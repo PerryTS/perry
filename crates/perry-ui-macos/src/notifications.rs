@@ -38,8 +38,8 @@ pub(crate) fn scan_macos_notifications_gc_roots(visitor: &mut perry_ffi::GcRootV
 extern "C" {
     fn js_nanbox_get_pointer(value: f64) -> i64;
     fn js_nanbox_string(ptr: i64) -> f64;
-    fn js_closure_call1(closure: *const u8, arg0: f64) -> f64;
-    fn js_closure_call2(closure: *const u8, arg0: f64, arg1: f64) -> f64;
+    fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg0: f64) -> f64;
+    fn js_closure_call2(closure: *const u8, this: perry_ffi::JsThis, arg0: f64, arg1: f64) -> f64;
     fn js_json_parse(text_ptr: *const perry_ffi::StringHeader) -> u64;
     fn js_run_stdlib_pump();
     fn js_promise_run_microtasks() -> i32;
@@ -142,7 +142,7 @@ unsafe fn dispatch_tap(response: &AnyObject) {
 
     let ptr = js_nanbox_get_pointer(callback) as *const u8;
     if !ptr.is_null() {
-        js_closure_call2(ptr, id_value, action_value);
+        js_closure_call2(ptr, perry_ffi::JsThis::UNDEFINED, id_value, action_value);
     }
 }
 
@@ -301,7 +301,7 @@ pub unsafe fn dispatch_device_token(device_token: *mut AnyObject) {
     let boxed = js_nanbox_string(str_ptr as i64);
     let ptr = js_nanbox_get_pointer(callback) as *const u8;
     if !ptr.is_null() {
-        js_closure_call1(ptr, boxed);
+        js_closure_call1(ptr, perry_ffi::JsThis::UNDEFINED, boxed);
     }
 }
 
@@ -368,7 +368,7 @@ pub unsafe fn dispatch_remote_payload(user_info: *mut AnyObject) {
 
     let ptr = js_nanbox_get_pointer(callback) as *const u8;
     if !ptr.is_null() {
-        js_closure_call1(ptr, parsed_f64);
+        js_closure_call1(ptr, perry_ffi::JsThis::UNDEFINED, parsed_f64);
     }
 }
 

@@ -133,10 +133,13 @@ unsafe fn stamp_reserved_floor_shape(
         .map(|d| d.live_inline_slot_count)
         .unwrap_or(0);
     let generation = lineage.as_ref().map(|d| d.semantic_generation).unwrap_or(0);
-    let kind = lineage
-        .as_ref()
-        .map(|d| d.object_kind)
-        .unwrap_or(shapes::ShapeObjectKind::Ordinary);
+    let kind = shapes::store_kind::mint_kind(
+        lineage
+            .as_ref()
+            .map(|d| d.object_kind)
+            .unwrap_or(shapes::ShapeObjectKind::Ordinary),
+        obj,
+    );
     let proto_id = match lineage.as_ref() {
         Some(d) => d.proto_id,
         None => shapes::object_proto_id(obj),
@@ -239,14 +242,20 @@ mod tests {
     /// path `for…of`'s fused `js_for_of_next` takes).
     #[test]
     fn own_next_shadows_the_builtin_advance() {
-        extern "C" fn patched_next(_c: *const crate::closure::ClosureHeader, _arg: f64) -> f64 {
+        extern "C" fn patched_next(
+            _c: *const crate::closure::ClosureHeader,
+            _this: crate::closure::JsThis,
+            _arg: f64,
+        ) -> f64 {
             unsafe { crate::iter_result::make_iter_result(JSValue::number(777.0), false) }
         }
         unsafe {
             let iter = set_iter_with_10_20_30();
-            let closure = crate::closure::js_closure_alloc(patched_next as *const u8, 0);
+            let closure = crate::closure::js_closure_alloc(
+                crate::fn_info!(patched_next, 1; with_declared(0)),
+                0,
+            );
             assert!(!closure.is_null());
-            crate::closure::js_register_closure_arity(patched_next as *const u8, 0);
             js_object_set_field_by_name(
                 iter,
                 key("next"),

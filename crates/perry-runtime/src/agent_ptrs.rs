@@ -1,10 +1,10 @@
 //! Per-agent runtime pointers that generated code reads WITHOUT a call.
 //!
-//! Some runtime state is per agent (per thread) and read on hot emitted paths:
-//! the first is the implicit-`this` cell a direct method call binds around
-//! the call (`perry-codegen/src/expr/method_site.rs`), which otherwise costs
-//! two runtime calls per method call. This block is the one place such
-//! pointers live, at fixed slots, so emitted code can load one directly:
+//! Some runtime state is per agent (per thread) and read on hot emitted paths.
+//! This block is the one place such pointers live, at fixed slots, so emitted
+//! code can load one directly. No slot is published today: slot 1 held the
+//! implicit-`this` cell until this-as-a-parameter deleted it, and slot 0 is
+//! reserved for the megamorphic follow-up's shape-record directory.
 //!
 //! * ELF executables (Linux, Android; x86-64 and aarch64): an `initialexec`
 //!   thread-local access to [`PERRY_AGENT_PTRS`] — `mov %fs:off` (or
@@ -24,8 +24,6 @@
 
 use std::cell::Cell;
 
-/// Slot 1: this agent's implicit-`this` cell. (Slot 0 is reserved.)
-pub use crate::codegen_abi::AGENT_PTR_IMPLICIT_THIS;
 /// Slots in the block. **Must equal `AGENT_PTR_SLOTS` in
 /// `perry-codegen/src/expr/agent_ptr.rs`** (the emitted global's type).
 pub use crate::codegen_abi::AGENT_PTR_SLOTS;
@@ -51,6 +49,7 @@ pub static PERRY_AGENT_PTRS: AgentPtrs =
     AgentPtrs([const { Cell::new(std::ptr::null()) }; AGENT_PTR_SLOTS]);
 
 /// Publish (or clear, with null) one of this agent's pointers.
+#[allow(dead_code)] // no slot is published today (see the module doc)
 #[inline]
 pub(crate) fn publish(slot: usize, ptr: *const u8) {
     PERRY_AGENT_PTRS.0[slot].set(ptr);
@@ -66,14 +65,4 @@ pub(crate) fn read(slot: usize) -> *const u8 {
 #[inline]
 pub(crate) fn hot_addr() -> *mut u8 {
     &PERRY_AGENT_PTRS as *const AgentPtrs as *mut u8
-}
-
-/// The address of this agent's implicit-`this` cell, published into slot
-/// [`AGENT_PTR_IMPLICIT_THIS`] for emitted code that binds `this` around a
-/// direct method call. A leaf: one TLS read and one store.
-#[no_mangle]
-pub extern "C" fn perry_implicit_this_cell() -> *const u8 {
-    let cell = &crate::tls_hot::hot().implicit_this as *const std::cell::Cell<u64> as *const u8;
-    publish(AGENT_PTR_IMPLICIT_THIS, cell);
-    cell
 }

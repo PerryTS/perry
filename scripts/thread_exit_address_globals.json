@@ -460,6 +460,14 @@
    "why": "Census counts keyed by (&'static event, &'static owner-kind name); owner address is only classified, never stored."
   },
   {
+   "file": "crates/perry-runtime/src/object/shapes_store_kind.rs",
+   "names": [
+    "COUNTERS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "shape-fact-audit diagnostic counters: an array of eight AtomicU64, only ever bumped by fetch_add(1) (audit::bump) and read by the atexit report; no store of a computed value, so it cannot hold an address. Absent unless the shape-fact-audit feature is on."
+  },
+  {
    "file": "crates/perry-runtime/src/event_pump.rs",
    "names": [
     "WAKE_CALLBACK"
@@ -2675,6 +2683,14 @@
    ],
    "verdict": "no_heap_address",
    "why": "Per-bucket NmAttachFn fn pointers stored at native_module_registry.rs:759; code addresses."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/native_module_registry.rs",
+   "names": [
+    "NM_STREAM_SUBCLASS_INIT"
+   ],
+   "verdict": "no_heap_address",
+   "why": "The node_stream_subclass_init NmStreamSubclassInitFn fn pointer, its only store at native_module_registry.rs:518 (js_nm_install_stream); a code address."
   },
   {
    "file": "crates/perry-runtime/src/object/native_module_registry.rs",

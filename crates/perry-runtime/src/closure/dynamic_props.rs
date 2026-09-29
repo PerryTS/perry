@@ -360,7 +360,7 @@ pub(crate) fn closure_get_dynamic_prop_keyed(
     let on_base = unsafe { super::shape::closure_on_base_shape(ptr as *const ClosureHeader) };
     if on_base {
         // fall through to the data lookups below
-    } else if super::shape::is_class_code(unsafe { (*(ptr as *const ClosureHeader)).func_ptr }) {
+    } else if super::shape::is_class_info(unsafe { (*(ptr as *const ClosureHeader)).info }) {
         // A class constructor: its class lookup (statics, the parent chain,
         // `name`/`length`/`prototype`, Function.prototype) — never the plain
         // function fallbacks below.
@@ -375,11 +375,10 @@ pub(crate) fn closure_get_dynamic_prop_keyed(
             return f64::from_bits(crate::value::TAG_UNDEFINED);
         }
         let receiver = crate::value::js_nanbox_pointer(ptr as i64);
-        let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-        let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
-        let result = crate::closure::js_closure_call0(closure);
-        crate::object::js_implicit_this_set(prev.get_nanbox_f64());
-        return result;
+        return crate::closure::js_closure_call0(
+            closure,
+            crate::closure::JsThis::from_f64(receiver),
+        );
     }
 
     if let Some(val) = closure_get_own_dynamic_prop(ptr, prop) {
@@ -414,7 +413,7 @@ pub(crate) fn closure_get_dynamic_prop_keyed(
     // cached, the `closure_props` lookup above intercepts before this runs
     // again.
     if prop == "name" && (on_base || !closure_is_key_deleted(ptr, "name")) {
-        let func_ptr = unsafe { (*(ptr as *const ClosureHeader)).func_ptr };
+        let func_ptr = unsafe { (*(ptr as *const ClosureHeader)).code() };
         if func_ptr == crate::closure::BOUND_FUNCTION_FUNC_PTR {
             return unsafe { crate::closure::bound_function_lazy_name(ptr) };
         }
@@ -449,19 +448,19 @@ pub(crate) fn closure_get_dynamic_prop_keyed(
                 if acc.get == 0 {
                     return f64::from_bits(crate::value::TAG_UNDEFINED);
                 }
-                let receiver = crate::value::js_nanbox_pointer(ptr as i64);
-                let getter_bits = clone_closure_rebind_this(acc.get, receiver);
+                let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+                let receiver =
+                    this_scope.root_nanbox_f64(crate::value::js_nanbox_pointer(ptr as i64));
+                let getter_bits = clone_closure_rebind_this(acc.get, receiver.get_nanbox_f64());
                 let getter = (getter_bits & crate::value::POINTER_MASK)
                     as *const crate::closure::ClosureHeader;
                 if getter.is_null() {
                     return f64::from_bits(crate::value::TAG_UNDEFINED);
                 }
-                let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-                let prev =
-                    this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
-                let result = crate::closure::js_closure_call0(getter);
-                crate::object::js_implicit_this_set(prev.get_nanbox_f64());
-                return result;
+                return crate::closure::js_closure_call0(
+                    getter,
+                    crate::closure::JsThis::from_f64(receiver.get_nanbox_f64()),
+                );
             }
             if let Some(p) = closure_get_own_dynamic_prop(proto_ptr, prop) {
                 return p;
@@ -480,18 +479,18 @@ pub(crate) fn closure_get_dynamic_prop_keyed(
             if acc.get == 0 {
                 return f64::from_bits(crate::value::TAG_UNDEFINED);
             }
-            let receiver = crate::value::js_nanbox_pointer(ptr as i64);
-            let getter_bits = clone_closure_rebind_this(acc.get, receiver);
+            let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+            let receiver = this_scope.root_nanbox_f64(crate::value::js_nanbox_pointer(ptr as i64));
+            let getter_bits = clone_closure_rebind_this(acc.get, receiver.get_nanbox_f64());
             let getter =
                 (getter_bits & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
             if getter.is_null() {
                 return f64::from_bits(crate::value::TAG_UNDEFINED);
             }
-            let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-            let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
-            let result = crate::closure::js_closure_call0(getter);
-            crate::object::js_implicit_this_set(prev.get_nanbox_f64());
-            return result;
+            return crate::closure::js_closure_call0(
+                getter,
+                crate::closure::JsThis::from_f64(receiver.get_nanbox_f64()),
+            );
         }
         {
             // The thread's canonical interned header: no allocation per read,
@@ -555,12 +554,10 @@ pub(crate) fn function_prototype_inherited_get(
             let getter =
                 (acc.get & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
             if !getter.is_null() {
-                let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-                let prev =
-                    this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
-                let result = crate::closure::js_closure_call0(getter);
-                crate::object::js_implicit_this_set(prev.get_nanbox_f64());
-                return Some(result);
+                return Some(crate::closure::js_closure_call0(
+                    getter,
+                    crate::closure::JsThis::from_f64(receiver),
+                ));
             }
         }
         return Some(f64::from_bits(crate::value::TAG_UNDEFINED));
@@ -740,72 +737,6 @@ pub fn closure_dynamic_props_snapshot(ptr: usize) -> Vec<(String, f64)> {
     unsafe { super::props::bag_snapshot(ptr) }
 }
 
-/// Unbind `this` from a detached method closure.
-///
-/// When a method is read from an object via PropertyGet (e.g., `const fn = holder.getX`),
-/// this function is called on the result. If the value is a closure whose capture_count
-/// has CAPTURES_THIS_FLAG set (indicating slot 0 is `this`), it allocates a new closure
-/// with the same func_ptr and captures but slot 0 set to undefined.
-///
-/// For non-closure values (numbers, strings, objects, arrays), this is a no-op.
-#[no_mangle]
-pub extern "C" fn js_closure_unbind_this(val: f64) -> f64 {
-    let bits = val.to_bits();
-    let tag = bits & 0xFFFF_0000_0000_0000;
-    // Only process POINTER_TAG values (closures are NaN-boxed with POINTER_TAG)
-    if tag != 0x7FFD_0000_0000_0000 {
-        return val;
-    }
-    let ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
-    // #6320: the old `< 0x10000` floor is an order of magnitude below
-    // `HANDLE_BAND_MAX`, so a registry handle NaN-boxed under POINTER_TAG — most
-    // sharply a revocable-Proxy id at `0xF0000 + id` — passed it and the
-    // CLOSURE_MAGIC probe below dereferenced unmapped low memory. Detaching a
-    // proxy-valued method (`const g = obj.m` where `obj.m = new Proxy(fn, {})`)
-    // reaches exactly here. `is_closure_ptr` subsumes the band, heap-range,
-    // alignment and magic checks; a non-closure value has no `this` slot to
-    // unbind, so it flows through untouched.
-    if !is_closure_ptr(ptr) {
-        return val;
-    }
-    unsafe {
-        let header = ptr as *const ClosureHeader;
-        let raw_count = (*header).capture_count;
-        // Only unbind if the closure has the CAPTURES_THIS_FLAG
-        if raw_count & CAPTURES_THIS_FLAG == 0 {
-            return val;
-        }
-        let count = real_capture_count(raw_count) as usize;
-        if count == 0 {
-            return val;
-        }
-        // Clone the closure with slot 0 set to undefined
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let val_handle = scope.root_nanbox_f64(val);
-        let func_ptr = (*header).func_ptr;
-        let new_closure = js_closure_alloc(func_ptr, raw_count);
-        let source_bits = val_handle.get_nanbox_f64().to_bits();
-        let source_ptr = (source_bits & 0x0000_FFFF_FFFF_FFFF) as usize;
-        if !closure_kind_probe(source_ptr) {
-            return val_handle.get_nanbox_f64();
-        }
-        let src_captures = closure_capture_slots_mut(source_ptr as *mut ClosureHeader);
-        let dst_captures = closure_capture_slots_mut(new_closure);
-        // Set slot 0 to undefined
-        // GC_STORE_AUDIT(BARRIERED): cloned closure capture stores are followed by layout/barrier rebuild.
-        *dst_captures = crate::value::TAG_UNDEFINED;
-        // Copy remaining captures (slots 1..count)
-        for i in 1..count {
-            *dst_captures.add(i) = *src_captures.add(i);
-        }
-        rebuild_closure_layout_and_barriers(new_closure, count);
-        super::clone_closure_box_captures(source_ptr as *const ClosureHeader, new_closure);
-        // NaN-box the new closure pointer
-        let new_ptr = new_closure as u64;
-        f64::from_bits(0x7FFD_0000_0000_0000 | (new_ptr & 0x0000_FFFF_FFFF_FFFF))
-    }
-}
-
 #[cfg(test)]
 mod tests_1802 {
     use super::*;
@@ -958,12 +889,11 @@ pub(crate) fn clone_closure_rebind_this(closure_bits: u64, recv_box: f64) -> u64
         if count == 0 {
             return closure_bits;
         }
-        // Allocate a fresh closure with the same func_ptr + capture_count (preserving the flag).
+        // Allocate a fresh closure of the same body + capture_count (preserving the flag).
         let scope = crate::gc::RuntimeHandleScope::new();
         let closure_handle = scope.root_nanbox_u64(closure_bits);
         let recv_handle = scope.root_nanbox_f64(recv_box);
-        let func_ptr = (*header).func_ptr;
-        let new_closure = js_closure_alloc(func_ptr, raw_count);
+        let new_closure = js_closure_alloc((*header).info, raw_count);
         let source_bits = closure_handle.get_nanbox_u64();
         let source_ptr = (source_bits & 0x0000_FFFF_FFFF_FFFF) as usize;
         if !closure_kind_probe(source_ptr) {

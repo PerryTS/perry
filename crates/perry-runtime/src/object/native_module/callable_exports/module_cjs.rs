@@ -3,6 +3,7 @@ use std::cell::Cell;
 
 extern "C" fn module_cjs_extension_noop_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _module: f64,
     _filename: f64,
 ) -> f64 {
@@ -10,10 +11,10 @@ extern "C" fn module_cjs_extension_noop_thunk(
 }
 
 fn module_cjs_extension_function(name: &str) -> f64 {
-    let func_ptr = module_cjs_extension_noop_thunk as *const u8;
-    crate::closure::js_register_closure_arity(func_ptr, 2);
-    crate::closure::js_register_closure_length(func_ptr, 2);
-    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    let closure = crate::closure::js_closure_alloc(
+        crate::fn_info!(module_cjs_extension_noop_thunk, 2; with_declared(2), with_length(2)),
+        0,
+    );
     let scope = crate::gc::RuntimeHandleScope::new();
     let closure = scope.root_raw_mut_ptr(closure);
     closure.with_mut_ptr(|closure: *mut crate::closure::ClosureHeader| {
@@ -187,6 +188,7 @@ pub(crate) fn module_constants_value() -> f64 {
 
 extern "C" fn module_wrap_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     source: f64,
 ) -> f64 {
     let value = JSValue::from_bits(source.to_bits());
@@ -200,10 +202,10 @@ extern "C" fn module_wrap_thunk(
 }
 
 fn module_wrap_value() -> f64 {
-    let func = module_wrap_thunk as *const u8;
-    crate::closure::js_register_closure_arity(func, 1);
-    crate::closure::js_register_closure_length(func, 1);
-    let closure = crate::closure::js_closure_alloc(func, 0);
+    let closure = crate::closure::js_closure_alloc(
+        crate::fn_info!(module_wrap_thunk, 1; with_declared(1), with_length(1)),
+        0,
+    );
     let scope = crate::gc::RuntimeHandleScope::new();
     let closure = scope.root_raw_mut_ptr(closure);
     closure.with_mut_ptr(|closure: *mut crate::closure::ClosureHeader| {
@@ -243,6 +245,7 @@ fn module_wrapper_value() -> f64 {
 
 extern "C" fn module_prototype_method_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _a: f64,
     _b: f64,
     _c: f64,
@@ -252,30 +255,31 @@ extern "C" fn module_prototype_method_thunk(
 
 extern "C" fn module_prototype_load_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     filename: f64,
     _b: f64,
     _c: f64,
 ) -> f64 {
-    crate::process::js_module_instance_load(filename)
+    crate::process::js_module_instance_load(this, filename)
 }
 
 extern "C" fn module_prototype_require_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     specifier: f64,
     _b: f64,
     _c: f64,
 ) -> f64 {
-    crate::process::js_module_instance_require(specifier)
+    crate::process::js_module_instance_require(this, specifier)
 }
 
 fn module_prototype_method(name: &str, length: u32) -> f64 {
-    let func = match name {
-        "load" => module_prototype_load_thunk as *const u8,
-        "require" => module_prototype_require_thunk as *const u8,
-        _ => module_prototype_method_thunk as *const u8,
+    let info = match name {
+        "load" => crate::fn_info!(module_prototype_load_thunk, 3; with_declared(3)),
+        "require" => crate::fn_info!(module_prototype_require_thunk, 3; with_declared(3)),
+        _ => crate::fn_info!(module_prototype_method_thunk, 3; with_declared(3)),
     };
-    crate::closure::js_register_closure_arity(func, 3);
-    let closure = crate::closure::js_closure_alloc(func, 0);
+    let closure = crate::closure::js_closure_alloc(info, 0);
     let scope = crate::gc::RuntimeHandleScope::new();
     let closure = scope.root_raw_mut_ptr(closure);
     closure.with_mut_ptr(|closure: *mut crate::closure::ClosureHeader| {
@@ -291,6 +295,7 @@ fn module_prototype_method(name: &str, length: u32) -> f64 {
 
 extern "C" fn module_prototype_constructor_getter(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     // Resolve through the canonical callable cache at access time. Capturing
     // the constructor while its own attach was still in progress preserved a
@@ -301,42 +306,44 @@ extern "C" fn module_prototype_constructor_getter(
     bound_native_callable_export_value("module", "Module")
 }
 
-extern "C" fn module_prototype_false_getter(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn module_prototype_false_getter(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     native_bool_value(false)
 }
 
 extern "C" fn module_prototype_parent_getter(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
 extern "C" fn module_prototype_parent_setter(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _value: f64,
 ) -> f64 {
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
 fn module_accessor(
-    get_func: *const u8,
-    set_func: Option<*const u8>,
+    get_info: *const crate::closure::JsFunctionInfo,
+    set_info: Option<*const crate::closure::JsFunctionInfo>,
     capture: Option<f64>,
 ) -> crate::object::AccessorDescriptor {
     let scope = crate::gc::RuntimeHandleScope::new();
     let capture = capture.map(|value| scope.root_nanbox_f64(value));
-    crate::closure::js_register_closure_arity(get_func, 0);
-    let getter = crate::closure::js_closure_alloc(get_func, capture.is_some() as u32);
+    let getter = crate::closure::js_closure_alloc(get_info, capture.is_some() as u32);
     let getter = scope.root_raw_mut_ptr(getter);
     if let Some(value) = capture.as_ref() {
         getter.with_mut_ptr(|getter: *mut crate::closure::ClosureHeader| {
             crate::closure::js_closure_set_capture_f64(getter, 0, value.get_nanbox_f64());
         });
     }
-    let setter = set_func.map(|func| {
-        crate::closure::js_register_closure_arity(func, 1);
-        scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(func, 0))
-    });
+    let setter =
+        set_info.map(|info| scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(info, 0)));
     crate::object::AccessorDescriptor {
         get: getter
             .with_mut_ptr(|getter: *mut crate::closure::ClosureHeader| {
@@ -408,17 +415,25 @@ fn module_cjs_prototype_value(_module_value: f64) -> f64 {
         };
         install_accessor(
             "constructor",
-            module_accessor(module_prototype_constructor_getter as *const u8, None, None),
+            module_accessor(
+                crate::fn_info!(module_prototype_constructor_getter, 0; with_declared(0)),
+                None,
+                None,
+            ),
         );
         install_accessor(
             "isPreloading",
-            module_accessor(module_prototype_false_getter as *const u8, None, None),
+            module_accessor(
+                crate::fn_info!(module_prototype_false_getter, 0; with_declared(0)),
+                None,
+                None,
+            ),
         );
         install_accessor(
             "parent",
             module_accessor(
-                module_prototype_parent_getter as *const u8,
-                Some(module_prototype_parent_setter as *const u8),
+                crate::fn_info!(module_prototype_parent_getter, 0; with_declared(0)),
+                Some(crate::fn_info!(module_prototype_parent_setter, 1; with_declared(1))),
                 None,
             ),
         );

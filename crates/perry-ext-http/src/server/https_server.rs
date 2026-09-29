@@ -12,7 +12,7 @@ use perry_ffi::{
 };
 
 use crate::server::ensure_gc_scanner_registered;
-use crate::server::request::{handle_to_pointer_f64, with_implicit_this};
+use crate::server::request::handle_to_pointer_f64;
 use crate::server::server::{
     sanitize_request_timeout, signal_connections_close, HttpPendingRequest, HttpServer,
 };
@@ -470,9 +470,8 @@ pub(crate) fn process_pending_https(pending: HttpPendingRequest) {
                 let raw = addr as *const RawClosureHeader;
                 let closure = JsClosure::from_raw(raw);
                 if !closure.is_null() {
-                    with_implicit_this(server_this, || {
-                        let _ = closure.call2(req_f64, res_f64);
-                    });
+                    let _ =
+                        closure.call2(perry_ffi::JsThis::from_f64(server_this), req_f64, res_f64);
                 }
                 js_promise_run_microtasks();
             }
@@ -485,9 +484,7 @@ pub(crate) fn process_pending_https(pending: HttpPendingRequest) {
             let raw = handler_rooted.get() as *const RawClosureHeader;
             let closure = JsClosure::from_raw(raw);
             if !closure.is_null() {
-                with_implicit_this(server_this, || {
-                    let _ = closure.call2(req_f64, res_f64);
-                });
+                let _ = closure.call2(perry_ffi::JsThis::from_f64(server_this), req_f64, res_f64);
             }
             js_promise_run_microtasks();
         }
@@ -501,9 +498,7 @@ pub(crate) fn process_pending_https(pending: HttpPendingRequest) {
             let raw = addr as *const RawClosureHeader;
             let closure = JsClosure::from_raw(raw);
             if !closure.is_null() {
-                with_implicit_this(server_this, || {
-                    let _ = closure.call2(req_f64, res_f64);
-                });
+                let _ = closure.call2(perry_ffi::JsThis::from_f64(server_this), req_f64, res_f64);
             }
             js_promise_run_microtasks();
         }

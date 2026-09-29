@@ -63,12 +63,16 @@ pub(crate) fn test_async_hooks_scanner_snapshot() -> (usize, u64) {
 mod tests {
     use super::*;
 
-    extern "C" fn throwing_lifecycle_hook(_closure: *const ClosureHeader, _async_id: f64) -> f64 {
+    extern "C" fn throwing_lifecycle_hook(
+        _closure: *const ClosureHeader,
+        _this: crate::closure::JsThis,
+        _async_id: f64,
+    ) -> f64 {
         crate::exception::js_throw(73.0)
     }
 
     fn enable_throwing_lifecycle_hook(before_phase: bool) {
-        let callback = js_closure_alloc(throwing_lifecycle_hook as *const u8, 0);
+        let callback = js_closure_alloc(crate::fn_info!(throwing_lifecycle_hook, 1), 0);
         let mut callbacks = HookCallbacks::empty();
         if before_phase {
             callbacks.before = callback;

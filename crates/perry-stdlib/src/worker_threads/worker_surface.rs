@@ -158,77 +158,122 @@ pub(super) fn worker_object(
     set_object_field(
         obj,
         "getHeapStatistics",
-        closure_value_with_worker_id(worker_get_heap_statistics as *const u8, 0, worker_id),
+        closure_value_with_worker_id(
+            perry_runtime::fn_info!(worker_get_heap_statistics, 0; with_declared(0)),
+            worker_id,
+        ),
     );
     set_object_field(
         obj,
         "cpuUsage",
-        closure_value_with_worker_id(worker_cpu_usage as *const u8, 1, worker_id),
+        closure_value_with_worker_id(
+            perry_runtime::fn_info!(worker_cpu_usage, 1; with_declared(1)),
+            worker_id,
+        ),
     );
     set_object_field(
         obj,
         "getHeapSnapshot",
-        closure_value_with_worker_id(worker_get_heap_snapshot as *const u8, 1, worker_id),
+        closure_value_with_worker_id(
+            perry_runtime::fn_info!(worker_get_heap_snapshot, 1; with_declared(1)),
+            worker_id,
+        ),
     );
     set_object_field(
         obj,
         "startCpuProfile",
-        closure_value_with_worker_id(worker_start_cpu_profile as *const u8, 0, worker_id),
+        closure_value_with_worker_id(
+            perry_runtime::fn_info!(worker_start_cpu_profile, 0; with_declared(0)),
+            worker_id,
+        ),
     );
     set_object_field(
         obj,
         "startHeapProfile",
-        closure_value_with_worker_id(worker_start_heap_profile as *const u8, 0, worker_id),
+        closure_value_with_worker_id(
+            perry_runtime::fn_info!(worker_start_heap_profile, 0; with_declared(0)),
+            worker_id,
+        ),
     );
     set_object_field(
         obj,
         "postMessage",
-        closure_value_with_worker_id(worker_post_message as *const u8, 1, worker_id),
+        closure_value_with_worker_id(
+            perry_runtime::fn_info!(worker_post_message, 1; with_declared(1)),
+            worker_id,
+        ),
     );
     set_object_field(
         obj,
         "terminate",
-        closure_value_with_worker_id(worker_terminate as *const u8, 0, worker_id),
+        closure_value_with_worker_id(
+            perry_runtime::fn_info!(worker_terminate, 0; with_declared(0)),
+            worker_id,
+        ),
     );
     set_object_field(
         obj,
         "reload",
-        closure_value_with_worker_id(worker_reload as *const u8, 0, worker_id),
+        closure_value_with_worker_id(
+            perry_runtime::fn_info!(worker_reload, 0; with_declared(0)),
+            worker_id,
+        ),
     );
     set_object_field(
         obj,
         "ref",
-        closure_value_with_worker_id(worker_ref as *const u8, 0, worker_id),
+        closure_value_with_worker_id(
+            perry_runtime::fn_info!(worker_ref, 0; with_declared(0)),
+            worker_id,
+        ),
     );
     set_object_field(
         obj,
         "unref",
-        closure_value_with_worker_id(worker_unref as *const u8, 0, worker_id),
+        closure_value_with_worker_id(
+            perry_runtime::fn_info!(worker_unref, 0; with_declared(0)),
+            worker_id,
+        ),
     );
     set_object_field(
         obj,
         "on",
-        closure_value_with_worker_id(worker_on as *const u8, 2, worker_id),
+        closure_value_with_worker_id(
+            perry_runtime::fn_info!(worker_on, 2; with_declared(2)),
+            worker_id,
+        ),
     );
     set_object_field(
         obj,
         "once",
-        closure_value_with_worker_id(worker_once as *const u8, 2, worker_id),
+        closure_value_with_worker_id(
+            perry_runtime::fn_info!(worker_once, 2; with_declared(2)),
+            worker_id,
+        ),
     );
     set_object_field(
         obj,
         "off",
-        closure_value_with_worker_id(worker_off as *const u8, 2, worker_id),
+        closure_value_with_worker_id(
+            perry_runtime::fn_info!(worker_off, 2; with_declared(2)),
+            worker_id,
+        ),
     );
     set_object_field(
         obj,
         "addEventListener",
-        closure_value_with_worker_id(worker_add_event_listener as *const u8, 2, worker_id),
+        closure_value_with_worker_id(
+            perry_runtime::fn_info!(worker_add_event_listener, 2; with_declared(2)),
+            worker_id,
+        ),
     );
     set_object_field(
         obj,
         "removeEventListener",
-        closure_value_with_worker_id(worker_remove_event_listener as *const u8, 2, worker_id),
+        closure_value_with_worker_id(
+            perry_runtime::fn_info!(worker_remove_event_listener, 2; with_declared(2)),
+            worker_id,
+        ),
     );
     set_object_field(obj, "onmessage", js_null());
     set_object_field(obj, "onmessageerror", js_null());
@@ -251,26 +296,29 @@ pub(super) fn install_web_worker_globals() {
         return;
     }
     set_object_field(global(), "self", global_h.get_nanbox_f64());
-    let post_message_h =
-        scope.root_nanbox_f64(closure_value(web_worker_post_message as *const u8, 2));
+    let post_message_h = scope.root_nanbox_f64(closure_value(
+        perry_runtime::fn_info!(web_worker_post_message, 2; with_declared(2)),
+    ));
     set_object_field(global(), "postMessage", post_message_h.get_nanbox_f64());
-    let add_event_listener_h =
-        scope.root_nanbox_f64(closure_value(web_worker_add_event_listener as *const u8, 3));
+    let add_event_listener_h = scope.root_nanbox_f64(closure_value(
+        perry_runtime::fn_info!(web_worker_add_event_listener, 3; with_declared(3)),
+    ));
     set_object_field(
         global(),
         "addEventListener",
         add_event_listener_h.get_nanbox_f64(),
     );
     let remove_event_listener_h = scope.root_nanbox_f64(closure_value(
-        web_worker_remove_event_listener as *const u8,
-        2,
+        perry_runtime::fn_info!(web_worker_remove_event_listener, 2; with_declared(2)),
     ));
     set_object_field(
         global(),
         "removeEventListener",
         remove_event_listener_h.get_nanbox_f64(),
     );
-    let close_h = scope.root_nanbox_f64(closure_value(web_worker_close as *const u8, 0));
+    let close_h = scope.root_nanbox_f64(closure_value(
+        perry_runtime::fn_info!(web_worker_close, 0; with_declared(0)),
+    ));
     set_object_field(global(), "close", close_h.get_nanbox_f64());
     set_object_field(global(), "onmessage", js_null());
     set_object_field(global(), "onmessageerror", js_null());
@@ -284,6 +332,7 @@ pub(super) fn web_worker_global_handler(name: &str) -> Option<u64> {
 
 extern "C" fn web_worker_post_message(
     _closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
     value: f64,
     _transfer: f64,
 ) -> f64 {
@@ -292,6 +341,7 @@ extern "C" fn web_worker_post_message(
 
 extern "C" fn web_worker_add_event_listener(
     _closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
     event: f64,
     callback: f64,
     _options: f64,
@@ -302,6 +352,7 @@ extern "C" fn web_worker_add_event_listener(
 
 extern "C" fn web_worker_remove_event_listener(
     _closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
     event: f64,
     callback: f64,
 ) -> f64 {
@@ -309,7 +360,10 @@ extern "C" fn web_worker_remove_event_listener(
     js_worker_threads_parent_port_event_remove(event.to_bits() as i64, callback_ptr)
 }
 
-extern "C" fn web_worker_close(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn web_worker_close(
+    _closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     CURRENT_WORKER_CLOSE_REQUESTED.with(|closed| closed.set(true));
     js_undefined()
 }
@@ -346,7 +400,7 @@ fn worker_performance_object() -> *mut perry_runtime::object::ObjectHeader {
     set_object_field(
         obj,
         "eventLoopUtilization",
-        closure_value(worker_event_loop_utilization as *const u8, 2),
+        closure_value(perry_runtime::fn_info!(worker_event_loop_utilization, 2; with_declared(2))),
     );
     obj
 }
@@ -355,19 +409,21 @@ fn stream_listener_key(event: &str) -> String {
     format!("__perryWorkerStreamListener:{event}")
 }
 
-fn stream_this() -> f64 {
-    perry_runtime::object::js_implicit_this_get()
-}
-
-fn stream_register(event: f64, callback: f64) -> f64 {
-    let this = stream_this();
+fn stream_register(receiver: perry_runtime::closure::JsThis, event: f64, callback: f64) -> f64 {
+    let this = receiver.as_f64();
     let Some(event) = string_value_to_string(event) else {
         return this;
     };
     let key = stream_listener_key(&event);
+    // The listener array allocations can collect: root the receiver (and the
+    // callback being stored) across them and re-read both.
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let this_h = scope.root_nanbox_f64(this);
+    let callback_h = scope.root_nanbox_f64(callback);
     let arr = array_ptr_from_value(get_object_field_from_value(this, &key))
         .unwrap_or_else(|| perry_runtime::array::js_array_alloc(0));
-    let arr = perry_runtime::array::js_array_push_f64(arr, callback);
+    let arr = perry_runtime::array::js_array_push_f64(arr, callback_h.get_nanbox_f64());
+    let this = this_h.get_nanbox_f64();
     if let Some(obj) = object_ptr_from_value(this) {
         set_object_field(
             obj,
@@ -378,8 +434,8 @@ fn stream_register(event: f64, callback: f64) -> f64 {
     this
 }
 
-fn stream_emit_event(event: f64, arg: f64) -> f64 {
-    let this = stream_this();
+fn stream_emit_event(receiver: perry_runtime::closure::JsThis, event: f64, arg: f64) -> f64 {
+    let this = receiver.as_f64();
     let Some(event) = string_value_to_string(event) else {
         return js_bool(false);
     };
@@ -392,33 +448,33 @@ fn stream_emit_event(event: f64, arg: f64) -> f64 {
     // listener allocates enough to trigger a moving minor collection
     // corrupts every read for the rest of this loop, not just one listener.
     // Root all three through one handle scope and re-read the current bits
-    // before every dispatch.
-    //
-    // #10490: the displaced `this` crosses every listener (user code) too.
-    // Root it ONCE in that same scope, before the first
-    // `js_implicit_this_set`, and restore it from that root rather than from
-    // a plain per-iteration local.
+    // before every dispatch. Each listener runs with the stream as `this`.
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
     let this_h = scope.root_nanbox_f64(this);
     let arr_h = scope.root_raw_mut_ptr(arr);
     let arg_h = scope.root_nanbox_f64(arg);
-    let prev_this = scope.root_nanbox_f64(perry_runtime::object::js_implicit_this_get());
     let len = perry_runtime::array::js_array_length(arr_h.get_raw_mut_ptr());
     for i in 0..len {
         let callback = perry_runtime::array::js_array_get_f64(arr_h.get_raw_mut_ptr(), i);
-        perry_runtime::object::js_implicit_this_set(this_h.get_nanbox_f64());
         unsafe {
             let args = [arg_h.get_nanbox_f64()];
-            let _ =
-                perry_runtime::closure::js_native_call_value(callback, args.as_ptr(), args.len());
+            let _ = perry_runtime::closure::js_native_call_value(
+                callback,
+                perry_runtime::closure::JsThis::from_f64(this_h.get_nanbox_f64()),
+                args.as_ptr(),
+                args.len(),
+            );
         }
-        perry_runtime::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     }
     js_bool(len > 0)
 }
 
-fn stream_remove_listener(event: f64, callback: f64) -> f64 {
-    let this = stream_this();
+fn stream_remove_listener(
+    receiver: perry_runtime::closure::JsThis,
+    event: f64,
+    callback: f64,
+) -> f64 {
+    let this = receiver.as_f64();
     let Some(event) = string_value_to_string(event) else {
         return this;
     };
@@ -426,14 +482,21 @@ fn stream_remove_listener(event: f64, callback: f64) -> f64 {
     let Some(arr) = array_ptr_from_value(get_object_field_from_value(this, &key)) else {
         return this;
     };
-    let len = perry_runtime::array::js_array_length(arr);
+    // The filtered copy allocates: root the receiver, the old array and the
+    // callback compared against across it and re-read them.
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let this_h = scope.root_nanbox_f64(this);
+    let arr_h = scope.root_raw_mut_ptr(arr);
+    let callback_h = scope.root_nanbox_f64(callback);
+    let len = perry_runtime::array::js_array_length(arr_h.get_raw_mut_ptr());
     let mut next = perry_runtime::array::js_array_alloc(len);
     for i in 0..len {
-        let value = perry_runtime::array::js_array_get_f64(arr, i);
-        if value.to_bits() != callback.to_bits() {
+        let value = perry_runtime::array::js_array_get_f64(arr_h.get_raw_mut_ptr(), i);
+        if value.to_bits() != callback_h.get_nanbox_f64().to_bits() {
             next = perry_runtime::array::js_array_push_f64(next, value);
         }
     }
+    let this = this_h.get_nanbox_f64();
     if let Some(obj) = object_ptr_from_value(this) {
         set_object_field(
             obj,
@@ -444,35 +507,70 @@ fn stream_remove_listener(event: f64, callback: f64) -> f64 {
     this
 }
 
-extern "C" fn stream_on(_closure: *const ClosureHeader, event: f64, callback: f64) -> f64 {
-    stream_register(event, callback)
+extern "C" fn stream_on(
+    _closure: *const ClosureHeader,
+    this: perry_runtime::closure::JsThis,
+    event: f64,
+    callback: f64,
+) -> f64 {
+    stream_register(this, event, callback)
 }
 
-extern "C" fn stream_emit(_closure: *const ClosureHeader, event: f64, arg: f64) -> f64 {
-    stream_emit_event(event, arg)
+extern "C" fn stream_emit(
+    _closure: *const ClosureHeader,
+    this: perry_runtime::closure::JsThis,
+    event: f64,
+    arg: f64,
+) -> f64 {
+    stream_emit_event(this, event, arg)
 }
 
-extern "C" fn stream_off(_closure: *const ClosureHeader, event: f64, callback: f64) -> f64 {
-    stream_remove_listener(event, callback)
+extern "C" fn stream_off(
+    _closure: *const ClosureHeader,
+    this: perry_runtime::closure::JsThis,
+    event: f64,
+    callback: f64,
+) -> f64 {
+    stream_remove_listener(this, event, callback)
 }
 
-extern "C" fn stream_this0(_closure: *const ClosureHeader) -> f64 {
-    stream_this()
+extern "C" fn stream_this0(
+    _closure: *const ClosureHeader,
+    this: perry_runtime::closure::JsThis,
+) -> f64 {
+    this.as_f64()
 }
 
-extern "C" fn stream_this1(_closure: *const ClosureHeader, _arg: f64) -> f64 {
-    stream_this()
+extern "C" fn stream_this1(
+    _closure: *const ClosureHeader,
+    this: perry_runtime::closure::JsThis,
+    _arg: f64,
+) -> f64 {
+    this.as_f64()
 }
 
-extern "C" fn stream_write(_closure: *const ClosureHeader, _chunk: f64, _encoding: f64) -> f64 {
+extern "C" fn stream_write(
+    _closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    _chunk: f64,
+    _encoding: f64,
+) -> f64 {
     js_bool(true)
 }
 
-extern "C" fn stream_read(_closure: *const ClosureHeader, _size: f64) -> f64 {
+extern "C" fn stream_read(
+    _closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    _size: f64,
+) -> f64 {
     js_null()
 }
 
-extern "C" fn stream_pipe(_closure: *const ClosureHeader, dest: f64) -> f64 {
+extern "C" fn stream_pipe(
+    _closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    dest: f64,
+) -> f64 {
     dest
 }
 
@@ -480,31 +578,71 @@ pub(super) fn worker_readable_stream_object() -> f64 {
     let obj = perry_runtime::object::js_object_alloc(0, 0);
     set_object_field(obj, "readable", js_bool(true));
     set_object_field(obj, "destroyed", js_bool(false));
-    set_object_field(obj, "on", closure_value(stream_on as *const u8, 2));
-    set_object_field(obj, "once", closure_value(stream_on as *const u8, 2));
-    set_object_field(obj, "addListener", closure_value(stream_on as *const u8, 2));
+    set_object_field(
+        obj,
+        "on",
+        closure_value(perry_runtime::fn_info!(stream_on, 2; with_declared(2))),
+    );
+    set_object_field(
+        obj,
+        "once",
+        closure_value(perry_runtime::fn_info!(stream_on, 2; with_declared(2))),
+    );
+    set_object_field(
+        obj,
+        "addListener",
+        closure_value(perry_runtime::fn_info!(stream_on, 2; with_declared(2))),
+    );
     set_object_field(
         obj,
         "prependListener",
-        closure_value(stream_on as *const u8, 2),
+        closure_value(perry_runtime::fn_info!(stream_on, 2; with_declared(2))),
     );
-    set_object_field(obj, "off", closure_value(stream_off as *const u8, 2));
+    set_object_field(
+        obj,
+        "off",
+        closure_value(perry_runtime::fn_info!(stream_off, 2; with_declared(2))),
+    );
     set_object_field(
         obj,
         "removeListener",
-        closure_value(stream_off as *const u8, 2),
+        closure_value(perry_runtime::fn_info!(stream_off, 2; with_declared(2))),
     );
-    set_object_field(obj, "emit", closure_value(stream_emit as *const u8, 2));
-    set_object_field(obj, "pause", closure_value(stream_this0 as *const u8, 0));
-    set_object_field(obj, "resume", closure_value(stream_this0 as *const u8, 0));
-    set_object_field(obj, "destroy", closure_value(stream_this0 as *const u8, 0));
+    set_object_field(
+        obj,
+        "emit",
+        closure_value(perry_runtime::fn_info!(stream_emit, 2; with_declared(2))),
+    );
+    set_object_field(
+        obj,
+        "pause",
+        closure_value(perry_runtime::fn_info!(stream_this0, 0; with_declared(0))),
+    );
+    set_object_field(
+        obj,
+        "resume",
+        closure_value(perry_runtime::fn_info!(stream_this0, 0; with_declared(0))),
+    );
+    set_object_field(
+        obj,
+        "destroy",
+        closure_value(perry_runtime::fn_info!(stream_this0, 0; with_declared(0))),
+    );
     set_object_field(
         obj,
         "setEncoding",
-        closure_value(stream_this1 as *const u8, 1),
+        closure_value(perry_runtime::fn_info!(stream_this1, 1; with_declared(1))),
     );
-    set_object_field(obj, "read", closure_value(stream_read as *const u8, 1));
-    set_object_field(obj, "pipe", closure_value(stream_pipe as *const u8, 1));
+    set_object_field(
+        obj,
+        "read",
+        closure_value(perry_runtime::fn_info!(stream_read, 1; with_declared(1))),
+    );
+    set_object_field(
+        obj,
+        "pipe",
+        closure_value(perry_runtime::fn_info!(stream_pipe, 1; with_declared(1))),
+    );
     object_value(obj)
 }
 
@@ -512,26 +650,67 @@ fn worker_writable_stream_object() -> f64 {
     let obj = perry_runtime::object::js_object_alloc(0, 0);
     set_object_field(obj, "writable", js_bool(true));
     set_object_field(obj, "destroyed", js_bool(false));
-    set_object_field(obj, "on", closure_value(stream_on as *const u8, 2));
-    set_object_field(obj, "once", closure_value(stream_on as *const u8, 2));
-    set_object_field(obj, "addListener", closure_value(stream_on as *const u8, 2));
-    set_object_field(obj, "off", closure_value(stream_off as *const u8, 2));
+    set_object_field(
+        obj,
+        "on",
+        closure_value(perry_runtime::fn_info!(stream_on, 2; with_declared(2))),
+    );
+    set_object_field(
+        obj,
+        "once",
+        closure_value(perry_runtime::fn_info!(stream_on, 2; with_declared(2))),
+    );
+    set_object_field(
+        obj,
+        "addListener",
+        closure_value(perry_runtime::fn_info!(stream_on, 2; with_declared(2))),
+    );
+    set_object_field(
+        obj,
+        "off",
+        closure_value(perry_runtime::fn_info!(stream_off, 2; with_declared(2))),
+    );
     set_object_field(
         obj,
         "removeListener",
-        closure_value(stream_off as *const u8, 2),
+        closure_value(perry_runtime::fn_info!(stream_off, 2; with_declared(2))),
     );
-    set_object_field(obj, "emit", closure_value(stream_emit as *const u8, 2));
-    set_object_field(obj, "write", closure_value(stream_write as *const u8, 2));
-    set_object_field(obj, "end", closure_value(stream_this1 as *const u8, 1));
-    set_object_field(obj, "destroy", closure_value(stream_this0 as *const u8, 0));
-    set_object_field(obj, "cork", closure_value(stream_this0 as *const u8, 0));
-    set_object_field(obj, "uncork", closure_value(stream_this0 as *const u8, 0));
+    set_object_field(
+        obj,
+        "emit",
+        closure_value(perry_runtime::fn_info!(stream_emit, 2; with_declared(2))),
+    );
+    set_object_field(
+        obj,
+        "write",
+        closure_value(perry_runtime::fn_info!(stream_write, 2; with_declared(2))),
+    );
+    set_object_field(
+        obj,
+        "end",
+        closure_value(perry_runtime::fn_info!(stream_this1, 1; with_declared(1))),
+    );
+    set_object_field(
+        obj,
+        "destroy",
+        closure_value(perry_runtime::fn_info!(stream_this0, 0; with_declared(0))),
+    );
+    set_object_field(
+        obj,
+        "cork",
+        closure_value(perry_runtime::fn_info!(stream_this0, 0; with_declared(0))),
+    );
+    set_object_field(
+        obj,
+        "uncork",
+        closure_value(perry_runtime::fn_info!(stream_this0, 0; with_declared(0))),
+    );
     object_value(obj)
 }
 
 extern "C" fn worker_event_loop_utilization(
     _closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
     util1: f64,
     util2: f64,
 ) -> f64 {
@@ -542,15 +721,20 @@ fn worker_profile_result(kind: &str) -> f64 {
     string_value(&format!("{{\"perryWorkerProfile\":\"{kind}\"}}"))
 }
 
-extern "C" fn worker_profile_stop(closure: *const ClosureHeader) -> f64 {
+extern "C" fn worker_profile_stop(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     let kind_bits = perry_runtime::closure::js_closure_get_capture_ptr(closure, 0) as u64;
     let kind = if kind_bits == 1 { "heap" } else { "cpu" };
     resolved_promise_value(worker_profile_result(kind))
 }
 
 pub(super) fn worker_profile_handle(kind_bits: i64) -> f64 {
-    perry_runtime::closure::js_register_closure_arity(worker_profile_stop as *const u8, 0);
-    let closure = perry_runtime::closure::js_closure_alloc(worker_profile_stop as *const u8, 1);
+    let closure = perry_runtime::closure::js_closure_alloc(
+        perry_runtime::fn_info!(worker_profile_stop, 0; with_declared(0)),
+        1,
+    );
     perry_runtime::closure::js_closure_set_capture_ptr(closure, 0, kind_bits);
     let obj = perry_runtime::object::js_object_alloc(0, 0);
     set_object_field(

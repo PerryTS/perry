@@ -7,7 +7,7 @@
 //! which previously resolved to `global_this_builtin_noop_thunk` and silently
 //! did nothing. Per spec these methods must perform a `this` brand check and
 //! throw a `TypeError` when called on an incompatible receiver. The thunks
-//! below read the `IMPLICIT_THIS` receiver (set by the `.call`/`.apply`
+//! below take the receiver as `this` (set by the `.call`/`.apply`
 //! dispatch), brand-check it, throw on mismatch, and otherwise dispatch to the
 //! real runtime helper — so reflective collection calls now also *work*.
 //!
@@ -123,27 +123,62 @@ pub(super) fn install_collection_proto_methods(
             install_collection_size_getter(
                 proto_obj,
                 "size",
-                map_proto_size_getter_thunk as *const u8,
+                crate::fn_info!(map_proto_size_getter_thunk, 0; with_declared(0)),
             );
-            ipm(proto_obj, "clear", map_proto_clear_thunk as *const u8, 0);
-            ipm(proto_obj, "delete", map_proto_delete_thunk as *const u8, 1);
+            ipm(
+                proto_obj,
+                "clear",
+                crate::fn_info!(map_proto_clear_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                0,
+            );
+            ipm(
+                proto_obj,
+                "delete",
+                crate::fn_info!(map_proto_delete_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                1,
+            );
             let entries_value = ipm(
                 proto_obj,
                 "entries",
-                map_proto_entries_thunk as *const u8,
+                crate::fn_info!(map_proto_entries_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
             ipm(
                 proto_obj,
                 "forEach",
-                map_proto_foreach_thunk as *const u8,
+                crate::fn_info!(map_proto_foreach_thunk, 2; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
-            ipm(proto_obj, "get", map_proto_get_thunk as *const u8, 1);
-            ipm(proto_obj, "has", map_proto_has_thunk as *const u8, 1);
-            ipm(proto_obj, "keys", map_proto_keys_thunk as *const u8, 0);
-            let set_value = ipm(proto_obj, "set", map_proto_set_thunk as *const u8, 2);
-            ipm(proto_obj, "values", map_proto_values_thunk as *const u8, 0);
+            ipm(
+                proto_obj,
+                "get",
+                crate::fn_info!(map_proto_get_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                1,
+            );
+            ipm(
+                proto_obj,
+                "has",
+                crate::fn_info!(map_proto_has_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                1,
+            );
+            ipm(
+                proto_obj,
+                "keys",
+                crate::fn_info!(map_proto_keys_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                0,
+            );
+            let set_value = ipm(
+                proto_obj,
+                "set",
+                crate::fn_info!(map_proto_set_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+                2,
+            );
+            ipm(
+                proto_obj,
+                "values",
+                crate::fn_info!(map_proto_values_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                0,
+            );
             install_collection_iterator_symbol(proto_obj, entries_value);
             remember_builtin_collection_method(
                 proto_obj,
@@ -157,26 +192,56 @@ pub(super) fn install_collection_proto_methods(
             install_collection_size_getter(
                 proto_obj,
                 "size",
-                set_proto_size_getter_thunk as *const u8,
+                crate::fn_info!(set_proto_size_getter_thunk, 0; with_declared(0)),
             );
-            let add_value = ipm(proto_obj, "add", set_proto_add_thunk as *const u8, 1);
-            ipm(proto_obj, "clear", set_proto_clear_thunk as *const u8, 0);
-            ipm(proto_obj, "delete", set_proto_delete_thunk as *const u8, 1);
+            let add_value = ipm(
+                proto_obj,
+                "add",
+                crate::fn_info!(set_proto_add_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                1,
+            );
+            ipm(
+                proto_obj,
+                "clear",
+                crate::fn_info!(set_proto_clear_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                0,
+            );
+            ipm(
+                proto_obj,
+                "delete",
+                crate::fn_info!(set_proto_delete_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                1,
+            );
             ipm(
                 proto_obj,
                 "entries",
-                set_proto_entries_thunk as *const u8,
+                crate::fn_info!(set_proto_entries_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
             ipm(
                 proto_obj,
                 "forEach",
-                set_proto_foreach_thunk as *const u8,
+                crate::fn_info!(set_proto_foreach_thunk, 2; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
-            ipm(proto_obj, "has", set_proto_has_thunk as *const u8, 1);
-            ipm(proto_obj, "keys", set_proto_keys_thunk as *const u8, 0);
-            let values_value = ipm(proto_obj, "values", set_proto_values_thunk as *const u8, 0);
+            ipm(
+                proto_obj,
+                "has",
+                crate::fn_info!(set_proto_has_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                1,
+            );
+            ipm(
+                proto_obj,
+                "keys",
+                crate::fn_info!(set_proto_keys_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                0,
+            );
+            let values_value = ipm(
+                proto_obj,
+                "values",
+                crate::fn_info!(set_proto_values_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                0,
+            );
             // ECMA-262 specifies these as the same function object, not merely
             // two functions with equivalent behavior.
             let keys_key = crate::string::js_string_from_bytes(b"keys".as_ptr(), 4);
@@ -193,22 +258,47 @@ pub(super) fn install_collection_proto_methods(
             ipm(
                 proto_obj,
                 "delete",
-                weakmap_proto_delete_thunk as *const u8,
+                crate::fn_info!(weakmap_proto_delete_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
-            ipm(proto_obj, "get", weakmap_proto_get_thunk as *const u8, 1);
-            ipm(proto_obj, "has", weakmap_proto_has_thunk as *const u8, 1);
-            ipm(proto_obj, "set", weakmap_proto_set_thunk as *const u8, 2);
+            ipm(
+                proto_obj,
+                "get",
+                crate::fn_info!(weakmap_proto_get_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                1,
+            );
+            ipm(
+                proto_obj,
+                "has",
+                crate::fn_info!(weakmap_proto_has_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                1,
+            );
+            ipm(
+                proto_obj,
+                "set",
+                crate::fn_info!(weakmap_proto_set_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+                2,
+            );
         }
         "WeakSet" => {
-            ipm(proto_obj, "add", weakset_proto_add_thunk as *const u8, 1);
+            ipm(
+                proto_obj,
+                "add",
+                crate::fn_info!(weakset_proto_add_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                1,
+            );
             ipm(
                 proto_obj,
                 "delete",
-                weakset_proto_delete_thunk as *const u8,
+                crate::fn_info!(weakset_proto_delete_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
-            ipm(proto_obj, "has", weakset_proto_has_thunk as *const u8, 1);
+            ipm(
+                proto_obj,
+                "has",
+                crate::fn_info!(weakset_proto_has_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                1,
+            );
         }
         _ => return false,
     }
@@ -237,13 +327,16 @@ fn install_collection_iterator_symbol(proto_obj: *mut ObjectHeader, method_value
     );
 }
 
-fn install_collection_size_getter(proto_obj: *mut ObjectHeader, name: &str, func_ptr: *const u8) {
+fn install_collection_size_getter(
+    proto_obj: *mut ObjectHeader,
+    name: &str,
+    info: *const crate::closure::JsFunctionInfo,
+) {
     if proto_obj.is_null() {
         return;
     }
     unsafe {
-        crate::closure::js_register_closure_arity(func_ptr, 0);
-        let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+        let closure = crate::closure::js_closure_alloc(info, 0);
         if closure.is_null() {
             return;
         }
@@ -414,8 +507,8 @@ fn throw_incompatible_receiver(proto: &str, method: &str, receiver_bits: u64) ->
 }
 
 #[inline]
-fn set_receiver_or_throw(method: &str) -> *mut crate::set::SetHeader {
-    let bits = IMPLICIT_THIS.with(|c| c.get());
+fn set_receiver_or_throw(this: crate::closure::JsThis, method: &str) -> *mut crate::set::SetHeader {
+    let bits = this.bits();
     let set = crate::set::set_ptr_from_receiver_bits(bits).or_else(|| {
         match super::map_set_subclass::subclass_backing_of(f64::from_bits(bits)) {
             Some(super::map_set_subclass::CollectionBacking::Set(set)) => Some(set),
@@ -429,8 +522,8 @@ fn set_receiver_or_throw(method: &str) -> *mut crate::set::SetHeader {
 }
 
 #[inline]
-fn map_receiver_or_throw(method: &str) -> *mut crate::map::MapHeader {
-    let bits = IMPLICIT_THIS.with(|c| c.get());
+fn map_receiver_or_throw(this: crate::closure::JsThis, method: &str) -> *mut crate::map::MapHeader {
+    let bits = this.bits();
     let map = crate::map::map_ptr_from_receiver_bits(bits).or_else(|| {
         match super::map_set_subclass::subclass_backing_of(f64::from_bits(bits)) {
             Some(super::map_set_subclass::CollectionBacking::Map(map)) => Some(map),
@@ -444,10 +537,10 @@ fn map_receiver_or_throw(method: &str) -> *mut crate::map::MapHeader {
 }
 
 /// Read the original receiver after its brand has been checked. Some native
-/// callers publish a raw pointer in IMPLICIT_THIS; normalize it before rooting
+/// callers pass a raw pointer as `this`; normalize it before rooting
 /// or exposing it to JavaScript. The backing collection is not the receiver.
-fn collection_this_value() -> f64 {
-    let bits = IMPLICIT_THIS.with(|c| c.get());
+fn collection_this_value(this: crate::closure::JsThis) -> f64 {
+    let bits = this.bits();
     if bits >> 48 == 0 {
         crate::value::js_nanbox_pointer(bits as i64)
     } else {
@@ -456,8 +549,13 @@ fn collection_this_value() -> f64 {
 }
 
 #[inline]
-fn weak_receiver_or_throw(expected: u32, proto: &str, method: &str) -> f64 {
-    let receiver = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+fn weak_receiver_or_throw(
+    this: crate::closure::JsThis,
+    expected: u32,
+    proto: &str,
+    method: &str,
+) -> f64 {
+    let receiver = f64::from_bits(this.bits());
     match super::weak_class_id_from_receiver(receiver) {
         Some(cid) if cid == expected => receiver,
         _ => throw_incompatible_receiver(proto, method, receiver.to_bits()),
@@ -466,62 +564,69 @@ fn weak_receiver_or_throw(expected: u32, proto: &str, method: &str) -> f64 {
 
 pub(super) extern "C" fn set_proto_add_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     v: f64,
 ) -> f64 {
-    let set = set_receiver_or_throw("add");
+    let set = set_receiver_or_throw(this, "add");
     let scope = crate::gc::RuntimeHandleScope::new();
-    let receiver = scope.root_nanbox_f64(collection_this_value());
+    let receiver = scope.root_nanbox_f64(collection_this_value(this));
     crate::set::js_set_add(set, v);
     receiver.get_nanbox_f64()
 }
 
 pub(super) extern "C" fn set_proto_has_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     v: f64,
 ) -> f64 {
-    let set = set_receiver_or_throw("has");
+    let set = set_receiver_or_throw(this, "has");
     f64::from_bits(crate::value::JSValue::bool(crate::set::js_set_has(set, v) != 0).bits())
 }
 
 pub(super) extern "C" fn set_proto_size_getter_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let set = set_receiver_or_throw("size");
+    let set = set_receiver_or_throw(this, "size");
     crate::set::js_set_size(set) as f64
 }
 
 pub(super) extern "C" fn set_proto_delete_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     v: f64,
 ) -> f64 {
-    let set = set_receiver_or_throw("delete");
+    let set = set_receiver_or_throw(this, "delete");
     f64::from_bits(crate::value::JSValue::bool(crate::set::js_set_delete(set, v) != 0).bits())
 }
 
 pub(super) extern "C" fn set_proto_clear_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     _v: f64,
 ) -> f64 {
-    let set = set_receiver_or_throw("clear");
+    let set = set_receiver_or_throw(this, "clear");
     crate::set::js_set_clear(set);
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
 pub(super) extern "C" fn set_proto_foreach_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     cb: f64,
     this_arg: f64,
 ) -> f64 {
-    let set = set_receiver_or_throw("forEach");
-    crate::set::js_set_foreach_with_collection(set, cb, this_arg, collection_this_value());
+    let set = set_receiver_or_throw(this, "forEach");
+    crate::set::js_set_foreach_with_collection(set, cb, this_arg, collection_this_value(this));
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
 pub(super) extern "C" fn set_proto_values_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     _v: f64,
 ) -> f64 {
-    let set = set_receiver_or_throw("values");
+    let set = set_receiver_or_throw(this, "values");
     f64::from_bits(
         crate::value::JSValue::pointer(
             crate::collection_iter_object::js_set_values_iter_obj(set) as *mut u8
@@ -532,9 +637,10 @@ pub(super) extern "C" fn set_proto_values_thunk(
 
 pub(super) extern "C" fn set_proto_keys_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     _v: f64,
 ) -> f64 {
-    let set = set_receiver_or_throw("keys");
+    let set = set_receiver_or_throw(this, "keys");
     f64::from_bits(
         crate::value::JSValue::pointer(
             crate::collection_iter_object::js_set_values_iter_obj(set) as *mut u8
@@ -545,9 +651,10 @@ pub(super) extern "C" fn set_proto_keys_thunk(
 
 pub(super) extern "C" fn set_proto_entries_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     _v: f64,
 ) -> f64 {
-    let set = set_receiver_or_throw("entries");
+    let set = set_receiver_or_throw(this, "entries");
     f64::from_bits(
         crate::value::JSValue::pointer(
             crate::collection_iter_object::js_set_entries_iter_obj(set) as *mut u8
@@ -558,71 +665,79 @@ pub(super) extern "C" fn set_proto_entries_thunk(
 
 pub(super) extern "C" fn map_proto_get_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     k: f64,
 ) -> f64 {
-    let map = map_receiver_or_throw("get");
+    let map = map_receiver_or_throw(this, "get");
     crate::map::js_map_get(map, k)
 }
 
 pub(super) extern "C" fn map_proto_set_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     k: f64,
     v: f64,
 ) -> f64 {
-    let map = map_receiver_or_throw("set");
+    let map = map_receiver_or_throw(this, "set");
     let scope = crate::gc::RuntimeHandleScope::new();
-    let receiver = scope.root_nanbox_f64(collection_this_value());
+    let receiver = scope.root_nanbox_f64(collection_this_value(this));
     crate::map::js_map_set(map, k, v);
     receiver.get_nanbox_f64()
 }
 
 pub(super) extern "C" fn map_proto_has_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     k: f64,
 ) -> f64 {
-    let map = map_receiver_or_throw("has");
+    let map = map_receiver_or_throw(this, "has");
     f64::from_bits(crate::value::JSValue::bool(crate::map::js_map_has(map, k) != 0).bits())
 }
 
 pub(super) extern "C" fn map_proto_size_getter_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let map = map_receiver_or_throw("size");
+    let map = map_receiver_or_throw(this, "size");
     crate::map::js_map_size(map) as f64
 }
 
 pub(super) extern "C" fn map_proto_delete_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     k: f64,
 ) -> f64 {
-    let map = map_receiver_or_throw("delete");
+    let map = map_receiver_or_throw(this, "delete");
     f64::from_bits(crate::value::JSValue::bool(crate::map::js_map_delete(map, k) != 0).bits())
 }
 
 pub(super) extern "C" fn map_proto_clear_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     _v: f64,
 ) -> f64 {
-    let map = map_receiver_or_throw("clear");
+    let map = map_receiver_or_throw(this, "clear");
     crate::map::js_map_clear(map);
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
 pub(super) extern "C" fn map_proto_foreach_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     cb: f64,
     this_arg: f64,
 ) -> f64 {
-    let map = map_receiver_or_throw("forEach");
-    crate::map::js_map_foreach_with_collection(map, cb, this_arg, collection_this_value());
+    let map = map_receiver_or_throw(this, "forEach");
+    crate::map::js_map_foreach_with_collection(map, cb, this_arg, collection_this_value(this));
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
 pub(super) extern "C" fn map_proto_keys_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     _v: f64,
 ) -> f64 {
-    let map = map_receiver_or_throw("keys");
+    let map = map_receiver_or_throw(this, "keys");
     f64::from_bits(
         crate::value::JSValue::pointer(
             crate::collection_iter_object::js_map_keys_iter_obj(map) as *mut u8
@@ -633,9 +748,10 @@ pub(super) extern "C" fn map_proto_keys_thunk(
 
 pub(super) extern "C" fn map_proto_values_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     _v: f64,
 ) -> f64 {
-    let map = map_receiver_or_throw("values");
+    let map = map_receiver_or_throw(this, "values");
     f64::from_bits(
         crate::value::JSValue::pointer(
             crate::collection_iter_object::js_map_values_iter_obj(map) as *mut u8
@@ -646,9 +762,10 @@ pub(super) extern "C" fn map_proto_values_thunk(
 
 pub(super) extern "C" fn map_proto_entries_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     _v: f64,
 ) -> f64 {
-    let map = map_receiver_or_throw("entries");
+    let map = map_receiver_or_throw(this, "entries");
     f64::from_bits(
         crate::value::JSValue::pointer(
             crate::collection_iter_object::js_map_entries_iter_obj(map) as *mut u8
@@ -659,25 +776,39 @@ pub(super) extern "C" fn map_proto_entries_thunk(
 
 pub(super) extern "C" fn weakset_proto_add_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     v: f64,
 ) -> f64 {
-    let r = weak_receiver_or_throw(crate::weakref::CLASS_ID_WEAKSET, "WeakSet.prototype", "add");
+    let r = weak_receiver_or_throw(
+        this,
+        crate::weakref::CLASS_ID_WEAKSET,
+        "WeakSet.prototype",
+        "add",
+    );
     crate::weakref::js_weakset_add(r, v)
 }
 
 pub(super) extern "C" fn weakset_proto_has_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     v: f64,
 ) -> f64 {
-    let r = weak_receiver_or_throw(crate::weakref::CLASS_ID_WEAKSET, "WeakSet.prototype", "has");
+    let r = weak_receiver_or_throw(
+        this,
+        crate::weakref::CLASS_ID_WEAKSET,
+        "WeakSet.prototype",
+        "has",
+    );
     crate::weakref::js_weakmap_has(r, v)
 }
 
 pub(super) extern "C" fn weakset_proto_delete_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     v: f64,
 ) -> f64 {
     let r = weak_receiver_or_throw(
+        this,
         crate::weakref::CLASS_ID_WEAKSET,
         "WeakSet.prototype",
         "delete",
@@ -687,34 +818,54 @@ pub(super) extern "C" fn weakset_proto_delete_thunk(
 
 pub(super) extern "C" fn weakmap_proto_get_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     k: f64,
 ) -> f64 {
-    let r = weak_receiver_or_throw(crate::weakref::CLASS_ID_WEAKMAP, "WeakMap.prototype", "get");
+    let r = weak_receiver_or_throw(
+        this,
+        crate::weakref::CLASS_ID_WEAKMAP,
+        "WeakMap.prototype",
+        "get",
+    );
     crate::weakref::js_weakmap_get(r, k)
 }
 
 pub(super) extern "C" fn weakmap_proto_set_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     k: f64,
     v: f64,
 ) -> f64 {
-    let r = weak_receiver_or_throw(crate::weakref::CLASS_ID_WEAKMAP, "WeakMap.prototype", "set");
+    let r = weak_receiver_or_throw(
+        this,
+        crate::weakref::CLASS_ID_WEAKMAP,
+        "WeakMap.prototype",
+        "set",
+    );
     crate::weakref::js_weakmap_set(r, k, v)
 }
 
 pub(super) extern "C" fn weakmap_proto_has_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     k: f64,
 ) -> f64 {
-    let r = weak_receiver_or_throw(crate::weakref::CLASS_ID_WEAKMAP, "WeakMap.prototype", "has");
+    let r = weak_receiver_or_throw(
+        this,
+        crate::weakref::CLASS_ID_WEAKMAP,
+        "WeakMap.prototype",
+        "has",
+    );
     crate::weakref::js_weakmap_has(r, k)
 }
 
 pub(super) extern "C" fn weakmap_proto_delete_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     k: f64,
 ) -> f64 {
     let r = weak_receiver_or_throw(
+        this,
         crate::weakref::CLASS_ID_WEAKMAP,
         "WeakMap.prototype",
         "delete",

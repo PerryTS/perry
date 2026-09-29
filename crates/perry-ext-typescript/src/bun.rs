@@ -16,9 +16,9 @@ use perry_ffi::{
     alloc_closure, alloc_null_proto_object, alloc_string, closure_capture_f64, drop_handle,
     gc_register_mutable_root_scanner_named, get_handle, iter_handles_of_mut, js_array_alloc,
     js_array_get, js_array_length, js_array_push, json_stringify, object_field_by_name,
-    read_string, register_closure_arity, register_handle, set_closure_capture_f64, with_handle,
-    with_handle_mut, ArrayHeader, GcRootVisitor, Handle, JsClosure, JsPromise, JsString, JsValue,
-    Promise, RawClosureHeader, StringHeader, TransientRootScope,
+    read_string, register_handle, set_closure_capture_f64, with_handle, with_handle_mut,
+    ArrayHeader, GcRootVisitor, Handle, JsClosure, JsPromise, JsString, JsValue, Promise,
+    RawClosureHeader, StringHeader, TransientRootScope,
 };
 use serde::{Deserialize, Serialize};
 use swc_bundler::{
@@ -684,7 +684,6 @@ struct BuildHookSession {
 }
 
 static PLUGIN_GC_REGISTERED: Once = Once::new();
-static NATIVE_CLOSURE_ARITIES_REGISTERED: Once = Once::new();
 
 fn ensure_build_runtime_registered() {
     PLUGIN_GC_REGISTERED.call_once(|| {
@@ -692,11 +691,6 @@ fn ensure_build_runtime_registered() {
             "perry-ext-typescript:bun-build",
             scan_build_hook_roots,
         );
-    });
-    NATIVE_CLOSURE_ARITIES_REGISTERED.call_once(|| {
-        register_closure_arity(bun_on_resolve as *const u8, 2);
-        register_closure_arity(bun_on_load as *const u8, 2);
-        register_closure_arity(bun_build_output_text as *const u8, 0);
     });
 }
 
@@ -779,16 +773,26 @@ fn register_plugin_hook(
     f64::from_bits(JsValue::UNDEFINED.bits())
 }
 
-extern "C" fn bun_on_resolve(closure: *const RawClosureHeader, options: f64, callback: f64) -> f64 {
+extern "C" fn bun_on_resolve(
+    closure: *const RawClosureHeader,
+    _this: perry_ffi::JsThis,
+    options: f64,
+    callback: f64,
+) -> f64 {
     register_plugin_hook(closure, options, callback, true)
 }
 
-extern "C" fn bun_on_load(closure: *const RawClosureHeader, options: f64, callback: f64) -> f64 {
+extern "C" fn bun_on_load(
+    closure: *const RawClosureHeader,
+    _this: perry_ffi::JsThis,
+    options: f64,
+    callback: f64,
+) -> f64 {
     register_plugin_hook(closure, options, callback, false)
 }
 
-fn native_closure_value(function: *const u8, session: Handle) -> JsValue {
-    let closure = alloc_closure(function, 1);
+fn native_closure_value(info: &'static perry_ffi::JsFunctionInfo, session: Handle) -> JsValue {
+    let closure = alloc_closure(info, 1);
     if closure.is_null() {
         return JsValue::UNDEFINED;
     }
@@ -822,10 +826,18 @@ fn configure_plugins(options: f64) -> Handle {
         return session;
     }
     let on_resolve = scope.root_nanbox(f64::from_bits(
-        native_closure_value(bun_on_resolve as *const u8, session).bits(),
+        native_closure_value(
+            perry_ffi::js_function_info!(bun_on_resolve, 2; with_declared(2)),
+            session,
+        )
+        .bits(),
     ));
     let on_load = scope.root_nanbox(f64::from_bits(
-        native_closure_value(bun_on_load as *const u8, session).bits(),
+        native_closure_value(
+            perry_ffi::js_function_info!(bun_on_load, 2; with_declared(2)),
+            session,
+        )
+        .bits(),
     ));
     let builder = scope.root_nanbox(f64::from_bits(
         alloc_null_proto_object(&[
@@ -836,7 +848,7 @@ fn configure_plugins(options: f64) -> Handle {
     ));
     for callback in callbacks {
         let closure = unsafe { JsClosure::from_raw(callback.get() as *const RawClosureHeader) };
-        unsafe { closure.call1(builder.get()) };
+        unsafe { closure.call1(perry_ffi::JsThis::UNDEFINED, builder.get()) };
     }
     session
 }
@@ -884,7 +896,7 @@ fn invoke_hook(hook: &PluginHook, args: f64) -> JsValue {
     let callback = scope.root_addr(hook.callback);
     let args = scope.root_nanbox(args);
     let closure = unsafe { JsClosure::from_raw(callback.get() as *const RawClosureHeader) };
-    JsValue::from_bits(unsafe { closure.call1(args.get()) }.to_bits())
+    JsValue::from_bits(unsafe { closure.call1(perry_ffi::JsThis::UNDEFINED, args.get()) }.to_bits())
 }
 
 fn file_parts(file: &FileName) -> (String, String) {
@@ -1284,7 +1296,10 @@ fn array_from_values(values: impl IntoIterator<Item = JsValue>) -> JsValue {
     JsValue::from_object_ptr(array.get() as *mut ArrayHeader)
 }
 
-extern "C" fn bun_build_output_text(closure: *const RawClosureHeader) -> f64 {
+extern "C" fn bun_build_output_text(
+    closure: *const RawClosureHeader,
+    _this: perry_ffi::JsThis,
+) -> f64 {
     let scope = TransientRootScope::enter();
     let contents = scope.root_nanbox(unsafe { closure_capture_f64(closure, 0) });
     let promise = JsPromise::new();
@@ -1299,7 +1314,7 @@ fn build_output_value(output: BuildOutput) -> JsValue {
     let contents = scope.root_nanbox(f64::from_bits(
         JsValue::from_string_ptr(alloc_string(&output.contents).as_raw()).bits(),
     ));
-    let text = alloc_closure(bun_build_output_text as *const u8, 1);
+    let text = perry_ffi::alloc_closure(&BUN_BUILD_OUTPUT_TEXT_INFO, 1);
     unsafe { set_closure_capture_f64(text, 0, contents.get()) };
     let text = scope.root_nanbox(f64::from_bits(JsValue::from_object_ptr(text).bits()));
     let path = JsValue::from_string_ptr(alloc_string(&output.path).as_raw());
@@ -1436,3 +1451,6 @@ mod tests {
         assert!(BunLoader::parse("css").is_err());
     }
 }
+
+static BUN_BUILD_OUTPUT_TEXT_INFO: perry_ffi::JsFunctionInfo =
+    perry_ffi::JsFunctionInfo::of(bun_build_output_text as perry_ffi::JsBody0).with_declared(0);

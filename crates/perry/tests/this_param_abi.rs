@@ -1,0 +1,189 @@
+//! This-as-a-parameter: every JS body — compiled closure, value wrapper,
+//! native builtin — is `double body(i64 callee, i64 this, double a0, ...)`
+//! (`perry_abi::JS_BODY_*`), and the `this` parameter is the ONLY way a body
+//! learns its receiver. There is no thread-local receiver cell: a caller that
+//! binds a receiver passes it, and a plain call passes `undefined`.
+
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+fn perry_bin() -> PathBuf {
+    PathBuf::from(env!("CARGO_BIN_EXE_perry"))
+}
+
+const ROUTES: &str = include_str!("fixtures/this_param_routes.ts");
+/// node v26.5.1's output for `fixtures/this_param_routes.ts`.
+const ROUTES_NODE: &str = "797550 -924,22981,272713,748250,12336 leaks=0\n\
+                           function,function,function,function\n\
+                           async 10 -1 18 9";
+
+struct Run {
+    stdout: String,
+    stderr: String,
+    ll_dir: tempfile::TempDir,
+    _dir: tempfile::TempDir,
+}
+
+/// Compile `source` with the constructed IR saved, run it.
+fn compile_and_run(source: &str) -> Run {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let ll_dir = tempfile::tempdir().expect("ll tempdir");
+    let entry = dir.path().join("main.ts");
+    let output = dir.path().join("main_bin");
+    std::fs::write(&entry, source).expect("write entry");
+    let compile = Command::new(perry_bin())
+        .current_dir(dir.path())
+        .arg("compile")
+        .arg(&entry)
+        .arg("-o")
+        .arg(&output)
+        .env("PERRY_NO_CACHE", "1")
+        .env("PERRY_SAVE_LL", ll_dir.path())
+        .output()
+        .expect("run perry compile");
+    assert!(
+        compile.status.success(),
+        "perry compile failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&compile.stdout),
+        String::from_utf8_lossy(&compile.stderr)
+    );
+    let run = Command::new(&output)
+        .current_dir(dir.path())
+        .output()
+        .expect("run compiled binary");
+    let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
+    assert!(
+        run.status.success(),
+        "binary failed ({:?})\nstderr:\n{stderr}",
+        run.status
+    );
+    Run {
+        stdout: String::from_utf8_lossy(&run.stdout).trim().to_owned(),
+        stderr,
+        ll_dir,
+        _dir: dir,
+    }
+}
+
+/// Every route into a body that reads `this` hands it the receiver node
+/// binds: the sums fold `this.k` from every route, so one route passing the
+/// wrong receiver (or `undefined`) changes them. Sabotage: the method-site
+/// hit passes `undefined` -> the first sum differs. Sabotage: the runtime's
+/// sort/reduce callback call passes the running method's receiver instead of
+/// the plain-call `undefined` (what a thread-local cell did) -> `leaks=` is
+/// non-zero. Sabotage: an async or generator body skips its entry bind ->
+/// the sum or the `async` line differs.
+#[test]
+fn every_call_route_hands_the_body_its_receiver() {
+    let run = compile_and_run(ROUTES);
+    assert_eq!(run.stdout, ROUTES_NODE, "stderr:\n{}", run.stderr);
+}
+
+/// Every symbol the module hands to a closure allocator or registers as a
+/// closure body is DEFINED with the JS body ABI. Sabotage: a wrapper family
+/// (e.g. `__perry_wrap_<fn>`) defined without `%js_this` -> named here.
+#[test]
+fn every_installed_body_is_defined_with_the_js_body_abi() {
+    let run = compile_and_run(ROUTES);
+    assert_eq!(run.stdout, ROUTES_NODE, "stderr:\n{}", run.stderr);
+    let ir = read_ir(run.ll_dir.path());
+    let installed = installed_bodies(&ir);
+    assert!(
+        installed.len() >= 10,
+        "found only {} installed bodies in the IR: {installed:?}",
+        installed.len()
+    );
+    let mut checked = 0;
+    let mut wrong = Vec::new();
+    for name in &installed {
+        let Some(params) = defined_params(&ir, name) else {
+            continue; // defined in another module or the runtime
+        };
+        checked += 1;
+        if !params.starts_with("i64 %this_closure, i64 %js_this") {
+            wrong.push(format!("@{name}({params})"));
+        }
+    }
+    assert!(
+        checked >= 10,
+        "only {checked} installed bodies are defined here"
+    );
+    assert!(
+        wrong.is_empty(),
+        "bodies installed as function objects without the JS body ABI:\n{}",
+        wrong.join("\n")
+    );
+    // Every wrapper family this fixture exercises is among them.
+    for family in ["@perry_closure_", "@__perry_wrap_"] {
+        assert!(
+            installed
+                .iter()
+                .any(|n| format!("@{n}").starts_with(family)),
+            "no {family}* body installed: {installed:?}"
+        );
+    }
+}
+
+fn read_ir(dir: &Path) -> String {
+    let mut ir = String::new();
+    for entry in std::fs::read_dir(dir).expect("ll dir") {
+        let path = entry.expect("ll entry").path();
+        if path.extension().is_some_and(|e| e == "ll") {
+            ir.push_str(&std::fs::read_to_string(&path).expect("read ll"));
+            ir.push('\n');
+        }
+    }
+    assert!(!ir.is_empty(), "PERRY_SAVE_LL wrote no IR");
+    ir
+}
+
+/// The bodies function objects run: every `JsFunctionInfo` the module
+/// defines names its body as its first field (`@X$info = ... { ptr @X, ...`),
+/// and every `js_closure_alloc*` names an info (`ptr @X$info`).
+fn installed_bodies(ir: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut push = |sym: &str| {
+        let sym = sym.trim_matches('"').to_string();
+        if !out.contains(&sym) {
+            out.push(sym);
+        }
+    };
+    for line in ir.lines() {
+        if let Some(at) = line.find("$info = ") {
+            if line.starts_with('@') {
+                if let Some(code) = line[at..].split("{ ptr @").nth(1) {
+                    push(code.split(',').next().unwrap_or_default());
+                }
+            }
+        }
+    }
+    for (at, _) in ir.match_indices("@js_closure_alloc") {
+        let rest = &ir[at..];
+        let Some(open) = rest.find('(') else { continue };
+        let Some(close) = rest[open..].find(')') else {
+            continue;
+        };
+        for arg in rest[open + 1..open + close].split(',') {
+            if let Some(sym) = arg.trim().strip_prefix("ptr @") {
+                push(sym.trim_matches('"').trim_end_matches("$info"));
+            }
+        }
+    }
+    out
+}
+
+/// The parameter list of `define ... @name(...)`, if defined in `ir`.
+fn defined_params(ir: &str, name: &str) -> Option<String> {
+    let quoted = format!("@\"{name}\"(");
+    let plain = format!("@{name}(");
+    ir.lines()
+        .filter(|l| l.starts_with("define "))
+        .find_map(|l| {
+            let at = l
+                .find(&plain)
+                .map(|i| i + plain.len())
+                .or_else(|| l.find(&quoted).map(|i| i + quoted.len()))?;
+            let rest = &l[at..];
+            Some(rest[..rest.find(')')?].to_string())
+        })
+}

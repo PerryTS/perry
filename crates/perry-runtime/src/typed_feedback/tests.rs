@@ -23,13 +23,29 @@ extern "C" fn test_direct_method(_this: f64, value: f64) -> f64 {
     value
 }
 
-extern "C" fn test_direct_closure(_closure: *const crate::closure::ClosureHeader, arg: f64) -> f64 {
+extern "C" fn test_direct_closure(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    arg: f64,
+) -> f64 {
     TEST_DIRECT_CLOSURE_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     arg
 }
 
-fn test_direct_closure_ptr() -> *const u8 {
-    test_direct_closure as *const () as *const u8
+static TEST_DIRECT_CLOSURE_INFO: crate::closure::JsFunctionInfo =
+    crate::closure::JsFunctionInfo::of(
+        test_direct_closure as crate::codegen_abi::JsBody1<crate::closure::ClosureHeader>,
+    )
+    .with_declared(1);
+
+/// A second one-parameter body, for a function object that must differ from
+/// `test_direct_closure`'s.
+extern "C" fn test_replacement_closure(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    arg: f64,
+) -> f64 {
+    arg
 }
 
 fn test_direct_method_ptr() -> *const u8 {
@@ -1379,19 +1395,19 @@ fn representation_lowering_helpers_have_lto_keepalive_anchors() {
         (
             guards,
             "static G3",
-            "static G3: extern \"C\" fn(u64, f64, *const u8, u32, u32) -> i32",
+            "static G3: extern \"C\" fn(u64, f64, *const crate::closure::JsFunctionInfo, u32, u32) -> i32",
             "js_typed_feedback_closure_direct_call_guard",
         ),
         (
             guards,
             "static G3B",
-            "static G3B: extern \"C\" fn(f64, *const u8) -> u64",
+            "static G3B: extern \"C\" fn(f64, *const crate::closure::JsFunctionInfo) -> u64",
             "js_closure_exact_func_guard",
         ),
         (
             guards,
             "static G3C",
-            "static G3C: unsafe extern \"C\" fn(f64, u32, u32, *const i8, usize, *const u8, *mut MethodPicCacheSlot) -> u64",
+            "static G3C: unsafe extern \"C\" fn(f64, u32, u32, *const i8, usize, *const crate::closure::JsFunctionInfo, *mut MethodPicCacheSlot) -> u64",
             "js_object_own_method_cache_miss",
         ),
         (
@@ -1766,6 +1782,7 @@ fn typed_feedback_class_field_set_guard_falls_back_for_class_setter() {
             b"x".as_ptr(),
             1,
             test_class_field_setter as *const () as usize as i64,
+            1,
         );
     }
 
@@ -1819,6 +1836,7 @@ fn typed_feedback_class_field_set_guard_falls_back_for_class_setter() {
             b"x".as_ptr(),
             1,
             test_class_field_setter as *const () as usize as i64,
+            1,
         );
     }
     crate::object::js_object_set_field_by_name(bare, key, 7.0);
@@ -2462,14 +2480,13 @@ fn typed_feedback_closure_direct_guard_passes_and_rejects_bound_sentinel() {
     reset_typed_feedback_for_tests();
     register(66, TypedFeedbackSiteKind::ClosureCall, "cb()");
 
-    let fn_ptr = test_direct_closure_ptr();
-    crate::closure::js_register_closure_arity(fn_ptr, 1);
-    let closure = crate::closure::js_closure_alloc_singleton(fn_ptr);
+    let fn_ptr: *const crate::closure::JsFunctionInfo = &TEST_DIRECT_CLOSURE_INFO;
+    let closure = crate::closure::js_closure_alloc_singleton(&TEST_DIRECT_CLOSURE_INFO);
     let closure_value = crate::value::js_nanbox_pointer(closure as i64);
     let pass = js_typed_feedback_closure_direct_call_guard(66, closure_value, fn_ptr, 1, 1);
     assert_eq!(pass, 1);
 
-    let bound = crate::closure::js_closure_alloc(crate::closure::BOUND_METHOD_FUNC_PTR, 0);
+    let bound = crate::closure::js_closure_alloc(&crate::closure::BOUND_METHOD_INFO, 0);
     let bound_value = crate::value::js_nanbox_pointer(bound as i64);
     let fail = js_typed_feedback_closure_direct_call_guard(66, bound_value, fn_ptr, 1, 1);
     assert_eq!(fail, 0);
@@ -2481,19 +2498,19 @@ fn typed_feedback_closure_direct_guard_passes_and_rejects_bound_sentinel() {
 
 #[test]
 fn exact_closure_func_guard_is_safe_and_identity_exact() {
-    let fn_ptr = test_direct_closure_ptr();
-    let closure = crate::closure::js_closure_alloc_singleton(fn_ptr);
+    let fn_ptr: *const crate::closure::JsFunctionInfo = &TEST_DIRECT_CLOSURE_INFO;
+    let closure = crate::closure::js_closure_alloc_singleton(&TEST_DIRECT_CLOSURE_INFO);
     let closure_value = crate::value::js_nanbox_pointer(closure as i64);
     assert_eq!(
         js_closure_exact_func_guard(closure_value, fn_ptr),
         closure as u64
     );
     assert_eq!(
-        js_closure_exact_func_guard(closure_value, test_direct_method_ptr()),
+        js_closure_exact_func_guard(closure_value, crate::fn_info!(test_replacement_closure, 1),),
         0
     );
 
-    let bound = crate::closure::js_closure_alloc(crate::closure::BOUND_METHOD_FUNC_PTR, 0);
+    let bound = crate::closure::js_closure_alloc(&crate::closure::BOUND_METHOD_INFO, 0);
     let bound_value = crate::value::js_nanbox_pointer(bound as i64);
     assert_eq!(js_closure_exact_func_guard(bound_value, fn_ptr), 0);
     assert_eq!(js_closure_exact_func_guard(42.0, fn_ptr), 0);
@@ -2514,8 +2531,8 @@ fn own_method_cache_accepts_appends_and_rejects_live_method_mutation() {
     let method_key = crate::string::js_string_from_bytes(b"method".as_ptr(), 6);
     let extra_key = crate::string::js_string_from_bytes(b"state".as_ptr(), 5);
     let spilled_key = crate::string::js_string_from_bytes(b"spilled".as_ptr(), 7);
-    let fn_ptr = test_direct_closure_ptr();
-    let closure = crate::closure::js_closure_alloc_singleton(fn_ptr);
+    let fn_ptr: *const crate::closure::JsFunctionInfo = &TEST_DIRECT_CLOSURE_INFO;
+    let closure = crate::closure::js_closure_alloc_singleton(&TEST_DIRECT_CLOSURE_INFO);
     let closure_value = crate::value::js_nanbox_pointer(closure as i64);
     crate::object::js_object_set_field_by_name(object, method_key, closure_value);
     let receiver = crate::value::js_nanbox_pointer(object as i64);
@@ -2574,7 +2591,8 @@ fn own_method_cache_accepts_appends_and_rejects_live_method_mutation() {
     assert_eq!(after_spilled_append, closure as u64);
     assert_ne!(cache[0], 0);
 
-    let replacement = crate::closure::js_closure_alloc_singleton(test_direct_method_ptr());
+    let replacement =
+        crate::closure::js_closure_alloc_singleton(crate::fn_info!(test_replacement_closure, 1));
     crate::object::js_object_set_field_by_name(
         object,
         method_key,
@@ -2997,7 +3015,14 @@ fn function_source_array_literal_keeps_the_array_index_fast_path_armed() {
     .map(|s| s.to_string())
     .collect();
     let f = crate::dyn_eval::dyn_function_from_strings(&source);
-    let result = unsafe { crate::closure::js_native_call_value(f, [].as_ptr(), 0) };
+    let result = unsafe {
+        crate::closure::js_native_call_value(
+            f,
+            crate::closure::plain_call_receiver(),
+            [].as_ptr(),
+            0,
+        )
+    };
     let result = crate::value::JSValue::from_bits(result.to_bits());
     assert_eq!(
         if result.is_int32() {

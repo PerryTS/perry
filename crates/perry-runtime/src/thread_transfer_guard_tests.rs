@@ -59,7 +59,7 @@ fn first_unsupported_transfer_type_finds_nested_markers() {
     assert_eq!(first_unsupported_transfer_type(&obj), Some("Promise"));
     // Inside a closure capture.
     let clo = SerializedValue::Closure {
-        func_ptr: 0,
+        info: 0,
         capture_count: 1,
         captures: vec![SerializedValue::Unsupported("Error")],
     };

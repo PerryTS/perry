@@ -131,7 +131,11 @@ unsafe fn alloc_transform_stream_with_strategies(
     // transform/flush callbacks receive), so `controller.enqueue(c)` /
     // `controller.terminate()` / `controller.error(e)` act on the readable.
     if start_cb != 0 {
-        js_closure_call1(start_cb as *const ClosureHeader, readable_id as f64);
+        js_closure_call1(
+            start_cb as *const ClosureHeader,
+            perry_runtime::closure::plain_call_receiver(),
+            readable_id as f64,
+        );
     }
     id as f64
 }
@@ -249,9 +253,10 @@ pub(super) unsafe fn transform_write(writable_id: usize, chunk: f64) -> *mut Pro
     // cadence (teepipe2.js) — which let a tee sibling's reader outrun the
     // pipeline (Next.js cold-start head reorder). Queue the invocation; the
     // write promise resolves in the job, after the transform enqueues.
-    let job_fn = transform_write_job as *const u8;
-    perry_runtime::closure::js_register_closure_arity(job_fn, 0);
-    let job = perry_runtime::closure::js_closure_alloc(job_fn, 5);
+    let job = perry_runtime::closure::js_closure_alloc(
+        perry_runtime::fn_info!(transform_write_job, 0; with_declared(0)),
+        5,
+    );
     perry_runtime::closure::js_closure_set_capture_ptr(job, 0, transform_cb);
     perry_runtime::closure::js_closure_set_capture_ptr(job, 1, readable_id as i64);
     perry_runtime::closure::js_closure_set_capture_ptr(job, 2, chunk.to_bits() as i64);
@@ -281,11 +286,15 @@ pub(super) unsafe fn transform_write(writable_id: usize, chunk: f64) -> *mut Pro
 /// before the transformer runs (sink write algorithm → PerformTransform);
 /// teepipe2.js shows the transform output landing one tick later than a
 /// single-job deferral produces. Re-queue once, then run the transform.
-extern "C" fn transform_write_job(closure: *const ClosureHeader) -> f64 {
+extern "C" fn transform_write_job(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     {
-        let job_fn = transform_write_job2 as *const u8;
-        perry_runtime::closure::js_register_closure_arity(job_fn, 0);
-        let job = perry_runtime::closure::js_closure_alloc(job_fn, 5);
+        let job = perry_runtime::closure::js_closure_alloc(
+            perry_runtime::fn_info!(transform_write_job2, 0; with_declared(0)),
+            5,
+        );
         for i in 0..5 {
             perry_runtime::closure::js_closure_set_capture_ptr(
                 job,
@@ -298,7 +307,10 @@ extern "C" fn transform_write_job(closure: *const ClosureHeader) -> f64 {
     f64::from_bits(TAG_UNDEFINED)
 }
 
-extern "C" fn transform_write_job2(closure: *const ClosureHeader) -> f64 {
+extern "C" fn transform_write_job2(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     unsafe {
         let transform_cb = perry_runtime::closure::js_closure_get_capture_ptr(closure, 0);
         let readable_id = perry_runtime::closure::js_closure_get_capture_ptr(closure, 1) as usize;
@@ -310,6 +322,7 @@ extern "C" fn transform_write_job2(closure: *const ClosureHeader) -> f64 {
         if transform_cb != 0 && readable_id != 0 {
             let ret = js_closure_call2(
                 transform_cb as *const ClosureHeader,
+                perry_runtime::closure::plain_call_receiver(),
                 chunk,
                 readable_id as f64,
             );
@@ -321,15 +334,17 @@ extern "C" fn transform_write_job2(closure: *const ClosureHeader) -> f64 {
             if perry_runtime::promise::js_value_is_promise(ret) != 0 {
                 let inner = perry_runtime::value::js_nanbox_get_pointer(ret) as *mut Promise;
                 if !inner.is_null() {
-                    let f = transform_write_settle_fulfilled as *const u8;
-                    let r = transform_write_settle_rejected as *const u8;
-                    perry_runtime::closure::js_register_closure_arity(f, 1);
-                    perry_runtime::closure::js_register_closure_arity(r, 1);
-                    let fc = perry_runtime::closure::js_closure_alloc(f, 3);
+                    let fc = perry_runtime::closure::js_closure_alloc(
+                        perry_runtime::fn_info!(transform_write_settle_fulfilled, 1; with_declared(1)),
+                        3,
+                    );
                     perry_runtime::closure::js_closure_set_capture_ptr(fc, 0, readable_id as i64);
                     perry_runtime::closure::js_closure_set_capture_ptr(fc, 1, promise as i64);
                     perry_runtime::closure::js_closure_set_capture_ptr(fc, 2, writable_id as i64);
-                    let rc = perry_runtime::closure::js_closure_alloc(r, 3);
+                    let rc = perry_runtime::closure::js_closure_alloc(
+                        perry_runtime::fn_info!(transform_write_settle_rejected, 1; with_declared(1)),
+                        3,
+                    );
                     perry_runtime::closure::js_closure_set_capture_ptr(rc, 0, readable_id as i64);
                     perry_runtime::closure::js_closure_set_capture_ptr(rc, 1, promise as i64);
                     perry_runtime::closure::js_closure_set_capture_ptr(rc, 2, writable_id as i64);
@@ -523,7 +538,11 @@ unsafe fn transform_write_job_done(writable_id: usize) {
 
 /// The async transformer's returned promise fulfilled — settle the write with
 /// the same backpressure gate as the synchronous path.
-extern "C" fn transform_write_settle_fulfilled(closure: *const ClosureHeader, _value: f64) -> f64 {
+extern "C" fn transform_write_settle_fulfilled(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    _value: f64,
+) -> f64 {
     unsafe {
         let readable_id = perry_runtime::closure::js_closure_get_capture_ptr(closure, 0) as usize;
         let promise =
@@ -538,7 +557,11 @@ extern "C" fn transform_write_settle_fulfilled(closure: *const ClosureHeader, _v
 /// The async transformer's returned promise rejected — error the readable side
 /// and reject the write (spec: transformResultPromise rejection errors the
 /// TransformStream).
-extern "C" fn transform_write_settle_rejected(closure: *const ClosureHeader, reason: f64) -> f64 {
+extern "C" fn transform_write_settle_rejected(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    reason: f64,
+) -> f64 {
     unsafe {
         let readable_id = perry_runtime::closure::js_closure_get_capture_ptr(closure, 0) as usize;
         let promise =
@@ -657,6 +680,7 @@ mod backpressure_tests {
 
     extern "C" fn capture_transform(
         _closure: *const ClosureHeader,
+        _this: perry_runtime::closure::JsThis,
         _chunk: f64,
         _controller: f64,
     ) -> f64 {
@@ -682,8 +706,10 @@ mod backpressure_tests {
     fn initial_backpressure_defers_transform_until_read_demand() {
         let _serial = crate::streams::tests::serial_guard();
         TRANSFORM_CALLS.store(0, Ordering::Relaxed);
-        let transform = perry_runtime::closure::js_closure_alloc(capture_transform as *const u8, 0);
-        perry_runtime::closure::js_register_closure_arity(capture_transform as *const u8, 2);
+        let transform = perry_runtime::closure::js_closure_alloc(
+            perry_runtime::fn_info!(capture_transform, 2; with_declared(2)),
+            0,
+        );
         let transform_value = f64::from_bits(JSValue::pointer(transform as *const u8).bits());
         let undefined = f64::from_bits(TAG_UNDEFINED);
         let stream = unsafe {
@@ -707,8 +733,10 @@ mod backpressure_tests {
     fn abort_rejects_transform_waiting_for_read_demand() {
         let _serial = crate::streams::tests::serial_guard();
         TRANSFORM_CALLS.store(0, Ordering::Relaxed);
-        let transform = perry_runtime::closure::js_closure_alloc(capture_transform as *const u8, 0);
-        perry_runtime::closure::js_register_closure_arity(capture_transform as *const u8, 2);
+        let transform = perry_runtime::closure::js_closure_alloc(
+            perry_runtime::fn_info!(capture_transform, 2; with_declared(2)),
+            0,
+        );
         let transform_value = f64::from_bits(JSValue::pointer(transform as *const u8).bits());
         let undefined = f64::from_bits(TAG_UNDEFINED);
         let stream = unsafe {
@@ -816,6 +844,7 @@ unsafe fn perform_transform_close(writable_id: usize, promise: *mut Promise) {
     let flush_result = if !handled_native && flush_cb != 0 && readable_id != 0 {
         Some(js_closure_call1(
             flush_cb as *const ClosureHeader,
+            perry_runtime::closure::plain_call_receiver(),
             readable_id as f64,
         ))
     } else {
@@ -839,11 +868,11 @@ unsafe fn perform_transform_close(writable_id: usize, promise: *mut Promise) {
                     // deferred enqueue lands on the still-open readable first.
                     _ => {
                         let fulfill = perry_runtime::closure::js_closure_alloc(
-                            transform_flush_fulfilled as *const u8,
+                            perry_runtime::fn_info!(transform_flush_fulfilled, 1),
                             3,
                         );
                         let reject = perry_runtime::closure::js_closure_alloc(
-                            transform_flush_rejected as *const u8,
+                            perry_runtime::fn_info!(transform_flush_rejected, 1),
                             3,
                         );
                         perry_runtime::closure::js_closure_set_capture_ptr(
@@ -931,7 +960,11 @@ unsafe fn error_transform_close(
     js_promise_reject(close_promise, f64::from_bits(reason_bits));
 }
 
-extern "C" fn transform_flush_fulfilled(closure: *const ClosureHeader, _value: f64) -> f64 {
+extern "C" fn transform_flush_fulfilled(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    _value: f64,
+) -> f64 {
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
@@ -945,7 +978,11 @@ extern "C" fn transform_flush_fulfilled(closure: *const ClosureHeader, _value: f
     f64::from_bits(TAG_UNDEFINED)
 }
 
-extern "C" fn transform_flush_rejected(closure: *const ClosureHeader, reason: f64) -> f64 {
+extern "C" fn transform_flush_rejected(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    reason: f64,
+) -> f64 {
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }

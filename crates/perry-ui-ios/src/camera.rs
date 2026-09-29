@@ -15,8 +15,8 @@ use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use crate::widgets;
 
 extern "C" {
-    fn js_closure_call0(closure: *const u8) -> f64;
-    fn js_closure_call2(closure: *const u8, arg1: f64, arg2: f64) -> f64;
+    fn js_closure_call0(closure: *const u8, this: perry_ffi::JsThis) -> f64;
+    fn js_closure_call2(closure: *const u8, this: perry_ffi::JsThis, arg1: f64, arg2: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
     fn js_run_stdlib_pump();
     fn js_promise_run_microtasks() -> i32;
@@ -254,7 +254,12 @@ fn register_tap_handler_class() -> *const c_void {
                             js_run_stdlib_pump();
                             js_promise_run_microtasks();
                             let closure_ptr = js_nanbox_get_pointer(closure_f64);
-                            js_closure_call2(closure_ptr as *const u8, norm_x, norm_y);
+                            js_closure_call2(
+                                closure_ptr as *const u8,
+                                perry_ffi::JsThis::UNDEFINED,
+                                norm_x,
+                                norm_y,
+                            );
                         }
                     });
                 }

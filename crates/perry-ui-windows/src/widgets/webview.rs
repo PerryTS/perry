@@ -49,8 +49,8 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use super::{alloc_control_id, register_widget, WidgetKind};
 
 extern "C" {
-    fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
-    fn js_closure_call2(closure: *const u8, arg1: f64, arg2: f64) -> f64;
+    fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
+    fn js_closure_call2(closure: *const u8, this: perry_ffi::JsThis, arg1: f64, arg2: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
     fn js_nanbox_string(ptr: i64) -> f64;
     fn js_is_truthy(value: f64) -> i32;
@@ -490,7 +490,9 @@ fn install_navigation_handlers(handle: i64, webview: &ICoreWebView2) {
                 catch_panic(
                     "webview onShouldNavigate",
                     std::panic::AssertUnwindSafe(|| {
-                        let r = unsafe { js_closure_call1(closure_ptr, url_nb) };
+                        let r = unsafe {
+                            js_closure_call1(closure_ptr, perry_ffi::JsThis::UNDEFINED, url_nb)
+                        };
                         result_cell_ref.set(r);
                     }),
                 );
@@ -547,7 +549,7 @@ fn install_navigation_handlers(handle: i64, webview: &ICoreWebView2) {
                     catch_panic(
                         "webview onLoaded",
                         std::panic::AssertUnwindSafe(|| unsafe {
-                            js_closure_call1(closure_ptr, url_nb);
+                            js_closure_call1(closure_ptr, perry_ffi::JsThis::UNDEFINED, url_nb);
                         }),
                     );
                 }
@@ -568,7 +570,12 @@ fn install_navigation_handlers(handle: i64, webview: &ICoreWebView2) {
                     catch_panic(
                         "webview onError",
                         std::panic::AssertUnwindSafe(|| unsafe {
-                            js_closure_call2(closure_ptr, status as f64, msg_nb);
+                            js_closure_call2(
+                                closure_ptr,
+                                perry_ffi::JsThis::UNDEFINED,
+                                status as f64,
+                                msg_nb,
+                            );
                         }),
                     );
                 }
@@ -788,7 +795,7 @@ pub fn evaluate_js(handle: i64, js_ptr: *const u8, callback: f64) {
                     catch_panic(
                         "webview evaluateJs callback",
                         std::panic::AssertUnwindSafe(|| unsafe {
-                            js_closure_call1(closure_ptr, nb);
+                            js_closure_call1(closure_ptr, perry_ffi::JsThis::UNDEFINED, nb);
                         }),
                     );
                 }

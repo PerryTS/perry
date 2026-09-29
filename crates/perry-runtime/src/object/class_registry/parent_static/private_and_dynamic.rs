@@ -288,7 +288,7 @@ pub(crate) unsafe fn class_private_instance_getter_value(
     if getter == 0 {
         return None;
     }
-    let f: extern "C" fn(f64) -> f64 = std::mem::transmute(getter);
+    let f = crate::closure::body_call::js_method_body_fn!(getter as *const u8;);
     Some(f(receiver))
 }
 
@@ -306,7 +306,7 @@ pub(crate) unsafe fn class_private_instance_setter_apply(
     if decl.set == 0 {
         return false;
     }
-    let f: extern "C" fn(f64, f64) -> f64 = std::mem::transmute(decl.set);
+    let f = crate::closure::body_call::js_method_body_fn!(decl.set as *const u8; value);
     let _ = f(receiver, value);
     true
 }
@@ -329,9 +329,6 @@ pub(crate) unsafe fn call_private_static_method_for_owner(
     let scope = crate::gc::RuntimeHandleScope::new();
     let this_value = scope.root_nanbox_f64(this_value);
     let private_brand = scope.root_nanbox_f64(private_brand);
-    let previous_this = scope.root_nanbox_f64(crate::object::js_implicit_this_set(
-        this_value.get_nanbox_f64(),
-    ));
     crate::object::static_private_owner_push(private_brand.get_nanbox_f64());
     crate::object::private_lexical_brand_push(private_brand.get_nanbox_f64());
     crate::object::static_this_arm_if_unarmed(this_value.get_nanbox_f64());
@@ -339,6 +336,5 @@ pub(crate) unsafe fn call_private_static_method_for_owner(
     crate::object::static_this_disarm();
     crate::object::private_lexical_brand_pop();
     crate::object::static_private_owner_pop();
-    crate::object::js_implicit_this_set(previous_this.get_nanbox_f64());
     Some(result)
 }

@@ -787,8 +787,8 @@ static KEEP_TEXT_DECODER_IGNORE_BOM: extern "C" fn(f64) -> f64 = js_text_decoder
 // Prototype thunks.
 //
 // A native method or accessor installed on a shared prototype is a
-// `ClosureHeader` whose ABI carries no receiver; it reads one from
-// `js_implicit_this_get()`. `temporal_proto_getter_thunk` is the template.
+// `ClosureHeader` body; it reads its receiver from its `this` parameter.
+// `temporal_proto_getter_thunk` is the template.
 // Each thunk brand-checks its receiver against the family class id, so
 // `TextDecoder.prototype.decode.call({})` throws a TypeError exactly as node
 // does, instead of silently decoding as utf-8.
@@ -804,9 +804,10 @@ fn require_text_brand(value: f64, class_id: u32, message: &[u8]) {
 #[cfg(feature = "global-text")]
 pub(crate) extern "C" fn text_decoder_decode_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     input: f64,
 ) -> f64 {
-    let this = crate::object::js_implicit_this_get();
+    let this = this.as_f64();
     require_text_brand(
         this,
         TEXT_DECODER_CLASS_ID,
@@ -819,8 +820,9 @@ pub(crate) extern "C" fn text_decoder_decode_thunk(
 #[cfg(feature = "global-text")]
 pub(crate) extern "C" fn text_decoder_encoding_getter(
     _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let this = crate::object::js_implicit_this_get();
+    let this = this.as_f64();
     require_text_brand(
         this,
         TEXT_DECODER_CLASS_ID,
@@ -833,8 +835,9 @@ pub(crate) extern "C" fn text_decoder_encoding_getter(
 #[cfg(feature = "global-text")]
 pub(crate) extern "C" fn text_decoder_fatal_getter(
     _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let this = crate::object::js_implicit_this_get();
+    let this = this.as_f64();
     require_text_brand(
         this,
         TEXT_DECODER_CLASS_ID,
@@ -846,8 +849,9 @@ pub(crate) extern "C" fn text_decoder_fatal_getter(
 #[cfg(feature = "global-text")]
 pub(crate) extern "C" fn text_decoder_ignore_bom_getter(
     _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let this = crate::object::js_implicit_this_get();
+    let this = this.as_f64();
     require_text_brand(
         this,
         TEXT_DECODER_CLASS_ID,
@@ -859,8 +863,9 @@ pub(crate) extern "C" fn text_decoder_ignore_bom_getter(
 #[cfg(feature = "global-text")]
 pub(crate) extern "C" fn text_encoder_encoding_getter(
     _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let this = crate::object::js_implicit_this_get();
+    let this = this.as_f64();
     require_text_brand(
         this,
         TEXT_ENCODER_CLASS_ID,
@@ -873,9 +878,10 @@ pub(crate) extern "C" fn text_encoder_encoding_getter(
 #[cfg(feature = "global-text")]
 pub(crate) extern "C" fn text_encoder_encode_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     input: f64,
 ) -> f64 {
-    let this = crate::object::js_implicit_this_get();
+    let this = this.as_f64();
     require_text_brand(
         this,
         TEXT_ENCODER_CLASS_ID,
@@ -887,10 +893,11 @@ pub(crate) extern "C" fn text_encoder_encode_thunk(
 #[cfg(feature = "global-text")]
 pub(crate) extern "C" fn text_encoder_encode_into_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     source: f64,
     dest: f64,
 ) -> f64 {
-    let this = crate::object::js_implicit_this_get();
+    let this = this.as_f64();
     require_text_brand(
         this,
         TEXT_ENCODER_CLASS_ID,

@@ -393,6 +393,7 @@ pub(super) fn call_global_blob_new(parts: f64, type_value: f64) -> f64 {
 pub(super) fn call_global_blob_new(parts: f64, type_value: f64) -> f64 {
     let f = GLOBAL_FETCH_BLOB_NEW.load(Ordering::Acquire);
     if !f.is_null() {
+        // NOT-A-JS-BODY: a native Rust helper registered by another crate.
         let func: FetchBlobNewFn = unsafe { std::mem::transmute(f) };
         return unsafe { func(parts, type_value) };
     }
@@ -418,6 +419,7 @@ pub(super) fn call_global_file_new(
 ) -> f64 {
     let f = GLOBAL_FETCH_FILE_NEW.load(Ordering::Acquire);
     if !f.is_null() {
+        // NOT-A-JS-BODY: a native Rust helper registered by another crate.
         let func: FetchFileNewFn = unsafe { std::mem::transmute(f) };
         return unsafe { func(parts, name, type_value, last_modified) };
     }
@@ -433,6 +435,7 @@ pub(super) fn call_global_headers_new() -> f64 {
 pub(super) fn call_global_headers_new() -> f64 {
     let f = GLOBAL_FETCH_HEADERS_NEW.load(Ordering::Acquire);
     if !f.is_null() {
+        // NOT-A-JS-BODY: a native Rust helper registered by another crate.
         let func: FetchHeadersNewFn = unsafe { std::mem::transmute(f) };
         return func();
     }
@@ -448,6 +451,7 @@ pub(super) fn call_global_headers_init_from_value(handle: f64, init: f64) -> f64
 pub(super) fn call_global_headers_init_from_value(handle: f64, init: f64) -> f64 {
     let f = GLOBAL_FETCH_HEADERS_INIT_FROM_VALUE.load(Ordering::Acquire);
     if !f.is_null() {
+        // NOT-A-JS-BODY: a native Rust helper registered by another crate.
         let func: FetchHeadersInitFromValueFn = unsafe { std::mem::transmute(f) };
         return unsafe { func(handle, init) };
     }
@@ -573,6 +577,7 @@ pub(super) fn call_global_request_new(input: f64, init: f64) -> f64 {
 pub(super) fn call_global_request_new(input: f64, init: f64) -> f64 {
     let f = GLOBAL_FETCH_REQUEST_NEW.load(Ordering::Acquire);
     if !f.is_null() {
+        // NOT-A-JS-BODY: perry-ext-fetch registers its Rust `Request` constructor.
         let func: FetchRequestNewFn = unsafe { std::mem::transmute(f) };
         return unsafe { func(input, init) };
     }
@@ -659,6 +664,7 @@ pub(super) fn call_global_response_static_error() -> f64 {
 pub(super) fn call_global_response_static_error() -> f64 {
     let f = GLOBAL_FETCH_RESPONSE_STATIC_ERROR.load(Ordering::Acquire);
     if !f.is_null() {
+        // NOT-A-JS-BODY: a native Rust helper registered by another crate.
         let func: FetchResponseStaticErrorFn = unsafe { std::mem::transmute(f) };
         return func();
     }
@@ -667,6 +673,7 @@ pub(super) fn call_global_response_static_error() -> f64 {
 
 pub(super) extern "C" fn global_this_fetch_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     input: f64,
     rest: f64,
 ) -> f64 {

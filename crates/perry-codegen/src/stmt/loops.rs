@@ -3888,14 +3888,21 @@ fn lower_packed_f64_range_versioned_for(
     }
 
     ctx.current_block = slow_pre_idx;
-    lower_for_after_init(
-        ctx,
-        init,
-        condition,
-        update,
-        body,
-        "for.packed_f64_range_slow",
-    )?;
+    // The arrays this tier refused (not packed numbers) may still be region
+    // arrays (S3): their element reads are then bare in the split loop.
+    let region = super::region_loop::begin_for_arrays(ctx, condition, body, update)?;
+    let lowered = super::region_loop::lower_loop(ctx, region, &mut |ctx| {
+        lower_for_after_init(
+            ctx,
+            init,
+            condition,
+            update,
+            body,
+            "for.packed_f64_range_slow",
+        )
+    });
+    super::region_loop::end(ctx, region);
+    lowered?;
     if !ctx.block().is_terminated() {
         ctx.block().br(&merge_label);
     }
@@ -8190,8 +8197,11 @@ fn emit_armed_gc_loop_safepoint(ctx: &mut FnCtx<'_>) {
             let handle = blk.and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
             blk.store(I64, &handle, &recipe.base_handle_slot);
         }
-        blk.br(&done_label);
     }
+    // Loop regions' array bases (S3), from the same GC-updated roots.
+    crate::stmt::region_loop::emit_poll_refresh(ctx)
+        .expect("a region array binding lowers as a plain load");
+    ctx.block().br(&done_label);
     ctx.current_block = done_idx;
 }
 

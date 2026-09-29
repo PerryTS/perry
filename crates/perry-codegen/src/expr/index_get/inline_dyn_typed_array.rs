@@ -77,7 +77,7 @@ use super::FnCtx;
 /// `compareSync`).
 ///
 /// [`lower_unknown_local_index_get_for_number_context`]: super::lower_unknown_local_index_get_for_number_context
-pub(super) fn lower_inline_dyn_typed_array_get(
+pub(in crate::expr) fn lower_inline_dyn_typed_array_get(
     ctx: &mut FnCtx<'_>,
     obj_box: &str,
     idx_d: &str,

@@ -32,8 +32,8 @@ pub(super) fn attach_readable_from_promise_chunk(stream: f64, chunk: f64) -> boo
         _ => {}
     }
 
-    let fulfill = js_closure_alloc(ns_readable_from_promise_fulfilled as *const u8, 2);
-    let reject = js_closure_alloc(ns_readable_from_promise_rejected as *const u8, 2);
+    let fulfill = js_closure_alloc(crate::fn_info!(ns_readable_from_promise_fulfilled, 1), 2);
+    let reject = js_closure_alloc(crate::fn_info!(ns_readable_from_promise_rejected, 1), 2);
     js_closure_set_capture_ptr(fulfill, 0, stream.to_bits() as i64);
     js_closure_set_capture_ptr(fulfill, 1, chunk.to_bits() as i64);
     js_closure_set_capture_ptr(reject, 0, stream.to_bits() as i64);
@@ -110,6 +110,7 @@ fn settle_readable_from_promise_rejected(stream: f64, chunk: f64, reason: f64) {
 
 pub(super) extern "C" fn ns_readable_from_promise_fulfilled(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     if closure.is_null() {
@@ -123,6 +124,7 @@ pub(super) extern "C" fn ns_readable_from_promise_fulfilled(
 
 pub(super) extern "C" fn ns_readable_from_promise_rejected(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     reason: f64,
 ) -> f64 {
     if closure.is_null() {

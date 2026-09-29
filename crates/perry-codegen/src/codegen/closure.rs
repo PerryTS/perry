@@ -140,12 +140,8 @@ fn emit_public_typed_closure_trampoline(
         TypedFunctionTrampolineKind::StringRef => typed_param_reps_for_params(params)
             .unwrap_or_else(|| vec![TypedParamRep::StringRef; params.len()]),
     };
-    let mut llvm_params: Vec<(LlvmType, String)> = Vec::with_capacity(params.len() + 1);
-    llvm_params.push((I64, "%this_closure".to_string()));
-    for p in params {
-        llvm_params.push((DOUBLE, format!("%arg{}", p.id)));
-    }
     let arg_names: Vec<String> = params.iter().map(|p| format!("%arg{}", p.id)).collect();
+    let llvm_params = crate::expr::body_call::js_body_params(arg_names.iter().cloned());
     let wf = llmod.define_function(&public_name, DOUBLE, llvm_params);
     let _ = wf.create_block("entry");
 
@@ -169,12 +165,15 @@ fn emit_public_typed_closure_trampoline(
             emit_typed_closure_trampoline_fast_value(blk, kind, &typed_name, values, &arg_reps)
         },
         &mut |blk| {
-            let mut call_args: Vec<(LlvmType, &str)> = Vec::with_capacity(arg_names.len() + 1);
-            call_args.push((I64, "%this_closure"));
-            for arg in &arg_names {
-                call_args.push((DOUBLE, arg.as_str()));
-            }
-            blk.call(DOUBLE, generic_body_name, &call_args)
+            // The generic body is this entry's own continuation: it gets the
+            // receiver this entry was given.
+            crate::expr::body_call::emit_js_body_call(
+                blk,
+                crate::expr::body_call::JsBody::Symbol(generic_body_name),
+                crate::expr::body_call::JS_BODY_CALLEE,
+                crate::expr::body_call::JS_BODY_THIS,
+                &arg_names,
+            )
         },
     );
     Ok(())
@@ -407,10 +406,12 @@ pub(super) fn compile_typed_i32_closure(
 
 /// Compile a closure body as a top-level LLVM function.
 ///
-/// Signature: `double perry_closure_<modprefix>__<func_id>(i64 this_closure,
-/// double arg0, double arg1, …)`. The first parameter is the closure
-/// pointer (raw i64); the remaining params are the closure's own
-/// declared parameters.
+/// Signature: the JS body ABI (`expr::body_call::js_body_params`),
+/// `double perry_closure_<modprefix>__<func_id>(i64 this_closure, i64
+/// js_this, double arg0, double arg1, …)`. The first parameter is the
+/// closure pointer (raw i64), the second the receiver bits (still read from
+/// the implicit-`this` cell, stage 1); the remaining params are the
+/// closure's own declared parameters.
 ///
 /// Inside the body, captured variables (`closure.captures`) are mapped
 /// to capture indices and accessed via the runtime
@@ -544,15 +545,13 @@ pub(super) fn compile_closure(
         ordinary_body_name
     };
 
-    // Param list: i64 this_closure, then each param as double. The private
-    // versioned-loop clone reuses its proven-unused first callback parameter
-    // for the caller's stack context, so its ABI and register footprint stay
-    // identical to the ordinary trusted clone.
-    let mut llvm_params: Vec<(LlvmType, String)> = Vec::with_capacity(params.len() + 1);
-    llvm_params.push((I64, "%this_closure".to_string()));
-    for p in params {
-        llvm_params.push((DOUBLE, format!("%arg{}", p.id)));
-    }
+    // Param list: the JS body ABI (`i64 %this_closure, i64 %js_this`), then
+    // each param as double. The private versioned-loop clone reuses its
+    // proven-unused first callback parameter for the caller's stack context,
+    // so its ABI and register footprint stay identical to the ordinary
+    // trusted clone.
+    let llvm_params =
+        crate::expr::body_call::js_body_params(params.iter().map(|p| format!("%arg{}", p.id)));
 
     let ic_base = llmod.ic_counter;
     let buffer_alias_base = llmod.buffer_alias_counter;
@@ -570,23 +569,21 @@ pub(super) fn compile_closure(
     // #10906: a non-arrow closure with its OWN `this` binding (a function
     // expression, or an object-literal method — the closed-shape literal path
     // lowers every method to exactly this) used to call
-    // `js_implicit_this_get{,_sloppy}` at EVERY `this` in its body. Bind the
+    // a thread-local receiver-cell read at EVERY `this` in its body. Bind the
     // receiver once instead, at entry, into a rooted `this` slot that every
     // `Expr::This` loads — what OrdinaryCallBindThis does, and what a class
     // method gets from `%this_arg`. The sloppy conversion (nullish ->
     // globalThis, primitive -> wrapper) then also runs once, so `this === this`
     // holds for a primitive receiver instead of boxing a fresh wrapper per read.
     //
-    // Async and generator bodies are excluded: their statements run across
-    // resumptions, and the entry read has not been audited against re-entry.
-    // Arrows have lexical `this`, which is `captures_this`'s job.
+    // Async and generator bodies bind it the same way: such a body runs ONCE
+    // per call (it returns a promise or a generator object), and the step
+    // closures that do run across resumptions capture the receiver lexically
+    // (the generator transform sets their `captures_this`). Arrows have
+    // lexical `this`, which is `captures_this`'s job.
     let entry_bound_this = !captures_this
         && enclosing_class.is_none()
         && !is_arrow
-        && !is_async
-        && !is_generator
-        && !cross_module.local_generator_funcs.contains(&func_id)
-        && !cross_module.async_step_closures.contains(&func_id)
         && perry_hir::analysis::body_reads_dynamic_this(body);
 
     // gh #6206 / #6081: closures/arrows compiled WITHOUT a shadow frame left
@@ -784,10 +781,11 @@ pub(super) fn compile_closure(
             let class_ref = crate::expr::emit_class_value(blk, class_id);
             blk.store(DOUBLE, &class_ref, &slot);
         } else if entry_bound_this {
-            // A valid non-pointer until the prologue's receiver read below
-            // fills it, so the slot is safe to bind here with the others.
-            let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-            blk.store(DOUBLE, &undef, &slot);
+            // The receiver parameter, stored before the body's first
+            // safepoint so the bind below makes it a rewritten root; a
+            // sloppy body coerces it in place in the prologue.
+            let receiver = blk.bitcast_i64_to_double(crate::expr::body_call::JS_BODY_THIS);
+            blk.store(DOUBLE, &receiver, &slot);
         } else {
             blk.store(DOUBLE, "0.0", &slot);
         }
@@ -1137,7 +1135,7 @@ pub(super) fn compile_closure(
         local_closure_func_ids: HashMap::new(),
         guard_free_closure_bindings: std::collections::HashSet::new(),
         local_closure_param_counts: HashMap::new(),
-        resolved_arrow_callback_targets: HashMap::new(),
+        resolved_plain_callback_targets: HashMap::new(),
         resolved_versioned_loop_callback_targets: HashMap::new(),
         trusted_box_captures,
         versioned_loop_deopt_context,
@@ -1331,23 +1329,18 @@ pub(super) fn compile_closure(
         super::arguments::ArgumentsCallee::CurrentClosure,
     );
 
-    // #10906: read the dynamic receiver into the entry `this` slot. It runs
+    // #10906: the entry `this` slot holds the receiver parameter (stored
+    // at entry, above). A sloppy body applies OrdinaryCallBindThis to it here,
     // after every parameter, capture and `arguments` root is bound, because
-    // the sloppy read can allocate a primitive wrapper — and ahead of the
-    // first statement, so no user code can have rebound IMPLICIT_THIS yet.
-    if entry_bound_this {
-        let helper = if is_strict {
-            "js_implicit_this_get"
-        } else {
-            "js_implicit_this_get_sloppy"
-        };
+    // the coercion can allocate a primitive wrapper — and ahead of the first
+    // statement. A strict body uses the receiver as passed.
+    if entry_bound_this && !is_strict {
         let slot = ctx
             .this_stack
             .last()
             .cloned()
             .expect("entry-bound `this` has a slot");
-        let receiver = ctx.block().call(DOUBLE, helper, &[]);
-        ctx.block().store(DOUBLE, &receiver, &slot);
+        crate::expr::body_call::emit_sloppy_receiver_coercion(&mut ctx, &slot);
     }
 
     // #9060 follow-up: resolve loop-called immutable callee bindings once at

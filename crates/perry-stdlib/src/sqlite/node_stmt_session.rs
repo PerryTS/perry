@@ -485,7 +485,11 @@ pub(crate) unsafe extern "C" fn node_sqlite_changeset_filter(
         CStr::from_ptr(table).to_str().unwrap_or("")
     };
     let table_value = JSValue::string_ptr(js_string_from_bytes(table.as_ptr(), table.len() as u32));
-    let result = js_closure_call1(filter, f64::from_bits(table_value.bits()));
+    let result = js_closure_call1(
+        filter,
+        perry_runtime::closure::plain_call_receiver(),
+        f64::from_bits(table_value.bits()),
+    );
     (perry_runtime::value::js_is_truthy(result) != 0) as c_int
 }
 
@@ -500,6 +504,7 @@ pub(crate) unsafe extern "C" fn node_sqlite_changeset_conflict(
     };
     let result = js_closure_call1(
         on_conflict,
+        perry_runtime::closure::plain_call_receiver(),
         f64::from_bits(JSValue::number(conflict as f64).bits()),
     );
     let result = value_from_f64(result);

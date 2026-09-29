@@ -95,10 +95,13 @@ pub(crate) unsafe fn dispatch_socket_completion(completion: u64, error: Option<S
     if let Some(message) = error {
         frame.set_payload(crate::build_error_object(&message).to_bits());
         let _ = perry_ffi::JsClosure::from_raw(frame.cb(0) as *const perry_ffi::RawClosureHeader)
-            .call1(f64::from_bits(frame.payload_bits()));
+            .call1(
+                perry_ffi::JsThis::UNDEFINED,
+                f64::from_bits(frame.payload_bits()),
+            );
     } else {
         let _ = perry_ffi::JsClosure::from_raw(frame.cb(0) as *const perry_ffi::RawClosureHeader)
-            .call0();
+            .call0(perry_ffi::JsThis::UNDEFINED);
     }
 }
 

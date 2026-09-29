@@ -151,24 +151,6 @@ mod rooted_iter_array_tests {
     }
 }
 
-/// Bind the callback's `this` to `undefined` for the duration of a dense
-/// iteration (spec: absent `thisArg` means the callback's `this` is
-/// `undefined` — NOT whatever ambient receiver the enclosing call left in
-/// IMPLICIT_THIS; test262 some/15.4.4.17-5-25, filter/15.4.4.20-5-30).
-/// Explicit-`thisArg` call sites route through the `js_arraylike_*` engine
-/// instead of these helpers. Arrow callbacks capture `this` lexically and
-/// are unaffected.
-///
-/// The displaced receiver is the caller's `this`, held across every callback
-/// in the loop, so it is restored from a root in the iteration's `scope`
-/// (#10490 — this guard used to keep it in a plain field).
-#[inline]
-fn bind_undefined_this(
-    scope: &crate::gc::RuntimeHandleScope,
-) -> crate::object::ImplicitThisScope<'_> {
-    crate::object::ImplicitThisScope::bind_undefined(scope)
-}
-
 /// #5989/#8117: `.forEach` on a receiver codegen could not prove is a
 /// collection is statically fused to the ARRAY entry point below, so a native
 /// `Set`/`Map` arrives there. Run the collection's own `forEach` and report
@@ -282,7 +264,6 @@ pub extern "C" fn js_array_forEach(arr: *const ArrayHeader, callback: *const Clo
             Some(h) => h.get_nanbox_f64(),
             None => rooted.receiver(),
         };
-        let _tg = bind_undefined_this(&scope);
         if crate::array::array_iteration_is_exotic(arr) {
             for i in 0..length as usize {
                 let arr = rooted.arr();
@@ -290,7 +271,13 @@ pub extern "C" fn js_array_forEach(arr: *const ArrayHeader, callback: *const Clo
                     continue;
                 }
                 let element = crate::array::array_spec_get(arr, i as u32);
-                cb_site.call(current_callback(), element, i as f64, self_value(&rooted));
+                cb_site.call(
+                    current_callback(),
+                    crate::closure::plain_call_receiver(),
+                    element,
+                    i as f64,
+                    self_value(&rooted),
+                );
             }
             return;
         }
@@ -302,7 +289,13 @@ pub extern "C" fn js_array_forEach(arr: *const ArrayHeader, callback: *const Clo
             // dispatch path supports call3 safely, so bound native
             // methods like `array.forEach(console.log)` can observe the
             // source array just like Node.
-            cb_site.call(current_callback(), element, i as f64, self_value(&rooted));
+            cb_site.call(
+                current_callback(),
+                crate::closure::plain_call_receiver(),
+                element,
+                i as f64,
+                self_value(&rooted),
+            );
         }
     }
 }
@@ -358,7 +351,6 @@ pub extern "C" fn js_array_map(
         // conservative scan; that knob was deleted in #7611, so there is no
         // longer a configuration in which this rooting is optional. See gh #6206.
         let cb_handle = scope.root_raw_const_ptr(callback);
-        let _tg = bind_undefined_this(&scope);
 
         // ECMA-262 §23.1.3.20 step 5: ArraySpeciesCreate(O, len) runs BEFORE
         // the iteration — it reads `O.constructor` / `@@species` (firing any
@@ -393,7 +385,13 @@ pub extern "C" fn js_array_map(
             };
             // JS .map() callback receives (element, index, array).
             let callback = cb_handle.get_raw_const_ptr::<ClosureHeader>();
-            let mapped = cb_site.call(callback, element, i as f64, rooted.receiver());
+            let mapped = cb_site.call(
+                callback,
+                crate::closure::plain_call_receiver(),
+                element,
+                i as f64,
+                rooted.receiver(),
+            );
             if is_plain {
                 let result = result_arr(&result_rooted);
                 // The head was just re-derived from `result_rooted` (a GC
@@ -477,7 +475,6 @@ pub extern "C" fn js_array_map_discard(arr: *const ArrayHeader, callback: *const
         let current_callback = || {
             crate::value::js_nanbox_get_pointer(cb_handle.get_nanbox_f64()) as *const ClosureHeader
         };
-        let _tg = bind_undefined_this(&scope);
         if crate::array::array_iteration_is_exotic(arr) {
             for i in 0..length as usize {
                 let arr = rooted.arr();
@@ -485,7 +482,13 @@ pub extern "C" fn js_array_map_discard(arr: *const ArrayHeader, callback: *const
                     continue;
                 }
                 let element = crate::array::array_spec_get(arr, i as u32);
-                let _ = cb_site.call(current_callback(), element, i as f64, rooted.receiver());
+                let _ = cb_site.call(
+                    current_callback(),
+                    crate::closure::plain_call_receiver(),
+                    element,
+                    i as f64,
+                    rooted.receiver(),
+                );
             }
             return;
         }
@@ -493,7 +496,13 @@ pub extern "C" fn js_array_map_discard(arr: *const ArrayHeader, callback: *const
             let Some(element) = rooted.present(i) else {
                 continue;
             };
-            let _ = cb_site.call(current_callback(), element, i as f64, rooted.receiver());
+            let _ = cb_site.call(
+                current_callback(),
+                crate::closure::plain_call_receiver(),
+                element,
+                i as f64,
+                rooted.receiver(),
+            );
         }
     }
 }
@@ -540,7 +549,6 @@ pub extern "C" fn js_array_filter(
         let cb_site = crate::closure::DirectCall3::resolve(callback);
         // Root the callback across the loop — see js_array_map / gh #6206.
         let cb_handle = scope.root_raw_const_ptr(callback);
-        let _tg = bind_undefined_this(&scope);
 
         // ECMA-262 §23.1.3.7 step 5: ArraySpeciesCreate(O, 0) runs before the
         // iteration (validates `O.constructor` / `@@species`, throwing on a
@@ -568,7 +576,13 @@ pub extern "C" fn js_array_filter(
                 }
             };
             let callback = cb_handle.get_raw_const_ptr::<ClosureHeader>();
-            let keep = cb_site.call(callback, element, i as f64, rooted.receiver());
+            let keep = cb_site.call(
+                callback,
+                crate::closure::plain_call_receiver(),
+                element,
+                i as f64,
+                rooted.receiver(),
+            );
             // Proper truthy check: handles NaN-boxed booleans (TAG_FALSE != 0.0 but is falsy)
             if crate::value::js_is_truthy(keep) != 0 {
                 if is_plain {
@@ -636,7 +650,6 @@ pub extern "C" fn js_array_find(arr: *const ArrayHeader, callback: *const Closur
         let current_callback = || {
             crate::value::js_nanbox_get_pointer(cb_handle.get_nanbox_f64()) as *const ClosureHeader
         };
-        let _tg = bind_undefined_this(&scope);
         let exotic = crate::array::array_iteration_is_exotic(arr);
 
         for i in 0..length as usize {
@@ -645,7 +658,13 @@ pub extern "C" fn js_array_find(arr: *const ArrayHeader, callback: *const Closur
             } else {
                 rooted.get_or_undefined(i)
             };
-            let result = cb_site.call(current_callback(), element, i as f64, rooted.receiver());
+            let result = cb_site.call(
+                current_callback(),
+                crate::closure::plain_call_receiver(),
+                element,
+                i as f64,
+                rooted.receiver(),
+            );
             // Proper truthy check: handles NaN-boxed booleans
             if crate::value::js_is_truthy(result) != 0 {
                 return element;
@@ -706,7 +725,6 @@ pub extern "C" fn js_array_findIndex(
         let current_callback = || {
             crate::value::js_nanbox_get_pointer(cb_handle.get_nanbox_f64()) as *const ClosureHeader
         };
-        let _tg = bind_undefined_this(&scope);
         let exotic = crate::array::array_iteration_is_exotic(arr);
 
         for i in 0..length as usize {
@@ -715,7 +733,13 @@ pub extern "C" fn js_array_findIndex(
             } else {
                 rooted.get_or_undefined(i)
             };
-            let result = cb_site.call(current_callback(), element, i as f64, rooted.receiver());
+            let result = cb_site.call(
+                current_callback(),
+                crate::closure::plain_call_receiver(),
+                element,
+                i as f64,
+                rooted.receiver(),
+            );
             // Proper truthy check: handles NaN-boxed booleans
             if crate::value::js_is_truthy(result) != 0 {
                 return i as i32;
@@ -761,7 +785,6 @@ pub extern "C" fn js_array_find_last(
         let current_callback = || {
             crate::value::js_nanbox_get_pointer(cb_handle.get_nanbox_f64()) as *const ClosureHeader
         };
-        let _tg = bind_undefined_this(&scope);
         let exotic = crate::array::array_iteration_is_exotic(arr);
         for i in (0..length).rev() {
             let element = if exotic {
@@ -769,7 +792,13 @@ pub extern "C" fn js_array_find_last(
             } else {
                 rooted.get_or_undefined(i)
             };
-            let result = cb_site.call(current_callback(), element, i as f64, rooted.receiver());
+            let result = cb_site.call(
+                current_callback(),
+                crate::closure::plain_call_receiver(),
+                element,
+                i as f64,
+                rooted.receiver(),
+            );
             if crate::value::js_is_truthy(result) != 0 {
                 return element;
             }
@@ -813,7 +842,6 @@ pub extern "C" fn js_array_find_last_index(
         let current_callback = || {
             crate::value::js_nanbox_get_pointer(cb_handle.get_nanbox_f64()) as *const ClosureHeader
         };
-        let _tg = bind_undefined_this(&scope);
         let exotic = crate::array::array_iteration_is_exotic(arr);
         for i in (0..length).rev() {
             let element = if exotic {
@@ -821,7 +849,13 @@ pub extern "C" fn js_array_find_last_index(
             } else {
                 rooted.get_or_undefined(i)
             };
-            let result = cb_site.call(current_callback(), element, i as f64, rooted.receiver());
+            let result = cb_site.call(
+                current_callback(),
+                crate::closure::plain_call_receiver(),
+                element,
+                i as f64,
+                rooted.receiver(),
+            );
             if crate::value::js_is_truthy(result) != 0 {
                 return i as i32;
             }
@@ -922,7 +956,6 @@ pub extern "C" fn js_array_some(arr: *const ArrayHeader, callback: *const Closur
         let current_callback = || {
             crate::value::js_nanbox_get_pointer(cb_handle.get_nanbox_f64()) as *const ClosureHeader
         };
-        let _tg = bind_undefined_this(&scope);
         let exotic = crate::array::array_iteration_is_exotic(arr);
 
         for i in 0..length as usize {
@@ -938,7 +971,13 @@ pub extern "C" fn js_array_some(arr: *const ArrayHeader, callback: *const Closur
                     None => continue,
                 }
             };
-            let result = cb_site.call(current_callback(), element, i as f64, rooted.receiver());
+            let result = cb_site.call(
+                current_callback(),
+                crate::closure::plain_call_receiver(),
+                element,
+                i as f64,
+                rooted.receiver(),
+            );
             if crate::value::js_is_truthy(result) != 0 {
                 return f64::from_bits(TAG_TRUE);
             }
@@ -951,15 +990,15 @@ pub extern "C" fn js_array_some(arr: *const ArrayHeader, callback: *const Closur
 /// `Array.prototype.some` for a compiler-proved captureless inline arrow.
 ///
 /// The callback literal is consumed only by `some`, has no observable
-/// function identity, and cannot read a closure environment. Passing its code
-/// pointer directly avoids the singleton-closure TLS lookup and lets the loop
+/// function identity, and cannot read a closure environment. Passing its
+/// body's info directly avoids the singleton-closure TLS lookup and lets the loop
 /// call the body without rebuilding closure dispatch state. Non-Array
 /// receivers retain the generic path so Buffer, TypedArray, and array-like
 /// semantics remain centralized in [`js_array_some`].
 #[no_mangle]
 pub extern "C" fn js_array_some_captureless(
     original_arr: *const ArrayHeader,
-    callback_func: *const u8,
+    callback_info: *const crate::closure::JsFunctionInfo,
 ) -> f64 {
     const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
     const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
@@ -973,12 +1012,14 @@ pub extern "C" fn js_array_some_captureless(
         || super::header::receiver_may_be_registered_exotic(arr)
             && crate::buffer::is_registered_buffer(arr as usize)
     {
-        let callback = crate::closure::js_closure_alloc_singleton(callback_func);
+        let callback = crate::closure::js_closure_alloc_singleton(callback_info);
         return js_array_some(original_arr, callback);
     }
 
-    let callback: extern "C" fn(*const ClosureHeader, f64, f64, f64) -> f64 =
-        unsafe { std::mem::transmute(callback_func) };
+    // `callback_info` is a captureless compiled closure body's static info.
+    let callback_func = unsafe { (*callback_info).code };
+    let callback: crate::closure::body_call::js_body_fn_ty!(value, index, array) =
+        unsafe { crate::closure::body_call::js_body_fn!(callback_func; value, index, array) };
     unsafe {
         let length = (*arr).length;
         // SAFETY: `normalize_array_receiver` returned this live plain-array
@@ -1013,6 +1054,7 @@ pub extern "C" fn js_array_some_captureless(
             };
             let result = callback(
                 std::ptr::null(),
+                crate::closure::plain_call_receiver(),
                 element,
                 i as f64,
                 array_receiver_value(arr),
@@ -1083,7 +1125,6 @@ pub extern "C" fn js_array_every(arr: *const ArrayHeader, callback: *const Closu
         let current_callback = || {
             crate::value::js_nanbox_get_pointer(cb_handle.get_nanbox_f64()) as *const ClosureHeader
         };
-        let _tg = bind_undefined_this(&scope);
         let exotic = crate::array::array_iteration_is_exotic(arr);
 
         for i in 0..length as usize {
@@ -1099,7 +1140,13 @@ pub extern "C" fn js_array_every(arr: *const ArrayHeader, callback: *const Closu
                     None => continue,
                 }
             };
-            let result = cb_site.call(current_callback(), element, i as f64, rooted.receiver());
+            let result = cb_site.call(
+                current_callback(),
+                crate::closure::plain_call_receiver(),
+                element,
+                i as f64,
+                rooted.receiver(),
+            );
             if crate::value::js_is_truthy(result) == 0 {
                 return f64::from_bits(TAG_FALSE);
             }
@@ -1152,13 +1199,18 @@ pub extern "C" fn js_array_flatMap(
                 crate::value::JSValue::pointer(result as *const u8).bits(),
             ));
         };
-        let _tg = bind_undefined_this(&scope);
 
         for i in 0..length as usize {
             let Some(element) = rooted.present(i) else {
                 continue;
             };
-            let mapped = cb_site.call(current_callback(), element, i as f64, rooted.receiver());
+            let mapped = cb_site.call(
+                current_callback(),
+                crate::closure::plain_call_receiver(),
+                element,
+                i as f64,
+                rooted.receiver(),
+            );
             // Root first: detecting a lazy array may materialize it, and a
             // push in the inner loop can move the callback result's target.
             sub_rooted.set_nanbox_f64(mapped);
@@ -1199,10 +1251,8 @@ pub extern "C" fn js_array_reduce(
     has_initial: i32,
     initial: f64,
 ) -> f64 {
-    // #11419: the callback runs with `this` undefined, not the receiver of
-    // whatever method dispatch encloses this call.
-    let this_scope = crate::gc::RuntimeHandleScope::new();
-    let _this = crate::object::ImplicitThisScope::bind_undefined(&this_scope);
+    // #11419: the callback runs with `this` undefined (a plain call), not the
+    // receiver of whatever method dispatch encloses this call.
     // #8137: a Buffer-backed `Uint8Array` receiver. Perry's
     // `new Uint8Array([…])` is a `BufferHeader`, absent from the typed-array
     // registry, so the `lookup_typed_array_kind` re-dispatch below never
@@ -1304,6 +1354,7 @@ pub extern "C" fn js_array_reduce(
             // Spec callback is `(accumulator, currentValue, currentIndex, array)`.
             let next = cb_site.call(
                 current_callback(),
+                crate::closure::plain_call_receiver(),
                 acc_rooted.get_nanbox_f64(),
                 element,
                 i as f64,

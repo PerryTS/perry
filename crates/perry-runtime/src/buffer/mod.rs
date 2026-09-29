@@ -345,7 +345,14 @@ mod tests {
             unsafe { crate::symbol::js_object_get_symbol_property(buf_value, iter_sym_value) };
         assert_ne!(method.to_bits(), crate::value::TAG_UNDEFINED);
 
-        let iterator = unsafe { crate::closure::js_native_call_value(method, std::ptr::null(), 0) };
+        let iterator = unsafe {
+            crate::closure::js_native_call_value(
+                method,
+                crate::closure::plain_call_receiver(),
+                std::ptr::null(),
+                0,
+            )
+        };
         let result = unsafe {
             crate::object::js_native_call_method(
                 iterator,

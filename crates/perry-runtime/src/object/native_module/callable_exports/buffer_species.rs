@@ -29,6 +29,7 @@ use super::*;
 /// memory-sharing `ArrayBuffer` view.
 extern "C" fn fast_buffer_constructor_thunk(
     closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     value: f64,
     byte_offset: f64,
     length: f64,
@@ -43,12 +44,15 @@ extern "C" fn fast_buffer_constructor_thunk(
         let buf = crate::buffer::js_buffer_alloc(size, 0);
         return crate::value::js_nanbox_pointer(buf as i64);
     }
-    super::buffer_constructor_thunk(closure, value, byte_offset, length)
+    super::buffer_constructor_thunk(closure, this, value, byte_offset, length)
 }
 
 /// `get [Symbol.species]` on `Buffer`: answers the `FastBuffer` held in the
 /// getter's own capture slot 0.
-extern "C" fn buffer_species_getter_thunk(closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn buffer_species_getter_thunk(
+    closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     crate::closure::js_closure_get_capture_f64(closure, 0)
 }
 
@@ -69,9 +73,10 @@ pub(super) fn install_buffer_species(buffer_ctor: f64) {
 
     // FastBuffer itself: named, sharing Buffer.prototype. Node reports
     // `FastBuffer.length === 0`; the thunk still receives three arguments.
-    let fast_ptr = fast_buffer_constructor_thunk as *const u8;
-    crate::closure::js_register_closure_arity(fast_ptr, 3);
-    let fast = crate::closure::js_closure_alloc(fast_ptr, 0);
+    let fast = crate::closure::js_closure_alloc(
+        crate::fn_info!(fast_buffer_constructor_thunk, 3; with_declared(3)),
+        0,
+    );
     if fast.is_null() {
         return;
     }
@@ -96,9 +101,10 @@ pub(super) fn install_buffer_species(buffer_ctor: f64) {
     }
 
     // The getter, holding FastBuffer in capture slot 0.
-    let getter_ptr = buffer_species_getter_thunk as *const u8;
-    crate::closure::js_register_closure_arity(getter_ptr, 0);
-    let getter = crate::closure::js_closure_alloc(getter_ptr, 1);
+    let getter = crate::closure::js_closure_alloc(
+        crate::fn_info!(buffer_species_getter_thunk, 0; with_declared(0)),
+        1,
+    );
     if getter.is_null() {
         return;
     }

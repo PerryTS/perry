@@ -1006,8 +1006,8 @@ fn get_field_by_name_past_data_probe(
     // which reads the property first) must resolve the reified Promise prototype
     // method. The generic prototype walk does not surface these builtin
     // `Promise.prototype` methods for a subclass instance, so hook them here when
-    // no own key shadows them. The method thunks unwrap the backing cell from the
-    // implicit-this receiver (see `promise_prototype_receiver`).
+    // no own key shadows them. The method thunks unwrap the backing cell from
+    // their `this` receiver (see `promise_prototype_receiver`).
     if !key.is_null()
         && ((obj as u64) >> 48) == 0
         && crate::value::addr_class::is_above_handle_band(obj as usize)

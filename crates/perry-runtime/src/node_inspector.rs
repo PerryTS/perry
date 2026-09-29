@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::sync::{LazyLock, Mutex};
 
 use crate::array::ArrayHeader;
-use crate::closure::{js_closure_alloc, js_register_closure_arity, ClosureHeader};
+use crate::closure::{js_closure_alloc, ClosureHeader};
 use crate::object::{
     js_object_alloc, js_object_get_field_by_name_f64, js_object_set_field_by_name, ObjectHeader,
 };
@@ -255,12 +255,14 @@ fn call_function(callback: f64, this: f64, args: &[f64]) -> f64 {
     if !is_callable_value(callback) {
         return undefined();
     }
-    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-    let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(this));
-    let result =
-        unsafe { crate::closure::js_native_call_value(callback, args.as_ptr(), args.len()) };
-    crate::object::js_implicit_this_set(prev.get_nanbox_f64());
-    result
+    unsafe {
+        crate::closure::native_call_value_this(
+            callback,
+            crate::closure::JsThis::from_f64(this),
+            args.as_ptr(),
+            args.len(),
+        )
+    }
 }
 
 fn node_error_value(message: &str, code: &'static str) -> f64 {
@@ -1108,7 +1110,10 @@ fn promise_value(result: Result<f64, f64>) -> f64 {
     boxed_pointer(promise as *const u8)
 }
 
-extern "C" fn endpoint_dispose(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn endpoint_dispose(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     js_node_inspector_close()
 }
 
@@ -1125,8 +1130,7 @@ fn install_dispose(obj: *mut ObjectHeader, method: f64) {
 }
 
 fn endpoint_handle() -> f64 {
-    js_register_closure_arity(endpoint_dispose as *const u8, 0);
-    let dispose = js_closure_alloc(endpoint_dispose as *const u8, 0);
+    let dispose = js_closure_alloc(crate::fn_info!(endpoint_dispose, 0; with_declared(0)), 0);
     let dispose_value = boxed_pointer(dispose as *const u8);
     let obj = js_object_alloc(0, 2);
     crate::object::set_bound_native_closure_name(dispose, "[Symbol.dispose]");
@@ -1180,6 +1184,7 @@ fn inspector_console_emit(kind: &str, first: f64, second: f64, third: f64) -> f6
 
 extern "C" fn inspector_console_log(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     first: f64,
     second: f64,
     third: f64,
@@ -1189,6 +1194,7 @@ extern "C" fn inspector_console_log(
 
 extern "C" fn inspector_console_info(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     first: f64,
     second: f64,
     third: f64,
@@ -1198,6 +1204,7 @@ extern "C" fn inspector_console_info(
 
 extern "C" fn inspector_console_debug(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     first: f64,
     second: f64,
     third: f64,
@@ -1207,6 +1214,7 @@ extern "C" fn inspector_console_debug(
 
 extern "C" fn inspector_console_warn(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     first: f64,
     second: f64,
     third: f64,
@@ -1216,6 +1224,7 @@ extern "C" fn inspector_console_warn(
 
 extern "C" fn inspector_console_error(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     first: f64,
     second: f64,
     third: f64,
@@ -1253,13 +1262,28 @@ pub extern "C" fn js_node_inspector_console_object() -> f64 {
     let value = object(&[]);
     let obj = object_ptr_from_value(value).expect("fresh console object");
     for (name, func) in [
-        ("log", inspector_console_log as *const u8),
-        ("info", inspector_console_info as *const u8),
-        ("debug", inspector_console_debug as *const u8),
-        ("warn", inspector_console_warn as *const u8),
-        ("error", inspector_console_error as *const u8),
+        (
+            "log",
+            crate::fn_info!(inspector_console_log, 3; with_declared(3)),
+        ),
+        (
+            "info",
+            crate::fn_info!(inspector_console_info, 3; with_declared(3)),
+        ),
+        (
+            "debug",
+            crate::fn_info!(inspector_console_debug, 3; with_declared(3)),
+        ),
+        (
+            "warn",
+            crate::fn_info!(inspector_console_warn, 3; with_declared(3)),
+        ),
+        (
+            "error",
+            crate::fn_info!(inspector_console_error, 3; with_declared(3)),
+        ),
     ] {
-        set_field(obj, name, fn_value(func, name, 3));
+        set_field(obj, name, fn_value(func, name));
     }
     value
 }
@@ -1347,38 +1371,49 @@ pub extern "C" fn js_node_inspector_wait_for_debugger() -> f64 {
     undefined()
 }
 
-extern "C" fn session_connect_thunk(_closure: *const ClosureHeader) -> f64 {
-    let this = crate::object::js_implicit_this_get();
+extern "C" fn session_connect_thunk(
+    _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    let this = this.as_f64();
     js_node_inspector_session_connect(raw_ptr_from_value(this) as i64)
 }
 
-extern "C" fn session_connect_main_thunk(_closure: *const ClosureHeader) -> f64 {
-    let this = crate::object::js_implicit_this_get();
+extern "C" fn session_connect_main_thunk(
+    _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    let this = this.as_f64();
     js_node_inspector_session_connect_to_main_thread(raw_ptr_from_value(this) as i64)
 }
 
-extern "C" fn session_disconnect_thunk(_closure: *const ClosureHeader) -> f64 {
-    let this = crate::object::js_implicit_this_get();
+extern "C" fn session_disconnect_thunk(
+    _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    let this = this.as_f64();
     js_node_inspector_session_disconnect(raw_ptr_from_value(this) as i64)
 }
 
 extern "C" fn session_post_thunk(
     _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
     method: f64,
     params: f64,
     callback: f64,
 ) -> f64 {
-    let this = crate::object::js_implicit_this_get();
+    let this = this.as_f64();
     js_node_inspector_session_post(raw_ptr_from_value(this) as i64, method, params, callback)
 }
 
 extern "C" fn promises_session_post_thunk(
     _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
     method: f64,
     params: f64,
     callback: f64,
 ) -> f64 {
-    let this = crate::object::js_implicit_this_get();
+    let this = this.as_f64();
     js_node_inspector_promises_session_post(
         raw_ptr_from_value(this) as i64,
         method,
@@ -1387,37 +1422,56 @@ extern "C" fn promises_session_post_thunk(
     )
 }
 
-extern "C" fn session_on_thunk(_closure: *const ClosureHeader, event: f64, listener: f64) -> f64 {
-    let this = crate::object::js_implicit_this_get();
+extern "C" fn session_on_thunk(
+    _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+    event: f64,
+    listener: f64,
+) -> f64 {
+    let this = this.as_f64();
     js_node_inspector_session_on(raw_ptr_from_value(this) as i64, event, listener)
 }
 
-extern "C" fn session_once_thunk(_closure: *const ClosureHeader, event: f64, listener: f64) -> f64 {
-    let this = crate::object::js_implicit_this_get();
+extern "C" fn session_once_thunk(
+    _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+    event: f64,
+    listener: f64,
+) -> f64 {
+    let this = this.as_f64();
     js_node_inspector_session_once(raw_ptr_from_value(this) as i64, event, listener)
 }
 
-extern "C" fn session_off_thunk(_closure: *const ClosureHeader, event: f64, listener: f64) -> f64 {
-    let this = crate::object::js_implicit_this_get();
+extern "C" fn session_off_thunk(
+    _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+    event: f64,
+    listener: f64,
+) -> f64 {
+    let this = this.as_f64();
     js_node_inspector_session_off(raw_ptr_from_value(this) as i64, event, listener)
 }
 
-extern "C" fn session_listener_count_thunk(_closure: *const ClosureHeader, event: f64) -> f64 {
-    let this = crate::object::js_implicit_this_get();
+extern "C" fn session_listener_count_thunk(
+    _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+    event: f64,
+) -> f64 {
+    let this = this.as_f64();
     js_node_inspector_session_listener_count(raw_ptr_from_value(this) as i64, event)
 }
 
 extern "C" fn session_remove_all_listeners_thunk(
     _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
     event: f64,
 ) -> f64 {
-    let this = crate::object::js_implicit_this_get();
+    let this = this.as_f64();
     js_node_inspector_session_remove_all_listeners(raw_ptr_from_value(this) as i64, event)
 }
 
-fn fn_value(func: *const u8, name: &str, arity: u32) -> f64 {
-    js_register_closure_arity(func, arity);
-    let closure = js_closure_alloc(func, 0);
+fn fn_value(info: *const crate::closure::JsFunctionInfo, name: &str) -> f64 {
+    let closure = js_closure_alloc(info, 0);
     crate::object::set_bound_native_closure_name(closure, name);
     boxed_pointer(closure as *const u8)
 }
@@ -1425,22 +1479,26 @@ fn fn_value(func: *const u8, name: &str, arity: u32) -> f64 {
 fn install_session_event_methods(session: f64) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let session = scope.root_nanbox_f64(session);
-    for (name, func, arity) in [
-        ("on", session_on_thunk as *const u8, 2),
-        ("once", session_once_thunk as *const u8, 2),
-        ("off", session_off_thunk as *const u8, 2),
+    for (name, func) in [
+        ("on", crate::fn_info!(session_on_thunk, 2; with_declared(2))),
+        (
+            "once",
+            crate::fn_info!(session_once_thunk, 2; with_declared(2)),
+        ),
+        (
+            "off",
+            crate::fn_info!(session_off_thunk, 2; with_declared(2)),
+        ),
         (
             "listenerCount",
-            session_listener_count_thunk as *const u8,
-            1,
+            crate::fn_info!(session_listener_count_thunk, 1; with_declared(1)),
         ),
         (
             "removeAllListeners",
-            session_remove_all_listeners_thunk as *const u8,
-            1,
+            crate::fn_info!(session_remove_all_listeners_thunk, 1; with_declared(1)),
         ),
     ] {
-        let value = fn_value(func, name, arity);
+        let value = fn_value(func, name);
         if let Some(object) = object_ptr_from_value(session.get_nanbox_f64()) {
             set_field(object, name, value);
             crate::object::set_builtin_property_attrs(
@@ -1479,7 +1537,10 @@ pub(crate) fn install_session_prototype(constructor: f64, promise_mode: bool) ->
             set_field(
                 proto,
                 "post",
-                fn_value(promises_session_post_thunk as *const u8, "post", 3),
+                fn_value(
+                    crate::fn_info!(promises_session_post_thunk, 3; with_declared(3)),
+                    "post",
+                ),
             );
             crate::object::set_builtin_property_attrs(
                 proto as usize,
@@ -1487,17 +1548,25 @@ pub(crate) fn install_session_prototype(constructor: f64, promise_mode: bool) ->
                 crate::object::PropertyAttrs::new(true, true, true),
             );
         } else {
-            for (method, func, arity) in [
-                ("connect", session_connect_thunk as *const u8, 0),
+            for (method, func) in [
+                (
+                    "connect",
+                    crate::fn_info!(session_connect_thunk, 0; with_declared(0)),
+                ),
                 (
                     "connectToMainThread",
-                    session_connect_main_thunk as *const u8,
-                    0,
+                    crate::fn_info!(session_connect_main_thunk, 0; with_declared(0)),
                 ),
-                ("disconnect", session_disconnect_thunk as *const u8, 0),
-                ("post", session_post_thunk as *const u8, 3),
+                (
+                    "disconnect",
+                    crate::fn_info!(session_disconnect_thunk, 0; with_declared(0)),
+                ),
+                (
+                    "post",
+                    crate::fn_info!(session_post_thunk, 3; with_declared(3)),
+                ),
             ] {
-                set_field(proto, method, fn_value(func, method, arity));
+                set_field(proto, method, fn_value(func, method));
                 crate::object::set_builtin_property_attrs(
                     proto as usize,
                     method.to_string(),

@@ -681,7 +681,7 @@ pub fn set_hugging_priority(handle: i64, priority: f64) {
 use std::collections::HashMap;
 
 extern "C" {
-    fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+    fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
 }
 

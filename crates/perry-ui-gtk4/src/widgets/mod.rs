@@ -458,7 +458,7 @@ pub fn set_background_gradient(
 /// don't satisfy `=== true` checks.
 pub fn set_on_hover(handle: i64, callback: f64) {
     extern "C" {
-        fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+        fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
         fn js_nanbox_get_pointer(value: f64) -> i64;
     }
     // Perry's NaN-box payload for `true` / `false`. Mirrors
@@ -472,14 +472,14 @@ pub fn set_on_hover(handle: i64, callback: f64) {
         motion.connect_enter(move |_ctrl, _x, _y| {
             let ptr = unsafe { js_nanbox_get_pointer(cb) } as *const u8;
             unsafe {
-                js_closure_call1(ptr, f64::from_bits(TAG_TRUE));
+                js_closure_call1(ptr, perry_ffi::JsThis::UNDEFINED, f64::from_bits(TAG_TRUE));
             }
         });
         let cb2 = callback;
         motion.connect_leave(move |_ctrl| {
             let ptr = unsafe { js_nanbox_get_pointer(cb2) } as *const u8;
             unsafe {
-                js_closure_call1(ptr, f64::from_bits(TAG_FALSE));
+                js_closure_call1(ptr, perry_ffi::JsThis::UNDEFINED, f64::from_bits(TAG_FALSE));
             }
         });
         widget.add_controller(motion);
@@ -489,7 +489,7 @@ pub fn set_on_hover(handle: i64, callback: f64) {
 /// Set a double-click callback on a widget.
 pub fn set_on_double_click(handle: i64, callback: f64) {
     extern "C" {
-        fn js_closure_call0(closure: *const u8) -> f64;
+        fn js_closure_call0(closure: *const u8, this: perry_ffi::JsThis) -> f64;
         fn js_nanbox_get_pointer(value: f64) -> i64;
     }
     if let Some(widget) = get_widget(handle) {
@@ -500,7 +500,7 @@ pub fn set_on_double_click(handle: i64, callback: f64) {
             if n_press == 2 {
                 let ptr = unsafe { js_nanbox_get_pointer(cb) } as *const u8;
                 unsafe {
-                    js_closure_call0(ptr);
+                    js_closure_call0(ptr, perry_ffi::JsThis::UNDEFINED);
                 }
             }
         });
@@ -511,7 +511,7 @@ pub fn set_on_double_click(handle: i64, callback: f64) {
 /// Set a single-click callback on a widget.
 pub fn set_on_click(handle: i64, callback: f64) {
     extern "C" {
-        fn js_closure_call0(closure: *const u8) -> f64;
+        fn js_closure_call0(closure: *const u8, this: perry_ffi::JsThis) -> f64;
         fn js_nanbox_get_pointer(value: f64) -> i64;
     }
     if let Some(widget) = get_widget(handle) {
@@ -522,7 +522,7 @@ pub fn set_on_click(handle: i64, callback: f64) {
             if n_press == 1 {
                 let ptr = unsafe { js_nanbox_get_pointer(cb) } as *const u8;
                 unsafe {
-                    js_closure_call0(ptr);
+                    js_closure_call0(ptr, perry_ffi::JsThis::UNDEFINED);
                 }
             }
         });
@@ -542,7 +542,7 @@ pub fn set_on_click(handle: i64, callback: f64) {
 /// convention `0`/`1`/`2` (web `MouseEvent.button`).
 pub fn set_on_mouse_down(handle: i64, callback: f64) {
     extern "C" {
-        fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+        fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
         fn js_nanbox_get_pointer(value: f64) -> i64;
         fn js_pointer_event_new(x: f64, y: f64, button: u32, pointer_type: u32) -> f64;
     }
@@ -567,7 +567,7 @@ pub fn set_on_mouse_down(handle: i64, callback: f64) {
             }
             let pe = unsafe { js_pointer_event_new(x, y, js_button, 0) };
             unsafe {
-                js_closure_call1(ptr, pe);
+                js_closure_call1(ptr, perry_ffi::JsThis::UNDEFINED, pe);
             }
         });
         widget.add_controller(gesture);
@@ -576,7 +576,7 @@ pub fn set_on_mouse_down(handle: i64, callback: f64) {
 
 pub fn set_on_mouse_up(handle: i64, callback: f64) {
     extern "C" {
-        fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+        fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
         fn js_nanbox_get_pointer(value: f64) -> i64;
         fn js_pointer_event_new(x: f64, y: f64, button: u32, pointer_type: u32) -> f64;
     }
@@ -600,7 +600,7 @@ pub fn set_on_mouse_up(handle: i64, callback: f64) {
             }
             let pe = unsafe { js_pointer_event_new(x, y, js_button, 0) };
             unsafe {
-                js_closure_call1(ptr, pe);
+                js_closure_call1(ptr, perry_ffi::JsThis::UNDEFINED, pe);
             }
         });
         widget.add_controller(gesture);
@@ -609,7 +609,7 @@ pub fn set_on_mouse_up(handle: i64, callback: f64) {
 
 pub fn set_on_mouse_move(handle: i64, callback: f64) {
     extern "C" {
-        fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+        fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
         fn js_nanbox_get_pointer(value: f64) -> i64;
         fn js_pointer_event_new(x: f64, y: f64, button: u32, pointer_type: u32) -> f64;
     }
@@ -625,7 +625,7 @@ pub fn set_on_mouse_move(handle: i64, callback: f64) {
             // per the web `MouseEvent.button` spec for mousemove.
             let pe = unsafe { js_pointer_event_new(x, y, 0, 0) };
             unsafe {
-                js_closure_call1(ptr, pe);
+                js_closure_call1(ptr, perry_ffi::JsThis::UNDEFINED, pe);
             }
         });
         widget.add_controller(motion);

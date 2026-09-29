@@ -229,6 +229,76 @@ fn emit_array_guard_word_ok(blk: &mut crate::block::LlBlock, word: &str) -> Stri
     blk.icmp_eq(I32, &masked, ARRAY_READ_GUARD_EXPECT_I32)
 }
 
+/// A loop region's array guard (#11650 regions, array slice S3): the S1 guard
+/// word, the prototype facts a hole read needs, and `max_index <u capacity`,
+/// checked once in the preheader (and at a re-check). On a pass it also
+/// derives the element base from the same header and stores it into
+/// `base_slot`; F-body's element reads then load `base + 8 * idx` and select
+/// `undefined` for a hole. Returns the `i1` pass flag. The receiver is tested
+/// against the heap band before anything is dereferenced.
+pub(crate) fn emit_array_region_guard(
+    ctx: &mut FnCtx<'_>,
+    recv_box: &str,
+    max_index: u32,
+    base_slot: &str,
+) -> String {
+    let deref_idx = ctx.new_block("rloop.arr.deref");
+    let cap_idx = ctx.new_block("rloop.arr.cap");
+    let join_idx = ctx.new_block("rloop.arr.join");
+    let deref_label = ctx.block_label(deref_idx);
+    let cap_label = ctx.block_label(cap_idx);
+    let join_label = ctx.block_label(join_idx);
+    let pre_label = ctx.block().label.clone();
+    let band_offset = {
+        let blk = ctx.block();
+        let bits = blk.bitcast_double_to_i64(recv_box);
+        let band_offset = blk.sub(I64, &bits, HEAP_POINTER_BAND_BASE_I64);
+        let in_band = blk.icmp_ult(I64, &band_offset, HEAP_POINTER_BAND_SPAN_I64);
+        blk.cond_br(&in_band, &deref_label, &join_label);
+        band_offset
+    };
+    ctx.current_block = deref_idx;
+    let handle = {
+        let blk = ctx.block();
+        let handle = blk.add(I64, &band_offset, "1048576");
+        let word = emit_array_guard_word(blk, &handle);
+        let word_ok = emit_array_guard_word_ok(blk, &word);
+        blk.cond_br(&word_ok, &cap_label, &join_label);
+        handle
+    };
+    ctx.current_block = cap_idx;
+    let (pass, base) = {
+        let blk = ctx.block();
+        let reserved = emit_array_reserved(blk, &handle);
+        let proto_ok =
+            crate::expr::array_proto_guard::emit_array_default_prototype_chain(blk, &reserved);
+        let capacity_addr = blk.add(I64, &handle, "4");
+        let capacity_ptr = blk.inttoptr(I64, &capacity_addr);
+        let capacity = blk.load(I32, &capacity_ptr);
+        let fits = blk.icmp_ult(I32, &max_index.to_string(), &capacity);
+        let pass = blk.and(I1, &proto_ok, &fits);
+        let base = blk.array_elements_addr_with_capacity(&handle, &capacity);
+        blk.br(&join_label);
+        (pass, base)
+    };
+    ctx.current_block = join_idx;
+    let blk = ctx.block();
+    let pass = blk.phi(
+        I1,
+        &[
+            ("false", &pre_label),
+            ("false", &deref_label),
+            (&pass, &cap_label),
+        ],
+    );
+    let base = blk.phi(
+        I64,
+        &[("0", &pre_label), ("0", &deref_label), (&base, &cap_label)],
+    );
+    blk.store(I64, &base, base_slot);
+    pass
+}
+
 pub(super) fn lower_guarded_array_index_get(
     ctx: &mut FnCtx<'_>,
     arr_box: &str,

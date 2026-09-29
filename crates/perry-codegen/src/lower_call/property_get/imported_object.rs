@@ -121,13 +121,12 @@ fn emit_cached_own_method_guard(
         .block()
         .gep(DOUBLE, &fields, &[(I64, &field_index.to_string())]);
     let closure_value = ctx.block().load(DOUBLE, &slot);
+    // The guard compares the value's `JsFunctionInfo` with the body's.
+    let expected_info = ctx.block().fn_info_ref(closure_symbol);
     let fast_handle = ctx.block().call(
         I64,
         "js_closure_exact_func_guard",
-        &[
-            (DOUBLE, &closure_value),
-            (PTR, &format!("@{closure_symbol}")),
-        ],
+        &[(DOUBLE, &closure_value), (PTR, &expected_info)],
     );
     let guard_passes = ctx.block().icmp_ne(I64, &fast_handle, "0");
     let fast_end = ctx.block().label.clone();
@@ -144,7 +143,7 @@ fn emit_cached_own_method_guard(
             (I32, &field_index.to_string()),
             (PTR, &bytes_global),
             (I64, &name_len),
-            (PTR, &format!("@{closure_symbol}")),
+            (PTR, &expected_info),
             (PTR, &ic_slot.slot_ref),
         ],
     );
@@ -207,9 +206,7 @@ pub(super) fn try_lower_imported_object_method_call(
     let key_index = ctx.strings.intern(property);
     let dispatch_global = ctx.strings.static_dispatch_global(key_index);
     let closure_symbol = method.target.clone();
-    let mut closure_params = Vec::with_capacity(method.param_count + 1);
-    closure_params.push(I64);
-    closure_params.extend(std::iter::repeat_n(DOUBLE, method.param_count));
+    let closure_params = crate::expr::body_call::js_body_param_types(method.param_count);
     ctx.pending_declares
         .push((closure_symbol.clone(), DOUBLE, closure_params));
 
@@ -244,11 +241,15 @@ pub(super) fn try_lower_imported_object_method_call(
         &closure_symbol,
         &fallback_label,
     );
-    let mut direct_args: Vec<(crate::types::LlvmType, &str)> =
-        Vec::with_capacity(lowered_args.len() + 1);
-    direct_args.push((I64, &closure_handle));
-    direct_args.extend(lowered_args.iter().map(|arg| (DOUBLE, arg.as_str())));
-    let direct_value = ctx.block().call(DOUBLE, &closure_symbol, &direct_args);
+    // `recv.method(args)`: the method's receiver is `recv`.
+    let this_bits = recv_bits.clone();
+    let direct_value = crate::expr::body_call::emit_js_body_call(
+        ctx.block(),
+        crate::expr::body_call::JsBody::Symbol(&closure_symbol),
+        &closure_handle,
+        &this_bits,
+        &lowered_args,
+    );
     let direct_end = ctx.block().label.clone();
     if !ctx.block().is_terminated() {
         ctx.block().br(&merge_label);
@@ -380,9 +381,8 @@ pub(super) fn try_lower_dynamic_object_method_call(
             .cond_br(&receiver_matches, &cache_label, &miss_label);
 
         let closure_symbol = candidate.method.target.clone();
-        let mut closure_params = Vec::with_capacity(candidate.method.param_count + 1);
-        closure_params.push(I64);
-        closure_params.extend(std::iter::repeat_n(DOUBLE, candidate.method.param_count));
+        let closure_params =
+            crate::expr::body_call::js_body_param_types(candidate.method.param_count);
         ctx.pending_declares
             .push((closure_symbol.clone(), DOUBLE, closure_params));
         let closure_handle = emit_cached_own_method_guard(
@@ -396,11 +396,15 @@ pub(super) fn try_lower_dynamic_object_method_call(
             &closure_symbol,
             &miss_label,
         );
-        let mut direct_args: Vec<(crate::types::LlvmType, &str)> =
-            Vec::with_capacity(lowered_args.len() + 1);
-        direct_args.push((I64, &closure_handle));
-        direct_args.extend(lowered_args.iter().map(|arg| (DOUBLE, arg.as_str())));
-        let direct_value = ctx.block().call(DOUBLE, &closure_symbol, &direct_args);
+        // As above: the method's receiver is `recv`.
+        let this_bits = recv_bits.clone();
+        let direct_value = crate::expr::body_call::emit_js_body_call(
+            ctx.block(),
+            crate::expr::body_call::JsBody::Symbol(&closure_symbol),
+            &closure_handle,
+            &this_bits,
+            &lowered_args,
+        );
         let direct_end = ctx.block().label.clone();
         if !ctx.block().is_terminated() {
             ctx.block().br(&merge_label);

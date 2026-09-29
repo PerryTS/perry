@@ -693,11 +693,15 @@ fn record_shape(names: &[&str]) -> (*mut ArrayHeader, u32) {
 }
 
 /// One class-0 ordinary record, birthed exactly the way
-/// `object/json_construction.rs` births a parsed one: class 0, the shape
-/// stamped from the canonical keys array, values in key order.
+/// `object/json_construction.rs` births a parsed one: class 0, marked
+/// plain-ordinary before the shape is stamped from the canonical keys array,
+/// values in key order.
 fn json_like_record(keys: *mut ArrayHeader, shape_id: u32, field_count: u32) -> f64 {
-    let obj =
-        crate::object::js_object_alloc_class_inline_keys_stamped(0, 0, field_count, keys, shape_id);
+    let obj = crate::object::alloc_plain::alloc_plain_record_inline_keys_stamped(
+        field_count,
+        keys,
+        shape_id,
+    );
     unsafe {
         assert_eq!(
             (*obj).class_id,

@@ -127,7 +127,7 @@ fn lower_value_for_dynamic_index_set(
 /// `is_array_expr`'s PLAIN-array element layout (byte 8) against a real
 /// typed-array object (data at byte 16): a type-confused write, not a missed
 /// optimization.
-fn is_width_tracked_typed_array_receiver(ctx: &FnCtx<'_>, object: &Expr) -> bool {
+pub(super) fn is_width_tracked_typed_array_receiver(ctx: &FnCtx<'_>, object: &Expr) -> bool {
     if matches!(object, Expr::LocalGet(id) if ctx.receiver_descriptors.contains_buffer_view(id)) {
         return true;
     }
@@ -152,7 +152,7 @@ fn is_width_tracked_typed_array_receiver(ctx: &FnCtx<'_>, object: &Expr) -> bool
     )
 }
 
-fn is_uint8array_receiver(ctx: &FnCtx<'_>, object: &Expr) -> bool {
+pub(super) fn is_uint8array_receiver(ctx: &FnCtx<'_>, object: &Expr) -> bool {
     matches!(
         receiver_class_name(ctx, object).as_deref(),
         Some("Uint8Array")
