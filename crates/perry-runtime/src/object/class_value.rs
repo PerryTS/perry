@@ -604,11 +604,12 @@ fn install_declared_static_accessor(class_id: u32, name: &str) {
             } else {
                 None
             };
-            super::class_registry::class_accessor_function_value(
+            super::class_registry::class_static_accessor_function_value(
                 raw,
                 is_setter,
                 name,
                 setter_length,
+                class_id,
             )
             .to_bits()
         }

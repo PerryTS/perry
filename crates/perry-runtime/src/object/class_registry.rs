@@ -199,7 +199,7 @@ pub(crate) use gc_roots::{
 pub(crate) use registration::{
     class_accessor_function_value, class_accessor_source_func_ptr, class_own_accessor_ptrs,
     class_own_setter_length, class_registered_static_accessor_ptrs,
-    invalidate_class_string_member_order,
+    class_static_accessor_function_value, invalidate_class_string_member_order,
 };
 pub use registration::{
     is_class_id_registered, js_register_class_getter, js_register_class_method,

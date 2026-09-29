@@ -263,6 +263,77 @@ extern "C" fn class_accessor_setter_thunk(
     f(this, value)
 }
 
+static CLASS_STATIC_ACCESSOR_GETTER_THUNK_INFO: crate::closure::JsFunctionInfo =
+    crate::closure::JsFunctionInfo::of(
+        class_static_accessor_getter_thunk
+            as crate::codegen_abi::JsBody0<crate::closure::ClosureHeader>,
+    );
+static CLASS_STATIC_ACCESSOR_SETTER_THUNK_INFO: crate::closure::JsFunctionInfo =
+    crate::closure::JsFunctionInfo::of(
+        class_static_accessor_setter_thunk
+            as crate::codegen_abi::JsBody1<crate::closure::ClosureHeader>,
+    );
+
+/// Trampoline for a raw STATIC getter (`fn() -> f64`, #11669). A compiled
+/// static accessor body takes no `this` parameter: it reads `this` from the
+/// static-this override and its private statics from the owner stack, exactly
+/// as `class_value::class_static_accessor_call_get` arms them. Capture 1 is the
+/// declaring class id (the private-static owner).
+extern "C" fn class_static_accessor_getter_thunk(
+    closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    let raw = crate::closure::js_closure_get_capture_ptr(closure, 0) as usize;
+    if raw == 0 {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    let this = this.as_f64();
+    let owner = static_accessor_thunk_owner(closure, this);
+    crate::object::static_this_arm_if_unarmed(this);
+    crate::object::static_private_owner_push(owner);
+    let f = unsafe { crate::closure::body_call::js_bare_body_fn!(raw as *const u8;) };
+    let result = f();
+    crate::object::static_private_owner_pop();
+    crate::object::static_this_disarm();
+    result
+}
+
+/// Trampoline for a raw STATIC setter (`fn(value) -> f64`, #11669). The
+/// instance trampoline calls `raw(this, value)`, which hands a static setter
+/// the receiver (the class itself) as its value; see
+/// [`class_static_accessor_getter_thunk`] for the `this`/owner protocol.
+extern "C" fn class_static_accessor_setter_thunk(
+    closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+    value: f64,
+) -> f64 {
+    let raw = crate::closure::js_closure_get_capture_ptr(closure, 0) as usize;
+    if raw == 0 {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    let this = this.as_f64();
+    let owner = static_accessor_thunk_owner(closure, this);
+    crate::object::static_this_arm_if_unarmed(this);
+    crate::object::static_private_owner_push(owner);
+    let f = unsafe { crate::closure::body_call::js_bare_body_fn!(raw as *const u8; value) };
+    let _ = f(value);
+    crate::object::static_private_owner_pop();
+    crate::object::static_this_disarm();
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+/// The private-static owner of a static accessor trampoline: the class
+/// function object of the declaring class id in capture 1 (a Number, never a
+/// heap word), or `this` when absent.
+fn static_accessor_thunk_owner(closure: *const crate::closure::ClosureHeader, this: f64) -> f64 {
+    let cid = crate::closure::js_closure_get_capture_f64(closure, 1);
+    if cid.is_finite() && cid >= 1.0 {
+        crate::object::class_value::class_value(cid as u32)
+    } else {
+        this
+    }
+}
+
 /// Return the raw getter/setter body wrapped by a descriptor-reflection
 /// accessor closure. The wrapper has its own calling-convention thunk, while
 /// Function.prototype.toString must consult the original MethodDefinition.
@@ -275,6 +346,8 @@ pub(crate) unsafe fn class_accessor_source_func_ptr(
     let thunk = (*closure).code();
     if thunk != class_accessor_getter_thunk as *const u8
         && thunk != class_accessor_setter_thunk as *const u8
+        && thunk != class_static_accessor_getter_thunk as *const u8
+        && thunk != class_static_accessor_setter_thunk as *const u8
     {
         return None;
     }
@@ -298,19 +371,47 @@ pub(crate) fn class_accessor_function_value(
     prop_name: &str,
     setter_length: Option<u32>,
 ) -> f64 {
+    accessor_function_value(raw_ptr, is_setter, prop_name, setter_length, None)
+}
+
+/// [`class_accessor_function_value`] for a STATIC accessor of `class_id`: the
+/// compiled entry takes no `this` parameter (`fn() -> f64` / `fn(v)`), so the
+/// closure uses the static trampolines (#11669).
+pub(crate) fn class_static_accessor_function_value(
+    raw_ptr: usize,
+    is_setter: bool,
+    prop_name: &str,
+    setter_length: Option<u32>,
+    class_id: u32,
+) -> f64 {
+    accessor_function_value(raw_ptr, is_setter, prop_name, setter_length, Some(class_id))
+}
+
+fn accessor_function_value(
+    raw_ptr: usize,
+    is_setter: bool,
+    prop_name: &str,
+    setter_length: Option<u32>,
+    static_class_id: Option<u32>,
+) -> f64 {
     if raw_ptr == 0 {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    let thunk = if is_setter {
-        &CLASS_ACCESSOR_SETTER_THUNK_INFO
-    } else {
-        &CLASS_ACCESSOR_GETTER_THUNK_INFO
+    let thunk = match (static_class_id.is_some(), is_setter) {
+        (false, true) => &CLASS_ACCESSOR_SETTER_THUNK_INFO,
+        (false, false) => &CLASS_ACCESSOR_GETTER_THUNK_INFO,
+        (true, true) => &CLASS_STATIC_ACCESSOR_SETTER_THUNK_INFO,
+        (true, false) => &CLASS_STATIC_ACCESSOR_GETTER_THUNK_INFO,
     };
-    let closure = crate::closure::js_closure_alloc(thunk, 1);
+    let captures = if static_class_id.is_some() { 2 } else { 1 };
+    let closure = crate::closure::js_closure_alloc(thunk, captures);
     if closure.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     crate::closure::js_closure_set_capture_ptr(closure, 0, raw_ptr as i64);
+    if let Some(cid) = static_class_id {
+        crate::closure::js_closure_set_capture_f64(closure, 1, cid as f64);
+    }
     // Spec `.length`: params before the first default/rest. A getter takes no
     // params (0); a setter takes exactly one formal param — but `set m(x = 42)`
     // has `.length === 0` (defaults don't count). Codegen records the setter's
