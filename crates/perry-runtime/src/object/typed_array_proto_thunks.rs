@@ -17,7 +17,7 @@
 //! regular Array helper, which (after the array-like-receiver change) silently
 //! accepted a plain array and returned a wrong-but-non-throwing result.
 //!
-//! These thunks instead read the `IMPLICIT_THIS` receiver (set by the
+//! These thunks instead take the receiver as their `this` argument (set by the
 //! `.call`/`.apply` dispatch), brand-check it via `lookup_typed_array_kind`,
 //! throw a `TypeError` on a non-TypedArray receiver, and otherwise delegate to
 //! the existing `dispatch_typed_array_method` tower (the same code the fast
@@ -76,30 +76,21 @@ pub(super) const TYPED_ARRAY_PROTO_METHODS: &[(&str, u32)] = &[
 ];
 
 /// Install the brand-checking `%TypedArray%.prototype` methods onto a per-kind
-/// typed-array prototype object. Each method gets a DISTINCT thunk func_ptr so
-/// the per-func-ptr arity registry (and the no-op-thunk filter in
-/// `try_dispatch_value_called_proto_method`) can tell them apart — and, because
+/// typed-array prototype object. Each method gets a DISTINCT thunk so the
+/// no-op-thunk filter in `try_dispatch_value_called_proto_method` can tell
+/// them apart — and, because
 /// these are not the shared no-op thunk, a `.call`/`.apply` on the value flows
 /// through the normal closure-dispatch path straight into the thunk, where the
 /// brand check runs.
 pub(super) fn install_typed_array_proto_methods(proto_obj: *mut ObjectHeader) {
     use super::global_this::install_proto_method as ipm;
     for &(name, arity) in TYPED_ARRAY_PROTO_METHODS {
-        let func_ptr = thunk_for(name);
-        ipm(proto_obj, name, func_ptr, arity);
-        // `install_proto_method` uses the visible spec `.length` as the call
-        // arity. Most of these thunks have a uniform 3-argument native
-        // signature; register that ABI width so omitted trailing arguments are
-        // padded with `undefined` instead of reading unset register slots.
-        //
-        // `lastIndexOf` and the reducers need to distinguish omitted optional
-        // arguments from an explicitly supplied `undefined`, so they use the
-        // rest-dispatch path with one fixed argument.
-        if matches!(name, "lastIndexOf" | "reduce" | "reduceRight") {
-            crate::closure::js_register_closure_rest(func_ptr, 1);
-        } else {
-            crate::closure::js_register_closure_arity(func_ptr, 3);
-        }
+        // The visible spec `.length` is `arity`; the body's info declares the
+        // uniform 3-argument ABI width, so omitted trailing arguments are
+        // padded with `undefined` — except `lastIndexOf` and the reducers,
+        // which tell omitted optional arguments from an explicit `undefined`
+        // and so take one fixed argument plus a rest array (`thunk_for`).
+        ipm(proto_obj, name, thunk_for(name), arity);
     }
 }
 
@@ -107,39 +98,101 @@ pub(super) fn install_typed_array_proto_methods(proto_obj: *mut ObjectHeader) {
 /// back to a generic dispatcher keyed off the closure's recorded `.name` — but
 /// every entry in `TYPED_ARRAY_PROTO_METHODS` has a concrete thunk so the lookup
 /// is exhaustive in practice.
-fn thunk_for(name: &str) -> *const u8 {
+fn thunk_for(name: &str) -> *const crate::closure::JsFunctionInfo {
     match name {
-        "at" => ta_at_thunk as *const u8,
-        "copyWithin" => ta_copy_within_thunk as *const u8,
-        "entries" => ta_entries_thunk as *const u8,
-        "every" => ta_every_thunk as *const u8,
-        "fill" => ta_fill_thunk as *const u8,
-        "filter" => ta_filter_thunk as *const u8,
-        "find" => ta_find_thunk as *const u8,
-        "findIndex" => ta_find_index_thunk as *const u8,
-        "findLast" => ta_find_last_thunk as *const u8,
-        "findLastIndex" => ta_find_last_index_thunk as *const u8,
-        "forEach" => ta_for_each_thunk as *const u8,
-        "includes" => ta_includes_thunk as *const u8,
-        "indexOf" => ta_index_of_thunk as *const u8,
-        "join" => ta_join_thunk as *const u8,
-        "keys" => ta_keys_thunk as *const u8,
-        "lastIndexOf" => ta_last_index_of_thunk as *const u8,
-        "map" => ta_map_thunk as *const u8,
-        "reduce" => ta_reduce_thunk as *const u8,
-        "reduceRight" => ta_reduce_right_thunk as *const u8,
-        "reverse" => ta_reverse_thunk as *const u8,
-        "set" => ta_set_thunk as *const u8,
-        "slice" => ta_slice_thunk as *const u8,
-        "some" => ta_some_thunk as *const u8,
-        "sort" => ta_sort_thunk as *const u8,
-        "subarray" => ta_subarray_thunk as *const u8,
-        "toLocaleString" => ta_to_locale_string_thunk as *const u8,
-        "toReversed" => ta_to_reversed_thunk as *const u8,
-        "toSorted" => ta_to_sorted_thunk as *const u8,
-        "values" => ta_values_thunk as *const u8,
-        "with" => ta_with_thunk as *const u8,
-        _ => ta_generic_thunk as *const u8,
+        "at" => {
+            crate::fn_info!(ta_at_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+        }
+        "copyWithin" => {
+            crate::fn_info!(ta_copy_within_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+        }
+        "entries" => {
+            crate::fn_info!(ta_entries_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+        }
+        "every" => {
+            crate::fn_info!(ta_every_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+        }
+        "fill" => {
+            crate::fn_info!(ta_fill_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+        }
+        "filter" => {
+            crate::fn_info!(ta_filter_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+        }
+        "find" => {
+            crate::fn_info!(ta_find_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+        }
+        "findIndex" => {
+            crate::fn_info!(ta_find_index_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+        }
+        "findLast" => {
+            crate::fn_info!(ta_find_last_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+        }
+        "findLastIndex" => {
+            crate::fn_info!(ta_find_last_index_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+        }
+        "forEach" => {
+            crate::fn_info!(ta_for_each_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+        }
+        "includes" => {
+            crate::fn_info!(ta_includes_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+        }
+        "indexOf" => {
+            crate::fn_info!(ta_index_of_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+        }
+        "join" => {
+            crate::fn_info!(ta_join_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+        }
+        "keys" => {
+            crate::fn_info!(ta_keys_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+        }
+        "lastIndexOf" => {
+            crate::fn_info!(ta_last_index_of_thunk, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN))
+        }
+        "map" => {
+            crate::fn_info!(ta_map_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+        }
+        "reduce" => {
+            crate::fn_info!(ta_reduce_thunk, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN))
+        }
+        "reduceRight" => {
+            crate::fn_info!(ta_reduce_right_thunk, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN))
+        }
+        "reverse" => {
+            crate::fn_info!(ta_reverse_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+        }
+        "set" => {
+            crate::fn_info!(ta_set_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+        }
+        "slice" => {
+            crate::fn_info!(ta_slice_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+        }
+        "some" => {
+            crate::fn_info!(ta_some_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+        }
+        "sort" => {
+            crate::fn_info!(ta_sort_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+        }
+        "subarray" => {
+            crate::fn_info!(ta_subarray_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+        }
+        "toLocaleString" => {
+            crate::fn_info!(ta_to_locale_string_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+        }
+        "toReversed" => {
+            crate::fn_info!(ta_to_reversed_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+        }
+        "toSorted" => {
+            crate::fn_info!(ta_to_sorted_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+        }
+        "values" => {
+            crate::fn_info!(ta_values_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+        }
+        "with" => {
+            crate::fn_info!(ta_with_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+        }
+        _ => {
+            crate::fn_info!(ta_generic_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+        }
     }
 }
 
@@ -155,11 +208,14 @@ fn throw_not_typed_array(method: &str) -> ! {
     ))
 }
 
-/// Read the `IMPLICIT_THIS` receiver and brand-check it as a real TypedArray.
+/// Brand-check the `this` receiver as a real TypedArray.
 /// Returns the cleaned receiver, or throws a `TypeError`.
 #[inline]
-unsafe fn ta_receiver_or_throw(method: &str) -> TypedArrayProtoReceiver {
-    let bits = IMPLICIT_THIS.with(|c| c.get());
+unsafe fn ta_receiver_or_throw(
+    this: crate::closure::JsThis,
+    method: &str,
+) -> TypedArrayProtoReceiver {
+    let bits = this.bits();
     // A TypedArray receiver reaches here in either of two boxings: a NaN-boxed
     // `POINTER_TAG` value (top16 >= 0x7FF8) or a *raw* heap pointer whose top16
     // is 0 (the receiver-typed fast path threads the bare pointer — see the
@@ -666,7 +722,7 @@ macro_rules! rooted_callback {
             fn call(&self, $($arg: f64),+) -> f64 {
                 self.handle
                     .with_const_ptr::<crate::closure::ClosureHeader, _>(|cb| {
-                        self.site.call(cb, $($arg),+)
+                        self.site.call(cb, crate::closure::plain_call_receiver(), $($arg),+)
                     })
             }
         }
@@ -967,8 +1023,8 @@ pub(crate) unsafe fn dispatch_uint8_buffer_method(
 /// `TYPED_ARRAY_PROTO_METHODS`; the `unwrap_or(undefined)` guard never fires in
 /// practice (the name set is kept in sync) but avoids a panic on drift.
 #[inline]
-unsafe fn brand_then_dispatch(method: &str, args: &[f64]) -> f64 {
-    let receiver = ta_receiver_or_throw(method);
+unsafe fn brand_then_dispatch(this: crate::closure::JsThis, method: &str, args: &[f64]) -> f64 {
+    let receiver = ta_receiver_or_throw(this, method);
     let args_ptr = if args.is_empty() {
         std::ptr::null()
     } else {
@@ -1012,12 +1068,13 @@ macro_rules! ta_thunk {
     ($name:ident, $method:literal, $argc:literal) => {
         pub(super) extern "C" fn $name(
             _c: *const crate::closure::ClosureHeader,
+            this: crate::closure::JsThis,
             a: f64,
             b: f64,
             d: f64,
         ) -> f64 {
             let all = [a, b, d];
-            unsafe { brand_then_dispatch($method, &all[..$argc]) }
+            unsafe { brand_then_dispatch(this, $method, &all[..$argc]) }
         }
     };
 }
@@ -1052,34 +1109,37 @@ ta_thunk!(ta_with_thunk, "with", 2);
 
 pub(super) extern "C" fn ta_last_index_of_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     search_element: f64,
     rest: f64,
 ) -> f64 {
     unsafe {
         let args = first_arg_with_rest(search_element, rest);
-        brand_then_dispatch("lastIndexOf", &args)
+        brand_then_dispatch(this, "lastIndexOf", &args)
     }
 }
 
 pub(super) extern "C" fn ta_reduce_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     callback: f64,
     rest: f64,
 ) -> f64 {
     unsafe {
         let args = first_arg_with_rest(callback, rest);
-        brand_then_dispatch("reduce", &args)
+        brand_then_dispatch(this, "reduce", &args)
     }
 }
 
 pub(super) extern "C" fn ta_reduce_right_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     callback: f64,
     rest: f64,
 ) -> f64 {
     unsafe {
         let args = first_arg_with_rest(callback, rest);
-        brand_then_dispatch("reduceRight", &args)
+        brand_then_dispatch(this, "reduceRight", &args)
     }
 }
 
@@ -1089,6 +1149,7 @@ pub(super) extern "C" fn ta_reduce_right_thunk(
 /// but keeps the install path total.
 pub(super) extern "C" fn ta_generic_thunk(
     c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     a: f64,
     b: f64,
     d: f64,
@@ -1099,7 +1160,7 @@ pub(super) extern "C" fn ta_generic_thunk(
         let name =
             super::has_own_helpers::str_from_string_header(name_hdr).unwrap_or("TypedArray method");
         let all = [a, b, d];
-        brand_then_dispatch(name, &all)
+        brand_then_dispatch(this, name, &all)
     }
 }
 
@@ -1134,13 +1195,13 @@ fn throw_not_uint8_array(method: &str) -> ! {
     ))
 }
 
-/// Resolve the `IMPLICIT_THIS` receiver to a Uint8Array-backed buffer address.
+/// Resolve the `this` receiver to a Uint8Array-backed buffer address.
 /// The base64/hex methods only exist on Uint8Array, so a multi-byte typed-array
 /// receiver (`Uint8Array.prototype.toBase64.call(new Int8Array())`) is rejected
 /// with a `TypeError` just like Node's `ValidateUint8Array`.
 #[inline]
-unsafe fn uint8_receiver_or_throw(method: &str) -> usize {
-    match ta_receiver_or_throw(method) {
+unsafe fn uint8_receiver_or_throw(this: crate::closure::JsThis, method: &str) -> usize {
+    match ta_receiver_or_throw(this, method) {
         TypedArrayProtoReceiver::Uint8Buffer(addr) => addr,
         TypedArrayProtoReceiver::TypedArray(_) => throw_not_uint8_array(method),
     }
@@ -1148,12 +1209,13 @@ unsafe fn uint8_receiver_or_throw(method: &str) -> usize {
 
 pub(super) extern "C" fn u8_to_base64_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     opts: f64,
     _b: f64,
     _d: f64,
 ) -> f64 {
     unsafe {
-        let addr = uint8_receiver_or_throw("toBase64");
+        let addr = uint8_receiver_or_throw(this, "toBase64");
         let args = [opts];
         super::dispatch_buffer_method(addr, "toBase64", args.as_ptr(), args.len())
     }
@@ -1161,24 +1223,26 @@ pub(super) extern "C" fn u8_to_base64_thunk(
 
 pub(super) extern "C" fn u8_to_hex_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     _a: f64,
     _b: f64,
     _d: f64,
 ) -> f64 {
     unsafe {
-        let addr = uint8_receiver_or_throw("toHex");
+        let addr = uint8_receiver_or_throw(this, "toHex");
         super::dispatch_buffer_method(addr, "toHex", std::ptr::null(), 0)
     }
 }
 
 pub(super) extern "C" fn u8_set_from_base64_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     str_arg: f64,
     opts: f64,
     _d: f64,
 ) -> f64 {
     unsafe {
-        let addr = uint8_receiver_or_throw("setFromBase64");
+        let addr = uint8_receiver_or_throw(this, "setFromBase64");
         let args = [str_arg, opts];
         super::dispatch_buffer_method(addr, "setFromBase64", args.as_ptr(), args.len())
     }
@@ -1186,12 +1250,13 @@ pub(super) extern "C" fn u8_set_from_base64_thunk(
 
 pub(super) extern "C" fn u8_set_from_hex_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     str_arg: f64,
     _b: f64,
     _d: f64,
 ) -> f64 {
     unsafe {
-        let addr = uint8_receiver_or_throw("setFromHex");
+        let addr = uint8_receiver_or_throw(this, "setFromHex");
         let args = [str_arg];
         super::dispatch_buffer_method(addr, "setFromHex", args.as_ptr(), args.len())
     }
@@ -1205,14 +1270,31 @@ pub(super) extern "C" fn u8_set_from_hex_thunk(
 /// — the same convention `install_typed_array_proto_methods` uses.
 pub(super) fn install_uint8array_base64_hex_proto_methods(proto_obj: *mut ObjectHeader) {
     use super::global_this::install_proto_method as ipm;
-    let methods: &[(&str, *const u8, u32)] = &[
-        ("toBase64", u8_to_base64_thunk as *const u8, 0),
-        ("toHex", u8_to_hex_thunk as *const u8, 0),
-        ("setFromBase64", u8_set_from_base64_thunk as *const u8, 1),
-        ("setFromHex", u8_set_from_hex_thunk as *const u8, 1),
+    use crate::closure::FN_BUILTIN;
+    use crate::fn_info;
+    let methods: &[(&str, *const crate::closure::JsFunctionInfo, u32)] = &[
+        (
+            "toBase64",
+            fn_info!(u8_to_base64_thunk, 3; with_declared(3), with_flags(FN_BUILTIN)),
+            0,
+        ),
+        (
+            "toHex",
+            fn_info!(u8_to_hex_thunk, 3; with_declared(3), with_flags(FN_BUILTIN)),
+            0,
+        ),
+        (
+            "setFromBase64",
+            fn_info!(u8_set_from_base64_thunk, 3; with_declared(3), with_flags(FN_BUILTIN)),
+            1,
+        ),
+        (
+            "setFromHex",
+            fn_info!(u8_set_from_hex_thunk, 3; with_declared(3), with_flags(FN_BUILTIN)),
+            1,
+        ),
     ];
-    for &(name, func_ptr, spec_length) in methods {
-        ipm(proto_obj, name, func_ptr, spec_length);
-        crate::closure::js_register_closure_arity(func_ptr, 3);
+    for &(name, info, spec_length) in methods {
+        ipm(proto_obj, name, info, spec_length);
     }
 }

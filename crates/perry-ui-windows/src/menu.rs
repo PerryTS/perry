@@ -8,7 +8,7 @@ use windows::Win32::Foundation::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 extern "C" {
-    fn js_closure_call0(closure: *const u8) -> f64;
+    fn js_closure_call0(closure: *const u8, this: perry_ffi::JsThis) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
 }
 
@@ -476,6 +476,6 @@ pub fn dispatch_menu_item(id: u16) {
         None
     });
     if let Some(ptr) = callback_ptr {
-        unsafe { js_closure_call0(ptr) };
+        unsafe { js_closure_call0(ptr, perry_ffi::JsThis::UNDEFINED) };
     }
 }

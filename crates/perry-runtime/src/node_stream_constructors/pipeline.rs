@@ -45,6 +45,7 @@ fn node_stream_duplex_from_source_chunks(source: f64) -> f64 {
 
 pub(super) extern "C" fn duplex_from_writable_write_callback(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     chunk: f64,
     encoding: f64,
     cb: f64,
@@ -58,6 +59,7 @@ pub(super) extern "C" fn duplex_from_writable_write_callback(
 
 pub(super) extern "C" fn duplex_from_writable_final_callback(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     cb: f64,
 ) -> f64 {
     if closure.is_null() {
@@ -78,7 +80,7 @@ fn install_duplex_from_writable(duplex: f64, writable: f64) {
         return;
     }
     let obj = raw as *mut ObjectHeader;
-    let write = js_closure_alloc(duplex_from_writable_write_callback as *const u8, 1);
+    let write = js_closure_alloc(crate::fn_info!(duplex_from_writable_write_callback, 3), 1);
     js_closure_set_capture_f64(write, 0, writable);
     js_object_set_field_by_name(
         obj,
@@ -86,7 +88,7 @@ fn install_duplex_from_writable(duplex: f64, writable: f64) {
         f64::from_bits(JSValue::pointer(write as *const u8).bits()),
     );
 
-    let final_cb = js_closure_alloc(duplex_from_writable_final_callback as *const u8, 1);
+    let final_cb = js_closure_alloc(crate::fn_info!(duplex_from_writable_final_callback, 1), 1);
     js_closure_set_capture_f64(final_cb, 0, writable);
     js_object_set_field_by_name(
         obj,
@@ -148,7 +150,10 @@ pub(super) fn add_finished_once_listeners(
     watch_finish: bool,
     watch_close: bool,
 ) {
-    let listener = js_closure_alloc(ns_finished_error_false_close as *const u8, 3);
+    let listener = js_closure_alloc(
+        crate::fn_info!(ns_finished_error_false_close, 0; with_declared(0)),
+        3,
+    );
     js_closure_set_capture_f64(listener, 0, stream);
     js_closure_set_capture_f64(listener, 1, callback);
     js_closure_set_capture_f64(listener, 2, f64::from_bits(TAG_FALSE));
@@ -162,7 +167,10 @@ pub(super) fn add_finished_once_listeners(
 }
 
 pub(super) fn add_finished_signal_abort_listener(stream: f64, signal: f64, callback: f64) {
-    let listener = js_closure_alloc(ns_finished_signal_abort as *const u8, 4);
+    let listener = js_closure_alloc(
+        crate::fn_info!(ns_finished_signal_abort, 0; with_declared(0)),
+        4,
+    );
     js_closure_set_capture_f64(listener, 0, stream);
     js_closure_set_capture_f64(listener, 1, callback);
     js_closure_set_capture_f64(listener, 2, f64::from_bits(TAG_FALSE));
@@ -182,7 +190,10 @@ pub(super) fn add_finished_signal_abort_listener(stream: f64, signal: f64, callb
 }
 
 pub(super) fn add_finished_cleanup_completion_listener(stream: f64, callback: f64) {
-    let listener = js_closure_alloc(ns_finished_default_completion as *const u8, 3);
+    let listener = js_closure_alloc(
+        crate::fn_info!(ns_finished_default_completion, 0; with_declared(0)),
+        3,
+    );
     js_closure_set_capture_f64(listener, 0, stream);
     js_closure_set_capture_f64(listener, 1, callback);
     js_closure_set_capture_f64(listener, 2, f64::from_bits(TAG_FALSE));
@@ -292,6 +303,7 @@ pub extern "C" fn js_node_stream_pipeline(args: *const crate::array::ArrayHeader
 
 pub(crate) extern "C" fn duplex_pair_write_callback(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     chunk: f64,
     _encoding: f64,
     cb: f64,
@@ -311,7 +323,11 @@ pub(crate) extern "C" fn duplex_pair_write_callback(
     f64::from_bits(TAG_UNDEFINED)
 }
 
-pub(crate) extern "C" fn duplex_pair_final_callback(closure: *const ClosureHeader, cb: f64) -> f64 {
+pub(crate) extern "C" fn duplex_pair_final_callback(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    cb: f64,
+) -> f64 {
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
@@ -327,7 +343,10 @@ fn install_duplex_pair_endpoint(endpoint: f64, peer: f64) {
         return;
     }
     let obj = raw as *mut ObjectHeader;
-    let write = js_closure_alloc(duplex_pair_write_callback as *const u8, 1);
+    let write = js_closure_alloc(
+        crate::fn_info!(duplex_pair_write_callback, 3; with_declared(3)),
+        1,
+    );
     js_closure_set_capture_f64(write, 0, peer);
     js_object_set_field_by_name(
         obj,
@@ -335,7 +354,10 @@ fn install_duplex_pair_endpoint(endpoint: f64, peer: f64) {
         f64::from_bits(JSValue::pointer(write as *const u8).bits()),
     );
 
-    let final_cb = js_closure_alloc(duplex_pair_final_callback as *const u8, 1);
+    let final_cb = js_closure_alloc(
+        crate::fn_info!(duplex_pair_final_callback, 1; with_declared(1)),
+        1,
+    );
     js_closure_set_capture_f64(final_cb, 0, peer);
     js_object_set_field_by_name(
         obj,

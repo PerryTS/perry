@@ -5,51 +5,6 @@ use super::*;
 
 use std::cell::{Cell, RefCell};
 
-// Implicit `this` for closure-typed class fields invoked method-style.
-//
-// Issue #519: when `obj.fn(args)` calls a closure stored as a class field,
-// the field-scan dispatch in `js_native_call_method` can't bind `this`
-// through the closure ABI (closures take `(closure_ptr, arg0, …)` — no
-// `this` slot). Hono's RegExpRouter does this with `match = match` (the
-// imported function from matcher.js), and the function body's
-// `this.buildAllMatchers()` reads `this = 0` and TypeErrors out.
-//
-// Codegen for `Expr::This` (perry-codegen/src/expr.rs) reads from this
-// thread-local when the lexical `this_stack` is empty (i.e. inside a
-// non-arrow function body or top-level closure body). The field-scan
-// dispatch saves the previous value, sets it to the receiver, calls the
-// closure, then restores. Direct function calls (`fn(args)`) don't touch
-// this slot, so non-method invocations don't pollute it across calls.
-//
-// Defaults to `TAG_UNDEFINED`. JS spec says top-level `this` is undefined
-// in strict mode, which matches.
-// The implicit-`this` cell itself lives INLINE in this thread's
-// `tls_hot::HotTls` (`implicit_this`), so the save/restore pair around every
-// dynamically-dispatched call — two calls per call — can be performed by
-// generated code on Apple aarch64 without entering the runtime at all; the
-// accessors below are the portable path and the fallback.
-#[inline(always)]
-fn implicit_this_cell() -> &'static Cell<u64> {
-    &crate::tls_hot::hot().implicit_this
-}
-
-/// The `IMPLICIT_THIS.with(|cell| …)` shape the runtime's dispatch paths and
-/// prototype thunks already use, re-backed by the inline `HotTls` field above
-/// instead of a `perry_thread_local!` slot. Preserving the shape keeps the
-/// move invisible at those ~120 call sites while making every one of them one
-/// hop shorter — and it is the same cell generated code now reads and writes
-/// directly on Apple aarch64.
-pub(crate) struct ImplicitThisSlot;
-
-impl ImplicitThisSlot {
-    #[inline(always)]
-    pub(crate) fn with<R>(&self, f: impl FnOnce(&Cell<u64>) -> R) -> R {
-        f(implicit_this_cell())
-    }
-}
-
-pub(crate) static IMPLICIT_THIS: ImplicitThisSlot = ImplicitThisSlot;
-
 crate::perry_thread_local! {
     pub(crate) static NEW_TARGET: Cell<u64> = const { Cell::new(crate::value::TAG_UNDEFINED) };
     // One-shot receiver override for STATIC method bodies. A compiled static
@@ -64,7 +19,7 @@ crate::perry_thread_local! {
     static STATIC_THIS_OVERRIDE: Cell<(bool, u64)> =
         const { Cell::new((false, crate::value::TAG_UNDEFINED)) };
     /// Lexical ClassDefinitionEvaluation owner for static method/accessor
-    /// dispatch. Unlike IMPLICIT_THIS, this is not replaced by `.call`'s
+    /// dispatch. Unlike the `this` argument, this is not replaced by `.call`'s
     /// visible receiver. A stack makes nested dispatch frame-local.
     static STATIC_PRIVATE_OWNER_STACK: RefCell<crate::exception::CatchStack<u64>> = const {
         RefCell::new(crate::exception::CatchStack::new(
@@ -172,6 +127,11 @@ pub extern "C" fn js_static_this_resolve(default_this: f64) -> f64 {
     })
 }
 
+/// Keepalive anchor — `js_this_coerce_sloppy` is called only from generated
+/// code (a sloppy body's receiver prologue).
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_THIS_COERCE_SLOPPY: extern "C" fn(f64) -> f64 = js_this_coerce_sloppy;
 /// [`js_static_this_resolve`] for a static method of class `class_id`: the
 /// armed override if any, else the class's function object, cached in the
 /// method's own zero-initialised `slot` (the object is pinned, so the cached
@@ -208,16 +168,13 @@ pub unsafe extern "C" fn js_static_this_resolve_class(class_id: i32, slot: *mut 
     value
 }
 
-/// Read the current implicit `this` (issue #519).
+/// OrdinaryCallBindThis for a non-strict body: `undefined`/`null` become
+/// `globalThis`, a boolean/string/number its wrapper object; objects and
+/// class refs are unchanged. Emitted at the entry of a sloppy body that reads
+/// its receiver (the `this` parameter, `perry_abi::JS_BODY_THIS_PARAM`) —
+/// only on the non-object path. Can allocate: a GC safepoint.
 #[no_mangle]
-pub extern "C" fn js_implicit_this_get() -> f64 {
-    f64::from_bits(implicit_this_cell().get())
-}
-
-/// Read implicit `this` using ordinary (non-strict) function binding rules.
-#[no_mangle]
-pub extern "C" fn js_implicit_this_get_sloppy() -> f64 {
-    let value = js_implicit_this_get();
+pub extern "C" fn js_this_coerce_sloppy(value: f64) -> f64 {
     let jv = crate::value::JSValue::from_bits(value.to_bits());
     if jv.is_undefined() || jv.is_null() {
         return js_get_global_this();
@@ -244,94 +201,6 @@ pub extern "C" fn js_implicit_this_get_sloppy() -> f64 {
         return crate::builtins::js_boxed_number_new(value);
     }
     value
-}
-
-/// Set the implicit `this` and return the previous value.
-/// Callers must restore the previous value to scope the binding to the
-/// duration of a single method-style call.
-///
-/// **The returned previous value is a GC-managed pointer held in a bare Rust
-/// local** (#9417, #9445). It is the caller's receiver, and the call this
-/// save/restore brackets is user code, so an evacuating young-gen minor inside
-/// it moves that object and rewrites every slot the collector can see — a
-/// Rust local is not one. Restoring the stale bits then installs a retired
-/// from-space address as the caller's `this`, and the failure is silent:
-/// `js_object_get_own_field_or_undef` fails its type check on the recycled cell
-/// and answers `undefined`, so the caller's next `this.<field>` throws a
-/// TypeError naming a property nowhere near the defect. Every runtime site
-/// therefore roots the saved value in a `RuntimeHandleScope` and re-reads it at
-/// the restore:
-///
-/// ```ignore
-/// let this_scope = crate::gc::RuntimeHandleScope::new();
-/// let prev = this_scope.root_nanbox_f64(js_implicit_this_set(receiver));
-/// … user code …
-/// js_implicit_this_set(prev.get_nanbox_f64());
-/// ```
-///
-/// or, when the restore must also run as the callee unwinds, the
-/// [`ImplicitThisScope`] guard, which is that idiom with the restore in `Drop`.
-///
-/// This is longjmp-safe: `exception.rs` saves and restores the handle stack at
-/// trap boundaries, so a throw through the window truncates the scope exactly
-/// as a normal drop would. Inside a loop, open the scope PER ITERATION (or
-/// reuse an existing per-iteration scope) so the handle stack does not grow by
-/// one slot per callback.
-///
-/// This is part of every dynamically-dispatched call's save/restore path.
-/// Keep the shipped path to one TLS replacement; default-off diagnostics here
-/// still impose their mode checks millions of times on closure-heavy programs.
-#[no_mangle]
-pub extern "C" fn js_implicit_this_set(value: f64) -> f64 {
-    f64::from_bits(implicit_this_cell().replace(value.to_bits()))
-}
-
-/// Bind `IMPLICIT_THIS` for the lifetime of the guard and restore the
-/// displaced value on the way out — including when the callee unwinds, which
-/// the runtime's `extern "C-unwind"` dispatch surfaces make an ordinary
-/// outcome: a plain set/restore pair leaks the receiver into every later
-/// implicit-`this` read once a callback throws (#9244).
-///
-/// The displaced value is the CALLER's receiver, held across the user code the
-/// guard brackets, so it lives in a slot of the borrowed `RuntimeHandleScope`
-/// — marked, and rewritten when an evacuating minor moves it — and `Drop`
-/// re-reads that slot. A guard that keeps it in a plain field is the #9445
-/// shape with the restore moved into `Drop`, where a sweep for
-/// `let prev = js_implicit_this_set(..)` cannot see it: the private guards this
-/// replaced reinstalled a retired from-space address as the caller's `this`
-/// after `Object.setPrototypeOf(o, proto); o.run()` ran an allocating method
-/// (#10490), and after every `Array.prototype` callback method.
-///
-/// The borrow is what makes the order safe: the scope must be declared before
-/// the guard, so the guard's `Drop` runs while its slot is still on the handle
-/// stack.
-pub struct ImplicitThisScope<'scope> {
-    previous: crate::gc::RuntimeHandle<'scope>,
-}
-
-impl<'scope> ImplicitThisScope<'scope> {
-    #[inline]
-    pub fn bind(scope: &'scope crate::gc::RuntimeHandleScope, receiver: f64) -> Self {
-        Self {
-            previous: scope.root_nanbox_f64(js_implicit_this_set(receiver)),
-        }
-    }
-
-    /// Bind `this` to `undefined`: OrdinaryCallBindThis for a callback the
-    /// runtime invokes with no receiver (`sort` comparators, `reduce`
-    /// callbacks, an absent `thisArg`). Without it the callee reads whatever
-    /// the enclosing method dispatch left in the cell (#11419).
-    #[inline]
-    pub fn bind_undefined(scope: &'scope crate::gc::RuntimeHandleScope) -> Self {
-        Self::bind(scope, f64::from_bits(crate::value::TAG_UNDEFINED))
-    }
-}
-
-impl Drop for ImplicitThisScope<'_> {
-    #[inline]
-    fn drop(&mut self) {
-        js_implicit_this_set(self.previous.get_nanbox_f64());
-    }
 }
 
 /// Read the current `new.target` value for ordinary function bodies.
@@ -384,32 +253,11 @@ impl Drop for SuperNewTargetScope<'_> {
     }
 }
 
-/// `catch_savepoints!` capture/restore for `IMPLICIT_THIS` (PR #10564 review
-/// finding). Several runtime guards displace `IMPLICIT_THIS` around a call
-/// they don't control — a `super()` bridge, a prototype-walk accessor
-/// dispatch, a stdlib listener/getter dispatcher — with a bare
-/// save/call/restore statement sequence, not `ImplicitThisScope`. Neither a
-/// `longjmp` nor a system unwind runs the restore statement that follows the
-/// call, so a throw crossing one of those sites leaves the callee's receiver
-/// installed for every later implicit-`this` read. This closes that gap the
-/// same way `runtime_handles`/`call_method` already do: captured at every `try`,
-/// replayed by `js_throw` before the exception transports, regardless of
-/// transport. It is an unconditional `set`, so it composes safely with a
-/// `ImplicitThisScope::drop` that also fires on the unwind path: whichever
-/// runs last for a given frame reproduces the same locally-correct value.
-#[inline]
-pub(crate) fn implicit_this_trap_savepoint() -> u64 {
-    implicit_this_cell().get()
-}
-
-pub(crate) fn implicit_this_trap_restore(bits: u64) {
-    implicit_this_cell().set(bits);
-}
-
-/// `catch_savepoints!` capture/restore for `NEW_TARGET`. Same rationale as
-/// [`implicit_this_trap_savepoint`]: the Temporal/Intl subclass `super()`
-/// bridges (`fetch_globals.rs`, `intl/subclass.rs`) save/restore `new.target`
-/// with a bare statement pair around the parent constructor call.
+/// `catch_savepoints!` capture/restore for `NEW_TARGET`: the Temporal/Intl
+/// subclass `super()` bridges (`fetch_globals.rs`, `intl/subclass.rs`)
+/// save/restore `new.target` with a bare statement pair around the parent
+/// constructor call, which neither a `longjmp` nor a system unwind runs, so
+/// every `try` captures it and `js_throw` replays it.
 #[inline]
 pub(crate) fn new_target_trap_savepoint() -> u64 {
     NEW_TARGET.with(|c| c.get())
@@ -419,37 +267,15 @@ pub(crate) fn new_target_trap_restore(bits: u64) {
     NEW_TARGET.with(|c| c.set(bits));
 }
 
-/// GC mutable-root scanner for the implicit-`this` cell (issue #1813).
-///
-/// `IMPLICIT_THIS` holds the NaN-boxed receiver for the duration of a
-/// dynamically-dispatched non-arrow method body — set then restored by
-/// `js_native_call_method` and by the codegen `js_implicit_this_set`
-/// save/restore around `js_native_call_value`. That receiver is a live
-/// heap object for the whole call, but the cell is plain thread-local
-/// storage, so before this scanner it was invisible to GC: not a root.
-///
-/// When a moving GC runs *during* the method body — e.g. a nested stdlib
-/// pump draining network IO for `@perryts/mysql`'s `Pool.acquire` →
-/// handshake → `nativeScramble` under concurrent load — the receiver is
-/// evacuated/copied. Without a root slot to rewrite, the cell kept the
-/// stale pre-move pointer and the body's next `this`-derived dispatch
-/// dereferenced freed/relocated memory: the concurrent-load SIGSEGV in
-/// `js_native_call_method` reported in #1813. (It only surfaced under
-/// memory pressure because nursery copying / old-gen evacuation only move
-/// objects then — hence the load-dependent heisenbug.)
-///
-/// Marking also keeps `this` reachable when the cell is its only root.
-/// Non-pointer tags (the `TAG_UNDEFINED` default, plus null/int/bool)
-/// flow through `visit_nanbox_bits` as no-ops, so scanning the idle cell
-/// is safe.
-pub fn scan_implicit_this_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    {
-        let c = implicit_this_cell();
-        let mut bits = c.get();
-        if visitor.visit_nanbox_u64_slot(&mut bits) {
-            c.set(bits);
-        }
-    }
+/// GC mutable-root scanner for the dispatch-binding cells: `new.target`, the
+/// one-shot static-`this` override and the static private-owner stack. Each
+/// holds a NaN-boxed heap value (a constructor, a receiver) for the duration
+/// of a call, in plain thread-local storage the collector cannot see, so it
+/// marks them and rewrites them when a moving collection relocates the value
+/// (the #1813 class: a stale pre-move pointer read after a nested collection).
+/// Non-pointer tags flow through `visit_nanbox_u64_slot` as no-ops, so an
+/// idle cell is safe to scan.
+pub fn scan_dispatch_binding_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     NEW_TARGET.with(|c| {
         let mut bits = c.get();
         if visitor.visit_nanbox_u64_slot(&mut bits) {

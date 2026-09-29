@@ -57,11 +57,14 @@ pub(crate) use test_root_helpers::*;
 
 pub(crate) mod alloc;
 mod alloc_basic;
-pub(crate) use alloc::mark_object_plain_ordinary;
+pub(crate) mod alloc_plain;
 pub use alloc::{
     js_object_alloc, js_object_alloc_fast, js_object_alloc_fast_with_parent,
     js_object_alloc_null_proto, js_object_alloc_with_parent, js_object_coerce,
 };
+pub(crate) use alloc_basic::object_alloc_plain;
+#[allow(unused_imports)]
+pub(crate) use alloc_plain::mark_object_plain_ordinary;
 mod json_construction;
 pub(crate) use json_construction::{
     object_from_inline_json_fields, object_from_json_fields_preinstalled,
@@ -367,16 +370,14 @@ pub(crate) use this_binding::js_derived_super_scope_push;
 pub(crate) use this_binding::SuperNewTargetScope;
 pub(crate) use this_binding::{
     derived_super_binding_stack_restore, derived_super_binding_stack_savepoint,
-    implicit_this_trap_restore, implicit_this_trap_savepoint, new_target_trap_restore,
-    new_target_trap_savepoint, scan_implicit_this_roots_mut, static_private_owner_current,
-    static_private_owner_pop, static_private_owner_push, static_private_owner_stack_restore,
-    static_private_owner_stack_savepoint, static_this_arm, static_this_arm_if_unarmed,
-    static_this_disarm, IMPLICIT_THIS,
+    new_target_trap_restore, new_target_trap_savepoint, scan_dispatch_binding_roots_mut,
+    static_private_owner_current, static_private_owner_pop, static_private_owner_push,
+    static_private_owner_stack_restore, static_private_owner_stack_savepoint, static_this_arm,
+    static_this_arm_if_unarmed, static_this_disarm,
 };
 pub use this_binding::{
-    js_implicit_this_get, js_implicit_this_get_sloppy, js_implicit_this_set, js_new_target_get,
-    js_new_target_set, js_static_this_arm_classref, js_static_this_arm_value,
-    js_static_this_resolve, js_static_this_resolve_class, ImplicitThisScope,
+    js_new_target_get, js_new_target_set, js_static_this_arm_classref, js_static_this_arm_value,
+    js_static_this_resolve, js_static_this_resolve_class, js_this_coerce_sloppy,
 };
 pub use to_string_tag::js_object_to_string;
 pub(crate) use to_string_tag::typed_array_to_string_tag_name;
@@ -1755,7 +1756,7 @@ pub(crate) unsafe fn object_is_regular(obj: *const ObjectHeader) -> bool {
     header.obj_type == crate::gc::GC_TYPE_OBJECT
         && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
         && shapes::shape_object_kind_by_id((*obj).parent_class_id)
-            == Some(shapes::ShapeObjectKind::Ordinary)
+            .is_some_and(|kind| kind.is_ordinary_layout())
 }
 
 #[inline]

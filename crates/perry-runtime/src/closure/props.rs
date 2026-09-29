@@ -60,7 +60,7 @@ unsafe fn object_own_get(obj: *const ObjectHeader, key: &[u8]) -> Option<f64> {
     // One shape lookup for an ordinary bag: keys, count and inline bound all
     // come from the same descriptor.
     if let Some(d) = crate::object::shapes::object_shape_descriptor(obj) {
-        if d.object_kind == crate::object::shapes::ShapeObjectKind::Ordinary && d.keys != 0 {
+        if d.object_kind.is_ordinary_layout() && d.keys != 0 {
             let keys = d.keys as usize as *const crate::array::ArrayHeader;
             let slot =
                 crate::object::keys_find_slot_by_bytes_resolved(keys, d.logical_key_count, key)?;

@@ -394,7 +394,7 @@ pub(crate) fn call0(callback: i64) {
         let raw = callback as *const RawClosureHeader;
         let closure = JsClosure::from_raw(raw);
         if !closure.is_null() {
-            let _ = closure.call0();
+            let _ = closure.call0(perry_ffi::JsThis::UNDEFINED);
         }
     }
 }
@@ -407,7 +407,7 @@ pub(crate) fn call1(callback: i64, arg: f64) {
         let raw = callback as *const RawClosureHeader;
         let closure = JsClosure::from_raw(raw);
         if !closure.is_null() {
-            let _ = closure.call1(arg);
+            let _ = closure.call1(perry_ffi::JsThis::UNDEFINED, arg);
         }
     }
 }
@@ -420,7 +420,7 @@ pub(crate) fn call2(callback: i64, arg0: f64, arg1: f64) {
         let raw = callback as *const RawClosureHeader;
         let closure = JsClosure::from_raw(raw);
         if !closure.is_null() {
-            let _ = closure.call2(arg0, arg1);
+            let _ = closure.call2(perry_ffi::JsThis::UNDEFINED, arg0, arg1);
         }
     }
 }
@@ -433,7 +433,7 @@ pub(crate) fn call3(callback: i64, arg0: f64, arg1: f64, arg2: f64) {
         let raw = callback as *const RawClosureHeader;
         let closure = JsClosure::from_raw(raw);
         if !closure.is_null() {
-            let _ = closure.call3(arg0, arg1, arg2);
+            let _ = closure.call3(perry_ffi::JsThis::UNDEFINED, arg0, arg1, arg2);
         }
     }
 }

@@ -5,11 +5,15 @@ use super::*;
 /// Schedule close only after delivering the error. A close timer armed at spawn
 /// time can already be overdue before the error's setImmediate callback runs.
 /// Keep fork's separate failure contract unchanged by using this for spawn only.
-pub(super) extern "C" fn emit_error_then_close(closure: *const ClosureHeader) -> f64 {
+pub(super) extern "C" fn emit_error_then_close(
+    closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let cp = scope.root_nanbox_f64(cp_this(closure));
-    reactor::cp_emit_spawn_error(closure);
-    let close = crate::closure::js_closure_alloc(reactor::cp_emit_spawn_close as *const u8, 1);
+    let cp = scope.root_nanbox_f64(cp_this(this, closure));
+    reactor::cp_emit_spawn_error(closure, this);
+    let close =
+        crate::closure::js_closure_alloc(crate::fn_info!(reactor::cp_emit_spawn_close, 0), 1);
     crate::closure::js_closure_set_capture_ptr(close, 0, cp.get_nanbox_f64().to_bits() as i64);
     crate::timer::js_set_timeout_callback(close as i64, 1.0);
     cp_undefined()
@@ -54,7 +58,6 @@ mod tests {
 
     #[test]
     fn failed_output_retains_end_and_closed_state() {
-        cp_register_arities();
         let scope = crate::gc::RuntimeHandleScope::new();
         let stream = scope.root_nanbox_f64(cp_build_readable());
         for _ in 0..2 {

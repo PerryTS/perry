@@ -9,7 +9,14 @@ fn closure_fn_id(closure: f64) -> u32 {
 }
 
 fn call0(function: f64) -> f64 {
-    unsafe { crate::closure::js_native_call_value(function, std::ptr::null(), 0) }
+    unsafe {
+        crate::closure::js_native_call_value(
+            function,
+            crate::closure::plain_call_receiver(),
+            std::ptr::null(),
+            0,
+        )
+    }
 }
 
 /// Disable the source cache (its byte cap is "full") for one test body, so

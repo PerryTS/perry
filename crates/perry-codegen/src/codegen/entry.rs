@@ -34,13 +34,14 @@ fn emit_script_global_function_decls(ctx: &mut FnCtx<'_>, hir: &HirModule) {
             Some(n) => n.clone(),
             None => continue,
         };
-        let wrap_ptr = format!("@__perry_wrap_{}", func_name);
+        let wrap_body = format!("__perry_wrap_{}", func_name);
         let key_idx = ctx.strings.intern(name);
         let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
         let blk = ctx.block();
         let global_box = blk.call(DOUBLE, "js_get_global_this", &[]);
         let obj_raw = crate::expr::unbox_to_i64(blk, &global_box);
-        let closure_handle = blk.call(I64, "js_closure_alloc_singleton", &[(PTR, &wrap_ptr)]);
+        let wrap_info = blk.fn_info_ref(&wrap_body);
+        let closure_handle = blk.call(I64, "js_closure_alloc_singleton", &[(PTR, &wrap_info)]);
         let closure_box = crate::expr::nanbox_pointer_inline(blk, &closure_handle);
         let key_box = blk.load(DOUBLE, &key_handle_global);
         let key_raw = crate::expr::unbox_to_i64(blk, &key_box);
@@ -617,11 +618,10 @@ pub(super) fn compile_module_entry(
         // `enable_post_init_shadow_frame` sized the frame from the unpruned
         // map, so the retained slot indices stay valid with holes, exactly as
         // in the function-body twin.
-        main_shadow_slot_map.retain(|id, _| {
-            !main_native_facts
-                .number_by_construction_locals()
-                .contains(id)
-        });
+        super::helpers::drop_number_local_root_slots(
+            &mut main_shadow_slot_map,
+            main_native_facts.number_by_construction_locals(),
+        );
         let main_shadow_slot_clears_after_stmt =
             crate::collectors::collect_shadow_slot_clear_points(&hir.init, &main_shadow_slot_map);
 
@@ -724,7 +724,7 @@ pub(super) fn compile_module_entry(
             local_closure_func_ids: HashMap::new(),
             guard_free_closure_bindings: std::collections::HashSet::new(),
             local_closure_param_counts: HashMap::new(),
-            resolved_arrow_callback_targets: HashMap::new(),
+            resolved_plain_callback_targets: HashMap::new(),
             resolved_versioned_loop_callback_targets: HashMap::new(),
             trusted_box_captures: false,
             versioned_loop_deopt_context: None,
@@ -1482,11 +1482,10 @@ pub(super) fn compile_module_entry(
         // `enable_post_init_shadow_frame` sized the frame from the unpruned
         // map, so the retained slot indices stay valid with holes, exactly as
         // in the function-body twin.
-        init_shadow_slot_map.retain(|id, _| {
-            !init_native_facts
-                .number_by_construction_locals()
-                .contains(id)
-        });
+        super::helpers::drop_number_local_root_slots(
+            &mut init_shadow_slot_map,
+            init_native_facts.number_by_construction_locals(),
+        );
         let init_shadow_slot_clears_after_stmt =
             crate::collectors::collect_shadow_slot_clear_points(&hir.init, &init_shadow_slot_map);
 
@@ -1587,7 +1586,7 @@ pub(super) fn compile_module_entry(
             local_closure_func_ids: HashMap::new(),
             guard_free_closure_bindings: std::collections::HashSet::new(),
             local_closure_param_counts: HashMap::new(),
-            resolved_arrow_callback_targets: HashMap::new(),
+            resolved_plain_callback_targets: HashMap::new(),
             resolved_versioned_loop_callback_targets: HashMap::new(),
             trusted_box_captures: false,
             versioned_loop_deopt_context: None,

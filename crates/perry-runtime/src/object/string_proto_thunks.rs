@@ -30,23 +30,28 @@ pub(super) fn install_string_proto_methods(
         return false;
     }
     use super::global_this::install_proto_method as ipm;
-    ipm(proto_obj, "at", string_proto_at_thunk as *const u8, 1);
+    ipm(
+        proto_obj,
+        "at",
+        crate::fn_info!(string_proto_at_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        1,
+    );
     ipm(
         proto_obj,
         "charAt",
-        string_proto_char_at_thunk as *const u8,
+        crate::fn_info!(string_proto_char_at_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         1,
     );
     ipm(
         proto_obj,
         "charCodeAt",
-        string_proto_char_code_at_thunk as *const u8,
+        crate::fn_info!(string_proto_char_code_at_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         1,
     );
     ipm(
         proto_obj,
         "codePointAt",
-        string_proto_code_point_at_thunk as *const u8,
+        crate::fn_info!(string_proto_code_point_at_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         1,
     );
     install_string_iterator_symbol(proto_obj);
@@ -119,12 +124,24 @@ fn install_generic_string_proto_methods(proto_obj: *mut ObjectHeader) {
             "match" | "search" | "matchAll" | "replace" | "replaceAll" | "split"
         ) {
             let fp = match name {
-                "match" => string_proto_match_thunk as *const u8,
-                "matchAll" => string_proto_match_all_thunk as *const u8,
-                "replace" => string_proto_replace_thunk as *const u8,
-                "replaceAll" => string_proto_replace_all_thunk as *const u8,
-                "split" => string_proto_split_thunk as *const u8,
-                _ => string_proto_search_thunk as *const u8,
+                "match" => {
+                    crate::fn_info!(string_proto_match_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN))
+                }
+                "matchAll" => {
+                    crate::fn_info!(string_proto_match_all_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN))
+                }
+                "replace" => {
+                    crate::fn_info!(string_proto_replace_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN))
+                }
+                "replaceAll" => {
+                    crate::fn_info!(string_proto_replace_all_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN))
+                }
+                "split" => {
+                    crate::fn_info!(string_proto_split_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN))
+                }
+                _ => {
+                    crate::fn_info!(string_proto_search_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN))
+                }
             };
             super::global_this::install_proto_method(proto_obj, name, fp, spec_length);
             continue;
@@ -134,9 +151,8 @@ fn install_generic_string_proto_methods(proto_obj: *mut ObjectHeader) {
         super::global_this::install_proto_method_rest_with_length(
             proto_obj,
             name,
-            string_proto_generic_thunk as *const u8,
+            crate::fn_info!(string_proto_generic_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
             spec_length,
-            0,
         );
     }
     // Annex B: `trimLeft`/`trimRight` are the SAME function objects as
@@ -163,6 +179,7 @@ fn install_generic_string_proto_methods(proto_obj: *mut ObjectHeader) {
 /// own method name off the closure. Args arrive as a rest array.
 pub(super) extern "C" fn string_proto_generic_thunk(
     closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     // Copy the method name to an owned String — `string_this_or_throw` may run
@@ -173,7 +190,7 @@ pub(super) extern "C" fn string_proto_generic_thunk(
     let name: String = unsafe { super::has_own_helpers::str_from_string_header(name_hdr) }
         .map(|s| s.to_string())
         .unwrap_or_default();
-    let s = string_this_or_throw(&name);
+    let s = string_this_or_throw(this, &name);
     let s_val = f64::from_bits(crate::value::JSValue::string_ptr(s).bits());
     let args = super::global_this::global_this_rest_array_values(rest);
     let (args_ptr, args_len) = if args.is_empty() {
@@ -205,12 +222,11 @@ fn install_string_iterator_symbol(proto_obj: *mut ObjectHeader) {
     if iter.is_null() {
         return;
     }
-    let func_ptr = string_proto_symbol_iterator_thunk as *const u8;
+    let func_ptr = crate::fn_info!(string_proto_symbol_iterator_thunk, 0; with_declared(0));
     let closure = crate::closure::js_closure_alloc(func_ptr, 0);
     if closure.is_null() {
         return;
     }
-    crate::closure::js_register_closure_arity(func_ptr, 0);
     super::native_module::set_bound_native_closure_name(closure, "[Symbol.iterator]");
     super::native_module::set_builtin_closure_length(closure as usize, 0);
     super::native_module::set_builtin_closure_non_constructable(closure as usize);
@@ -247,13 +263,16 @@ fn throw_string_proto_nullish(method: &str) -> ! {
 }
 
 /// `RequireObjectCoercible(this)` + `ToString(this)` for the generic-`this`
-/// String.prototype methods. `this` is the IMPLICIT_THIS receiver bound by
+/// String.prototype methods. `this` is the receiver argument passed by
 /// `.call`/`.apply`/property dispatch. `null`/`undefined` throw `TypeError`;
 /// everything else (a primitive string, a boxed `String`/`Boolean`/`Number`
 /// object, a `{ toString }` object) coerces via the shared `js_string_coerce`,
 /// which runs user `toString`/`valueOf`.
-fn string_this_or_throw(method: &str) -> *mut crate::string::StringHeader {
-    let this = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+fn string_this_or_throw(
+    this: crate::closure::JsThis,
+    method: &str,
+) -> *mut crate::string::StringHeader {
+    let this = f64::from_bits(this.bits());
     let jv = crate::value::JSValue::from_bits(this.to_bits());
     if jv.is_undefined() || jv.is_null() {
         throw_string_proto_nullish(method);
@@ -270,9 +289,10 @@ fn string_this_or_throw(method: &str) -> *mut crate::string::StringHeader {
 
 pub(super) extern "C" fn string_proto_char_at_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     pos: f64,
 ) -> f64 {
-    let s = string_this_or_throw("charAt");
+    let s = string_this_or_throw(this, "charAt");
     let idx = crate::string::js_string_index_to_i32(pos);
     let r = crate::string::js_string_char_at(s, idx);
     f64::from_bits(crate::value::JSValue::string_ptr(r).bits())
@@ -280,81 +300,93 @@ pub(super) extern "C" fn string_proto_char_at_thunk(
 
 pub(super) extern "C" fn string_proto_char_code_at_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     pos: f64,
 ) -> f64 {
-    let s = string_this_or_throw("charCodeAt");
+    let s = string_this_or_throw(this, "charCodeAt");
     let idx = crate::string::js_string_index_to_i32(pos);
     crate::string::js_string_char_code_at(s, idx)
 }
 
 pub(super) extern "C" fn string_proto_code_point_at_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     pos: f64,
 ) -> f64 {
-    let s = string_this_or_throw("codePointAt");
+    let s = string_this_or_throw(this, "codePointAt");
     let idx = crate::string::js_string_index_to_i32(pos);
     crate::string::js_string_code_point_at(s, idx)
 }
 
 pub(super) extern "C" fn string_proto_at_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     index: f64,
 ) -> f64 {
-    let s = string_this_or_throw("at");
+    let s = string_this_or_throw(this, "at");
     let idx = crate::string::js_string_index_to_i32(index);
     crate::string::js_string_at(s, idx)
 }
 
 pub(super) extern "C" fn string_proto_symbol_iterator_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let s = string_this_or_throw("[Symbol.iterator]");
+    let s = string_this_or_throw(this, "[Symbol.iterator]");
     crate::string::string_values_iter(s)
 }
 
 #[cfg(feature = "regex-engine")]
-extern "C" fn string_proto_match_thunk(_: *const crate::closure::ClosureHeader, arg: f64) -> f64 {
-    crate::regex::js_string_match_js(crate::object::js_implicit_this_get(), arg)
+extern "C" fn string_proto_match_thunk(
+    _: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+    arg: f64,
+) -> f64 {
+    crate::regex::js_string_match_js(this.as_f64(), arg)
 }
 #[cfg(feature = "regex-engine")]
-extern "C" fn string_proto_search_thunk(_: *const crate::closure::ClosureHeader, arg: f64) -> f64 {
-    crate::regex::js_string_search_js(crate::object::js_implicit_this_get(), arg)
+extern "C" fn string_proto_search_thunk(
+    _: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+    arg: f64,
+) -> f64 {
+    crate::regex::js_string_search_js(this.as_f64(), arg)
 }
 
 #[cfg(feature = "regex-engine")]
 extern "C" fn string_proto_match_all_thunk(
     _: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     arg: f64,
 ) -> f64 {
-    crate::regex::js_string_match_all_js(crate::object::js_implicit_this_get(), arg)
+    crate::regex::js_string_match_all_js(this.as_f64(), arg)
 }
 
 #[cfg(feature = "regex-engine")]
 extern "C" fn string_proto_replace_thunk(
     _: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     search: f64,
     replacement: f64,
 ) -> f64 {
-    crate::regex::js_string_replace_js(crate::object::js_implicit_this_get(), search, replacement)
+    crate::regex::js_string_replace_js(this.as_f64(), search, replacement)
 }
 #[cfg(feature = "regex-engine")]
 extern "C" fn string_proto_replace_all_thunk(
     _: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     search: f64,
     replacement: f64,
 ) -> f64 {
-    crate::regex::js_string_replace_all_js(
-        crate::object::js_implicit_this_get(),
-        search,
-        replacement,
-    )
+    crate::regex::js_string_replace_all_js(this.as_f64(), search, replacement)
 }
 
 #[cfg(feature = "regex-engine")]
 extern "C" fn string_proto_split_thunk(
     _: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     separator: f64,
     limit: f64,
 ) -> f64 {
-    crate::regex::js_string_split_js(crate::object::js_implicit_this_get(), separator, limit)
+    crate::regex::js_string_split_js(this.as_f64(), separator, limit)
 }

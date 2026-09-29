@@ -301,7 +301,7 @@ pub(crate) fn call_closure0(callback: i64) {
     unsafe {
         let closure = JsClosure::from_raw(callback as *const RawClosureHeader);
         if !closure.is_null() {
-            let _ = closure.call0();
+            let _ = closure.call0(perry_ffi::JsThis::UNDEFINED);
         }
     }
 }

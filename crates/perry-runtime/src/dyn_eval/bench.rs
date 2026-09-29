@@ -21,7 +21,14 @@ use super::dyn_function_from_strings;
 use super::{root_get, root_push, roots_truncate};
 
 fn call(f: f64, args: &[f64]) -> f64 {
-    unsafe { crate::closure::js_native_call_value(f, args.as_ptr(), args.len()) }
+    unsafe {
+        crate::closure::js_native_call_value(
+            f,
+            crate::closure::plain_call_receiver(),
+            args.as_ptr(),
+            args.len(),
+        )
+    }
 }
 
 fn env_usize(key: &str, default: usize) -> usize {

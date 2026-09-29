@@ -4,23 +4,26 @@
 # `cargo login` once if missing).
 #
 # **Prerequisites — publish dependency packages before perry-ffi.** The
-# required perry-native-registration dependency and the optional perry-runtime
-# dependency (runtime-link) must both resolve on crates.io. Cargo checks the
-# optional edge even when external wrappers leave that feature off.
-# For dependency versions not already available, the order is:
+# required perry-native-registration and perry-abi dependencies and the
+# optional perry-runtime dependency (runtime-link) must all resolve on
+# crates.io. Cargo checks the optional edge even when external wrappers leave
+# that feature off. For dependency versions not already available, the order
+# is:
 #
 #   1. cargo publish --dry-run -p perry-native-registration
 #      cargo publish -p perry-native-registration
+#      cargo publish -p perry-abi        (the JS body ABI perry-ffi re-exports)
 #   2. cargo publish -p perry-runtime
 #      (Its own workspace dependencies need prior publication as appropriate;
 #      dependency publication remains a manual maintainer prerequisite.)
 #   3. ./scripts/publish_perry_ffi.sh                 (perry-ffi dry run)
 #      ./scripts/publish_perry_ffi.sh --really-publish (perry-ffi publication)
 #
-# Run from the workspace root. Ships whatever the
-# `[workspace.package].version` currently in `Cargo.toml` says, so
-# make sure the changeset + Cargo.toml were updated for this release
-# first (the standard workflow already covers that).
+# Run from the workspace root. perry-ffi carries its OWN version
+# (`crates/perry-ffi/Cargo.toml`, 0.6 since the receiver became a body
+# parameter); its dependencies ship at the `[workspace.package].version`
+# currently in `Cargo.toml`, so make sure the changeset + Cargo.toml were
+# updated for this release first (the standard workflow already covers that).
 set -euo pipefail
 
 WORKSPACE_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -28,7 +31,7 @@ cd "$WORKSPACE_ROOT"
 
 VERSION="$(grep -E '^version = "0\.5\.' Cargo.toml | head -1 | sed -E 's/.*"([^"]+)".*/\1/')"
 echo "Workspace version: ${VERSION}"
-echo "Prerequisites: publish perry-native-registration, then perry-runtime, before perry-ffi."
+echo "Prerequisites: publish perry-native-registration and perry-abi, then perry-runtime, before perry-ffi."
 echo "The dependency versions required by Cargo.toml must already resolve on crates.io."
 
 # Verify the package builds and would publish cleanly. `--allow-dirty`

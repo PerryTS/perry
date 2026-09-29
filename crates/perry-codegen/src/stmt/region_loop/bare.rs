@@ -412,6 +412,8 @@ pub(crate) fn try_lower_fact_add_tree(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<O
         emitted: Vec::new(),
         handles: Vec::new(),
         spill: false,
+        arrays: Vec::new(),
+        emitted_arr: Vec::new(),
     });
     let slow = lower_expr(ctx, e);
     ctx.region_loop_facts.pop();

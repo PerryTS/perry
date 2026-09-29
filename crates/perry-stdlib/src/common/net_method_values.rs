@@ -504,6 +504,7 @@ pub(crate) unsafe fn dispatch_external_server_method(
                 if callback >= 0x1000 {
                     perry_runtime::closure::js_closure_call2(
                         callback as *const perry_runtime::ClosureHeader,
+                        perry_runtime::closure::plain_call_receiver(),
                         null(),
                         js_net_server_get_connections(handle),
                     );

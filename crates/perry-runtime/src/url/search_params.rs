@@ -929,8 +929,9 @@ pub extern "C" fn js_url_search_params_for_each(
     let entries = get_url_search_params_entries(params);
     let this_value = crate::value::js_nanbox_pointer(params as i64);
     let this_scope = crate::gc::RuntimeHandleScope::new();
-    // #9445: the displaced receiver is rooted ONCE here, not once per callback.
-    let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_get());
+    // A callback can collect, so `thisArg` is rooted ONCE here and re-read at
+    // each call.
+    let this_arg_handle = this_scope.root_nanbox_f64(this_arg);
     for (key, value) in entries {
         let args = [
             create_string_f64(&value),
@@ -938,9 +939,12 @@ pub extern "C" fn js_url_search_params_for_each(
             this_value,
         ];
         unsafe {
-            crate::object::js_implicit_this_set(this_arg);
-            let _ = crate::closure::js_native_call_value(callback, args.as_ptr(), args.len());
-            crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
+            let _ = crate::closure::native_call_value_this(
+                callback,
+                crate::closure::JsThis::from_f64(this_arg_handle.get_nanbox_f64()),
+                args.as_ptr(),
+                args.len(),
+            );
         }
     }
 }
@@ -1038,6 +1042,7 @@ fn usp_thunk_receiver(closure: *const crate::closure::ClosureHeader) -> *mut Obj
 
 extern "C" fn usp_append_thunk(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     name: f64,
     value: f64,
 ) -> f64 {
@@ -1047,6 +1052,7 @@ extern "C" fn usp_append_thunk(
 
 extern "C" fn usp_set_thunk(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     name: f64,
     value: f64,
 ) -> f64 {
@@ -1054,7 +1060,11 @@ extern "C" fn usp_set_thunk(
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
-extern "C" fn usp_get_thunk(closure: *const crate::closure::ClosureHeader, name: f64) -> f64 {
+extern "C" fn usp_get_thunk(
+    closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    name: f64,
+) -> f64 {
     // js_url_search_params_get returns a raw `*mut StringHeader` for the
     // static-lowering path; rebuild the boxed value here instead.
     let wanted = coerce_search_param_arg(name);
@@ -1065,7 +1075,11 @@ extern "C" fn usp_get_thunk(closure: *const crate::closure::ClosureHeader, name:
     }
 }
 
-extern "C" fn usp_has_thunk(closure: *const crate::closure::ClosureHeader, name: f64) -> f64 {
+extern "C" fn usp_has_thunk(
+    closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    name: f64,
+) -> f64 {
     if js_url_search_params_has(usp_thunk_receiver(closure), name) != 0.0 {
         f64::from_bits(crate::value::TAG_TRUE)
     } else {
@@ -1073,7 +1087,11 @@ extern "C" fn usp_has_thunk(closure: *const crate::closure::ClosureHeader, name:
     }
 }
 
-extern "C" fn usp_delete_thunk(closure: *const crate::closure::ClosureHeader, name: f64) -> f64 {
+extern "C" fn usp_delete_thunk(
+    closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    name: f64,
+) -> f64 {
     js_url_search_params_delete(usp_thunk_receiver(closure), name);
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
@@ -1242,16 +1260,15 @@ pub(crate) fn url_search_params_dynamic_call(
 /// object. Returns `None` for names outside the covered surface so unknown
 /// properties still read as `undefined`.
 pub(crate) fn url_search_params_method_value(obj: *const ObjectHeader, name: &str) -> Option<f64> {
-    let (func_ptr, arity): (*const u8, u32) = match name {
-        "append" => (usp_append_thunk as *const u8, 2),
-        "set" => (usp_set_thunk as *const u8, 2),
-        "get" => (usp_get_thunk as *const u8, 1),
-        "has" => (usp_has_thunk as *const u8, 1),
-        "delete" => (usp_delete_thunk as *const u8, 1),
+    let info = match name {
+        "append" => crate::fn_info!(usp_append_thunk, 2; with_declared(2)),
+        "set" => crate::fn_info!(usp_set_thunk, 2; with_declared(2)),
+        "get" => crate::fn_info!(usp_get_thunk, 1; with_declared(1)),
+        "has" => crate::fn_info!(usp_has_thunk, 1; with_declared(1)),
+        "delete" => crate::fn_info!(usp_delete_thunk, 1; with_declared(1)),
         _ => return None,
     };
-    crate::closure::js_register_closure_arity(func_ptr, arity);
-    let closure = crate::closure::js_closure_alloc(func_ptr, 1);
+    let closure = crate::closure::js_closure_alloc(info, 1);
     if closure.is_null() {
         return Some(f64::from_bits(crate::value::TAG_UNDEFINED));
     }

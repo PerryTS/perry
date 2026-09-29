@@ -24,6 +24,7 @@ fn reset_old_reclaim_pressure() {
 
 extern "C" fn finreg_step_bounds_callback(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _held: f64,
 ) -> f64 {
     f64::from_bits(crate::value::TAG_UNDEFINED)
@@ -33,7 +34,7 @@ extern "C" fn finreg_step_bounds_callback(
 /// registrations. Targets are deliberately unrooted: a registry whose records
 /// all resolve is the cheap case, and the expensive one is what needs bounding.
 fn rooted_registry_with_records(records: usize) {
-    let cb = crate::closure::js_closure_alloc(finreg_step_bounds_callback as *const u8, 0);
+    let cb = crate::closure::js_closure_alloc(crate::fn_info!(finreg_step_bounds_callback, 1), 0);
     let reg = crate::weakref::js_finreg_new(f64::from_bits(ptr_bits(cb as usize)));
     js_shadow_slot_set(0, ptr_bits(reg as usize));
     for _ in 0..records {

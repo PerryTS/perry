@@ -1,8 +1,6 @@
 use super::*;
 
-use crate::closure::{
-    js_closure_alloc, js_closure_set_capture_ptr, js_register_closure_arity, ClosureHeader,
-};
+use crate::closure::{js_closure_alloc, js_closure_set_capture_ptr};
 use crate::object::{js_object_alloc_with_shape, js_object_set_field, ObjectHeader};
 use crate::value::JSValue;
 
@@ -14,57 +12,9 @@ pub(crate) const CP_WRITABLE_SHAPE_ID: u32 = 0x7FFF_FD80;
 
 // ----- object construction -----
 
-pub(crate) type CpFn = unsafe extern "C" fn();
-#[allow(clippy::missing_transmute_annotations)]
-pub(crate) fn cp_cast0(f: extern "C" fn(*const ClosureHeader) -> f64) -> CpFn {
-    unsafe { std::mem::transmute(f) }
-}
-#[allow(clippy::missing_transmute_annotations)]
-pub(crate) fn cp_cast1(f: extern "C" fn(*const ClosureHeader, f64) -> f64) -> CpFn {
-    unsafe { std::mem::transmute(f) }
-}
-#[allow(clippy::missing_transmute_annotations)]
-pub(crate) fn cp_cast2(f: extern "C" fn(*const ClosureHeader, f64, f64) -> f64) -> CpFn {
-    unsafe { std::mem::transmute(f) }
-}
-#[allow(clippy::missing_transmute_annotations)]
-/// Erase a three-argument native method to the common child-process method ABI.
-pub(crate) fn cp_cast3(f: extern "C" fn(*const ClosureHeader, f64, f64, f64) -> f64) -> CpFn {
-    unsafe { std::mem::transmute(f) }
-}
-#[allow(clippy::missing_transmute_annotations)]
-pub(crate) fn cp_cast4(f: extern "C" fn(*const ClosureHeader, f64, f64, f64, f64) -> f64) -> CpFn {
-    unsafe { std::mem::transmute(f) }
-}
-
-pub(crate) fn cp_register_arities() {
-    js_register_closure_arity(cp_method_on as *const u8, 2);
-    js_register_closure_arity(cp_method_emit as *const u8, 2);
-    js_register_closure_arity(cp_method_this0 as *const u8, 0);
-    js_register_closure_arity(cp_method_this1 as *const u8, 1);
-    js_register_closure_arity(cp_method_child_spawn as *const u8, 1);
-    js_register_closure_arity(cp_method_set_encoding as *const u8, 1);
-    js_register_closure_arity(cp_method_remove_listener as *const u8, 2);
-    js_register_closure_arity(cp_method_remove_all_listeners as *const u8, 1);
-    js_register_closure_arity(cp_method_kill as *const u8, 1);
-    js_register_closure_arity(cp_method_ref as *const u8, 0);
-    js_register_closure_arity(cp_method_unref as *const u8, 0);
-    js_register_closure_arity(cp_method_dispose as *const u8, 0);
-    crate::closure::js_register_closure_length(cp_method_dispose as *const u8, 0);
-    js_register_closure_arity(cp_method_read as *const u8, 1);
-    js_register_closure_arity(cp_method_pipe as *const u8, 1);
-    js_register_closure_arity(cp_method_stdin_write as *const u8, 3);
-    js_register_closure_arity(cp_method_stdin_end as *const u8, 3);
-    js_register_closure_arity(cp_stream_callback_thunk as *const u8, 0);
-    // #3316: `send(message, sendHandle, options, callback)` — dispatch with 4
-    // padded slots so the trailing callback is visible regardless of call-site
-    // arity, and report `child.send.length === 4` like Node.
-    js_register_closure_arity(cp_method_send as *const u8, 4);
-    crate::closure::js_register_closure_length(cp_method_send as *const u8, 4);
-    js_register_closure_arity(cp_method_disconnect as *const u8, 0);
-    // The deferred send-callback thunk takes no JS args.
-    js_register_closure_arity(cp_send_callback_thunk as *const u8, 0);
-}
+/// A child-process method body's static info: what a method table lists and
+/// `cp_build_object` allocates from (`crate::fn_info!(body, N)`).
+pub(crate) type CpFn = *const crate::closure::JsFunctionInfo;
 
 /// Allocate a heap object whose method-name fields each hold a closure capturing
 /// the object itself in slot 0 (so method bodies recover `this`).
@@ -82,7 +32,7 @@ pub(crate) fn cp_build_object(methods: &[(&str, CpFn)], shape_id: u32) -> *mut O
     );
     let this_bits = JSValue::pointer(obj as *const u8).bits();
     for (i, (_name, func)) in methods.iter().enumerate() {
-        let closure = js_closure_alloc(*func as *const u8, 1);
+        let closure = js_closure_alloc(*func, 1);
         js_closure_set_capture_ptr(closure, 0, this_bits as i64);
         js_object_set_field(obj, i as u32, JSValue::pointer(closure as *const u8));
     }
@@ -94,7 +44,10 @@ pub(crate) fn cp_install_dispose(cp: f64) {
         return;
     };
 
-    let closure = js_closure_alloc(cp_method_dispose as *const u8, 1);
+    let closure = js_closure_alloc(
+        crate::fn_info!(cp_method_dispose, 0; with_declared(0), with_length(0)),
+        1,
+    );
     if closure.is_null() {
         return;
     }
@@ -121,19 +74,43 @@ pub(crate) fn cp_install_dispose(cp: f64) {
 /// Build a stdout/stderr Readable-shaped EventEmitter.
 pub(crate) fn cp_build_readable() -> f64 {
     let methods: [(&str, CpFn); 13] = [
-        ("on", cp_cast2(cp_method_on)),
-        ("once", cp_cast2(cp_method_on)),
-        ("addListener", cp_cast2(cp_method_on)),
-        ("prependListener", cp_cast2(cp_method_on)),
-        ("off", cp_cast2(cp_method_remove_listener)),
-        ("removeListener", cp_cast2(cp_method_remove_listener)),
-        ("emit", cp_cast2(cp_method_emit)),
-        ("pause", cp_cast0(cp_method_this0)),
-        ("resume", cp_cast0(cp_method_this0)),
-        ("destroy", cp_cast0(cp_method_this0)),
-        ("setEncoding", cp_cast1(cp_method_set_encoding)),
-        ("read", cp_cast1(cp_method_read)),
-        ("pipe", cp_cast1(cp_method_pipe)),
+        ("on", crate::fn_info!(cp_method_on, 2; with_declared(2))),
+        ("once", crate::fn_info!(cp_method_on, 2; with_declared(2))),
+        (
+            "addListener",
+            crate::fn_info!(cp_method_on, 2; with_declared(2)),
+        ),
+        (
+            "prependListener",
+            crate::fn_info!(cp_method_on, 2; with_declared(2)),
+        ),
+        (
+            "off",
+            crate::fn_info!(cp_method_remove_listener, 2; with_declared(2)),
+        ),
+        (
+            "removeListener",
+            crate::fn_info!(cp_method_remove_listener, 2; with_declared(2)),
+        ),
+        ("emit", crate::fn_info!(cp_method_emit, 2; with_declared(2))),
+        (
+            "pause",
+            crate::fn_info!(cp_method_this0, 0; with_declared(0)),
+        ),
+        (
+            "resume",
+            crate::fn_info!(cp_method_this0, 0; with_declared(0)),
+        ),
+        (
+            "destroy",
+            crate::fn_info!(cp_method_this0, 0; with_declared(0)),
+        ),
+        (
+            "setEncoding",
+            crate::fn_info!(cp_method_set_encoding, 1; with_declared(1)),
+        ),
+        ("read", crate::fn_info!(cp_method_read, 1; with_declared(1))),
+        ("pipe", crate::fn_info!(cp_method_pipe, 1; with_declared(1))),
     ];
     let obj = cp_build_object(&methods, CP_READABLE_SHAPE_ID + methods.len() as u32);
     let val = cp_box_ptr(obj as *const u8);
@@ -160,17 +137,41 @@ pub(crate) fn cp_build_readable() -> f64 {
 /// Build a stdin Writable-shaped EventEmitter.
 pub(crate) fn cp_build_writable() -> f64 {
     let methods: [(&str, CpFn); 11] = [
-        ("on", cp_cast2(cp_method_on)),
-        ("once", cp_cast2(cp_method_on)),
-        ("addListener", cp_cast2(cp_method_on)),
-        ("removeListener", cp_cast2(cp_method_remove_listener)),
-        ("off", cp_cast2(cp_method_remove_listener)),
-        ("emit", cp_cast2(cp_method_emit)),
-        ("write", cp_cast3(cp_method_stdin_write)),
-        ("end", cp_cast3(cp_method_stdin_end)),
-        ("destroy", cp_cast0(cp_method_this0)),
-        ("cork", cp_cast0(cp_method_this0)),
-        ("uncork", cp_cast0(cp_method_this0)),
+        ("on", crate::fn_info!(cp_method_on, 2; with_declared(2))),
+        ("once", crate::fn_info!(cp_method_on, 2; with_declared(2))),
+        (
+            "addListener",
+            crate::fn_info!(cp_method_on, 2; with_declared(2)),
+        ),
+        (
+            "removeListener",
+            crate::fn_info!(cp_method_remove_listener, 2; with_declared(2)),
+        ),
+        (
+            "off",
+            crate::fn_info!(cp_method_remove_listener, 2; with_declared(2)),
+        ),
+        ("emit", crate::fn_info!(cp_method_emit, 2; with_declared(2))),
+        (
+            "write",
+            crate::fn_info!(cp_method_stdin_write, 3; with_declared(3)),
+        ),
+        (
+            "end",
+            crate::fn_info!(cp_method_stdin_end, 3; with_declared(3)),
+        ),
+        (
+            "destroy",
+            crate::fn_info!(cp_method_this0, 0; with_declared(0)),
+        ),
+        (
+            "cork",
+            crate::fn_info!(cp_method_this0, 0; with_declared(0)),
+        ),
+        (
+            "uncork",
+            crate::fn_info!(cp_method_this0, 0; with_declared(0)),
+        ),
     ];
     let obj = cp_build_object(&methods, CP_WRITABLE_SHAPE_ID + methods.len() as u32);
     let val = cp_box_ptr(obj as *const u8);
@@ -192,22 +193,36 @@ pub(crate) fn cp_build_writable() -> f64 {
 /// `fork()` construct their live variants in the reactor; this low-level Node
 /// API only needs the initial observable shape plus its validating `.spawn`.
 pub(crate) fn cp_build_unstarted_child_process() -> f64 {
-    cp_register_arities();
     let methods: [(&str, CpFn); 11] = [
-        ("on", cp_cast2(cp_method_on)),
-        ("once", cp_cast2(cp_method_on)),
-        ("addListener", cp_cast2(cp_method_on)),
-        ("removeListener", cp_cast2(cp_method_remove_listener)),
-        ("off", cp_cast2(cp_method_remove_listener)),
-        ("emit", cp_cast2(cp_method_emit)),
+        ("on", crate::fn_info!(cp_method_on, 2; with_declared(2))),
+        ("once", crate::fn_info!(cp_method_on, 2; with_declared(2))),
+        (
+            "addListener",
+            crate::fn_info!(cp_method_on, 2; with_declared(2)),
+        ),
+        (
+            "removeListener",
+            crate::fn_info!(cp_method_remove_listener, 2; with_declared(2)),
+        ),
+        (
+            "off",
+            crate::fn_info!(cp_method_remove_listener, 2; with_declared(2)),
+        ),
+        ("emit", crate::fn_info!(cp_method_emit, 2; with_declared(2))),
         (
             "removeAllListeners",
-            cp_cast1(cp_method_remove_all_listeners),
+            crate::fn_info!(cp_method_remove_all_listeners, 1; with_declared(1)),
         ),
-        ("kill", cp_cast1(cp_method_kill)),
-        ("ref", cp_cast0(cp_method_ref)),
-        ("unref", cp_cast0(cp_method_unref)),
-        ("spawn", cp_cast1(cp_method_child_spawn)),
+        ("kill", crate::fn_info!(cp_method_kill, 1; with_declared(1))),
+        ("ref", crate::fn_info!(cp_method_ref, 0; with_declared(0))),
+        (
+            "unref",
+            crate::fn_info!(cp_method_unref, 0; with_declared(0)),
+        ),
+        (
+            "spawn",
+            crate::fn_info!(cp_method_child_spawn, 1; with_declared(1)),
+        ),
     ];
     let obj = cp_build_object(&methods, CP_SHAPE_ID + 0x60 + methods.len() as u32);
     let scope = crate::gc::RuntimeHandleScope::new();

@@ -10,7 +10,7 @@ use std::fs;
 use crate::closure::{
     js_closure_alloc, js_closure_call0, js_closure_call1, js_closure_get_capture_f64,
     js_closure_get_capture_ptr, js_closure_set_capture_f64, js_closure_set_capture_ptr,
-    js_register_closure_arity, js_register_closure_rest, ClosureHeader,
+    ClosureHeader,
 };
 use crate::object::{js_object_alloc, js_object_set_field_by_name};
 use crate::string::js_string_from_bytes;
@@ -88,29 +88,35 @@ fn set_field(obj: *mut crate::object::ObjectHeader, name: &str, value: f64) {
     js_object_set_field_by_name(obj, key, value);
 }
 
-fn make_closure(func: *const u8, arity: u32, captures: u32) -> *mut crate::closure::ClosureHeader {
-    js_register_closure_arity(func, arity);
-    let closure = js_closure_alloc(func, captures);
-    // Optimized Windows links may fold identical COMDAT function bodies, so
-    // the function-pointer registry is not a stable identity for reflective
-    // metadata. Pin the requested arity to this closure instance as well.
+fn make_closure(
+    info: *const crate::closure::JsFunctionInfo,
+    arity: u32,
+    captures: u32,
+) -> *mut crate::closure::ClosureHeader {
+    let closure = js_closure_alloc(info, captures);
+    // Optimized Windows links may fold identical COMDAT function bodies, so a
+    // code address is not a stable identity for reflective metadata. Pin the
+    // requested arity to this closure instance as well.
     crate::object::set_builtin_closure_length(closure as usize, arity);
     closure
 }
 
-fn closure_value(func: *const u8, arity: u32) -> f64 {
-    boxed_ptr(make_closure(func, arity, 0))
+fn closure_value(info: *const crate::closure::JsFunctionInfo, arity: u32) -> f64 {
+    boxed_ptr(make_closure(info, arity, 0))
 }
 
-fn closure_value_with_id(func: *const u8, arity: u32, id: i64) -> f64 {
-    let closure = make_closure(func, arity, 1);
+fn closure_value_with_id(info: *const crate::closure::JsFunctionInfo, arity: u32, id: i64) -> f64 {
+    let closure = make_closure(info, arity, 1);
     js_closure_set_capture_ptr(closure, 0, id);
     boxed_ptr(closure)
 }
 
-fn rest_closure_value_with_id(func: *const u8, fixed_arity: u32, id: i64) -> f64 {
-    js_register_closure_rest(func, fixed_arity);
-    let closure = js_closure_alloc(func, 1);
+fn rest_closure_value_with_id(
+    info: *const crate::closure::JsFunctionInfo,
+    fixed_arity: u32,
+    id: i64,
+) -> f64 {
+    let closure = js_closure_alloc(info, 1);
     crate::object::set_builtin_closure_length(closure as usize, fixed_arity);
     js_closure_set_capture_ptr(closure, 0, id);
     boxed_ptr(closure)
@@ -218,13 +224,21 @@ fn assert_mock_target_method(value: f64) {
     }
 }
 
-extern "C" fn mock_timers_enable(_closure: *const ClosureHeader, options: f64) -> f64 {
+extern "C" fn mock_timers_enable(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    options: f64,
+) -> f64 {
     let (apis, now) = parse_mock_timer_options(options);
     crate::timer::js_mock_timers_enable(apis, now);
     undefined_value()
 }
 
-extern "C" fn mock_timers_tick(_closure: *const ClosureHeader, ms: f64) -> f64 {
+extern "C" fn mock_timers_tick(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    ms: f64,
+) -> f64 {
     let delay = if is_undefined_value(ms) {
         1.0
     } else {
@@ -234,18 +248,28 @@ extern "C" fn mock_timers_tick(_closure: *const ClosureHeader, ms: f64) -> f64 {
     undefined_value()
 }
 
-extern "C" fn mock_timers_run_all(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn mock_timers_run_all(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     crate::timer::js_mock_timers_run_all();
     undefined_value()
 }
 
-extern "C" fn mock_timers_set_time(_closure: *const ClosureHeader, ms: f64) -> f64 {
+extern "C" fn mock_timers_set_time(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    ms: f64,
+) -> f64 {
     let time = validate_mock_timer_number("time", ms, false);
     crate::timer::js_mock_timers_set_time(time);
     undefined_value()
 }
 
-extern "C" fn mock_timers_reset(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn mock_timers_reset(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     crate::timer::js_mock_timers_reset();
     undefined_value()
 }
@@ -549,28 +573,48 @@ fn mock_context_object(id: i64, calls: f64, include_call_tracking: bool) -> f64 
         set_field(
             obj,
             "callCount",
-            closure_value_with_id(mock_context_call_count as *const u8, 0, id),
+            closure_value_with_id(
+                crate::fn_info!(mock_context_call_count, 0; with_declared(0)),
+                0,
+                id,
+            ),
         );
         set_field(
             obj,
             "resetCalls",
-            closure_value_with_id(mock_context_reset_calls as *const u8, 0, id),
+            closure_value_with_id(
+                crate::fn_info!(mock_context_reset_calls, 0; with_declared(0)),
+                0,
+                id,
+            ),
         );
         set_field(
             obj,
             "mockImplementation",
-            closure_value_with_id(mock_context_mock_implementation as *const u8, 1, id),
+            closure_value_with_id(
+                crate::fn_info!(mock_context_mock_implementation, 1; with_declared(1)),
+                1,
+                id,
+            ),
         );
         set_field(
             obj,
             "mockImplementationOnce",
-            closure_value_with_id(mock_context_mock_implementation_once as *const u8, 2, id),
+            closure_value_with_id(
+                crate::fn_info!(mock_context_mock_implementation_once, 2; with_declared(2)),
+                2,
+                id,
+            ),
         );
     }
     set_field(
         obj,
         "restore",
-        closure_value_with_id(mock_context_restore as *const u8, 0, id),
+        closure_value_with_id(
+            crate::fn_info!(mock_context_restore, 0; with_declared(0)),
+            0,
+            id,
+        ),
     );
     boxed_ptr(obj)
 }
@@ -583,7 +627,7 @@ fn mock_function_metadata(original: f64) -> (String, u32) {
     let dynamic_name = crate::closure::closure_get_own_dynamic_prop(closure as usize, "name")
         .and_then(value_to_string);
     let name = dynamic_name
-        .or_else(|| unsafe { crate::builtins::function_name_for_ptr((*closure).func_ptr as usize) })
+        .or_else(|| unsafe { crate::builtins::function_name_for_ptr((*closure).code() as usize) })
         .unwrap_or_default();
     let length = crate::closure::closure_length(closure).unwrap_or(0);
     (name, length)
@@ -610,7 +654,7 @@ fn create_mock_function(
     let calls = scope.root_nanbox_f64(boxed_ptr(crate::array::js_array_alloc(0)));
     let context = scope.root_nanbox_f64(mock_context_object(id, calls.get_nanbox_f64(), true));
     let function = scope.root_nanbox_f64(rest_closure_value_with_id(
-        mock_function_invoke as *const u8,
+        crate::fn_info!(mock_function_invoke, 1; with_rest(0)),
         0,
         id,
     ));
@@ -775,7 +819,11 @@ fn record_mock_call(id: i64, args_value: f64, this_value: f64, result: f64, erro
 #[path = "test_metadata_unit_tests.rs"]
 mod metadata_tests;
 
-extern "C" fn mock_function_invoke(closure: *const ClosureHeader, rest: f64) -> f64 {
+extern "C" fn mock_function_invoke(
+    closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+    rest: f64,
+) -> f64 {
     let id = closure_id(closure);
     let args = array_values(rest).unwrap_or_default();
     let (implementation, is_symbol_method) = MOCK_STATES.with(|states| {
@@ -789,7 +837,7 @@ extern "C" fn mock_function_invoke(closure: *const ClosureHeader, rest: f64) -> 
         )
     });
 
-    let this_value = crate::object::js_implicit_this_get();
+    let this_value = this.as_f64();
     if JSValue::from_bits(implementation.to_bits()).is_undefined() {
         if is_symbol_method {
             let scope = crate::gc::RuntimeHandleScope::new();
@@ -818,15 +866,15 @@ extern "C" fn mock_function_invoke(closure: *const ClosureHeader, rest: f64) -> 
     let rest_handle = scope.root_nanbox_f64(rest);
     let arg_handles = scope.root_nanbox_f64_slice(&args);
     let call_args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
-    let previous_this = scope.root_nanbox_f64(crate::object::js_implicit_this_set(this_value)); // #9445
+    let this_handle = scope.root_nanbox_f64(this_value);
     let call_result = catch_js(|| unsafe {
-        crate::closure::js_native_call_value(
+        crate::closure::native_call_value_this(
             implementation_handle.get_nanbox_f64(),
+            crate::closure::JsThis::from_f64(this_handle.get_nanbox_f64()),
             call_args.as_ptr(),
             call_args.len(),
         )
     });
-    crate::object::js_implicit_this_set(previous_this.get_nanbox_f64());
 
     match call_result {
         Ok(result) => {
@@ -854,7 +902,10 @@ extern "C" fn mock_function_invoke(closure: *const ClosureHeader, rest: f64) -> 
     }
 }
 
-extern "C" fn mock_context_call_count(closure: *const ClosureHeader) -> f64 {
+extern "C" fn mock_context_call_count(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = closure_id(closure);
     MOCK_STATES.with(|states| {
         states
@@ -872,7 +923,10 @@ extern "C" fn mock_context_call_count(closure: *const ClosureHeader) -> f64 {
     })
 }
 
-extern "C" fn mock_context_reset_calls(closure: *const ClosureHeader) -> f64 {
+extern "C" fn mock_context_reset_calls(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = closure_id(closure);
     MOCK_STATES.with(|states| {
         if let Some(state) = states.borrow_mut().iter_mut().find(|state| state.id == id) {
@@ -884,6 +938,7 @@ extern "C" fn mock_context_reset_calls(closure: *const ClosureHeader) -> f64 {
 
 extern "C" fn mock_context_mock_implementation(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     implementation: f64,
 ) -> f64 {
     assert_callable_arg("implementation", implementation);
@@ -898,6 +953,7 @@ extern "C" fn mock_context_mock_implementation(
 
 extern "C" fn mock_context_mock_implementation_once(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     implementation: f64,
     on_call: f64,
 ) -> f64 {
@@ -929,13 +985,17 @@ extern "C" fn mock_context_mock_implementation_once(
     undefined_value()
 }
 
-extern "C" fn mock_context_restore(closure: *const ClosureHeader) -> f64 {
+extern "C" fn mock_context_restore(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     restore_mock_state(closure_id(closure));
     undefined_value()
 }
 
 extern "C" fn mock_fn_thunk(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     original: f64,
     implementation_or_options: f64,
     options: f64,
@@ -970,6 +1030,7 @@ extern "C" fn mock_fn_thunk(
 
 extern "C" fn mock_method_thunk(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     target: f64,
     property: f64,
     implementation: f64,
@@ -1100,6 +1161,7 @@ fn create_getter_mock(target: f64, property: f64, implementation: f64, times: Op
 
 extern "C" fn mock_getter_thunk(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     target: f64,
     property: f64,
     implementation: f64,
@@ -1167,6 +1229,7 @@ fn create_setter_mock(target: f64, property: f64, implementation: f64, times: Op
 
 extern "C" fn mock_setter_thunk(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     target: f64,
     property: f64,
     implementation: f64,
@@ -1190,7 +1253,10 @@ extern "C" fn mock_setter_thunk(
     )
 }
 
-extern "C" fn mock_reset_thunk(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn mock_reset_thunk(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     restore_tracked_mocks();
     MOCK_STATES.with(|states| {
         for state in states.borrow_mut().iter_mut() {
@@ -1216,7 +1282,10 @@ fn restore_tracked_mocks() {
     property_mock::restore_all();
 }
 
-extern "C" fn mock_restore_all_thunk(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn mock_restore_all_thunk(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     restore_tracked_mocks();
     undefined_value()
 }
@@ -1230,28 +1299,35 @@ fn mock_object_value() -> f64 {
         set_field(
             timers,
             "enable",
-            closure_value(mock_timers_enable as *const u8, 1),
+            closure_value(crate::fn_info!(mock_timers_enable, 1; with_declared(1)), 1),
         );
         set_field(
             timers,
             "tick",
-            closure_value(mock_timers_tick as *const u8, 1),
+            closure_value(crate::fn_info!(mock_timers_tick, 1; with_declared(1)), 1),
         );
         set_field(
             timers,
             "runAll",
-            closure_value(mock_timers_run_all as *const u8, 0),
+            closure_value(crate::fn_info!(mock_timers_run_all, 0; with_declared(0)), 0),
         );
         set_field(
             timers,
             "setTime",
-            closure_value(mock_timers_set_time as *const u8, 1),
+            closure_value(
+                crate::fn_info!(mock_timers_set_time, 1; with_declared(1)),
+                1,
+            ),
         );
-        let reset = closure_value(mock_timers_reset as *const u8, 0);
+        let reset = closure_value(crate::fn_info!(mock_timers_reset, 0; with_declared(0)), 0);
         set_field(timers, "reset", reset);
         let dispose = crate::symbol::well_known_symbol("dispose");
         if !dispose.is_null() {
-            let dispose_closure = make_closure(mock_timers_reset as *const u8, 0, 0);
+            let dispose_closure = make_closure(
+                crate::fn_info!(mock_timers_reset, 0; with_declared(0)),
+                0,
+                0,
+            );
             crate::object::set_bound_native_closure_name(dispose_closure, "[Symbol.dispose]");
             unsafe {
                 crate::symbol::js_object_set_symbol_property(
@@ -1268,32 +1344,39 @@ fn mock_object_value() -> f64 {
         }
 
         let mock = js_object_alloc(0, 8);
-        set_field(mock, "fn", closure_value(mock_fn_thunk as *const u8, 3));
+        set_field(
+            mock,
+            "fn",
+            closure_value(crate::fn_info!(mock_fn_thunk, 3; with_declared(3)), 3),
+        );
         set_field(
             mock,
             "method",
-            closure_value(mock_method_thunk as *const u8, 4),
+            closure_value(crate::fn_info!(mock_method_thunk, 4; with_declared(4)), 4),
         );
         set_field(
             mock,
             "getter",
-            closure_value(mock_getter_thunk as *const u8, 4),
+            closure_value(crate::fn_info!(mock_getter_thunk, 4; with_declared(4)), 4),
         );
         set_field(
             mock,
             "setter",
-            closure_value(mock_setter_thunk as *const u8, 4),
+            closure_value(crate::fn_info!(mock_setter_thunk, 4; with_declared(4)), 4),
         );
         set_field(mock, "property", property_mock::tracker_property_value());
         set_field(
             mock,
             "reset",
-            closure_value(mock_reset_thunk as *const u8, 0),
+            closure_value(crate::fn_info!(mock_reset_thunk, 0; with_declared(0)), 0),
         );
         set_field(
             mock,
             "restoreAll",
-            closure_value(mock_restore_all_thunk as *const u8, 0),
+            closure_value(
+                crate::fn_info!(mock_restore_all_thunk, 0; with_declared(0)),
+                0,
+            ),
         );
         set_field(mock, "timers", boxed_ptr(timers));
         *slot.borrow_mut() = Some(mock);
@@ -1301,14 +1384,22 @@ fn mock_object_value() -> f64 {
     })
 }
 
-extern "C" fn test_context_diagnostic(_closure: *const ClosureHeader, message: f64) -> f64 {
+extern "C" fn test_context_diagnostic(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    message: f64,
+) -> f64 {
     let message =
         value_to_string(message).unwrap_or_else(|| crate::builtins::format_jsvalue(message, 0));
     CURRENT_DIAGNOSTICS.with(|diagnostics| diagnostics.borrow_mut().push(message));
     undefined_value()
 }
 
-extern "C" fn test_context_plan(_closure: *const ClosureHeader, expected: f64) -> f64 {
+extern "C" fn test_context_plan(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    expected: f64,
+) -> f64 {
     let n = crate::builtins::js_number_coerce(expected);
     if !n.is_finite() || n < 0.0 {
         let message = format!(
@@ -1321,7 +1412,11 @@ extern "C" fn test_context_plan(_closure: *const ClosureHeader, expected: f64) -
     undefined_value()
 }
 
-extern "C" fn test_context_skip(_closure: *const ClosureHeader, reason: f64) -> f64 {
+extern "C" fn test_context_skip(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    reason: f64,
+) -> f64 {
     CURRENT_TEST_OVERRIDE.with(|slot| slot.set(TEST_OVERRIDE_SKIP));
     if let Some(reason) = value_to_string(reason) {
         CURRENT_DIAGNOSTICS
@@ -1330,7 +1425,11 @@ extern "C" fn test_context_skip(_closure: *const ClosureHeader, reason: f64) -> 
     undefined_value()
 }
 
-extern "C" fn test_context_todo(_closure: *const ClosureHeader, reason: f64) -> f64 {
+extern "C" fn test_context_todo(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    reason: f64,
+) -> f64 {
     CURRENT_TEST_OVERRIDE.with(|slot| slot.set(TEST_OVERRIDE_TODO));
     if let Some(reason) = value_to_string(reason) {
         CURRENT_DIAGNOSTICS
@@ -1347,6 +1446,7 @@ macro_rules! test_context_assertion3 {
     ($name:ident, $assertion:path) => {
         extern "C" fn $name(
             _closure: *const ClosureHeader,
+            _this: crate::closure::JsThis,
             actual: f64,
             expected: f64,
             message: f64,
@@ -1399,6 +1499,7 @@ test_context_assertion3!(test_context_assert_throws, crate::object::js_assert_th
 
 extern "C" fn test_context_assert_ok(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
     message: f64,
 ) -> f64 {
@@ -1406,12 +1507,20 @@ extern "C" fn test_context_assert_ok(
     crate::object::js_assert_ok(value, message)
 }
 
-extern "C" fn test_context_assert_fail(_closure: *const ClosureHeader, message: f64) -> f64 {
+extern "C" fn test_context_assert_fail(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    message: f64,
+) -> f64 {
     record_test_context_assertion();
     crate::object::js_assert_fail(message)
 }
 
-extern "C" fn test_context_assert_if_error(_closure: *const ClosureHeader, value: f64) -> f64 {
+extern "C" fn test_context_assert_if_error(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    value: f64,
+) -> f64 {
     record_test_context_assertion();
     crate::object::js_assert_if_error(value)
 }
@@ -1419,64 +1528,99 @@ extern "C" fn test_context_assert_if_error(_closure: *const ClosureHeader, value
 fn test_context_value(name: &str) -> f64 {
     let assert = js_object_alloc(0, 17);
     for (name, func, arity) in [
-        ("deepEqual", test_context_assert_deep_equal as *const u8, 3),
+        (
+            "deepEqual",
+            crate::fn_info!(test_context_assert_deep_equal, 3; with_declared(3)),
+            3,
+        ),
         (
             "deepStrictEqual",
-            test_context_assert_deep_strict_equal as *const u8,
+            crate::fn_info!(test_context_assert_deep_strict_equal, 3; with_declared(3)),
             3,
         ),
         (
             "doesNotMatch",
-            test_context_assert_does_not_match as *const u8,
+            crate::fn_info!(test_context_assert_does_not_match, 3; with_declared(3)),
             3,
         ),
         (
             "doesNotReject",
-            test_context_assert_does_not_reject as *const u8,
+            crate::fn_info!(test_context_assert_does_not_reject, 3; with_declared(3)),
             3,
         ),
         (
             "doesNotThrow",
-            test_context_assert_does_not_throw as *const u8,
+            crate::fn_info!(test_context_assert_does_not_throw, 3; with_declared(3)),
             3,
         ),
-        ("equal", test_context_assert_equal as *const u8, 3),
-        ("fail", test_context_assert_fail as *const u8, 1),
-        ("ifError", test_context_assert_if_error as *const u8, 1),
-        ("match", test_context_assert_match as *const u8, 3),
+        (
+            "equal",
+            crate::fn_info!(test_context_assert_equal, 3; with_declared(3)),
+            3,
+        ),
+        (
+            "fail",
+            crate::fn_info!(test_context_assert_fail, 1; with_declared(1)),
+            1,
+        ),
+        (
+            "ifError",
+            crate::fn_info!(test_context_assert_if_error, 1; with_declared(1)),
+            1,
+        ),
+        (
+            "match",
+            crate::fn_info!(test_context_assert_match, 3; with_declared(3)),
+            3,
+        ),
         (
             "notDeepEqual",
-            test_context_assert_not_deep_equal as *const u8,
+            crate::fn_info!(test_context_assert_not_deep_equal, 3; with_declared(3)),
             3,
         ),
         (
             "notStrictEqual",
-            test_context_assert_not_strict_equal as *const u8,
+            crate::fn_info!(test_context_assert_not_strict_equal, 3; with_declared(3)),
             3,
         ),
-        ("ok", test_context_assert_ok as *const u8, 2),
-        ("rejects", test_context_assert_rejects as *const u8, 3),
+        (
+            "ok",
+            crate::fn_info!(test_context_assert_ok, 2; with_declared(2)),
+            2,
+        ),
+        (
+            "rejects",
+            crate::fn_info!(test_context_assert_rejects, 3; with_declared(3)),
+            3,
+        ),
         (
             "strictEqual",
-            test_context_assert_strict_equal as *const u8,
+            crate::fn_info!(test_context_assert_strict_equal, 3; with_declared(3)),
             3,
         ),
-        ("throws", test_context_assert_throws as *const u8, 3),
+        (
+            "throws",
+            crate::fn_info!(test_context_assert_throws, 3; with_declared(3)),
+            3,
+        ),
     ] {
         set_field(assert, name, closure_value(func, arity));
     }
     set_field(
         assert,
         "snapshot",
-        closure_value(assert_snapshot as *const u8, 2),
+        closure_value(crate::fn_info!(assert_snapshot, 2; with_declared(2)), 2),
     );
     set_field(
         assert,
         "fileSnapshot",
-        closure_value(assert_file_snapshot as *const u8, 3),
+        closure_value(
+            crate::fn_info!(assert_file_snapshot, 3; with_declared(3)),
+            3,
+        ),
     );
     let ctx = js_object_alloc(0, 8);
-    let test_fn = closure_value(thunk_test as *const u8, 3);
+    let test_fn = closure_value(crate::fn_info!(thunk_test, 3; with_declared(3)), 3);
     let test_fn_ptr = raw_ptr_from_value(test_fn);
     let test_fn = if crate::value::addr_class::is_plausible_heap_addr(test_fn_ptr) {
         boxed_ptr(decorate_test_export(
@@ -1494,22 +1638,25 @@ fn test_context_value(name: &str) -> f64 {
     set_field(
         ctx,
         "diagnostic",
-        closure_value(test_context_diagnostic as *const u8, 1),
+        closure_value(
+            crate::fn_info!(test_context_diagnostic, 1; with_declared(1)),
+            1,
+        ),
     );
     set_field(
         ctx,
         "plan",
-        closure_value(test_context_plan as *const u8, 1),
+        closure_value(crate::fn_info!(test_context_plan, 1; with_declared(1)), 1),
     );
     set_field(
         ctx,
         "skip",
-        closure_value(test_context_skip as *const u8, 1),
+        closure_value(crate::fn_info!(test_context_skip, 1; with_declared(1)), 1),
     );
     set_field(
         ctx,
         "todo",
-        closure_value(test_context_todo as *const u8, 1),
+        closure_value(crate::fn_info!(test_context_todo, 1; with_declared(1)), 1),
     );
     boxed_ptr(ctx)
 }
@@ -1530,6 +1677,7 @@ pub extern "C" fn js_node_test_mock_fn(
 ) -> f64 {
     mock_fn_thunk(
         std::ptr::null(),
+        crate::closure::plain_call_receiver(),
         original,
         implementation_or_options,
         options,
@@ -1543,7 +1691,14 @@ pub extern "C" fn js_node_test_mock_method(
     implementation: f64,
     options: f64,
 ) -> f64 {
-    mock_method_thunk(std::ptr::null(), target, property, implementation, options)
+    mock_method_thunk(
+        std::ptr::null(),
+        crate::closure::plain_call_receiver(),
+        target,
+        property,
+        implementation,
+        options,
+    )
 }
 
 #[no_mangle]
@@ -1553,7 +1708,14 @@ pub extern "C" fn js_node_test_mock_getter(
     implementation: f64,
     options: f64,
 ) -> f64 {
-    mock_getter_thunk(std::ptr::null(), target, property, implementation, options)
+    mock_getter_thunk(
+        std::ptr::null(),
+        crate::closure::plain_call_receiver(),
+        target,
+        property,
+        implementation,
+        options,
+    )
 }
 
 #[no_mangle]
@@ -1563,7 +1725,14 @@ pub extern "C" fn js_node_test_mock_setter(
     implementation: f64,
     options: f64,
 ) -> f64 {
-    mock_setter_thunk(std::ptr::null(), target, property, implementation, options)
+    mock_setter_thunk(
+        std::ptr::null(),
+        crate::closure::plain_call_receiver(),
+        target,
+        property,
+        implementation,
+        options,
+    )
 }
 
 #[no_mangle]
@@ -1583,47 +1752,59 @@ pub extern "C" fn js_node_test_mock_property_with_presence(
 
 #[no_mangle]
 pub extern "C" fn js_node_test_mock_reset() -> f64 {
-    mock_reset_thunk(std::ptr::null())
+    mock_reset_thunk(std::ptr::null(), crate::closure::plain_call_receiver())
 }
 
 #[no_mangle]
 pub extern "C" fn js_node_test_mock_restore_all() -> f64 {
-    mock_restore_all_thunk(std::ptr::null())
+    mock_restore_all_thunk(std::ptr::null(), crate::closure::plain_call_receiver())
 }
 
 #[no_mangle]
 pub extern "C" fn js_node_test_snapshot_set_default_serializers(serializers: f64) -> f64 {
-    snapshot_set_default_serializers(std::ptr::null(), serializers)
+    snapshot_set_default_serializers(
+        std::ptr::null(),
+        crate::closure::plain_call_receiver(),
+        serializers,
+    )
 }
 
 #[no_mangle]
 pub extern "C" fn js_node_test_snapshot_set_resolve_snapshot_path(resolver: f64) -> f64 {
-    snapshot_set_resolve_snapshot_path(std::ptr::null(), resolver)
+    snapshot_set_resolve_snapshot_path(
+        std::ptr::null(),
+        crate::closure::plain_call_receiver(),
+        resolver,
+    )
 }
 
 #[no_mangle]
 pub extern "C" fn js_node_test_mock_timers_enable(options: f64) -> f64 {
-    mock_timers_enable(std::ptr::null(), options)
+    mock_timers_enable(
+        std::ptr::null(),
+        crate::closure::plain_call_receiver(),
+        options,
+    )
 }
 
 #[no_mangle]
 pub extern "C" fn js_node_test_mock_timers_tick(ms: f64) -> f64 {
-    mock_timers_tick(std::ptr::null(), ms)
+    mock_timers_tick(std::ptr::null(), crate::closure::plain_call_receiver(), ms)
 }
 
 #[no_mangle]
 pub extern "C" fn js_node_test_mock_timers_run_all() -> f64 {
-    mock_timers_run_all(std::ptr::null())
+    mock_timers_run_all(std::ptr::null(), crate::closure::plain_call_receiver())
 }
 
 #[no_mangle]
 pub extern "C" fn js_node_test_mock_timers_set_time(ms: f64) -> f64 {
-    mock_timers_set_time(std::ptr::null(), ms)
+    mock_timers_set_time(std::ptr::null(), crate::closure::plain_call_receiver(), ms)
 }
 
 #[no_mangle]
 pub extern "C" fn js_node_test_mock_timers_reset() -> f64 {
-    mock_timers_reset(std::ptr::null())
+    mock_timers_reset(std::ptr::null(), crate::closure::plain_call_receiver())
 }
 
 pub(crate) fn decorate_test_export(
@@ -1642,15 +1823,33 @@ pub(crate) fn decorate_test_export(
     }
     let decorators = if suite {
         [
-            ("skip", thunk_test_suite_skip as *const u8),
-            ("todo", thunk_test_suite_todo as *const u8),
-            ("only", thunk_test_suite_only as *const u8),
+            (
+                "skip",
+                crate::fn_info!(thunk_test_suite_skip, 3; with_declared(3)),
+            ),
+            (
+                "todo",
+                crate::fn_info!(thunk_test_suite_todo, 3; with_declared(3)),
+            ),
+            (
+                "only",
+                crate::fn_info!(thunk_test_suite_only, 3; with_declared(3)),
+            ),
         ]
     } else {
         [
-            ("skip", thunk_test_skip as *const u8),
-            ("todo", thunk_test_todo as *const u8),
-            ("only", thunk_test_only as *const u8),
+            (
+                "skip",
+                crate::fn_info!(thunk_test_skip, 3; with_declared(3)),
+            ),
+            (
+                "todo",
+                crate::fn_info!(thunk_test_todo, 3; with_declared(3)),
+            ),
+            (
+                "only",
+                crate::fn_info!(thunk_test_only, 3; with_declared(3)),
+            ),
         ]
     };
     for (name, func) in decorators {

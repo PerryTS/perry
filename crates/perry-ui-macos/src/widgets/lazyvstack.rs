@@ -8,8 +8,8 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 extern "C" {
-    fn js_closure_call0(closure: *const u8) -> f64;
-    fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+    fn js_closure_call0(closure: *const u8, this: perry_ffi::JsThis) -> f64;
+    fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
 }
 
@@ -69,7 +69,7 @@ define_class!(
                 return std::ptr::null_mut();
             }
             let render_ptr = unsafe { js_nanbox_get_pointer(render_closure) } as *const u8;
-            let child_f64 = unsafe { js_closure_call1(render_ptr, row as f64) };
+            let child_f64 = unsafe { js_closure_call1(render_ptr, perry_ffi::JsThis::UNDEFINED, row as f64) };
             let child_handle = unsafe { js_nanbox_get_pointer(child_f64) };
             if let Some(view) = super::get_widget(child_handle) {
                 Retained::as_ptr(&view) as *mut NSView
@@ -334,7 +334,7 @@ fn check_scroll_end(handle: i64) {
     if should_fire {
         unsafe {
             let ptr = js_nanbox_get_pointer(closure) as *const u8;
-            js_closure_call0(ptr);
+            js_closure_call0(ptr, perry_ffi::JsThis::UNDEFINED);
         }
     }
 }

@@ -63,7 +63,7 @@ pub(in crate::codegen) fn compile_static_method(
     // dynamic dispatch, and that object may be reachable only from this slot.
     // #10663: decided before any statement is lowered.
     crate::codegen::helpers::decide_straight_line_store_outline(lf, &f.body);
-    let shadow_slot_map = if crate::codegen::helpers::precise_root_analysis_enabled() {
+    let mut shadow_slot_map = if crate::codegen::helpers::precise_root_analysis_enabled() {
         let flat_const_ids: std::collections::HashSet<u32> =
             cross_module.flat_const_arrays.keys().copied().collect();
         let m =
@@ -80,8 +80,6 @@ pub(in crate::codegen) fn compile_static_method(
         std::collections::HashMap::new()
     };
     let this_shadow_slot_idx = shadow_slot_map.len() as u32;
-    let shadow_slot_clears_after_stmt =
-        crate::collectors::collect_shadow_slot_clear_points(&f.body, &shadow_slot_map);
 
     let _ = lf.create_block("entry");
 
@@ -97,8 +95,8 @@ pub(in crate::codegen) fn compile_static_method(
     // INT32-tagged class-id value `Expr::ClassRef` lowers to) stored in a
     // `this` slot so `this.x` / `this.#x()` / `this[k]` inside the body
     // resolve against the class object via the normal dynamic-dispatch
-    // path. (Previously `this` fell through to `js_implicit_this_get` and
-    // read back `undefined`.)
+    // path. (Previously `this` fell through to a receiver-less read and came
+    // back `undefined`.)
     let class_ref_cid = class_ids.get(&class.name).copied().unwrap_or(class.id);
     let (this_slot, locals): (String, HashMap<u32, String>) = {
         let blk = lf.block_mut(0).unwrap();
@@ -189,6 +187,12 @@ pub(in crate::codegen) fn compile_static_method(
         // #9363: a method body reads the same module-scope views.
         &cross_module.module_global_proven_types,
     );
+    crate::codegen::helpers::drop_number_local_root_slots(
+        &mut shadow_slot_map,
+        native_facts.number_by_construction_locals(),
+    );
+    let shadow_slot_clears_after_stmt =
+        crate::collectors::collect_shadow_slot_clear_points(&f.body, &shadow_slot_map);
 
     // Representation-selection context gates (see codegen/function.rs).
     let repsel_flags =
@@ -287,7 +291,7 @@ pub(in crate::codegen) fn compile_static_method(
         local_closure_func_ids: HashMap::new(),
         guard_free_closure_bindings: std::collections::HashSet::new(),
         local_closure_param_counts: HashMap::new(),
-        resolved_arrow_callback_targets: HashMap::new(),
+        resolved_plain_callback_targets: HashMap::new(),
         resolved_versioned_loop_callback_targets: HashMap::new(),
         trusted_box_captures: false,
         versioned_loop_deopt_context: None,

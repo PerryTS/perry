@@ -321,11 +321,11 @@ pub extern "C" fn perry_watchos_handle_action(id: i64) {
     if let Some(closure_f64) = closure {
         extern "C" {
             fn js_nanbox_get_pointer(value: f64) -> i64;
-            fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+            fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
         }
         let closure_ptr = unsafe { js_nanbox_get_pointer(closure_f64) } as *const u8;
         unsafe {
-            js_closure_call1(closure_ptr, 0.0);
+            js_closure_call1(closure_ptr, perry_ffi::JsThis::UNDEFINED, 0.0);
         }
     }
 }
@@ -547,11 +547,11 @@ pub extern "C" fn perry_watchos_slider_changed(id: i64, value: f64) {
     if let Some(closure_f64) = closure {
         extern "C" {
             fn js_nanbox_get_pointer(value: f64) -> i64;
-            fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+            fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
         }
         let closure_ptr = unsafe { js_nanbox_get_pointer(closure_f64) } as *const u8;
         unsafe {
-            js_closure_call1(closure_ptr, value);
+            js_closure_call1(closure_ptr, perry_ffi::JsThis::UNDEFINED, value);
         }
     }
 }
@@ -567,11 +567,15 @@ pub extern "C" fn perry_watchos_toggle_changed(id: i64, on: bool) {
     if let Some(closure_f64) = closure {
         extern "C" {
             fn js_nanbox_get_pointer(value: f64) -> i64;
-            fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+            fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
         }
         let closure_ptr = unsafe { js_nanbox_get_pointer(closure_f64) } as *const u8;
         unsafe {
-            js_closure_call1(closure_ptr, if on { 1.0 } else { 0.0 });
+            js_closure_call1(
+                closure_ptr,
+                perry_ffi::JsThis::UNDEFINED,
+                if on { 1.0 } else { 0.0 },
+            );
         }
     }
 }
@@ -587,11 +591,11 @@ pub extern "C" fn perry_watchos_picker_changed(id: i64, index: i64) {
     if let Some(closure_f64) = closure {
         extern "C" {
             fn js_nanbox_get_pointer(value: f64) -> i64;
-            fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+            fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
         }
         let closure_ptr = unsafe { js_nanbox_get_pointer(closure_f64) } as *const u8;
         unsafe {
-            js_closure_call1(closure_ptr, index as f64);
+            js_closure_call1(closure_ptr, perry_ffi::JsThis::UNDEFINED, index as f64);
         }
     }
 }
@@ -601,7 +605,7 @@ pub extern "C" fn perry_watchos_picker_changed(id: i64, index: i64) {
 pub extern "C" fn perry_watchos_textarea_changed(id: i64, text_ptr: *const std::ffi::c_char) {
     extern "C" {
         fn js_nanbox_get_pointer(value: f64) -> i64;
-        fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+        fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
         fn js_string_from_bytes(ptr: *const u8, len: i64) -> *const u8;
         fn js_nanbox_string(ptr: i64) -> f64;
     }
@@ -624,7 +628,7 @@ pub extern "C" fn perry_watchos_textarea_changed(id: i64, text_ptr: *const std::
         let nanboxed = unsafe { js_nanbox_string(str_ptr as i64) };
         let closure_ptr = unsafe { js_nanbox_get_pointer(closure_f64) } as *const u8;
         unsafe {
-            js_closure_call1(closure_ptr, nanboxed);
+            js_closure_call1(closure_ptr, perry_ffi::JsThis::UNDEFINED, nanboxed);
         }
     }
 }

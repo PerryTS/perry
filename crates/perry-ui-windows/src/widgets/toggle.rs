@@ -15,7 +15,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use super::{alloc_control_id, register_widget, WidgetKind};
 
 extern "C" {
-    fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+    fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
 }
 
@@ -111,7 +111,7 @@ pub fn handle_click(handle: i64) {
                 callbacks.get(&handle).copied()
             });
             if let Some(ptr) = ptr {
-                unsafe { js_closure_call1(ptr, value) };
+                unsafe { js_closure_call1(ptr, perry_ffi::JsThis::UNDEFINED, value) };
             }
         }
     }

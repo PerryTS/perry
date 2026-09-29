@@ -19,6 +19,7 @@ pub(crate) fn normalize_eval_this_body(body: &str) -> Option<String> {
 
 pub(crate) extern "C" fn typed_array_constructor_call_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
     super::super::object_ops::throw_object_type_error(b"Constructor %TypedArray% requires 'new'")
@@ -26,6 +27,7 @@ pub(crate) extern "C" fn typed_array_constructor_call_thunk(
 
 pub(crate) extern "C" fn construct_only_builtin_call_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     super::super::object_ops::throw_object_type_error(b"Constructor requires 'new'")
 }
@@ -44,6 +46,7 @@ pub(crate) extern "C" fn construct_only_builtin_call_thunk(
 #[cfg(feature = "regex-engine")]
 pub(crate) extern "C" fn regexp_constructor_call_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     pattern: f64,
     flags: f64,
 ) -> f64 {
@@ -55,6 +58,7 @@ pub(crate) extern "C" fn regexp_constructor_call_thunk(
 #[cfg(not(feature = "regex-engine"))]
 pub(crate) extern "C" fn regexp_constructor_call_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _pattern: f64,
     _flags: f64,
 ) -> f64 {
@@ -68,6 +72,7 @@ pub(crate) extern "C" fn regexp_constructor_call_thunk(
 // construct-expression path and is unaffected.)
 pub(crate) extern "C" fn map_constructor_call_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
     super::super::object_ops::throw_object_type_error(b"Constructor Map requires 'new'")
@@ -75,6 +80,7 @@ pub(crate) extern "C" fn map_constructor_call_thunk(
 
 pub(crate) extern "C" fn set_constructor_call_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
     super::super::object_ops::throw_object_type_error(b"Constructor Set requires 'new'")
@@ -82,6 +88,7 @@ pub(crate) extern "C" fn set_constructor_call_thunk(
 
 pub(crate) extern "C" fn weak_map_constructor_call_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
     super::super::object_ops::throw_object_type_error(b"Constructor WeakMap requires 'new'")
@@ -89,6 +96,7 @@ pub(crate) extern "C" fn weak_map_constructor_call_thunk(
 
 pub(crate) extern "C" fn weak_set_constructor_call_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
     super::super::object_ops::throw_object_type_error(b"Constructor WeakSet requires 'new'")
@@ -96,6 +104,7 @@ pub(crate) extern "C" fn weak_set_constructor_call_thunk(
 
 pub(crate) extern "C" fn weak_ref_constructor_call_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
     super::super::object_ops::throw_object_type_error(b"Constructor WeakRef requires 'new'")
@@ -103,6 +112,7 @@ pub(crate) extern "C" fn weak_ref_constructor_call_thunk(
 
 pub(crate) extern "C" fn promise_constructor_call_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
     super::super::object_ops::throw_object_type_error(b"Constructor Promise requires 'new'")
@@ -110,6 +120,7 @@ pub(crate) extern "C" fn promise_constructor_call_thunk(
 
 pub(crate) extern "C" fn global_this_url_pattern_call_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     input: f64,
     base: f64,
 ) -> f64 {
@@ -123,6 +134,7 @@ fn error_constructor_call(kind: u32, message: f64) -> f64 {
 
 pub(crate) extern "C" fn error_constructor_call_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     message: f64,
 ) -> f64 {
     error_constructor_call(crate::error::ERROR_KIND_ERROR, message)
@@ -130,6 +142,7 @@ pub(crate) extern "C" fn error_constructor_call_thunk(
 
 pub(crate) extern "C" fn type_error_constructor_call_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     message: f64,
 ) -> f64 {
     error_constructor_call(crate::error::ERROR_KIND_TYPE_ERROR, message)
@@ -137,6 +150,7 @@ pub(crate) extern "C" fn type_error_constructor_call_thunk(
 
 pub(crate) extern "C" fn range_error_constructor_call_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     message: f64,
 ) -> f64 {
     error_constructor_call(crate::error::ERROR_KIND_RANGE_ERROR, message)
@@ -144,6 +158,7 @@ pub(crate) extern "C" fn range_error_constructor_call_thunk(
 
 pub(crate) extern "C" fn reference_error_constructor_call_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     message: f64,
 ) -> f64 {
     error_constructor_call(crate::error::ERROR_KIND_REFERENCE_ERROR, message)
@@ -151,6 +166,7 @@ pub(crate) extern "C" fn reference_error_constructor_call_thunk(
 
 pub(crate) extern "C" fn syntax_error_constructor_call_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     message: f64,
 ) -> f64 {
     error_constructor_call(crate::error::ERROR_KIND_SYNTAX_ERROR, message)
@@ -158,6 +174,7 @@ pub(crate) extern "C" fn syntax_error_constructor_call_thunk(
 
 pub(crate) extern "C" fn eval_error_constructor_call_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     message: f64,
 ) -> f64 {
     error_constructor_call(crate::error::ERROR_KIND_EVAL_ERROR, message)
@@ -165,6 +182,7 @@ pub(crate) extern "C" fn eval_error_constructor_call_thunk(
 
 pub(crate) extern "C" fn uri_error_constructor_call_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     message: f64,
 ) -> f64 {
     error_constructor_call(crate::error::ERROR_KIND_URI_ERROR, message)
@@ -278,6 +296,7 @@ pub(crate) fn is_array_prototype_method_value(value: f64, method: &str) -> bool 
 
 pub(crate) extern "C" fn webcrypto_illegal_constructor_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     crate::fs::validate::throw_type_error_with_code(
         "Illegal constructor",
@@ -295,12 +314,13 @@ pub extern "C" fn js_webcrypto_illegal_constructor() -> f64 {
 
 pub(crate) extern "C" fn global_this_crypto_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     super::super::native_module::webcrypto_namespace()
 }
 
-fn require_webcrypto_this() -> f64 {
-    let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+fn require_webcrypto_this(this: crate::closure::JsThis) -> f64 {
+    let this_value = f64::from_bits(this.bits());
     let jv = crate::value::JSValue::from_bits(this_value.to_bits());
     if jv.is_pointer() {
         let obj = jv.as_pointer::<ObjectHeader>();
@@ -320,9 +340,10 @@ fn require_webcrypto_this() -> f64 {
 
 pub(crate) extern "C" fn webcrypto_get_random_values_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     array: f64,
 ) -> f64 {
-    let this_value = require_webcrypto_this();
+    let this_value = require_webcrypto_this(this);
     unsafe {
         js_native_call_method(
             this_value,
@@ -340,8 +361,9 @@ pub(crate) extern "C" fn webcrypto_get_random_values_thunk(
 /// name through the whole native-call tower on every UUID.
 pub(crate) extern "C" fn webcrypto_random_uuid_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    require_webcrypto_this();
+    require_webcrypto_this(this);
     let ptr = crate::value::JS_NATIVE_CRYPTO_DISPATCH.load(std::sync::atomic::Ordering::SeqCst);
     if ptr.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
@@ -359,13 +381,14 @@ pub(crate) extern "C" fn webcrypto_random_uuid_thunk(
 
 pub(crate) extern "C" fn webcrypto_subtle_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    require_webcrypto_this();
+    require_webcrypto_this(this);
     super::super::native_module::subtle_crypto_namespace()
 }
 
-fn cryptokey_receiver_addr() -> Option<usize> {
-    let this_bits = IMPLICIT_THIS.with(|c| c.get());
+fn cryptokey_receiver_addr(this: crate::closure::JsThis) -> Option<usize> {
+    let this_bits = this.bits();
     let this_jsv = crate::value::JSValue::from_bits(this_bits);
     let raw = if this_jsv.is_pointer() {
         (this_bits & crate::value::POINTER_MASK) as usize
@@ -383,8 +406,8 @@ fn cryptokey_brand_error() -> ! {
     )
 }
 
-fn cryptokey_property_getter(key: &[u8]) -> f64 {
-    let addr = cryptokey_receiver_addr().unwrap_or_else(|| cryptokey_brand_error());
+fn cryptokey_property_getter(this: crate::closure::JsThis, key: &[u8]) -> f64 {
+    let addr = cryptokey_receiver_addr(this).unwrap_or_else(|| cryptokey_brand_error());
     unsafe {
         super::super::crypto_key_property_value(addr, key)
             .map(|value| f64::from_bits(value.bits()))
@@ -394,26 +417,30 @@ fn cryptokey_property_getter(key: &[u8]) -> f64 {
 
 pub(crate) extern "C" fn cryptokey_algorithm_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    cryptokey_property_getter(b"algorithm")
+    cryptokey_property_getter(this, b"algorithm")
 }
 
 pub(crate) extern "C" fn cryptokey_extractable_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    cryptokey_property_getter(b"extractable")
+    cryptokey_property_getter(this, b"extractable")
 }
 
 pub(crate) extern "C" fn cryptokey_type_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    cryptokey_property_getter(b"type")
+    cryptokey_property_getter(this, b"type")
 }
 
 pub(crate) extern "C" fn cryptokey_usages_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    cryptokey_property_getter(b"usages")
+    cryptokey_property_getter(this, b"usages")
 }
 
 /// #10427: `globalThis.crypto.<method>` is a property READ, resolved fresh
@@ -427,34 +454,32 @@ pub(crate) extern "C" fn cryptokey_usages_getter_thunk(
 /// closure for the same `func_ptr` every time — the func_ptr IS the method
 /// identity here since these thunks take no captures.
 pub(crate) fn webcrypto_method_value(property_name: &str) -> Option<f64> {
-    let (func_ptr, arity) = match property_name {
-        "getRandomValues" => (webcrypto_get_random_values_thunk as *const u8, 1),
-        "randomUUID" => (webcrypto_random_uuid_thunk as *const u8, 0),
+    let (info, arity) = match property_name {
+        "getRandomValues" => (
+            crate::fn_info!(webcrypto_get_random_values_thunk, 1; with_declared(1)),
+            1,
+        ),
+        "randomUUID" => (
+            crate::fn_info!(webcrypto_random_uuid_thunk, 0; with_declared(0)),
+            0,
+        ),
         _ => return None,
     };
-    Some(webcrypto_singleton_method(
-        func_ptr,
-        property_name,
-        arity,
-        || crate::closure::js_register_closure_arity(func_ptr, arity),
-    ))
+    Some(webcrypto_singleton_method(info, property_name, arity))
 }
 
-/// #10523: decorate a Web Crypto method's singleton closure (body registry
-/// entry, `name`, `length`) only when it is first minted. Redoing it on every
-/// read allocated a name string, reinstalled the `name` descriptor and
-/// invalidated the thunk's cached call-dispatch strategy each time, which was
+/// #10523: decorate a Web Crypto method's singleton closure (`name`,
+/// `length`) only when it is first minted. Redoing it on every read allocated
+/// a name string and reinstalled the `name` descriptor each time, which was
 /// most of what `crypto.randomUUID ? crypto.randomUUID() : …` spent in Perry.
 fn webcrypto_singleton_method(
-    func_ptr: *const u8,
+    func_ptr: *const crate::closure::JsFunctionInfo,
     name: &str,
     length: u32,
-    register_body: impl FnOnce(),
 ) -> f64 {
     if let Some(closure) = crate::closure::singleton_closure_if_cached(func_ptr) {
         return crate::value::js_nanbox_pointer(closure as i64);
     }
-    register_body();
     let closure = crate::closure::js_closure_alloc_singleton(func_ptr);
     if closure.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
@@ -466,12 +491,27 @@ fn webcrypto_singleton_method(
     crate::value::js_nanbox_pointer(closure as i64)
 }
 
-fn subtle_crypto_method_spec(property_name: &str) -> Option<(*const u8, u32)> {
+/// The KEM method's body info (a rest body) and its `.length`.
+fn subtle_crypto_method_spec(
+    property_name: &str,
+) -> Option<(*const crate::closure::JsFunctionInfo, u32)> {
     match property_name {
-        "encapsulateBits" => Some((subtle_crypto_encapsulate_bits_thunk as *const u8, 2)),
-        "decapsulateBits" => Some((subtle_crypto_decapsulate_bits_thunk as *const u8, 3)),
-        "encapsulateKey" => Some((subtle_crypto_encapsulate_key_thunk as *const u8, 5)),
-        "decapsulateKey" => Some((subtle_crypto_decapsulate_key_thunk as *const u8, 6)),
+        "encapsulateBits" => Some((
+            crate::fn_info!(subtle_crypto_encapsulate_bits_thunk, 1; with_rest(0)),
+            2,
+        )),
+        "decapsulateBits" => Some((
+            crate::fn_info!(subtle_crypto_decapsulate_bits_thunk, 1; with_rest(0)),
+            3,
+        )),
+        "encapsulateKey" => Some((
+            crate::fn_info!(subtle_crypto_encapsulate_key_thunk, 1; with_rest(0)),
+            5,
+        )),
+        "decapsulateKey" => Some((
+            crate::fn_info!(subtle_crypto_decapsulate_key_thunk, 1; with_rest(0)),
+            6,
+        )),
         _ => None,
     }
 }
@@ -482,12 +522,7 @@ fn subtle_crypto_method_spec(property_name: &str) -> Option<(*const u8, u32)> {
 /// see #10427's PR body for which paths were and weren't affected).
 pub(crate) fn subtle_crypto_method_value(property_name: &str) -> Option<f64> {
     let (func_ptr, length) = subtle_crypto_method_spec(property_name)?;
-    Some(webcrypto_singleton_method(
-        func_ptr,
-        property_name,
-        length,
-        || crate::closure::js_register_closure_rest(func_ptr, 0),
-    ))
+    Some(webcrypto_singleton_method(func_ptr, property_name, length))
 }
 
 #[cfg(test)]

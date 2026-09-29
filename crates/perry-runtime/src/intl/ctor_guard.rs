@@ -113,6 +113,7 @@ fn receiver_on_constructor_chain(receiver: f64, closure: *const ClosureHeader) -
 /// this for the Collator kind.
 pub(super) fn chain_legacy_constructed(
     closure: *const ClosureHeader,
+    this_value: f64,
     instance: f64,
 ) -> Option<f64> {
     // Only the legacy path: a `new`-invocation (new.target present) always
@@ -120,7 +121,6 @@ pub(super) fn chain_legacy_constructed(
     if crate::object::js_new_target_get().to_bits() != crate::value::TAG_UNDEFINED {
         return None;
     }
-    let this_value = crate::object::js_implicit_this_get();
     let this_bits = this_value.to_bits();
     // `this` must be an Object (pointer-tagged, valid heap object).
     if (this_bits & !POINTER_MASK) != POINTER_TAG {

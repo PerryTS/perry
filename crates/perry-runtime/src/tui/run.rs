@@ -62,7 +62,7 @@ pub extern "C" fn js_perry_tui_run(component: i64) -> f64 {
         super::hooks::reset_hook_index();
 
         // Call the component to get a fresh widget tree.
-        let widget_v = js_closure_call0(component_closure);
+        let widget_v = js_closure_call0(component_closure, crate::closure::plain_call_receiver());
         // #340/#341: the component returns a widget handle OBJECT, so resolve
         // it through the brand instead of masking the tag off whatever came
         // back. A component that returns a number or a string now paints

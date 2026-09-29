@@ -329,7 +329,7 @@ pub(super) fn schedule_readable_resume(stream: f64) {
         hidden_readable_resume_scheduled_key(),
         f64::from_bits(TAG_TRUE),
     );
-    let closure = js_closure_alloc(ns_readable_resume_microtask as *const u8, 1);
+    let closure = js_closure_alloc(crate::fn_info!(ns_readable_resume_microtask, 0), 1);
     js_closure_set_capture_ptr(closure, 0, stream.to_bits() as i64);
     crate::builtins::js_queue_microtask(closure as i64);
 }
@@ -630,7 +630,7 @@ pub(super) fn schedule_readable_from_drain(stream: f64) {
         hidden_drain_scheduled_key(),
         f64::from_bits(TAG_TRUE),
     );
-    let closure = js_closure_alloc(ns_readable_from_drain as *const u8, 1);
+    let closure = js_closure_alloc(crate::fn_info!(ns_readable_from_drain, 0), 1);
     js_closure_set_capture_ptr(closure, 0, stream.to_bits() as i64);
     crate::builtins::js_queue_microtask(closure as i64);
 }
@@ -655,7 +655,7 @@ pub(super) fn queue_readable_event(stream: f64) {
         hidden_readable_scheduled_key(),
         f64::from_bits(TAG_TRUE),
     );
-    let closure = js_closure_alloc(ns_readable_event_microtask as *const u8, 1);
+    let closure = js_closure_alloc(crate::fn_info!(ns_readable_event_microtask, 0), 1);
     js_closure_set_capture_ptr(closure, 0, stream.to_bits() as i64);
     crate::builtins::js_queue_microtask(closure as i64);
 }
@@ -675,7 +675,7 @@ pub(super) fn schedule_readable_end(stream: f64) {
         return;
     }
     set_hidden_value(stream, hidden_end_scheduled_key(), f64::from_bits(TAG_TRUE));
-    let closure = js_closure_alloc(ns_readable_end_microtask as *const u8, 1);
+    let closure = js_closure_alloc(crate::fn_info!(ns_readable_end_microtask, 0), 1);
     js_closure_set_capture_ptr(closure, 0, stream.to_bits() as i64);
     crate::builtins::js_queue_microtask(closure as i64);
 }
@@ -699,7 +699,7 @@ pub(super) fn schedule_writable_finish(stream: f64, callback: Option<f64>) {
                 hidden_writable_final_pending_key(),
                 f64::from_bits(TAG_TRUE),
             );
-            let cb = js_closure_alloc(ns_writable_final_callback_done as *const u8, 2);
+            let cb = js_closure_alloc(crate::fn_info!(ns_writable_final_callback_done, 1), 2);
             js_closure_set_capture_f64(cb, 0, stream);
             js_closure_set_capture_f64(
                 cb,
@@ -707,13 +707,14 @@ pub(super) fn schedule_writable_finish(stream: f64, callback: Option<f64>) {
                 callback.unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED)),
             );
             let cb_value = f64::from_bits(JSValue::pointer(cb as *const u8).bits());
-            let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-            let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(stream));
             unsafe {
-                let _ =
-                    crate::closure::js_native_call_value(final_callback, [cb_value].as_ptr(), 1);
+                let _ = crate::closure::native_call_value_this(
+                    final_callback,
+                    crate::closure::JsThis::from_f64(stream),
+                    [cb_value].as_ptr(),
+                    1,
+                );
             }
-            crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
             return;
         }
     }
@@ -722,7 +723,7 @@ pub(super) fn schedule_writable_finish(stream: f64, callback: Option<f64>) {
         hidden_finish_scheduled_key(),
         f64::from_bits(TAG_TRUE),
     );
-    let closure = js_closure_alloc(ns_writable_finish_microtask as *const u8, 2);
+    let closure = js_closure_alloc(crate::fn_info!(ns_writable_finish_microtask, 0), 2);
     js_closure_set_capture_ptr(closure, 0, stream.to_bits() as i64);
     js_closure_set_capture_ptr(
         closure,
@@ -1026,7 +1027,7 @@ pub(super) fn finish_transform_stream(stream: f64, callback: Option<f64>) -> boo
         hidden_transform_finishing_key(),
         f64::from_bits(TAG_TRUE),
     );
-    let cb = js_closure_alloc(transform_flush_callback as *const u8, 2);
+    let cb = js_closure_alloc(crate::fn_info!(transform_flush_callback, 2), 2);
     js_closure_set_capture_f64(cb, 0, stream);
     js_closure_set_capture_f64(
         cb,
@@ -1034,12 +1035,14 @@ pub(super) fn finish_transform_stream(stream: f64, callback: Option<f64>) -> boo
         callback.unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED)),
     );
     let cb_value = f64::from_bits(JSValue::pointer(cb as *const u8).bits());
-    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-    let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(stream));
     unsafe {
-        let _ = crate::closure::js_native_call_value(flush, [cb_value].as_ptr(), 1);
+        let _ = crate::closure::native_call_value_this(
+            flush,
+            crate::closure::JsThis::from_f64(stream),
+            [cb_value].as_ptr(),
+            1,
+        );
     }
-    crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     true
 }
 
@@ -1308,15 +1311,17 @@ pub(super) fn invoke_construct_callback(stream: f64, opts: f64) {
     };
     let construct = rebind_callback_this(construct, stream);
     set_hidden_value(stream, hidden_key(STREAM_CONSTRUCT_KEY), construct);
-    let cb = js_closure_alloc(ns_construct_callback_done as *const u8, 1);
+    let cb = js_closure_alloc(crate::fn_info!(ns_construct_callback_done, 1), 1);
     js_closure_set_capture_f64(cb, 0, stream);
     let cb_value = f64::from_bits(JSValue::pointer(cb as *const u8).bits());
-    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-    let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(stream));
     unsafe {
-        let _ = crate::closure::js_native_call_value(construct, [cb_value].as_ptr(), 1);
+        let _ = crate::closure::native_call_value_this(
+            construct,
+            crate::closure::JsThis::from_f64(stream),
+            [cb_value].as_ptr(),
+            1,
+        );
     }
-    crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
 }
 
 pub(super) fn invoke_read_once(stream: f64) {
@@ -1346,12 +1351,14 @@ fn invoke_read_once_inner(stream: f64, emit_default_error: bool) {
     }
     set_hidden_value(stream, hidden_read_invoked_key(), f64::from_bits(TAG_TRUE));
     let size = get_hidden_value(stream, hidden_hwm_key()).unwrap_or_else(|| default_hwm(false));
-    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-    let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(stream));
     unsafe {
-        let _ = crate::closure::js_native_call_value(read, [size].as_ptr(), 1);
+        let _ = crate::closure::native_call_value_this(
+            read,
+            crate::closure::JsThis::from_f64(stream),
+            [size].as_ptr(),
+            1,
+        );
     }
-    crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
 }
 
 pub(super) fn maybe_emit_default_read_error(stream: f64) {
@@ -1798,51 +1805,115 @@ pub(crate) fn js_node_stream_readable_chunks_result(stream: f64) -> Result<Optio
     Ok(Some(out))
 }
 
+use crate::closure::JsFunctionInfo;
+
+/// The info of the stream method body `$body`, declaring `$n` JS parameters
+/// (typed: any other signature does not compile).
+macro_rules! ns_info {
+    ($body:path, $n:tt) => {
+        JsFunctionInfo::of($body as crate::fn_info!(@ty $n))
+    };
+}
+
+/// The stream method bodies' infos: one per body, shared by every table below.
+static NS_ON2_INFO: JsFunctionInfo = ns_info!(ns_on2, 2).with_declared(2);
+static NS_ONCE2_INFO: JsFunctionInfo = ns_info!(ns_once2, 2).with_declared(2);
+static NS_PREPEND_LISTENER2_INFO: JsFunctionInfo =
+    ns_info!(ns_prepend_listener2, 2).with_declared(2);
+static NS_PREPEND_ONCE_LISTENER2_INFO: JsFunctionInfo =
+    ns_info!(ns_prepend_once_listener2, 2).with_declared(2);
+static NS_OFF2_INFO: JsFunctionInfo = ns_info!(ns_off2, 2).with_declared(2);
+static NS_REMOVE_LISTENER2_INFO: JsFunctionInfo = ns_info!(ns_remove_listener2, 2).with_declared(2);
+static NS_REMOVE_ALL_LISTENERS1_INFO: JsFunctionInfo =
+    ns_info!(ns_remove_all_listeners1, 1).with_declared(1);
+static NS_EMIT_REST_INFO: JsFunctionInfo = ns_info!(ns_emit_rest, 2).with_rest(1);
+static NS_SET_MAX_LISTENERS_INFO: JsFunctionInfo =
+    ns_info!(ns_set_max_listeners, 1).with_declared(1);
+static NS_GET_MAX_LISTENERS_INFO: JsFunctionInfo =
+    ns_info!(ns_get_max_listeners, 0).with_declared(0);
+static NS_EVENT_NAMES_INFO: JsFunctionInfo = ns_info!(ns_event_names, 0).with_declared(0);
+static NS_LISTENER_COUNT_INFO: JsFunctionInfo = ns_info!(ns_listener_count, 1).with_declared(1);
+static NS_LISTENERS_INFO: JsFunctionInfo = ns_info!(ns_listeners, 1).with_declared(1);
+static NS_RAW_LISTENERS_INFO: JsFunctionInfo = ns_info!(ns_raw_listeners, 1).with_declared(1);
+static NS_READ1_INFO: JsFunctionInfo = ns_info!(ns_read1, 1).with_declared(1);
+static NS_PIPE2_INFO: JsFunctionInfo = ns_info!(ns_pipe2, 2).with_declared(2);
+static NS_UNPIPE1_INFO: JsFunctionInfo = ns_info!(ns_unpipe1, 1).with_declared(1);
+static NS_WRAP1_INFO: JsFunctionInfo = ns_info!(ns_wrap1, 1).with_declared(1);
+static NS_PAUSE0_INFO: JsFunctionInfo = ns_info!(ns_pause0, 0).with_declared(0);
+static NS_RESUME0_INFO: JsFunctionInfo = ns_info!(ns_resume0, 0).with_declared(0);
+static NS_DESTROY1_INFO: JsFunctionInfo = ns_info!(ns_destroy1, 1).with_declared(1);
+static NS_SET_ENCODING1_INFO: JsFunctionInfo = ns_info!(ns_set_encoding1, 1);
+static NS_IS_PAUSED0_INFO: JsFunctionInfo = ns_info!(ns_is_paused0, 0).with_declared(0);
+static NS_ITER_TO_ARRAY_INFO: JsFunctionInfo = ns_info!(ns_iter_to_array, 1).with_declared(1);
+static NS_ITER_MAP_INFO: JsFunctionInfo = ns_info!(ns_iter_map, 2).with_declared(2);
+static NS_ITER_FILTER_INFO: JsFunctionInfo = ns_info!(ns_iter_filter, 2).with_declared(2);
+static NS_ITER_REDUCE_INFO: JsFunctionInfo = ns_info!(ns_iter_reduce, 3).with_declared(3);
+static NS_ITER_FOR_EACH_INFO: JsFunctionInfo = ns_info!(ns_iter_for_each, 2).with_declared(2);
+static NS_ITER_FIND_INFO: JsFunctionInfo = ns_info!(ns_iter_find, 2).with_declared(2);
+static NS_ITER_SOME_INFO: JsFunctionInfo = ns_info!(ns_iter_some, 2).with_declared(2);
+static NS_ITER_EVERY_INFO: JsFunctionInfo = ns_info!(ns_iter_every, 2).with_declared(2);
+static NS_ITER_FLAT_MAP_INFO: JsFunctionInfo = ns_info!(ns_iter_flat_map, 2).with_declared(2);
+static NS_ITER_TAKE_INFO: JsFunctionInfo = ns_info!(ns_iter_take, 1).with_declared(1);
+static NS_ITER_DROP_INFO: JsFunctionInfo = ns_info!(ns_iter_drop, 1).with_declared(1);
+static NS_ITERATOR1_INFO: crate::closure::JsFunctionInfo = crate::closure::JsFunctionInfo::of(
+    async_iterator::ns_iterator1 as crate::codegen_abi::JsBody1<crate::closure::ClosureHeader>,
+)
+.with_declared(1);
+static NS_PUSH1_INFO: JsFunctionInfo = ns_info!(ns_push1, 1).with_declared(1);
+static NS_UNSHIFT1_INFO: JsFunctionInfo = ns_info!(ns_unshift1, 1).with_declared(1);
+static NS_COMPOSE1_INFO: JsFunctionInfo = ns_info!(ns_compose1, 1).with_declared(1);
+static NS_WRITE3_INFO: JsFunctionInfo = ns_info!(ns_write3, 3).with_declared(3);
+static NS_END3_INFO: JsFunctionInfo = ns_info!(ns_end3, 3).with_declared(3);
+static NS_CORK0_INFO: JsFunctionInfo = ns_info!(ns_cork0, 0).with_declared(0);
+static NS_UNCORK0_INFO: JsFunctionInfo = ns_info!(ns_uncork0, 0).with_declared(0);
+static NS_CHAIN1_INFO: JsFunctionInfo = ns_info!(ns_chain1, 1).with_declared(1);
+static NS_CHAIN3_INFO: JsFunctionInfo = ns_info!(ns_chain3, 3).with_declared(3);
+
 // Method table order determines packed-key order and shape-cache identity.
 
 pub(super) fn readable_methods() -> [(&'static str, StubFn); 39] {
     [
-        ("on", cast2(ns_on2)),
-        ("once", cast2(ns_once2)),
-        ("prependListener", cast2(ns_prepend_listener2)),
-        ("prependOnceListener", cast2(ns_prepend_once_listener2)),
-        ("off", cast2(ns_off2)),
-        ("addListener", cast2(ns_on2)),
-        ("removeListener", cast2(ns_remove_listener2)),
-        ("removeAllListeners", cast1(ns_remove_all_listeners1)),
-        ("emit", cast2(ns_emit_rest)),
-        ("setMaxListeners", cast1(ns_set_max_listeners)),
-        ("getMaxListeners", cast0(ns_get_max_listeners)),
-        ("eventNames", cast0(ns_event_names)),
-        ("listenerCount", cast1(ns_listener_count)),
-        ("listeners", cast1(ns_listeners)),
-        ("rawListeners", cast1(ns_raw_listeners)),
-        ("read", cast1(ns_read1)),
-        ("pipe", cast2(ns_pipe2)),
-        ("unpipe", cast1(ns_unpipe1)),
-        ("wrap", cast1(ns_wrap1)),
-        ("pause", cast0(ns_pause0)),
-        ("resume", cast0(ns_resume0)),
-        ("destroy", cast1(ns_destroy1)),
-        ("setEncoding", cast1(ns_set_encoding1)),
-        ("isPaused", cast0(ns_is_paused0)),
+        ("on", &NS_ON2_INFO),
+        ("once", &NS_ONCE2_INFO),
+        ("prependListener", &NS_PREPEND_LISTENER2_INFO),
+        ("prependOnceListener", &NS_PREPEND_ONCE_LISTENER2_INFO),
+        ("off", &NS_OFF2_INFO),
+        ("addListener", &NS_ON2_INFO),
+        ("removeListener", &NS_REMOVE_LISTENER2_INFO),
+        ("removeAllListeners", &NS_REMOVE_ALL_LISTENERS1_INFO),
+        ("emit", &NS_EMIT_REST_INFO),
+        ("setMaxListeners", &NS_SET_MAX_LISTENERS_INFO),
+        ("getMaxListeners", &NS_GET_MAX_LISTENERS_INFO),
+        ("eventNames", &NS_EVENT_NAMES_INFO),
+        ("listenerCount", &NS_LISTENER_COUNT_INFO),
+        ("listeners", &NS_LISTENERS_INFO),
+        ("rawListeners", &NS_RAW_LISTENERS_INFO),
+        ("read", &NS_READ1_INFO),
+        ("pipe", &NS_PIPE2_INFO),
+        ("unpipe", &NS_UNPIPE1_INFO),
+        ("wrap", &NS_WRAP1_INFO),
+        ("pause", &NS_PAUSE0_INFO),
+        ("resume", &NS_RESUME0_INFO),
+        ("destroy", &NS_DESTROY1_INFO),
+        ("setEncoding", &NS_SET_ENCODING1_INFO),
+        ("isPaused", &NS_IS_PAUSED0_INFO),
         // #1558: async iterator helpers; arities pad missing options args.
-        ("toArray", cast1(ns_iter_to_array)),
-        ("map", cast2(ns_iter_map)),
-        ("filter", cast2(ns_iter_filter)),
-        ("reduce", cast3(ns_iter_reduce)),
-        ("forEach", cast2(ns_iter_for_each)),
-        ("find", cast2(ns_iter_find)),
-        ("some", cast2(ns_iter_some)),
-        ("every", cast2(ns_iter_every)),
-        ("flatMap", cast2(ns_iter_flat_map)),
-        ("take", cast1(ns_iter_take)),
-        ("drop", cast1(ns_iter_drop)),
-        ("iterator", cast1(async_iterator::ns_iterator1)),
+        ("toArray", &NS_ITER_TO_ARRAY_INFO),
+        ("map", &NS_ITER_MAP_INFO),
+        ("filter", &NS_ITER_FILTER_INFO),
+        ("reduce", &NS_ITER_REDUCE_INFO),
+        ("forEach", &NS_ITER_FOR_EACH_INFO),
+        ("find", &NS_ITER_FIND_INFO),
+        ("some", &NS_ITER_SOME_INFO),
+        ("every", &NS_ITER_EVERY_INFO),
+        ("flatMap", &NS_ITER_FLAT_MAP_INFO),
+        ("take", &NS_ITER_TAKE_INFO),
+        ("drop", &NS_ITER_DROP_INFO),
+        ("iterator", &NS_ITERATOR1_INFO),
         // #1539 — push() backpressure return + readable.compose() instance form.
-        ("push", cast1(ns_push1)),
-        ("unshift", cast1(ns_unshift1)),
-        ("compose", cast1(ns_compose1)),
+        ("push", &NS_PUSH1_INFO),
+        ("unshift", &NS_UNSHIFT1_INFO),
+        ("compose", &NS_COMPOSE1_INFO),
     ]
 }
 
@@ -1858,47 +1929,47 @@ pub(super) fn readable_methods() -> [(&'static str, StubFn); 39] {
 /// constructor.
 pub(super) fn emitter_methods() -> [(&'static str, StubFn); 15] {
     [
-        ("on", cast2(ns_on2)),
-        ("once", cast2(ns_once2)),
-        ("prependListener", cast2(ns_prepend_listener2)),
-        ("prependOnceListener", cast2(ns_prepend_once_listener2)),
-        ("off", cast2(ns_off2)),
-        ("addListener", cast2(ns_on2)),
-        ("removeListener", cast2(ns_remove_listener2)),
-        ("removeAllListeners", cast1(ns_remove_all_listeners1)),
-        ("emit", cast2(ns_emit_rest)),
-        ("setMaxListeners", cast1(ns_set_max_listeners)),
-        ("getMaxListeners", cast0(ns_get_max_listeners)),
-        ("eventNames", cast0(ns_event_names)),
-        ("listenerCount", cast1(ns_listener_count)),
-        ("listeners", cast1(ns_listeners)),
-        ("rawListeners", cast1(ns_raw_listeners)),
+        ("on", &NS_ON2_INFO),
+        ("once", &NS_ONCE2_INFO),
+        ("prependListener", &NS_PREPEND_LISTENER2_INFO),
+        ("prependOnceListener", &NS_PREPEND_ONCE_LISTENER2_INFO),
+        ("off", &NS_OFF2_INFO),
+        ("addListener", &NS_ON2_INFO),
+        ("removeListener", &NS_REMOVE_LISTENER2_INFO),
+        ("removeAllListeners", &NS_REMOVE_ALL_LISTENERS1_INFO),
+        ("emit", &NS_EMIT_REST_INFO),
+        ("setMaxListeners", &NS_SET_MAX_LISTENERS_INFO),
+        ("getMaxListeners", &NS_GET_MAX_LISTENERS_INFO),
+        ("eventNames", &NS_EVENT_NAMES_INFO),
+        ("listenerCount", &NS_LISTENER_COUNT_INFO),
+        ("listeners", &NS_LISTENERS_INFO),
+        ("rawListeners", &NS_RAW_LISTENERS_INFO),
     ]
 }
 
 pub(super) fn writable_methods() -> [(&'static str, StubFn); 22] {
     [
-        ("on", cast2(ns_on2)),
-        ("once", cast2(ns_once2)),
-        ("prependListener", cast2(ns_prepend_listener2)),
-        ("prependOnceListener", cast2(ns_prepend_once_listener2)),
-        ("off", cast2(ns_off2)),
-        ("addListener", cast2(ns_on2)),
-        ("removeListener", cast2(ns_remove_listener2)),
-        ("removeAllListeners", cast1(ns_remove_all_listeners1)),
-        ("emit", cast2(ns_emit_rest)),
-        ("setMaxListeners", cast1(ns_set_max_listeners)),
-        ("getMaxListeners", cast0(ns_get_max_listeners)),
-        ("eventNames", cast0(ns_event_names)),
-        ("listenerCount", cast1(ns_listener_count)),
-        ("listeners", cast1(ns_listeners)),
-        ("rawListeners", cast1(ns_raw_listeners)),
-        ("write", cast3(ns_write3)),
-        ("end", cast3(ns_end3)),
-        ("cork", cast0(ns_cork0)),
-        ("uncork", cast0(ns_uncork0)),
-        ("destroy", cast1(ns_destroy1)),
-        ("setDefaultEncoding", cast1(ns_chain1)),
-        ("_write", cast3(ns_chain3)),
+        ("on", &NS_ON2_INFO),
+        ("once", &NS_ONCE2_INFO),
+        ("prependListener", &NS_PREPEND_LISTENER2_INFO),
+        ("prependOnceListener", &NS_PREPEND_ONCE_LISTENER2_INFO),
+        ("off", &NS_OFF2_INFO),
+        ("addListener", &NS_ON2_INFO),
+        ("removeListener", &NS_REMOVE_LISTENER2_INFO),
+        ("removeAllListeners", &NS_REMOVE_ALL_LISTENERS1_INFO),
+        ("emit", &NS_EMIT_REST_INFO),
+        ("setMaxListeners", &NS_SET_MAX_LISTENERS_INFO),
+        ("getMaxListeners", &NS_GET_MAX_LISTENERS_INFO),
+        ("eventNames", &NS_EVENT_NAMES_INFO),
+        ("listenerCount", &NS_LISTENER_COUNT_INFO),
+        ("listeners", &NS_LISTENERS_INFO),
+        ("rawListeners", &NS_RAW_LISTENERS_INFO),
+        ("write", &NS_WRITE3_INFO),
+        ("end", &NS_END3_INFO),
+        ("cork", &NS_CORK0_INFO),
+        ("uncork", &NS_UNCORK0_INFO),
+        ("destroy", &NS_DESTROY1_INFO),
+        ("setDefaultEncoding", &NS_CHAIN1_INFO),
+        ("_write", &NS_CHAIN3_INFO),
     ]
 }

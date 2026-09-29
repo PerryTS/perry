@@ -487,7 +487,6 @@ mod tests {
         "js_i32_box_get",
         "js_box_release",
         "js_box_scope_release",
-        "js_implicit_this_get",
         "js_tdz_suppress_begin",
         "js_tdz_suppress_end",
     ];
@@ -762,6 +761,25 @@ mod tests {
         }
     }
 
+    /// First-read D3: a generic read's miss front must be a proven GC leaf
+    /// (`read_confirm.rs` says why). If the generated table ever classifies
+    /// it otherwise, the front grew a collecting path — a design error in the
+    /// front, not a table update. Its decline continuation still collects.
+    #[test]
+    fn the_generic_read_miss_front_is_leaf_and_its_continuation_collects() {
+        assert_eq!(
+            runtime_class("js_object_get_field_ic_front"),
+            RuntimeClass::Leaf
+        );
+        assert!(external_callee_cannot_collect(
+            "js_object_get_field_ic_front"
+        ));
+        assert!(external_callee_cannot_collect("perry_shape_dir_cell"));
+        assert!(!external_callee_cannot_collect(
+            "js_object_get_field_ic_slow"
+        ));
+    }
+
     #[test]
     fn register_global_root_tracks_the_barrier_it_wraps() {
         assert_eq!(
@@ -788,7 +806,7 @@ mod tests {
             "js_object_get_field_ic_miss_packed",
             "js_object_get_field_ic_slow",
             "js_object_get_field_ic_nonptr",
-            "js_implicit_this_get_sloppy",
+            "js_this_coerce_sloppy",
             "js_box_get_bits",
             "js_box_get_bits_trusted",
             "js_box_get_bits_named",

@@ -26,7 +26,7 @@ pub(crate) fn scan_ios_wheel_picker_gc_roots(visitor: &mut perry_ffi::GcRootVisi
 }
 
 extern "C" {
-    fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+    fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
     static _dispatch_main_q: std::ffi::c_void;
     fn dispatch_async_f(
@@ -45,7 +45,7 @@ unsafe extern "C" fn callback_trampoline(context: *mut std::ffi::c_void) {
     let _ = std::panic::catch_unwind(|| {
         let payload = Box::from_raw(context as *mut WheelPickerDispatch);
         let closure = js_nanbox_get_pointer(payload.closure) as *const u8;
-        js_closure_call1(closure, payload.index);
+        js_closure_call1(closure, perry_ffi::JsThis::UNDEFINED, payload.index);
     });
 }
 

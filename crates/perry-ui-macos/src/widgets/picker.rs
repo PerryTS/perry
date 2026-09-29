@@ -19,7 +19,7 @@ pub(crate) fn scan_macos_picker_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<
 }
 
 extern "C" {
-    fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+    fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
 }
 
@@ -45,7 +45,7 @@ define_class!(
                             let index: i64 = unsafe { msg_send![&*view, indexOfSelectedItem] };
                             let closure_ptr = unsafe { js_nanbox_get_pointer(callback) } as *const u8;
                             unsafe {
-                                js_closure_call1(closure_ptr, index as f64);
+                                js_closure_call1(closure_ptr, perry_ffi::JsThis::UNDEFINED, index as f64);
                             }
                         }
                     }

@@ -60,18 +60,20 @@ fn padded_empty_object(mut bytes: &[u8]) -> bool {
 pub(super) unsafe fn allocate_empty_object() -> JSValue {
     crate::gc::gc_collect_pending_suppressed_parse();
     let shape_id = EMPTY_JSON_SHAPE_ID.with(std::cell::Cell::get);
+    // Charter step 3: born marked plain-ordinary, so the cached id below is
+    // the `Ordinary` one and every later birth stamps it directly.
     let object = if shape_id != 0 {
         crate::object::try_empty_json_object_preinstalled(shape_id)
-            .unwrap_or_else(|| crate::object::js_object_alloc(0, 0))
+            .unwrap_or_else(|| crate::object::object_alloc_plain(0))
     } else {
-        let object = crate::object::js_object_alloc(0, 0);
+        let object = crate::object::object_alloc_plain(0);
         let shape_id = crate::object::shapes::object_shape_stamp(object);
         debug_assert_ne!(shape_id, 0);
         EMPTY_JSON_SHAPE_ID.with(|cached| cached.set(shape_id));
         crate::object::shape_carriers::note_shape_id(shape_id);
         object
     };
-    crate::object::mark_object_plain_ordinary(object);
+    crate::object::shapes::store_kind::check_store_facts(object);
     super::parse_scalar::clear_oversized_key_cache();
     crate::gc::gc_schedule_tiny_parse_boundary_collection_if_pressure();
     JSValue::object_ptr(object as *mut u8)

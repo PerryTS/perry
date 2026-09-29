@@ -24,10 +24,12 @@
 //!
 //! # Emitted form
 //!
-//! Codegen (`generic_dispatch.rs`) checks the entry on the edges where the
-//! MRU word and the polymorphic ways have missed. A depth-1 entry is compared
-//! and loaded inline; a deeper one calls [`js_read_site_holder_hit`], a
-//! GC leaf that compares the hop words and answers `TAG_HOLE` to decline.
+//! Emitted code holds nothing of the entry. The read site's ShapeId compare
+//! misses, and its one GC-leaf front call
+//! (`field_get_set::ic_miss::read_confirm::js_object_get_field_ic_front`)
+//! asks [`entry_answer`] after the ways, the spill entry and a latched site's
+//! confirm, so an own-key read pays nothing for it. A decline is `TAG_HOLE`
+//! and the site continues to the collecting slow call.
 //!
 //! # Priming
 //!
@@ -61,13 +63,13 @@ pub const HOLDER_RECV: usize = crate::codegen_abi::PIC_HOLDER_RECV_WORD;
 pub const HOLDER_OBJ: usize = crate::codegen_abi::PIC_HOLDER_OBJ_WORD;
 /// Low 32 bits: the holder's ShapeId. High 32 bits: the third hop's ShapeId.
 pub const HOLDER_SHAPE: usize = crate::codegen_abi::PIC_HOLDER_SHAPE_WORD;
-/// The answer's kind, laid out for the emitted test:
+/// The answer's kind:
 ///
 /// | value | meaning |
 /// |---|---|
 /// | `0 ..= u32::MAX` | depth 1, the value is the holder's inline slot |
 /// | [`HOLDER_ABSENT_DEPTH1`] | depth 1, absent: the answer is `undefined` |
-/// | negative | [`HOLDER_STUB`] set: call [`js_read_site_holder_hit`] |
+/// | negative | [`HOLDER_STUB`] set: depth 2..=4 and/or a deep absent entry |
 pub const HOLDER_KIND: usize = crate::codegen_abi::PIC_HOLDER_KIND_WORD;
 /// First of three intermediate hop addresses (depth 2..=4).
 pub const HOLDER_HOPS: usize = HOLDER_KIND + 1;
@@ -135,7 +137,7 @@ unsafe fn refuse_and_latch(cache: *mut PicCache) {
 /// hit needs none: every delete is a shape transition (#10826), so a holder
 /// whose ShapeId still matches has not had the slot cleared.
 #[inline(always)]
-unsafe fn entry_answer(c: &PicCache, token: i64) -> Option<u64> {
+pub(crate) unsafe fn entry_answer(c: &PicCache, token: i64) -> Option<u64> {
     if c[HOLDER_RECV] != token || token == 0 {
         return None;
     }
@@ -469,22 +471,6 @@ unsafe fn publish(cache: *mut PicCache, recv: *const ObjectHeader, w: &Walk) {
         PRIMES_ABSENT.fetch_add(1, Ordering::Relaxed);
     }
     super::stats_report_enabled();
-}
-
-/// The emitted form's call for an entry it does not answer inline (depth 2..4,
-/// or absent past depth 1). A GC leaf: it reads site words and object words
-/// only. `TAG_HOLE` declines, and the caller continues to the miss call.
-///
-/// # Safety
-/// `recv` is the receiver the emitted tower validated as a plain object;
-/// `cache` the site's resolved `PicCache`.
-#[no_mangle]
-pub unsafe extern "C" fn js_read_site_holder_hit(recv: *const u8, cache: *const PicCache) -> f64 {
-    if cache.is_null() || recv.is_null() {
-        return f64::from_bits(crate::value::TAG_HOLE);
-    }
-    let token = (u64::from(std::ptr::read((recv as *const u32).add(1))) | PIC_ID_TOKEN_BIT) as i64;
-    f64::from_bits(entry_answer(&*cache, token).unwrap_or(crate::value::TAG_HOLE))
 }
 
 /// Root scan: every live entry's holder and hops are marked and rewritten.

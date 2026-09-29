@@ -648,7 +648,10 @@ fn set_error_string_prop(error: *mut crate::error::ErrorHeader, name: &str, valu
 
 static WARNED_PROCESS_WARNING_TRACE_HINT: AtomicBool = AtomicBool::new(false);
 
-extern "C" fn process_warning_callback(closure: *const ClosureHeader) -> f64 {
+extern "C" fn process_warning_callback(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     use std::io::Write;
 
     if closure.is_null() {
@@ -697,7 +700,7 @@ fn schedule_warning(warning: f64, label: &str, code: &str, msg: &str, detail: &s
     let detail_handle = scope.root_nanbox_f64(string_value(detail));
     let hint_handle = scope.root_nanbox_f64(string_value(&hint));
 
-    let callback = js_closure_alloc(process_warning_callback as *const u8, 4);
+    let callback = js_closure_alloc(crate::fn_info!(process_warning_callback, 0), 4);
     if callback.is_null() {
         return;
     }

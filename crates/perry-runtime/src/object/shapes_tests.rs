@@ -553,6 +553,7 @@ mod descriptor_tests_8067 {
             1,
             1,
             PROTO_ID_DEFAULT,
+            ShapeObjectKind::Ordinary,
         ));
 
         assert_eq!(
@@ -668,6 +669,7 @@ mod descriptor_tests_8067 {
                 2,
                 2,
                 PROTO_ID_DEFAULT,
+                ShapeObjectKind::Ordinary,
             ));
             assert_eq!(
                 shape_descriptor_by_id(module_id).unwrap().keys,
@@ -1168,7 +1170,11 @@ fn the_ordinary_slot_query_declines_a_class_kind_shape() {
         // `transition_object_shape_to_class` keeps the keys array and both
         // counts and changes ONLY the kind, so the pair below differs in
         // exactly the conjunct under test.
-        let obj = crate::object::js_object_alloc_class_inline_keys_stamped(0, 0, 1, keys, ordinary);
+        // Born marked plain-ordinary: a class-less unmarked receiver would
+        // derive `OrdinaryUnmarked` and decline the `Ordinary` id (charter
+        // step 3).
+        let obj =
+            crate::object::alloc_plain::alloc_plain_record_inline_keys_stamped(1, keys, ordinary);
         assert_eq!((*obj).parent_class_id, ordinary, "test premise: stamped");
         let class_kind = transition_object_shape_to_class(obj);
         assert_ne!(
@@ -1472,6 +1478,44 @@ mod field_rep_identity_tests {
         );
         assert_eq!(shape_descriptor_by_id(typed).map(|d| d.rep), Some(f64_at_1));
         assert_eq!(shape_descriptor_by_id(any).map(|d| d.rep), Some(REP_ANY));
+    }
+
+    /// POSBOUND is a fact of every record, a rep-typed one included: a shape
+    /// minted with an `F64` slot through the rep-aware entry carries the
+    /// bound its facts define, the same bound as its all-`Any` sibling
+    /// (`rep` is not an input of the definition), and its stored bound agrees
+    /// with the definition.
+    #[test]
+    fn a_rep_typed_shape_carries_its_own_position_bound() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let keys = crate::array::js_array_alloc_with_length(3);
+        let mint_keys = |rep: u64| {
+            publish_shape_result(shape_descriptor_ensure_with_rep(
+                keys,
+                3,
+                3,
+                0,
+                ShapeObjectKind::Ordinary,
+                0,
+                PROTO,
+                0,
+                rep,
+                None,
+            ))
+        };
+        let any = mint_keys(REP_ANY);
+        let typed = mint_keys(with_slot_rep(0, 1, REP_F64));
+        assert_ne!(any, typed, "premise: the rep makes a different shape");
+        assert_eq!(
+            crate::object::shapes::test_positional_of_id(any),
+            Some((3, 3)),
+            "premise: the all-Any shape answers three positions"
+        );
+        assert_eq!(
+            crate::object::shapes::test_positional_of_id(typed),
+            Some((3, 3)),
+            "the rep-typed shape must carry its own, agreeing POSBOUND"
+        );
     }
 
     /// P1 is inert: the all-`Any` entry points mint the same id as an explicit

@@ -3888,14 +3888,21 @@ fn lower_packed_f64_range_versioned_for(
     }
 
     ctx.current_block = slow_pre_idx;
-    lower_for_after_init(
-        ctx,
-        init,
-        condition,
-        update,
-        body,
-        "for.packed_f64_range_slow",
-    )?;
+    // The arrays this tier refused (not packed numbers) may still be region
+    // arrays (S3): their element reads are then bare in the split loop.
+    let region = super::region_loop::begin_for_arrays(ctx, condition, body, update)?;
+    let lowered = super::region_loop::lower_loop(ctx, region, &mut |ctx| {
+        lower_for_after_init(
+            ctx,
+            init,
+            condition,
+            update,
+            body,
+            "for.packed_f64_range_slow",
+        )
+    });
+    super::region_loop::end(ctx, region);
+    lowered?;
     if !ctx.block().is_terminated() {
         ctx.block().br(&merge_label);
     }
@@ -7122,13 +7129,22 @@ fn dynamic_bound_private_counter_is_safe(
 pub(crate) fn emit_js_value_is_number(ctx: &mut FnCtx<'_>, value: &str) -> String {
     let n_bits = ctx.block().bitcast_double_to_i64(value);
     // Every boxed tag occupies the positive suffix [0x7FF9_0000_0000_0000,
-    // 0x7FFF_FFFF_FFFF_FFFF]. A signed comparison rejects that whole suffix
-    // while admitting every negative IEEE value, including negative NaNs.
-    // INT32 boxes remain excluded: their payload still needs unboxing before
-    // floating-point arithmetic. This is exactly JSValue::is_number's range.
-    ctx.block().icmp_slt(
+    // 0x7FFF_FFFF_FFFF_FFFF]. INT32 boxes are excluded too: their payload
+    // still needs unboxing before floating-point arithmetic.
+    //
+    // The test ignores the sign bit, so it also rejects the MIRROR of the tag
+    // band (negative NaNs whose magnitude lies in it). A value that passes
+    // flows into raw-double arithmetic and may become a Number local, which
+    // owns no root slot (step5 DESIGN §3.4): `fneg`/`fabs`/`copysign` flip only
+    // the sign, and an IEEE operation on a NaN keeps its payload, so an
+    // admitted negative `0xFFFD_...` NaN would reach a local as the pointer
+    // tag `0x7FFD_...`. The admitted set, {x : |x| below the band}, is closed
+    // under those operations, and it contains both default NaNs
+    // (`0x7FF8_0000_0000_0000`, x86's `0xFFF8_0000_0000_0000`).
+    let magnitude = ctx.block().and(I64, &n_bits, "9223372036854775807");
+    ctx.block().icmp_ult(
         I64,
-        &n_bits,
+        &magnitude,
         &crate::nanbox::i64_literal(crate::nanbox::SHORT_STRING_TAG),
     )
 }
@@ -8181,8 +8197,11 @@ fn emit_armed_gc_loop_safepoint(ctx: &mut FnCtx<'_>) {
             let handle = blk.and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
             blk.store(I64, &handle, &recipe.base_handle_slot);
         }
-        blk.br(&done_label);
     }
+    // Loop regions' array bases (S3), from the same GC-updated roots.
+    crate::stmt::region_loop::emit_poll_refresh(ctx)
+        .expect("a region array binding lowers as a plain load");
+    ctx.block().br(&done_label);
     ctx.current_block = done_idx;
 }
 
