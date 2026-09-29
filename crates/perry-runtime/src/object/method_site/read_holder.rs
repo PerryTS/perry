@@ -50,8 +50,8 @@
 
 use super::{key_may_be_accessor, next_prototype, ordinary_receiver, WORKER_AGENTS_EXIST};
 use crate::object::shapes::{
-    object_proto_id, object_shape_descriptor, object_shape_stamp, shape_proto_id, ShapeObjectKind,
-    PIC_ID_TOKEN_BIT, PROTO_ID_DEFAULT, PROTO_ID_NULL,
+    object_proto_id, object_shape_descriptor, object_shape_stamp, shape_proto_id, PIC_ID_TOKEN_BIT,
+    PROTO_ID_DEFAULT, PROTO_ID_NULL,
 };
 use crate::object::{ObjectHeader, PicCache, PicCacheSlot};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -308,7 +308,7 @@ unsafe fn walk(recv: *const ObjectHeader, name: &[u8]) -> Option<Walk> {
             return None;
         }
         let shape = object_shape_descriptor(next)?;
-        if shape.object_kind != ShapeObjectKind::Ordinary || object_shape_stamp(next) == 0 {
+        if !shape.object_kind.is_ordinary_layout() || object_shape_stamp(next) == 0 {
             return None;
         }
         let keys = shape.keys as usize as *const crate::array::ArrayHeader;
