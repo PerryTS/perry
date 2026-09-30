@@ -1367,7 +1367,7 @@ fn array_subclass_fast_push_one_validated(
     }
     // A numeric-proof sibling has no learned tail edge. Restore the ordinary
     // shape before the exact-shape transition lookup, including on a miss.
-    unsafe { clear_packed_subclass_numeric_proof(obj) };
+    unsafe { clear_packed_subclass_numeric_proof(obj as *mut ObjectHeader) };
     let predecessor_shape_id = unsafe { (*obj).parent_class_id };
     let transition = crate::object::array_tail_transition::lookup_forward_for_owner(
         obj,
@@ -1496,7 +1496,7 @@ fn array_subclass_fast_pop_validated(receiver: ValidatedObjectReceiver) -> Optio
     }
     // Retire before consulting the exact-shape tail cache: proof siblings do
     // not carry the ordinary shape's learned reverse edge.
-    if unsafe { clear_packed_subclass_numeric_proof(obj) } {
+    if unsafe { clear_packed_subclass_numeric_proof(obj as *mut ObjectHeader) } {
         crate::object::prop_plan::prop_plan_epoch_bump();
     }
     let successor_shape_id = unsafe { (*obj).parent_class_id };

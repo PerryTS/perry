@@ -82,7 +82,7 @@ impl Reader<'_> {
                 if shape.keys_slot.is_null() || shape.shape_id_slot.is_null() {
                     return None;
                 }
-                let object = crate::object::alloc::alloc_class_instance_stamped(
+                let object = crate::object::alloc::js_object_alloc_class_inline_keys_stamped(
                     shape.class_id,
                     0,
                     shape.field_count,

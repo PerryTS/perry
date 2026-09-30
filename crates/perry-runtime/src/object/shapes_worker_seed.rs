@@ -65,6 +65,7 @@ pub(crate) fn install_worker_shape_seed(seed: &WorkerShapeSeed) {
             r.logical_key_count,
             r.live_inline_slot_count,
             r.proto_id,
+            ShapeObjectKind::Ordinary,
             r.rep,
         );
     }

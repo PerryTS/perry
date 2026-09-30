@@ -40,6 +40,8 @@ mod shapes_birth_width;
 mod shapes_slot_list;
 #[path = "shapes_store.rs"]
 mod shapes_store;
+#[path = "shapes_worker_seed.rs"]
+mod shapes_worker_seed;
 #[path = "shapes_store_kind.rs"]
 pub(crate) mod store_kind;
 pub(crate) use shapes_birth_width::{keyless_birth_width, note_spill_width};
@@ -58,6 +60,7 @@ use shapes_store::{
     RECORD_FLAG_CARRIED_SEEN, RECORD_FLAG_EXTERNAL_CARRIER, RECORD_FLAG_FACTS_INDEXED,
     RECORD_FLAG_OLD_CARRIER, RECORD_FLAG_OLD_CARRIER_SEEN,
 };
+pub(crate) use shapes_worker_seed::{install_worker_shape_seed, worker_shape_seed};
 
 #[derive(Clone)]
 pub(crate) struct ShapeIndex {
