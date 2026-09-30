@@ -326,27 +326,6 @@ pub(crate) unsafe fn layout_all_pointer_slots_would_hold(
     (0..slot_count).all(|i| layout_pointer_bearing_bits(*slots.add(i)))
 }
 
-/// #7630: settle a materialiser-built object's layout state ONCE, after its
-/// construction loop elided the per-slot notes
-/// (`runtime_store_jsvalue_slot_layout_deferred`). Two exact outcomes:
-///
-/// - **No pointer was stored**: the `layout_init_pointer_free` birth state is
-///   still the truth, and it is the valuable one — the tracer skips the whole
-///   payload. Nothing to do.
-/// - **Any pointer was stored**: `GC_LAYOUT_UNKNOWN`, the tag-checked
-///   scan-all-slots state. For a cohort whose every slot is a NaN-boxed
-///   `JSValue`, a pointer mask can never skip anything a tag check would not
-///   reject anyway — the mask machinery (per-object side-table entry, hashmap
-///   round-trip per store, `layout_transfer` per promotion,
-///   `layout_forget_object` per death) buys nothing here. Routed through
-///   `layout_mark_unknown`, not a bare state store, so a mask that a
-///   slow-path by-name store DID create mid-construction (shape-overflow
-///   records) is removed with the state change rather than stranded.
-pub(crate) unsafe fn layout_finish_deferred_boxed_object(_user_ptr: usize, _saw_pointer: bool) {
-    // A boxed object is traced by ShapeId rep, including a newborn whose
-    // construction stores took the note-free barrier path.
-}
-
 /// Settle a FRESH closure/object whose every payload slot is a word the
 /// tag-checked scan understands (NaN-boxed values, raw heap pointers, 0) into
 /// `GC_LAYOUT_UNKNOWN` — the #7630 state for a payload a pointer mask cannot

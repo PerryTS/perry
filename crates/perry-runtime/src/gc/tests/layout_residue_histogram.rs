@@ -28,28 +28,15 @@ fn layout_residue_histogram_counts_by_kind_and_bucket() {
     let closure5 = closure_with_captures(5, 1);
     let closure20 = closure_with_captures(20, 10);
 
-    let object70 = crate::object::js_object_alloc(0, 70);
-    let pointer = pointer_bits();
-    unsafe {
-        let fields = (object70 as *mut u8).add(std::mem::size_of::<crate::object::ObjectHeader>())
-            as *mut u64;
-        for slot in 0..70 {
-            fields.add(slot).write(if slot < 60 {
-                pointer
-            } else {
-                (slot as f64).to_bits()
-            });
-        }
-        crate::object::rebuild_object_field_layout(object70, 70);
-    }
+    let closure70 = closure_with_captures(70, 60);
 
     crate::gc::layout_tables::test_reset_layout_residue_histogram_entries();
     crate::gc::layout_tables::prune_dead_per_object_layout_owners(&|_| false);
 
     let residue = crate::hot_diag::LayoutDiagTestGuard::residue();
     assert_eq!(residue.keys, 3, "{residue:?}");
-    assert_eq!(residue.closure, 2, "{residue:?}");
-    assert_eq!(residue.object, 1, "{residue:?}");
+    assert_eq!(residue.closure, 3, "{residue:?}");
+    assert_eq!(residue.object, 0, "{residue:?}");
     assert_eq!(residue.array, 0, "{residue:?}");
     assert_eq!(residue.other, 0, "{residue:?}");
     assert_eq!(residue.slots, [1, 0, 1, 0, 1, 0], "{residue:?}");
@@ -62,15 +49,15 @@ fn layout_residue_histogram_counts_by_kind_and_bucket() {
     );
 
     let output = crate::hot_diag::LayoutDiagTestGuard::output();
-    assert!(output.contains("[layout-diag] residue keys=3 closure=2 object=1 array=0 other=0"));
+    assert!(output.contains("[layout-diag] residue keys=3 closure=3 object=0 array=0 other=0"));
     assert!(output.contains("slots{4-7=1 8-15=0 16-31=1 32-63=0 64-255=1 256+=0}"));
     assert!(output.contains("ptr_share{q1=1 q2=1 q3=0 q4=1}"));
     assert!(output.contains("space{nursery=3 old=0 malloc=0}"));
-    assert!(output.contains("inserts_since{birth=2 rebuild=1 store=0}"));
+    assert!(output.contains("inserts_since{birth=3 rebuild=0 store=0}"));
     assert!(output.contains("[layout-diag] price per_key_prune_ns="));
     assert!(output.contains("est_tag_checks_saved_per_trace=24"));
 
-    for owner in [closure5, closure20, object70 as usize] {
+    for owner in [closure5, closure20, closure70] {
         crate::gc::layout_clear_for_ptr(owner);
     }
 }

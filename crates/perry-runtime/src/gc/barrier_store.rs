@@ -116,16 +116,10 @@ fn slot_holds_raw_f64(parent_user: usize, slot_index: usize) -> bool {
     false
 }
 
-/// #7630: `runtime_store_jsvalue_slot` minus the per-slot layout note, for a
-/// caller that OWNS the object's whole construction and settles its layout
-/// state once at the end (`layout_finish_deferred_boxed_object`). The JSON
-/// materialiser is the caller: per record it performed ~13 `layout_note_slot`
-/// calls whose only net effect was to build a per-object side-table pointer
-/// mask — the profile's top cost family. Everything else is kept bit-for-bit:
-/// the typed-slot canonicalization, the string addref demote, and the write
-/// barrier (whose SATB shade must never be dropped — the #7602 lesson).
-/// Returns whether the stored bits carry a heap pointer, so the caller can
-/// accumulate the one fact the elided notes were computing.
+/// Newborn object slot store: canonicalize representation, demote a heap
+/// string alias and publish the generational/incremental barrier. Object
+/// tracing uses ShapeId rep, so no per-slot layout note is needed. The
+/// returned pointer classification is retained for construction witnesses.
 #[inline]
 pub(crate) fn runtime_store_jsvalue_slot_layout_deferred(
     parent_user: usize,

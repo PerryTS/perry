@@ -24,10 +24,8 @@ pub(crate) unsafe fn store_object_field_slot(
     );
 }
 
-/// #7630: `store_object_field_slot` without the per-slot layout note, for the
-/// JSON materialiser's construction loops. Returns whether the value carries a
-/// heap pointer; the caller accumulates that and settles the object's layout
-/// state once via `layout_finish_deferred_boxed_object`.
+/// Newborn JSON materializer store with the same string alias and write
+/// barrier work as ordinary object stores. The shape owns its layout.
 #[inline]
 pub(crate) unsafe fn store_object_field_slot_layout_deferred(
     obj: *mut ObjectHeader,
