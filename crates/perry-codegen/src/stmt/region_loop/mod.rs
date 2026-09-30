@@ -1047,6 +1047,9 @@ pub(crate) fn lower_split(
         let fl = ctx.block_label(fb);
         ctx.current_block = fb;
         note(ctx, Route::RloopF);
+        if receivers.iter().any(|rv| rv.r_mask != 0) {
+            note(ctx, Route::RloopFRep);
+        }
         if let Some(d) = &retry {
             ctx.block().store(I1, "true", d);
         }
