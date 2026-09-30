@@ -1,5 +1,6 @@
 use crate::srgb;
 use objc2::rc::Retained;
+use objc2::{msg_send, ClassType};
 use objc2_app_kit::{NSTextField, NSView};
 use objc2_foundation::{MainThreadMarker, NSString};
 use std::cell::RefCell;
@@ -125,6 +126,14 @@ pub fn set_line_height(handle: i64, multiple: f64) {
     refresh_spacing(handle);
 }
 
+/// A label, as `labelWithString:` builds it, with an inset cell so
+/// `set_edge_insets` can pad it.
+pub(crate) fn label(string: &NSString, _mtm: MainThreadMarker) -> Retained<NSTextField> {
+    let label: Retained<super::textfield::PerryTextField> =
+        unsafe { msg_send![super::textfield::PerryTextField::class(), labelWithString: string] };
+    label.into_super()
+}
+
 /// Create an NSTextField configured as a non-editable label.
 pub fn create(text_ptr: *const u8) -> i64 {
     let text = unsafe { str_from_header(text_ptr) };
@@ -132,7 +141,7 @@ pub fn create(text_ptr: *const u8) -> i64 {
     let mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
     let ns_string = NSString::from_str(&text);
 
-    let label = super::padding::label(&ns_string, mtm);
+    let label = label(&ns_string, mtm);
     unsafe {
         let _: () = objc2::msg_send![&*label, setAccessibilityLabel: &*ns_string];
         // Disable autoresizing mask so Auto Layout can size this view in NSStackView.

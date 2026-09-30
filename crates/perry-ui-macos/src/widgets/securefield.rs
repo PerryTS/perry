@@ -1,10 +1,10 @@
 use crate::ffi::js_string_from_bytes;
 use objc2::rc::Retained;
-use objc2::runtime::{AnyObject, Sel};
-use objc2::{define_class, msg_send, AnyThread, DefinedClass};
-use objc2_app_kit::{NSTextField, NSView};
+use objc2::runtime::{AnyClass, AnyObject, Sel};
+use objc2::{define_class, msg_send, AnyThread, ClassType, DefinedClass};
+use objc2_app_kit::{NSSecureTextField, NSTextField, NSTextView, NSView};
 use objc2_foundation::{
-    MainThreadMarker, NSNotification, NSNotificationCenter, NSObject, NSString,
+    MainThreadMarker, NSNotification, NSNotificationCenter, NSObject, NSRange, NSString,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -86,6 +86,62 @@ impl PerrySecureFieldObserver {
     }
 }
 
+define_class!(
+    #[unsafe(super(NSSecureTextField))]
+    #[name = "PerrySecureTextField"]
+    pub struct PerrySecureTextField;
+
+    impl PerrySecureTextField {
+        #[unsafe(method(cellClass))]
+        fn cell_class() -> &'static AnyClass {
+            super::padding::PerryInsetSecureTextFieldCell::class()
+        }
+
+        #[unsafe(method(setStringValue:))]
+        fn set_string_value(&self, value: &NSString) {
+            let value = super::textfield::one_line_value(value);
+            unsafe { msg_send![super(self), setStringValue: &*value] }
+        }
+
+        #[unsafe(method(textView:shouldChangeTextInRange:replacementString:))]
+        fn should_change_text(
+            &self,
+            editor: &NSTextView,
+            range: NSRange,
+            replacement: Option<&NSString>,
+        ) -> bool {
+            match super::textfield::entered_text_with_spaces(replacement) {
+                // Inserting the spaced text asks this method again, now with no
+                // line break, so the edit still passes through super.
+                Some(spaced) => {
+                    let _: () = unsafe { msg_send![editor, insertText: &*spaced, replacementRange: range] };
+                    false
+                }
+                None => unsafe {
+                    msg_send![super(self), textView: editor, shouldChangeTextInRange: range, replacementString: replacement]
+                },
+            }
+        }
+
+        #[unsafe(method(textView:doCommandBySelector:))]
+        fn do_command(&self, editor: &NSTextView, command: Sel) -> bool {
+            super::textfield::is_line_break_command(command)
+                || unsafe { msg_send![super(self), textView: editor, doCommandBySelector: command] }
+        }
+    }
+);
+
+/// A one-line secure text field, as `textFieldWithString:` builds it, with an
+/// inset cell so `set_edge_insets` can pad it.
+pub(crate) fn secure_text_field(
+    string: &NSString,
+    _mtm: MainThreadMarker,
+) -> Retained<NSSecureTextField> {
+    let field: Retained<PerrySecureTextField> =
+        unsafe { msg_send![PerrySecureTextField::class(), textFieldWithString: string] };
+    field.into_super()
+}
+
 /// Extract a &str from a *const StringHeader pointer.
 use perry_ffi::copy_string_from_raw as str_from_header;
 
@@ -98,7 +154,7 @@ pub fn create(placeholder_ptr: *const u8, on_change: f64) -> i64 {
     let ns_placeholder = NSString::from_str(&placeholder);
 
     unsafe {
-        let text_field = super::padding::secure_text_field(&NSString::from_str(""), mtm);
+        let text_field = secure_text_field(&NSString::from_str(""), mtm);
         text_field.setPlaceholderString(Some(&ns_placeholder));
 
         let view: Retained<NSView> = Retained::cast_unchecked(text_field);
