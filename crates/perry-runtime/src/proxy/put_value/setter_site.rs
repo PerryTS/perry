@@ -299,22 +299,7 @@ pub(super) unsafe fn try_set(
     key: *const crate::StringHeader,
     value: f64,
 ) -> Option<f64> {
-    if !primary_only() {
-        return None;
-    }
-    try_set_after_worker_gate(slot, target, key, value)
-}
-
-/// The primary-agent setter validation, also exercised by the unit test
-/// without resetting the process-wide sticky worker gate.
-#[inline(always)]
-unsafe fn try_set_after_worker_gate(
-    slot: *mut PackedSetWaysSlot,
-    target: f64,
-    key: *const crate::StringHeader,
-    value: f64,
-) -> Option<f64> {
-    if slot.is_null() || key.is_null() {
+    if !primary_only() || slot.is_null() || key.is_null() {
         return None;
     }
     let bits = target.to_bits();
@@ -394,7 +379,12 @@ mod tests {
     }
 
     #[test]
-    fn direct_setter_rechecks_same_shape_relink_and_own_shadow() {
+    fn direct_setter_rechecks_same_shape_relink_own_shadow_and_worker_gate() {
+        if !crate::object::method_site::run_with_fresh_worker_gate(
+            "direct_setter_rechecks_same_shape_relink_own_shadow_and_worker_gate",
+        ) {
+            return;
+        }
         let _lock = crate::gc::global_side_table_test_lock();
         const CID: u32 = 0x0C3C_79B5;
         FIRST.store(0, Ordering::Relaxed);
@@ -466,11 +456,11 @@ mod tests {
         });
         let key_ptr = key.get_raw_const_ptr::<crate::StringHeader>();
         assert_eq!(
-            unsafe { try_set_after_worker_gate(&mut slot, target, key_ptr, 5.0) },
+            unsafe { try_set(&mut slot, target, key_ptr, 5.0) },
             Some(5.0)
         );
         assert_eq!(
-            unsafe { try_set_after_worker_gate(&mut slot, target, key_ptr, 6.0) },
+            unsafe { try_set(&mut slot, target, key_ptr, 6.0) },
             Some(6.0)
         );
         assert!(unsafe { entry(&mut slot).unwrap().bare_class_link });
@@ -485,10 +475,12 @@ mod tests {
             None
         );
         assert_eq!(
-            unsafe { try_set_after_worker_gate(&mut slot, target, key_ptr, 7.0) },
+            unsafe { try_set(&mut slot, target, key_ptr, 7.0) },
             Some(7.0)
         );
         assert_eq!(SECOND.load(Ordering::Relaxed), 1);
+        crate::object::method_site::WORKER_AGENTS_EXIST.store(1, Ordering::SeqCst);
+        assert_eq!(unsafe { try_set(&mut slot, target, key_ptr, 8.0) }, None);
         let p1_value = p1.with_const_ptr::<crate::ObjectHeader, _>(|p| {
             crate::value::js_nanbox_pointer(p as i64)
         });

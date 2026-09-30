@@ -137,20 +137,10 @@ pub(super) unsafe fn try_hit(
     recv: *const ObjectHeader,
     cache_slot: *mut PicCacheSlot,
 ) -> Option<crate::value::JSValue> {
-    if WORKER_AGENTS_EXIST.load(Ordering::SeqCst) != 0 {
-        return None;
-    }
-    try_hit_after_worker_gate(recv, cache_slot)
-}
-
-/// Primary-agent site validation used by the unit test after another test
-/// has already started a worker; the public hit stays gate guarded.
-#[inline(always)]
-unsafe fn try_hit_after_worker_gate(
-    recv: *const ObjectHeader,
-    cache_slot: *mut PicCacheSlot,
-) -> Option<crate::value::JSValue> {
-    if cache_slot.is_null() || crate::agent::current_agent() != crate::agent::PRIMARY_AGENT {
+    if cache_slot.is_null()
+        || WORKER_AGENTS_EXIST.load(Ordering::SeqCst) != 0
+        || crate::agent::current_agent() != crate::agent::PRIMARY_AGENT
+    {
         return None;
     }
     let cache = crate::object::field_get_set::pic_slot_peek::<PicCache>(cache_slot);
@@ -309,6 +299,11 @@ mod tests {
 
     #[test]
     fn bare_class_link_replacement_with_same_holder_shape_declines() {
+        if !crate::object::method_site::run_with_fresh_worker_gate(
+            "bare_class_link_replacement_with_same_holder_shape_declines",
+        ) {
+            return;
+        }
         let _lock = crate::gc::global_side_table_test_lock();
         const CID: u32 = 0x0C3C_79A3;
         const PROTO_CID: u32 = 0x0C3C_79A4;
@@ -393,9 +388,11 @@ mod tests {
         cache[HOLDER_STATE] = STATE_CLASS_SITE;
         let mut slot = &mut cache as *mut PicCache;
         assert_eq!(
-            unsafe { try_hit_after_worker_gate(recv, &mut slot) }.map(|v| v.bits()),
+            unsafe { try_hit(recv, &mut slot) }.map(|v| v.bits()),
             Some(crate::value::TAG_UNDEFINED)
         );
+        WORKER_AGENTS_EXIST.store(1, Ordering::SeqCst);
+        assert!(unsafe { try_hit(recv, &mut slot) }.is_none());
         unsafe { drop(Box::from_raw(record)) };
     }
 }

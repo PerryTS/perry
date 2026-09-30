@@ -197,6 +197,35 @@ static METHOD_SITES: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::n
 pub(crate) static WORKER_AGENTS_EXIST: std::sync::atomic::AtomicU8 =
     std::sync::atomic::AtomicU8::new(0);
 
+/// Run a gate-sensitive unit in a fresh test process. Worker startup is
+/// process-wide and sticky: clearing it in a parallel libtest process can
+/// re-enable a worker's access to primary-heap holder pointers.
+#[cfg(test)]
+pub(crate) fn run_with_fresh_worker_gate(filter: &str) -> bool {
+    const MARKER: &str = "PERRY_A2_FRESH_WORKER_GATE_TEST";
+    if std::env::var_os(MARKER).as_deref() == Some(std::ffi::OsStr::new(filter)) {
+        assert_eq!(
+            WORKER_AGENTS_EXIST.load(Ordering::SeqCst),
+            0,
+            "the filtered child must begin before worker startup"
+        );
+        return true;
+    }
+    let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
+        .arg("--test-threads=1")
+        .arg(filter)
+        .env(MARKER, filter)
+        .output()
+        .expect("run filtered test in a fresh process");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success() && stdout.contains("running 1 test") && stdout.contains("1 passed"),
+        "isolated test {filter} failed or matched no test:\n{stdout}\n{stderr}",
+    );
+    false
+}
+
 /// Called by `agent::enter_worker_agent` before the worker runs any code.
 pub fn note_worker_agent() {
     // Publish the gate under the same lock as `publish`: every in-flight

@@ -193,13 +193,6 @@ pub(crate) unsafe fn entry_answer(c: &PicCache, token: i64) -> Option<u64> {
     if WORKER_AGENTS_EXIST.load(Ordering::SeqCst) != 0 {
         return None;
     }
-    entry_answer_after_worker_gate(c, token)
-}
-
-/// The same site-word validation for primary-agent unit tests whose process
-/// may already have started a worker. The public entry remains gate guarded.
-#[inline(always)]
-unsafe fn entry_answer_after_worker_gate(c: &PicCache, token: i64) -> Option<u64> {
     if token == 0 {
         return None;
     }
@@ -533,20 +526,7 @@ pub(crate) unsafe fn try_cached_class_accessor(
     recv: *const ObjectHeader,
     cache_slot: *mut PicCacheSlot,
 ) -> Option<crate::value::JSValue> {
-    if WORKER_AGENTS_EXIST.load(Ordering::SeqCst) != 0 {
-        return None;
-    }
-    try_cached_class_accessor_after_worker_gate(recv, cache_slot)
-}
-
-/// The primary-agent accessor validation, also used by the unit test when
-/// another test has already set the sticky process-wide worker gate.
-#[inline(always)]
-unsafe fn try_cached_class_accessor_after_worker_gate(
-    recv: *const ObjectHeader,
-    cache_slot: *mut PicCacheSlot,
-) -> Option<crate::value::JSValue> {
-    if cache_slot.is_null() {
+    if cache_slot.is_null() || WORKER_AGENTS_EXIST.load(Ordering::SeqCst) != 0 {
         return None;
     }
     let cache = crate::object::field_get_set::pic_slot_peek::<PicCache>(cache_slot);
@@ -963,6 +943,11 @@ mod tests {
     /// link, rather than trust receiver and holder shapes alone.
     #[test]
     fn class_accessor_rechecks_same_shape_holder_link() {
+        if !crate::object::method_site::run_with_fresh_worker_gate(
+            "class_accessor_rechecks_same_shape_holder_link",
+        ) {
+            return;
+        }
         let _lock = crate::gc::global_side_table_test_lock();
         const CID: u32 = 0x0C3C_79A3;
         let scope = crate::gc::RuntimeHandleScope::new();
@@ -1038,8 +1023,7 @@ mod tests {
                 crate::object::class_lookup_surface_generation()
             );
             assert_eq!(
-                unsafe { try_cached_class_accessor_after_worker_gate(receiver, &mut slot) }
-                    .map(|v| v.as_number()),
+                unsafe { try_cached_class_accessor(receiver, &mut slot) }.map(|v| v.as_number()),
                 Some(2.0)
             );
 
@@ -1053,8 +1037,7 @@ mod tests {
             );
             assert_eq!(unsafe { object_shape_stamp(receiver) }, recv_shape);
             assert!(
-                unsafe { try_cached_class_accessor_after_worker_gate(receiver, &mut slot) }
-                    .is_none(),
+                unsafe { try_cached_class_accessor(receiver, &mut slot) }.is_none(),
                 "stale getter was served after registry replacement"
             );
             let second =
@@ -1069,8 +1052,7 @@ mod tests {
             unsafe { publish(cache, receiver, &w, true) };
             assert!(read_accessor_same_shape_relinks() > old_relinks);
             assert_eq!(
-                unsafe { try_cached_class_accessor_after_worker_gate(receiver, &mut slot) }
-                    .map(|v| v.as_number()),
+                unsafe { try_cached_class_accessor(receiver, &mut slot) }.map(|v| v.as_number()),
                 Some(8.0)
             );
         });
@@ -1078,6 +1060,11 @@ mod tests {
 
     #[test]
     fn ten_receiver_shapes_share_one_confirmed_absent_terminal() {
+        if !crate::object::method_site::run_with_fresh_worker_gate(
+            "ten_receiver_shapes_share_one_confirmed_absent_terminal",
+        ) {
+            return;
+        }
         let _lock = crate::gc::global_side_table_test_lock();
         let base = crate::object::shapes::SHAPE_ID_BASE;
         let holder = Box::new(ObjectHeader {
@@ -1112,28 +1099,21 @@ mod tests {
         }
         assert_ne!(cache[HOLDER_KIND] as u64 & HOLDER_MULTI_ABSENT, 0);
         assert_eq!(
-            unsafe {
-                entry_answer_after_worker_gate(&cache, (PIC_ID_TOKEN_BIT | u64::from(base)) as i64)
-            },
+            unsafe { entry_answer(&cache, (PIC_ID_TOKEN_BIT | u64::from(base)) as i64) },
             None,
             "the oldest of eleven shapes must leave a ten-shape site"
         );
         for i in 1..11 {
             let token = (PIC_ID_TOKEN_BIT | u64::from(base + i)) as i64;
             assert_eq!(
-                unsafe { entry_answer_after_worker_gate(&cache, token) },
+                unsafe { entry_answer(&cache, token) },
                 Some(crate::value::TAG_UNDEFINED)
             );
         }
         // A new shape after an own-key shadow has no entry, while a terminal
         // mutation invalidates every receiver shape in the shared entry.
         assert_eq!(
-            unsafe {
-                entry_answer_after_worker_gate(
-                    &cache,
-                    (PIC_ID_TOKEN_BIT | u64::from(base + 11)) as i64,
-                )
-            },
+            unsafe { entry_answer(&cache, (PIC_ID_TOKEN_BIT | u64::from(base + 11)) as i64) },
             None
         );
         let mut moved = Box::new(ObjectHeader {
@@ -1143,22 +1123,12 @@ mod tests {
         });
         cache[HOLDER_OBJ] = (&mut *moved as *mut ObjectHeader) as i64;
         assert_eq!(
-            unsafe {
-                entry_answer_after_worker_gate(
-                    &cache,
-                    (PIC_ID_TOKEN_BIT | u64::from(base + 10)) as i64,
-                )
-            },
+            unsafe { entry_answer(&cache, (PIC_ID_TOKEN_BIT | u64::from(base + 10)) as i64) },
             Some(crate::value::TAG_UNDEFINED)
         );
         moved.parent_class_id = base + 102;
         assert_eq!(
-            unsafe {
-                entry_answer_after_worker_gate(
-                    &cache,
-                    (PIC_ID_TOKEN_BIT | u64::from(base + 10)) as i64,
-                )
-            },
+            unsafe { entry_answer(&cache, (PIC_ID_TOKEN_BIT | u64::from(base + 10)) as i64) },
             None
         );
         // A different terminal never inherits the old entry's receiver set.
@@ -1171,22 +1141,17 @@ mod tests {
         unsafe { publish(&mut cache, &recv, &distinct, false) };
         assert_eq!(cache[HOLDER_KIND], HOLDER_ABSENT_DEPTH1);
         assert_eq!(
-            unsafe {
-                entry_answer_after_worker_gate(
-                    &cache,
-                    (PIC_ID_TOKEN_BIT | u64::from(base + 10)) as i64,
-                )
-            },
+            unsafe { entry_answer(&cache, (PIC_ID_TOKEN_BIT | u64::from(base + 10)) as i64) },
             None
         );
         assert_eq!(
-            unsafe {
-                entry_answer_after_worker_gate(
-                    &cache,
-                    (PIC_ID_TOKEN_BIT | u64::from(base + 11)) as i64,
-                )
-            },
+            unsafe { entry_answer(&cache, (PIC_ID_TOKEN_BIT | u64::from(base + 11)) as i64) },
             Some(crate::value::TAG_UNDEFINED)
+        );
+        WORKER_AGENTS_EXIST.store(1, Ordering::SeqCst);
+        assert_eq!(
+            unsafe { entry_answer(&cache, (PIC_ID_TOKEN_BIT | u64::from(base + 11)) as i64) },
+            None
         );
     }
 
