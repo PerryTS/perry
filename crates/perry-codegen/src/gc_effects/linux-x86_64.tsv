@@ -1455,8 +1455,6 @@ js_import_meta_resolve	Reenters
 js_import_meta_resolve_value	Reenters
 js_in_operator	Reenters
 js_in_operator_presence_ic	Reenters
-js_inherited_read_cache_hit_f64	Leaf
-js_inherited_read_cache_stats	Leaf
 js_inline_arena_slow_alloc	AllocOnly
 js_inline_arena_state	Leaf
 js_install_global_value_surfaces	Leaf

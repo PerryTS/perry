@@ -76,9 +76,9 @@
 //!
 //! # Agents
 //!
-//! Entries are primed only on the primary agent, like the chain-store
-//! verdicts. A program with workers emits thread-local site slots (#10399), so
-//! a worker never reads a primary-heap closure through a site.
+//! Inherited entries prime only on the primary agent. The first worker start
+//! clears them and prevents further inherited primes, so a worker cannot
+//! follow a holder from the primary heap through a process-global site.
 
 use crate::object::ObjectHeader;
 
@@ -296,9 +296,8 @@ fn stats_report_enabled() -> bool {
                 }
                 let (hd, ha, hr) = read_holder::read_holder_stats();
                 eprintln!(
-                    "[method-site] primes_own={a} primes_inherited={b} primes_function={} misses={c} read_holder_primes={hd} read_absent_primes={ha} read_holder_refused={hr} marked_value_write_bumps={}{refused}",
-                    method_site_function_primes(),
-                    crate::object::proto_validity::marked_value_write_bumps()
+                    "[method-site] primes_own={a} primes_inherited={b} primes_function={} misses={c} read_holder_primes={hd} read_absent_primes={ha} read_holder_refused={hr}{refused}",
+                    method_site_function_primes()
                 );
             }
             unsafe { libc::atexit(report) };
@@ -978,7 +977,7 @@ unsafe fn next_prototype(obj: *const ObjectHeader) -> *const ObjectHeader {
     super::class_prototype_object(class_id)
 }
 
-/// Root scan: every inherited entry's closure is marked and rewritten.
+/// Root scan: every inherited entry's holder is marked and rewritten.
 pub(crate) fn scan_method_site_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     if let Ok(sites) = METHOD_SITES.lock() {
         for &site in sites.iter() {

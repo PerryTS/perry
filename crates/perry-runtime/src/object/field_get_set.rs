@@ -261,13 +261,12 @@ impl FieldLookupCaches {
 // reach the cross-module helpers via their own `use super::*;`.
 pub use accessors::js_object_get_field;
 pub(crate) use accessors::{
-    accessor_receiver_override_armed, accessor_receiver_override_begin,
-    accessor_receiver_override_end, accessor_receiver_override_take,
-    array_prototype_property_value, builtin_reflection_accessor_read, invoke_accessor_getter,
-    invoke_accessor_setter, is_typed_array_prototype, object_field_at_with_live,
-    ordinary_object_prototype_property_value, own_data_field_by_name,
-    primitive_builtin_prototype_property, primitive_object_prototype_accessor,
-    primitive_tagged_prototype_property, string_index_value,
+    accessor_receiver_override_begin, accessor_receiver_override_end,
+    accessor_receiver_override_take, array_prototype_property_value,
+    builtin_reflection_accessor_read, invoke_accessor_getter, invoke_accessor_setter,
+    is_typed_array_prototype, object_field_at_with_live, ordinary_object_prototype_property_value,
+    own_data_field_by_name, primitive_builtin_prototype_property,
+    primitive_object_prototype_accessor, primitive_tagged_prototype_property, string_index_value,
 };
 pub(crate) use class_object_props::{
     class_evaluation_prototype_class_id, class_object_materialized_prototype,
@@ -292,7 +291,7 @@ pub use field_ops::{
 };
 pub use for_in_stable::js_for_in_keys_stable_value;
 pub(crate) use get_field_by_name::class_value_get_field;
-pub(crate) use get_field_by_name::get_field_by_name_past_inherited_cache;
+pub(crate) use get_field_by_name::get_field_by_name_after_site_miss;
 pub use get_field_by_name::js_object_get_field_by_name;
 pub(crate) use get_field_by_name_async::async_resource_property;
 pub(crate) use get_field_by_name_tail::get_field_by_name_object_tail;

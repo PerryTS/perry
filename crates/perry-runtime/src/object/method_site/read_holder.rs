@@ -381,13 +381,12 @@ pub(crate) unsafe fn prime_read_holder(
     let recv = ordinary_receiver(obj as usize)?;
     // Cheap pre-walk: a receiver the entry could never describe keeps the
     // caller's path and pays nothing for the getter below. A site with no
-    // cache yet stays without one, so the slow entry keeps asking the
-    // inherited-read cache for it.
+    // cache yet stays without one and uses the generic getter.
     //
     // A walk that ends at the default link needs `%Object.prototype%`, which
     // is materialized lazily: while it is unresolved the walk cannot pin it,
-    // and refusing here would leave the site to the inherited-read cache for
-    // good (the getter below is what resolves it). So an unresolved realm
+    // and refusing here would leave the site on the generic path (the getter
+    // below is what resolves it). So an unresolved realm
     // does not decide the pre-walk; the walk after the getter does.
     let realm_pending = crate::array::object_prototype_addr_if_resolved() == 0;
     if !holder_name_admitted(name)
@@ -403,7 +402,7 @@ pub(crate) unsafe fn prime_read_holder(
     let scope = crate::gc::RuntimeHandleScope::new();
     let handle = scope.root_raw_mut_ptr(obj as *mut ObjectHeader);
     let (value, obj) = handle.across_mut::<ObjectHeader, _>(|| {
-        crate::object::field_get_set::get_field_by_name_past_inherited_cache(obj, key)
+        crate::object::field_get_set::get_field_by_name_after_site_miss(obj, key)
     });
     // From here a refusal has already run the getter, so the site latches:
     // the next miss must not walk and run it again only to refuse again.

@@ -1,6 +1,6 @@
 //! The method-call site: `recv.m(args)` as ONE path — the property read's
-//! receiver test and shape compare, one slot load (or the memoized inherited
-//! closure), then a direct call of the method body with `recv` as `this`.
+//! receiver test and shape compare, a slot load (from the receiver or a
+//! shape-guarded direct holder), then a direct call with `recv` as `this`.
 //!
 //! The site's memo is a runtime `MethodSite`
 //! (`perry-runtime/src/object/method_site.rs`, which states what an entry
@@ -13,7 +13,7 @@
 //!         w == site.word                                     else MISS
 //!   s   = site.slot
 //!   s < 0 (inherited):  [site.holder] == site.holder_word     else MISS
-//!                       h = site.closure ; f = site.code
+//!                       v = load [site.holder + HDR + 8*i]
 //!   own:  v = load [recv + HDR + 8*s] ; v is a heap pointer  else MISS
 //!   fn:   v = load [[recv + PROPS] + HDR + 8*s]  (bit 61: a function's
 //!         own-property object; same checks as own)

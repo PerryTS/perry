@@ -1169,22 +1169,6 @@ impl IcDiag {
                 self.prime_way_encoded_slot
             );
         }
-        // Lane 3's inherited-read cache, on the SAME arming rather than an
-        // env var of its own. A cache that primes and then declines every
-        // lookup returns exactly the values the chain walk would and is
-        // invisible in a program's output; this row is what tells a real
-        // program's run apart from that.
-        let inh_hits = crate::object::inherited_read_cache::inherited_read_cache_hits();
-        let inh_primes = crate::object::inherited_read_cache::inherited_read_cache_primes();
-        let inh_declines = crate::object::inherited_read_cache::inherited_read_cache_declines();
-        let inh_neg = crate::object::inherited_read_cache::inherited_read_cache_neg_served();
-        if (inh_hits | inh_primes | inh_declines | inh_neg) != 0 {
-            let _ = writeln!(
-                out,
-                "  inherited: hits={inh_hits} primes={inh_primes} \
-                 declines={inh_declines} declines_cached={inh_neg}"
-            );
-        }
         let mut rows: Vec<&SiteStat> = self.sites.values().collect();
         crate::cold_sort::sort_by_key(&mut rows, |s| std::cmp::Reverse(s.misses));
         let _ = writeln!(
@@ -1582,10 +1566,10 @@ const RECV_ROUTE_NAMES: [&str; 33] = [
     // supplier matched (`Route::RloopStatic`).
     "rloop_static",
     // Runtime-counted: a class-field read whose inline guard missed, answered
-    // from the receiver's shape (the site's word or the inherited cache)...
+    // from the receiver's shape (the site's word or holder fact)...
     "rt_class_miss_shape",
-    // ...or by the generic read ladder behind it (own miss, inherited cache,
-    // priming), where it used to take the site-less by-name walk.
+    // ...or by the generic read ladder behind it, where it used to take the
+    // site-less by-name walk.
     "rt_class_miss_ladder",
     // Runtime-counted: a by-name overwrite of a live inline slot on an object
     // holding a typed layout, which keeps it (it used to declare it unknown).

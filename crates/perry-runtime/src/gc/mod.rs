@@ -1067,17 +1067,11 @@ pub fn gc_init() {
     // or Proxy trap can re-enter after moving GC. Rewrite that temporary
     // identity so malformed prototype cycles remain bounded.
     reg_scanner!(crate::object::prototype_chain::scan_prototype_resolution_stack_roots_mut,);
-    // Lane 3: the inherited-read cache records a holder ADDRESS per entry and
-    // a hit LOADS through it, so the slots are STRONG roots: marked, so the
-    // address cannot be recycled under the entry, and rewritten, so a
-    // compacting or copying pass leaves it pointing at the same object.
-    reg_scanner!(crate::object::inherited_read_cache::scan_inherited_read_cache_roots_mut);
-    // Inherited-access lane: a store site's chain verdict names its interned
+    // A store site's chain verdict names its interned
     // key and the receiver's recorded prototype, and compares them on every
     // use, so both are STRONG roots (`object::chain_store`).
     reg_scanner!(crate::object::chain_store::scan_chain_store_roots_mut);
-    // Method-calls lane: an inherited method-site entry holds the method
-    // closure it calls, so the closure is a STRONG root (`object::method_site`).
+    // An inherited method-site entry roots its direct prototype holder.
     reg_scanner!(crate::object::method_site::scan_method_site_roots_mut);
     // A read site's holder entry names the object that holds the answer (and
     // the hops to it); the emitted hit loads through it, so each is a STRONG

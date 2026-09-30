@@ -136,7 +136,6 @@ pub(crate) use global_fetch::scan_pending_fetch_signal_root_mut;
 pub(crate) mod chain_store;
 mod global_this;
 pub mod handle_expando;
-pub(crate) mod inherited_read_cache;
 pub(crate) mod prop_plan;
 pub(crate) mod proto_validity;
 pub(crate) use global_this::{

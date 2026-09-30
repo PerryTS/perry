@@ -119,27 +119,6 @@ fn static_of(word: u64) -> usize {
     }
 }
 
-/// The accessor a pair VALUE holds, without re-proving that it is one — for a
-/// cache hit whose entry proved it at prime time (the holder's key is an
-/// accessor, and a slot of an accessor key is written only by an accessor
-/// install, which transitions the holder's ShapeId).
-///
-/// # Safety
-/// `value` is a NaN-boxed pointer to a pair.
-#[inline(always)]
-pub(crate) unsafe fn pair_of_value_unchecked(value: u64) -> Accessor {
-    let w = crate::array::array_elements_ptr((value & POINTER_MASK) as *const ArrayHeader);
-    let (raw_get_word, raw_set_word) = (*w.add(PAIR_RAW_GET), *w.add(PAIR_RAW_SET));
-    Accessor {
-        get: closure_of(*w.add(PAIR_GET)),
-        set: closure_of(*w.add(PAIR_SET)),
-        raw_get: raw_of(raw_get_word),
-        raw_set: raw_of(raw_set_word),
-        static_get: static_of(raw_get_word),
-        static_set: static_of(raw_set_word),
-    }
-}
-
 #[inline]
 fn closure_word(bits: u64) -> u64 {
     if bits == 0 {

@@ -4004,6 +4004,14 @@
   {
    "file": "crates/perry-runtime/src/object/method_site.rs",
    "names": [
+    "METHOD_SITES"
+   ],
+   "verdict": "process_global_allocation",
+   "why": "The values are addresses of MethodSite records allocated by pic_slot_resolve_init from the process-lifetime PicArena (std::alloc chunks, never freed), not from any thread's GC arena. Each record's primary-heap holder is visited by scan_method_site_roots_mut and all inherited entries are emptied before the first worker executes (note_worker_agent), after which inherited primes are refused."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/method_site.rs",
+   "names": [
     "SITE_REFUSED"
    ],
    "verdict": "no_heap_address",

@@ -177,24 +177,6 @@ pub extern "C" fn js_put_value_set_packed_miss(
         }
     }
 
-    // Charter step 3: a key this receiver shape inherits as an accessor runs
-    // its setter from the inherited-access table (the same entries reads use),
-    // ahead of the key interning, chain proof and rooting below, which it
-    // would pay for nothing.
-    {
-        let tb = target.to_bits();
-        if tb & !crate::value::POINTER_MASK == crate::value::POINTER_TAG && !key.is_null() {
-            let obj = (tb & crate::value::POINTER_MASK) as *const crate::ObjectHeader;
-            if crate::value::addr_class::is_above_handle_band(obj as usize)
-                && unsafe {
-                    crate::object::inherited_read_cache::inherited_write_through(obj, key, value)
-                }
-            {
-                return value;
-            }
-        }
-    }
-
     // Inherited-access lane: a key-adding store whose chain this site has
     // already proved clear takes the transition append (`object::chain_store`).
     // Allocation-free on a decline.
@@ -384,7 +366,6 @@ unsafe fn prime_packed_set(
         || !crate::object::shapes::store_kind::shape_admits_plain_store(
             crate::object::shapes::object_shape_stamp(obj),
         )
-        || !crate::object::proto_validity::store_cache_may_learn(obj)
     {
         return;
     }
