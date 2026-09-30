@@ -210,6 +210,14 @@ pub(crate) unsafe fn entry_answer(c: &PicCache, token: i64) -> Option<u64> {
         }
         return Some(slot_bits(holder, kind as u32));
     }
+    entry_answer_other(c, kind)
+}
+
+/// Uncommon entries keep their complete depth/absence validation off the
+/// inlined depth-1 data hit, including the class-field read's caller.
+#[cold]
+#[inline(never)]
+unsafe fn entry_answer_other(c: &PicCache, kind: i64) -> Option<u64> {
     if kind as u64 & (HOLDER_ACCESSOR | HOLDER_MULTI_ABSENT) != 0 {
         if kind as u64 & HOLDER_ACCESSOR != 0 || kind as u64 & HOLDER_ABSENT_BIT == 0 {
             return None;
@@ -302,7 +310,7 @@ fn set_multi_absent_id(c: &mut PicCache, i: usize, id: u32) {
 /// # Safety
 /// `handle` is a pointer above the handle band; `cache_slot` null or the
 /// site's live read cache slot.
-#[inline]
+#[inline(always)]
 pub(crate) unsafe fn read_holder_hit(
     handle: *const ObjectHeader,
     cache_slot: *mut PicCacheSlot,
