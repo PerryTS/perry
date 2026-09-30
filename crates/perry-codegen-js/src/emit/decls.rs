@@ -57,9 +57,11 @@ impl JsEmitter {
         if let Some(ctor) = &class.constructor {
             self.write_indent();
             self.output.push_str("constructor(");
-            self.emit_params(&ctor.params);
+            let default_params = self.emit_params(&ctor.params, true);
             self.output.push_str(") {\n");
             self.indent += 1;
+            let temp_scope = self.begin_scoped_temp_scope();
+            self.emit_parameter_defaults(&default_params);
 
             // Emit field initializers that aren't in constructor body
             for field in &class.fields {
@@ -75,6 +77,8 @@ impl JsEmitter {
             for stmt in &ctor.body {
                 self.emit_stmt(stmt);
             }
+            self.finish_parameter_defaults(&default_params);
+            self.finish_scoped_temp_scope(temp_scope.0, temp_scope.1, temp_scope.2);
             self.indent -= 1;
             self.writeln("}");
         } else if !class.fields.is_empty() {
@@ -82,6 +86,7 @@ impl JsEmitter {
             self.write_indent();
             self.output.push_str("constructor() {\n");
             self.indent += 1;
+            let temp_scope = self.begin_scoped_temp_scope();
             if class.extends.is_some() || class.extends_name.is_some() {
                 self.writeln("super();");
             }
@@ -95,6 +100,7 @@ impl JsEmitter {
                 }
                 self.output.push_str(";\n");
             }
+            self.finish_scoped_temp_scope(temp_scope.0, temp_scope.1, temp_scope.2);
             self.indent -= 1;
             self.writeln("}");
         }
@@ -109,9 +115,11 @@ impl JsEmitter {
             self.write_indent();
             let _ = writeln!(self.output, "get {}() {{", prop_name);
             self.indent += 1;
+            let temp_scope = self.begin_scoped_temp_scope();
             for stmt in &func.body {
                 self.emit_stmt(stmt);
             }
+            self.finish_scoped_temp_scope(temp_scope.0, temp_scope.1, temp_scope.2);
             self.indent -= 1;
             self.writeln("}");
         }
@@ -120,12 +128,16 @@ impl JsEmitter {
         for (prop_name, func) in &class.setters {
             self.write_indent();
             let _ = write!(self.output, "set {}(", prop_name);
-            self.emit_params(&func.params);
+            let default_params = self.emit_params(&func.params, !func.is_generator);
             self.output.push_str(") {\n");
             self.indent += 1;
+            let temp_scope = self.begin_scoped_temp_scope();
+            self.emit_parameter_defaults(&default_params);
             for stmt in &func.body {
                 self.emit_stmt(stmt);
             }
+            self.finish_parameter_defaults(&default_params);
+            self.finish_scoped_temp_scope(temp_scope.0, temp_scope.1, temp_scope.2);
             self.indent -= 1;
             self.writeln("}");
         }
@@ -138,12 +150,16 @@ impl JsEmitter {
                 self.output.push_str("async ");
             }
             let _ = write!(self.output, "{}(", method.name);
-            self.emit_params(&method.params);
+            let default_params = self.emit_params(&method.params, !method.is_generator);
             self.output.push_str(") {\n");
             self.indent += 1;
+            let temp_scope = self.begin_scoped_temp_scope();
+            self.emit_parameter_defaults(&default_params);
             for stmt in &method.body {
                 self.emit_stmt(stmt);
             }
+            self.finish_parameter_defaults(&default_params);
+            self.finish_scoped_temp_scope(temp_scope.0, temp_scope.1, temp_scope.2);
             self.indent -= 1;
             self.writeln("}");
         }
@@ -158,6 +174,7 @@ impl JsEmitter {
                 let _ = write!(self.output, "{}.{} = ", class.name, field.name);
                 self.emit_expr(init);
                 self.output.push_str(";\n");
+                self.clear_scoped_temps();
             }
         }
     }
@@ -172,12 +189,16 @@ impl JsEmitter {
         } else {
             let _ = write!(self.output, "{}(", method.name);
         }
-        self.emit_params(&method.params);
+        let default_params = self.emit_params(&method.params, !method.is_generator);
         self.output.push_str(") {\n");
         self.indent += 1;
+        let temp_scope = self.begin_scoped_temp_scope();
+        self.emit_parameter_defaults(&default_params);
         for stmt in &method.body {
             self.emit_stmt(stmt);
         }
+        self.finish_parameter_defaults(&default_params);
+        self.finish_scoped_temp_scope(temp_scope.0, temp_scope.1, temp_scope.2);
         self.indent -= 1;
         self.writeln("}");
     }
@@ -195,17 +216,50 @@ impl JsEmitter {
         } else {
             let _ = write!(self.output, "function {}(", name);
         }
-        self.emit_params(&func.params);
+        let default_params = self.emit_params(&func.params, !func.is_generator);
         self.output.push_str(") {\n");
         self.indent += 1;
+        let temp_scope = self.begin_scoped_temp_scope();
+        self.emit_parameter_defaults(&default_params);
         for stmt in &func.body {
             self.emit_stmt(stmt);
         }
+        self.finish_parameter_defaults(&default_params);
+        self.finish_scoped_temp_scope(temp_scope.0, temp_scope.1, temp_scope.2);
         self.indent -= 1;
         self.writeln("}");
     }
 
-    pub(super) fn emit_params(&mut self, params: &[Param]) {
+    /// Default expressions with scoped captures need body-local declarations.
+    /// Argument aliases preserve the signature's arity; sequential lexical
+    /// initialization preserves earlier-parameter reads and later-parameter TDZ.
+    /// Generators retain parameter evaluation at iterator creation time.
+    pub(super) fn emit_params(
+        &mut self,
+        params: &[Param],
+        lower_scoped_defaults: bool,
+    ) -> Vec<(Param, String)> {
+        fn has_capture(expr: &Expr) -> bool {
+            if matches!(expr, Expr::ScopedTemp { .. }) {
+                return true;
+            }
+            if matches!(expr, Expr::Closure { .. }) {
+                return false;
+            }
+            let mut found = false;
+            perry_hir::walker::walk_expr_children(expr, &mut |child| found |= has_capture(child));
+            found
+        }
+        let lower_defaults = lower_scoped_defaults
+            && params
+                .iter()
+                .any(|param| param.default.as_ref().is_some_and(has_capture));
+        if lower_defaults {
+            for param in params {
+                self.make_local_name(&param.name, param.id);
+            }
+        }
+        let mut defaults = Vec::new();
         for (i, param) in params.iter().enumerate() {
             if i > 0 {
                 self.output.push_str(", ");
@@ -213,12 +267,59 @@ impl JsEmitter {
             if param.is_rest {
                 self.output.push_str("...");
             }
-            let name = self.make_local_name(&param.name, param.id);
+            let name = if lower_defaults {
+                let mut alias = format!("__perry_arg_{}", param.id);
+                while self.used_names.contains(&alias) {
+                    alias.push('_');
+                }
+                self.used_names.insert(alias.clone());
+                defaults.push((param.clone(), alias.clone()));
+                alias
+            } else {
+                self.make_local_name(&param.name, param.id)
+            };
             self.output.push_str(&name);
             if let Some(default) = &param.default {
                 self.output.push_str(" = ");
-                self.emit_expr(default);
+                if lower_defaults {
+                    self.output.push_str("undefined");
+                } else {
+                    let previous = self.in_parameter_default;
+                    self.in_parameter_default = true;
+                    self.emit_expr(default);
+                    self.in_parameter_default = previous;
+                }
             }
+        }
+        defaults
+    }
+
+    pub(super) fn emit_parameter_defaults(&mut self, defaults: &[(Param, String)]) {
+        for (param, alias) in defaults {
+            let name = self.get_local_name(param.id);
+            self.write_indent();
+            let _ = write!(self.output, "let {name} = ");
+            if let Some(default) = &param.default {
+                let _ = write!(self.output, "{alias} === undefined ? ");
+                self.emit_expr(default);
+                let _ = write!(self.output, " : {alias}");
+            } else {
+                self.output.push_str(alias);
+            }
+            self.output.push_str(";\n");
+        }
+        if !defaults.is_empty() {
+            // Body declarations live in the original body environment, outside
+            // the environment in which parameter initializers resolve names.
+            self.writeln("{");
+            self.indent += 1;
+        }
+    }
+
+    pub(super) fn finish_parameter_defaults(&mut self, defaults: &[(Param, String)]) {
+        if !defaults.is_empty() {
+            self.indent -= 1;
+            self.writeln("}");
         }
     }
 }
