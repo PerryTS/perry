@@ -1071,6 +1071,7 @@ pub fn gc_init() {
     // key and the receiver's recorded prototype, and compares them on every
     // use, so both are STRONG roots (`object::chain_store`).
     reg_scanner!(crate::object::chain_store::scan_chain_store_roots_mut);
+    reg_scanner!(crate::proxy::scan_setter_site_roots_mut);
     // An inherited method-site entry roots its direct prototype holder.
     reg_scanner!(crate::object::method_site::scan_method_site_roots_mut);
     // A read site's holder entry names the object that holds the answer (and

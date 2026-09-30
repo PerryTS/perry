@@ -61,6 +61,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::*;
 
+mod setter_site;
+pub(crate) use setter_site::scan_roots as scan_setter_site_roots_mut;
+
 /// The value `@perry_ic_N_packed_set` holds before its first prime.
 ///
 /// **Must equal `PACKED_SET_EMPTY` in
@@ -91,15 +94,18 @@ pub const PACKED_SET_INLINE_WAYS: usize = 4;
 /// (`object::chain_store`), 0 until the site primes one. Never compared by
 /// the emitted code, which reads only ways `0..PACKED_SET_INLINE_WAYS`.
 pub const PACKED_SET_CHAIN_WORD: usize = PACKED_SET_WAYS;
+/// Collecting-only direct class setter memo; emitted code never reads it.
+pub const PACKED_SET_SETTER_WORD: usize = PACKED_SET_WAYS + 1;
 
 /// A site's way cache: packed words in the compact word's format, then the
 /// chain entry word.
-pub type PackedSetWays = [u64; PACKED_SET_WAYS + 1];
+pub type PackedSetWays = [u64; PACKED_SET_WAYS + 2];
 
 /// A site cache no prime has touched: every way empty, no chain entry.
 pub const fn packed_set_cache_empty() -> PackedSetWays {
-    let mut cache = [PACKED_SET_EMPTY; PACKED_SET_WAYS + 1];
+    let mut cache = [PACKED_SET_EMPTY; PACKED_SET_WAYS + 2];
     cache[PACKED_SET_CHAIN_WORD] = 0;
+    cache[PACKED_SET_SETTER_WORD] = 0;
     cache
 }
 
@@ -195,6 +201,9 @@ pub extern "C" fn js_put_value_set_packed_miss(
         } {
             return stored;
         }
+    }
+    if let Some(stored) = unsafe { setter_site::try_set(cache_slot, target, key, value) } {
+        return stored;
     }
     // The receiver's ShapeId before the store: the pre-shape a key-add memo
     // is keyed on. Allocation-free.
