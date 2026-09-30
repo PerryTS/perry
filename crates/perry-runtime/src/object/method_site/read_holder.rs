@@ -5,20 +5,22 @@
 //!   is an ordinary object, and its [[Prototype]] identity. Only a serial
 //!   identity or `PROTO_ID_DEFAULT` (the realm's `Object.prototype`) pins ONE
 //!   object for the GC-leaf data/absent path. A collecting accessor entry may
-//!   also use a declared class identity because it rechecks the live registry
-//!   prototype pointer on every hit.
+//!   also use a declared class identity: a registry generation check proves
+//!   its rooted holder is still the registered prototype on every hit.
 //! * The holder's ShapeId `SH` vouches that `k` is an own inline data slot of
 //!   the holder `H` — or, for an ABSENT entry, that the terminal object lacks
 //!   `k` and has a null [[Prototype]].
 //! * For a holder deeper than the direct prototype, each intermediate hop's
 //!   ShapeId vouches that the hop lacks `k` and still links to the next hop.
 //!
-//! Every fact is compared on use, so there is no invalidation and no global
-//! word: a key add, delete, descriptor change or `setPrototypeOf` on any object
+//! Data/absence facts are compared on use without a global invalidation word:
+//! a key add, delete, descriptor change or `setPrototypeOf` on any object
 //! the entry names moves that object's ShapeId, and a value store to the
 //! holder's slot is seen because the hit LOADS the slot. A delete is a shape
 //! transition (#10826), so a holder whose ShapeId matches still has the slot:
-//! the hit needs no `TAG_HOLE` test, as the emitted MRU hit needs none.
+//! the hit needs no `TAG_HOLE` test, as the emitted MRU hit needs none. The
+//! collecting class-accessor route additionally checks the class registry's
+//! lookup-surface generation for a bare declared-prototype link.
 //!
 //! The entry lives in the read site's own cache (`PicCache` words
 //! [`HOLDER_RECV`]..=[`HOLDER_REGISTERED`]). The holder and the hops are
@@ -555,13 +557,11 @@ pub(crate) unsafe fn try_cached_class_accessor(
     // the ShapeId; a raw-only pair replacement may not, so reread the pair
     // itself on every hit before invoking.
     let slot = c[HOLDER_KIND] as u32;
-    let acc = crate::object::accessor_pair::pair_of_value(slot_bits(holder, slot))?;
-    if acc.raw_get == 0 && acc.raw_set == 0 {
-        return None;
-    }
+    let raw_get =
+        crate::object::accessor_pair::raw_instance_getter_of_value(slot_bits(holder, slot))?;
     HITS_ACCESSOR.fetch_add(1, Ordering::Relaxed);
     super::stats_report_enabled();
-    Some(invoke_class_getter(recv, acc.raw_get))
+    Some(invoke_class_getter(recv, raw_get))
 }
 
 unsafe fn walk(recv: *const ObjectHeader, name: &[u8], class_first: bool) -> Option<Walk> {

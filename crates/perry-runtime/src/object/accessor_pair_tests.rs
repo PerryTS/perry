@@ -41,6 +41,45 @@ fn a_pair_round_trips_both_forms() {
     }
 }
 
+#[test]
+fn raw_instance_getter_probe_preserves_setter_only_and_static_refusal() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    unsafe {
+        for (acc, answer) in [
+            (
+                Accessor {
+                    raw_get: 0x5555_1234_5678,
+                    ..Default::default()
+                },
+                Some(0x5555_1234_5678),
+            ),
+            (
+                Accessor {
+                    raw_set: 0x5555_8765_4320,
+                    ..Default::default()
+                },
+                Some(0),
+            ),
+            (
+                Accessor {
+                    static_get: 0x5555_1234_5678,
+                    ..Default::default()
+                },
+                None,
+            ),
+            (Accessor::default(), None),
+        ] {
+            let pair = pair_new(acc);
+            let value = crate::value::js_nanbox_pointer(pair as i64).to_bits();
+            assert_eq!(raw_instance_getter_of_value(value), answer);
+        }
+        assert_eq!(
+            raw_instance_getter_of_value(crate::value::TAG_UNDEFINED),
+            None
+        );
+    }
+}
+
 /// An ordinary object's accessor lives in its key's slot, not in the
 /// owner-keyed table, and reads back through the descriptor API. Sabotage:
 /// storing the pair in the table instead leaves the slot `undefined` and the

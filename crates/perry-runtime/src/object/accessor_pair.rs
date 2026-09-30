@@ -191,6 +191,30 @@ pub(crate) unsafe fn pair_of_value(value: u64) -> Option<Accessor> {
     })
 }
 
+/// The compiled INSTANCE getter at an already-proved accessor slot, or
+/// `Some(0)` for a setter-only pair (whose read is `undefined`). A class
+/// accessor site's hit needs neither closure nor static-entry decoding.
+/// The pair's tag, GC kind and length are still checked on every hit because
+/// the slot's value may be replaced without a holder ShapeId transition.
+///
+/// # Safety
+/// `value` is the slot value of a key proved to carry `ENTRY_ACCESSOR`.
+#[inline]
+pub(crate) unsafe fn raw_instance_getter_of_value(value: u64) -> Option<usize> {
+    if value & TAG_MASK != POINTER_TAG {
+        return None;
+    }
+    let pair = (value & POINTER_MASK) as *const ArrayHeader;
+    let header = crate::value::addr_class::try_read_gc_header(pair as usize)?;
+    if header.obj_type != crate::gc::GC_TYPE_ARRAY || (*pair).length as usize != PAIR_LEN {
+        return None;
+    }
+    let w = crate::array::array_elements_ptr(pair);
+    let raw_get = raw_of(*w.add(PAIR_RAW_GET));
+    let raw_set = raw_of(*w.add(PAIR_RAW_SET));
+    (raw_get != 0 || raw_set != 0).then_some(raw_get)
+}
+
 /// The accessor stored in `obj`'s slot for key position `pos`.
 ///
 /// # Safety
