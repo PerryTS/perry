@@ -9,7 +9,9 @@
 //! slot that holds a heap pointer is an `F64` lane holding a pointer, i.e. a
 //! writer that stored past the field-representation store check, and aborts.
 
-use super::{layout_pointer_bearing_bits, HeapPayloadSlotSelection, HeapSlotRange, LayoutSlotMask};
+#[cfg(any(debug_assertions, test))]
+use super::layout_pointer_bearing_bits;
+use super::{HeapPayloadSlotSelection, HeapSlotRange, LayoutSlotMask};
 use crate::object::field_rep;
 use crate::object::shapes::ShapeRecordRef;
 
