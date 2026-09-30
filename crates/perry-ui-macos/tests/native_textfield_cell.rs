@@ -64,7 +64,7 @@ fn main() {
     let mtm = MainThreadMarker::new().expect("TextField cell test runs on the main thread");
     let _app = NSApplication::sharedApplication(mtm);
 
-    let long = "Hxg assignee = currentUser() AND statusCategory != Done AND project = SU";
+    let long = "Hxg the quick brown fox jumps over the lazy dog, then jumps over it again";
     let mut cases = Vec::new();
     for secure in [false, true] {
         for border in [Border::Borderless, Border::Default, Border::Bordered] {

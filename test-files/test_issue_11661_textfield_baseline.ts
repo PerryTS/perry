@@ -48,7 +48,7 @@ const body = VStack(12, [
   field("Hxg first 16pt", 16),
   field("Hxg second 16pt", 16),
   field("Hxg third 28pt", 28),
-  field("Hxg long value: assignee = currentUser() AND statusCategory != Done AND project = SU", 16),
+  field("Hxg long value: the quick brown fox jumps over the lazy dog, then jumps over it again", 16),
   padded,
   bezeled,
   secure,
