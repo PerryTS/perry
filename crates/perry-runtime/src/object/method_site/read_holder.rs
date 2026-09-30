@@ -96,6 +96,11 @@ const HOLDER_ABSENT_BIT: u64 = 1 << 62;
 /// A direct class-prototype accessor. It can collect and therefore never
 /// answers from the GC-leaf front call.
 const HOLDER_ACCESSOR: u64 = 1 << 61;
+/// Depth-1 ABSENT entries can share one terminal holder across several
+/// receiver shapes. The spare hop words hold ShapeIds, never GC pointers.
+const HOLDER_MULTI_ABSENT: u64 = 1 << 60;
+const MULTI_ABSENT_EXTRA_IDS: usize = 9;
+const MULTI_ABSENT_NEXT_MASK: u64 = 0xf;
 const HOLDER_DEPTH_SHIFT: u32 = 32;
 const HOLDER_MAX_DEPTH: usize = 4;
 
@@ -175,11 +180,25 @@ pub(crate) unsafe fn entry_answer(c: &PicCache, token: i64) -> Option<u64> {
     if WORKER_AGENTS_EXIST.load(Ordering::SeqCst) != 0 {
         return None;
     }
-    if c[HOLDER_RECV] != token || token == 0 {
+    if token == 0 {
         return None;
     }
     let kind = c[HOLDER_KIND];
     if kind as u64 & HOLDER_ACCESSOR != 0 {
+        return None;
+    }
+    if kind as u64 & HOLDER_MULTI_ABSENT != 0 {
+        if c[HOLDER_RECV] == 0
+            || kind as u64 & HOLDER_ABSENT_BIT == 0
+            || (c[HOLDER_RECV] != token
+                && !(0..MULTI_ABSENT_EXTRA_IDS).any(|i| multi_absent_id(c, i) == token as u32))
+        {
+            return None;
+        }
+        return (shape_word(c[HOLDER_OBJ] as usize) == c[HOLDER_SHAPE] as u32)
+            .then_some(crate::value::TAG_UNDEFINED);
+    }
+    if c[HOLDER_RECV] != token {
         return None;
     }
     let (depth, absent, slot) = if kind >= 0 {
@@ -211,6 +230,34 @@ pub(crate) unsafe fn entry_answer(c: &PicCache, token: i64) -> Option<u64> {
         return Some(crate::value::TAG_UNDEFINED);
     }
     Some(slot_bits(holder, slot))
+}
+
+/// Spare depth-1 ABSENT words: the upper half of the holder-shape word and
+/// four words that otherwise hold intermediate hop addresses/shapes.
+/// The root scanner visits only HOLDER_OBJ for this entry kind.
+#[inline]
+fn multi_absent_id(c: &PicCache, i: usize) -> u32 {
+    debug_assert!(i < MULTI_ABSENT_EXTRA_IDS);
+    if i == 0 {
+        (c[HOLDER_SHAPE] as u64 >> 32) as u32
+    } else {
+        let word = HOLDER_HOPS + (i - 1) / 2;
+        (c[word] as u64 >> (32 * ((i - 1) % 2))) as u32
+    }
+}
+
+#[inline]
+fn set_multi_absent_id(c: &mut PicCache, i: usize, id: u32) {
+    debug_assert!(i < MULTI_ABSENT_EXTRA_IDS);
+    if i == 0 {
+        c[HOLDER_SHAPE] =
+            ((c[HOLDER_SHAPE] as u64 & u64::from(u32::MAX)) | (u64::from(id) << 32)) as i64;
+    } else {
+        let word = HOLDER_HOPS + (i - 1) / 2;
+        let shift = 32 * ((i - 1) % 2);
+        let mask = u64::from(u32::MAX) << shift;
+        c[word] = ((c[word] as u64 & !mask) | (u64::from(id) << shift)) as i64;
+    }
 }
 
 /// The site's holder entry asked for `handle`, without priming: what the
@@ -636,6 +683,39 @@ pub(crate) unsafe fn prime_read_holder(
 unsafe fn publish(cache: *mut PicCache, recv: *const ObjectHeader, w: &Walk, accessor: bool) {
     let c = &mut *cache;
     let token = (u64::from(object_shape_stamp(recv)) | PIC_ID_TOKEN_BIT) as i64;
+    // A default-prototype optional field is often absent from many receiver
+    // shapes at ONE read site (TypeScript AST's `.name` is the canonical
+    // case). Keep the already-confirmed receiver shapes in this site's spare
+    // words when they all share the same terminal object and terminal shape.
+    // Every new token is admitted only after the caller's generic getter
+    // returned `undefined` and `walk` proved the complete chain absent.
+    let old_kind = c[HOLDER_KIND] as u64;
+    if !accessor
+        && w.depth == 1
+        && w.slot.is_none()
+        && c[HOLDER_RECV] != 0
+        && c[HOLDER_RECV] != token
+        && (old_kind == HOLDER_ABSENT_DEPTH1 as u64 || old_kind & HOLDER_MULTI_ABSENT != 0)
+        && c[HOLDER_OBJ] as usize == w.holder
+        && c[HOLDER_SHAPE] as u32 == w.holder_shape
+    {
+        let next = if old_kind & HOLDER_MULTI_ABSENT == 0 {
+            0
+        } else {
+            (old_kind & MULTI_ABSENT_NEXT_MASK) as usize
+        };
+        debug_assert!(next < MULTI_ABSENT_EXTRA_IDS);
+        let previous = c[HOLDER_RECV] as u32;
+        c[HOLDER_RECV] = 0;
+        set_multi_absent_id(c, next, previous);
+        c[HOLDER_KIND] = (HOLDER_ABSENT_BIT
+            | HOLDER_MULTI_ABSENT
+            | ((next + 1) % MULTI_ABSENT_EXTRA_IDS) as u64) as i64;
+        c[HOLDER_RECV] = token;
+        PRIMES_ABSENT.fetch_add(1, Ordering::Relaxed);
+        super::stats_report_enabled();
+        return;
+    }
     if c[HOLDER_RECV] != 0 && c[HOLDER_RECV] != token {
         // The site's non-own receivers take more than one shape. One entry
         // cannot hold them; after a few replacements the site stops priming.
@@ -725,8 +805,10 @@ pub(crate) fn scan_read_holder_roots_mut(visitor: &mut crate::gc::RuntimeRootVis
                 ACCESSOR_REWRITES.fetch_add(1, Ordering::Relaxed);
             }
         }
-        for i in 0..HOLDER_MAX_DEPTH - 1 {
-            visitor.visit_i64_slot(&mut c[HOLDER_HOPS + i]);
+        if c[HOLDER_KIND] as u64 & HOLDER_MULTI_ABSENT == 0 {
+            for i in 0..HOLDER_MAX_DEPTH - 1 {
+                visitor.visit_i64_slot(&mut c[HOLDER_HOPS + i]);
+            }
         }
     }
 }
@@ -734,6 +816,100 @@ pub(crate) fn scan_read_holder_roots_mut(visitor: &mut crate::gc::RuntimeRootVis
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ten_receiver_shapes_share_one_confirmed_absent_terminal() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let gate = WORKER_AGENTS_EXIST.swap(0, Ordering::SeqCst);
+        let base = crate::object::shapes::SHAPE_ID_BASE;
+        let holder = Box::new(ObjectHeader {
+            class_id: 0,
+            parent_class_id: base + 100,
+            meta: std::ptr::null_mut(),
+        });
+        let other = Box::new(ObjectHeader {
+            class_id: 0,
+            parent_class_id: base + 101,
+            meta: std::ptr::null_mut(),
+        });
+        let mut cache = [0; crate::object::PIC_CACHE_WORDS];
+        // The stack cache is not a process-lifetime PIC allocation. Skip
+        // registration; this test exercises only the published words.
+        cache[HOLDER_STATE] = STATE_REGISTERED;
+        let mut recv = ObjectHeader {
+            class_id: 0,
+            parent_class_id: base,
+            meta: std::ptr::null_mut(),
+        };
+        let absent = Walk {
+            holder: (&*holder as *const ObjectHeader) as usize,
+            holder_shape: base + 100,
+            slot: None,
+            hops: [(0, 0); HOLDER_MAX_DEPTH - 1],
+            depth: 1,
+        };
+        for i in 0..11 {
+            recv.parent_class_id = base + i;
+            unsafe { publish(&mut cache, &recv, &absent, false) };
+        }
+        assert_ne!(cache[HOLDER_KIND] as u64 & HOLDER_MULTI_ABSENT, 0);
+        assert_eq!(
+            unsafe { entry_answer(&cache, (PIC_ID_TOKEN_BIT | u64::from(base)) as i64) },
+            None,
+            "the oldest of eleven shapes must leave a ten-shape site"
+        );
+        for i in 1..11 {
+            let token = (PIC_ID_TOKEN_BIT | u64::from(base + i)) as i64;
+            assert_eq!(
+                unsafe { entry_answer(&cache, token) },
+                Some(crate::value::TAG_UNDEFINED)
+            );
+        }
+        // A new shape after an own-key shadow has no entry, while a terminal
+        // mutation invalidates every receiver shape in the shared entry.
+        assert_eq!(
+            unsafe { entry_answer(&cache, (PIC_ID_TOKEN_BIT | u64::from(base + 11)) as i64) },
+            None
+        );
+        let mut moved = Box::new(ObjectHeader {
+            class_id: 0,
+            parent_class_id: base + 100,
+            meta: std::ptr::null_mut(),
+        });
+        cache[HOLDER_OBJ] = (&mut *moved as *mut ObjectHeader) as i64;
+        assert_eq!(
+            unsafe { entry_answer(&cache, (PIC_ID_TOKEN_BIT | u64::from(base + 10)) as i64) },
+            Some(crate::value::TAG_UNDEFINED)
+        );
+        moved.parent_class_id = base + 102;
+        assert_eq!(
+            unsafe { entry_answer(&cache, (PIC_ID_TOKEN_BIT | u64::from(base + 10)) as i64) },
+            None
+        );
+        // A different terminal never inherits the old entry's receiver set.
+        let distinct = Walk {
+            holder: (&*other as *const ObjectHeader) as usize,
+            holder_shape: base + 101,
+            ..absent
+        };
+        recv.parent_class_id = base + 11;
+        unsafe { publish(&mut cache, &recv, &distinct, false) };
+        assert_eq!(cache[HOLDER_KIND], HOLDER_ABSENT_DEPTH1);
+        assert_eq!(
+            unsafe { entry_answer(&cache, (PIC_ID_TOKEN_BIT | u64::from(base + 10)) as i64) },
+            None
+        );
+        assert_eq!(
+            unsafe { entry_answer(&cache, (PIC_ID_TOKEN_BIT | u64::from(base + 11)) as i64) },
+            Some(crate::value::TAG_UNDEFINED)
+        );
+        WORKER_AGENTS_EXIST.store(1, Ordering::SeqCst);
+        assert_eq!(
+            unsafe { entry_answer(&cache, (PIC_ID_TOKEN_BIT | u64::from(base + 11)) as i64) },
+            None
+        );
+        WORKER_AGENTS_EXIST.store(gate, Ordering::SeqCst);
+    }
 
     /// A class instance has a valid, stamped ShapeId, but its prototype is
     /// resolved through the class vtable. The holder walk must refuse it even
