@@ -395,20 +395,22 @@ fn arguments_object_alloc(
     if restricted_callee {
         let thrower = thrower_closure_value();
         obj.with_mut_ptr::<ObjectHeader, _>(|obj| {
-            set_property_attrs(
-                obj as usize,
-                "length".to_string(),
-                PropertyAttrs::new(true, false, true),
-            );
-            super::descriptor_state::install_fresh_accessor_property(
-                obj as usize,
-                "callee".to_string(),
-                AccessorDescriptor {
-                    get: thrower.to_bits(),
-                    set: thrower.to_bits(),
-                },
-                PropertyAttrs::new(false, false, false),
-            );
+            // Both attributes were born in the canonical key layout. The
+            // restricted callee's getter and setter live in its own value
+            // slot, as they do for ordinary accessor properties. Installing
+            // descriptors here would re-edit that layout on every call and
+            // leave entries in the address-keyed descriptor tables.
+            unsafe {
+                super::accessor_pair::store_own_accessor(
+                    obj as usize,
+                    "callee",
+                    Some(super::accessor_pair::pair_from(&AccessorDescriptor {
+                        get: thrower.to_bits(),
+                        set: thrower.to_bits(),
+                    })),
+                );
+            }
+            super::descriptor_state::note_accessor_born_with_keys(obj as usize);
         });
     } else {
         obj.with_mut_ptr(|obj| {
