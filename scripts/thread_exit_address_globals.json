@@ -500,22 +500,6 @@
    "why": "Code address of the stdlib reader.read callback registered by js_register_stream_consumer_callbacks (consumers.rs:125); function pointer."
   },
   {
-   "file": "crates/perry-runtime/src/object/prop_plan.rs",
-   "names": [
-    "HITS"
-   ],
-   "verdict": "no_heap_address",
-   "why": "PLAN-DIAG counter of load-plan cache hits (prop_plan.rs:205), only under plan_diag_enabled."
-  },
-  {
-   "file": "crates/perry-runtime/src/object/prop_plan.rs",
-   "names": [
-    "RECORDS"
-   ],
-   "verdict": "no_heap_address",
-   "why": "PLAN-DIAG counter of store-plan records (prop_plan.rs:238); key_ptr is only printed, not stored here."
-  },
-  {
    "file": "crates/perry-stdlib/src/framework/server.rs",
    "names": [
     "QUEUES"
@@ -555,14 +539,6 @@
    ],
    "verdict": "no_heap_address",
    "why": "Queue of Arc<AsyncWorkInner> (Rust-heap) whose env_address is the Rust Box of the owning thread's NODE_API_ENV and data/execute/complete are native addon pointers; drained only when work.owner == current ThreadId and env serial matches via with_env (async_work.rs:270-288, mod.rs:421-433), so no GC arena address and a dead owner's entries can never be dereferenced (ThreadIds are never reused)."
-  },
-  {
-   "file": "crates/perry-runtime/src/object/field_get_set/for_in_stable.rs",
-   "names": [
-    "HITS"
-   ],
-   "verdict": "no_heap_address",
-   "why": "FOR-IN-DIAG counter of stable single-shape for-in hits (for_in_stable.rs:223)."
   },
   {
    "file": "crates/perry-runtime/src/perf_hooks.rs",
@@ -2278,14 +2254,6 @@
    ],
    "verdict": "no_heap_address",
    "why": "Stores the RenderStreamFn fn pointer registered by perry-stdlib via js_register_jsx_render_stream (hono_jsx.rs:81); code address."
-  },
-  {
-   "file": "crates/perry-runtime/src/object/inherited_read_cache.rs",
-   "names": [
-    "HITS"
-   ],
-   "verdict": "no_heap_address",
-   "why": "Hit counter for the inherited-read inline cache; fetch_add / reset only."
   },
   {
    "file": "crates/perry-runtime/src/process.rs",
