@@ -12,6 +12,7 @@ use perry_hir::Expr;
 use super::get_raw_string_ptr;
 use crate::expr::{lower_expr, nanbox_pointer_inline, nanbox_string_inline, FnCtx};
 use crate::nanbox::double_literal;
+use crate::rooting::{any_operand_may_collect, with_rooted_group};
 use crate::types::{DOUBLE, I1, I64};
 
 /// Dispatch for the Web Fetch API family: Response/Headers/Request
@@ -898,57 +899,42 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
                 return Ok(Some(nanbox_pointer_inline(blk, &promise)));
             }
             "pipeThrough" => {
-                // pipeThrough(transform) — transform has .readable / .writable.
-                // We need both sub-handles. Lower the transform once, then
-                // call js_transform_stream_writable / _readable to extract.
-                let transform_raw = if !args.is_empty() {
-                    lower_expr(ctx, &args[0])?
-                } else {
-                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-                };
-                // Issue #562: `transform` may be a subclass instance — unwrap.
-                let transform = ctx.block().call(
-                    DOUBLE,
-                    "js_stream_unwrap_handle",
-                    &[(DOUBLE, &transform_raw)],
-                );
-                let writable = ctx.block().call(
-                    DOUBLE,
-                    "js_transform_stream_writable",
-                    &[(DOUBLE, &transform)],
-                );
-                let readable = ctx.block().call(
-                    DOUBLE,
-                    "js_transform_stream_readable",
-                    &[(DOUBLE, &transform)],
-                );
-                let options = if args.len() >= 2 {
-                    lower_expr(ctx, &args[1])?
-                } else {
-                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-                };
-                let _ = ctx.block().call(
-                    DOUBLE,
-                    "js_readable_stream_pipe_through_validate",
-                    &[
-                        (DOUBLE, &recv_handle),
-                        (DOUBLE, &writable),
-                        (DOUBLE, &readable),
-                        (DOUBLE, &options),
-                    ],
-                );
-                let pipe = ctx.block().call(
-                    I64,
-                    "js_readable_stream_pipe_to",
-                    &[
-                        (DOUBLE, &recv_handle),
-                        (DOUBLE, &writable),
-                        (DOUBLE, &options),
-                    ],
-                );
-                ctx.block()
-                    .call_void("js_promise_mark_internally_handled", &[(I64, &pipe)]);
-                return Ok(Some(readable));
+                // Evaluate both arguments before the pair getters. The runtime
+                // owns roots across getters; only options evaluation can move
+                // the transform before the call. With no options, no temp root
+                // is emitted (including the numeric TransformStream path).
+                let output = with_rooted_group(ctx, 2, |ctx, roots| {
+                    let transform = if let Some(expr) = args.first() {
+                        let collects = any_operand_may_collect(ctx, args[1..].iter());
+                        Some(roots.lower(ctx, expr, collects)?)
+                    } else {
+                        None
+                    };
+                    let options = if let Some(expr) = args.get(1) {
+                        Some(roots.lower(ctx, expr, false)?)
+                    } else {
+                        None
+                    };
+                    let undefined = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                    let transform = match transform {
+                        Some(i) => roots.reread(ctx, i)?,
+                        None => undefined.clone(),
+                    };
+                    let options = match options {
+                        Some(i) => roots.reread(ctx, i)?,
+                        None => undefined,
+                    };
+                    Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_readable_stream_pipe_through_pair",
+                        &[
+                            (DOUBLE, &recv_handle),
+                            (DOUBLE, &transform),
+                            (DOUBLE, &options),
+                        ],
+                    ))
+                })?;
+                return Ok(Some(output));
             }
             "locked" => {
                 let v = ctx.block().call(

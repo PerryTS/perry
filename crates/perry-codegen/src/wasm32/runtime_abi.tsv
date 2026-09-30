@@ -3101,6 +3101,7 @@ js_readable_stream_new_from_source_object	f64	f64,f64
 js_readable_stream_new_with_source_type	f64	f64,f64,f64,f64,f64
 js_readable_stream_new_with_strategy_and_source_type	f64	f64,f64,f64,f64,f64
 js_readable_stream_pipe_through	f64	f64,f64,f64
+js_readable_stream_pipe_through_pair	f64	f64,f64,f64
 js_readable_stream_pipe_through_validate	f64	f64,f64,f64,f64
 js_readable_stream_pipe_to	ptr	f64,f64,f64
 js_readable_stream_subclass_init	f64	f64,f64,f64,f64,f64
