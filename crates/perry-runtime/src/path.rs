@@ -138,11 +138,22 @@ fn optional_suffix_from_header_or_throw(ptr: *const StringHeader) -> String {
     }
 }
 
+pub(crate) fn posix_cwd() -> String {
+    let cwd = std::env::current_dir()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    #[cfg(windows)]
+    {
+        let cwd = cwd.replace('\\', "/");
+        return cwd[cwd.find('/').unwrap_or(cwd.len())..].to_string();
+    }
+    #[cfg(not(windows))]
+    cwd
+}
+
 pub(crate) fn resolve_posix_str(path_str: &str) -> String {
     let mut resolved = if path_str.is_empty() {
-        std::env::current_dir()
-            .map(|cwd| cwd.to_string_lossy().to_string())
-            .unwrap_or_default()
+        posix_cwd()
     // POSIX absoluteness is lexical (a leading `/`). `Path::is_absolute()`
     // is byte-identical on Unix hosts but host-dependent on Windows (it
     // would treat `C:\x` as absolute and `/x` as relative), which would
@@ -150,10 +161,7 @@ pub(crate) fn resolve_posix_str(path_str: &str) -> String {
     } else if path_str.starts_with('/') {
         normalize_str(path_str)
     } else {
-        match std::env::current_dir() {
-            Ok(cwd) => normalize_str(&format!("{}/{}", cwd.to_string_lossy(), path_str)),
-            Err(_) => normalize_str(path_str),
-        }
+        normalize_str(&format!("{}/{}", posix_cwd(), path_str))
     };
     while resolved.len() > 1 && resolved.ends_with('/') {
         resolved.pop();
@@ -472,6 +480,11 @@ pub(crate) fn resolve_win32_str(path_str: &str) -> String {
 fn win32_resolve_inner(path_str: &str) -> String {
     let split = split_win32(path_str);
     if split.is_absolute {
+        if split.prefix.is_empty() {
+            let cwd = posix_cwd_as_win32_path();
+            let device = split_win32(&cwd).prefix;
+            return normalize_win32_str(&format!("{}{}", device, path_str));
+        }
         return normalize_win32_str(path_str);
     }
 
@@ -1614,6 +1627,9 @@ fn current_dir_as_win32() -> Option<String> {
 }
 
 fn resolve_win32_for_namespace(path_str: &str) -> String {
+    if cfg!(windows) {
+        return win32_resolve_inner(path_str);
+    }
     let normalized = normalize_win32_str(path_str);
     let split = split_win32(&normalized);
     if split.is_absolute {

@@ -159,7 +159,7 @@ def scan_tree():
     findings = []
     for rel in SCAN_DIRS:
         for path in sorted((ROOT / rel).rglob("*.rs")):
-            for line, fn_name, msg in analyze_source(path.read_text(), str(path)):
+            for line, fn_name, msg in analyze_source(path.read_text(encoding="utf-8"), str(path)):
                 findings.append(f"{path.relative_to(ROOT)}:{line}: in `{fn_name}`: {msg}")
     return findings
 

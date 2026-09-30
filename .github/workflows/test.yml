@@ -1973,6 +1973,9 @@ jobs:
         shell: bash
         run: RUST_TEST_THREADS=1 cargo test --profile perry-dev --lib -p perry-runtime
 
+      - name: Windows runtime regressions against pinned Node
+        run: python scripts/run_windows_runtime_regressions.py
+
       # Small deterministic subset: verifies the Git Bash driver itself,
       # `.exe`/`.lib` discovery, native TEMP paths, compilation, execution,
       # and Node/Perry comparison on a real Windows host.

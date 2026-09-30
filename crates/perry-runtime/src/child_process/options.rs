@@ -498,6 +498,37 @@ fn cp_default_node_interpreter() -> String {
         .unwrap_or_else(|| "node".to_string())
 }
 
+pub(super) fn cp_shell_command(line: &str, opts_val: f64) -> Command {
+    let shell = cp_get_field(opts_val, b"shell");
+    let shell_bin = if JSValue::from_bits(shell.to_bits()).is_any_string() {
+        cp_value_to_string(shell).unwrap_or_else(cp_default_shell)
+    } else {
+        cp_default_shell()
+    };
+    validate::cp_validate_no_null_bytes("options.shell", &shell_bin);
+    let mut command = cp_command_for_program(&shell_bin, opts_val);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let name = std::path::Path::new(&shell_bin)
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy();
+        if name.eq_ignore_ascii_case("cmd") || name.eq_ignore_ascii_case("cmd.exe") {
+            command
+                .arg("/d")
+                .arg("/s")
+                .arg("/c")
+                .raw_arg(format!("\"{}\"", line));
+        } else {
+            command.arg("-c").arg(line);
+        }
+    }
+    #[cfg(not(windows))]
+    command.arg("-c").arg(line);
+    command
+}
+
 /// Build a `Command` for `spawn(cmd, args, opts)`, honoring the `shell` option
 /// (Node joins `cmd` + `args` into a single line passed to `<shell> -c`) and
 /// then applying `cwd`/`env`. With no `shell` the file is run directly. #1780.
@@ -518,27 +549,11 @@ pub(crate) fn cp_build_command(cmd: &str, args: &[String], opts_val: f64) -> Com
     };
 
     let mut command = if crate::value::js_is_truthy(shell) != 0 {
-        // `shell: "<path>"` picks the binary; `shell: true` uses the default.
-        let shell_bin = match cp_value_to_string(shell) {
-            Some(s) if !s.is_empty() => {
-                validate::cp_validate_no_null_bytes("options.shell", &s);
-                s
-            }
-            _ => cp_default_shell(),
-        };
-        let mut line = program.clone();
-        for a in args {
-            line.push(' ');
-            line.push_str(a);
-        }
-        // Resolve a bare shell name to an absolute path so std stays on
-        // `posix_spawn` (see `cp_command_for_program`).
-        let mut c = cp_command_for_program(&shell_bin, opts_val);
-        #[cfg(windows)]
-        c.arg("/d").arg("/s").arg("/c").arg(line);
-        #[cfg(not(windows))]
-        c.arg("-c").arg(line);
-        c
+        let line = std::iter::once(program.as_str())
+            .chain(args.iter().map(String::as_str))
+            .collect::<Vec<_>>()
+            .join(" ");
+        cp_shell_command(&line, opts_val)
     } else {
         let mut c = cp_command_for_program(&program, opts_val);
         c.args(args);

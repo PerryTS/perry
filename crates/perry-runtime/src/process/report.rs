@@ -7,10 +7,12 @@ use super::*;
 use crate::value::JSValue;
 
 pub(crate) fn process_release_value() -> f64 {
-    let obj = crate::object::js_object_alloc(0, 3);
+    let obj = crate::object::js_object_alloc(0, if cfg!(windows) { 4 } else { 3 });
     module_set_field(obj, "name", module_string_value("node"));
     module_set_field(obj, "sourceUrl", module_string_value(""));
     module_set_field(obj, "headersUrl", module_string_value(""));
+    #[cfg(windows)]
+    module_set_field(obj, "libUrl", module_string_value(""));
     module_object_value(obj)
 }
 
@@ -201,6 +203,7 @@ fn process_report_object(trigger: &str, filename: Option<&str>) -> f64 {
         "environmentVariables",
         module_object_value(crate::object::js_object_alloc(0, 0)),
     );
+    #[cfg(not(windows))]
     module_set_field(obj, "userLimits", process_report_user_limits_object());
     module_set_field(obj, "sharedObjects", module_array_value(&[]));
     module_object_value(obj)
@@ -310,6 +313,7 @@ fn process_report_thread_resource_usage_object() -> f64 {
     module_object_value(obj)
 }
 
+#[cfg(not(windows))]
 fn process_report_user_limits_object() -> f64 {
     let obj = crate::object::js_object_alloc(0, 3);
     module_set_field(
@@ -367,7 +371,8 @@ fn process_report_json_string(trigger: &str, filename: Option<&str>) -> String {
     let (proc_user, proc_system) = read_process_cpu_micros();
     let (thread_user, thread_system) = read_thread_cpu_micros();
 
-    let value = serde_json::json!({
+    #[allow(unused_mut)]
+    let mut value = serde_json::json!({
         "header": {
             "reportVersion": 5,
             "event": "JavaScript API",
@@ -443,6 +448,11 @@ fn process_report_json_string(trigger: &str, filename: Option<&str>) -> String {
         "sharedObjects": []
     });
 
+    #[cfg(windows)]
+    if let Some(value) = value.as_object_mut() {
+        value.remove("userLimits");
+        value["header"]["release"]["libUrl"] = serde_json::json!("");
+    }
     serde_json::to_string_pretty(&value).unwrap_or_else(|_| "{}".to_string())
 }
 

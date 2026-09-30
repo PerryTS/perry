@@ -777,6 +777,24 @@ fn process_stdio_property(property: &str) -> Option<f64> {
 }
 
 pub fn process_metadata_property(property: &str) -> Option<f64> {
+    if cfg!(windows)
+        && matches!(
+            property,
+            "getuid"
+                | "geteuid"
+                | "getgid"
+                | "getegid"
+                | "getgroups"
+                | "setuid"
+                | "seteuid"
+                | "setgid"
+                | "setegid"
+                | "setgroups"
+                | "initgroups"
+        )
+    {
+        return Some(f64::from_bits(crate::value::TAG_UNDEFINED));
+    }
     Some(match property {
         // #4987: core value-properties. The bare `process` identifier lowers
         // these to codegen intrinsics, but `import process from

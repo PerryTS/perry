@@ -24,10 +24,13 @@
 //! kept reachable across ticks by [`cp_reactor_scan_roots_mut`], a registered
 //! GC mutable-root scanner.
 
+#[cfg(windows)]
+use super::windows_child::Child;
 use std::collections::HashMap;
 #[cfg(any(unix, windows))]
 use std::io::BufRead;
 use std::io::{Read, Write};
+#[cfg(not(windows))]
 use std::process::Child;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
@@ -980,8 +983,19 @@ pub extern "C" fn js_child_process_spawn_streams(
 
     // Build + launch the child (honoring `shell`/`cwd`/`env`), non-blocking.
     let mut command = cp_build_command(&cmd_str, &arg_strs, opts_val);
-    let launch = cp_apply_live_stdio(&mut command, &stdio_kinds)
-        .and_then(|extra_readers| command.spawn().map(|child| (child, extra_readers)));
+    let launch = cp_apply_live_stdio(&mut command, &stdio_kinds).and_then(|extra_readers| {
+        #[cfg(not(windows))]
+        let launch = command.spawn();
+        #[cfg(windows)]
+        let launch = super::windows_child::spawn(
+            &mut command,
+            &stdio_kinds,
+            super::options::cp_read_argv0(opts_val).as_deref(),
+            cp_object_ptr(cp_get_field(opts_val, b"env")).is_some(),
+            cp_get_field(opts_val, b"detached").to_bits() == TAG_TRUE_F64.to_bits(),
+        );
+        launch.map(|child| (child, extra_readers))
+    });
 
     match launch {
         Ok((child, extra_readers)) => {

@@ -1521,7 +1521,16 @@ fn realpath_bytes_result(path_value: f64, syscall: &'static str) -> Result<Vec<u
             None => validate::throw_invalid_path_arg("path", path_value),
         };
         match fs::canonicalize(&path_str) {
-            Ok(p) => Ok(p.to_string_lossy().as_bytes().to_vec()),
+            Ok(p) => {
+                let path = p.to_string_lossy();
+                #[cfg(windows)]
+                let path = if let Some(unc) = path.strip_prefix(r"\\?\UNC\") {
+                    format!(r"\\{}", unc)
+                } else {
+                    path.strip_prefix(r"\\?\").unwrap_or(&path).to_string()
+                };
+                Ok(path.as_bytes().to_vec())
+            }
             Err(err) => Err(build_fs_error_value(&err, syscall, &path_str)),
         }
     }
