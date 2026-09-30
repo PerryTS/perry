@@ -157,6 +157,45 @@ fn a_region_word_refuses_a_boxed_store_into_an_f64_lane() {
     );
 }
 
+/// P7: a learned region may publish a Number-read word only for an exact
+/// F64 identity lane. A wrong-rep receiver keeps the site empty for G.
+#[test]
+fn a_region_prime_refuses_a_requested_number_read_on_an_any_lane() {
+    use super::shapes::{js_region_loop_prime, REGION_GUARD_WORD_EMPTY};
+    use core::sync::atomic::{AtomicU64, Ordering};
+
+    let k = keys(b"p7a\0p7b\0", 2);
+    let typed = js_object_shape_id_for_class_keys(k, 2, CID, REP_F64);
+    let untyped = js_object_shape_id_for_class_keys(k, 2, CID, REP_ANY);
+    let (a, b) = unsafe {
+        let (slots, len) = crate::object::keys_array_dense_slots_resolved(
+            k as usize as *const crate::array::ArrayHeader,
+        );
+        assert!(len >= 2);
+        ((*slots).to_bits(), (*slots.add(1)).to_bits())
+    };
+    let site = AtomicU64::new(REGION_GUARD_WORD_EMPTY);
+    let prime = |id, key, r_mask| unsafe {
+        js_region_loop_prime(&site, id, 1, key, 0, 0, 0, 0, 0, 0, 0, r_mask)
+    };
+    assert_eq!(prime(untyped, a, 1), REGION_GUARD_WORD_EMPTY);
+    assert_eq!(site.load(Ordering::Relaxed), REGION_GUARD_WORD_EMPTY);
+    assert_eq!(prime(typed, b, 1), REGION_GUARD_WORD_EMPTY);
+    assert_eq!(site.load(Ordering::Relaxed), REGION_GUARD_WORD_EMPTY);
+    let word = prime(typed, a, 1);
+    assert_ne!(word, REGION_GUARD_WORD_EMPTY);
+    assert_eq!(site.load(Ordering::Relaxed), word);
+
+    // A deprecated lane is still safe for existing objects but is no
+    // longer a publishable identity fact for a new learned region.
+    assert!(super::shapes::shape_record_by_id(typed)
+        .expect("typed shape record")
+        .deprecate_rep_slot(0));
+    site.store(REGION_GUARD_WORD_EMPTY, Ordering::Relaxed);
+    assert_eq!(prime(typed, a, 1), REGION_GUARD_WORD_EMPTY);
+    assert_eq!(site.load(Ordering::Relaxed), REGION_GUARD_WORD_EMPTY);
+}
+
 /// Design step 4 x T1: the rep is part of a static id's content, so a class
 /// birth with an `F64` lane adopts its static id like an all-`Any` one, and
 /// the same keys with the other rep are another content under another id.

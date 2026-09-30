@@ -3194,7 +3194,7 @@ js_regexp_to_string	ptr	ptr
 js_region_guard_pack	i64	i32u,i32u,i64,i64,i64,i64,i64
 js_region_guard_prime	i64	ptr,i32u,i32u,i64,i64,i64,i64,i64
 js_region_loop_pack	i64	i32u,i32u,i64,i64,i64,i64,i64,i32u,i32u
-js_region_loop_prime	i64	ptr,i32u,i32u,i64,i64,i64,i64,i64,i32u,i32u,i32u
+js_region_loop_prime	i64	ptr,i32u,i32u,i64,i64,i64,i64,i64,i32u,i32u,i32u,i32u
 js_register_anon_shape_class_id	void	i32u
 js_register_aux_has_active	void	ptr
 js_register_aux_pump	void	ptr

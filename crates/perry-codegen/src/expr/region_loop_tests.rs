@@ -64,7 +64,7 @@ fn put(key: &str, value: Expr) -> Stmt {
 }
 
 /// `function probe(o, v, n) { let h = 0; for (let i = 0; i < n; i++) { body } return h; }`
-fn loop_ir(name: &str, body: Vec<Stmt>) -> String {
+fn loop_ir_with_return(name: &str, body: Vec<Stmt>, result: Expr) -> String {
     let mut m = Module::new(name);
     m.functions = vec![Function {
         id: 1,
@@ -100,7 +100,7 @@ fn loop_ir(name: &str, body: Vec<Stmt>) -> String {
                 }),
                 body,
             },
-            Stmt::Return(Some(Expr::LocalGet(H))),
+            Stmt::Return(Some(result)),
         ],
         is_async: false,
         is_generator: false,
@@ -113,6 +113,10 @@ fn loop_ir(name: &str, body: Vec<Stmt>) -> String {
     }];
     m.init_kind = ModuleInitKind::Eager;
     String::from_utf8(compile_module(&m, opts()).expect("module compiles")).expect("UTF-8 IR")
+}
+
+fn loop_ir(name: &str, body: Vec<Stmt>) -> String {
+    loop_ir_with_return(name, body, Expr::LocalGet(H))
 }
 
 /// The blocks of the probe function, label -> (instructions, successors).
@@ -342,15 +346,15 @@ fn a_region_that_stores_every_key_it_names_has_no_spill_copy() {
     );
 }
 
-/// The prime call's last argument: the boxed-store mask (charter step 5).
+/// The prime call's penultimate argument: the boxed-store mask (charter step 5).
 fn prime_boxed_masks(ir: &str) -> Vec<u32> {
     ir.lines()
         .filter(|l| l.contains("@js_region_loop_prime("))
         .filter_map(|l| {
-            // The call can carry trailing attributes after its closing parenthesis.
-            let call = l.split_once(')')?.0;
-            let last_arg = call.rsplit_once("i32 ")?.1;
-            last_arg.trim().parse().ok()
+            // The R mask follows the boxed-store mask; the call may carry
+            // trailing LLVM attributes after its closing parenthesis.
+            let (before_r, _) = l.rsplit_once(", i32 ")?;
+            before_r.rsplit_once("i32 ")?.1.trim().parse().ok()
         })
         .collect()
 }
@@ -387,5 +391,110 @@ fn a_bare_store_of_a_value_not_proven_a_double_names_its_key_to_the_prime() {
     assert!(
         masks.iter().all(|&m| m == 0),
         "a literal double is a valid value of every lane: {masks:?}"
+    );
+}
+
+/// A fresh bare read used by a Number-consuming add requests an F64 lane.
+/// The prime must refuse an Any receiver, so this is an actual R-bearing
+/// region rather than a vacuous mask argument.
+#[test]
+fn a_number_consuming_bare_read_sets_the_prime_rep_mask() {
+    let ir = loop_ir(
+        "region_loop_rep",
+        vec![Stmt::Expr(Expr::LocalSet(
+            H,
+            Box::new(Expr::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(Expr::LocalGet(H)),
+                right: Box::new(get("x")),
+            }),
+        ))],
+    );
+    assert!(ir.contains("rloop.fast"), "region did not form:\n{ir}");
+    let masks: Vec<u32> = ir
+        .lines()
+        .filter(|l| l.contains("@js_region_loop_prime("))
+        .filter_map(|l| {
+            l.rsplit_once("i32 ")?
+                .1
+                .trim_end_matches(')')
+                .trim()
+                .parse()
+                .ok()
+        })
+        .collect();
+    assert!(!masks.is_empty(), "no learned prime in\n{ir}");
+    assert!(
+        masks.iter().all(|&m| m == 1),
+        "fresh x read must request key 0: {masks:?}"
+    );
+}
+
+/// The F-local fixed point follows the fresh F64 read through a temporary and
+/// a loop-carried accumulator. Entry is strict; G and post-loop code retain
+/// the ordinary dynamic add. Removing the scoped materialization or the
+/// entry check makes this test fail.
+#[test]
+fn a_region_number_local_is_admitted_only_in_f() {
+    const TEMP: u32 = 6;
+    let body = vec![
+        Stmt::Let {
+            id: TEMP,
+            name: "temp".to_string(),
+            ty: Type::Any,
+            mutable: false,
+            init: Some(get("x")),
+        },
+        Stmt::Expr(Expr::LocalSet(
+            H,
+            Box::new(Expr::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(Expr::LocalGet(H)),
+                right: Box::new(Expr::LocalGet(TEMP)),
+            }),
+        )),
+    ];
+    let ir = loop_ir_with_return(
+        "region_number_scope",
+        body,
+        Expr::Binary {
+            op: BinaryOp::Add,
+            left: Box::new(Expr::LocalGet(H)),
+            right: Box::new(Expr::Integer(1)),
+        },
+    );
+    assert!(ir.contains("rloop.fast"), "region did not form:\n{ir}");
+    let masks: Vec<u32> = ir
+        .lines()
+        .filter(|l| l.contains("@js_region_loop_prime("))
+        .filter_map(|l| {
+            l.rsplit_once("i32 ")?
+                .1
+                .trim_end_matches(')')
+                .trim()
+                .parse()
+                .ok()
+        })
+        .collect();
+    assert!(
+        !masks.is_empty() && masks.iter().all(|&m| m == 1),
+        "the temp's source must request R=1: {masks:?}\n{ir}"
+    );
+    assert!(
+        ir.contains("rloop.fast") && ir.contains("fadd double"),
+        "F must use numeric add:\n{ir}"
+    );
+    assert!(
+        ir.contains("rloop.guard") && ir.contains("icmp ult i64"),
+        "A_F must strictly test the loop-carried accumulator:\n{ir}"
+    );
+    assert!(
+        ir.lines()
+            .filter(|line| {
+                line.contains("call ") && line.contains("@js_dynamic_string_or_number_add(")
+            })
+            .count()
+            >= 2,
+        "G and post-loop adds must remain dynamic (no scope leak):\n{ir}"
     );
 }

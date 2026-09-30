@@ -2285,8 +2285,15 @@ pub extern "C" fn js_region_loop_pack(
     stored_mask: u32,
     boxed_mask: u32,
 ) -> u64 {
-    region_loop_pack(shape_id, n, [k0, k1, k2, k3, k4], stored_mask, boxed_mask)
-        .unwrap_or(REGION_GUARD_WORD_EMPTY)
+    region_loop_pack(
+        shape_id,
+        n,
+        [k0, k1, k2, k3, k4],
+        stored_mask,
+        boxed_mask,
+        0,
+    )
+    .unwrap_or(REGION_GUARD_WORD_EMPTY)
 }
 
 /// Why [`js_region_loop_pack`] refused a shape — the route census's refusal
@@ -2310,6 +2317,8 @@ enum RegionRefusal {
     Range,
     /// A key a bare store may write a non-double into is not an `Any` lane.
     F64Stored,
+    /// A requested Number read is not on an identity F64 lane.
+    Rep,
 }
 
 fn region_loop_pack(
@@ -2318,6 +2327,7 @@ fn region_loop_pack(
     keys: [u64; 5],
     stored_mask: u32,
     boxed_mask: u32,
+    r_mask: u32,
 ) -> Result<u64, RegionRefusal> {
     use RegionRefusal::*;
     if !is_site_matchable_shape_id(shape_id) || n == 0 || n > REGION_GUARD_MAX_KEYS {
@@ -2364,6 +2374,14 @@ fn region_loop_pack(
     };
     let mut word = u64::from(id);
     for (i, &(spilled, n_at)) in at.iter().enumerate().take(n as usize) {
+        if r_mask & (1 << i) != 0
+            && (spilled
+                || n_at >= super::field_rep::REP_SLOTS as usize
+                || super::field_rep::slot_rep(descriptor.rep, n_at as u32)
+                    != super::field_rep::REP_F64)
+        {
+            return Err(Rep);
+        }
         if !spilled
             && boxed_mask & (1 << i) != 0
             && (n_at as u32) < super::field_rep::REP_SLOTS
@@ -2409,8 +2427,16 @@ pub unsafe extern "C" fn js_region_loop_prime(
     last: u32,
     stored_mask: u32,
     boxed_mask: u32,
+    r_mask: u32,
 ) -> u64 {
-    let verdict = region_loop_pack(shape_id, n, [k0, k1, k2, k3, k4], stored_mask, boxed_mask);
+    let verdict = region_loop_pack(
+        shape_id,
+        n,
+        [k0, k1, k2, k3, k4],
+        stored_mask,
+        boxed_mask,
+        r_mask,
+    );
     region_loop_prime_census(verdict);
     let packed = verdict.unwrap_or(REGION_GUARD_WORD_EMPTY);
     if word.is_null() {
@@ -2435,10 +2461,11 @@ pub unsafe extern "C" fn js_region_loop_prime(
 /// ([`RegionRefusal`]).
 fn region_loop_prime_census(verdict: Result<u64, RegionRefusal>) {
     use crate::hot_diag::{
-        recv_route_note_runtime, RT_ROUTE_RLOOP_PRIME_OK, RT_ROUTE_RLOOP_REFUSE_ABSENT,
-        RT_ROUTE_RLOOP_REFUSE_BAND, RT_ROUTE_RLOOP_REFUSE_F64_STORED, RT_ROUTE_RLOOP_REFUSE_KIND,
-        RT_ROUTE_RLOOP_REFUSE_RANGE, RT_ROUTE_RLOOP_REFUSE_SPILL_STORED,
+        RT_ROUTE_RLOOP_PRIME_OK, RT_ROUTE_RLOOP_REFUSE_ABSENT, RT_ROUTE_RLOOP_REFUSE_BAND,
+        RT_ROUTE_RLOOP_REFUSE_F64_STORED, RT_ROUTE_RLOOP_REFUSE_KIND, RT_ROUTE_RLOOP_REFUSE_RANGE,
+        RT_ROUTE_RLOOP_REFUSE_REP, RT_ROUTE_RLOOP_REFUSE_SPILL_STORED,
         RT_ROUTE_RLOOP_REFUSE_SPILL_UNSERVABLE, RT_ROUTE_RLOOP_REFUSE_SUMMARY,
+        recv_route_note_runtime,
     };
     let route = match verdict {
         Ok(_) => RT_ROUTE_RLOOP_PRIME_OK,
@@ -2450,6 +2477,7 @@ fn region_loop_prime_census(verdict: Result<u64, RegionRefusal>) {
         Err(RegionRefusal::SpillUnservable) => RT_ROUTE_RLOOP_REFUSE_SPILL_UNSERVABLE,
         Err(RegionRefusal::Range) => RT_ROUTE_RLOOP_REFUSE_RANGE,
         Err(RegionRefusal::F64Stored) => RT_ROUTE_RLOOP_REFUSE_F64_STORED,
+        Err(RegionRefusal::Rep) => RT_ROUTE_RLOOP_REFUSE_REP,
     };
     recv_route_note_runtime(route);
 }
@@ -2467,6 +2495,7 @@ static KEEP_JS_REGION_LOOP_PRIME: unsafe extern "C" fn(
     u64,
     u64,
     u64,
+    u32,
     u32,
     u32,
     u32,

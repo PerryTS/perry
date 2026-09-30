@@ -88,6 +88,35 @@ pub(super) fn fact_tree_leaves<'e>(
     Some((recv?, reads))
 }
 
+/// Candidate reads inside a Number-consuming expression. The planner's
+/// exact bare-access set filters these by freshness after the walk.
+fn number_operand_reads(e: &Expr, out: &mut Vec<(usize, Recv, String)>) {
+    if let Expr::PropertyGet {
+        object, property, ..
+    } = e
+    {
+        if let Some(r) = Recv::of(object) {
+            out.push((e as *const Expr as usize, r, property.clone()));
+        }
+    }
+    perry_hir::walker::walk_expr_children(e, &mut |child| number_operand_reads(child, out));
+}
+
+/// Local value operands whose incoming Number-ness can be discharged by
+/// the region's strict entry tests. A receiver beneath PropertyGet is an
+/// object, not a candidate Number value.
+fn number_operand_locals(e: &Expr, out: &mut HashSet<u32>) {
+    match e {
+        Expr::LocalGet(id) => {
+            out.insert(*id);
+            return;
+        }
+        Expr::PropertyGet { .. } => return,
+        _ => {}
+    }
+    perry_hir::walker::walk_expr_children(e, &mut |child| number_operand_locals(child, out));
+}
+
 pub(super) fn kill(st: &mut St) {
     if let Some(m) = st {
         m.clear();
@@ -121,6 +150,10 @@ pub(super) struct Planner<'p, 'a> {
     /// Array receivers (S3) and their static index bound.
     arrays: &'p HashMap<Recv, u32>,
     bare: HashSet<usize>,
+    /// Potential R keys, filtered against exact fresh bare reads at finish.
+    number_reads: Vec<(usize, Recv, String)>,
+    number_local_uses: HashSet<u32>,
+    bare_reads: Vec<(usize, Recv, String)>,
     bare_arrays: HashSet<Recv>,
     /// A body region nested in this loop region (array regions): while its
     /// tail is walked, its bare accesses run no JS and its fact trees only
@@ -156,7 +189,11 @@ impl Planner<'_, '_> {
         let fresh = st.as_ref().is_some_and(|m| m.get(&r) == Some(&FRESH));
         if fresh && self.cands.contains(&r) && self.covered(r, key) {
             if self.record {
-                self.bare.insert(e as *const Expr as usize);
+                let ptr = e as *const Expr as usize;
+                self.bare.insert(ptr);
+                if !store {
+                    self.bare_reads.push((ptr, r, key.to_string()));
+                }
                 if store {
                     self.bare_stores.insert(r);
                     if boxed {
@@ -265,6 +302,12 @@ impl Planner<'_, '_> {
                 st
             }
             Expr::Binary { left, right, .. } => {
+                if self.record {
+                    number_operand_reads(left, &mut self.number_reads);
+                    number_operand_reads(right, &mut self.number_reads);
+                    number_operand_locals(left, &mut self.number_local_uses);
+                    number_operand_locals(right, &mut self.number_local_uses);
+                }
                 let keys = self.keys;
                 let cands = self.cands;
                 let covered = |r: Recv, k: &str| {
@@ -275,7 +318,16 @@ impl Planner<'_, '_> {
                         if self.record {
                             self.trees.insert(e as *const Expr as usize);
                             for l in reads {
-                                self.bare.insert(l as *const Expr as usize);
+                                let ptr = l as *const Expr as usize;
+                                self.bare.insert(ptr);
+                                if let Expr::PropertyGet {
+                                    object, property, ..
+                                } = l
+                                {
+                                    if let Some(r) = Recv::of(object) {
+                                        self.bare_reads.push((ptr, r, property.clone()));
+                                    }
+                                }
                             }
                         }
                         dirty(&mut st);
@@ -290,6 +342,10 @@ impl Planner<'_, '_> {
                 st
             }
             Expr::Unary { op, operand } => {
+                if self.record && !matches!(op, UnaryOp::Not) {
+                    number_operand_reads(operand, &mut self.number_reads);
+                    number_operand_locals(operand, &mut self.number_local_uses);
+                }
                 st = self.expr(operand, st);
                 if !matches!(op, UnaryOp::Not) && !self.prim(operand) {
                     kill(&mut st);
@@ -297,6 +353,17 @@ impl Planner<'_, '_> {
                 st
             }
             Expr::Compare { op, left, right } => {
+                if self.record
+                    && matches!(
+                        op,
+                        CompareOp::Lt | CompareOp::Le | CompareOp::Gt | CompareOp::Ge
+                    )
+                {
+                    number_operand_reads(left, &mut self.number_reads);
+                    number_operand_reads(right, &mut self.number_reads);
+                    number_operand_locals(left, &mut self.number_local_uses);
+                    number_operand_locals(right, &mut self.number_local_uses);
+                }
                 st = self.expr(left, st);
                 st = self.expr(right, st);
                 if !matches!(op, CompareOp::Eq | CompareOp::Ne)
@@ -797,9 +864,12 @@ pub(super) fn receiver_eligible(ctx: &FnCtx<'_>, r: Recv) -> bool {
 }
 
 pub(super) struct Plan {
-    /// `(receiver, keys, has a bare store, stored mask, boxed-store mask)`.
-    pub(super) receivers: Vec<(Recv, Vec<String>, bool, u32, u32)>,
+    /// `(receiver, keys, has a bare store, stored mask, boxed-store mask, R mask)`.
+    pub(super) receivers: Vec<(Recv, Vec<String>, bool, u32, u32, u32)>,
     pub(super) bare: HashSet<usize>,
+    pub(super) bare_reads: Vec<(usize, Recv, String)>,
+    pub(super) number_local_uses: HashSet<u32>,
+    pub(super) declared_locals: HashSet<u32>,
     pub(super) trees: HashSet<usize>,
     pub(super) recheck: Recheck,
     /// Array receivers with a bare read, and their static index bound.
@@ -865,6 +935,9 @@ pub(super) fn plan(
         keys: &keys,
         arrays: &arrays,
         bare: HashSet::new(),
+        number_reads: Vec::new(),
+        number_local_uses: HashSet::new(),
+        bare_reads: Vec::new(),
         bare_arrays: HashSet::new(),
         inner: inner.map(|(_, b, t)| (b, t)),
         in_inner: false,
@@ -927,6 +1000,12 @@ pub(super) fn plan(
         };
     }
     let bare = std::mem::take(&mut p.bare);
+    let number_reads = std::mem::take(&mut p.number_reads);
+    let bare_reads = std::mem::take(&mut p.bare_reads);
+    let mut number_local_uses = std::mem::take(&mut p.number_local_uses);
+    let (flow_reads, flow_locals, declared_locals) =
+        crate::collectors::region_number_flow_reads(tail, &number_local_uses);
+    number_local_uses.extend(flow_locals);
     let trees = std::mem::take(&mut p.trees);
     let bare_stores = std::mem::take(&mut p.bare_stores);
     let boxed_stores = std::mem::take(&mut p.boxed_stores);
@@ -959,7 +1038,7 @@ pub(super) fn plan(
             }
         }
     }
-    let mut receivers: Vec<(Recv, Vec<String>, bool, u32, u32)> = used
+    let mut receivers: Vec<(Recv, Vec<String>, bool, u32, u32, u32)> = used
         .into_iter()
         .map(|r| {
             let boxed = boxed_stores.get(&r).map_or(0, |ks| {
@@ -969,19 +1048,33 @@ pub(super) fn plan(
                     .filter(|(_, k)| ks.contains(*k))
                     .fold(0u32, |m, (i, _)| m | 1 << i)
             });
+            let r_mask = bare_reads.iter().fold(0u32, |mask, (ptr, nr, key)| {
+                if *nr == r
+                    && (flow_reads.contains(ptr) || number_reads.iter().any(|(p, _, _)| p == ptr))
+                {
+                    if let Some(i) = keys[&r].iter().position(|k| k == key) {
+                        return mask | (1 << i);
+                    }
+                }
+                mask
+            });
             (
                 r,
                 keys[&r].clone(),
                 bare_stores.contains(&r),
                 stored.get(&r).copied().unwrap_or(0),
                 boxed,
+                r_mask,
             )
         })
         .collect();
-    receivers.sort_by_key(|(r, _, _, _, _)| *r);
+    receivers.sort_by_key(|(r, _, _, _, _, _)| *r);
     Some(Plan {
         receivers,
         bare,
+        bare_reads,
+        number_local_uses,
+        declared_locals,
         trees,
         recheck,
         arrays: plan_arrays,

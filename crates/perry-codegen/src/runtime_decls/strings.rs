@@ -1136,7 +1136,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function(
         "js_region_loop_prime",
         I64,
-        &[PTR, I32, I32, I64, I64, I64, I64, I64, I32, I32, I32],
+        &[PTR, I32, I32, I64, I64, I64, I64, I64, I32, I32, I32, I32],
     );
     // Design step 4: the per-class mint with the driver's static id, and the
     // literal-shape seed.

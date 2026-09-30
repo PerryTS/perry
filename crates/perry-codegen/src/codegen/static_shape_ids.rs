@@ -504,13 +504,14 @@ pub(crate) fn static_shape_id_for_keys_global(keys_global: &str) -> Option<u32> 
 /// inline key of the birth shape, or when a key in `boxed_mask` (a bare
 /// store of a value not proven a canonical double) sits on a non-`Any` lane
 /// of the birth rep: the runtime's pack refuses that word too (charter step
-/// 5). A returned id is a guard immediate: it joins the module's seed set
-/// like any other.
+/// 5). The third result is R in region-key order: only identity F64 lanes
+/// of this exact birth ShapeId set a bit. A returned id is a guard immediate:
+/// it joins the module's seed set like any other.
 pub(crate) fn static_region_slots(
     keys_global: &str,
     keys: &[String],
     boxed_mask: u32,
-) -> Option<(u32, Vec<u32>)> {
+) -> Option<(u32, Vec<u32>, u32)> {
     MODULE_STATIC_IDS.with(|m| {
         let m = m.borrow();
         let (id, shape) = m.get(keys_global)?;
@@ -538,8 +539,15 @@ pub(crate) fn static_region_slots(
         {
             return None;
         }
+        let r_mask = slots.iter().enumerate().fold(0u32, |mask, (i, &slot)| {
+            if (shape.rep >> (2 * slot)) & 0b11 == 0b01 {
+                mask | (1 << i)
+            } else {
+                mask
+            }
+        });
         note_guard_id(*id, Some(shape));
-        Some((*id, slots))
+        Some((*id, slots, r_mask))
     })
 }
 

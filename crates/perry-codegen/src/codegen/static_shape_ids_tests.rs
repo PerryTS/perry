@@ -368,3 +368,28 @@ fn class_birth_names_anon_shapes_as_literals_and_skips_class_zero() {
     assert_eq!(o.class_id, 0);
     assert!(o.shape.is_none());
 }
+
+#[test]
+fn region_static_r_is_the_exact_birth_shapes_f64_key_mask() {
+    let shape = BirthShape {
+        rep: 0b01 | (0b01 << 4),
+        ..class("ra\0rb\0rc\0", 3, 0x517)
+    };
+    let global = "p7_region_keys".to_string();
+    MODULE_STATIC_IDS.with(|m| {
+        m.borrow_mut()
+            .insert(global.clone(), (SHAPE_ID_BASE + 917, shape));
+    });
+    let keys = vec!["rc".to_string(), "rb".to_string(), "ra".to_string()];
+    let (_, slots, r) = static_region_slots(&global, &keys, 0).expect("birth keys are inline");
+    assert_eq!(slots, vec![2, 1, 0]);
+    assert_eq!(r, 0b101, "R follows key order, not birth slot order");
+    assert!(
+        static_region_slots(&global, &keys, 0b001).is_none(),
+        "a boxed store to an F64 birth lane is refused"
+    );
+    MODULE_STATIC_IDS.with(|m| {
+        m.borrow_mut().remove(&global);
+    });
+    take_module_static_seeds();
+}
