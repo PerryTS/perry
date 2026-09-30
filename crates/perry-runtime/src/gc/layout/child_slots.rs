@@ -142,6 +142,7 @@ impl HeapChildSlotIterator {
     /// caller already resolved (#8122). The payload-mask selection reuses it
     /// instead of probing the shape table, and it is retained on the iterator
     /// for the slot visitor.
+    #[inline(always)]
     pub(in crate::gc) fn new_object(
         header: *mut GcHeader,
         prefix_slot: Option<*mut u64>,
@@ -296,6 +297,7 @@ pub(in crate::gc) unsafe fn heap_payload_slot_selection(
 /// [`heap_payload_slot_selection`] for an ObjectFields receiver whose shape
 /// record the caller already resolved (#8122): the shared-shape
 /// pointer-mask lookup reuses it instead of probing the shape table twice.
+#[inline(always)]
 pub(in crate::gc) unsafe fn heap_payload_slot_selection_from(
     header: *mut GcHeader,
     payload: HeapSlotRange,
@@ -312,7 +314,7 @@ pub(in crate::gc) unsafe fn heap_payload_slot_selection_from(
     selection
 }
 
-#[inline]
+#[inline(always)]
 unsafe fn heap_payload_slot_selection_impl(
     header: *mut GcHeader,
     payload: HeapSlotRange,
@@ -361,6 +363,7 @@ unsafe fn heap_payload_slot_selection_impl(
 
 /// #10362: every arm returns the iterator it builds, never through an `Option`
 /// combinator whose temporary is copied out — a per-object memmove per GC walk.
+#[inline(always)]
 pub(in crate::gc) unsafe fn gc_child_slots(header: *mut GcHeader) -> HeapChildSlotIterator {
     if header.is_null() || (*header).gc_flags & GC_FLAG_FORWARDED != 0 {
         return HeapChildSlotIterator::empty();
@@ -488,6 +491,14 @@ pub(in crate::gc) enum GcMutableSlotDescriptor {
 
 impl GcMutableSlotDescriptor {
     pub(in crate::gc) unsafe fn visit_slots(self, visit: &mut dyn FnMut(GcMutableSlot)) {
+        self.visit_slots_inline(visit)
+    }
+
+    #[inline(always)]
+    pub(in crate::gc) unsafe fn visit_slots_inline<F: FnMut(GcMutableSlot) + ?Sized>(
+        self,
+        visit: &mut F,
+    ) {
         match self {
             GcMutableSlotDescriptor::Slot(slot) => visit(slot),
             GcMutableSlotDescriptor::Range { range, layout_kind } => {
