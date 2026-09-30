@@ -296,8 +296,9 @@ fn stats_report_enabled() -> bool {
                 }
                 let (hd, ha, hr) = read_holder::read_holder_stats();
                 let (ap, ah) = read_holder::read_accessor_stats();
+                let (cp, ch, cr) = read_holder::class_read_stats();
                 eprintln!(
-                    "[method-site] primes_own={a} primes_inherited={b} primes_function={} holder_rewrites={} misses={c} read_holder_primes={hd} read_absent_primes={ha} read_accessor_primes={ap} read_accessor_hits={ah} read_accessor_class_primes={} read_holder_rewrites={} read_accessor_rewrites={} read_accessor_same_shape_relinks={} read_holder_refused={hr}{refused}",
+                    "[method-site] primes_own={a} primes_inherited={b} primes_function={} holder_rewrites={} misses={c} read_holder_primes={hd} read_absent_primes={ha} read_accessor_primes={ap} read_accessor_hits={ah} read_accessor_class_primes={} class_read_primes={cp} class_read_hits={ch} class_read_root_rewrites={cr} read_holder_rewrites={} read_accessor_rewrites={} read_accessor_same_shape_relinks={} read_holder_refused={hr}{refused}",
                     method_site_function_primes(),
                     HOLDER_REWRITES.load(Ordering::Relaxed),
                     read_holder::read_accessor_class_primes(),

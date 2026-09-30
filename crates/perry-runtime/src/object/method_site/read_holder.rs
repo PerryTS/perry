@@ -60,6 +60,8 @@ use crate::object::shapes::{
 use crate::object::{ObjectHeader, PicCache, PicCacheSlot};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+mod class_read;
+
 /// The receiver's ShapeId as a PIC token (`ShapeId | PIC_ID_TOKEN_BIT`), or 0
 /// for an empty entry. A zeroed cache is therefore an empty one: no token is 0.
 pub const HOLDER_RECV: usize = crate::codegen_abi::PIC_HOLDER_RECV_WORD;
@@ -139,6 +141,10 @@ pub fn read_accessor_stats() -> (u64, u64) {
         PRIMES_ACCESSOR.load(Ordering::Relaxed),
         HITS_ACCESSOR.load(Ordering::Relaxed),
     )
+}
+
+pub fn class_read_stats() -> (u64, u64, u64) {
+    class_read::stats()
 }
 
 pub fn read_holder_rewrites() -> u64 {
@@ -448,6 +454,14 @@ unsafe fn invoke_class_getter(recv: *const ObjectHeader, raw_get: usize) -> crat
     crate::value::JSValue::from_bits(bits)
 }
 
+/// Collecting-path class data/absence memo; the leaf front never consults it.
+pub(crate) unsafe fn try_cached_class_read(
+    recv: *const ObjectHeader,
+    cache_slot: *mut PicCacheSlot,
+) -> Option<crate::value::JSValue> {
+    class_read::try_hit(recv, cache_slot)
+}
+
 /// Collecting read-miss arm. The GC-leaf front always declines this kind.
 /// Every hit confirms the receiver's shape and live link, the rooted holder's
 /// shape, and the accessor descriptor before invoking with the ORIGINAL receiver.
@@ -501,7 +515,7 @@ pub(crate) unsafe fn try_cached_class_accessor(
     Some(invoke_class_getter(recv, acc.raw_get))
 }
 
-unsafe fn walk(recv: *const ObjectHeader, name: &[u8]) -> Option<Walk> {
+unsafe fn walk(recv: *const ObjectHeader, name: &[u8], class_first: bool) -> Option<Walk> {
     let mut w = Walk {
         holder: 0,
         holder_shape: 0,
@@ -518,6 +532,18 @@ unsafe fn walk(recv: *const ObjectHeader, name: &[u8]) -> Option<Walk> {
         let terminal = depth > 1 && current as usize == object_prototype;
         let pid = if terminal {
             PROTO_ID_NULL
+        } else if depth == 1 && class_first {
+            // A bare CLASS ShapeId does not pin the registry's live
+            // C.prototype. The collecting class-read hit compares that
+            // pointer on every use; this walk records it as the first hop.
+            crate::object::shapes::PROTO_ID_CLASS
+        } else if class_first {
+            let pid = shape_proto_id(object_shape_stamp(current))?;
+            if (PROTO_ID_MIXED..PROTO_ID_UNIQUE).contains(&pid) && object_proto_id(current) == pid {
+                pid
+            } else {
+                admitted_proto_id(current)?
+            }
         } else {
             admitted_proto_id(current)?
         };
@@ -533,7 +559,9 @@ unsafe fn walk(recv: *const ObjectHeader, name: &[u8]) -> Option<Walk> {
             w.depth = depth - 1;
             return Some(w);
         }
-        let next = if pid == PROTO_ID_DEFAULT {
+        let next = if depth == 1 && class_first {
+            class_link(recv)?
+        } else if pid == PROTO_ID_DEFAULT {
             object_prototype as *const ObjectHeader
         } else {
             next_prototype(current)
@@ -639,6 +667,11 @@ pub(crate) unsafe fn prime_read_holder(
         && std::str::from_utf8(name).ok().is_some_and(|name| {
             crate::object::class_chain_has_instance_accessor((*recv).class_id, name)
         });
+    if !pending_class_accessor {
+        if let Some(value) = class_read::prime(recv, key, cache_slot, name) {
+            return Some(value);
+        }
+    }
     // Cheap pre-walk: a receiver the entry could never describe keeps the
     // caller's path and pays nothing for the getter below. A site with no
     // cache yet stays without one and uses the generic getter.
@@ -652,7 +685,7 @@ pub(crate) unsafe fn prime_read_holder(
     if !pending_class_accessor
         && (!holder_name_admitted(name)
             || key_may_be_accessor(recv, name)
-            || (walk(recv, name).is_none() && !realm_pending))
+            || (walk(recv, name, false).is_none() && !realm_pending))
     {
         refuse_and_latch(existing);
         return None;
@@ -684,7 +717,7 @@ pub(crate) unsafe fn prime_read_holder(
         refuse_and_latch(cache);
         return Some(value);
     };
-    let Some(w) = walk(recv, name) else {
+    let Some(w) = walk(recv, name, false) else {
         refuse_and_latch(cache);
         return Some(value);
     };
@@ -821,20 +854,20 @@ pub(crate) fn scan_read_holder_roots_mut(visitor: &mut crate::gc::RuntimeRootVis
         // SAFETY: registered caches are PIC-arena allocations
         // (`pic_arena_alloc`), which are never freed.
         let c = unsafe { &mut *(site as *mut PicCache) };
-        if c[HOLDER_RECV] == 0 {
-            continue;
-        }
-        if visitor.visit_i64_slot(&mut c[HOLDER_OBJ]) {
-            HOLDER_REWRITES.fetch_add(1, Ordering::Relaxed);
-            if c[HOLDER_KIND] as u64 & HOLDER_ACCESSOR != 0 {
-                ACCESSOR_REWRITES.fetch_add(1, Ordering::Relaxed);
+        if c[HOLDER_RECV] != 0 {
+            if visitor.visit_i64_slot(&mut c[HOLDER_OBJ]) {
+                HOLDER_REWRITES.fetch_add(1, Ordering::Relaxed);
+                if c[HOLDER_KIND] as u64 & HOLDER_ACCESSOR != 0 {
+                    ACCESSOR_REWRITES.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            if c[HOLDER_KIND] as u64 & HOLDER_MULTI_ABSENT == 0 {
+                for i in 0..HOLDER_MAX_DEPTH - 1 {
+                    visitor.visit_i64_slot(&mut c[HOLDER_HOPS + i]);
+                }
             }
         }
-        if c[HOLDER_KIND] as u64 & HOLDER_MULTI_ABSENT == 0 {
-            for i in 0..HOLDER_MAX_DEPTH - 1 {
-                visitor.visit_i64_slot(&mut c[HOLDER_HOPS + i]);
-            }
-        }
+        class_read::scan_roots(c, visitor);
     }
 }
 

@@ -807,6 +807,11 @@ pub(super) fn get_field_ic_miss_impl(
     // miss handler. The leaf front only recognizes data and absent entries.
     if gc_kind == Some(crate::gc::GC_TYPE_OBJECT) {
         if let Some(value) = unsafe {
+            crate::object::method_site::read_holder::try_cached_class_read(obj, cache_slot)
+        } {
+            return f64::from_bits(value.bits());
+        }
+        if let Some(value) = unsafe {
             crate::object::method_site::read_holder::try_cached_class_accessor(obj, cache_slot)
         } {
             return f64::from_bits(value.bits());
