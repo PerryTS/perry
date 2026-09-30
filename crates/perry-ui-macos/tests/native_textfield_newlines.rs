@@ -8,7 +8,6 @@
 // AppKit must run on the process main thread, so this test has no Rust harness.
 #[cfg(target_os = "macos")]
 unsafe extern "C" {
-    fn js_closure_alloc(func_ptr: *const u8, capture_count: u32) -> *mut u8;
     fn js_nanbox_pointer(ptr: i64) -> f64;
 }
 
@@ -116,17 +115,18 @@ fn main() {
     /// end, then reads back what the field holds.
     fn run(secure: bool, input: Input, mtm: MainThreadMarker) -> Outcome {
         // An edit calls onChange, so the field needs a real closure.
-        extern "C" fn on_change(_closure: *const u8, _value: f64) -> f64 {
+        use perry_runtime::closure::{ClosureHeader, JsFunctionInfo, JsThis};
+        extern "C" fn on_change(_closure: *const ClosureHeader, _this: JsThis, _value: f64) -> f64 {
             f64::from_bits(0x7FFC_0000_0000_0001)
         }
-        extern "C" fn on_submit(_closure: *const u8, _value: f64) -> f64 {
+        extern "C" fn on_submit(_closure: *const ClosureHeader, _this: JsThis, _value: f64) -> f64 {
             SUBMITS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             f64::from_bits(0x7FFC_0000_0000_0001)
         }
-        let closure = |func: extern "C" fn(*const u8, f64) -> f64| unsafe {
-            js_nanbox_pointer(js_closure_alloc(func as *const u8, 0) as i64)
+        let closure = |info: *const JsFunctionInfo| unsafe {
+            js_nanbox_pointer(perry_runtime::closure::js_closure_alloc(info, 0) as i64)
         };
-        let on_change = closure(on_change);
+        let on_change = closure(perry_runtime::fn_info!(on_change, 1));
         let empty = perry_runtime::string::js_string_from_bytes(b"".as_ptr(), 0);
         let handle = if secure {
             widgets::securefield::create(empty.cast(), on_change)
@@ -134,7 +134,7 @@ fn main() {
             widgets::textfield::create(empty.cast(), on_change)
         };
         if !secure {
-            widgets::textfield::set_on_submit(handle, closure(on_submit));
+            widgets::textfield::set_on_submit(handle, closure(perry_runtime::fn_info!(on_submit, 1)));
         }
         let submits_before = SUBMITS.load(std::sync::atomic::Ordering::SeqCst);
         let view = widgets::get_widget(handle).unwrap();
