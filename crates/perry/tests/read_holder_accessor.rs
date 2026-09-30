@@ -34,6 +34,13 @@ async function main(): Promise<void> {
   });
   let mutated = 0;
   for (let i = 0; i < 1000; i++) mutated += read(o);
+  // A declared class with no user override is the bare CLASS identity that
+  // resolves through the class registry, as Zod's ParseInputLazyPath does.
+  class Bare { n = 2; get path(): number { return this.n + 40; } }
+  function bareRead(x: any): number { return x.path; }
+  const bare: any = new Bare();
+  let declared = 0;
+  for (let i = 0; i < 1000; i++) declared += bareRead(bare);
   const sab = new SharedArrayBuffer(8);
   const gate = new Int32Array(sab);
   const pending = spawn(() => {
@@ -56,7 +63,7 @@ async function main(): Promise<void> {
   Atomics.notify(gate, 1);
   const worker = await pending;
   (globalThis as any).gc();
-  console.log(first, moved, replaced, mutated, overlap, worker, read(o));
+  console.log(first, moved, replaced, mutated, declared, overlap, worker, read(o));
 }
 main();
 "#;
@@ -104,7 +111,7 @@ fn class_accessor_entry_collects_with_original_receiver_and_stops_for_workers() 
     assert!(run.status.success(), "run failed:\n{stderr}");
     assert_eq!(
         String::from_utf8_lossy(&run.stdout).trim(),
-        "2000 2000 8000 31000 31000 103000 31",
+        "2000 2000 8000 31000 42000 31000 103000 31",
         "{stderr}"
     );
     assert!(
@@ -116,7 +123,15 @@ fn class_accessor_entry_collects_with_original_receiver_and_stops_for_workers() 
         "accessor entry never hit: {stderr}"
     );
     assert!(
-        stat(&stderr, "read_holder_rewrites") > 0,
-        "holder never moved: {stderr}"
+        stat(&stderr, "read_accessor_class_primes") > 0,
+        "bare CLASS path never primed: {stderr}"
+    );
+    assert!(
+        stat(&stderr, "read_accessor_rewrites") > 0,
+        "accessor holder never moved: {stderr}"
+    );
+    assert!(
+        stat(&stderr, "read_accessor_same_shape_relinks") > 0,
+        "prototype replacement did not preserve holder shape: {stderr}"
     );
 }

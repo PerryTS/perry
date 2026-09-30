@@ -53,7 +53,7 @@
 use super::{key_may_be_accessor, next_prototype, ordinary_receiver, WORKER_AGENTS_EXIST};
 use crate::object::shapes::{
     object_proto_id, object_shape_descriptor, object_shape_stamp, shape_proto_id, PIC_ID_TOKEN_BIT,
-    PROTO_ID_DEFAULT, PROTO_ID_MIXED, PROTO_ID_NULL, PROTO_ID_UNIQUE,
+    PROTO_ID_CLASS, PROTO_ID_DEFAULT, PROTO_ID_MIXED, PROTO_ID_NULL, PROTO_ID_UNIQUE,
 };
 use crate::object::{ObjectHeader, PicCache, PicCacheSlot};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -111,6 +111,9 @@ per_test_global! {
     static PRIMES_ACCESSOR: AtomicU64 = AtomicU64::new(0);
     static HITS_ACCESSOR: AtomicU64 = AtomicU64::new(0);
     static HOLDER_REWRITES: AtomicU64 = AtomicU64::new(0);
+    static ACCESSOR_REWRITES: AtomicU64 = AtomicU64::new(0);
+    static SAME_SHAPE_RELINKS: AtomicU64 = AtomicU64::new(0);
+    static CLASS_PRIMES: AtomicU64 = AtomicU64::new(0);
 }
 
 /// `(data primes, absent primes, refusals)`.
@@ -131,6 +134,18 @@ pub fn read_accessor_stats() -> (u64, u64) {
 
 pub fn read_holder_rewrites() -> u64 {
     HOLDER_REWRITES.load(Ordering::Relaxed)
+}
+
+pub fn read_accessor_rewrites() -> u64 {
+    ACCESSOR_REWRITES.load(Ordering::Relaxed)
+}
+
+pub fn read_accessor_same_shape_relinks() -> u64 {
+    SAME_SHAPE_RELINKS.load(Ordering::Relaxed)
+}
+
+pub fn read_accessor_class_primes() -> u64 {
+    CLASS_PRIMES.load(Ordering::Relaxed)
 }
 
 #[inline]
@@ -292,15 +307,21 @@ pub(super) unsafe fn admitted_proto_id(obj: *const ObjectHeader) -> Option<u64> 
     (object_proto_id(obj) == pid).then_some(pid)
 }
 
-/// The class-instance form records both a class and a serial prototype link.
-/// A bare CLASS identity cannot name one holder: the class registry may still
-/// resolve its prototype lazily, and is deliberately refused.
+/// A MIXED identity records an explicit serial link. A bare CLASS identity
+/// does not pin its registry-resolved prototype, so the accessor-only hit must
+/// compare the LIVE declared-prototype pointer with the cached holder.
 unsafe fn class_link(recv: *const ObjectHeader) -> Option<*const ObjectHeader> {
     let pid = shape_proto_id(object_shape_stamp(recv))?;
-    if !(PROTO_ID_MIXED..PROTO_ID_UNIQUE).contains(&pid) || object_proto_id(recv) != pid {
+    if object_proto_id(recv) != pid {
         return None;
     }
-    let holder = next_prototype(recv);
+    let holder = if (PROTO_ID_MIXED..PROTO_ID_UNIQUE).contains(&pid) {
+        next_prototype(recv)
+    } else if (PROTO_ID_CLASS..PROTO_ID_MIXED).contains(&pid) {
+        crate::object::class_decl_prototype_object((*recv).class_id)
+    } else {
+        return None;
+    };
     (!holder.is_null() && holder != recv).then_some(holder)
 }
 
@@ -383,12 +404,7 @@ pub(crate) unsafe fn try_cached_class_accessor(
     recv: *const ObjectHeader,
     cache_slot: *mut PicCacheSlot,
 ) -> Option<crate::value::JSValue> {
-    if cache_slot.is_null()
-        || WORKER_AGENTS_EXIST.load(Ordering::SeqCst) != 0
-        || crate::agent::current_agent() != crate::agent::PRIMARY_AGENT
-        || crate::object::field_get_set::accessor_receiver_override_armed()
-        || crate::object::prototype_chain::resolution_stack_savepoint() != 0
-    {
+    if cache_slot.is_null() || WORKER_AGENTS_EXIST.load(Ordering::SeqCst) != 0 {
         return None;
     }
     let cache = crate::object::field_get_set::pic_slot_peek::<PicCache>(cache_slot);
@@ -396,10 +412,16 @@ pub(crate) unsafe fn try_cached_class_accessor(
         return None;
     }
     let c = &*cache;
+    if c[HOLDER_KIND] as u64 & HOLDER_ACCESSOR == 0
+        || crate::agent::current_agent() != crate::agent::PRIMARY_AGENT
+        || crate::object::field_get_set::accessor_receiver_override_armed()
+        || crate::object::prototype_chain::resolution_stack_savepoint() != 0
+    {
+        return None;
+    }
     let stamp = object_shape_stamp(recv);
     if stamp == 0
         || c[HOLDER_RECV] != (u64::from(stamp) | PIC_ID_TOKEN_BIT) as i64
-        || c[HOLDER_KIND] as u64 & HOLDER_ACCESSOR == 0
         || class_link(recv)? as usize != c[HOLDER_OBJ] as usize
     {
         return None;
@@ -626,6 +648,14 @@ unsafe fn publish(cache: *mut PicCache, recv: *const ObjectHeader, w: &Walk, acc
             return;
         }
     }
+    if accessor
+        && c[HOLDER_RECV] != 0
+        && c[HOLDER_KIND] as u64 & HOLDER_ACCESSOR != 0
+        && c[HOLDER_OBJ] as usize != w.holder
+        && c[HOLDER_SHAPE] as u32 == w.holder_shape
+    {
+        SAME_SHAPE_RELINKS.fetch_add(1, Ordering::Relaxed);
+    }
     c[HOLDER_RECV] = 0;
     c[HOLDER_OBJ] = w.holder as i64;
     c[HOLDER_SHAPE] = (u64::from(w.holder_shape) | u64::from(w.hops[2].1) << 32) as i64;
@@ -657,6 +687,11 @@ unsafe fn publish(cache: *mut PicCache, recv: *const ObjectHeader, w: &Walk, acc
     c[HOLDER_RECV] = token;
     if accessor {
         PRIMES_ACCESSOR.fetch_add(1, Ordering::Relaxed);
+        if shape_proto_id(object_shape_stamp(recv))
+            .is_some_and(|pid| (PROTO_ID_CLASS..PROTO_ID_MIXED).contains(&pid))
+        {
+            CLASS_PRIMES.fetch_add(1, Ordering::Relaxed);
+        }
     } else if w.slot.is_some() {
         PRIMES_HOLDER.fetch_add(1, Ordering::Relaxed);
     } else {
@@ -686,6 +721,9 @@ pub(crate) fn scan_read_holder_roots_mut(visitor: &mut crate::gc::RuntimeRootVis
         }
         if visitor.visit_i64_slot(&mut c[HOLDER_OBJ]) {
             HOLDER_REWRITES.fetch_add(1, Ordering::Relaxed);
+            if c[HOLDER_KIND] as u64 & HOLDER_ACCESSOR != 0 {
+                ACCESSOR_REWRITES.fetch_add(1, Ordering::Relaxed);
+            }
         }
         for i in 0..HOLDER_MAX_DEPTH - 1 {
             visitor.visit_i64_slot(&mut c[HOLDER_HOPS + i]);
