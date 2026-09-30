@@ -899,6 +899,60 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
                 return Ok(Some(nanbox_pointer_inline(blk, &promise)));
             }
             "pipeThrough" => {
+                // Preserve the original numeric sequence for a write-stable
+                // native TransformStream and no options. This proof comes from
+                // its initializer's runtime contract, never a TS annotation.
+                let numeric_transform = args.len() == 1
+                    && !ctx.classes.contains_key("TransformStream")
+                    && !(ctx.import_function_prefixes.contains_key("TransformStream")
+                        && !ctx
+                            .import_function_v8_specifiers
+                            .contains_key("TransformStream"))
+                    && matches!(
+                        crate::type_analysis::proven_type_from_init(ctx, &args[0]),
+                        Some(perry_hir::types::Type::Named(name)) if name == "TransformStream"
+                    );
+                if numeric_transform {
+                    let transform_raw = lower_expr(ctx, &args[0])?;
+                    let transform = ctx.block().call(
+                        DOUBLE,
+                        "js_stream_unwrap_handle",
+                        &[(DOUBLE, &transform_raw)],
+                    );
+                    let writable = ctx.block().call(
+                        DOUBLE,
+                        "js_transform_stream_writable",
+                        &[(DOUBLE, &transform)],
+                    );
+                    let readable = ctx.block().call(
+                        DOUBLE,
+                        "js_transform_stream_readable",
+                        &[(DOUBLE, &transform)],
+                    );
+                    let options = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                    let _ = ctx.block().call(
+                        DOUBLE,
+                        "js_readable_stream_pipe_through_validate",
+                        &[
+                            (DOUBLE, &recv_handle),
+                            (DOUBLE, &writable),
+                            (DOUBLE, &readable),
+                            (DOUBLE, &options),
+                        ],
+                    );
+                    let pipe = ctx.block().call(
+                        I64,
+                        "js_readable_stream_pipe_to",
+                        &[
+                            (DOUBLE, &recv_handle),
+                            (DOUBLE, &writable),
+                            (DOUBLE, &options),
+                        ],
+                    );
+                    ctx.block()
+                        .call_void("js_promise_mark_internally_handled", &[(I64, &pipe)]);
+                    return Ok(Some(readable));
+                }
                 // Evaluate both arguments before the pair getters. The runtime
                 // owns roots across getters; only options evaluation can move
                 // the transform before the call. With no options, no temp root
