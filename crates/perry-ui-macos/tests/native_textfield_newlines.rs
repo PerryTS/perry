@@ -134,7 +134,10 @@ fn main() {
             widgets::textfield::create(empty.cast(), on_change)
         };
         if !secure {
-            widgets::textfield::set_on_submit(handle, closure(perry_runtime::fn_info!(on_submit, 1)));
+            widgets::textfield::set_on_submit(
+                handle,
+                closure(perry_runtime::fn_info!(on_submit, 1)),
+            );
         }
         let submits_before = SUBMITS.load(std::sync::atomic::Ordering::SeqCst);
         let view = widgets::get_widget(handle).unwrap();
