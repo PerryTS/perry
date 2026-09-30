@@ -79,6 +79,7 @@ pub unsafe extern "C" fn js_stream_unwrap_handle(value: f64) -> f64 {
 
 // Pair conversion can call user getters and allocate its hidden-field key.
 // Keep that scoped rooting local to pipeThrough instead of legacy dispatch.
+#[cfg_attr(target_os = "macos", link_section = "__TEXT,__perry_cold")]
 #[cold]
 #[inline(never)]
 pub(super) unsafe fn unwrap_pair_stream_handle(value: f64) -> f64 {

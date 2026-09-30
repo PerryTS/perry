@@ -2591,6 +2591,7 @@ pub unsafe extern "C" fn js_readable_stream_pipe_through(
 /// Resolve a WHATWG transform pair and start piping, keeping object-backed
 /// transforms and options live across arbitrary getter callbacks. Numeric
 /// TransformStream handles without options take no runtime handle slots.
+#[cfg_attr(target_os = "macos", link_section = "__TEXT,__perry_cold")]
 #[no_mangle]
 pub unsafe extern "C" fn js_readable_stream_pipe_through_pair(
     readable_handle: f64,
@@ -2614,6 +2615,7 @@ pub unsafe extern "C" fn js_readable_stream_pipe_through_pair(
 
 // Keep the scoped-root frame out of the numeric handle path. The object path
 // needs those roots across arbitrary getter callbacks; numeric streams do not.
+#[cfg_attr(target_os = "macos", link_section = "__TEXT,__perry_cold")]
 #[cold]
 #[inline(never)]
 unsafe fn pipe_through_rooted_pair(readable_handle: f64, pair: f64, options: f64) -> f64 {
