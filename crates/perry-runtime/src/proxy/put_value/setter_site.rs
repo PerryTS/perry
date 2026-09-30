@@ -17,6 +17,7 @@ struct Entry {
     holder: usize,
     class_id: u32,
     receiver_shape: u32,
+    bare_class_link: bool,
     holder_shape: u32,
     slot: u32,
     raw_set: usize,
@@ -168,6 +169,9 @@ unsafe fn candidate(
         return None;
     }
 
+    let bare_class_link = (crate::object::shapes::PROTO_ID_CLASS
+        ..crate::object::shapes::PROTO_ID_MIXED)
+        .contains(&recv_shape.proto_id);
     let holder = class_link(recv)?;
     let holder_gc = crate::value::addr_class::try_read_gc_header(holder as usize)?;
     if holder_gc.obj_type != crate::gc::GC_TYPE_OBJECT
@@ -211,6 +215,7 @@ unsafe fn candidate(
         holder: holder as usize,
         class_id,
         receiver_shape: crate::object::shapes::object_shape_stamp(recv),
+        bare_class_link,
         holder_shape: crate::object::shapes::object_shape_stamp(holder),
         slot,
         raw_set: acc.raw_set,
@@ -244,10 +249,25 @@ unsafe fn validated_raw_set(
         || e.receiver_shape != crate::object::shapes::object_shape_stamp(recv)
         || e.validity != crate::object::proto_validity::proto_validity()
         || e.vtable_gen != crate::object::vtable_generation()
-        || class_link(recv)? as usize != e.holder
         || crate::object::shapes::object_shape_stamp(e.holder as *const crate::ObjectHeader)
             != e.holder_shape
     {
+        return None;
+    }
+    if e.bare_class_link {
+        // ShapeId proves the class-link mode. Every declared-prototype root
+        // replacement (including generic-origin redirects) bumps the validity
+        // word checked above. GC moves both the registry root and this rooted
+        // holder entry together. A per-instance prototype change must either
+        // restamp the ShapeId or leave an explicit meta link, rejected here.
+        if gc._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0
+            || (!meta.is_null() && (*meta).prototype != 0)
+            || e.holder == recv as usize
+        {
+            return None;
+        }
+    } else if class_link(recv)? as usize != e.holder {
+        // MIXED receivers keep the full live per-object link comparison.
         return None;
     }
     let holder_gc = crate::value::addr_class::try_read_gc_header(e.holder)?;
@@ -439,6 +459,7 @@ mod tests {
             unsafe { try_set(&mut slot, target, key_ptr, 6.0) },
             Some(6.0)
         );
+        assert!(unsafe { entry(&mut slot).unwrap().bare_class_link });
         assert_eq!(FIRST.load(Ordering::Relaxed), 2);
         p2.with_const_ptr::<crate::ObjectHeader, _>(|p| {
             crate::object::test_seed_class_decl_prototype_object_root(CID, p as usize)
@@ -457,6 +478,21 @@ mod tests {
         crate::object::method_site::WORKER_AGENTS_EXIST.store(1, Ordering::SeqCst);
         assert_eq!(unsafe { try_set(&mut slot, target, key_ptr, 8.0) }, None);
         crate::object::method_site::WORKER_AGENTS_EXIST.store(before_gate, Ordering::SeqCst);
+        let p1_value = p1.with_const_ptr::<crate::ObjectHeader, _>(|p| {
+            crate::value::js_nanbox_pointer(p as i64)
+        });
+        crate::object::object_ops::js_object_set_prototype_of(target, p1_value);
+        let key_ptr = key.get_raw_const_ptr::<crate::StringHeader>();
+        let explicit_shape = recv.with_const_ptr::<crate::ObjectHeader, _>(|p| unsafe {
+            crate::object::shapes::object_shape_stamp(p)
+        });
+        assert_ne!(explicit_shape, recv_shape);
+        assert_eq!(
+            unsafe {
+                validated_raw_set(entry(&mut slot).unwrap(), recv.get_raw_const_ptr(), key_ptr)
+            },
+            None
+        );
         recv.with_mut_ptr::<crate::ObjectHeader, _>(|p| unsafe {
             crate::object::object_ops::define_property_force_store_value(p, key_ptr, 99.0);
         });
@@ -464,7 +500,7 @@ mod tests {
             recv.with_const_ptr::<crate::ObjectHeader, _>(|p| unsafe {
                 crate::object::shapes::object_shape_stamp(p)
             }),
-            recv_shape
+            explicit_shape
         );
         assert_eq!(
             unsafe {
