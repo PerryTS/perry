@@ -5,32 +5,51 @@ use std::path::PathBuf;
 use std::process::Command;
 
 const SOURCE: &str = r#"import { spawn } from 'perry/thread';
-class HolderA { get path(): number { return (this as any).n + 1; } }
-class HolderB { get path(): number { return (this as any).n + 7; } }
-class Host { n = 1; }
+function makeHolder() {
+  return class { get path(): number {
+    if ((globalThis as any).accessorCollect) {
+      (globalThis as any).accessorCollect = false;
+      (globalThis as any).gc();
+    }
+    return (this as any).child.value + (this as any).factor;
+  } };
+}
+const HolderA = makeHolder();
+const HolderB = makeHolder();
+class Host { n = 1; child = { value: 1 }; }
 function read(o: any): number { return o.path; }
 async function main(): Promise<void> {
   const o: any = new Host();
   const a: any = HolderA.prototype;
   const b: any = HolderB.prototype;
+  a.factor = 1;
+  b.factor = 7;
   // An explicit, serial prototype link gives Host a MIXED identity.
   Object.setPrototypeOf(o, a);
   let first = 0;
-  for (let i = 0; i < 1000; i++) first += read(o);
+  for (let i = 0; i < 1000; i++) {
+    if (i === 500) (globalThis as any).accessorCollect = true;
+    first += read(o);
+  }
   let keep: any[] = [];
   for (let i = 0; i < 20000; i++) keep.push({ i });
   (globalThis as any).gc();
   keep = [];
   let moved = 0;
   for (let i = 0; i < 1000; i++) moved += read(o);
-  // Both prototypes declare the same accessor key. A receiver-link check,
-  // not holder shape alone, must reject a stale answer from A.
+  // A live receiver-link check rejects A after the prototype is replaced.
   Object.setPrototypeOf(o, b);
   let replaced = 0;
   for (let i = 0; i < 1000; i++) replaced += read(o);
   Object.defineProperty(b, 'path', {
     configurable: true,
-    get() { return (this as any).n + 30; }
+    get() {
+      if ((globalThis as any).accessorCollect) {
+        (globalThis as any).accessorCollect = false;
+        (globalThis as any).gc();
+      }
+      return (this as any).child.value + 30;
+    }
   });
   let mutated = 0;
   for (let i = 0; i < 1000; i++) mutated += read(o);
@@ -45,7 +64,13 @@ async function main(): Promise<void> {
   const gate = new Int32Array(sab);
   const pending = spawn(() => {
     const workerGate = new Int32Array(sab);
-    class WorkerHolder { get path(): number { return (this as any).n + 100; } }
+    class WorkerHolder { get path(): number {
+      if ((globalThis as any).workerAccessorCollect) {
+        (globalThis as any).workerAccessorCollect = false;
+        (globalThis as any).gc();
+      }
+      return (this as any).n + 100;
+    } }
     const w: any = { n: 3 };
     Object.setPrototypeOf(w, WorkerHolder.prototype);
     (globalThis as any).gc();
@@ -53,12 +78,18 @@ async function main(): Promise<void> {
     Atomics.notify(workerGate, 0);
     if (Atomics.wait(workerGate, 1, 0, 10000) === 'timed-out') throw new Error('primary did not overlap worker');
     let total = 0;
-    for (let i = 0; i < 1000; i++) total += read(w);
+    for (let i = 0; i < 1000; i++) {
+      if (i === 500) (globalThis as any).workerAccessorCollect = true;
+      total += read(w);
+    }
     return total;
   });
   if (Atomics.wait(gate, 0, 0, 10000) === 'timed-out') throw new Error('worker did not start');
   let overlap = 0;
-  for (let i = 0; i < 1000; i++) overlap += read(o);
+  for (let i = 0; i < 1000; i++) {
+    if (i === 500) (globalThis as any).accessorCollect = true;
+    overlap += read(o);
+  }
   Atomics.store(gate, 1, 1);
   Atomics.notify(gate, 1);
   const worker = await pending;
@@ -129,9 +160,5 @@ fn class_accessor_entry_collects_with_original_receiver_and_stops_for_workers() 
     assert!(
         stat(&stderr, "read_accessor_rewrites") > 0,
         "accessor holder never moved: {stderr}"
-    );
-    assert!(
-        stat(&stderr, "read_accessor_same_shape_relinks") > 0,
-        "prototype replacement did not preserve holder shape: {stderr}"
     );
 }
