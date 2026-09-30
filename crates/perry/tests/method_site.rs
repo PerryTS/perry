@@ -250,6 +250,10 @@ console.log(sum, call(o, 7));
         "site never primed: {stderr}"
     );
     assert!(stat(&stderr, "misses") < 50, "site did not hit: {stderr}");
+    assert!(
+        stat(&stderr, "holder_rewrites") > 0,
+        "the method-site holder was not relocated: {stderr}"
+    );
     let moved: u64 = stderr
         .lines()
         .filter_map(|line| line.strip_prefix("[gc-copy-minor] ran "))

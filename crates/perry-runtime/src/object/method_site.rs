@@ -245,6 +245,7 @@ fn refuse(reason: usize) {
 per_test_global! {
     static PRIMES_OWN: AtomicU64 = AtomicU64::new(0);
     static PRIMES_INHERITED: AtomicU64 = AtomicU64::new(0);
+    static HOLDER_REWRITES: AtomicU64 = AtomicU64::new(0);
     static MISSES: AtomicU64 = AtomicU64::new(0);
     static PRIMES_FUNCTION: AtomicU64 = AtomicU64::new(0);
 }
@@ -295,8 +296,9 @@ fn stats_report_enabled() -> bool {
                 }
                 let (hd, ha, hr) = read_holder::read_holder_stats();
                 eprintln!(
-                    "[method-site] primes_own={a} primes_inherited={b} primes_function={} misses={c} read_holder_primes={hd} read_absent_primes={ha} read_holder_refused={hr}{refused}",
-                    method_site_function_primes()
+                    "[method-site] primes_own={a} primes_inherited={b} primes_function={} holder_rewrites={} misses={c} read_holder_primes={hd} read_absent_primes={ha} read_holder_refused={hr}{refused}",
+                    method_site_function_primes(),
+                    HOLDER_REWRITES.load(Ordering::Relaxed)
                 );
             }
             unsafe { libc::atexit(report) };
@@ -1003,7 +1005,9 @@ pub(crate) fn scan_method_site_roots_mut(visitor: &mut crate::gc::RuntimeRootVis
         for &site in sites.iter() {
             for e in unsafe { (*(site as *mut MethodSite)).entries.iter_mut() } {
                 if e.closure != 0 {
-                    visitor.visit_tagged_usize_slot(&mut e.closure, crate::value::POINTER_TAG);
+                    if visitor.visit_tagged_usize_slot(&mut e.closure, crate::value::POINTER_TAG) {
+                        HOLDER_REWRITES.fetch_add(1, Ordering::Relaxed);
+                    }
                 }
             }
         }
