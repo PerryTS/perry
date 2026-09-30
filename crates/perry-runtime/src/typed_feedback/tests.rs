@@ -1752,6 +1752,7 @@ fn typed_feedback_class_field_set_guard_fails_for_frozen_object() {
 #[test]
 fn typed_feedback_class_field_set_guard_retires_packed_numeric_proof_for_tagged_values() {
     let _guard = typed_feedback_test_lock();
+    let _global = crate::gc::global_side_table_test_lock();
     reset_typed_feedback_for_tests();
     register(8_690, TypedFeedbackSiteKind::PropertySet, "obj.x=");
 
@@ -1759,14 +1760,13 @@ fn typed_feedback_class_field_set_guard_retires_packed_numeric_proof_for_tagged_
     let (obj, _, key, receiver) = class_instance(class_id, b"x");
     let expected_shape_id = shape_id(obj);
     crate::object::js_object_set_field(obj, 0, crate::JSValue::number(1.0));
-    let header =
-        unsafe { (obj as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader };
     let short = crate::value::JSValue::try_short_string(b"s").expect("inline SSO");
 
     for (name, value_bits) in [("SSO", short.bits()), ("boolean", crate::value::TAG_TRUE)] {
-        unsafe {
-            (*header)._reserved |= crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF;
-        }
+        assert_eq!(
+            unsafe { crate::object::shapes::store_kind::stamp_numeric_proof_twin(obj) },
+            Some(expected_shape_id)
+        );
         let value = f64::from_bits(value_bits);
         assert_eq!(
             js_typed_feedback_class_field_set_guard(
@@ -1783,9 +1783,9 @@ fn typed_feedback_class_field_set_guard_retires_packed_numeric_proof_for_tagged_
             "{name} must not bypass packed numeric proof invalidation"
         );
         crate::object::js_object_set_field(obj, 0, crate::JSValue::from_bits(value_bits));
-        assert_eq!(
-            unsafe { (*header)._reserved } & crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF,
-            0,
+        assert_ne!(
+            crate::object::shapes::shape_object_kind_by_id(shape_id(obj)),
+            Some(crate::object::shapes::ShapeObjectKind::OrdinaryNumericProof),
             "the runtime setter must retire proof authority for {name}"
         );
     }

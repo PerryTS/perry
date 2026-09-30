@@ -582,6 +582,13 @@ pub extern "C" fn js_put_value_set_ic_miss(
             return result;
         }
 
+        // A numeric-proof sibling must never enter an own-slot write cache:
+        // a hit would bypass the owner store that retires the proof.
+        if !crate::object::shapes::store_kind::shape_admits_plain_store(
+            crate::object::shapes::object_shape_stamp(obj),
+        ) {
+            return result;
+        }
         let Some(shape) = crate::object::shapes::object_shape_descriptor(obj) else {
             return result;
         };
@@ -1238,6 +1245,13 @@ pub extern "C" fn js_put_value_set_dyn_ic_miss(
             || !write_fast_path_receiver_kind_ok(obj, gc_header._reserved)
             || crate::array::object_prototype_addr_matches(obj_addr)
         {
+            return result;
+        }
+        // A numeric-proof sibling must never enter an own-slot write cache:
+        // a hit would bypass the owner store that retires the proof.
+        if !crate::object::shapes::store_kind::shape_admits_plain_store(
+            crate::object::shapes::object_shape_stamp(obj),
+        ) {
             return result;
         }
         let Some(shape) = crate::object::shapes::object_shape_descriptor(obj) else {

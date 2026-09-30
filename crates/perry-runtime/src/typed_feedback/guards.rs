@@ -418,6 +418,13 @@ pub extern "C" fn js_typed_feedback_class_field_get_guard(
     }
 }
 
+#[inline]
+fn receiver_has_numeric_proof_shape(obj: *const ObjectHeader) -> bool {
+    crate::object::shapes::shape_object_kind_by_id(unsafe {
+        crate::object::shapes::object_shape_stamp(obj)
+    }) == Some(crate::object::shapes::ShapeObjectKind::OrdinaryNumericProof)
+}
+
 fn class_field_set_fast_contract(
     receiver: f64,
     expected_class_id: u32,
@@ -440,10 +447,7 @@ fn class_field_set_fast_contract(
         let Some(gc_header) = gc_header_for_user_addr(object_addr) else {
             return false;
         };
-        if (*gc_header)._reserved
-            & (crate::gc::OBJ_FLAG_FROZEN | crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF)
-            != 0
-        {
+        if (*gc_header)._reserved & crate::gc::OBJ_FLAG_FROZEN != 0 {
             return false;
         }
     }
@@ -515,9 +519,7 @@ fn class_field_set_contract(
             return (0, 0, gc_type, false);
         }
         if (*gc_header)._reserved
-            & (crate::gc::OBJ_FLAG_FROZEN
-                | crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF
-                | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES)
+            & (crate::gc::OBJ_FLAG_FROZEN | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES)
             != 0
         {
             let obj = object_addr as *mut ObjectHeader;
@@ -533,6 +535,9 @@ fn class_field_set_contract(
         let class_id = (*obj).class_id;
         let shape_id = crate::object::shapes::object_shape_id(obj);
         let shape_addr = shape_id as usize;
+        if receiver_has_numeric_proof_shape(obj) {
+            return (shape_addr, class_id, gc_type, false);
+        }
         let Some(descriptor) = crate::object::shapes::shape_descriptor_by_id(shape_id) else {
             return (shape_addr, class_id, gc_type, false);
         };
@@ -1414,9 +1419,7 @@ pub unsafe extern "C" fn js_method_direct_shape_class(
     if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT
         || (*gc_header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || (*gc_header)._reserved
-            & (crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
-                | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES
-                | crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF)
+            & (crate::gc::OBJ_FLAG_HAS_DESCRIPTORS | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES)
             != 0
         || crate::object::class_prototype_fast_guard_invalidated_for_method(method_guard_slot)
     {
@@ -1435,7 +1438,7 @@ pub unsafe extern "C" fn js_method_direct_shape_class(
     // alias an ordinary instance's expected id: the class-kind transition
     // mints its own semantic successor ShapeId.
     let shape_id = crate::object::shapes::object_shape_stamp(obj);
-    if shape_id == 0 {
+    if shape_id == 0 || receiver_has_numeric_proof_shape(obj) {
         return 0;
     }
     if !out_shape_id.is_null() {
@@ -1609,15 +1612,16 @@ pub unsafe extern "C" fn js_object_own_method_cache_miss(
     if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT
         || (*gc_header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || (*gc_header)._reserved
-            & (crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
-                | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES
-                | crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF)
+            & (crate::gc::OBJ_FLAG_HAS_DESCRIPTORS | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES)
             != 0
     {
         return 0;
     }
     let object = object_addr as *const ObjectHeader;
-    if !crate::object::object_is_regular(object) || (*object).class_id != expected_class_id {
+    if !crate::object::object_is_regular(object)
+        || (*object).class_id != expected_class_id
+        || receiver_has_numeric_proof_shape(object)
+    {
         return 0;
     }
     let meta = (*object).meta;

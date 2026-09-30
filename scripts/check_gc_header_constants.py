@@ -88,7 +88,6 @@ RUNTIME_WANTED = {
     "GC_FLAG_FORWARDED",
     "GC_FLAG_TENURED",
     "OBJ_FLAG_FROZEN",
-    "OBJ_FLAG_PACKED_NUMERIC_PROOF",
     "OBJ_FLAG_PLAIN_ORDINARY",
     "OBJ_FLAG_ARRAY_DESCRIPTORS",
     "OBJ_FLAG_STABLE_TOMBSTONES",
@@ -135,9 +134,6 @@ REGISTRY: list[Restatement] = [
      "GC_TYPE_OBJECT", "guard: obj_type byte"),
     ("crates/perry-codegen/src/expr/class_field_inline_guard.rs", "GC_FLAG_FORWARDED_I8",
      "GC_FLAG_FORWARDED - 256", "guard: gc_flags 0x80 spelled as a signed i8"),
-    ("crates/perry-codegen/src/expr/class_field_inline_guard.rs", "WRITE_PROOF_BIT",
-     "OBJ_FLAG_PACKED_NUMERIC_PROOF",
-     "write guard: #8690 Array-subclass numeric-prefix proof (per object)"),
 
     # --- the key-add hit (`expr/put_value_store_ic.rs`, emit_key_add_hit) ---
     ("crates/perry-codegen/src/expr/put_value_store_ic.rs", "ADD_REFUSE_GC_FLAGS",
@@ -156,8 +152,8 @@ REGISTRY: list[Restatement] = [
     ("crates/perry-codegen/src/expr/class_field_inline_guard.rs",
      "OBJ_FLAG_WRITE_FAST_PATH_BLOCKED",
      "OBJ_FLAG_ARRAY_DESCRIPTORS | OBJ_FLAG_HAS_DESCRIPTORS"
-     " | OBJ_FLAG_PACKED_NUMERIC_PROOF | OBJ_FLAG_FROZEN",
-     "guard: the write side adds frozen + the packed-numeric proof"),
+     " | OBJ_FLAG_FROZEN",
+     "guard: exact ShapeId refuses numeric proof; the write side adds frozen"),
 
     # --- the element-shape guard's fused masks -------------------------------
     ("crates/perry-codegen/src/expr/element_shape_guard.rs", "GC_TYPE_ARRAY",
@@ -181,12 +177,12 @@ REGISTRY: list[Restatement] = [
     ("crates/perry-codegen/src/lower_call/method_override.rs",
      "GC_OBJECT_METHOD_GUARD_MASK_I32",
      "0xFF | (GC_FLAG_FORWARDED << 8)"
-     " | ((OBJ_FLAG_HAS_DESCRIPTORS | OBJ_FLAG_PACKED_NUMERIC_PROOF) << 16)",
+     " | ((OBJ_FLAG_HAS_DESCRIPTORS) << 16)",
      "method probe: one fused 32-bit mask over all three header bytes"),
     ("crates/perry-codegen/src/lower_call/property_get/imported_object.rs",
      "GC_OBJECT_METHOD_GUARD_MASK_I32",
      "0xFF | (GC_FLAG_FORWARDED << 8)"
-     " | ((OBJ_FLAG_HAS_DESCRIPTORS | OBJ_FLAG_PACKED_NUMERIC_PROOF) << 16)",
+     " | ((OBJ_FLAG_HAS_DESCRIPTORS) << 16)",
      "imported-object probe: second copy of the same fused mask"),
 
     # --- other single-bit restatements --------------------------------------

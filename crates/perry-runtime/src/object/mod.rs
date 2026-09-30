@@ -1339,6 +1339,13 @@ fn transition_cache_insert(
     if next_keys == 0 {
         return;
     }
+    // Generated transition hits store without the owner layout note. They
+    // must not learn an edge from a numeric-proof predecessor.
+    if shapes::shape_object_kind_by_id(prev_shape_id)
+        == Some(shapes::ShapeObjectKind::OrdinaryNumericProof)
+    {
+        return;
+    }
     if slot_idx > TRANSITION_SLOT_IDX_MASK {
         return;
     }

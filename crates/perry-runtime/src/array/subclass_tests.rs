@@ -1139,6 +1139,7 @@ fn dense_array_subclass_tail_transition_edges_survive_moving_gc() {
 /// later loop clone would reinterpret the SSO bits as an f64 Number.
 #[test]
 fn packed_numeric_proof_is_retired_by_sso_index_overwrite() {
+    let _global = crate::gc::global_side_table_test_lock();
     // Pins the shape-carried representation: the elements store is the
     // default, and this test is about the property-shape machinery.
     let _representation =
@@ -1175,12 +1176,6 @@ fn packed_numeric_proof_is_retired_by_sso_index_overwrite() {
         crate::object::shapes::shape_object_kind_by_id(proof_shape)
             == Some(crate::object::shapes::ShapeObjectKind::OrdinaryNumericProof)
     );
-    let header = unsafe { crate::value::addr_class::try_read_gc_header(live_raw as usize) }
-        .expect("the rooted receiver is a live GC object");
-    assert_ne!(
-        header._reserved & crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF,
-        0
-    );
 
     let key_ptr = crate::string::js_string_from_bytes(b"1".as_ptr(), 1);
     let key = f64::from_bits(crate::value::js_nanbox_string(key_ptr as i64).to_bits());
@@ -1204,13 +1199,6 @@ fn packed_numeric_proof_is_retired_by_sso_index_overwrite() {
         crate::object::shapes::shape_object_kind_by_id(retired_shape)
             != Some(crate::object::shapes::ShapeObjectKind::OrdinaryNumericProof)
     );
-    let header = unsafe { crate::value::addr_class::try_read_gc_header(live_raw as usize) }
-        .expect("the rooted receiver is a live GC object");
-    assert_eq!(
-        header._reserved & crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF,
-        0,
-        "a successful SSO overwrite must retire numeric authority without a GC barrier"
-    );
     assert_eq!(
         js_packed_arraylike_loop_guard(receiver_h.get_nanbox_f64(), 3.0, 1, facts.as_mut_ptr(),),
         0,
@@ -1220,6 +1208,7 @@ fn packed_numeric_proof_is_retired_by_sso_index_overwrite() {
 
 #[test]
 fn packed_numeric_proof_survives_pointer_free_index_swap() {
+    let _global = crate::gc::global_side_table_test_lock();
     // Pins the shape-carried representation: the elements store is the
     // default, and this test is about the property-shape machinery.
     let _representation =
@@ -1238,20 +1227,20 @@ fn packed_numeric_proof_survives_pointer_free_index_swap() {
         js_packed_arraylike_loop_guard(receiver, 3.0, 1, facts.as_mut_ptr()),
         2
     );
-    let header = unsafe { crate::value::addr_class::try_read_gc_header(obj as usize) }
-        .expect("the subclass receiver is live");
-    assert_ne!(
-        header._reserved & crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF,
-        0
+    assert_eq!(
+        crate::object::shapes::shape_object_kind_by_id(unsafe {
+            crate::object::shapes::object_shape_stamp(obj)
+        },),
+        Some(crate::object::shapes::ShapeObjectKind::OrdinaryNumericProof)
     );
 
     assert!(array_subclass_fast_index_set(receiver, 1, 33.0));
     assert_eq!(array_subclass_fast_index_get(receiver, 1), Some(33.0));
-    let header = unsafe { crate::value::addr_class::try_read_gc_header(obj as usize) }
-        .expect("the subclass receiver remains live");
-    assert_ne!(
-        header._reserved & crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF,
-        0,
+    assert_eq!(
+        crate::object::shapes::shape_object_kind_by_id(unsafe {
+            crate::object::shapes::object_shape_stamp(obj)
+        },),
+        Some(crate::object::shapes::ShapeObjectKind::OrdinaryNumericProof),
         "a numeric-for-numeric overwrite must preserve the exact packed-u32 proof"
     );
     assert_eq!(
@@ -1415,6 +1404,7 @@ fn dense_array_subclass_guard_rejects_other_object_brands() {
 /// while retiring a proof only on the first.
 #[test]
 fn retiring_a_packed_numeric_proof_reports_only_the_call_that_did_it() {
+    let _global = crate::gc::global_side_table_test_lock();
     let _representation =
         super::subclass_elements::ArraySubclassRepresentationGuard::shape_carried();
     let class_id = 0x0074_8694;

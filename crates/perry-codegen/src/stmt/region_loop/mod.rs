@@ -96,8 +96,6 @@ const RETIRED_WORD: &str = "-1";
 /// guard's plain compare admits only all-inline words and a second compare, on
 /// the miss side, recognises a spill word.
 const FLIP_I32: &str = "-1073741824";
-/// `OBJ_FLAG_PACKED_NUMERIC_PROOF` (0x80) — DESIGN §6.5a fact F-B.
-const PROOF_FLAG_I16: &str = "128";
 /// `OBJ_FLAG_PLAIN_ORDINARY | OBJ_FLAG_TYPED_ARRAY_PROTO` and its admitted
 /// value — DESIGN §6.5a fact F-A (class-less receivers).
 const CLASSLESS_ADMIT_MASK_I16: &str = "768";

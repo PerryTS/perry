@@ -3301,10 +3301,9 @@ mod tests {
             "perry-codegen emits 0x200 for this bit"
         );
         // It ADMITS a receiver, so it must not appear in the mask that REJECTS
-        // one (`WRITE_PIC_BLOCKING_FLAGS = 0x1180`) — a collision would make
+        // one (`WRITE_PIC_BLOCKING_FLAGS = 0x1100`) — a collision would make
         // every marked object permanently ineligible.
-        assert_eq!(crate::gc::OBJ_FLAG_PLAIN_ORDINARY & 0x1180, 0);
-        assert_ne!(crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF & 0x1180, 0);
+        assert_eq!(crate::gc::OBJ_FLAG_PLAIN_ORDINARY & 0x1100, 0);
         // Bit 9 is shared with the array-only arguments-object flag, disjoint
         // by `obj_type`; and it must not collide with any object-meaningful
         // flag or with the survival-age / layout-state fields the GC owns.

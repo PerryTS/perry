@@ -488,7 +488,9 @@ pub(crate) fn layout_note_slot(parent_user: usize, slot_index: usize, value_bits
                 value_bits,
             );
         } else if (*header).obj_type == GC_TYPE_OBJECT
-            && (*header)._reserved & OBJ_FLAG_PACKED_NUMERIC_PROOF != 0
+            && crate::object::shapes::store_kind::receiver_carries_numeric_proof(
+                parent_user as *const crate::object::ObjectHeader,
+            )
         {
             // The proof is a shape fact. Retire it on an owner write before
             // leaving the object arm; object-owned spill writes use their
@@ -697,7 +699,9 @@ pub(crate) fn layout_note_slot_aware(
                     value_bits,
                 );
             } else if (*header).obj_type == GC_TYPE_OBJECT
-                && (*header)._reserved & OBJ_FLAG_PACKED_NUMERIC_PROOF != 0
+                && crate::object::shapes::store_kind::receiver_carries_numeric_proof(
+                    parent_user as *const crate::object::ObjectHeader,
+                )
             {
                 crate::array::clear_packed_subclass_numeric_proof(
                     parent_user as *mut crate::object::ObjectHeader,

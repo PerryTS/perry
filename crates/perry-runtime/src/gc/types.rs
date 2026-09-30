@@ -1252,18 +1252,6 @@ pub const OBJ_FLAG_NULL_PROTO: u16 = 0x40;
 /// Bit 7 is kind-disjoint from object/array numeric-layout proofs. Generic age
 /// and layout transitions preserve it; no Buffer reader interprets those proofs.
 pub(crate) const GC_BUFFER_FOREIGN_DATA: u16 = 0x80;
-/// #8690: this `GC_TYPE_OBJECT` carries a cached proof that the packed
-/// Array-subclass element prefix recorded in `ObjectMeta::flags` is numeric.
-/// The bit is the address-reuse-safe authority: fresh allocations start with
-/// it clear, and the whole `_reserved` word rides copying/compacting GC moves.
-/// Every ordinary object-slot store clears it through `layout_note_slot`; the
-/// object-owned spill store has the matching owner-side hook.
-///
-/// Bit 7 is shared with `GC_ARRAY_RAW_F64_LAYOUT`, which is only meaningful
-/// for `GC_TYPE_ARRAY`. The two facts deliberately mean the same thing to the
-/// loop guard — direct loads over the admitted prefix are raw numeric f64s —
-/// but their payload layouts and invalidation funnels remain type-specific.
-pub(crate) const OBJ_FLAG_PACKED_NUMERIC_PROOF: u16 = 0x80;
 // Array carries properties outside its ordinary dense-element representation:
 // per-index descriptors (accessors or custom attrs installed via
 // `Object.defineProperty`), a non-writable `length`, or named properties in
@@ -1422,7 +1410,7 @@ pub const OBJ_FLAG_PLAIN_ORDINARY: u16 = 0x200;
 /// | 0..2 | `OBJ_FLAG_FROZEN` / `SEALED` / `NO_EXTEND` | same | |
 /// | 3..5 | | | `GC_COPY_SURVIVAL_AGE_MASK` |
 /// | 6 | `OBJ_FLAG_NULL_PROTO` | `GC_ARRAY_CUSTOM_PROTO` (alias) | `GC_RESIDUAL_PROTO_OWNER` (non-object) |
-/// | 7 | `OBJ_FLAG_PACKED_NUMERIC_PROOF` | `GC_ARRAY_RAW_F64_LAYOUT` | BUFFER: `GC_BUFFER_FOREIGN_DATA` |
+/// | 7 | | `GC_ARRAY_RAW_F64_LAYOUT` | BUFFER: `GC_BUFFER_FOREIGN_DATA` |
 /// | 8 | `OBJ_FLAG_TYPED_ARRAY_PROTO` | `GC_ARRAY_NAMED_PROPS` | |
 /// | 9 | `OBJ_FLAG_PLAIN_ORDINARY` | `GC_ARRAY_ARGUMENTS_OBJECT` | |
 /// | 10 | `OBJ_FLAG_STABLE_TOMBSTONES` | `OBJ_FLAG_ARRAY_DESCRIPTORS` | |

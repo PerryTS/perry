@@ -46,9 +46,9 @@ const GC_FLAG_FORWARDED_I8: &str = "-128"; // 0x80 as i8
 /// `OBJ_FLAG_HAS_DESCRIPTORS | OBJ_FLAG_STABLE_TOMBSTONES`.
 const OBJ_FLAG_READ_FAST_PATH_BLOCKED: &str = "3072";
 /// `OBJ_FLAG_FROZEN | OBJ_FLAG_STABLE_TOMBSTONES |
-/// OBJ_FLAG_HAS_DESCRIPTORS | OBJ_FLAG_PACKED_NUMERIC_PROOF` — all live in the
-/// same `GcHeader::_reserved` i16, so one mask tests them.
-const OBJ_FLAG_WRITE_FAST_PATH_BLOCKED: &str = "3201";
+/// OBJ_FLAG_HAS_DESCRIPTORS`. Numeric proof is a different ShapeId, so the
+/// exact shape comparison below excludes it.
+const OBJ_FLAG_WRITE_FAST_PATH_BLOCKED: &str = "3073";
 const F64_EXP_MASK: &str = "9218868437227405312"; // 0x7FF0_0000_0000_0000
 
 /// A widening arm for the class-field shape check: one concrete subclass whose
@@ -496,8 +496,8 @@ pub(crate) fn emit_proven_shape_recheck(
 /// block, which is left current and whose label is returned, so the caller
 /// emits the unchanged `js_typed_feedback_class_field_set_guard` call next.
 ///
-/// It is the read guard ([`emit_class_field_read_precheck`]) plus the two
-/// facts a store needs that no ShapeId carries:
+/// It is the read guard ([`emit_class_field_read_precheck`]) plus the
+/// value check a raw-f64 store needs:
 ///
 /// * the receiver range check, as ONE biased unsigned compare (the shared
 ///   fused receiver test, `crate::expr::receiver_range`);
@@ -511,10 +511,8 @@ pub(crate) fn emit_proven_shape_recheck(
 ///   guard's list therefore covers `OBJ_FLAG_FROZEN` too, and the header word
 ///   test the old write guard made (GC kind, forwarded, descriptor, tombstone,
 ///   frozen) is gone;
-/// * **kept, per object**: `OBJ_FLAG_PACKED_NUMERIC_PROOF` (an Array-subclass
-///   element-prefix claim any owner store must retire first) and, for a
-///   raw-f64 field, `GC_OBJ_TYPED_LAYOUT_INTACT`. Both live in the one
-///   `_reserved` half-word, so they are one load, one mask and one compare;
+/// * a numeric-proof Array subclass carries a sibling ShapeId, so the
+///   exact birth-shape compare refuses its inline store;
 /// * for a raw-f64 store, the value is a plain finite number (a non-number
 ///   must downgrade through the guard call, never a raw store).
 ///
@@ -613,14 +611,8 @@ pub(crate) fn emit_class_field_inline_precheck(
             }
             ok
         };
-        // GcHeader `_reserved` (u16 @-6): no numeric proof. A raw-f64 field
-        // needs nothing more: the compared ids' birth reps carry its `F64`
-        // lane (charter step 5, P4), and the finite test below keeps it one.
-        let res_ptr = blk.gep(I8, &obj_ptr, &[(I64, "-6")]);
-        let reserved = blk.load(I16, &res_ptr);
-        let bits = blk.and(I16, &reserved, &(WRITE_PROOF_BIT as i16).to_string());
-        let facts_ok = blk.icmp_eq(I16, &bits, "0");
-        ok = blk.and(I1, &ok, &facts_ok);
+        // The compared birth ShapeId has kind Ordinary. A numeric-proof
+        // sibling carries another id, so no per-object proof read is needed.
         if let (Some(value_bits), true) = (set_value_bits, require_raw_f64 || f64_lane) {
             // Only a plain finite number may be stored raw. Non-finite
             // (exponent all-ones: +-Inf/NaN) and every NaN-boxed tag share the
@@ -635,11 +627,6 @@ pub(crate) fn emit_class_field_inline_precheck(
     guardcall_label
 }
 
-/// `OBJ_FLAG_PACKED_NUMERIC_PROOF` (0x80) and `GC_OBJ_TYPED_LAYOUT_INTACT`
-/// (0x1000): the two per-object `_reserved` facts the write guard reads.
-const WRITE_PROOF_BIT: u16 = 0x80;
-const _: () = assert!(WRITE_PROOF_BIT as u64 == 128);
-
 /// Emit the class-field READ guard: receiver range check, ONE ShapeId compare
 /// against the class's own ShapeId global, and — for a raw-f64 site
 /// only — the class id and the per-object typed-layout intact bit.
@@ -653,8 +640,8 @@ const _: () = assert!(WRITE_PROOF_BIT as u64 == 128);
 ///
 /// This is the read-side form of [`emit_class_field_inline_precheck`], and it
 /// is deliberately a separate function: the WRITE guard keeps the full header
-/// word test, because `OBJ_FLAG_FROZEN` and `OBJ_FLAG_PACKED_NUMERIC_PROOF` are
-/// per-object facts no ShapeId carries.
+/// word test for `OBJ_FLAG_FROZEN`. The exact ShapeId comparison rejects
+/// the Array-subclass numeric-proof sibling.
 ///
 /// ## What a matching ShapeId already proves (the checks this guard dropped)
 ///
