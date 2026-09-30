@@ -258,7 +258,7 @@ unsafe fn hop_admitted(addr: usize, name: &[u8]) -> bool {
 
 /// The prototype identity `obj`'s shape records, if it admits: a serial, the
 /// default link or null — and equal to what the object says it is.
-unsafe fn admitted_proto_id(obj: *const ObjectHeader) -> Option<u64> {
+pub(super) unsafe fn admitted_proto_id(obj: *const ObjectHeader) -> Option<u64> {
     let pid = shape_proto_id(object_shape_stamp(obj))?;
     let serial = pid != PROTO_ID_DEFAULT && pid < crate::object::shapes::PROTO_ID_CLASS;
     if !(serial || pid == PROTO_ID_DEFAULT || pid == PROTO_ID_NULL) {

@@ -101,8 +101,8 @@ console.log(s, out.join(","));
     );
 }
 
-/// Sabotage: an existing-slot write to a marked prototype does not bump PERRY_PROTO_VALIDITY, or the
-/// emitted inherited hit skips the validity compare -> the old closure is called.
+/// Sabotage: the inherited hit reuses a memoized closure instead of loading
+/// the holder's slot -> a replacement still calls the old method.
 #[test]
 fn an_inherited_method_reassigned_by_any_store_spelling_is_seen() {
     let (stdout, own, inherited, misses) = run(
@@ -141,8 +141,8 @@ console.log(s, out.join(","));
     );
 }
 
-/// Sabotage: the emitted inherited hit skips the validity compare -> the redefined / deleted method is
-/// still called.
+/// Sabotage: the emitted inherited hit skips the holder-word compare -> a
+/// redefined or deleted method is still called.
 #[test]
 fn define_property_and_delete_on_the_holder_invalidate_the_inherited_entry() {
     let (stdout, own, inherited, misses) = run(
@@ -166,6 +166,7 @@ for (let i = 0; i < N; i++) {
   s += r;
   if (i % 1000 < 2) out.push(r);
 }
+
 console.log(s, out.join(","));
 "#,
     );
@@ -176,6 +177,29 @@ console.log(s, out.join(","));
     assert!(
         inherited > 0 && misses < 4100,
         "the site was not served inline (own={own} inherited={inherited} misses={misses})"
+    );
+}
+
+/// Mutating an unrelated marked prototype must not invalidate the inherited
+/// method entry: the receiver and its direct holder keep their shape words.
+#[test]
+fn an_unrelated_prototype_write_does_not_invalidate_the_method_site() {
+    let (stdout, own, inherited, misses) =
+        run(r#"const proto: any = { m(x: number) { return x + 1; } };
+const o: any = Object.create(proto);
+const unrelated: any = { y: 0 };
+const child: any = Object.create(unrelated);
+let sum = 0;
+for (let i = 0; i < 6000; i++) {
+  unrelated.y = i;
+  sum += o.m(i);
+}
+console.log(sum, unrelated.y, child.y);
+"#);
+    assert_eq!(stdout, "18003000 5999 5999");
+    assert!(
+        inherited > 0 && misses < 20,
+        "the inherited entry was invalidated by an unrelated store (own={own} inherited={inherited} misses={misses})"
     );
 }
 

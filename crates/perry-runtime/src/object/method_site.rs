@@ -9,9 +9,9 @@
 //!   proves the value is a closure whose body info equals
 //!   [`MethodEntry::info`], and calls [`MethodEntry::code`] directly with the
 //!   receiver as `this`;
-//! * **inherited entry** ([`METHOD_SITE_INHERITED`] in `slot`) — compares
-//!   [`MethodEntry::gen`] against `PERRY_PROTO_VALIDITY` and calls
-//!   [`MethodEntry::code`] on the memoized closure [`MethodEntry::closure`].
+//! * **inherited entry** ([`METHOD_SITE_INHERITED`] in `slot`) — compares the
+//!   direct holder's word with [`MethodEntry::gen`], loads its slot, proves
+//!   the loaded closure has [`MethodEntry::info`], and calls it directly.
 //!
 //! Everything else calls [`js_method_site_miss`], which primes the entry when
 //! the facts below hold and then performs the ordinary dispatch.
@@ -30,12 +30,10 @@
 //!   seen at once. The body info, not the closure, is compared: a factory
 //!   that returns fresh closures per object shares one body, and the call
 //!   passes the LOADED closure, so each object's captures are its own.
-//! * An inherited entry holds the method closure itself. The chain it was
-//!   found through is made of MARKED prototypes only, and
-//!   `PERRY_PROTO_VALIDITY` moves on every structural change of a marked
-//!   object AND on every write to an existing slot of one
-//!   (`proto_validity::note_marked_value_write`, owner decision D3(b)), so an
-//!   unchanged word proves the closure is still the value `m` resolves to.
+//! * An inherited entry holds the direct holder as a strong root. The
+//!   receiver's shape pins that holder, and the holder's shape pins the
+//!   inline slot. A structural change invalidates one of those word compares;
+//!   a value overwrite is seen by loading the slot on every hit.
 //!
 //! What the prime refuses (they keep the ordinary dispatch): non-ordinary
 //! receivers (class objects, native-module namespaces, dictionaries,
@@ -66,17 +64,14 @@
 //! * an entry that holds a heap reference stores it in [`MethodEntry::closure`]
 //!   and is registered by [`publish`], so [`scan_method_site_roots_mut`] marks
 //!   and rewrites it;
-//! * anything the ShapeId does not pin is validated by `PERRY_PROTO_VALIDITY`
-//!   ([`MethodEntry::gen`]), which moves on every structural change of a
-//!   marked prototype and every write to an existing slot of one
-//!   (`proto_validity::note_marked_value_write`,
-//!   `proto_validity::store_cache_may_learn`);
+//! * an inherited entry records the direct holder's word in
+//!   [`MethodEntry::gen`]; deeper chains stay on ordinary dispatch;
 //! * primes run after the ordinary dispatch, with collection suppressed.
 //!
 //! # GC
 //!
-//! [`MethodEntry::closure`] is a STRONG root: marked, and rewritten when the
-//! closure moves (`scan_method_site_roots_mut`). Every site that ever primed an
+//! [`MethodEntry::closure`] is a STRONG root for the inherited holder: marked,
+//! and rewritten when it moves (`scan_method_site_roots_mut`). Every site that ever primed an
 //! inherited entry is registered once for the scan.
 //!
 //! # Agents
@@ -117,9 +112,9 @@ pub struct MethodEntry {
     /// The method body's `JsFunctionInfo` (the identity an own hit compares
     /// the slot closure's info word with).
     pub info: u64,
-    /// Inherited entry: the method closure's address (a STRONG GC root).
+    /// Inherited entry: the direct holder's address (a STRONG GC root).
     pub closure: usize,
-    /// Inherited entry: `PERRY_PROTO_VALIDITY` when the entry was primed.
+    /// Inherited entry: the holder's full `(class_id | ShapeId)` word.
     pub gen: u64,
     /// The method body's code address, the hit's call target.
     pub code: u64,
@@ -184,17 +179,14 @@ const _: () = {
 /// The emitted `@perry_ic_N = private global ptr null` for a method site.
 pub type MethodSiteSlot = *mut MethodSite;
 
-crate::perry_thread_local! {
-    /// Every site that holds (or held) an inherited entry, for the root scan.
-    static METHOD_SITES: std::cell::UnsafeCell<Vec<*mut MethodSite>> =
-        const { std::cell::UnsafeCell::new(Vec::new()) };
-}
+/// Every site that holds (or held) an inherited entry, for the root scan and
+/// for clearing primary-heap holders when the first worker starts.
+static METHOD_SITES: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
 
 /// Set when the first `perry/thread` worker agent starts. Site memos are
-/// process-global and an inherited entry holds a primary-heap closure, so from
-/// then on no inherited entry is primed and every existing one is dead: the
-/// same call bumps `PERRY_PROTO_VALIDITY`, which no entry primed earlier can
-/// match again. Own entries hold no heap reference (ShapeIds are
+/// process-global and an inherited entry holds a primary-heap holder, so from
+/// then on no inherited entry is primed and every existing one is emptied.
+/// Own entries hold no heap reference (ShapeIds are
 /// process-unique; the call passes the receiver's own closure).
 static WORKER_AGENTS_EXIST: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
@@ -203,6 +195,20 @@ static WORKER_AGENTS_EXIST: std::sync::atomic::AtomicBool =
 pub fn note_worker_agent() {
     if !WORKER_AGENTS_EXIST.swap(true, Ordering::SeqCst) {
         super::proto_validity::bump_proto_validity();
+        if let Ok(sites) = METHOD_SITES.lock() {
+            for &site in sites.iter() {
+                // A worker must not read a primary-heap holder through a
+                // process-wide site. No inherited entry is published again.
+                unsafe {
+                    for entry in (*(site as *mut MethodSite)).entries.iter_mut() {
+                        if entry.slot & METHOD_SITE_INHERITED != 0 {
+                            entry.word = METHOD_SITE_EMPTY;
+                            entry.closure = 0;
+                        }
+                    }
+                }
+            }
+        }
         read_holder::empty_read_holder_entries();
     }
 }
@@ -440,6 +446,12 @@ unsafe fn site_is_megamorphic(slot: *mut MethodSiteSlot) -> bool {
 /// receiver word, else into an empty one, else over the next in turn. The
 /// word is written LAST, so a half-written entry never matches.
 unsafe fn publish(slot: *mut MethodSiteSlot, entry: MethodEntry) -> bool {
+    let Ok(mut sites) = METHOD_SITES.lock() else {
+        return false;
+    };
+    if entry.slot & METHOD_SITE_INHERITED != 0 && WORKER_AGENTS_EXIST.load(Ordering::SeqCst) {
+        return false;
+    }
     let site = site_of(slot);
     if site.is_null() {
         return false;
@@ -449,14 +461,14 @@ unsafe fn publish(slot: *mut MethodSiteSlot, entry: MethodEntry) -> bool {
     // an own entry replaces only the one naming the same slot AND body, so
     // objects of one shape holding different bodies each get an entry (the
     // emitted own hit falls through to the next way on a body mismatch).
-    let inherited = entry.slot == METHOD_SITE_INHERITED;
+    let inherited = entry.slot & METHOD_SITE_INHERITED != 0;
     let idx = site
         .entries
         .iter()
         .position(|e| {
             e.word == entry.word
                 && if inherited {
-                    e.slot == METHOD_SITE_INHERITED
+                    e.slot & METHOD_SITE_INHERITED != 0
                 } else {
                     e.slot == entry.slot && e.info == entry.info
                 }
@@ -473,8 +485,7 @@ unsafe fn publish(slot: *mut MethodSiteSlot, entry: MethodEntry) -> bool {
         });
     if entry.closure != 0 && site.registered == 0 {
         site.registered = 1;
-        let ptr = site as *mut MethodSite;
-        METHOD_SITES.with(|cell| (*cell.get()).push(ptr));
+        sites.push(site as *mut MethodSite as usize);
     }
     let e = &mut site.entries[idx];
     e.word = METHOD_SITE_EMPTY;
@@ -832,8 +843,8 @@ unsafe fn direct_callable(
     }
 }
 
-/// Prime an inherited entry: `name` is absent from the receiver and found as
-/// a plain inline data slot on a chain of MARKED prototypes.
+/// Prime an inherited entry when the receiver's shape pins a direct holder
+/// with `name` in a plain inline data slot. Deeper chains use ordinary dispatch.
 unsafe fn prime_inherited(
     slot: *mut MethodSiteSlot,
     obj: *const ObjectHeader,
@@ -859,18 +870,18 @@ unsafe fn prime_inherited(
         refuse(8);
         return;
     }
-    // The ShapeId must name the prototype this walk follows (#11342).
-    let stamp = super::shapes::object_shape_stamp(obj);
-    if super::shapes::shape_proto_id(stamp) != Some(super::shapes::object_proto_id(obj)) {
+    // Only a serial or the realm-default identity pins one direct prototype.
+    let Some(proto_id) = read_holder::admitted_proto_id(obj) else {
         refuse(7);
         return;
-    }
-    // Read BEFORE the walk: a change during it can only make the entry older.
-    let gen = super::proto_validity::proto_validity();
-    let mut current = obj;
-    for _hop in 0..4 {
-        let next = next_prototype(current);
-        if next.is_null() || next == current || next == obj {
+    };
+    {
+        let next = if proto_id == super::shapes::PROTO_ID_DEFAULT {
+            crate::array::object_prototype_addr_if_resolved() as *const ObjectHeader
+        } else {
+            next_prototype(obj)
+        };
+        if next.is_null() || next == obj {
             refuse(9);
             return;
         }
@@ -902,16 +913,9 @@ unsafe fn prime_inherited(
             return;
         }
         let meta = (*next).meta;
-        if meta.is_null() || (*meta).flags & super::OBJECT_META_FLAG_IS_PROTOTYPE == 0 {
-            // Only a marked hop invalidates an entry recorded through it.
-            // Marking allocates (the meta record), so nothing here may be
-            // touched afterwards: mark and abandon; the next miss primes.
-            let _ = super::proto_validity::mark_object_as_prototype(next_addr);
-            refuse(8);
-            return;
-        }
-        if (*meta).elements != 0
-            || (*meta).flags & super::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER != 0
+        if (!meta.is_null()
+            && ((*meta).elements != 0
+                || (*meta).flags & super::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER != 0))
             || key_may_be_accessor(next, name)
         {
             refuse(8);
@@ -937,11 +941,11 @@ unsafe fn prime_inherited(
                 }
                 let entry = MethodEntry {
                     word,
-                    slot: METHOD_SITE_INHERITED,
+                    slot: METHOD_SITE_INHERITED | u64::from(s),
                     info: info as *const crate::closure::JsFunctionInfo as u64,
                     code: info.code as u64,
-                    closure: (value & crate::value::POINTER_MASK) as usize,
-                    gen,
+                    closure: next_addr,
+                    gen: std::ptr::read(next_addr as *const u64),
                 };
                 if publish(slot, entry) {
                     PRIMES_INHERITED.fetch_add(1, Ordering::Relaxed);
@@ -949,7 +953,6 @@ unsafe fn prime_inherited(
                 return;
             }
         }
-        current = next;
     }
     refuse(9);
 }
@@ -977,13 +980,13 @@ unsafe fn next_prototype(obj: *const ObjectHeader) -> *const ObjectHeader {
 
 /// Root scan: every inherited entry's closure is marked and rewritten.
 pub(crate) fn scan_method_site_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    METHOD_SITES.with(|cell| unsafe {
-        for &site in (*cell.get()).iter() {
-            for e in (*site).entries.iter_mut() {
+    if let Ok(sites) = METHOD_SITES.lock() {
+        for &site in sites.iter() {
+            for e in unsafe { (*(site as *mut MethodSite)).entries.iter_mut() } {
                 if e.closure != 0 {
                     visitor.visit_tagged_usize_slot(&mut e.closure, crate::value::POINTER_TAG);
                 }
             }
         }
-    });
+    }
 }
