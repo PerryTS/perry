@@ -2633,7 +2633,7 @@ unsafe fn pipe_through_rooted_pair(readable_handle: f64, pair: f64, options: f64
         .as_ref()
         .map(|root| root.get_nanbox_f64())
         .unwrap_or(pair);
-    let transform = js_stream_unwrap_handle(pair);
+    let transform = subclass::unwrap_pair_stream_handle(pair);
     let transform_root = scope
         .as_ref()
         .filter(|_| JSValue::from_bits(transform.to_bits()).is_pointer())
@@ -2661,8 +2661,8 @@ unsafe fn pipe_through_rooted_pair(readable_handle: f64, pair: f64, options: f64
         // Keep object-specific property dispatch out of the numeric endpoint
         // getters, so merely reading TransformStream endpoints does not link
         // the generic object-property machinery into an otherwise lean binary.
-        let readable = js_stream_unwrap_handle(transform_field(b"readable"));
-        let writable = js_stream_unwrap_handle(transform_field(b"writable"));
+        let readable = subclass::unwrap_pair_stream_handle(transform_field(b"readable"));
+        let writable = subclass::unwrap_pair_stream_handle(transform_field(b"writable"));
         (readable, writable)
     } else {
         (

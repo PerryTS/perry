@@ -65,17 +65,26 @@ pub unsafe extern "C" fn js_stream_unwrap_handle(value: f64) -> f64 {
     if top16 != 0x7FFD {
         return value;
     }
-    let Some(_) = this_object_ptr(value) else {
+    let Some(obj) = this_object_ptr(value) else {
         return value;
     };
-    unwrap_object_stream_handle(value)
+    let key = subclass_handle_key();
+    let result = js_object_get_field_by_name(obj, key);
+    let result_bits = result.bits();
+    if result_bits == TAG_UNDEFINED || result_bits == TAG_NULL {
+        return value;
+    }
+    f64::from_bits(result_bits)
 }
 
-// Numeric registry handles never enter this rooted object branch. Keep its
-// root frame and getter machinery away from the ordinary stream fast path.
+// Pair conversion can call user getters and allocate its hidden-field key.
+// Keep that scoped rooting local to pipeThrough instead of legacy dispatch.
 #[cold]
 #[inline(never)]
-unsafe fn unwrap_object_stream_handle(value: f64) -> f64 {
+pub(super) unsafe fn unwrap_pair_stream_handle(value: f64) -> f64 {
+    if this_object_ptr(value).is_none() {
+        return value;
+    }
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(value);
     let key = subclass_handle_key();
