@@ -394,6 +394,23 @@ fn a_bare_store_of_a_value_not_proven_a_double_names_its_key_to_the_prime() {
     );
 }
 
+/// Last prime argument, before LLVM's call attributes (e.g. the
+/// `"gc-leaf-function"` suffix), is the requested region R mask.
+fn prime_rep_masks(ir: &str) -> Vec<u32> {
+    ir.lines()
+        .filter(|line| line.contains("@js_region_loop_prime("))
+        .filter_map(|line| {
+            line.rsplit_once("i32 ")?
+                .1
+                .split_once(')')?
+                .0
+                .trim()
+                .parse()
+                .ok()
+        })
+        .collect()
+}
+
 /// A fresh bare read used by a Number-consuming add requests an F64 lane.
 /// The prime must refuse an Any receiver, so this is an actual R-bearing
 /// region rather than a vacuous mask argument.
@@ -411,18 +428,7 @@ fn a_number_consuming_bare_read_sets_the_prime_rep_mask() {
         ))],
     );
     assert!(ir.contains("rloop.fast"), "region did not form:\n{ir}");
-    let masks: Vec<u32> = ir
-        .lines()
-        .filter(|l| l.contains("@js_region_loop_prime("))
-        .filter_map(|l| {
-            l.rsplit_once("i32 ")?
-                .1
-                .trim_end_matches(')')
-                .trim()
-                .parse()
-                .ok()
-        })
-        .collect();
+    let masks = prime_rep_masks(&ir);
     assert!(!masks.is_empty(), "no learned prime in\n{ir}");
     assert!(
         masks.iter().all(|&m| m == 1),
@@ -464,18 +470,7 @@ fn a_region_number_local_is_admitted_only_in_f() {
         },
     );
     assert!(ir.contains("rloop.fast"), "region did not form:\n{ir}");
-    let masks: Vec<u32> = ir
-        .lines()
-        .filter(|l| l.contains("@js_region_loop_prime("))
-        .filter_map(|l| {
-            l.rsplit_once("i32 ")?
-                .1
-                .trim_end_matches(')')
-                .trim()
-                .parse()
-                .ok()
-        })
-        .collect();
+    let masks = prime_rep_masks(&ir);
     assert!(
         !masks.is_empty() && masks.iter().all(|&m| m == 1),
         "the temp's source must request R=1: {masks:?}\n{ir}"
