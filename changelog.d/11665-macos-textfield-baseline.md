@@ -24,7 +24,3 @@ only the frames that AppKit hands it to draw and to edit, so the padding
 applies once for every border style. `textfieldSetBackgroundColor` paints the
 field's layer, so the background fills the padding too. The cell's own
 background filled only the area inside the padding.
-
-Layer colours reach CoreAnimation as a typed `CGColor` pointer. As a `c_void`
-pointer, `widgetSetBackgroundColor`, border colours and shadow colours
-panicked in a debug build's message check.
