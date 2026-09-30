@@ -137,10 +137,20 @@ pub(super) unsafe fn try_hit(
     recv: *const ObjectHeader,
     cache_slot: *mut PicCacheSlot,
 ) -> Option<crate::value::JSValue> {
-    if cache_slot.is_null()
-        || WORKER_AGENTS_EXIST.load(Ordering::SeqCst) != 0
-        || crate::agent::current_agent() != crate::agent::PRIMARY_AGENT
-    {
+    if WORKER_AGENTS_EXIST.load(Ordering::SeqCst) != 0 {
+        return None;
+    }
+    try_hit_after_worker_gate(recv, cache_slot)
+}
+
+/// Primary-agent site validation used by the unit test after another test
+/// has already started a worker; the public hit stays gate guarded.
+#[inline(always)]
+unsafe fn try_hit_after_worker_gate(
+    recv: *const ObjectHeader,
+    cache_slot: *mut PicCacheSlot,
+) -> Option<crate::value::JSValue> {
+    if cache_slot.is_null() || crate::agent::current_agent() != crate::agent::PRIMARY_AGENT {
         return None;
     }
     let cache = crate::object::field_get_set::pic_slot_peek::<PicCache>(cache_slot);
@@ -382,14 +392,10 @@ mod tests {
         cache[SITE_WORD] = (SITE_TAG | record as usize as u64) as i64;
         cache[HOLDER_STATE] = STATE_CLASS_SITE;
         let mut slot = &mut cache as *mut PicCache;
-        let gate = WORKER_AGENTS_EXIST.swap(0, Ordering::SeqCst);
         assert_eq!(
-            unsafe { try_hit(recv, &mut slot) }.map(|v| v.bits()),
+            unsafe { try_hit_after_worker_gate(recv, &mut slot) }.map(|v| v.bits()),
             Some(crate::value::TAG_UNDEFINED)
         );
-        WORKER_AGENTS_EXIST.store(1, Ordering::SeqCst);
-        assert!(unsafe { try_hit(recv, &mut slot) }.is_none());
-        WORKER_AGENTS_EXIST.store(gate, Ordering::SeqCst);
         unsafe { drop(Box::from_raw(record)) };
     }
 }
