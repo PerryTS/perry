@@ -2461,11 +2461,10 @@ pub unsafe extern "C" fn js_region_loop_prime(
 /// ([`RegionRefusal`]).
 fn region_loop_prime_census(verdict: Result<u64, RegionRefusal>) {
     use crate::hot_diag::{
-        RT_ROUTE_RLOOP_PRIME_OK, RT_ROUTE_RLOOP_REFUSE_ABSENT, RT_ROUTE_RLOOP_REFUSE_BAND,
-        RT_ROUTE_RLOOP_REFUSE_F64_STORED, RT_ROUTE_RLOOP_REFUSE_KIND, RT_ROUTE_RLOOP_REFUSE_RANGE,
-        RT_ROUTE_RLOOP_REFUSE_REP, RT_ROUTE_RLOOP_REFUSE_SPILL_STORED,
+        recv_route_note_runtime, RT_ROUTE_RLOOP_PRIME_OK, RT_ROUTE_RLOOP_REFUSE_ABSENT,
+        RT_ROUTE_RLOOP_REFUSE_BAND, RT_ROUTE_RLOOP_REFUSE_F64_STORED, RT_ROUTE_RLOOP_REFUSE_KIND,
+        RT_ROUTE_RLOOP_REFUSE_RANGE, RT_ROUTE_RLOOP_REFUSE_REP, RT_ROUTE_RLOOP_REFUSE_SPILL_STORED,
         RT_ROUTE_RLOOP_REFUSE_SPILL_UNSERVABLE, RT_ROUTE_RLOOP_REFUSE_SUMMARY,
-        recv_route_note_runtime,
     };
     let route = match verdict {
         Ok(_) => RT_ROUTE_RLOOP_PRIME_OK,
