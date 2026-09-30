@@ -6,6 +6,8 @@
 //! it to the outer local's LLVM alloca slot so the mutation is visible to the
 //! caller.
 
+use anyhow::{ensure, Result};
+
 use crate::expr::FnCtx;
 use crate::nanbox::POINTER_MASK_I64;
 use crate::types::{DOUBLE, I32, I64};
@@ -36,13 +38,13 @@ pub(crate) fn emit_class_capture_writeback(
     class: &perry_hir::Class,
     obj_handle: &str,
     new_args: &[perry_hir::Expr],
-) {
+) -> Result<()> {
     // Cap params are synthesized in `synthesize_class_captures` as extra
     // constructor params with name `__perry_cap_<outer_id>`. They are NOT in
     // `class.fields` — they are PropertySet stmts on `this` in the ctor body.
     // Iterate ctor params to find which outer locals were captured.
     let Some(ctor) = class.constructor.as_ref() else {
-        return;
+        return Ok(());
     };
     // Collect the cap params (those with __perry_cap_ prefix) in declaration
     // order so we can index them positionally against new_args.
@@ -59,7 +61,7 @@ pub(crate) fn emit_class_capture_writeback(
     // or ctor-side write of a capture is a shared cell anyway (#5951), so the
     // outer binding already sees it.
     if guarded {
-        return;
+        return Ok(());
     }
 
     for (cap_idx, param) in cap_params.iter().enumerate() {
@@ -135,7 +137,11 @@ pub(crate) fn emit_class_capture_writeback(
             && crate::scope_env::access::slot(ctx, outer_id).is_some()
         {
             let val_bits = ctx.block().bitcast_double_to_i64(&val);
-            let _ = crate::scope_env::access::write_scoped(ctx, outer_id, &val_bits);
+            ensure!(
+                crate::scope_env::access::write_scoped(ctx, outer_id, &val_bits)?,
+                "scoped capture {} has no storage during class write-back",
+                outer_id
+            );
         } else if ctx.boxed_vars.contains(&outer_id) {
             let outer_slot = outer_slot.expect("non-canonical write-back has a slot");
             let box_dbl = ctx.block().load(DOUBLE, &outer_slot);
@@ -155,4 +161,5 @@ pub(crate) fn emit_class_capture_writeback(
             }
         }
     }
+    Ok(())
 }

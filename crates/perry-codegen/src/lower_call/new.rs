@@ -858,7 +858,7 @@ fn lower_new_impl_inner<'a>(
             // a cap arg and write to the wrong outer slot. Fall back to suffix-based
             // lookup (empty slice) in that case.
             let writeback_args = if caps_absent_from_args { &[][..] } else { args };
-            emit_class_capture_writeback(ctx, class, &obj_handle, writeback_args);
+            emit_class_capture_writeback(ctx, class, &obj_handle, writeback_args)?;
             let is_derived = class.extends.is_some()
                 || class.extends_name.is_some()
                 || class.native_extends.is_some()
