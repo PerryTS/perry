@@ -803,6 +803,15 @@ pub(super) fn get_field_ic_miss_impl(
     //
     let gc_header = unsafe { crate::value::addr_class::try_read_gc_header(obj as usize) };
     let gc_kind = gc_header.map(|h| h.obj_type);
+    // An accessor can run JS and collect, so this lives in the collecting
+    // miss handler. The leaf front only recognizes data and absent entries.
+    if gc_kind == Some(crate::gc::GC_TYPE_OBJECT) {
+        if let Some(value) = unsafe {
+            crate::object::method_site::read_holder::try_cached_class_accessor(obj, cache_slot)
+        } {
+            return f64::from_bits(value.bits());
+        }
+    }
     if crate::value::addr_class::is_above_handle_band(obj as usize) {
         // # The receiver-classification ladder runs only for NON-object kinds
         //

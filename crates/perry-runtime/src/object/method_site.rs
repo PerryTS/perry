@@ -295,10 +295,12 @@ fn stats_report_enabled() -> bool {
                     }
                 }
                 let (hd, ha, hr) = read_holder::read_holder_stats();
+                let (ap, ah) = read_holder::read_accessor_stats();
                 eprintln!(
-                    "[method-site] primes_own={a} primes_inherited={b} primes_function={} holder_rewrites={} misses={c} read_holder_primes={hd} read_absent_primes={ha} read_holder_refused={hr}{refused}",
+                    "[method-site] primes_own={a} primes_inherited={b} primes_function={} holder_rewrites={} misses={c} read_holder_primes={hd} read_absent_primes={ha} read_accessor_primes={ap} read_accessor_hits={ah} read_holder_rewrites={} read_holder_refused={hr}{refused}",
                     method_site_function_primes(),
-                    HOLDER_REWRITES.load(Ordering::Relaxed)
+                    HOLDER_REWRITES.load(Ordering::Relaxed),
+                    read_holder::read_holder_rewrites()
                 );
             }
             unsafe { libc::atexit(report) };

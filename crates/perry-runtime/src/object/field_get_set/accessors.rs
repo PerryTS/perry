@@ -446,6 +446,10 @@ pub(crate) fn accessor_receiver_override_take() -> Option<f64> {
     ACCESSOR_RECEIVER_OVERRIDE.with(|c| c.take())
 }
 
+pub(crate) fn accessor_receiver_override_armed() -> bool {
+    ACCESSOR_RECEIVER_OVERRIDE.with(|c| c.get().is_some())
+}
+
 pub(crate) fn accessor_receiver_override_end(prev: Option<f64>) {
     ACCESSOR_RECEIVER_OVERRIDE.with(|c| c.set(prev));
 }
