@@ -713,6 +713,24 @@ pub unsafe extern "C" fn js_ext_net_handle_property_dispatch(
             "maxConnections" => crate::js_net_server_get_max_connections(handle),
             _ => crate::js_net_server_get_drop_max_connection(handle),
         })
+    } else if matches!(
+        prop,
+        "localAddress"
+            | "localPort"
+            | "localFamily"
+            | "remoteAddress"
+            | "remotePort"
+            | "remoteFamily"
+    ) && crate::js_ext_net_is_socket_handle(handle) != 0
+    {
+        Some(match prop {
+            "localAddress" => crate::js_net_socket_get_local_address(handle),
+            "localPort" => crate::js_net_socket_get_local_port(handle),
+            "localFamily" => crate::js_net_socket_get_local_family(handle),
+            "remoteAddress" => crate::js_net_socket_get_remote_address(handle),
+            "remotePort" => crate::js_net_socket_get_remote_port(handle),
+            _ => crate::js_net_socket_get_remote_family(handle),
+        })
     } else {
         None
     };

@@ -1,0 +1,1 @@
+Accepted TCP sockets now expose `remoteAddress`, `remotePort`, `remoteFamily`, `localAddress`, `localPort`, and `localFamily` through dynamic property access, using the existing endpoint getters. Unconnected sockets retain undefined endpoint values. No new socket state or runtime side tables are added.
