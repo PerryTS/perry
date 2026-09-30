@@ -57,7 +57,7 @@ pub(crate) fn class_proto_key_deleted(class_id: u32, name: &str) -> bool {
     let declared = name == "constructor"
         || class_own_accessor_ptrs(class_id, name).is_some()
         || super::super::native_module::class_has_own_method(class_id, name);
-    if !declared {
+    if !declared || proto_member_has_no_string_key(class_id, name) {
         return false;
     }
     let proto = class_decl_prototype_object(class_id);
@@ -89,6 +89,29 @@ pub(crate) fn class_proto_key_deleted(class_id: u32, name: &str) -> bool {
                 )
                 .is_some()
         }
+}
+
+/// A declared prototype member that the reflective prototype object never
+/// carries under the string key `name`, so the absence of that key proves
+/// nothing about a `delete` (#11692): a `#private` method (not a property at
+/// all; `delete` cannot reach it) and the synthetic dispatch alias of a
+/// well-known-symbol method (`@@iterator` stands in for `[Symbol.iterator]`,
+/// which lives under its symbol key). A source method literally named
+/// `"@@iterator"` has a string-member order registration and is a real key.
+fn proto_member_has_no_string_key(class_id: u32, name: &str) -> bool {
+    if name.starts_with('#') {
+        return true;
+    }
+    internal_symbol_dispatch_alias(name)
+        && !CLASS_STRING_MEMBER_ORDERS
+            .read()
+            .ok()
+            .and_then(|guard| {
+                guard
+                    .as_ref()
+                    .map(|map| map.contains_key(&(class_id, false, name.to_string())))
+            })
+            .unwrap_or(false)
 }
 
 /// Has `delete` removed class `class_id`'s own static member `name` (a
