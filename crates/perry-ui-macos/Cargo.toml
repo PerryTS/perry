@@ -118,6 +118,11 @@ path = "tests/native_textfield_cell.rs"
 harness = false
 
 [[test]]
+name = "native_textfield_newlines"
+path = "tests/native_textfield_newlines.rs"
+harness = false
+
+[[test]]
 name = "native_text_spacing"
 path = "tests/native_text_spacing.rs"
 harness = false

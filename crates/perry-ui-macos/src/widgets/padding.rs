@@ -1,11 +1,12 @@
 use objc2::rc::{Allocated, Retained};
-use objc2::runtime::{AnyClass, AnyObject};
+use objc2::runtime::{AnyClass, AnyObject, Sel};
 use objc2::{define_class, msg_send, ClassType, DefinedClass};
 use objc2_app_kit::{
-    NSEvent, NSSecureTextField, NSSecureTextFieldCell, NSText, NSTextField, NSTextFieldCell, NSView,
+    NSEvent, NSSecureTextField, NSSecureTextFieldCell, NSText, NSTextField, NSTextFieldCell,
+    NSTextView, NSView,
 };
 use objc2_core_foundation::CGRect;
-use objc2_foundation::{MainThreadMarker, NSEdgeInsets, NSObjectProtocol, NSString};
+use objc2_foundation::{MainThreadMarker, NSEdgeInsets, NSObjectProtocol, NSRange, NSString};
 use std::cell::Cell;
 
 mod button;
@@ -219,6 +220,38 @@ define_class!(
         fn cell_class() -> &'static AnyClass {
             PerryInsetTextFieldCell::class()
         }
+
+        #[unsafe(method(setStringValue:))]
+        fn set_string_value(&self, value: &NSString) {
+            let value = super::textfield::one_line_value(value);
+            unsafe { msg_send![super(self), setStringValue: &*value] }
+        }
+
+        #[unsafe(method(textView:shouldChangeTextInRange:replacementString:))]
+        fn should_change_text(
+            &self,
+            editor: &NSTextView,
+            range: NSRange,
+            replacement: Option<&NSString>,
+        ) -> bool {
+            match super::textfield::entered_text_with_spaces(replacement) {
+                // Inserting the spaced text asks this method again, now with no
+                // line break, so the edit still passes through super.
+                Some(spaced) => {
+                    let _: () = unsafe { msg_send![editor, insertText: &*spaced, replacementRange: range] };
+                    false
+                }
+                None => unsafe {
+                    msg_send![super(self), textView: editor, shouldChangeTextInRange: range, replacementString: replacement]
+                },
+            }
+        }
+
+        #[unsafe(method(textView:doCommandBySelector:))]
+        fn do_command(&self, editor: &NSTextView, command: Sel) -> bool {
+            super::textfield::is_line_break_command(command)
+                || unsafe { msg_send![super(self), textView: editor, doCommandBySelector: command] }
+        }
     }
 );
 
@@ -231,6 +264,38 @@ define_class!(
         #[unsafe(method(cellClass))]
         fn cell_class() -> &'static AnyClass {
             PerryInsetSecureTextFieldCell::class()
+        }
+
+        #[unsafe(method(setStringValue:))]
+        fn set_string_value(&self, value: &NSString) {
+            let value = super::textfield::one_line_value(value);
+            unsafe { msg_send![super(self), setStringValue: &*value] }
+        }
+
+        #[unsafe(method(textView:shouldChangeTextInRange:replacementString:))]
+        fn should_change_text(
+            &self,
+            editor: &NSTextView,
+            range: NSRange,
+            replacement: Option<&NSString>,
+        ) -> bool {
+            match super::textfield::entered_text_with_spaces(replacement) {
+                // Inserting the spaced text asks this method again, now with no
+                // line break, so the edit still passes through super.
+                Some(spaced) => {
+                    let _: () = unsafe { msg_send![editor, insertText: &*spaced, replacementRange: range] };
+                    false
+                }
+                None => unsafe {
+                    msg_send![super(self), textView: editor, shouldChangeTextInRange: range, replacementString: replacement]
+                },
+            }
+        }
+
+        #[unsafe(method(textView:doCommandBySelector:))]
+        fn do_command(&self, editor: &NSTextView, command: Sel) -> bool {
+            super::textfield::is_line_break_command(command)
+                || unsafe { msg_send![super(self), textView: editor, doCommandBySelector: command] }
         }
     }
 );
