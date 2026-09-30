@@ -820,13 +820,11 @@ unsafe fn stream_object_field(object: f64, name: &[u8]) -> f64 {
     if !value.is_pointer() {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    let scope = perry_runtime::gc::RuntimeHandleScope::new();
-    let receiver = scope.root_nanbox_f64(object);
-    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    let obj = js_nanbox_get_pointer(receiver.get_nanbox_f64()) as *const ObjectHeader;
+    let obj = js_nanbox_get_pointer(object) as *const ObjectHeader;
     if obj.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
+    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
     f64::from_bits(js_object_get_field_by_name(obj, key).bits())
 }
 
@@ -2651,12 +2649,19 @@ unsafe fn pipe_through_rooted_pair(readable_handle: f64, pair: f64, options: f64
             .map(|root| root.get_nanbox_f64())
             .unwrap_or(options)
     };
+    let transform_field = |name: &[u8]| {
+        let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        // The key allocation can move the pair. Read the already-rooted
+        // receiver only after it, and again for each getter.
+        let object = js_nanbox_get_pointer(transform_value()) as *const ObjectHeader;
+        f64::from_bits(js_object_get_field_by_name(object, key).bits())
+    };
     let (readable, writable) = if JSValue::from_bits(transform.to_bits()).is_pointer() {
         // Keep object-specific property dispatch out of the numeric endpoint
         // getters, so merely reading TransformStream endpoints does not link
         // the generic object-property machinery into an otherwise lean binary.
-        let readable = js_stream_unwrap_handle(stream_object_field(transform_value(), b"readable"));
-        let writable = js_stream_unwrap_handle(stream_object_field(transform_value(), b"writable"));
+        let readable = js_stream_unwrap_handle(transform_field(b"readable"));
+        let writable = js_stream_unwrap_handle(transform_field(b"writable"));
         (readable, writable)
     } else {
         (
