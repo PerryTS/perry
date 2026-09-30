@@ -423,6 +423,7 @@ pub extern "C" fn js_object_alloc_class_inline_keys_stamped(
     field_count: u32,
     keys_array: *mut ArrayHeader,
     shape_id: u32,
+    rep: u64,
 ) -> *mut ObjectHeader {
     // The key count comes from the shape the module-init code minted beside
     // this keys global: the global holds only the array, and the array can
@@ -433,34 +434,9 @@ pub extern "C" fn js_object_alloc_class_inline_keys_stamped(
         field_count,
         keys_array,
         shape_id,
+        rep,
         false,
     )
-}
-
-/// A class keys global's keys, with the count its module-init ShapeId names.
-/// A worker agent may not have installed that id yet, and an id that names a
-/// different array is not this global's; both fall back to the array itself,
-/// which module init built exact. So does an id whose count the array no
-/// longer holds: the id's facts diverged from the global beside it, and a
-/// count past the array's initialized slots would name keys that are not
-/// there. The fallback's count then differs from the id's, so the stamp
-/// declines it and publishes an exact descriptor.
-#[inline]
-pub(super) fn preinstalled_class_keys(
-    keys_array: *mut ArrayHeader,
-    shape_id: u32,
-) -> crate::object::ObjectKeys {
-    // SAFETY: a module keys global is a live keys array (or null).
-    let owned = unsafe { crate::object::ObjectKeys::owned(keys_array) };
-    match crate::object::shapes::shape_descriptor_by_id(shape_id) {
-        Some(descriptor)
-            if descriptor.keys == keys_array as u64
-                && descriptor.logical_key_count <= owned.count() =>
-        {
-            descriptor.keys_view()
-        }
-        _ => owned,
-    }
 }
 
 /// Build (or fetch from SHAPE_CACHE) the keys_array for a class.
@@ -470,17 +446,21 @@ pub(super) fn preinstalled_class_keys(
 ///
 /// Same packed-keys format as `js_object_alloc_class_with_keys`:
 /// null-separated UTF-8 field names.
+///
+/// `rep` is the class's birth rep (charter step 5): the shape minted beside
+/// the keys carries it, so an allocator that births from this cache entry
+/// (`js_object_alloc_class_with_keys`, the runtime construct path through
+/// `alloc_plain::class_keys_birth_rep`) gets the birth rep, never an all-`Any`
+/// twin of the class's shape.
 #[no_mangle]
 pub extern "C" fn js_build_class_keys_array(
     class_id: u32,
     field_count: u32,
     packed_keys: *const u8,
     packed_keys_len: u32,
+    rep: u64,
 ) -> *mut ArrayHeader {
-    let shape_id = class_id
-        .wrapping_mul(10007)
-        .wrapping_add(field_count.wrapping_mul(100003))
-        .wrapping_add(1000000);
+    let shape_id = super::alloc_plain::class_keys_cache_slot(class_id, field_count);
     let cached = shape_cache_get(shape_id);
     if !cached.is_null() {
         remember_class_keys(class_id, field_count, cached);
@@ -492,6 +472,7 @@ pub extern "C" fn js_build_class_keys_array(
             shape_id,
             crate::object::canonical_keys::LiveObject::none(),
             crate::object::ObjectKeys::new(arr, 0),
+            rep,
         );
         remember_class_keys(class_id, field_count, keys);
         return keys.arr();
@@ -541,6 +522,7 @@ pub extern "C" fn js_build_class_keys_array(
         shape_id,
         crate::object::canonical_keys::LiveObject::none(),
         unsafe { crate::object::ObjectKeys::owned(arr) },
+        rep,
     );
     remember_class_keys(class_id, field_count, keys);
     // Generated code keeps only the array; `js_object_alloc_class_inline_keys_stamped`
@@ -585,10 +567,7 @@ pub extern "C" fn js_object_alloc_class_with_keys(
     // makes — and an instance allocated first would have to be carried across
     // all of them (it used to be carried raw across the first two, which can
     // collect).
-    let shape_id = class_id
-        .wrapping_mul(10007)
-        .wrapping_add(field_count.wrapping_mul(100003))
-        .wrapping_add(1000000);
+    let shape_id = super::alloc_plain::class_keys_cache_slot(class_id, field_count);
     let (cached, cached_runtime_id) = shape_cache_get_with_id(shape_id);
     let (keys_arr, runtime_shape_id) = if !cached.is_null() {
         (cached, cached_runtime_id)
@@ -606,9 +585,13 @@ pub extern "C" fn js_object_alloc_class_with_keys(
             shape_id,
             crate::object::canonical_keys::LiveObject::none(),
             unsafe { crate::object::ObjectKeys::owned(arr) },
+            super::field_rep::REP_ANY,
         );
         (keys, shape_cache_get_with_id(shape_id).1)
     };
+    // The entry's shape carries the class's birth rep (a module-init entry,
+    // `js_build_class_keys_array`); every birth from it carries that rep too.
+    let rep = super::alloc_plain::shape_rep_of(runtime_shape_id);
 
     let (ptr, arr) = alloc_instance_keeping_keys(total_size, keys_arr.arr());
     let keys_arr = crate::object::ObjectKeys::new(arr, keys_arr.count());
@@ -625,7 +608,10 @@ pub extern "C" fn js_object_alloc_class_with_keys(
         // for every class that lands here — and a split population is a
         // permanent PIC miss, not a slow start. See
         // `shapes::birth_stamp_object_shape`.
-        crate::object::shapes::birth_stamp_object_shape(ptr, runtime_shape_id, field_count);
+        crate::object::shapes::birth_stamp_object_shape(ptr, runtime_shape_id, field_count, rep);
+        if rep != super::field_rep::REP_ANY {
+            super::field_rep_store::birth_fill_f64_lanes(ptr);
+        }
     }
     remember_class_keys(class_id, field_count, keys_arr);
     ptr
@@ -710,6 +696,7 @@ pub extern "C" fn js_object_alloc_class_dynamic_parent(
             shape_id,
             crate::object::canonical_keys::LiveObject::none(),
             unsafe { crate::object::ObjectKeys::owned(arr) },
+            super::field_rep::REP_ANY,
         );
         debug_assert_eq!(merged.count() as usize, merged_len);
         (
@@ -739,7 +726,8 @@ pub extern "C" fn js_object_alloc_class_dynamic_parent(
         crate::gc::layout_init_pointer_free(ptr as *mut u8);
         // The dynamically-parented subclass shape needs the same birth stamp
         // as every other class instance, or its sites split the same way.
-        crate::object::shapes::birth_stamp_object_shape(ptr, runtime_shape_id, field_count);
+        let rep = super::field_rep::REP_ANY;
+        crate::object::shapes::birth_stamp_object_shape(ptr, runtime_shape_id, field_count, rep);
     }
     remember_class_keys(class_id, field_count, merged_arr);
     ptr
@@ -815,6 +803,7 @@ pub extern "C" fn js_object_alloc_with_shape(
             shape_id,
             crate::object::canonical_keys::LiveObject::none(),
             unsafe { crate::object::ObjectKeys::owned(arr) },
+            super::field_rep::REP_ANY,
         );
         (keys, shape_cache_get_with_id(shape_id).1)
     };
@@ -845,7 +834,13 @@ pub extern "C" fn js_object_alloc_with_shape(
             // pre-stamp window for shape-cached objects.
             // #8113: `field_count` is the LOGICAL live-slot bound; the extra
             // physical slots above it stay available for dynamic growth.
-            crate::object::shapes::birth_stamp_object_shape(obj_ptr, runtime_shape_id, field_count);
+            let rep = super::field_rep::REP_ANY;
+            crate::object::shapes::birth_stamp_object_shape(
+                obj_ptr,
+                runtime_shape_id,
+                field_count,
+                rep,
+            );
         }
     }
 

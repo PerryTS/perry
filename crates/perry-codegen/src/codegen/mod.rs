@@ -251,6 +251,7 @@ mod static_shape_ids;
 pub use static_shape_ids::{
     assign_static_shape_ids, decode_static_seed, encode_static_seed, take_module_static_seeds,
     BirthProto, BirthShape, DefinedClassShape, ModuleBirth, ProgramClassShapeIds, TypedMasks,
+    STATIC_SEED_FORMAT,
 };
 pub(crate) use static_shape_ids::{
     static_region_slots, static_shape_id_for_foreign_global, static_shape_id_for_keys_global,
@@ -2443,12 +2444,34 @@ fn compile_module_impl(
         inits.retain(|_, (class_id, _, _)| *class_id != u32::MAX);
         inits
     };
+    // Charter step 5, T1: each class's birth rep (`typed_shape::class_birth_rep_in`),
+    // keyed like the header-image inits by keys global. Two names sharing a
+    // keys global that disagree get `Any` (0): every consumer reads this map,
+    // so they still agree with each other.
+    let class_birth_reps_map: std::collections::HashMap<String, u64> = {
+        let mut reps: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+        for (class_name, keys_global) in &class_keys_globals_map {
+            let rep = crate::typed_shape::class_birth_rep_in(
+                &class_table,
+                &class_keys_globals_map,
+                &class_init_chains_map,
+                imported_stub_names.contains(class_name.as_str()),
+                class_name,
+            );
+            let entry = reps.entry(keys_global.clone()).or_insert(rep);
+            if *entry != rep {
+                *entry = 0;
+            }
+        }
+        reps
+    };
     if let Some(births) = births {
         *births = static_shape_ids::module_births(
             &module_prefix,
             &class_keys_init_data,
             defined_class_keys_len,
             &class_header_image_inits,
+            &class_birth_reps_map,
             &class_ids,
         );
         return Ok(Vec::new());
@@ -2457,6 +2480,7 @@ fn compile_module_impl(
         &module_prefix,
         &class_keys_init_data,
         &class_header_image_inits,
+        &class_birth_reps_map,
         &class_ids,
         &opts.static_shape_ids,
         &opts.program_class_shape_ids,
@@ -2568,6 +2592,7 @@ fn compile_module_impl(
         class_field_counts: class_field_counts_map,
         class_init_chains: class_init_chains_map,
         class_header_images: class_header_images_map,
+        class_birth_reps: class_birth_reps_map,
         imported_class_ctors: opts
             .imported_classes
             .iter()

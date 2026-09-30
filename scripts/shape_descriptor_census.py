@@ -526,7 +526,9 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
         ensure_append,
         "by-id descriptor before reverse accelerator",
     )
-    sync = function_body(shapes, "publish_object_shape_from")
+    # The structural publish body (charter step 5: `publish_object_shape_from`
+    # delegates to it with an all-Any rep).
+    sync = function_body(shapes, "publish_object_shape_from_rep")
     # #9317 routed every post-birth ShapeId publication through
     # `stamp_object_shape_id_with_carrier_note`, which performs the header
     # write and then arms `old_carrier` for a promoted receiver. The header
@@ -545,14 +547,19 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     # test-only.
     for name in (
         "publish_object_shape_from",
+        "publish_object_shape_from_rep",
         "publish_object_live_slot_count",
+        "publish_object_live_slot_count_rep",
         "birth_publish_object_shape",
         "stamp_object_shape",
         "birth_stamp_object_shape",
     ):
         if "clear_object_shape_stamp" in function_body(shapes, name):
             raise CensusError(f"{name} clears the shape stamp: the live-slot bound has no mirror")
-    if "clear_object_shape_stamp" in function_body(object_mod, "set_object_keys_with_live"):
+    if any(
+        "clear_object_shape_stamp" in function_body(object_mod, name)
+        for name in ("set_object_keys_with_live", "set_object_keys_with_live_rep")
+    ):
         raise CensusError(
             "set_object_keys_with_live clears the shape stamp: "
             "the live-slot bound has no mirror"
@@ -625,7 +632,8 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     assert_before(
         cache_arm,
         "set_object_live_slot_count",
-        "runtime_store_jsvalue_slot",
+        # The checked store funnel (charter step 5 P2b; was the raw slot store).
+        "store_object_field_slot",
         "transition-cache count before value",
     )
 
@@ -1179,13 +1187,14 @@ def run_sabotage_selftests(sources: dict[str, str], baseline: dict[str, object])
     inverted_publication = dict(sources)
     path = "crates/perry-runtime/src/object/shapes.rs"
     publication_body = function_body(
-        inverted_publication[path], "publish_object_shape_from"
+        inverted_publication[path], "publish_object_shape_from_rep"
     )
     inverted_body = swap_once(
         publication_body,
         # #9029 tombstones: the lineage publish carries hole_count, so the
-        # mint call in publish_object_shape_from is the _with_holes form.
-        "shape_descriptor_ensure_with_holes(",
+        # mint call in the structural publish is the form taking a rep
+        # (charter step 5).
+        "shape_descriptor_ensure_with_rep(",
         "stamp_object_shape_id_with_carrier_note",
     )
     inverted_publication[path] = inverted_publication[path].replace(
@@ -1218,7 +1227,7 @@ def run_sabotage_selftests(sources: dict[str, str], baseline: dict[str, object])
     )
 
     early_retirement = dict(sources)
-    publish_body = function_body(early_retirement[path], "publish_object_shape_from")
+    publish_body = function_body(early_retirement[path], "publish_object_shape_from_rep")
     early_body = swap_once(
         publish_body,
         "stamp_object_shape_id_with_carrier_note",
@@ -1353,7 +1362,7 @@ def run_sabotage_selftests(sources: dict[str, str], baseline: dict[str, object])
     # #8113: a re-introduced clear-then-remint window.
     cleared_publication = dict(sources)
     path = "crates/perry-runtime/src/object/shapes.rs"
-    cleared_body = function_body(cleared_publication[path], "publish_object_live_slot_count")
+    cleared_body = function_body(cleared_publication[path], "publish_object_live_slot_count_rep")
     cleared_publication[path] = cleared_publication[path].replace(
         cleared_body,
         cleared_body.replace(

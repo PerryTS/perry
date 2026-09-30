@@ -565,8 +565,16 @@ fn emit_instance_alloc_inner(
             ctx.pending_declares.push((
                 "js_object_alloc_class_inline_keys_stamped".to_string(),
                 I64,
-                vec![I32, I32, I32, I64, I32],
+                vec![I32, I32, I32, I64, I32, I64],
             ));
+            // The birth rep module init minted that id with (T1): a birth
+            // the runtime cannot stamp with it verbatim still carries it.
+            let rep = ctx
+                .class_birth_reps
+                .get(&keys_global_name)
+                .copied()
+                .unwrap_or(0)
+                .to_string();
             ctx.block().call(
                 I64,
                 "js_object_alloc_class_inline_keys_stamped",
@@ -576,6 +584,7 @@ fn emit_instance_alloc_inner(
                     (I32, &field_count.to_string()),
                     (I64, &keys_ptr),
                     (I32, &shape_id),
+                    (I64, &rep),
                 ],
             )
         } else {
@@ -803,6 +812,11 @@ fn emit_instance_alloc_inner(
                 ctx.class_header_images.insert(image_key, source.clone());
                 source
             };
+            let birth_rep = ctx
+                .class_birth_reps
+                .get(&keys_global_name)
+                .copied()
+                .unwrap_or(0);
             let header_image = match image_source {
                 crate::expr::HeaderImageSource::EntrySlot(slot) => {
                     ctx.block().load("<2 x i64>", &slot)
@@ -837,11 +851,23 @@ fn emit_instance_alloc_inner(
             // `undefined`/pointer (e.g. `marked`'s `this.defaults`), the constructor
             // crashed with "Cannot read properties of undefined". Slots start
             // at raw + GcHeader(8) + ObjectHeader(16) = raw + 24 (#8047).
+            //
+            // Charter step 5, T1: an `F64` lane of the class's birth rep starts
+            // as +0.0 instead (the same word module init minted the ShapeId
+            // with), so the representation invariant holds before the
+            // constructor's stores; the constructor proof behind the lane says
+            // nothing reads the slot first. The runtime allocator does the same
+            // (`field_rep_store::birth_fill_f64_lanes`).
             for i in 0..alloc_field_count {
                 let slot_off = GC_HEADER_SIZE + object_header_size + i * FIELD_SLOT_SIZE;
                 let slot_ptr = blk.gep(I8, &raw, &[(I64, &slot_off.to_string())]);
-                // GC_STORE_AUDIT(INIT): freshly allocated inline object slot initialized to undefined.
-                blk.store(I64, crate::nanbox::TAG_UNDEFINED_I64, &slot_ptr);
+                if crate::typed_shape::birth_rep_slot_is_f64(birth_rep, i as u32) {
+                    // GC_STORE_AUDIT(INIT): fresh F64 birth lane initialized to +0.0 (T1).
+                    blk.store(I64, "0", &slot_ptr);
+                } else {
+                    // GC_STORE_AUDIT(INIT): freshly allocated inline object slot initialized to undefined.
+                    blk.store(I64, crate::nanbox::TAG_UNDEFINED_I64, &slot_ptr);
+                }
             }
 
             // User pointer = raw + 8 (the ObjectHeader address — what the

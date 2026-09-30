@@ -15,6 +15,8 @@ pub struct LiteralShape {
     raw_mask_len: u32,
     pointer_mask: *const u64,
     pointer_mask_len: u32,
+    /// The birth rep codegen gave the shape id (charter step 5).
+    rep: u64,
 }
 
 struct Reader<'a> {
@@ -86,6 +88,7 @@ impl Reader<'_> {
                     shape.field_count,
                     unsafe { *shape.keys_slot } as *mut super::ArrayHeader,
                     unsafe { *shape.shape_id_slot },
+                    shape.rep,
                 );
                 for i in 0..shape.field_count {
                     let value = self.value(depth + 1)?;
@@ -145,7 +148,8 @@ mod tests {
         const POINTERS: &[u64] = &[2];
         const CLASS_ID: u32 = 1017301;
         let keys =
-            crate::object::js_build_class_keys_array(CLASS_ID, 2, b"id\0name\0".as_ptr(), 8) as u64;
+            crate::object::js_build_class_keys_array(CLASS_ID, 2, b"id\0name\0".as_ptr(), 8, 0)
+                as u64;
         let shape_id = crate::gc::js_gc_typed_shape_id_for_keys(
             CLASS_ID,
             keys,
@@ -154,6 +158,7 @@ mod tests {
             1,
             POINTERS.as_ptr(),
             1,
+            0,
             0,
         );
         let shape = LiteralShape {
@@ -165,6 +170,7 @@ mod tests {
             raw_mask_len: 1,
             pointer_mask: POINTERS.as_ptr(),
             pointer_mask_len: 1,
+            rep: 0,
         };
         // {id:-0, name:"snowman☃"}, using the public compiler/runtime ABI.
         let mut bytes = vec![7, 0, 0, 0, 0, 0];
@@ -245,6 +251,7 @@ mod tests {
             raw_mask_len: 0,
             pointer_mask: std::ptr::null(),
             pointer_mask_len: 0,
+            rep: 0,
         };
         for bytes in [
             &[0_u8][..],

@@ -320,8 +320,13 @@ fn test_class_keys_array_declares_all_pointer_slots_instead_of_a_mask() {
     clear_mark_seeds();
 
     let packed: &[u8] = b"alpha\0beta\0gamma\0";
-    let keys =
-        crate::object::js_build_class_keys_array(0x7510, 3, packed.as_ptr(), packed.len() as u32);
+    let keys = crate::object::js_build_class_keys_array(
+        0x7510,
+        3,
+        packed.as_ptr(),
+        packed.len() as u32,
+        0,
+    );
     assert!(!keys.is_null());
 
     assert!(

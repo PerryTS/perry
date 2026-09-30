@@ -95,7 +95,7 @@ pub use codegen::{
     ExportedObjectLiteralCapability, FpContractMode, ImportedClass, ImportedObjectLiteral,
     ImportedObjectLiteralMethod, ModuleBirth, NamespaceEntry, NamespaceEntryKind,
     ObjectLiteralMethodCandidate, ProgramClassShapeIds, ResolvedConstructorContracts,
-    ShortSpreadMethodCandidate, TypedMasks,
+    ShortSpreadMethodCandidate, TypedMasks, STATIC_SEED_FORMAT,
 };
 // #10399: whole-program Worker flag, set by the driver before module codegen.
 pub use codegen::{program_has_worker, set_program_has_worker};

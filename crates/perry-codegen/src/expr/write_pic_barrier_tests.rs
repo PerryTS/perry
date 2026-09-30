@@ -48,6 +48,8 @@ use perry_hir::{Expr, Function, Module, ModuleInitKind, Param, Stmt};
 /// THE shape compare, and the block holding the slot store.
 const HIT: &str = "put.pic.token";
 const HIT_STORE: &str = "put.pic.hit.store";
+/// Charter step 5 (P2c): the store check between the admission and the store.
+const HIT_REP: &str = "put.pic.hit.rep";
 /// The pointer-bearing arm. The IC passes the `"put.pic"` stem precisely so an
 /// assertion about THIS site cannot be satisfied by a class-field store
 /// elsewhere in the same module.
@@ -475,8 +477,8 @@ fn store_ic_hit_path_reads_no_gc_kind_or_forwarded_byte() {
 /// Charter step 3: the receiver kind and the Array-subclass numeric proof are
 /// SHAPE facts (`perry_runtime::object::shapes::store_kind` — the runtime
 /// publishes a word only for an `Ordinary` shape), so nothing per object
-/// stands between the shape compare and the store: the hit block loads
-/// `_reserved` for the barrier only and branches straight to the store, with
+/// stands between the shape compare and the store check: the hit block loads
+/// `_reserved` for the barrier only and branches straight to the rep block, with
 /// no `class_id` read and no proof or ordinary-mark mask. Sabotage:
 /// re-inserting any of the old per-object tests turns this red.
 #[test]
@@ -489,15 +491,28 @@ fn store_ic_hit_reads_no_per_object_receiver_fact() {
     let kind = block(&ir, "put.pic.kind").unwrap_or_else(|| panic!("hit block:\n{ir}"));
     let term = kind.lines().last().unwrap_or("").trim().to_string();
     assert!(
-        term.starts_with("br label %")
-            && label_is(term.trim_start_matches("br label %"), HIT_STORE),
-        "a matched shape stores unconditionally: {term}\n{kind}"
+        term.starts_with("br label %") && label_is(term.trim_start_matches("br label %"), HIT_REP),
+        "a matched shape goes straight on to the store check: {term}\n{kind}"
     );
     assert!(
         !kind.contains("load i32") && !kind.contains(", 128") && !kind.contains(", 768"),
         "the hit reads no class id and tests no proof / ordinary-mark bit:\n{kind}"
     );
-    // Exactly the hit block enters the store.
+    // The store check (DESIGN §3.2): a word whose sign bit is set (an `F64`
+    // lane) refuses a value whose exponent is all ones to the miss; every
+    // other store goes on to the store block.
+    let rep = block(&ir, HIT_REP).unwrap_or_else(|| panic!("rep block:\n{ir}"));
+    assert!(
+        rep.contains("icmp slt i64") && rep.contains("9218868437227405312"),
+        "the rep block must test the word's F64 flag and the value's exponent:\n{rep}"
+    );
+    let (_, r_true, r_false) = branch_targets(rep.lines().last().unwrap_or("").trim());
+    assert!(
+        label_is(&r_true, "put.pic.miss") && label_is(&r_false, HIT_STORE),
+        "a refused value misses, anything else stores:\n{rep}"
+    );
+
+    // No other edge reaches the store.
     let into_store = ir
         .lines()
         .filter(|l| {
@@ -510,7 +525,7 @@ fn store_ic_hit_reads_no_per_object_receiver_fact() {
         .count();
     assert_eq!(
         into_store, 1,
-        "only the matched-shape hit may enter the store:\n{ir}"
+        "only the store check may enter the store:\n{ir}"
     );
 }
 

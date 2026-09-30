@@ -684,7 +684,7 @@ fn object_set_field_by_name_transition_fast_impl_value(
 
         let prev_shape_id = super::shapes::object_shape_stamp(obj);
         let Some((next_keys, slot_idx, target_shape_id)) =
-            transition_cache_lookup(prev_shape_id, interned_key)
+            transition_cache_lookup_for_value(prev_shape_id, interned_key, Some(value.to_bits()))
         else {
             return None;
         };

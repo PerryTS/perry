@@ -9,7 +9,7 @@ const RAW: [u64; 1] = [0b10];
 const POINTERS: [u64; 1] = [0b01];
 
 fn keys_for(class_id: u32, packed: &[u8]) -> u64 {
-    crate::object::js_build_class_keys_array(class_id, 2, packed.as_ptr(), packed.len() as u32)
+    crate::object::js_build_class_keys_array(class_id, 2, packed.as_ptr(), packed.len() as u32, 0)
         as usize as u64
 }
 
@@ -23,6 +23,7 @@ fn typed(class_id: u32, keys: u64, raw: &[u64], pointers: &[u64], requested: u32
         pointers.as_ptr(),
         pointers.len() as u32,
         requested,
+        0,
     )
 }
 
@@ -49,7 +50,7 @@ fn the_definer_adopts_the_static_id_and_an_importer_resolves_to_it() {
     assert_eq!(typed(class_id, keys, &RAW, &POINTERS, s), s);
     assert!(hot(s) == Some(Some(descriptor(&RAW, &POINTERS))));
     let importer = crate::object::static_shapes::js_object_shape_id_for_class_keys_static(
-        keys, 2, 2, class_id, s,
+        keys, 2, 2, class_id, s, 0,
     );
     assert_eq!(
         importer, s,
@@ -69,7 +70,7 @@ fn an_importer_first_adopts_the_definers_id_and_the_typed_install_accepts_it() {
     let s = SHAPE_ID_BASE + 0x5103;
     let keys = keys_for(class_id, b"lt4u_next\0lt4u_value\0");
     let importer = crate::object::static_shapes::js_object_shape_id_for_class_keys_static(
-        keys, 2, 2, class_id, s,
+        keys, 2, 2, class_id, s, 0,
     );
     assert_eq!(importer, s);
     assert!(
@@ -80,7 +81,7 @@ fn an_importer_first_adopts_the_definers_id_and_the_typed_install_accepts_it() {
     assert!(hot(s) == Some(Some(descriptor(&RAW, &POINTERS))));
     assert_eq!(
         crate::object::static_shapes::js_object_shape_id_for_class_keys_static(
-            keys, 2, 2, class_id, s,
+            keys, 2, 2, class_id, s, 0,
         ),
         s,
         "a later birth of those facts reaches the one id"
@@ -171,7 +172,8 @@ fn a_static_id_naming_other_facts_aborts_the_typed_install() {
             2,
             2,
             other_class,
-            s
+            s,
+            0
         ),
         s
     );

@@ -1423,6 +1423,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                                 &fast_label,
                                 &subclass_arms,
                                 &keys_global_name,
+                                field_index,
                             );
                                 super::store_census::bump(ctx, super::store_census::CFIELD_IC_CALL);
                                 let guard_ok = ctx.block().call(

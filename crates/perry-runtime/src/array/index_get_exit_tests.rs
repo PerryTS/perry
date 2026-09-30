@@ -90,6 +90,7 @@ fn array_subclass(
         declared,
         packed_keys.as_ptr(),
         packed_keys.len() as u32,
+        0,
     );
     let obj =
         crate::object::js_object_alloc_class_inline_keys(class_id, CLASS_ID_ARRAY, declared, keys);

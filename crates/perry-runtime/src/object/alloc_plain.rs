@@ -53,7 +53,45 @@ pub(crate) fn alloc_plain_record_inline_keys_stamped(
     keys_array: *mut ArrayHeader,
     shape_id: u32,
 ) -> *mut ObjectHeader {
-    alloc_class_inline_keys_stamped_impl(0, 0, field_count, keys_array, shape_id, true)
+    let rep = super::field_rep::REP_ANY;
+    alloc_class_inline_keys_stamped_impl(0, 0, field_count, keys_array, shape_id, rep, true)
+}
+
+/// The shape-cache slot of `class_id`'s keys built with `field_count` keys
+/// (`js_build_class_keys_array`, `js_object_alloc_class_with_keys`).
+pub(super) fn class_keys_cache_slot(class_id: u32, field_count: u32) -> u32 {
+    class_id
+        .wrapping_mul(10007)
+        .wrapping_add(field_count.wrapping_mul(100003))
+        .wrapping_add(1000000)
+}
+
+/// The birth rep of `class_id`'s instances, read off the shape its module
+/// init minted beside its canonical keys (`js_build_class_keys_array` mints
+/// that shape with the class's birth rep): the shape is the record, so no
+/// table carries the rep. `REP_ANY` for a class-less birth, or when the slot
+/// names other keys (or nothing).
+pub(super) fn class_keys_birth_rep(
+    class_id: u32,
+    field_count: u32,
+    keys: crate::object::ObjectKeys,
+) -> u64 {
+    if class_id == 0 {
+        return super::field_rep::REP_ANY;
+    }
+    let (cached, id) = super::shape_cache_get_with_id(class_keys_cache_slot(class_id, field_count));
+    if id == 0 || cached.arr() != keys.arr() || cached.count() != keys.count() {
+        return super::field_rep::REP_ANY;
+    }
+    shape_rep_of(id)
+}
+
+/// The birth rep an id names (`F64` for a lane its lineage has since
+/// deprecated: a birth still carries it, `birth_fill_f64_lanes`).
+pub(super) fn shape_rep_of(shape_id: u32) -> u64 {
+    crate::object::shapes::shape_record_by_id(shape_id).map_or(super::field_rep::REP_ANY, |r| {
+        super::field_rep::identity(r.rep())
+    })
 }
 
 /// The runtime class-instance allocation, optionally born marked.
@@ -64,6 +102,8 @@ pub(super) fn alloc_class_instance_with_keys_impl(
     keys: crate::object::ObjectKeys,
     premark_plain: bool,
 ) -> *mut ObjectHeader {
+    // Read before the allocation: `keys` is current only until then.
+    let rep = class_keys_birth_rep(class_id, field_count, keys);
     let (ptr, birth_slots, _, keys) = super::alloc::object_alloc_class_inline_keys_impl(
         class_id,
         parent_class_id,
@@ -73,27 +113,38 @@ pub(super) fn alloc_class_instance_with_keys_impl(
         premark_plain,
     );
     unsafe {
-        let id = crate::object::shapes::shape_id_for_class_keys_ensure(
-            keys.arr() as *const ArrayHeader,
-            keys.count(),
-            class_id,
+        // The class's birth shape with its birth rep: the same id its
+        // compiled `new` sites stamp when the live bound agrees.
+        let id = crate::object::shapes::publish_shape_result(
+            crate::object::shapes::class_birth_shape_ensure(
+                keys.arr() as *const ArrayHeader,
+                keys.count(),
+                birth_slots,
+                class_id,
+                rep,
+                None,
+            ),
         );
-        crate::object::shapes::birth_stamp_object_shape(ptr, id, birth_slots);
+        crate::object::shapes::birth_stamp_object_shape(ptr, id, birth_slots, rep);
+        if rep != super::field_rep::REP_ANY {
+            crate::object::field_rep_store::birth_fill_f64_lanes(ptr);
+        }
     }
     ptr
 }
 
-/// The compiled-class allocation from a module-init ShapeId, optionally born
-/// marked.
+/// The compiled-class allocation from a module-init ShapeId and the birth rep
+/// codegen gave that id, optionally born marked.
 pub(super) fn alloc_class_inline_keys_stamped_impl(
     class_id: u32,
     parent_class_id: u32,
     field_count: u32,
     keys_array: *mut ArrayHeader,
     shape_id: u32,
+    rep: u64,
     premark_plain: bool,
 ) -> *mut ObjectHeader {
-    let keys = super::alloc::preinstalled_class_keys(keys_array, shape_id);
+    let keys = preinstalled_class_keys(keys_array, shape_id);
     let (ptr, birth_slots, used_preinstalled_shape, _) =
         super::alloc::object_alloc_class_inline_keys_impl(
             class_id,
@@ -105,8 +156,37 @@ pub(super) fn alloc_class_inline_keys_stamped_impl(
         );
     if !used_preinstalled_shape {
         unsafe {
-            crate::object::shapes::birth_stamp_object_shape(ptr, shape_id, birth_slots);
+            crate::object::shapes::birth_stamp_object_shape(ptr, shape_id, birth_slots, rep);
         }
     }
+    // T1: a class birth id's `F64` lanes start as +0.0 (the shape decides,
+    // whichever id the object ended up carrying).
+    unsafe { crate::object::field_rep_store::birth_fill_f64_lanes(ptr) };
     ptr
+}
+
+/// A class keys global's keys, with the count its module-init ShapeId names.
+/// A worker agent may not have installed that id yet, and an id that names a
+/// different array is not this global's; both fall back to the array itself,
+/// which module init built exact. So does an id whose count the array no
+/// longer holds: the id's facts diverged from the global beside it, and a
+/// count past the array's initialized slots would name keys that are not
+/// there. The fallback's count then differs from the id's, so the stamp
+/// declines it and publishes an exact descriptor.
+#[inline]
+fn preinstalled_class_keys(
+    keys_array: *mut ArrayHeader,
+    shape_id: u32,
+) -> crate::object::ObjectKeys {
+    // SAFETY: a module keys global is a live keys array (or null).
+    let owned = unsafe { crate::object::ObjectKeys::owned(keys_array) };
+    match crate::object::shapes::shape_descriptor_by_id(shape_id) {
+        Some(descriptor)
+            if descriptor.keys == keys_array as u64
+                && descriptor.logical_key_count <= owned.count() =>
+        {
+            descriptor.keys_view()
+        }
+        _ => owned,
+    }
 }

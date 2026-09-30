@@ -294,3 +294,30 @@ fn a_far_memo_moves_into_the_inline_ways() {
     assert_eq!(at(h + 1).0, next_home);
     assert_eq!(at(h + 3).0, hot);
 }
+
+/// Charter step 5 (P2c): a memo whose successor has an `F64` lane at the
+/// slot carries the flag the emitted hit refuses non-doubles with; a memo
+/// learned from a non-Number does not.
+#[test]
+fn a_number_key_add_memo_carries_the_store_check_flag() {
+    let key = interned(b"p2c_added_number");
+    let first = parsed(b"{\"p2c_q\":1}");
+    let site = leaked_site();
+    miss(site, first, key, 5.5);
+    assert!(
+        !crate::object::field_rep_store::shape_slot_is_any(stamp(first), 1),
+        "the successor has an F64 lane"
+    );
+    let guard = site.add_guard.load(Ordering::Relaxed);
+    assert_ne!(guard & ADD_F64_SLOT, 0);
+    assert_eq!(guard & ADD_SLOT_MASK, 1);
+    assert_eq!(guard >> ADD_SLOT_BITS, add_generation());
+
+    let other = interned(b"p2c_added_string");
+    let second = parsed(b"{\"p2c_q\":1}");
+    let text = crate::string::js_string_from_bytes(b"s".as_ptr(), 1);
+    let boxed = f64::from_bits(crate::value::js_nanbox_string(text as i64).to_bits());
+    let site2 = leaked_site();
+    miss(site2, second, other, boxed);
+    assert_eq!(site2.add_guard.load(Ordering::Relaxed) & ADD_F64_SLOT, 0);
+}

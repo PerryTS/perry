@@ -146,7 +146,17 @@ pub(crate) const ADD_WAY_HASH: u32 = 0x9E37_79B1;
 /// Ways compared from the home on: the home, then the next (mod the block),
 /// where the runtime places a memo whose home an earlier one holds.
 pub(crate) const ADD_WAY_PROBES: usize = 2;
-const ADD_SLOT_MASK: u64 = (1 << ADD_SLOT_BITS) - 1;
+/// Charter step 5 (P2c): the guard's slot-field bit that marks a successor
+/// whose lane at the slot is not `Any`. **Must equal
+/// `perry_runtime::proxy::put_value::packed_add::ADD_F64_SLOT`.**
+const ADD_F64_SLOT: u64 = 1 << (ADD_SLOT_BITS - 1);
+const ADD_SLOT_MASK: u64 = ADD_F64_SLOT - 1;
+/// The store word's slot half without its top bit, the runtime's
+/// `packed_set::PACKED_SET_F64_SLOT` (the word's sign bit).
+const PACKED_SLOT_INDEX_MASK: &str = "2147483647";
+/// A double's exponent field: all ones = an INT32/tagged box, an infinity or
+/// a NaN, the values an `F64` lane refuses inline (DESIGN §3.2).
+const F64_EXP_MASK: &str = "9218868437227405312"; // 0x7FF0_0000_0000_0000
 /// Block-name stem of the key-add hit.
 const ADD_STEM: &str = "put.add";
 /// `GC_FLAG_TENURED` (gc_flags byte).
@@ -271,11 +281,13 @@ pub(crate) fn emit_static_store_ic(
 
     let tok_idx = ctx.new_block(&format!("{STORE_IC_STEM}.token"));
     let kind_idx = ctx.new_block(&format!("{STORE_IC_STEM}.kind"));
+    let rep_idx = ctx.new_block(&format!("{STORE_IC_STEM}.hit.rep"));
     let store_idx = ctx.new_block(&format!("{STORE_IC_STEM}.hit.store"));
     let miss_idx = ctx.new_block(&format!("{STORE_IC_STEM}.miss"));
     let merge_idx = ctx.new_block(&format!("{STORE_IC_STEM}.merge"));
     let tok_label = ctx.block_label(tok_idx);
     let kind_label = ctx.block_label(kind_idx);
+    let rep_label = ctx.block_label(rep_idx);
     let store_label = ctx.block_label(store_idx);
     let miss_label = ctx.block_label(miss_idx);
     let merge_label = ctx.block_label(merge_idx);
@@ -438,11 +450,24 @@ pub(crate) fn emit_static_store_ic(
     let reserved_addr = ctx.block().sub(I64, &handle, "6");
     let reserved_ptr = ctx.block().inttoptr(I64, &reserved_addr);
     let reserved = ctx.block().load(I16, &reserved_ptr);
-    ctx.block().br(&store_label);
+    ctx.block().br(&rep_label);
+
+    // Charter step 5 (P2c, DESIGN §3.2): the store check. A word with its sign
+    // bit set names an `F64` lane: a value whose exponent is not all ones is
+    // a finite double, stored inline as is; anything else (a box, an
+    // infinity, a NaN) takes the miss, whose store is the checked funnel
+    // (canonicalize, or generalize the lane with the shape word first).
+    ctx.current_block = rep_idx;
+    let f64_slot = ctx.block().icmp_slt(I64, &word, "0");
+    let exponent = ctx.block().and(I64, value_bits, F64_EXP_MASK);
+    let boxed = ctx.block().icmp_eq(I64, &exponent, F64_EXP_MASK);
+    let refuse = ctx.block().and(I1, &f64_slot, &boxed);
+    ctx.block().cond_br(&refuse, &miss_label, &store_label);
 
     // The store, then the GC's obligations for the bits actually stored.
     ctx.current_block = store_idx;
-    let slot = ctx.block().lshr(I64, &word, "32");
+    let slot_half = ctx.block().lshr(I64, &word, "32");
+    let slot = ctx.block().and(I64, &slot_half, PACKED_SLOT_INDEX_MASK);
     let header_size = crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
     let fields = ctx.block().add(I64, &handle, &header_size);
     let fields_ptr = ctx.block().inttoptr(I64, &fields);
@@ -554,11 +579,13 @@ fn emit_key_add_hit(
     miss_label: &str,
     merge_label: &str,
 ) -> String {
+    let rep_idx = ctx.new_block(&format!("{ADD_STEM}.rep"));
     let obj_idx = ctx.new_block(&format!("{ADD_STEM}.object"));
     let layout_idx = ctx.new_block(&format!("{ADD_STEM}.layout"));
     let slow_idx = ctx.new_block(&format!("{ADD_STEM}.layout.slow"));
     let forget_idx = ctx.new_block(&format!("{ADD_STEM}.layout.forget"));
     let store_idx = ctx.new_block(&format!("{ADD_STEM}.hit.store"));
+    let rep_label = ctx.block_label(rep_idx);
     let obj_label = ctx.block_label(obj_idx);
     let layout_label = ctx.block_label(layout_idx);
     let slow_label = ctx.block_label(slow_idx);
@@ -578,7 +605,18 @@ fn emit_key_add_hit(
         .load_atomic_monotonic(I64, "@PERRY_PROTO_VALIDITY", 8);
     let recorded = ctx.block().lshr(I64, &guard, &ADD_SLOT_BITS.to_string());
     let gen_eq = ctx.block().icmp_eq(I64, &now, &recorded);
-    ctx.block().cond_br(&gen_eq, &obj_label, miss_label);
+    ctx.block().cond_br(&gen_eq, &rep_label, miss_label);
+
+    // Charter step 5 (P2c): a memo whose successor has an `F64` lane at the
+    // slot admits only a value whose exponent is not all ones (a finite
+    // double); the miss serves the rest, before anything is stamped.
+    ctx.current_block = rep_idx;
+    let flag = ctx.block().and(I64, &guard, &ADD_F64_SLOT.to_string());
+    let f64_slot = ctx.block().icmp_ne(I64, &flag, "0");
+    let exponent = ctx.block().and(I64, value_bits, F64_EXP_MASK);
+    let boxed = ctx.block().icmp_eq(I64, &exponent, F64_EXP_MASK);
+    let refuse = ctx.block().and(I1, &f64_slot, &boxed);
+    ctx.block().cond_br(&refuse, miss_label, &obj_label);
 
     // The GcHeader's first word (obj_type | gc_flags << 8 | _reserved << 16).
     // No receiver-kind admission: the memo's pre-shape is an `Ordinary` shape

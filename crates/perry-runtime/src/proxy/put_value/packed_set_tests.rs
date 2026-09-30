@@ -572,7 +572,11 @@ fn an_object_create_receiver_publishes_its_shape_and_inline_slot() {
         stamp(target),
         "an Object.create receiver must publish its ShapeId to the site word"
     );
-    assert_eq!(word >> 32, 1, "high half: `b` is the second own slot");
+    assert_eq!(
+        (word & !PACKED_SET_F64_SLOT) >> 32,
+        1,
+        "high half: `b` is the second own slot"
+    );
     // Its shape is store-admitted (charter step 3: `Ordinary`), so the
     // published word is actually served inline.
     assert!(
@@ -582,4 +586,28 @@ fn an_object_create_receiver_publishes_its_shape_and_inline_slot() {
     // Its prototype is still the one it was created with.
     let got = crate::object::js_object_get_prototype_of(target);
     assert_eq!(got.to_bits(), proto.to_bits());
+}
+
+/// Charter step 5 (P2c): a store word for a non-`Any` lane carries the flag
+/// that makes the emitted hit check the value; an `Any` lane's does not.
+#[test]
+fn an_f64_lane_publishes_the_store_check_flag() {
+    let key_x = interned(b"p2c_f64_x");
+    let target = parsed(br#"{"p2c_a":1}"#);
+    crate::object::js_object_set_field_by_name(object_of(target), key_x as *mut _, 2.5);
+    assert!(
+        !crate::object::field_rep_store::shape_slot_is_any(stamp(target), 1),
+        "the key-add of a Number earned an F64 lane"
+    );
+    let (_, word) = store_fresh(target, key_x, 3.5);
+    assert_eq!(word as u32, stamp(target));
+    assert_ne!(word & PACKED_SET_F64_SLOT, 0);
+    assert_eq!((word & !PACKED_SET_F64_SLOT) >> 32, 1);
+    let (_, any_word) = store_fresh(target, interned(b"p2c_a"), 4.0);
+    assert_eq!(
+        any_word & PACKED_SET_F64_SLOT,
+        0,
+        "a JSON birth lane is Any"
+    );
+    assert_eq!(any_word >> 32, 0);
 }

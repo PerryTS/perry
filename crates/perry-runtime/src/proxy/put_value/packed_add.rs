@@ -173,7 +173,13 @@ pub const ADD_WAYS_WORD: usize = 3;
 pub const ADD_WAY_WORDS: usize = 2;
 /// Low bits of the guard word that hold the slot.
 pub const ADD_SLOT_BITS: u32 = 16;
-const ADD_SLOT_MASK: u64 = (1 << ADD_SLOT_BITS) - 1;
+/// Charter step 5 (P2c): the top bit of the guard's slot field marks a memo
+/// whose successor's lane at the slot is not `Any`; the emitted hit then
+/// refuses a value whose exponent is all ones (every non-double, and the
+/// doubles the funnel canonicalizes) before it stamps anything. **Must equal
+/// perry-codegen `expr/put_value_store_ic.rs::ADD_F64_SLOT`.**
+pub const ADD_F64_SLOT: u64 = 1 << (ADD_SLOT_BITS - 1);
+const ADD_SLOT_MASK: u64 = ADD_F64_SLOT - 1;
 
 const SPILL_FLIP: u32 = crate::object::field_get_set::PACKED_SPILL_FLIP;
 
@@ -284,6 +290,13 @@ pub(crate) const C_PRIME_INTERCEPTED: usize = 21;
 pub(crate) const C_FULL_KEYADD_CLASS: usize = 22;
 pub(crate) const C_FULL_KEYADD_SPILL: usize = 23;
 pub(crate) const C_PRIME_UNVERIFIED: usize = 24;
+/// Charter step 5: a lane's first deprecation, which moves the
+/// prototype-validity word (`field_rep_store::deprecate_lane`).
+pub(crate) const C_REP_VALIDITY_BUMP: usize = 25;
+/// A key-add found its sibling differing only in the new lane.
+pub(crate) const C_REP_CONVERGE: usize = 26;
+/// A receiver on a shape with a deprecated lane moved to the normalized shape.
+pub(crate) const C_REP_MIGRATE: usize = 27;
 
 #[cfg_attr(test, allow(dead_code))]
 const CENSUS_NAMES: [&str; 48] = [
@@ -312,9 +325,9 @@ const CENSUS_NAMES: [&str; 48] = [
     "rt.full.key_add.class_instance",
     "rt.full.key_add.spill",
     "rt.prime.unverified",
-    "rt.25",
-    "rt.26",
-    "rt.27",
+    "rt.rep.validity_bump",
+    "rt.rep.converge",
+    "rt.rep.migrate",
     "rt.28",
     "rt.29",
     "rt.30",
@@ -456,6 +469,14 @@ pub(crate) unsafe fn packed_add_try(
     let post = (shapes >> 32) as u32;
     let post_d = crate::object::shapes::shape_descriptor_by_id(post)?;
     let slot = (guard & ADD_SLOT_MASK) as usize;
+    // Charter step 5 (T2): the post-shape is the class guard of the memo.
+    if !crate::object::field_rep_store::cached_key_add_admits(
+        post,
+        slot as u32,
+        Some(value.to_bits()),
+    ) {
+        return None;
+    }
     // The audited funnel: layout-unknown marking, the stamp, the prototype
     // validity bump for a marked receiver, the old-generation carrier note.
     if !crate::object::shapes::install_cached_object_shape_version(
@@ -625,7 +646,7 @@ pub(crate) unsafe fn packed_add_prime(
         && pre_d.semantic_generation == post_d.semantic_generation
         && pre_d.object_kind == post_d.object_kind
         && post_d.live_inline_slot_count == expected_live
-        && n < (1 << ADD_SLOT_BITS) - 1
+        && u64::from(n) < ADD_SLOT_MASK
         && crate::object::object_is_regular(obj)
         && eligible_key(key)
         && crate::object::keys_find_slot_by_key_ptr(
@@ -710,7 +731,12 @@ pub(crate) unsafe fn packed_add_prime(
     }
     let pre_word = if inline { pre } else { pre ^ SPILL_FLIP };
     let shapes = u64::from(pre_word) | (u64::from(post) << 32);
-    let guard = (generation << ADD_SLOT_BITS) | u64::from(n);
+    let f64_slot = if inline && !crate::object::field_rep_store::shape_slot_is_any(post, n) {
+        ADD_F64_SLOT
+    } else {
+        0
+    };
+    let guard = (generation << ADD_SLOT_BITS) | f64_slot | u64::from(n);
     let same_pre = |word: u64| word != PACKED_SET_EMPTY && unflip(word as u32) == pre;
     // A way that holds this pre-shape (a stale guard) is superseded.
     if let Some(ways) = site_ways(site_ptr) {

@@ -62,6 +62,8 @@ const F64_EXP_MASK: &str = "9218868437227405312"; // 0x7FF0_0000_0000_0000
 pub(crate) struct ClassFieldSubclassArm {
     pub class_id: u32,
     pub keys_global: String,
+    /// The subclass's birth rep word (`CrossModuleCtx::class_birth_reps`, T1).
+    pub birth_rep: u64,
 }
 
 /// A hierarchy wider than this turns the shape check into a longer compare
@@ -152,6 +154,7 @@ pub(crate) fn class_field_subclass_arms(
         seen_ids.push(sub_id);
         arms.push(ClassFieldSubclassArm {
             class_id: sub_id,
+            birth_rep: ctx.class_birth_reps.get(&keys_global).copied().unwrap_or(0),
             keys_global,
         });
         if arms.len() > MAX_CLASS_FIELD_SUBCLASS_ARMS {
@@ -508,7 +511,24 @@ pub(crate) fn emit_class_field_inline_precheck(
     fast_label: &str,
     subclass_arms: &[ClassFieldSubclassArm],
     keys_global_name: &str,
+    field_index: u32,
 ) -> String {
+    // Charter step 5, T1 (c): a store the shape compare admits into an `F64`
+    // birth lane of ANY accepted class stores only a canonical double. That is
+    // the same plain-finite test the raw-f64 arm emits; a non-Number or
+    // non-finite value takes the guard call, whose checked store generalizes.
+    // It is decided here from the birth rep, not inferred from the declared
+    // field type, so a writer cannot raw-store into an `F64` lane by passing
+    // `require_raw_f64 = false`.
+    let f64_lane = crate::typed_shape::birth_rep_slot_is_f64(
+        ctx.class_birth_reps
+            .get(keys_global_name)
+            .copied()
+            .unwrap_or(0),
+        field_index,
+    ) || subclass_arms
+        .iter()
+        .any(|arm| crate::typed_shape::birth_rep_slot_is_f64(arm.birth_rep, field_index));
     let deref_idx = ctx.new_block("class_field_inline.deref");
     let guardcall_idx = ctx.new_block("class_field_inline.guardcall");
     let deref_label = ctx.block_label(deref_idx);
@@ -584,7 +604,7 @@ pub(crate) fn emit_class_field_inline_precheck(
         let bits = blk.and(I16, &reserved, &(mask as i16).to_string());
         let facts_ok = blk.icmp_eq(I16, &bits, &(expected as i16).to_string());
         ok = blk.and(I1, &ok, &facts_ok);
-        if let (Some(value_bits), true) = (set_value_bits, require_raw_f64) {
+        if let (Some(value_bits), true) = (set_value_bits, require_raw_f64 || f64_lane) {
             // Only a plain finite number may be stored raw. Non-finite
             // (exponent all-ones: +-Inf/NaN) and every NaN-boxed tag share the
             // all-ones exponent, so one mask/compare routes them to the call.

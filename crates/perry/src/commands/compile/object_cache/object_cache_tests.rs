@@ -898,6 +898,7 @@ fn static_seeds_round_trip_and_an_entry_without_them_misses() {
             live: 2,
             proto: perry_codegen::BirthProto::Literal,
             typed: None,
+            rep: 0b0101,
         },
     );
     cache.store_static_seeds(key, &[line.as_str()]);
@@ -905,8 +906,8 @@ fn static_seeds_round_trip_and_an_entry_without_them_misses() {
     assert_eq!(seeds, vec![line.clone()]);
     let (id, shape) = perry_codegen::decode_static_seed(&seeds[0]).expect("decodes");
     assert_eq!(
-        (id, shape.keys.as_slice(), shape.key_count),
-        (0x1000_0042, &b"u\0v\0"[..], 2)
+        (id, shape.keys.as_slice(), shape.key_count, shape.rep),
+        (0x1000_0042, &b"u\0v\0"[..], 2, 0b0101)
     );
 }
 

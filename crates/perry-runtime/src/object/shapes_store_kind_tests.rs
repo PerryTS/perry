@@ -265,7 +265,7 @@ fn an_explicit_id_of_the_wrong_kind_is_declined() {
             Some(ShapeObjectKind::Ordinary)
         );
         let unmarked =
-            crate::object::js_object_alloc_class_inline_keys_stamped(0, 0, 1, keys, ordinary);
+            crate::object::js_object_alloc_class_inline_keys_stamped(0, 0, 1, keys, ordinary, 0);
         assert_ne!(
             object_shape_id(unmarked),
             ordinary,

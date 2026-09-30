@@ -136,6 +136,7 @@ fn test_typed_shape_descriptor_visible_for_shape_keyed_objects() {
         2,
         packed.as_ptr(),
         packed.len() as u32,
+        0,
     );
     let first = crate::object::js_object_alloc_class_inline_keys(0x6957_01, 0, 2, keys);
     let second = crate::object::js_object_alloc_class_inline_keys(0x6957_01, 0, 2, keys);
@@ -229,6 +230,7 @@ fn test_shape_keyed_typed_layout_survives_layout_transfer() {
         2,
         packed.as_ptr(),
         packed.len() as u32,
+        0,
     );
     let src = crate::object::js_object_alloc_class_inline_keys(0x6964_01, 0, 2, keys);
     crate::object::js_object_set_field(src, 0, crate::value::JSValue::number(1.5));
@@ -310,6 +312,7 @@ fn test_shape_keyed_typed_layout_survives_copying_minor() {
         2,
         packed.as_ptr(),
         packed.len() as u32,
+        0,
     );
     let obj = crate::object::js_object_alloc_class_inline_keys(0x6964_02, 0, 2, keys);
     crate::object::js_object_set_field(obj, 0, crate::value::JSValue::number(10.5));
@@ -385,6 +388,7 @@ fn test_poisoned_shape_intact_and_per_object_record_survive_a_copying_minor() {
         2,
         packed.as_ptr(),
         packed.len() as u32,
+        0,
     );
 
     // Slot 0 raw-f64, slot 1 a declared pointer: the shape's first descriptor.
@@ -632,6 +636,7 @@ fn test_typed_shape_descriptor_growing_new_field_falls_back() {
         1,
         packed_keys.as_ptr(),
         packed_keys.len() as u32,
+        0,
     );
     let obj = crate::object::js_object_alloc_class_inline_keys(65_001, 0, 1, keys);
     js_gc_init_typed_shape_layout(obj as u64, 1, std::ptr::null(), 0, std::ptr::null(), 0);

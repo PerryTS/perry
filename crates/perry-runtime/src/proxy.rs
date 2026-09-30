@@ -38,6 +38,7 @@ pub(crate) use put_value::{
 };
 pub use put_value::{js_put_value_set_packed_miss, PackedSetSite, PACKED_SET_EMPTY};
 pub(crate) use put_value::{packed_set_cache_resolve, PackedSetWaysSlot, PACKED_SET_CHAIN_WORD};
+pub(crate) use put_value::{store_census, C_REP_CONVERGE, C_REP_MIGRATE, C_REP_VALIDITY_BUMP};
 pub use put_value::{write_pic_way_entry, WritePicCache, WritePicCacheSlot, WRITE_PIC_WORDS};
 mod json;
 mod metadata;
@@ -3057,6 +3058,7 @@ mod tests {
             4,
             packed.as_ptr(),
             packed.len() as u32,
+            0,
         );
         let first = crate::object::js_object_alloc_class_inline_keys(0x6809_01, 0, 4, keys);
         let second = crate::object::js_object_alloc_class_inline_keys(0x6809_01, 0, 4, keys);
@@ -3190,6 +3192,7 @@ mod tests {
             4,
             other_packed.as_ptr(),
             other_packed.len() as u32,
+            0,
         );
         assert_ne!(
             keys, other_keys,
@@ -3287,6 +3290,7 @@ mod tests {
             5,
             wide_packed.as_ptr(),
             wide_packed.len() as u32,
+            0,
         );
         let narrow = crate::object::js_object_alloc_class_inline_keys(0x6812_03, 0, 4, wide_keys);
         let narrow_values = [boxed_object(narrow)];

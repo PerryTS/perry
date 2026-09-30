@@ -350,8 +350,17 @@ fn class_field_fast_contract(
         let obj = object_addr as *const ObjectHeader;
         let descriptor = crate::object::shapes::object_shape_descriptor(obj);
         let shape_id = crate::object::shapes::object_shape_stamp(obj);
+        // The ShapeId compare is the whole proof, the lane included: the
+        // expected id is the class's birth shape, whose rep is part of its
+        // identity, so a receiver that carries it carries its lanes. A lane
+        // that is not `Any` there sends the store through the checked
+        // funnel (charter step 5).
         let shape_ok = (*obj).class_id == expected_class_id
             && shape_id == expected_shape_id
+            && crate::object::field_rep_store::shape_slot_is_any(
+                expected_shape_id,
+                expected_field_index,
+            )
             && descriptor.is_some_and(|facts| {
                 facts.object_kind.is_ordinary_layout()
                     && expected_field_index < facts.live_inline_slot_count
@@ -1123,6 +1132,8 @@ pub extern "C" fn js_class_field_get_ic_fast_miss(
     require_raw_f64: i32,
     cache_slot: *mut crate::object::PicCacheSlot,
 ) -> f64 {
+    // Charter step 5: migrate-on-miss (DESIGN §1.5 step 4).
+    crate::object::field_rep_store::migrate_on_miss_value(receiver.to_bits());
     if typed_feedback_enabled() {
         return js_class_field_get_ic(
             site_id,
@@ -1185,13 +1196,9 @@ pub extern "C" fn js_class_field_set_ic_fast(
             return CLASS_FIELD_SET_FAST_STORE_SLOW;
         }
         // `js_object_set_field`'s store for an in-bound index and a value that
-        // is not a null POINTER (both established above).
-        crate::gc::runtime_store_jsvalue_slot(
-            object_addr,
-            slot as usize,
-            expected_field_index as usize,
-            vbits,
-        );
+        // is not a null POINTER (both established above), through the checked
+        // funnel (charter step 5).
+        crate::object::store_object_field_slot(obj, expected_field_index as usize, vbits);
     }
     CLASS_FIELD_SET_FAST_DONE
 }
@@ -1211,6 +1218,8 @@ pub extern "C" fn js_class_field_set_ic_fast_miss(
     value: f64,
     require_raw_f64: i32,
 ) {
+    // Charter step 5: migrate-on-miss (DESIGN §1.5 step 4).
+    crate::object::field_rep_store::migrate_on_miss_value(receiver.to_bits());
     match status {
         CLASS_FIELD_SET_FAST_GUARD_FAILED => {
             let key_raw = key as u64 & crate::value::POINTER_MASK;

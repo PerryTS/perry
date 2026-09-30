@@ -231,6 +231,75 @@ pub(crate) fn class_layout_declarable_at_allocation(
     worth_declaring
 }
 
+/// Slots with a birth representation lane (the runtime's `field_rep::REP_SLOTS`).
+pub(crate) const BIRTH_REP_SLOTS: u32 = 32;
+/// The `F64` lane value (`field_rep::REP_F64`).
+const BIRTH_REP_F64: u64 = 0b01;
+
+/// Charter step 5, T1: a class's birth representation word — `F64` for
+/// exactly the slots its typed layout marks raw-f64 when that layout is
+/// declared at allocation, `Any` everywhere else.
+///
+/// This is THE decision. The string pool passes it to the runtime mint
+/// (`js_object_shape_id_for_class_keys{,_live}`, `js_gc_typed_shape_id_for_keys`),
+/// the inline allocation birth-fills its `F64` lanes with `+0.0`, and the
+/// class-field store precheck finite-tests every value bound for one. The
+/// runtime takes the word as given; nothing re-derives it from the
+/// environment.
+///
+/// Why "declared at allocation" is the per-field condition: that proof
+/// (`class_layout_declarable_at_allocation` and its chain form) holds exactly
+/// when every `number` field is written by the constructor prologue before
+/// anything can read `this` — so no JS code observes the `+0.0` birth fill.
+/// A class with even one `number` field that could be read first (a field
+/// initializer, a `this` read before the store, heritage without the chain
+/// proof) gets no `F64` lane at all, because its typed layout is then only
+/// validated after the constructor and "requires raw f64" would not hold at
+/// birth. An imported class stub has no constructor body to prove anything
+/// from, so it is `Any` too.
+pub(crate) fn class_birth_rep_in(
+    classes: &std::collections::HashMap<String, &perry_hir::Class>,
+    class_keys_globals: &std::collections::HashMap<String, String>,
+    class_init_chains: &std::collections::HashMap<
+        String,
+        Vec<(String, Vec<perry_hir::ClassField>)>,
+    >,
+    imported_stub: bool,
+    class_name: &str,
+) -> u64 {
+    if imported_stub
+        || !crate::lower_call::typed_shape_init::layout_declared_at_allocation_in(
+            classes,
+            class_keys_globals,
+            class_name,
+        )
+    {
+        return 0;
+    }
+    let Some(chain) = class_init_chains.get(class_name) else {
+        return 0;
+    };
+    birth_rep_from_raw_f64_mask(&class_typed_layout_from_chain(chain).raw_f64_mask_words)
+}
+
+/// The birth rep word for a raw-f64 mask: one `F64` lane per raw-f64 slot
+/// below [`BIRTH_REP_SLOTS`] (slots past it have no lane and stay `Any`).
+pub(crate) fn birth_rep_from_raw_f64_mask(raw_f64_mask_words: &[u64]) -> u64 {
+    let mut low = raw_f64_mask_words.first().copied().unwrap_or(0) & 0xFFFF_FFFF;
+    let mut rep = 0u64;
+    while low != 0 {
+        let slot = low.trailing_zeros();
+        low &= low - 1;
+        rep |= BIRTH_REP_F64 << (2 * slot);
+    }
+    rep
+}
+
+/// Is `slot` an `F64` lane of birth rep `rep`?
+pub(crate) fn birth_rep_slot_is_f64(rep: u64, slot: u32) -> bool {
+    slot < BIRTH_REP_SLOTS && (rep >> (2 * slot)) & 0b11 == BIRTH_REP_F64
+}
+
 #[derive(Clone, Debug, Default)]
 pub(crate) struct TypedShapeLayout {
     pub(crate) slot_count: u32,

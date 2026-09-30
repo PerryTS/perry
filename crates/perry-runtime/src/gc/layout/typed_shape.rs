@@ -69,9 +69,13 @@ unsafe fn mask_words<'a>(words: *const u64, word_count: u32) -> &'a [u64] {
 /// globals and init guards are per-thread), so every agent installs its own.
 ///
 /// `requested` is the driver's static id for this layout (design step 4, 0 =
-/// none: a fresh counter id). Its content includes the masks; the only other
-/// requester is an importer's structural view of exactly these facts (the
-/// same content at runtime, so the driver hands it this id too). So the id is
+/// none: a fresh counter id). Its content includes the masks and `rep`, the
+/// birth representation codegen declared (charter step 5, T1: `F64` lanes are
+/// shape identity); the only other requester is an importer's structural view
+/// of exactly these facts (the same content at runtime, so the driver hands it
+/// this id too). An importer's stub is all-`Any`, so it never requests an id
+/// whose rep has an `F64` lane: its inline allocation fills `undefined` and
+/// cannot know the defining constructor's proof. So the id is
 /// absent from this agent, present with these exact facts and no layout (the
 /// importer initialized first), or present with these exact facts and this
 /// exact descriptor (a second module deriving the same typed layout). A
@@ -92,6 +96,7 @@ pub extern "C" fn js_gc_typed_shape_id_for_keys(
     pointer_words: *const u64,
     pointer_word_count: u32,
     requested: u32,
+    rep: u64,
 ) -> u32 {
     if class_id == 0 || keys == 0 || slot_count >= 16_000_000 {
         eprintln!("Perry internal error: invalid pre-registered typed shape");
@@ -109,6 +114,12 @@ pub extern "C" fn js_gc_typed_shape_id_for_keys(
         eprintln!("Perry internal error: invalid pre-registered typed shape masks");
         std::process::abort();
     }
+    // T1: an `F64` lane may name only a raw-f64 slot of this layout. Codegen
+    // derives both from one class layout, so a disagreement is a codegen bug.
+    if !birth_rep_within_raw_mask(rep, raw_f64_slice) {
+        eprintln!("Perry internal error: typed shape rep {rep:#x} names a non-raw-f64 slot");
+        std::process::abort();
+    }
     let proto_id = crate::object::shapes::class_proto_id(class_id);
     let descriptor = TypedLayoutDescriptor {
         slot_count: slot_count as usize,
@@ -117,10 +128,10 @@ pub extern "C" fn js_gc_typed_shape_id_for_keys(
     };
     let keys = keys as usize as *const crate::array::ArrayHeader;
     let shape_id = if requested == 0 {
-        crate::object::shapes::mint_typed_shape_id(keys, slot_count, proto_id)
+        crate::object::shapes::mint_typed_shape_id(keys, slot_count, proto_id, rep)
     } else if hot_layout_accepts(requested, &descriptor)
         && crate::object::shapes::install_static_typed_shape_id(
-            requested, keys, slot_count, proto_id,
+            requested, keys, slot_count, proto_id, rep,
         )
     {
         requested
@@ -149,6 +160,16 @@ fn hot_layout_accepts(shape_id: u32, descriptor: &TypedLayoutDescriptor) -> bool
         Some(Some(existing)) => existing == descriptor,
         Some(None) => false,
     }
+}
+
+/// Does every `F64` lane of `rep` name a slot of the raw-f64 mask?
+fn birth_rep_within_raw_mask(rep: u64, raw_f64_words: &[u64]) -> bool {
+    if !crate::object::field_rep::is_valid(rep) {
+        return false;
+    }
+    let raw_low = raw_f64_words.first().copied().unwrap_or(0) as u32;
+    crate::object::field_rep::f64_lane_slots(rep) & !raw_low == 0
+        && rep & !crate::object::field_rep::lanes_below(crate::object::field_rep::REP_SLOTS) == 0
 }
 
 #[allow(clippy::too_many_arguments)]

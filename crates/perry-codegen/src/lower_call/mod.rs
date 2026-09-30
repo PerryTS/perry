@@ -97,6 +97,8 @@ mod new_ctor_args;
 mod new_error_init;
 mod new_helpers;
 pub(crate) use new_helpers::emit_ctor_return_override;
+#[cfg(test)]
+mod class_birth_rep_tests;
 mod omitted_native_params;
 mod options;
 mod private_method;

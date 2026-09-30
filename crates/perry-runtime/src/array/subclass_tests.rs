@@ -360,8 +360,13 @@ fn array_subclass_length_ic_publishes_only_scalar_exact_or_family_facts() {
     let class_id = 0x0074_867b;
     crate::object::js_register_class_parent(class_id, CLASS_ID_ARRAY);
     let packed = b"sset\0mask\0";
-    let keys =
-        crate::object::js_build_class_keys_array(class_id, 2, packed.as_ptr(), packed.len() as u32);
+    let keys = crate::object::js_build_class_keys_array(
+        class_id,
+        2,
+        packed.as_ptr(),
+        packed.len() as u32,
+        0,
+    );
     let obj = crate::object::js_object_alloc_class_inline_keys(class_id, CLASS_ID_ARRAY, 2, keys);
     let receiver = crate::value::js_nanbox_pointer(obj as i64);
     crate::node_stream::js_array_subclass_init(receiver, 0.0);
@@ -660,8 +665,13 @@ fn array_subclass_named_prefix_token_survives_only_exact_numeric_tail_transition
     let class_id = 0x0074_865b;
     crate::object::js_register_class_parent(class_id, CLASS_ID_ARRAY);
     let packed = b"sset\0mask\0";
-    let keys =
-        crate::object::js_build_class_keys_array(class_id, 2, packed.as_ptr(), packed.len() as u32);
+    let keys = crate::object::js_build_class_keys_array(
+        class_id,
+        2,
+        packed.as_ptr(),
+        packed.len() as u32,
+        0,
+    );
     let obj = crate::object::js_object_alloc_class_inline_keys(class_id, CLASS_ID_ARRAY, 2, keys);
     let receiver = crate::value::js_nanbox_pointer(obj as i64);
     crate::node_stream::js_array_subclass_init(receiver, 0.0);
@@ -783,8 +793,13 @@ fn plain_array_element_shape_consumes_array_subclass_prefix_proof() {
     let class_id = 0x0074_8667;
     crate::object::js_register_class_parent(class_id, CLASS_ID_ARRAY);
     let packed = b"sset\0mask\0change\0";
-    let keys =
-        crate::object::js_build_class_keys_array(class_id, 3, packed.as_ptr(), packed.len() as u32);
+    let keys = crate::object::js_build_class_keys_array(
+        class_id,
+        3,
+        packed.as_ptr(),
+        packed.len() as u32,
+        0,
+    );
     let obj = crate::object::js_object_alloc_class_inline_keys(class_id, CLASS_ID_ARRAY, 3, keys);
     let receiver = crate::value::js_nanbox_pointer(obj as i64);
     crate::node_stream::js_array_subclass_init(receiver, 0.0);
@@ -850,8 +865,13 @@ fn empty_array_subclass_named_prefix_token_survives_warm_tail_cycle() {
     let class_id = 0x0074_8659;
     crate::object::js_register_class_parent(class_id, CLASS_ID_ARRAY);
     let packed = b"sset\0mask\0change\0";
-    let keys =
-        crate::object::js_build_class_keys_array(class_id, 3, packed.as_ptr(), packed.len() as u32);
+    let keys = crate::object::js_build_class_keys_array(
+        class_id,
+        3,
+        packed.as_ptr(),
+        packed.len() as u32,
+        0,
+    );
     let obj = crate::object::js_object_alloc_class_inline_keys(class_id, CLASS_ID_ARRAY, 3, keys);
     let receiver = crate::value::js_nanbox_pointer(obj as i64);
     crate::node_stream::js_array_subclass_init(receiver, 0.0);

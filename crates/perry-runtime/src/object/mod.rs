@@ -171,6 +171,8 @@ pub(crate) use side_table_roots::{
     test_seed_transition_cache_entry, test_transition_cache_occupancy,
 };
 #[cfg(test)]
+mod class_birth_rep_tests;
+#[cfg(test)]
 mod field_rep_store_tests;
 pub(crate) mod iterator_prototypes;
 pub(crate) mod map_set_subclass;
@@ -797,11 +799,16 @@ fn shape_cache_get_with_id(shape_id: u32) -> (ObjectKeys, u32) {
 /// which `descriptor_trap_collection_preserves_for_in_target_and_keys` caught
 /// because its trap collects once per key — fourteen collections through one
 /// enumeration, where the `ownKeys` sibling collects once and saw nothing.
+///
+/// `rep` is the birth rep of the shape bound beside the keys (charter step 5):
+/// a class's module-init entry carries the class's, every other entry
+/// `REP_ANY`.
 #[must_use]
 fn shape_cache_insert(
     shape_id: u32,
     live: canonical_keys::LiveObject,
     keys: ObjectKeys,
+    rep: u64,
 ) -> (canonical_keys::LiveObject, ObjectKeys) {
     // #10868 step 2.5 stage 1b: the cache holds the CANONICAL array for this
     // static shape's key list, so two compile-time shapes that spell the same
@@ -850,10 +857,20 @@ fn shape_cache_insert(
     // #6804: bind the runtime ShapeId once at insert (one probe per shape
     // BIRTH), so every later allocation of this shape reads it from the
     // cache entry it already touches.
+    // The plain (prototype-default) shape of these keys with `rep`: for an
+    // anonymous literal class it IS the literal's birth shape, for a named
+    // class its all-default-prototype sibling.
     let runtime_shape_id = if keys_array.is_null() {
         0
     } else {
-        shapes::shape_id_for_keys_ensure(keys_array, keys.count())
+        shapes::publish_shape_result(shapes::class_birth_shape_ensure(
+            keys_array,
+            keys.count(),
+            keys.count(),
+            0,
+            rep,
+            None,
+        ))
     };
     let st = crate::state::state();
     let slot = (shape_id as usize) & (SHAPE_INLINE_CACHE_SIZE - 1);
@@ -1252,6 +1269,25 @@ fn transition_cache_lookup(
     }
 }
 
+/// [`transition_cache_lookup`] for a key-add of a value of known class
+/// (`None` = a key-only add): a hit whose target's field representation does
+/// not admit the value is a miss (charter step 5, T2; the target is the
+/// class guard, so the cache key carries no class bit).
+#[inline(always)]
+fn transition_cache_lookup_for_value(
+    prev_shape_id: u32,
+    interned_key: *const crate::StringHeader,
+    value_bits: Option<u64>,
+) -> Option<(ObjectKeys, u32, u32)> {
+    let hit = transition_cache_lookup(prev_shape_id, interned_key)?;
+    if field_rep_store::cached_key_add_admits(hit.2, hit.1, value_bits) {
+        return Some(hit);
+    }
+    #[cfg(feature = "shape-mint-diag")]
+    shape_mint_census::note_transition_rep_refused();
+    None
+}
+
 const TRANSITION_CACHE_EAGER_SHARE_MAX_SLOT: u32 = 64;
 
 #[inline(always)]
@@ -1566,9 +1602,14 @@ pub(crate) fn test_shape_cache_insert(
 ) -> *mut ArrayHeader {
     // A test hands in a freshly built, exclusively owned list.
     let keys = unsafe { ObjectKeys::owned(keys_array) };
-    shape_cache_insert(shape_id, canonical_keys::LiveObject::none(), keys)
-        .1
-        .arr()
+    shape_cache_insert(
+        shape_id,
+        canonical_keys::LiveObject::none(),
+        keys,
+        field_rep::REP_ANY,
+    )
+    .1
+    .arr()
 }
 
 #[cfg(test)]
@@ -1814,6 +1855,18 @@ unsafe fn set_object_keys_with_live(
     keys: ObjectKeys,
     live_inline_slot_count: u32,
 ) {
+    set_object_keys_with_live_rep(obj, keys, live_inline_slot_count, field_rep::REP_ANY);
+}
+
+/// `set_object_keys_with_live` publishing the successor with field
+/// representation `rep` (charter step 5, T2: `field_rep_store::publish_key_add_edge`).
+#[cfg_attr(feature = "shape-mint-diag", track_caller)]
+unsafe fn set_object_keys_with_live_rep(
+    obj: *mut ObjectHeader,
+    keys: ObjectKeys,
+    live_inline_slot_count: u32,
+    rep: u64,
+) {
     let keys_array = keys.arr();
     // #6759 C3c: a stamped shape id (carried in the `parent_class_id` word)
     // describes the OLD keys array on a pointer CHANGE. A same-pointer append is
@@ -1873,7 +1926,7 @@ unsafe fn set_object_keys_with_live(
     // (`shapes::stamp_object_shape_id_with_carrier_note`), which
     // `publish_object_shape_from` and every other post-birth publish now
     // route through — this call site no longer needs to remember the note.
-    shapes::publish_object_shape_from(obj, predecessor, keys, live_inline_slot_count);
+    shapes::publish_object_shape_from_rep(obj, predecessor, keys, live_inline_slot_count, rep);
     // #10868 step 2.5: this is where a receiver whose key list is unique to
     // it stops interning (`dictionary::should_latch_to_dictionary`). The run
     // is nonzero only when the append that produced `keys` created the list.

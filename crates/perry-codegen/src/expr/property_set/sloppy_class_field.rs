@@ -192,6 +192,7 @@ pub(crate) fn try_lower_sloppy_class_field_store(
             &fast_label,
             &subclass_arms,
             &keys_global_name,
+            field_index,
         );
 
         // Miss: the strict-aware runtime with `strict = 0`, so a rejected write
@@ -328,6 +329,7 @@ fn try_lower_sloppy_class_field_boxed_store(
             &fast_label,
             &subclass_arms,
             &keys_global_name,
+            field_index,
         );
 
         {

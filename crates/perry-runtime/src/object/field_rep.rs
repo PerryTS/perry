@@ -49,6 +49,17 @@ pub(crate) fn with_slot_rep(rep: u64, slot: u32, value: u64) -> u64 {
     (rep & !(0b11 << shift)) | (value << shift)
 }
 
+/// The lanes of every slot below `slot` (the whole word past it): the part
+/// of a predecessor's rep a key-add at `slot` carries.
+#[inline]
+pub(crate) fn lanes_below(slot: u32) -> u64 {
+    if slot >= REP_SLOTS {
+        u64::MAX
+    } else {
+        (1u64 << (2 * slot)) - 1
+    }
+}
+
 /// Does no lane carry the reserved `11`?
 #[inline]
 pub(crate) fn is_valid(rep: u64) -> bool {
@@ -64,6 +75,21 @@ pub(crate) fn identity(rep: u64) -> u64 {
     debug_assert!(is_valid(rep), "reserved rep lane in {rep:#x}");
     let deprecated = rep & LANE_HIGH & !(rep << 1);
     (rep & !deprecated) | (deprecated >> 1)
+}
+
+/// The slots whose lane is exactly `F64` (`01`), one bit per slot: the
+/// lanes a class birth shape declares (T1) and the allocator birth-fills.
+#[inline]
+pub(crate) fn f64_lane_slots(rep: u64) -> u32 {
+    let lanes = rep & LANE_LOW & !(rep >> 1);
+    let mut slots = 0u32;
+    let mut rest = lanes;
+    while rest != 0 {
+        let bit = rest.trailing_zeros();
+        slots |= 1 << (bit / 2);
+        rest &= rest - 1;
+    }
+    slots
 }
 
 /// Does any lane carry the deprecated `10`?

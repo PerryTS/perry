@@ -1419,6 +1419,29 @@ pub(crate) fn layout_typed_intact_for_user(user_ptr: usize) -> bool {
     }
 }
 
+/// `(raw_f64, pointer)` for `slot_index` of `user_ptr`'s intact typed
+/// layout, or `None` without one: the field-representation cross-check
+/// (`object::field_rep_store::assert_f64_lanes_hold_numbers`).
+#[cfg(any(
+    debug_assertions,
+    feature = "field-rep-assert",
+    feature = "gc-instruments"
+))]
+pub(crate) fn layout_typed_slot_kinds_for_user(
+    user_ptr: usize,
+    slot_index: usize,
+) -> Option<(bool, bool)> {
+    if !layout_typed_intact_for_user(user_ptr) {
+        return None;
+    }
+    with_typed_descriptor_for_query(user_ptr, |layout| {
+        (
+            slot_index < layout.slot_count && layout.raw_f64_mask.contains_slot(slot_index),
+            slot_index < layout.slot_count && layout.pointer_mask.contains_slot(slot_index),
+        )
+    })
+}
+
 pub(crate) fn layout_typed_raw_f64_slot_for_user(user_ptr: usize, slot_index: usize) -> bool {
     #[cfg(test)]
     TYPED_RAW_F64_DESCRIPTOR_QUERIES.with(|c| c.set(c.get() + 1));

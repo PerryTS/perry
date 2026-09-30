@@ -649,11 +649,14 @@ fn imported_length_only_arguments_capability_uses_scalar_direct_abi() {
 /// A module's string pool can run before the defining module of a class it
 /// imports has initialized (the entry module, an import cycle). With link-time
 /// ids (design step 4) the stub's mint carries the static id the driver gave
-/// its content — the id the definer's typed install uses when exactly one
-/// typed layout matches — so either init order converges on one id without
-/// the runtime keeping any module's global addresses.
+/// its content, so either init order converges on one id without the runtime
+/// keeping any module's global addresses. The birth rep is content (charter
+/// step 5, T1): an importer's all-`Any` stub requests the definer's id only
+/// when the definer is all-`Any` too; a definer born with an `F64` lane is
+/// another content, and the stub keeps its own id.
 #[test]
 fn imported_stub_mints_with_the_drivers_static_id_and_registers_no_slots() {
+    use crate::{BirthShape, DefinedClassShape, ProgramClassShapeIds};
     let module = || {
         let mut module = Module::new("imported_shape_slots.ts");
         module.init = vec![Stmt::Let {
@@ -676,27 +679,76 @@ fn imported_stub_mints_with_the_drivers_static_id_and_registers_no_slots() {
     let births = crate::module_birth_shapes(&module(), opts.clone()).unwrap();
     assert_eq!(births.len(), 1, "the stub is this module's one class birth");
     assert!(!births[0].defined, "an imported stub is not a definition");
-    let ids = crate::assign_static_shape_ids(births.iter().map(|b| &b.shape));
-    let id = ids[&births[0].shape];
-    opts.static_shape_ids = vec![(births[0].shape.clone(), id)];
-    let ir = String::from_utf8(compile_module(&module(), opts).unwrap())
-        .expect("LLVM IR should be UTF-8");
-    let mint = ir
-        .lines()
-        .find(|l| l.contains("call i32 @js_object_shape_id_for_class_keys_static("))
-        .unwrap_or_else(|| panic!("the stub must mint with its static id:\n{ir}"));
-    assert!(
-        mint.contains(&format!("i32 {id})")) && mint.contains("i32 55,"),
-        "the mint must carry the class id and the driver's id {id}:\n{mint}"
+    let stub = births[0].shape.clone();
+    assert_eq!(stub.rep, 0, "an imported stub is born all-Any");
+
+    // `definer_rep`: the defining module's birth rep for the same keys. Returns
+    // the id the stub's mint requests, after checking the mint's shape.
+    let mint_id = |definer_rep: u64| -> (u32, u32, u32) {
+        let definer = BirthShape {
+            rep: definer_rep,
+            ..stub.clone()
+        };
+        let ids = crate::assign_static_shape_ids([&stub, &definer]);
+        let (own, def_id) = (ids[&stub], ids[&definer]);
+        let mut opts = opts.clone();
+        opts.static_shape_ids = vec![(stub.clone(), own)];
+        opts.program_class_shape_ids = ProgramClassShapeIds(
+            [(
+                55,
+                DefinedClassShape {
+                    keys_global: "perry_class_keys_producer_ts__Remote".to_string(),
+                    shape: definer,
+                    id: def_id,
+                },
+            )]
+            .into_iter()
+            .collect(),
+        );
+        let ir = String::from_utf8(compile_module(&module(), opts).unwrap())
+            .expect("LLVM IR should be UTF-8");
+        let mint = ir
+            .lines()
+            .find(|l| l.contains("call i32 @js_object_shape_id_for_class_keys_static("))
+            .unwrap_or_else(|| panic!("the stub must mint with its static id:\n{ir}"));
+        assert!(
+            mint.contains("i32 55,") && mint.ends_with(", i64 0)"),
+            "the mint must carry the class id and the stub's all-Any rep:\n{mint}"
+        );
+        assert!(
+            !ir.contains("js_register_imported_class_shape_slot"),
+            "no module global address is handed to the runtime any more:\n{ir}"
+        );
+        // S6: there is no poisonable guard twin to seed or register any more;
+        // the class-field guards compare against the ShapeId global itself.
+        assert!(
+            !ir.contains("perry_class_guard_shape_"),
+            "no poisonable guard expectation may be emitted:\n{ir}"
+        );
+        let requested = [own, def_id]
+            .into_iter()
+            .find(|id| mint.contains(&format!("i32 {id}, i64 0)")))
+            .unwrap_or_else(|| panic!("the mint requests neither {own} nor {def_id}:\n{mint}"));
+        (requested, own, def_id)
+    };
+
+    // Both all-Any: one content, so the stub requests the definer's id.
+    let (requested, own, def_id) = mint_id(0);
+    assert_eq!(own, def_id, "equal contents get one id");
+    assert_eq!(
+        requested, def_id,
+        "the all-Any stub must adopt the definer's id"
     );
-    assert!(
-        !ir.contains("js_register_imported_class_shape_slot"),
-        "no module global address is handed to the runtime any more:\n{ir}"
+
+    // The definer has an F64 lane (slot 0): two contents, two ids, and the
+    // stub keeps its own.
+    let (requested, own, def_id) = mint_id(0b01);
+    assert_ne!(
+        own, def_id,
+        "an F64 birth rep is content: one id would name two layouts"
     );
-    // S6: there is no poisonable guard twin to seed or register any more; the
-    // class-field guards compare against the ShapeId global itself.
-    assert!(
-        !ir.contains("perry_class_guard_shape_"),
-        "no poisonable guard expectation may be emitted:\n{ir}"
+    assert_eq!(
+        requested, own,
+        "an all-Any stub must never adopt an F64 definer's id"
     );
 }

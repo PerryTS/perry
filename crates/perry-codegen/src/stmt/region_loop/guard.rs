@@ -91,6 +91,7 @@ pub(super) fn emit_prime_call(
             (I64, &key_bits[4]),
             (I32, &last),
             (I32, &rv.stored_mask.to_string()),
+            (I32, &rv.boxed_mask.to_string()),
         ],
     )
 }
@@ -209,7 +210,7 @@ fn static_region_word(ctx: &FnCtx<'_>, rv: &Receiver) -> Option<u64> {
             }
         })?;
     let keys_global = ctx.class_keys_globals.get(&class_name)?;
-    let (id, slots) = crate::codegen::static_region_slots(keys_global, &rv.keys)?;
+    let (id, slots) = crate::codegen::static_region_slots(keys_global, &rv.keys, rv.boxed_mask)?;
     let mut word = u64::from(id);
     for (i, slot) in slots.iter().enumerate() {
         word |= u64::from(*slot) << (32 + SLOT_BITS * i as u32);

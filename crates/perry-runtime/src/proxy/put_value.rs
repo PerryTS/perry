@@ -415,6 +415,9 @@ mod packed_add;
 mod packed_set;
 pub(crate) use packed_add::note_packed_add_carriers;
 pub use packed_add::PackedSetSite;
+pub(crate) use packed_add::{
+    census as store_census, C_REP_CONVERGE, C_REP_MIGRATE, C_REP_VALIDITY_BUMP,
+};
 pub use packed_set::{js_put_value_set_packed_miss, PACKED_SET_EMPTY};
 pub(crate) use packed_set::{packed_set_cache_resolve, PackedSetWaysSlot, PACKED_SET_CHAIN_WORD};
 
@@ -468,6 +471,8 @@ pub extern "C" fn js_put_value_set_ic_miss(
     cache_slot: *mut WritePicCacheSlot,
     way: i32,
 ) -> f64 {
+    // Charter step 5: migrate-on-miss (DESIGN §1.5 step 4).
+    crate::object::field_rep_store::migrate_on_miss_value(target.to_bits());
     // Inherited-access lane: a key-adding store on a class instance whose
     // chain this site has already proved clear takes the transition append
     // (`object::chain_store`). Before any scope: the try allocates nothing on
@@ -1074,6 +1079,8 @@ pub extern "C" fn js_put_value_set_dyn_ic_miss(
     value: f64,
     strict: i32,
 ) -> f64 {
+    // Charter step 5: migrate-on-miss (DESIGN §1.5 step 4).
+    crate::object::field_rep_store::migrate_on_miss_value(target.to_bits());
     // The slot is read once here; a null cache means the site has never
     // primed, which the stub probe below treats as "no site token" exactly as
     // it treated an all-zero global (#9708).

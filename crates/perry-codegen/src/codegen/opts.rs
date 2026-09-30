@@ -988,6 +988,10 @@ pub(crate) struct CrossModuleCtx {
     /// both come from `target_layout::inline_alloc_gc_packed`, but a header
     /// word is not something to trust by argument.
     pub class_header_images: std::collections::HashMap<String, (String, u64, u32)>,
+    /// Keys global -> the class's birth rep word (charter step 5, T1;
+    /// `typed_shape::class_birth_rep_in`): what module init mints and what
+    /// every inline allocation and class-field store of the class obeys.
+    pub class_birth_reps: std::collections::HashMap<String, u64>,
     /// Imported class constructor function names. Maps class_name →
     /// full constructor symbol (e.g. "Editor" → "hone_editor_...__Editor_constructor").
     /// Populated from `opts.imported_classes`.

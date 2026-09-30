@@ -183,6 +183,9 @@ pub(crate) struct Receiver {
     pub(crate) has_store: bool,
     /// Bit `i`: the body stores `keys[i]` (the runtime then requires it inline).
     stored_mask: u32,
+    /// Bit `i`: a bare store may write `keys[i]` a value not proven a
+    /// canonical double (the word must then give it an `Any` lane).
+    boxed_mask: u32,
     /// `i1`: the guard matched this receiver's SPILL word (flipped id).
     spill: String,
     sites: Option<(String, String)>,
@@ -418,11 +421,12 @@ fn begin_with(
         let mut receivers: Vec<Receiver> = p
             .receivers
             .iter()
-            .map(|(r, k, st, sm)| Receiver {
+            .map(|(r, k, st, sm, bm)| Receiver {
                 recv: *r,
                 keys: k.clone(),
                 has_store: *st,
                 stored_mask: effective_stored_mask(*sm, k.len()),
+                boxed_mask: *bm,
                 spill: "false".to_string(),
                 sites: None,
                 word: String::new(),
@@ -538,11 +542,12 @@ fn body_pending(p: Plan, body: &[Stmt], split_at: usize) -> Pending {
     let receivers: Vec<Receiver> = p
         .receivers
         .iter()
-        .map(|(r, k, st, sm)| Receiver {
+        .map(|(r, k, st, sm, bm)| Receiver {
             recv: *r,
             keys: k.clone(),
             has_store: *st,
             stored_mask: effective_stored_mask(*sm, k.len()),
+            boxed_mask: *bm,
             spill: "false".to_string(),
             sites: None,
             word: String::new(),

@@ -201,8 +201,13 @@ fn test_registered_typed_shape_traces_without_a_per_object_install() {
 
     let class_id = 17;
     let packed = b"peer\0payload\0";
-    let keys =
-        crate::object::js_build_class_keys_array(class_id, 2, packed.as_ptr(), packed.len() as u32);
+    let keys = crate::object::js_build_class_keys_array(
+        class_id,
+        2,
+        packed.as_ptr(),
+        packed.len() as u32,
+        0,
+    );
     let raw_mask = [0b10u64];
     let pointer_mask = [0b01u64];
     let shape_id = js_gc_typed_shape_id_for_keys(
@@ -214,9 +219,10 @@ fn test_registered_typed_shape_traces_without_a_per_object_install() {
         pointer_mask.as_ptr(),
         1,
         0,
+        0,
     );
     let obj =
-        crate::object::js_object_alloc_class_inline_keys_stamped(class_id, 0, 2, keys, shape_id);
+        crate::object::js_object_alloc_class_inline_keys_stamped(class_id, 0, 2, keys, shape_id, 0);
     let child = crate::string::js_string_from_bytes(b"registered".as_ptr(), 10);
     unsafe {
         let header = header_from_user_ptr(obj as *const u8);

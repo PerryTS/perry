@@ -609,8 +609,15 @@ fn materialize_scalar_receiver(
         ctx.pending_declares.push((
             "js_object_alloc_class_inline_keys_stamped".to_string(),
             I64,
-            vec![I32, I32, I32, I64, I32],
+            vec![I32, I32, I32, I64, I32, I64],
         ));
+        // The birth rep module init minted that id with (T1).
+        let rep = ctx
+            .class_birth_reps
+            .get(&keys_global_name)
+            .copied()
+            .unwrap_or(0)
+            .to_string();
         let obj_handle = ctx.block().call(
             I64,
             "js_object_alloc_class_inline_keys_stamped",
@@ -620,6 +627,7 @@ fn materialize_scalar_receiver(
                 (I32, &field_count_str),
                 (I64, &keys_ptr),
                 (I32, &shape_id),
+                (I64, &rep),
             ],
         );
         emit_materialized_scalar_receiver_typed_shape_init(ctx, class_name, &obj_handle);

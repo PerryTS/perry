@@ -128,6 +128,7 @@ pub(super) fn emit_string_pool(
     output_type: &str,
     class_keys_init_data: &[(String, String, u32, Vec<u64>, Vec<u64>)],
     class_header_image_inits: &std::collections::HashMap<String, (u32, u64, u32)>,
+    class_birth_reps: &HashMap<String, u64>,
     class_ids: &HashMap<String, u32>,
     classes: &HashMap<String, &perry_hir::Class>,
     // The classes this module defines, by identity: the registration loops
@@ -654,6 +655,7 @@ pub(super) fn emit_string_pool(
             module_prefix,
             &class_keys_init_data[idx],
             class_header_image_inits,
+            class_birth_reps,
             class_ids,
         );
         let class_id = birth.class_id;
@@ -668,6 +670,17 @@ pub(super) fn emit_string_pool(
             format!("@{}", packed_global_names[idx])
         };
         let len_str = packed.len().to_string();
+        // Charter step 5, T1: the birth rep rides every class mint
+        // (`typed_shape::class_birth_rep_in`, one decision for the mint, the
+        // inline allocation's birth fill and the store precheck), the shape
+        // cache's mint beside the keys included: an outlined birth from that
+        // entry carries it. It is part of the content, so the static id
+        // already names it.
+        let rep_str = class_birth_reps
+            .get(global_name)
+            .copied()
+            .unwrap_or(0)
+            .to_string();
         let arr = blk.call(
             I64,
             "js_build_class_keys_array",
@@ -676,6 +689,7 @@ pub(super) fn emit_string_pool(
                 (I32, &fc_str),
                 (PTR, &packed_ref),
                 (I32, &len_str),
+                (I64, &rep_str),
             ],
         );
         let global_ref = format!("@{}", global_name);
@@ -730,6 +744,7 @@ pub(super) fn emit_string_pool(
                     (PTR, &pointer_mask_ref),
                     (I32, &pointer_mask_words.len().to_string()),
                     (I32, &requested),
+                    (I64, &rep_str),
                 ],
             )
         } else if requested != "0" {
@@ -751,6 +766,7 @@ pub(super) fn emit_string_pool(
                     (I32, &live.to_string()),
                     (I32, &cid_str),
                     (I32, &requested),
+                    (I64, &rep_str),
                 ],
             )
         } else {
@@ -768,12 +784,18 @@ pub(super) fn emit_string_pool(
                         (I32, &fc_str),
                         (I32, &birth_live.to_string()),
                         (I32, &cid_str),
+                        (I64, &rep_str),
                     ],
                 ),
                 _ => blk.call(
                     I32,
                     "js_object_shape_id_for_class_keys",
-                    &[(I64, &arr), (I32, &fc_str), (I32, &cid_str)],
+                    &[
+                        (I64, &arr),
+                        (I32, &fc_str),
+                        (I32, &cid_str),
+                        (I64, &rep_str),
+                    ],
                 ),
             }
         };

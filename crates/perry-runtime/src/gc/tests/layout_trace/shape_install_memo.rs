@@ -50,7 +50,7 @@ static POINTER_MASK_WORDS: [u64; 1] = [0b10];
 
 fn keys_for(class_id: u32) -> *mut crate::array::ArrayHeader {
     let packed: &[u8] = b"n\0s\0";
-    crate::object::js_build_class_keys_array(class_id, 2, packed.as_ptr(), packed.len() as u32)
+    crate::object::js_build_class_keys_array(class_id, 2, packed.as_ptr(), packed.len() as u32, 0)
 }
 
 /// Allocate one instance of the shape and fill it: a plain double in slot 0, a

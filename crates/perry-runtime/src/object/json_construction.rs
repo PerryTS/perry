@@ -43,7 +43,7 @@ unsafe fn finish_inline_json_object(
         // matching descriptor only for the stale-id case.
         let id = shapes::shape_id_for_keys_ensure(keys, count as u32);
         set_object_keys_with_live(object, keys_view, count as u32);
-        shapes::birth_stamp_object_shape(object, id, count as u32);
+        shapes::birth_stamp_object_shape(object, id, count as u32, super::field_rep::REP_ANY);
     }
     shapes::store_kind::check_store_facts(object);
 
@@ -222,7 +222,8 @@ pub(crate) unsafe fn object_from_json_fields_preinstalled(
         if !shapes::try_birth_stamp_preinstalled_shape(obj, shape_id, keys_view, count as u32) {
             let id = shapes::shape_id_for_keys_ensure(keys, count as u32);
             set_object_keys_with_live(obj, keys_view, count as u32);
-            shapes::birth_stamp_object_shape(obj, id, count as u32);
+            let rep = super::field_rep::REP_ANY;
+            shapes::birth_stamp_object_shape(obj, id, count as u32, rep);
         }
         crate::gc::layout_init_pointer_free(raw);
         obj

@@ -647,6 +647,8 @@ pub(crate) struct FnCtx<'a> {
     /// #8122: per-class inline-`new` header-image globals, see
     /// `CrossModuleCtx::class_header_images`.
     pub class_header_image_globals: &'a std::collections::HashMap<String, (String, u64, u32)>,
+    /// `CrossModuleCtx::class_birth_reps` (keys global -> birth rep, T1).
+    pub class_birth_reps: &'a std::collections::HashMap<String, u64>,
     /// Imported class constructor metadata, keyed by effective imported class name.
     pub imported_class_ctors: &'a std::collections::HashMap<String, crate::codegen::ImportedCtor>,
     /// Per-function param signature: `(declared_param_count,
