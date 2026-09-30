@@ -1601,16 +1601,16 @@
    "why": "Pointer to the `static FS_THREAD_CODEC_IMPL` (fs/filehandle.rs:1470) holding two fn pointers, armed by arm_fs_thread_codec; address of a static."
   },
   {
-   "file": "crates/perry-runtime/src/thread.rs",
+   "file": "crates/perry-runtime/src/thread/pending_results.rs",
    "names": [
     "PENDING_THREAD_RESULTS"
    ],
    "verdict": "thread_exit_invalidated",
-   "why": "Queue of spawn results: owner AgentId, raw promise address in the owner's heap, and a SerializedValue; drained only by the owning agent, and agent::retire_agent (agent.rs:164) calls thread::purge_agent_thread_results (thread.rs:1926) to drop every entry owned by an exiting worker agent.",
+   "why": "Queue of spawn results: owner AgentId, raw promise address in the owner's heap, and a SerializedValue; drained only by the owning agent, and agent::retire_agent (agent.rs:164) calls thread::purge_agent_thread_results (thread/pending_results.rs:217) to drop every entry owned by an exiting worker agent.",
    "hook": "purge_agent_thread_results"
   },
   {
-   "file": "crates/perry-runtime/src/thread.rs",
+   "file": "crates/perry-runtime/src/thread/pending_results.rs",
    "names": [
     "PENDING_THREAD_RESULTS_LEN"
    ],
