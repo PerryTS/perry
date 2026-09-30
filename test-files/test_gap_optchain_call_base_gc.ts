@@ -2,7 +2,13 @@
 declare const gc: undefined | (() => void);
 let calls = 0;
 function base() { calls++; return { child: { x: 41 } }; }
-function key() { if (typeof gc === "function") gc(); return "child"; }
+function key() {
+  const keep: { n: number }[] = [];
+  for (let i = 0; i < 96; i++) keep.push({ n: i });
+  if (keep.length !== 96) throw new Error("allocation loop lost elements");
+  if (typeof gc === "function") gc();
+  return "child";
+}
 console.log("gc", base()?.[key()]?.x, calls);
 let suspended = 0;
 async function load() { suspended++; return { x: 43 }; }
