@@ -1,7 +1,7 @@
 //! Array/closure pointer-slot states, store maintenance and child-slot
-//! enumeration. Object children are selected by ShapeId. Mask storage is in `layout/slot_mask.rs`; typed descriptor
-//! installation is in `layout/typed_shape.rs`; the relocation funnel every
-//! moving-GC and growth path calls is in `layout/transfer.rs`.
+//! enumeration. Object children are selected by ShapeId. Mask storage is in
+//! `layout/slot_mask.rs`; the relocation funnel every moving-GC and growth
+//! path calls is in `layout/transfer.rs`.
 
 use super::hot_tls::hot_layout_slot_masks;
 use super::layout_tables::{
