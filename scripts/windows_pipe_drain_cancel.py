@@ -74,7 +74,13 @@ setTimeout(() => console.log('still alive'), 4000);
             raise RuntimeError(f"Cancellation probe failed: {stdout!r} {stderr!r}")
     finally:
         if process is not None and process.poll() is None:
-            process.kill()
-            process.communicate()
+            subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           check=False, timeout=10)
+            try:
+                process.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.stdout.close()
+                process.stderr.close()
         kernel.CloseHandle(pipe)
     print("PASS unread pipe drain cancellation releases its native handle", flush=True)

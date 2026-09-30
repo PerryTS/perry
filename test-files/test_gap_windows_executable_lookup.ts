@@ -21,6 +21,15 @@ if (process.platform !== 'win32') {
     fs.unlinkSync(path.join(dir, 'probe.com'));
     const exe = spawnSync('probe', args, options);
     console.log('exe fallback:', exe.status === 0 && exe.stdout.trim() === 'probe.exe:' + argv0);
+    const relative = spawnSync('.\\probe', args, options);
+    console.log('relative fallback:', relative.status === 0 && relative.stdout.trim() === 'probe.exe:' + argv0);
+    const absolute = spawnSync(path.join(dir, 'probe'), args, options);
+    console.log('absolute skips bare:', absolute.status === 0 && absolute.stdout.trim() === 'probe.exe:' + argv0);
+    fs.unlinkSync(path.join(dir, 'probe'));
+    const absoluteFallback = spawnSync(path.join(dir, 'probe'), args, options);
+    console.log('absolute fallback:', absoluteFallback.status === 0 && absoluteFallback.stdout.trim() === 'probe.exe:' + argv0);
+    const trailingDot = spawnSync('probe.', args, options);
+    console.log('trailing dot fallback:', trailingDot.status === 0 && trailingDot.stdout.trim() === 'probe.exe:' + argv0);
     const appended = spawnSync('probe.extra', args, options);
     console.log('append extension:', appended.status === 0 && appended.stdout.trim() === 'probe.extra.com:' + argv0);
     const literal = spawnSync('probe.exe', args, options);
