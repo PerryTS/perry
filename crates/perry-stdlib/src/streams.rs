@@ -2599,6 +2599,25 @@ pub unsafe extern "C" fn js_readable_stream_pipe_through_pair(
     pair: f64,
     options: f64,
 ) -> f64 {
+    if JSValue::from_bits(pair.to_bits()).is_pointer()
+        || JSValue::from_bits(options.to_bits()).is_pointer()
+    {
+        return pipe_through_rooted_pair(readable_handle, pair, options);
+    }
+    let transform = js_stream_unwrap_handle(pair);
+    let readable = js_transform_stream_readable(transform);
+    let writable = js_transform_stream_writable(transform);
+    let output =
+        js_readable_stream_pipe_through_validate(readable_handle, writable, readable, options);
+    let pipe = js_readable_stream_pipe_to(readable_handle, writable, options);
+    js_promise_mark_internally_handled(pipe);
+    output
+}
+
+// Keep the scoped-root frame out of the numeric handle path. The object path
+// needs those roots across arbitrary getter callbacks; numeric streams do not.
+#[inline(never)]
+unsafe fn pipe_through_rooted_pair(readable_handle: f64, pair: f64, options: f64) -> f64 {
     let pair_is_object = JSValue::from_bits(pair.to_bits()).is_pointer();
     let options_is_object = JSValue::from_bits(options.to_bits()).is_pointer();
     let scope =
