@@ -497,7 +497,7 @@ pub(crate) unsafe fn try_cached_class_read(
 
 /// Collecting read-miss arm. The GC-leaf front always declines this kind.
 /// Every hit confirms the receiver's shape and live link, the rooted holder's
-/// shape, and the accessor descriptor before invoking with the ORIGINAL receiver.
+/// shape, and the current accessor pair before invoking with the ORIGINAL receiver.
 pub(crate) unsafe fn try_cached_class_accessor(
     recv: *const ObjectHeader,
     cache_slot: *mut PicCacheSlot,
@@ -528,17 +528,11 @@ pub(crate) unsafe fn try_cached_class_accessor(
     if shape_word(holder) != c[HOLDER_SHAPE] as u32 {
         return None;
     }
+    // The holder's unchanged ShapeId carries the prime-time proof that this
+    // inline slot exists and is an accessor. Key/attribute changes transition
+    // the ShapeId; a raw-only pair replacement may not, so reread the pair
+    // itself on every hit before invoking.
     let slot = c[HOLDER_KIND] as u32;
-    let shape = object_shape_descriptor(holder as *const ObjectHeader)?;
-    let keys = shape.keys as usize as *const crate::array::ArrayHeader;
-    if keys.is_null()
-        || slot >= shape.live_inline_slot_count
-        || crate::object::key_attrs::keys_entry(keys, slot)
-            & crate::object::key_attrs::ENTRY_ACCESSOR
-            == 0
-    {
-        return None;
-    }
     let acc = crate::object::accessor_pair::pair_of_value(slot_bits(holder, slot))?;
     if acc.raw_get == 0 && acc.raw_set == 0 {
         return None;
