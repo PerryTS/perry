@@ -1161,10 +1161,10 @@ mod tests {
     #[test]
     fn class_prototype_identity_is_refused_by_read_holder() {
         let _lock = crate::gc::global_side_table_test_lock();
-        const CLASS_ID: u32 = 0x0C3C_79A2;
+        const CID: u32 = 0x0C3C_79A2;
         let packed = b"holder_class_key";
         let keys = crate::object::js_build_class_keys_array(
-            CLASS_ID,
+            CID,
             1,
             packed.as_ptr(),
             packed.len() as u32,
@@ -1173,14 +1173,13 @@ mod tests {
         let shape_id = crate::object::shapes::js_object_shape_id_for_class_keys(
             keys as usize as u64,
             1,
-            CLASS_ID,
+            CID,
             0,
         );
-        let obj = crate::object::js_object_alloc_class_inline_keys_stamped(
-            CLASS_ID, 0, 1, keys, shape_id, 0,
-        );
+        let obj =
+            crate::object::js_object_alloc_class_inline_keys_stamped(CID, 0, 1, keys, shape_id, 0);
         let claimed = shape_proto_id(shape_id).expect("class shape must be stamped");
-        assert_eq!(claimed, crate::object::shapes::class_proto_id(CLASS_ID));
+        assert_eq!(claimed, crate::object::shapes::class_proto_id(CID));
         assert_eq!(unsafe { object_proto_id(obj) }, claimed);
         assert!(claimed >= crate::object::shapes::PROTO_ID_CLASS);
         assert_eq!(unsafe { admitted_proto_id(obj) }, None);

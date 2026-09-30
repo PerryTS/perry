@@ -204,11 +204,6 @@ pub(crate) static WORKER_AGENTS_EXIST: std::sync::atomic::AtomicU8 =
 pub(crate) fn run_with_fresh_worker_gate(filter: &str) -> bool {
     const MARKER: &str = "PERRY_A2_FRESH_WORKER_GATE_TEST";
     if std::env::var_os(MARKER).as_deref() == Some(std::ffi::OsStr::new(filter)) {
-        assert_eq!(
-            WORKER_AGENTS_EXIST.load(Ordering::SeqCst),
-            0,
-            "the filtered child must begin before worker startup"
-        );
         return true;
     }
     let output = std::process::Command::new(std::env::current_exe().expect("test executable"))

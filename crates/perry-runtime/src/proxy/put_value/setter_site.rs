@@ -41,7 +41,9 @@ fn stats_enabled() -> bool {
     }
     #[cfg(not(test))]
     {
-        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        per_test_global! {
+            static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        }
         *ON.get_or_init(|| {
             let on = std::env::var_os("PERRY_SETTER_SITE_STATS").is_some();
             if on {
@@ -361,8 +363,10 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU32, Ordering};
 
-    static FIRST: AtomicU32 = AtomicU32::new(0);
-    static SECOND: AtomicU32 = AtomicU32::new(0);
+    per_test_global! {
+        static FIRST: AtomicU32 = AtomicU32::new(0);
+        static SECOND: AtomicU32 = AtomicU32::new(0);
+    }
 
     extern "C" fn first(_recv: f64, _value: f64) -> f64 {
         FIRST.fetch_add(1, Ordering::Relaxed);
@@ -448,56 +452,60 @@ mod tests {
         p1.with_const_ptr::<crate::ObjectHeader, _>(|p| {
             crate::object::test_seed_class_decl_prototype_object_root(CID, p as usize)
         });
+        // This unit proves shape/link invalidation. The end-to-end setter
+        // fixture separately proves moving-GC behavior; keep the direct raw
+        // setter stubs and descriptor mutation noncollecting here.
+        let _no_gc = crate::gc::GcSuppressScope::new();
         let cache: &'static mut PackedSetWays = Box::leak(Box::new(packed_set_cache_empty()));
         assert_eq!(cache[PACKED_SET_SETTER_WORD], 0);
         let mut slot: PackedSetWaysSlot = cache;
-        let target = recv.with_const_ptr::<crate::ObjectHeader, _>(|p| {
-            crate::value::js_nanbox_pointer(p as i64)
-        });
-        let key_ptr = key.get_raw_const_ptr::<crate::StringHeader>();
-        assert_eq!(
-            unsafe { try_set(&mut slot, target, key_ptr, 5.0) },
-            Some(5.0)
-        );
-        assert_eq!(
-            unsafe { try_set(&mut slot, target, key_ptr, 6.0) },
-            Some(6.0)
-        );
+        macro_rules! call_set {
+            ($value:expr) => {
+                recv.with_const_ptr::<crate::ObjectHeader, _>(|recv_ptr| {
+                    let target = crate::value::js_nanbox_pointer(recv_ptr as i64);
+                    key.with_const_ptr::<crate::StringHeader, _>(|key_ptr| unsafe {
+                        try_set(&mut slot, target, key_ptr, $value)
+                    })
+                })
+            };
+        }
+        macro_rules! validated {
+            () => {
+                recv.with_const_ptr::<crate::ObjectHeader, _>(|recv_ptr| {
+                    key.with_const_ptr::<crate::StringHeader, _>(|key_ptr| unsafe {
+                        validated_raw_set(entry(&mut slot).unwrap(), recv_ptr, key_ptr)
+                    })
+                })
+            };
+        }
+        assert_eq!(call_set!(5.0), Some(5.0));
+        assert_eq!(call_set!(6.0), Some(6.0));
         assert!(unsafe { entry(&mut slot).unwrap().bare_class_link });
         assert_eq!(FIRST.load(Ordering::Relaxed), 2);
         p2.with_const_ptr::<crate::ObjectHeader, _>(|p| {
             crate::object::test_seed_class_decl_prototype_object_root(CID, p as usize)
         });
-        assert_eq!(
-            unsafe {
-                validated_raw_set(entry(&mut slot).unwrap(), recv.get_raw_const_ptr(), key_ptr)
-            },
-            None
-        );
-        assert_eq!(
-            unsafe { try_set(&mut slot, target, key_ptr, 7.0) },
-            Some(7.0)
-        );
+        assert_eq!(validated!(), None);
+        assert_eq!(call_set!(7.0), Some(7.0));
         assert_eq!(SECOND.load(Ordering::Relaxed), 1);
         crate::object::method_site::WORKER_AGENTS_EXIST.store(1, Ordering::SeqCst);
-        assert_eq!(unsafe { try_set(&mut slot, target, key_ptr, 8.0) }, None);
+        assert_eq!(call_set!(8.0), None);
         let p1_value = p1.with_const_ptr::<crate::ObjectHeader, _>(|p| {
             crate::value::js_nanbox_pointer(p as i64)
         });
-        crate::object::object_ops::js_object_set_prototype_of(target, p1_value);
-        let key_ptr = key.get_raw_const_ptr::<crate::StringHeader>();
+        recv.with_const_ptr::<crate::ObjectHeader, _>(|p| {
+            let target = crate::value::js_nanbox_pointer(p as i64);
+            crate::object::object_ops::js_object_set_prototype_of(target, p1_value)
+        });
         let explicit_shape = recv.with_const_ptr::<crate::ObjectHeader, _>(|p| unsafe {
             crate::object::shapes::object_shape_stamp(p)
         });
         assert_ne!(explicit_shape, recv_shape);
-        assert_eq!(
-            unsafe {
-                validated_raw_set(entry(&mut slot).unwrap(), recv.get_raw_const_ptr(), key_ptr)
-            },
-            None
-        );
-        recv.with_mut_ptr::<crate::ObjectHeader, _>(|p| unsafe {
-            crate::object::object_ops::define_property_force_store_value(p, key_ptr, 99.0);
+        assert_eq!(validated!(), None);
+        recv.with_mut_ptr::<crate::ObjectHeader, _>(|p| {
+            key.with_const_ptr::<crate::StringHeader, _>(|key_ptr| unsafe {
+                crate::object::object_ops::define_property_force_store_value(p, key_ptr, 99.0);
+            })
         });
         assert_ne!(
             recv.with_const_ptr::<crate::ObjectHeader, _>(|p| unsafe {
@@ -505,11 +513,6 @@ mod tests {
             }),
             explicit_shape
         );
-        assert_eq!(
-            unsafe {
-                validated_raw_set(entry(&mut slot).unwrap(), recv.get_raw_const_ptr(), key_ptr)
-            },
-            None
-        );
+        assert_eq!(validated!(), None);
     }
 }

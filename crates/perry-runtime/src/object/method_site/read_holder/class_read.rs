@@ -366,12 +366,16 @@ mod tests {
         data_entry.absent = false;
         unsafe {
             let slot = (a as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
+            // GC_STORE_AUDIT(POINTER_FREE): the test stores Number bits, never a heap pointer.
             std::ptr::write(slot, 42.0f64.to_bits());
             assert_eq!(answer(&data_entry, recv), Some(42.0f64.to_bits()));
+            // GC_STORE_AUDIT(POINTER_FREE): undefined is an immediate NaN-box tag.
             std::ptr::write(slot, crate::value::TAG_UNDEFINED);
             assert_eq!(answer(&data_entry, recv), None);
+            // GC_STORE_AUDIT(POINTER_FREE): null is an immediate NaN-box tag.
             std::ptr::write(slot, crate::value::TAG_NULL);
             assert_eq!(answer(&data_entry, recv), None);
+            // GC_STORE_AUDIT(POINTER_FREE): the test stores Number bits, never a heap pointer.
             std::ptr::write(slot, 43.0f64.to_bits());
             assert_eq!(answer(&data_entry, recv), Some(43.0f64.to_bits()));
         }
