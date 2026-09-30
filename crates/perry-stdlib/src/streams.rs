@@ -820,11 +820,13 @@ unsafe fn stream_object_field(object: f64, name: &[u8]) -> f64 {
     if !value.is_pointer() {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    let obj = js_nanbox_get_pointer(object) as *const ObjectHeader;
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(object);
+    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let obj = js_nanbox_get_pointer(receiver.get_nanbox_f64()) as *const ObjectHeader;
     if obj.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
     f64::from_bits(js_object_get_field_by_name(obj, key).bits())
 }
 
@@ -2584,6 +2586,72 @@ pub unsafe extern "C" fn js_readable_stream_pipe_through(
         transform_writable_handle,
         f64::from_bits(TAG_UNDEFINED),
     );
+    js_promise_mark_internally_handled(pipe);
+    output
+}
+
+/// Resolve a WHATWG transform pair and start piping, keeping object-backed
+/// transforms and options live across arbitrary getter callbacks. Numeric
+/// TransformStream handles without options take no runtime handle slots.
+#[no_mangle]
+pub unsafe extern "C" fn js_readable_stream_pipe_through_pair(
+    readable_handle: f64,
+    pair: f64,
+    options: f64,
+) -> f64 {
+    let pair_is_object = JSValue::from_bits(pair.to_bits()).is_pointer();
+    let options_is_object = JSValue::from_bits(options.to_bits()).is_pointer();
+    let scope =
+        (pair_is_object || options_is_object).then(perry_runtime::gc::RuntimeHandleScope::new);
+    let pair_root = scope
+        .as_ref()
+        .filter(|_| pair_is_object)
+        .map(|scope| scope.root_nanbox_f64(pair));
+    let options_root = scope
+        .as_ref()
+        .filter(|_| options_is_object)
+        .map(|scope| scope.root_nanbox_f64(options));
+    let pair = pair_root
+        .as_ref()
+        .map(|root| root.get_nanbox_f64())
+        .unwrap_or(pair);
+    let transform = js_stream_unwrap_handle(pair);
+    let transform_root = scope
+        .as_ref()
+        .filter(|_| JSValue::from_bits(transform.to_bits()).is_pointer())
+        .map(|scope| scope.root_nanbox_f64(transform));
+    let transform_value = || {
+        transform_root
+            .as_ref()
+            .map(|root| root.get_nanbox_f64())
+            .unwrap_or(transform)
+    };
+    let options_value = || {
+        options_root
+            .as_ref()
+            .map(|root| root.get_nanbox_f64())
+            .unwrap_or(options)
+    };
+    let (readable, writable) = if JSValue::from_bits(transform.to_bits()).is_pointer() {
+        // Keep object-specific property dispatch out of the numeric endpoint
+        // getters, so merely reading TransformStream endpoints does not link
+        // the generic object-property machinery into an otherwise lean binary.
+        let readable = js_stream_unwrap_handle(stream_object_field(transform_value(), b"readable"));
+        let writable = js_stream_unwrap_handle(stream_object_field(transform_value(), b"writable"));
+        (readable, writable)
+    } else {
+        (
+            js_transform_stream_readable(transform),
+            js_transform_stream_writable(transform),
+        )
+    };
+    let output = js_readable_stream_pipe_through_validate(
+        readable_handle,
+        writable,
+        readable,
+        options_value(),
+    );
+    let pipe = js_readable_stream_pipe_to(readable_handle, writable, options_value());
     js_promise_mark_internally_handled(pipe);
     output
 }

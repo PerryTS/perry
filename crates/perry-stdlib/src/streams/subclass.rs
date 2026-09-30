@@ -65,14 +65,17 @@ pub unsafe extern "C" fn js_stream_unwrap_handle(value: f64) -> f64 {
     if top16 != 0x7FFD {
         return value;
     }
-    let Some(obj) = this_object_ptr(value) else {
+    let Some(_) = this_object_ptr(value) else {
         return value;
     };
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(value);
     let key = subclass_handle_key();
+    let obj = js_nanbox_get_pointer(receiver.get_nanbox_f64()) as *const ObjectHeader;
     let result = js_object_get_field_by_name(obj, key);
     let result_bits = result.bits();
     if result_bits == TAG_UNDEFINED || result_bits == TAG_NULL {
-        return value;
+        return receiver.get_nanbox_f64();
     }
     f64::from_bits(result_bits)
 }
@@ -201,14 +204,7 @@ pub(crate) unsafe fn dispatch_stream_method(
             "tee" => return Some(js_readable_stream_tee(handle)),
             "pipeTo" => return Some(box_promise(js_readable_stream_pipe_to(handle, arg0, arg1))),
             "pipeThrough" => {
-                let transform = js_stream_unwrap_handle(arg0);
-                let writable = js_transform_stream_writable(transform);
-                let readable = js_transform_stream_readable(transform);
-                let output =
-                    js_readable_stream_pipe_through_validate(handle, writable, readable, arg1);
-                let pipe = js_readable_stream_pipe_to(handle, writable, arg1);
-                js_promise_mark_internally_handled(pipe);
-                return Some(output);
+                return Some(js_readable_stream_pipe_through_pair(handle, arg0, arg1));
             }
             // #1644: a readable handle is also its own controller. The
             // start/transform/flush callbacks receive it as `controller`, so

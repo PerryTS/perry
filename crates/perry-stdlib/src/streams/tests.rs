@@ -482,3 +482,96 @@ fn iterator_next_is_called_with_the_iterator_as_its_receiver() {
         "next() must see the iterator as `this`"
     );
 }
+
+extern "C" fn collecting_pair_getter(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
+    // Only a numeric stream handle is held in Rust across the collection.
+    let endpoint = unsafe { perry_runtime::closure::js_closure_get_capture_f64(closure, 0) };
+    perry_runtime::gc::gc_collect_minor();
+    endpoint
+}
+
+#[test]
+fn pipe_through_pair_survives_a_moving_getter() {
+    let _serial = serial_guard();
+    struct RestoreGc(i32);
+    impl Drop for RestoreGc {
+        fn drop(&mut self) {
+            perry_runtime::gc::js_gc_write_barriers_emitted(0);
+            perry_runtime::gc::js_gc_force_evacuation_test_override(self.0);
+        }
+    }
+    let _restore = RestoreGc(perry_runtime::gc::js_gc_force_evacuation_test_override(1));
+    perry_runtime::gc::js_gc_write_barriers_emitted(1);
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    unsafe {
+        let undefined = f64::from_bits(TAG_UNDEFINED);
+        let transform =
+            js_transform_stream_new(undefined, undefined, undefined, undefined, undefined);
+        let readable = js_transform_stream_readable(transform);
+        let writable = js_transform_stream_writable(transform);
+        let pair = scope.root_raw_mut_ptr(js_object_alloc(0, 0));
+        let child = scope.root_raw_mut_ptr(js_object_alloc(0, 0));
+        let getter = scope.root_raw_mut_ptr(js_closure_alloc(
+            perry_runtime::fn_info!(collecting_pair_getter, 0; with_declared(0)),
+            1,
+        ));
+        perry_runtime::closure::js_closure_set_capture_f64(
+            getter.get_raw_mut_ptr::<ClosureHeader>(),
+            0,
+            readable,
+        );
+        let key = js_string_from_bytes(b"readable".as_ptr(), 8);
+        perry_runtime::object::js_object_define_accessor(
+            f64::from_bits(
+                JSValue::pointer(pair.get_raw_mut_ptr::<ObjectHeader>() as *const u8).bits(),
+            ),
+            f64::from_bits(JSValue::string_ptr(key).bits()),
+            f64::from_bits(
+                JSValue::pointer(getter.get_raw_mut_ptr::<ClosureHeader>() as *const u8).bits(),
+            ),
+            undefined,
+        );
+        let writer_getter = scope.root_raw_mut_ptr(js_closure_alloc(
+            perry_runtime::fn_info!(collecting_pair_getter, 0; with_declared(0)),
+            1,
+        ));
+        perry_runtime::closure::js_closure_set_capture_f64(
+            writer_getter.get_raw_mut_ptr::<ClosureHeader>(),
+            0,
+            writable,
+        );
+        let key = js_string_from_bytes(b"writable".as_ptr(), 8);
+        perry_runtime::object::js_object_define_accessor(
+            f64::from_bits(
+                JSValue::pointer(pair.get_raw_mut_ptr::<ObjectHeader>() as *const u8).bits(),
+            ),
+            f64::from_bits(JSValue::string_ptr(key).bits()),
+            f64::from_bits(
+                JSValue::pointer(writer_getter.get_raw_mut_ptr::<ClosureHeader>() as *const u8)
+                    .bits(),
+            ),
+            undefined,
+        );
+        let options = scope.root_raw_mut_ptr(js_object_alloc(0, 0));
+        let child_before = child.get_raw_mut_ptr::<ObjectHeader>();
+        let source = alloc_closed_readable() as f64;
+        let output = js_readable_stream_pipe_through_pair(
+            source,
+            f64::from_bits(
+                JSValue::pointer(pair.get_raw_mut_ptr::<ObjectHeader>() as *const u8).bits(),
+            ),
+            f64::from_bits(
+                JSValue::pointer(options.get_raw_mut_ptr::<ObjectHeader>() as *const u8).bits(),
+            ),
+        );
+        assert_eq!(output, readable);
+        assert_ne!(
+            child.get_raw_mut_ptr::<ObjectHeader>(),
+            child_before,
+            "the getter must have performed a moving collection"
+        );
+    }
+}
