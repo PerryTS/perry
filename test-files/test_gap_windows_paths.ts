@@ -9,6 +9,8 @@ if (process.platform !== 'win32') {
   const drive = path.parse(process.cwd()).root;
   console.log('root resolve:', path.resolve('/audit-root') === path.join(drive, 'audit-root'));
   console.log('win32 resolve:', path.win32.resolve('\\audit-root') === path.join(drive, 'audit-root'));
+  console.log('explicit drive root:', path.resolve('D:\\base', '\\leaf') === 'D:\\leaf');
+  console.log('win32 explicit drive root:', path.win32.resolve('D:\\base', '\\leaf') === 'D:\\leaf');
   console.log('namespace root:', path.toNamespacedPath('/audit-root') === '\\\\?\\' + path.resolve('/audit-root'));
   console.log('root file URL:', pathToFileURL('/audit-root').pathname === '/' + path.resolve('/audit-root').replaceAll('\\', '/'));
   console.log('realpath:', fs.realpathSync('.') === process.cwd());

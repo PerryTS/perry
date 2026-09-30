@@ -47,6 +47,14 @@ copy is current.
 | `effect-basic-smoke` |  |  | yes |
 | `doc-tests` |  |  | yes |
 
+`windows-build` also runs `python scripts/run_windows_runtime_regressions.py`
+after building the compiler and both static archives. It compares the Windows
+path/file-URL, realpath, shell quoting, child `argv0`, platform metadata, and
+named-pipe shutdown fixtures with the exact Node oracle in `.node-version`.
+The pipe fixtures cover duplex replies and queued writes as well as EOF.
+These fixtures skip their Windows bodies on other hosts; use the full tier
+(`run-extended-tests`) when reviewing changes to this behavior.
+
 Within the **pr** tier the changed-file list narrows the plan further:
 
 - **docs-only** (only `docs/`, `*.md`, `benchmarks/`, `npm/`, `packaging/`,
