@@ -1,6 +1,7 @@
 use crate::srgb;
 use objc2::rc::Retained;
-use objc2::{msg_send, ClassType};
+use objc2::runtime::AnyClass;
+use objc2::{define_class, msg_send, ClassType};
 use objc2_app_kit::{NSTextField, NSView};
 use objc2_foundation::{MainThreadMarker, NSString};
 use std::cell::RefCell;
@@ -126,11 +127,25 @@ pub fn set_line_height(handle: i64, multiple: f64) {
     refresh_spacing(handle);
 }
 
+define_class!(
+    /// A label that shows the line breaks in its value.
+    #[unsafe(super(NSTextField))]
+    #[name = "PerryLabel"]
+    pub struct PerryLabel;
+
+    impl PerryLabel {
+        #[unsafe(method(cellClass))]
+        fn cell_class() -> &'static AnyClass {
+            super::padding::PerryInsetTextFieldCell::class()
+        }
+    }
+);
+
 /// A label, as `labelWithString:` builds it, with an inset cell so
 /// `set_edge_insets` can pad it.
 pub(crate) fn label(string: &NSString, _mtm: MainThreadMarker) -> Retained<NSTextField> {
-    let label: Retained<super::textfield::PerryTextField> =
-        unsafe { msg_send![super::textfield::PerryTextField::class(), labelWithString: string] };
+    let label: Retained<PerryLabel> =
+        unsafe { msg_send![PerryLabel::class(), labelWithString: string] };
     label.into_super()
 }
 

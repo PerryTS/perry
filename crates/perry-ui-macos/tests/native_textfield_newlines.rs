@@ -3,6 +3,7 @@
 // - typed, pasted or dropped text turns each line break into one space;
 // - Option-Return and Control-Return insert nothing;
 // - Return still submits.
+// A Text label is not an input, so it keeps the line breaks in its value.
 //
 // AppKit must run on the process main thread, so this test has no Rust harness.
 #[cfg(target_os = "macos")]
@@ -89,6 +90,23 @@ fn main() {
             if actual != expected {
                 failures.push(format!("{name}: expected {expected:?}, got {actual:?}"));
             }
+        }
+    }
+    for text in ["a\nb", "a\r\nb\rc"] {
+        let js = |text: &str| {
+            perry_runtime::string::js_string_from_bytes(text.as_ptr(), text.len() as u32).cast()
+        };
+        let created = widgets::text::create(js(text));
+        let set = widgets::text::create(js(""));
+        widgets::text::set_text_str(set, text);
+        let actual = [created, set].map(|handle| {
+            let view = widgets::get_widget(handle).unwrap();
+            let label = unsafe { &*(Retained::as_ptr(&view) as *const NSTextField) };
+            label.stringValue().to_string()
+        });
+        println!("Text {text:?}: {actual:?}");
+        if actual != [text; 2] {
+            failures.push(format!("Text {text:?}: expected {text:?}, got {actual:?}"));
         }
     }
     assert!(failures.is_empty(), "{failures:#?}");
