@@ -1,9 +1,12 @@
-//! Windows pipes have no write-side shutdown. Drain on a worker before closing.
+//! Windows pipes have no write-side shutdown. Drain cooperatively before closing.
 use super::*;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+use windows_sys::Wdk::Storage::FileSystem::{
+    FilePipeLocalInformation, NtQueryInformationFile, FILE_PIPE_LOCAL_INFORMATION,
+};
 use windows_sys::Win32::Foundation::{DuplicateHandle, DUPLICATE_SAME_ACCESS};
-use windows_sys::Win32::Storage::FileSystem::FlushFileBuffers;
 use windows_sys::Win32::System::Threading::GetCurrentProcess;
+use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
 
 pub(super) fn is_pipe(driver: &turnloop::Loop, entry: &Entry) -> bool {
     matches!(
@@ -61,18 +64,38 @@ pub(super) fn submit(driver: &mut turnloop::Loop, id: i64, entry: &mut Entry) ->
     }
     let handle = unsafe { OwnedHandle::from_raw_handle(duplicate.cast()) };
     let op = driver.blocking_with(
-        move |_| {
-            // Pipe FlushFileBuffers waits for the peer to read all buffered bytes.
-            // Keep it off the agent, and retain the handle for the duration of the call.
-            if unsafe { FlushFileBuffers(handle.as_raw_handle().cast()) } == 0 {
-                let error = std::io::Error::last_os_error();
-                if matches!(error.raw_os_error(), Some(109 | 232 | 233)) {
-                    Ok(turnloop::Payload::U64(0))
-                } else {
-                    Err(error.into())
+        move |cancel| {
+            // Query the same outbound quota libuv uses to detect a drained pipe.
+            // Unlike FlushFileBuffers, this never waits for the peer to read.
+            // Cancellation (including loop drop) releases the duplicate promptly.
+            loop {
+                if cancel.requested() {
+                    return Ok(turnloop::Payload::U64(0));
                 }
-            } else {
-                Ok(turnloop::Payload::U64(0))
+                let mut status: IO_STATUS_BLOCK = unsafe { std::mem::zeroed() };
+                let mut info: FILE_PIPE_LOCAL_INFORMATION = unsafe { std::mem::zeroed() };
+                // SAFETY: live handle and correctly sized output storage; no pointer
+                // is retained. The underlying pipe is opened for overlapped I/O.
+                let result = unsafe {
+                    NtQueryInformationFile(
+                        handle.as_raw_handle().cast(),
+                        &mut status,
+                        std::ptr::from_mut(&mut info).cast(),
+                        std::mem::size_of_val(&info) as u32,
+                        FilePipeLocalInformation,
+                    )
+                };
+                if result < 0 {
+                    // These statuses mean the peer already closed/disconnected.
+                    if matches!(result as u32, 0xc000_014b | 0xc000_00b0 | 0xc000_00b1) {
+                        return Ok(turnloop::Payload::U64(0));
+                    }
+                    return Err(Error::new(ErrorKind::Other));
+                }
+                if info.OutboundQuota == info.WriteQuotaAvailable {
+                    return Ok(turnloop::Payload::U64(0));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
             }
         },
         turnloop::Occupancy::Long,

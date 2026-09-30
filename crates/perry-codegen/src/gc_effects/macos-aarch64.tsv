@@ -2237,9 +2237,9 @@ js_path_matches_glob	Reenters
 js_path_matches_glob_value	Reenters
 js_path_normalize	ThrowOnly
 js_path_parse	Reenters
-js_path_relative	ThrowOnly
-js_path_relative_checked	ThrowOnly
-js_path_resolve	ThrowOnly
+js_path_relative	Reenters
+js_path_relative_checked	Reenters
+js_path_resolve	Reenters
 js_path_resolve_join	ThrowOnly
 js_path_resolve_join_value	ThrowOnly
 js_path_sep_get	AllocOnly
@@ -2259,9 +2259,9 @@ js_path_win32_matches_glob	Reenters
 js_path_win32_matches_glob_value	Reenters
 js_path_win32_normalize	AllocOnly
 js_path_win32_parse	Reenters
-js_path_win32_relative	ThrowOnly
-js_path_win32_relative_checked	ThrowOnly
-js_path_win32_resolve	AllocOnly
+js_path_win32_relative	Reenters
+js_path_win32_relative_checked	Reenters
+js_path_win32_resolve	Reenters
 js_path_win32_resolve_join	ThrowOnly
 js_path_win32_resolve_join_value	ThrowOnly
 js_path_win32_sep_get	AllocOnly

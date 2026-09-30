@@ -51,7 +51,9 @@ copy is current.
 after building the compiler and both static archives. It compares the Windows
 path/file-URL, realpath, shell quoting, child `argv0`, platform metadata, and
 named-pipe shutdown fixtures with the exact Node oracle in `.node-version`.
-The pipe fixtures cover duplex replies and queued writes as well as EOF.
+The pipe fixtures cover duplex replies and queued writes as well as EOF. A native
+unread-peer probe also checks that destroying a socket releases the drain's
+duplicated handle while the JavaScript process remains alive.
 These fixtures skip their Windows bodies on other hosts; use the full tier
 (`run-extended-tests`) when reviewing changes to this behavior.
 
