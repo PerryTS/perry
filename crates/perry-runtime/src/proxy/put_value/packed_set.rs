@@ -183,6 +183,12 @@ pub extern "C" fn js_put_value_set_packed_miss(
         }
     }
 
+    // P4 checked inherited setters before key interning and the clear-chain
+    // add memo. A direct setter cannot add a receiver key, and this collecting
+    // route validates its own live link and descriptor before invocation.
+    if let Some(stored) = unsafe { setter_site::try_set(cache_slot, target, key, value) } {
+        return stored;
+    }
     // Inherited-access lane: a key-adding store whose chain this site has
     // already proved clear takes the transition append (`object::chain_store`).
     // Allocation-free on a decline.
@@ -201,9 +207,6 @@ pub extern "C" fn js_put_value_set_packed_miss(
         } {
             return stored;
         }
-    }
-    if let Some(stored) = unsafe { setter_site::try_set(cache_slot, target, key, value) } {
-        return stored;
     }
     // The receiver's ShapeId before the store: the pre-shape a key-add memo
     // is keyed on. Allocation-free.
