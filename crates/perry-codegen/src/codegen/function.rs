@@ -894,8 +894,6 @@ pub(super) fn compile_function(
         }
         map
     };
-    super::arguments::box_rooted_parameter_slots(lf, &f.params, &boxed_vars, &locals);
-
     // The entry `this` slot: the receiver parameter (or `undefined` for a
     // directly-called specialized entry), stored before the body's first
     // safepoint and bound so a moving collection rewrites it. A sloppy body
@@ -920,6 +918,9 @@ pub(super) fn compile_function(
     } else {
         Vec::new()
     };
+    // A parameter cell allocation can collect. Root the receiver before the
+    // first such allocation so a moving collection rewrites its entry slot.
+    super::arguments::box_rooted_parameter_slots(lf, &f.params, &boxed_vars, &locals);
 
     // Param types feed local_types so type-aware dispatch (e.g. string
     // concat detection on a `: string` parameter) works inside the body.
