@@ -177,39 +177,37 @@ pub(super) unsafe fn prime(
     let handle = scope.root_raw_mut_ptr(obj as *mut ObjectHeader);
     let key_handle = scope.root_string_ptr(key);
     let (value, obj) = handle.across_mut::<ObjectHeader, _>(|| {
-        crate::object::field_get_set::get_field_by_name_after_site_miss(
-            obj,
-            key_handle.get_raw_const_ptr::<crate::StringHeader>(),
-        )
+        crate::object::field_get_set::get_field_by_name_after_site_miss(obj, key)
     });
     if WORKER_AGENTS_EXIST.load(Ordering::SeqCst) != 0 {
         return Some(value);
     }
-    let key = key_handle.get_raw_const_ptr::<crate::StringHeader>();
-    let name = crate::string::header_str_checked(key)?.as_bytes();
-    let Some(obj) = ordinary_receiver(obj as usize) else {
-        return Some(value);
-    };
-    let Some(w) = walk(obj, name, true) else {
-        return Some(value);
-    };
-    let bits = value.bits();
-    let confirmed = match w.slot {
-        None => bits == crate::value::TAG_UNDEFINED,
-        Some(slot) => {
-            bits == slot_bits(w.holder, slot)
-                && bits != crate::value::TAG_HOLE
-                && bits != crate::value::TAG_UNDEFINED
-                && bits != crate::value::TAG_NULL
+    key_handle.with_const_ptr::<crate::StringHeader, _>(|key| {
+        let name = crate::string::header_str_checked(key)?.as_bytes();
+        let Some(obj) = ordinary_receiver(obj as usize) else {
+            return Some(value);
+        };
+        let Some(w) = walk(obj, name, true) else {
+            return Some(value);
+        };
+        let bits = value.bits();
+        let confirmed = match w.slot {
+            None => bits == crate::value::TAG_UNDEFINED,
+            Some(slot) => {
+                bits == slot_bits(w.holder, slot)
+                    && bits != crate::value::TAG_HOLE
+                    && bits != crate::value::TAG_UNDEFINED
+                    && bits != crate::value::TAG_NULL
+            }
+        };
+        if confirmed {
+            let cache = crate::object::field_get_set::pic_slot_resolve::<PicCache>(cache_slot);
+            if !cache.is_null() {
+                publish(cache, obj, &w);
+            }
         }
-    };
-    if confirmed {
-        let cache = crate::object::field_get_set::pic_slot_resolve::<PicCache>(cache_slot);
-        if !cache.is_null() {
-            publish(cache, obj, &w);
-        }
-    }
-    Some(value)
+        Some(value)
+    })
 }
 
 unsafe fn publish(cache: *mut PicCache, recv: *const ObjectHeader, w: &Walk) {
