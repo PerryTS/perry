@@ -68,6 +68,14 @@ pub unsafe extern "C" fn js_stream_unwrap_handle(value: f64) -> f64 {
     let Some(_) = this_object_ptr(value) else {
         return value;
     };
+    unwrap_object_stream_handle(value)
+}
+
+// Numeric registry handles never enter this rooted object branch. Keep its
+// root frame and getter machinery away from the ordinary stream fast path.
+#[cold]
+#[inline(never)]
+unsafe fn unwrap_object_stream_handle(value: f64) -> f64 {
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(value);
     let key = subclass_handle_key();

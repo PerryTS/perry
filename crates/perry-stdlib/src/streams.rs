@@ -2614,6 +2614,7 @@ pub unsafe extern "C" fn js_readable_stream_pipe_through_pair(
 
 // Keep the scoped-root frame out of the numeric handle path. The object path
 // needs those roots across arbitrary getter callbacks; numeric streams do not.
+#[cold]
 #[inline(never)]
 unsafe fn pipe_through_rooted_pair(readable_handle: f64, pair: f64, options: f64) -> f64 {
     let pair_is_object = JSValue::from_bits(pair.to_bits()).is_pointer();
