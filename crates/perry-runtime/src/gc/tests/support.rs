@@ -882,6 +882,9 @@ pub(super) unsafe fn alloc_old_test_object(
     let obj = crate::arena::arena_alloc_gc_old(payload, 8, GC_TYPE_OBJECT)
         as *mut crate::object::ObjectHeader;
     (*obj).class_id = 0;
+    // The fixture uses an Ordinary ShapeId; mark its newborn store kind
+    // before publishing that id, as the production plain-record allocator does.
+    crate::object::shapes::store_kind::premark_plain_ordinary(obj);
     (*obj).parent_class_id = shape_id;
     (*obj).meta = std::ptr::null_mut();
     let fields =
@@ -921,6 +924,9 @@ pub(super) unsafe fn alloc_nursery_test_object(
     let obj = crate::arena::arena_alloc_gc(payload, 8, GC_TYPE_OBJECT)
         as *mut crate::object::ObjectHeader;
     (*obj).class_id = 0;
+    // The fixture uses an Ordinary ShapeId; mark its newborn store kind
+    // before publishing that id, as the production plain-record allocator does.
+    crate::object::shapes::store_kind::premark_plain_ordinary(obj);
     (*obj).parent_class_id = shape_id;
     (*obj).meta = std::ptr::null_mut();
     let fields =
