@@ -11,10 +11,34 @@ use swc_ecma_visit::{Visit, VisitWith};
 /// Use the AST: brace scanning misses concise arrows, unbraced branches, and
 /// short-circuit expressions. On a parse failure retain the existing scanner's
 /// function-local classification (some CJS sources need wrapping to parse).
-pub(super) fn deferred_require_specs(source: &str) -> HashSet<String> {
+#[cfg(test)]
+fn deferred_require_specs(source: &str) -> HashSet<String> {
+    analyze_require_specs(source, None)
+}
+
+pub(super) fn deferred_require_specs_for_path(
+    source: &str,
+    path: &std::path::Path,
+    diagnose_computed_requires: bool,
+) -> HashSet<String> {
+    analyze_require_specs(source, diagnose_computed_requires.then_some(path))
+}
+
+fn analyze_require_specs(source: &str, path: Option<&std::path::Path>) -> HashSet<String> {
     let Ok(module) = perry_parser::parse_typescript(source, "requires.cjs") else {
         return super::extract_requires::function_local_specs(source);
     };
+    if let Some(path) = path {
+        for offset in super::computed_requires::computed_require_offsets(&module) {
+            let prefix = &source[..offset.min(source.len())];
+            let line = prefix.bytes().filter(|byte| *byte == b'\n').count() + 1;
+            let column = prefix.rsplit('\n').next().unwrap_or("").chars().count() + 1;
+            eprintln!(
+                "warning: {}:{}:{}: computed CommonJS require does not automatically include target files; add static imports for the possible targets and use explicit file extensions in computed requests (#10438)",
+                path.display(), line, column,
+            );
+        }
+    }
     let mut visitor = Requires::default();
     module.visit_with(&mut visitor);
     visitor
