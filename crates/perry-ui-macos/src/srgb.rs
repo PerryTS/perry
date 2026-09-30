@@ -8,8 +8,8 @@ use std::ffi::c_void;
 use std::sync::OnceLock;
 
 /// CoreGraphics' opaque colour. A typed pointer encodes as `^{CGColor=}`, the
-/// type CALayer's colour properties declare; a `c_void` pointer encodes as `^v`,
-/// which a debug build's message check rejects.
+/// type CALayer's colour properties declare. If the pointer were `c_void`, it
+/// would encode as `^v`, and a debug build's message check would reject the send.
 #[repr(C)]
 pub struct CGColor {
     _private: [u8; 0],
