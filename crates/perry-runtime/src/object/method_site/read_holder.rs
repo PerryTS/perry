@@ -29,16 +29,18 @@
 //! (`field_get_set::ic_miss::read_confirm::js_object_get_field_ic_front`)
 //! asks [`entry_answer`] after the ways, the spill entry and a latched site's
 //! confirm, so an own-key read pays nothing for it. A decline is `TAG_HOLE`
-//! and the site continues to the collecting slow call.
+//! and the site continues to the collecting slow call. Once a worker starts,
+//! the front declines before reading any holder-entry word: the entry belongs
+//! to the primary heap and no agent's GC scans it after the gate.
 //!
 //! # Priming
 //!
-//! Only from the read miss handler, which already knows the key is not own,
-//! and only after the generic getter has produced the answer: the entry is
+//! Only from the primary agent's read miss handler, which already knows the key
+//! is not own, and only after the generic getter has produced the answer: the entry is
 //! recorded only when what the shapes say equals what the getter returned
 //! (names the runtime synthesizes, lazily materialized intrinsics and
-//! `constructor` refuse there). Primary agent only; a worker agent's start
-//! empties every entry.
+//! `constructor` refuse there). A worker agent's start gates all further
+//! holder hits and primes; stale entries stop being roots and can collect.
 //!
 //! A miss whose receiver the live entry already answers is served from the
 //! entry and primes nothing (a caller that does not emit the check, such as
@@ -94,9 +96,9 @@ const HOLDER_ABSENT_BIT: u64 = 1 << 62;
 const HOLDER_DEPTH_SHIFT: u32 = 32;
 const HOLDER_MAX_DEPTH: usize = 4;
 
-/// Every cache that holds (or held) a holder entry, for the root scan and for
-/// emptying the entries when the first worker agent starts. The entries are
-/// in the per-site caches; this is only where the scan finds them.
+/// Every cache that holds (or held) a holder entry, for the primary agent's
+/// root scan until a worker starts. The entries are in the per-site caches;
+/// this is only where the scan finds them.
 static HOLDER_SITES: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
 
 per_test_global! {
@@ -138,6 +140,9 @@ unsafe fn refuse_and_latch(cache: *mut PicCache) {
 /// whose ShapeId still matches has not had the slot cleared.
 #[inline(always)]
 pub(crate) unsafe fn entry_answer(c: &PicCache, token: i64) -> Option<u64> {
+    if WORKER_AGENTS_EXIST.load(Ordering::SeqCst) != 0 {
+        return None;
+    }
     if c[HOLDER_RECV] != token || token == 0 {
         return None;
     }
@@ -357,7 +362,7 @@ pub(crate) unsafe fn prime_read_holder(
 ) -> Option<crate::value::JSValue> {
     if cache_slot.is_null()
         || key.is_null()
-        || WORKER_AGENTS_EXIST.load(Ordering::SeqCst)
+        || WORKER_AGENTS_EXIST.load(Ordering::SeqCst) != 0
         || crate::agent::current_agent() != crate::agent::PRIMARY_AGENT
     {
         return None;
@@ -404,6 +409,9 @@ pub(crate) unsafe fn prime_read_holder(
     let (value, obj) = handle.across_mut::<ObjectHeader, _>(|| {
         crate::object::field_get_set::get_field_by_name_after_site_miss(obj, key)
     });
+    if WORKER_AGENTS_EXIST.load(Ordering::SeqCst) != 0 {
+        return Some(value);
+    }
     // From here a refusal has already run the getter, so the site latches:
     // the next miss must not walk and run it again only to refuse again.
     let cache = crate::object::field_get_set::pic_slot_resolve::<PicCache>(cache_slot);
@@ -481,8 +489,15 @@ unsafe fn publish(cache: *mut PicCache, recv: *const ObjectHeader, w: &Walk) {
     super::stats_report_enabled();
 }
 
-/// Root scan: every live entry's holder and hops are marked and rewritten.
+/// Root scan: live entries are primary roots only until a worker starts. Once
+/// the sticky gate is set, `entry_answer` declines before touching any entry
+/// word, and no agent needs to retain the old primary objects.
 pub(crate) fn scan_read_holder_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    if crate::agent::current_agent() != crate::agent::PRIMARY_AGENT
+        || WORKER_AGENTS_EXIST.load(Ordering::SeqCst) != 0
+    {
+        return;
+    }
     let Ok(sites) = HOLDER_SITES.lock() else {
         return;
     };
@@ -496,20 +511,6 @@ pub(crate) fn scan_read_holder_roots_mut(visitor: &mut crate::gc::RuntimeRootVis
         visitor.visit_i64_slot(&mut c[HOLDER_OBJ]);
         for i in 0..HOLDER_MAX_DEPTH - 1 {
             visitor.visit_i64_slot(&mut c[HOLDER_HOPS + i]);
-        }
-    }
-}
-
-/// The first worker agent's start: a holder entry names a primary-heap object,
-/// so every entry is emptied, and none is primed again (`WORKER_AGENTS_EXIST`).
-pub(crate) fn empty_read_holder_entries() {
-    let Ok(sites) = HOLDER_SITES.lock() else {
-        return;
-    };
-    for &site in sites.iter() {
-        // SAFETY: as in `scan_read_holder_roots_mut`; one aligned word store.
-        unsafe {
-            std::ptr::write_volatile(&mut (*(site as *mut PicCache))[HOLDER_RECV], 0);
         }
     }
 }

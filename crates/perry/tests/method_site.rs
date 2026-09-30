@@ -263,9 +263,10 @@ console.log(sum, call(o, 7));
     assert!(moved > 0, "no copying minor relocated an object: {stderr}");
 }
 
-/// Starting a worker clears inherited entries whose holders live in the
-/// primary heap. The worker must execute the same call site and get its own
-/// prototype's method; subsequent primary calls must also remain correct.
+/// Starting a worker gates every process-global site without clearing a
+/// primary holder while primary code may be reading it. Both agents execute
+/// the same call site while the worker is live. Their copying collections
+/// must scan only the roots in their own heaps.
 #[test]
 fn a_worker_never_uses_the_primary_heaps_inherited_holder() {
     let (stdout, stderr) = compile_and_run(
@@ -276,20 +277,39 @@ async function main(): Promise<void> {
   const o: any = Object.create(p);
   let before = 0;
   for (let i = 0; i < 1000; i++) before += call(o, i);
-  const worker = await spawn(() => {
-    const wp: any = { m(x: number) { return x * 2; } };
+  const sab = new SharedArrayBuffer(8);
+  const gate = new Int32Array(sab);
+  const pending = spawn(() => {
+    const workerGate = new Int32Array(sab);
+    const wp: any = {};
+    wp.m = (x: number) => x * 2;
     const wo: any = Object.create(wp);
+    (globalThis as any).gc();
+    Atomics.store(workerGate, 0, 1);
+    Atomics.notify(workerGate, 0);
+    if (Atomics.wait(workerGate, 1, 0, 10000) === 'timed-out') throw new Error('primary did not overlap worker');
     let total = 0;
     for (let i = 0; i < 1000; i++) total += call(wo, i);
     return total;
   });
-  console.log(before, worker, call(o, 5));
+  if (Atomics.wait(gate, 0, 0, 10000) === 'timed-out') throw new Error('worker did not start');
+  let overlap = 0;
+  for (let i = 0; i < 1000; i++) overlap += call(o, i);
+  Atomics.store(gate, 1, 1);
+  Atomics.notify(gate, 1);
+  const worker = await pending;
+  (globalThis as any).gc();
+  console.log(before, worker, overlap, call(o, 5));
 }
 main();
 "#,
-        &[],
+        &[
+            ("PERRY_GC_FORCE_EVACUATE", "1"),
+            ("PERRY_GC_VERIFY_EVACUATION", "1"),
+            ("PERRY_GC_POISON_FROMSPACE", "1"),
+        ],
     );
-    assert_eq!(stdout, "500500 999000 6", "{stderr}");
+    assert_eq!(stdout, "500500 999000 500500 6", "{stderr}");
     assert!(
         stat(&stderr, "primes_inherited") > 0,
         "primary site never primed: {stderr}"
@@ -297,6 +317,10 @@ main();
     assert!(
         stat(&stderr, "misses") >= 1000,
         "worker did not take the inherited miss path: {stderr}"
+    );
+    assert!(
+        stat(&stderr, "refused.inh_workers") > 0,
+        "site miss did not refuse admission after worker startup: {stderr}"
     );
 }
 /// What the prime must refuse (rest, `arguments`, bound) and what the hit must keep (arity padding,

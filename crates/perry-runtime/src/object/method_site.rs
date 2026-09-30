@@ -76,9 +76,12 @@
 //!
 //! # Agents
 //!
-//! Inherited entries prime only on the primary agent. The first worker start
-//! clears them and prevents further inherited primes, so a worker cannot
-//! follow a holder from the primary heap through a process-global site.
+//! The first worker start atomically gates every emitted method site and
+//! prevents further primes. It does not rewrite a live site while primary
+//! code may be reading it. Existing inherited entries are no longer read or
+//! traced by any agent after the gate; their stale words are inert and the
+//! holders can be collected by the primary GC. The cost thereafter is
+//! ordinary method dispatch at every site.
 
 use crate::object::ObjectHeader;
 
@@ -179,37 +182,33 @@ const _: () = {
 /// The emitted `@perry_ic_N = private global ptr null` for a method site.
 pub type MethodSiteSlot = *mut MethodSite;
 
-/// Every site that holds (or held) an inherited entry, for the root scan and
-/// for clearing primary-heap holders when the first worker starts.
+/// Every site that holds (or held) an inherited entry, for the primary agent's
+/// root scan until a worker starts. The sites are process-lifetime
+/// allocations, but their holders belong to the primary heap.
 static METHOD_SITES: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
 
-/// Set when the first `perry/thread` worker agent starts. Site memos are
-/// process-global and an inherited entry holds a primary-heap holder, so from
-/// then on no inherited entry is primed and every existing one is emptied.
-/// Own entries hold no heap reference (ShapeIds are
-/// process-unique; the call passes the receiver's own closure).
-static WORKER_AGENTS_EXIST: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+/// Sticky process-wide gate: a worker cannot read a primary-heap holder from
+/// a process-global method or read site. Emitted method sites read this byte
+/// atomically and take the generic miss once it is set. Keeping the old words
+/// intact avoids racing a worker startup write against a primary inline hit.
+/// After the gate, no agent reads or traces the stale entries, so they do not
+/// retain their primary-heap holders.
+#[cfg_attr(not(test), export_name = "PERRY_METHOD_SITE_WORKERS_PRESENT")]
+pub(crate) static WORKER_AGENTS_EXIST: std::sync::atomic::AtomicU8 =
+    std::sync::atomic::AtomicU8::new(0);
 
 /// Called by `agent::enter_worker_agent` before the worker runs any code.
 pub fn note_worker_agent() {
-    if !WORKER_AGENTS_EXIST.swap(true, Ordering::SeqCst) {
+    // Publish the gate under the same lock as `publish`: every in-flight
+    // write finishes before a worker can run emitted code, and all later
+    // publishes decline. No site word is written at worker startup.
+    let _sites = METHOD_SITES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let first = WORKER_AGENTS_EXIST.swap(1, Ordering::SeqCst) == 0;
+    drop(_sites);
+    if first {
         super::proto_validity::bump_proto_validity();
-        if let Ok(sites) = METHOD_SITES.lock() {
-            for &site in sites.iter() {
-                // A worker must not read a primary-heap holder through a
-                // process-wide site. No inherited entry is published again.
-                unsafe {
-                    for entry in (*(site as *mut MethodSite)).entries.iter_mut() {
-                        if entry.slot & METHOD_SITE_INHERITED != 0 {
-                            entry.word = METHOD_SITE_EMPTY;
-                            entry.closure = 0;
-                        }
-                    }
-                }
-            }
-        }
-        read_holder::empty_read_holder_entries();
     }
 }
 
@@ -327,6 +326,17 @@ pub unsafe extern "C-unwind" fn js_method_site_miss(
     else {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     };
+    if WORKER_AGENTS_EXIST.load(Ordering::SeqCst) != 0 {
+        refuse(11);
+        return crate::typed_feedback::js_typed_feedback_native_call_method(
+            site_id,
+            recv,
+            name_ref.ptr as *const i8,
+            name_ref.len,
+            args_ptr,
+            argc,
+        );
+    }
     // Only an ordinary heap object can prime. Everything else (primitives,
     // handles, functions, arrays) dispatches with no extra work at all.
     let megamorphic = site_is_megamorphic(slot);
@@ -448,7 +458,7 @@ unsafe fn publish(slot: *mut MethodSiteSlot, entry: MethodEntry) -> bool {
     let Ok(mut sites) = METHOD_SITES.lock() else {
         return false;
     };
-    if entry.slot & METHOD_SITE_INHERITED != 0 && WORKER_AGENTS_EXIST.load(Ordering::SeqCst) {
+    if WORKER_AGENTS_EXIST.load(Ordering::SeqCst) != 0 {
         return false;
     }
     let site = site_of(slot);
@@ -510,6 +520,7 @@ unsafe fn prime(slot: *mut MethodSiteSlot, recv: f64, name: &[u8], argc: usize) 
     if slot.is_null()
         || name_refused(name)
         || crate::agent::current_agent() != crate::agent::PRIMARY_AGENT
+        || WORKER_AGENTS_EXIST.load(Ordering::SeqCst) != 0
     {
         return;
     }
@@ -851,7 +862,7 @@ unsafe fn prime_inherited(
     name: &[u8],
     argc: usize,
 ) {
-    if WORKER_AGENTS_EXIST.load(Ordering::SeqCst) {
+    if WORKER_AGENTS_EXIST.load(Ordering::SeqCst) != 0 {
         refuse(11);
         return;
     }
@@ -977,8 +988,17 @@ unsafe fn next_prototype(obj: *const ObjectHeader) -> *const ObjectHeader {
     super::class_prototype_object(class_id)
 }
 
-/// Root scan: every inherited entry's holder is marked and rewritten.
+/// Root scan: before workers exist, every inherited entry's holder is marked
+/// and rewritten. After the sticky gate, no emitted or runtime path reads an
+/// entry; returning here lets otherwise-dead holders collect. A primary
+/// inline hit begun before the gate cannot safepoint between its entry read
+/// and method call, so no primary GC can observe an in-flight holder read.
 pub(crate) fn scan_method_site_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    if crate::agent::current_agent() != crate::agent::PRIMARY_AGENT
+        || WORKER_AGENTS_EXIST.load(Ordering::SeqCst) != 0
+    {
+        return;
+    }
     if let Ok(sites) = METHOD_SITES.lock() {
         for &site in sites.iter() {
             for e in unsafe { (*(site as *mut MethodSite)).entries.iter_mut() } {

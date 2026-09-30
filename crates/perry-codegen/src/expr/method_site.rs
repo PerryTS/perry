@@ -30,7 +30,7 @@
 //! exactly the behaviour it had.
 
 use super::FnCtx;
-use crate::types::{DOUBLE, I1, I32, I64, PTR};
+use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 
 /// Is the One Path method site available for this call?
 /// `PERRY_METHOD_SITE=0` at compile time keeps the old dispatcher (A/B).
@@ -147,7 +147,16 @@ pub(crate) fn emit_method_site(
         fused.biased
     };
     ctx.current_block = object_idx;
-    ctx.block().cond_br(&ic.present, &deref_l, &miss_l);
+    // Site records are process-global, and inherited holders belong to the
+    // primary heap. A worker's first startup publishes this sticky gate
+    // before executing user code; afterward every agent takes the generic
+    // path. No worker reads a primary holder or races a primary site update.
+    let workers = ctx
+        .block()
+        .load_atomic_seq_cst(I8, "@PERRY_METHOD_SITE_WORKERS_PRESENT", 1);
+    let no_workers = ctx.block().icmp_eq(I8, &workers, "0");
+    let site_enabled = ctx.block().and(I1, &no_workers, &ic.present);
+    ctx.block().cond_br(&site_enabled, &deref_l, &miss_l);
 
     // deref: the receiver word against each entry's word, in order.
     ctx.current_block = deref_idx;

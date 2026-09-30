@@ -4007,7 +4007,7 @@
     "METHOD_SITES"
    ],
    "verdict": "process_global_allocation",
-   "why": "The values are addresses of MethodSite records allocated by pic_slot_resolve_init from the process-lifetime PicArena (std::alloc chunks, never freed), not from any thread's GC arena. Each record's primary-heap holder is visited by scan_method_site_roots_mut and all inherited entries are emptied before the first worker executes (note_worker_agent), after which inherited primes are refused."
+   "why": "The values are addresses of MethodSite records allocated by pic_slot_resolve_init from the process-lifetime PicArena (std::alloc chunks, never freed), not from any thread's GC arena. Before workers start, primary-heap holders are visited by the primary agent's scan_method_site_roots_mut. Worker startup atomically gates all site reads and later publishes without writing live entries; thereafter no agent reads or scans the stale holder words, allowing their objects to collect."
   },
   {
    "file": "crates/perry-runtime/src/object/method_site.rs",
@@ -4023,7 +4023,7 @@
     "HOLDER_SITES"
    ],
    "verdict": "process_global_allocation",
-   "why": "The addresses of read-site `PicCache`s, each allocated by `field_get_set::ic_slot::pic_arena_alloc` from `std::alloc::alloc_zeroed` chunks that are never freed and belong to no thread's arena, so thread exit cannot free or reuse them. The primary-heap holder and hop addresses the caches hold are written only by the primary agent (`prime_read_holder` checks `current_agent() == PRIMARY_AGENT` and `WORKER_AGENTS_EXIST`), are strong roots visited by `scan_read_holder_roots_mut`, and are emptied by `empty_read_holder_entries` when the first worker agent starts."
+   "why": "The addresses of read-site `PicCache`s, each allocated by `field_get_set::ic_slot::pic_arena_alloc` from `std::alloc::alloc_zeroed` chunks that are never freed and belong to no thread's arena, so thread exit cannot free or reuse them. Primary-heap holder and hop addresses are written only by the primary agent and traced by its scan_read_holder_roots_mut until the atomic worker-start gate is set. Thereafter no agent reads or scans stale holder words, allowing their objects to collect."
   },
   {
    "file": "crates/perry-stdlib/src/common/handle_lifecycle.rs",
