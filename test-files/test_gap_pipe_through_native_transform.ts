@@ -34,3 +34,12 @@ function options() { order.push("options"); return {}; }
 const typedSource = new ReadableStream<Uint8Array>({ start(c) { c.enqueue(bytes); c.close(); } });
 console.log("getter", await count(typedSource.pipeThrough(getterPair, options())));
 console.log("order", order.join(","));
+
+// Erased annotations and later writes must never select the numeric fast path.
+const falseHint: TransformStream<Uint8Array, Uint8Array> = new DecompressionStream("gzip") as any;
+const hintSource = new ReadableStream<Uint8Array>({ start(c) { c.enqueue(zlib.gzipSync(bytes)); c.close(); } });
+console.log("erased hint", await count(hintSource.pipeThrough(falseHint)));
+let reassigned: TransformStream<Uint8Array, Uint8Array> = new TransformStream();
+reassigned = new DecompressionStream("gzip") as any;
+const reassignedSource = new ReadableStream<Uint8Array>({ start(c) { c.enqueue(zlib.gzipSync(bytes)); c.close(); } });
+console.log("reassigned", await count(reassignedSource.pipeThrough(reassigned)));
