@@ -222,12 +222,15 @@ fn a_seeded_literal_shape_answers_the_megamorphic_confirm_like_a_minted_one() {
 /// class's confirms fail.
 #[test]
 fn a_class_registered_before_the_pools_answers_the_megamorphic_confirm() {
-    const CLASS_ID: u32 = 0x0074_1c77;
+    const LATE_POOL_CLASS_ID: u32 = 0x0074_1c77;
     let packed = b"ltca_x\0ltca_only_in_b\0";
-    let keys =
-        crate::object::js_build_class_keys_array(CLASS_ID, 2, packed.as_ptr(), packed.len() as u32)
-            as u64;
-    let id = shapes::js_object_shape_id_for_class_keys(keys, 2, CLASS_ID);
+    let keys = crate::object::js_build_class_keys_array(
+        LATE_POOL_CLASS_ID,
+        2,
+        packed.as_ptr(),
+        packed.len() as u32,
+    ) as u64;
+    let id = shapes::js_object_shape_id_for_class_keys(keys, 2, LATE_POOL_CLASS_ID);
     // Module B's pool runs afterwards and mints its key literals.
     let (x, b) = (pool_atom("ltca_x"), pool_atom("ltca_only_in_b"));
     assert!(
