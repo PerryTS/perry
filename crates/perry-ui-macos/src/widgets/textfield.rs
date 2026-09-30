@@ -2,7 +2,7 @@ use crate::ffi::{js_gc_pin_user_ptr, js_string_from_bytes};
 use crate::srgb;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Sel};
-use objc2::{define_class, msg_send, AnyThread, DefinedClass};
+use objc2::{define_class, msg_send, AnyThread, DefinedClass, Message};
 use objc2_app_kit::{NSTextField, NSView};
 use objc2_foundation::{
     MainThreadMarker, NSNotification, NSNotificationCenter, NSObject, NSRange, NSRunLoop, NSString,
@@ -575,6 +575,71 @@ pub fn set_text_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
             let tf: &NSTextField = &*(Retained::as_ptr(&view) as *const NSTextField);
             let color = srgb::ns_color(r, g, b, a);
             tf.setTextColor(Some(&color));
+        }
+    }
+}
+
+/// `value` as a TextField stores it: `without_line_breaks` applied.
+pub(crate) fn one_line_value(value: &NSString) -> Retained<NSString> {
+    match without_line_breaks(&value.to_string()) {
+        std::borrow::Cow::Borrowed(_) => value.retain(),
+        std::borrow::Cow::Owned(text) => NSString::from_str(&text),
+    }
+}
+
+/// The text to insert in place of `entered`, when it holds a line break.
+pub(crate) fn entered_text_with_spaces(entered: Option<&NSString>) -> Option<Retained<NSString>> {
+    line_breaks_as_spaces(&entered?.to_string()).map(|text| NSString::from_str(&text))
+}
+
+/// The field editor commands that would insert a line break. A web `<input>`
+/// ignores Option-Return and Control-Return, so a TextField does too.
+pub(crate) fn is_line_break_command(command: Sel) -> bool {
+    [
+        objc2::sel!(insertNewlineIgnoringFieldEditor:),
+        objc2::sel!(insertLineBreak:),
+        objc2::sel!(insertParagraphSeparator:),
+    ]
+    .contains(&command)
+}
+
+/// A TextField holds one line, as a web `<input>` does. A value set in code
+/// drops its line breaks, as `input.value = …` does.
+pub(crate) fn without_line_breaks(text: &str) -> std::borrow::Cow<'_, str> {
+    if text.contains(['\r', '\n']) {
+        text.replace(['\r', '\n'], "").into()
+    } else {
+        text.into()
+    }
+}
+
+/// Text typed, pasted or dropped into a TextField turns each line break into
+/// one space, as a web `<input>` does. `None` when the text has no line break.
+pub(crate) fn line_breaks_as_spaces(text: &str) -> Option<String> {
+    text.contains(['\r', '\n'])
+        .then(|| text.replace("\r\n", " ").replace(['\r', '\n'], " "))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn line_breaks_match_a_web_input() {
+        for (text, set_in_code, entered) in [
+            ("one line", "one line", None),
+            ("a\nb\r\nc\rd", "abcd", Some("a b c d")),
+            ("trailing\n", "trailing", Some("trailing ")),
+            ("a\u{2028}b\u{2029}c\td", "a\u{2028}b\u{2029}c\td", None),
+        ] {
+            assert_eq!(
+                (
+                    without_line_breaks(text).as_ref(),
+                    line_breaks_as_spaces(text).as_deref()
+                ),
+                (set_in_code, entered),
+                "{text:?}"
+            );
         }
     }
 }
