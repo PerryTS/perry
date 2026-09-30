@@ -727,30 +727,32 @@ pub(crate) unsafe fn prime_read_holder(
     // From here a refusal has already run the getter, so the site latches:
     // the next miss must not walk and run it again only to refuse again.
     let cache = crate::object::field_get_set::pic_slot_resolve::<PicCache>(cache_slot);
-    let name = crate::string::header_str_checked(key_handle.get_raw_const_ptr())?.as_bytes();
-    let Some(recv) = ordinary_receiver(obj as usize) else {
-        refuse_and_latch(cache);
-        return Some(value);
-    };
-    let Some(w) = walk(recv, name, false) else {
-        refuse_and_latch(cache);
-        return Some(value);
-    };
-    // Confirm: what the shapes say must be what the getter returned.
-    let bits = value.bits();
-    let confirmed = match w.slot {
-        None => bits == crate::value::TAG_UNDEFINED,
-        Some(s) => bits == slot_bits(w.holder, s) && bits != crate::value::TAG_HOLE,
-    };
-    if !confirmed {
-        refuse_and_latch(cache);
-        return Some(value);
-    }
-    if cache.is_null() {
-        return Some(value);
-    }
-    publish(cache, recv, &w, false);
-    Some(value)
+    key_handle.with_const_ptr::<crate::StringHeader, _>(|key| {
+        let name = crate::string::header_str_checked(key)?.as_bytes();
+        let Some(recv) = ordinary_receiver(obj as usize) else {
+            refuse_and_latch(cache);
+            return Some(value);
+        };
+        let Some(w) = walk(recv, name, false) else {
+            refuse_and_latch(cache);
+            return Some(value);
+        };
+        // This scoped key pointer is used only by the non-collecting walk
+        // and confirmation. The generic getter has already returned.
+        let bits = value.bits();
+        let confirmed = match w.slot {
+            None => bits == crate::value::TAG_UNDEFINED,
+            Some(s) => bits == slot_bits(w.holder, s) && bits != crate::value::TAG_HOLE,
+        };
+        if !confirmed {
+            refuse_and_latch(cache);
+            return Some(value);
+        }
+        if !cache.is_null() {
+            publish(cache, recv, &w, false);
+        }
+        Some(value)
+    })
 }
 
 unsafe fn publish(cache: *mut PicCache, recv: *const ObjectHeader, w: &Walk, accessor: bool) {
@@ -924,12 +926,13 @@ mod tests {
                 );
             });
         }
-        let p1_addr = p1.get_raw_const_ptr::<ObjectHeader>() as usize;
-        let p2_addr = p2.get_raw_const_ptr::<ObjectHeader>() as usize;
-        let shape = unsafe { object_shape_stamp(p1_addr as *const ObjectHeader) };
-        assert_ne!(p1_addr, p2_addr);
-        assert_eq!(shape, unsafe {
-            object_shape_stamp(p2_addr as *const ObjectHeader)
+        p1.with_const_ptr::<ObjectHeader, _>(|first| {
+            p2.with_const_ptr::<ObjectHeader, _>(|second| {
+                assert_ne!(first, second);
+                assert_eq!(unsafe { object_shape_stamp(first) }, unsafe {
+                    object_shape_stamp(second)
+                });
+            });
         });
 
         let packed = b"holder_class_key";
@@ -950,51 +953,57 @@ mod tests {
             CID, 0, 1, keys, recv_shape, 0,
         );
         let recv = scope.root_raw_mut_ptr(recv);
-        let receiver = recv.get_raw_const_ptr::<ObjectHeader>();
-        assert_eq!(
-            unsafe { shape_proto_id(object_shape_stamp(receiver)) },
-            Some(PROTO_ID_CLASS | u64::from(CID))
-        );
+        recv.with_const_ptr::<ObjectHeader, _>(|receiver| {
+            assert_eq!(
+                unsafe { shape_proto_id(object_shape_stamp(receiver)) },
+                Some(PROTO_ID_CLASS | u64::from(CID))
+            );
 
-        crate::object::test_seed_class_decl_prototype_object_root(CID, p1_addr);
-        let first = unsafe { class_accessor_walk(receiver, b"path") }.expect("first accessor");
-        let cache: &'static mut PicCache =
-            Box::leak(Box::new([0; crate::codegen_abi::PIC_CACHE_WORDS]));
-        let mut slot: PicCacheSlot = cache;
-        let w = Walk {
-            holder: first.holder,
-            holder_shape: first.shape,
-            slot: Some(first.slot),
-            hops: [(0, 0); HOLDER_MAX_DEPTH - 1],
-            depth: 1,
-        };
-        unsafe { publish(cache, receiver, &w, true) };
-        assert_eq!(
-            unsafe { try_cached_class_accessor(receiver, &mut slot) }.map(|v| v.as_number()),
-            Some(2.0)
-        );
+            p1.with_const_ptr::<ObjectHeader, _>(|ptr| {
+                crate::object::test_seed_class_decl_prototype_object_root(CID, ptr as usize);
+            });
+            let first = unsafe { class_accessor_walk(receiver, b"path") }.expect("first accessor");
+            let cache: &'static mut PicCache =
+                Box::leak(Box::new([0; crate::codegen_abi::PIC_CACHE_WORDS]));
+            let mut slot: PicCacheSlot = cache;
+            let w = Walk {
+                holder: first.holder,
+                holder_shape: first.shape,
+                slot: Some(first.slot),
+                hops: [(0, 0); HOLDER_MAX_DEPTH - 1],
+                depth: 1,
+            };
+            unsafe { publish(cache, receiver, &w, true) };
+            assert_eq!(
+                unsafe { try_cached_class_accessor(receiver, &mut slot) }.map(|v| v.as_number()),
+                Some(2.0)
+            );
 
-        let old_relinks = read_accessor_same_shape_relinks();
-        crate::object::test_seed_class_decl_prototype_object_root(CID, p2_addr);
-        assert_eq!(unsafe { object_shape_stamp(receiver) }, recv_shape);
-        assert!(
-            unsafe { try_cached_class_accessor(receiver, &mut slot) }.is_none(),
-            "stale getter was served after registry replacement"
-        );
-        let second = unsafe { class_accessor_walk(receiver, b"path") }.expect("second accessor");
-        let w = Walk {
-            holder: second.holder,
-            holder_shape: second.shape,
-            slot: Some(second.slot),
-            hops: [(0, 0); HOLDER_MAX_DEPTH - 1],
-            depth: 1,
-        };
-        unsafe { publish(cache, receiver, &w, true) };
-        assert!(read_accessor_same_shape_relinks() > old_relinks);
-        assert_eq!(
-            unsafe { try_cached_class_accessor(receiver, &mut slot) }.map(|v| v.as_number()),
-            Some(8.0)
-        );
+            let old_relinks = read_accessor_same_shape_relinks();
+            p2.with_const_ptr::<ObjectHeader, _>(|ptr| {
+                crate::object::test_seed_class_decl_prototype_object_root(CID, ptr as usize);
+            });
+            assert_eq!(unsafe { object_shape_stamp(receiver) }, recv_shape);
+            assert!(
+                unsafe { try_cached_class_accessor(receiver, &mut slot) }.is_none(),
+                "stale getter was served after registry replacement"
+            );
+            let second =
+                unsafe { class_accessor_walk(receiver, b"path") }.expect("second accessor");
+            let w = Walk {
+                holder: second.holder,
+                holder_shape: second.shape,
+                slot: Some(second.slot),
+                hops: [(0, 0); HOLDER_MAX_DEPTH - 1],
+                depth: 1,
+            };
+            unsafe { publish(cache, receiver, &w, true) };
+            assert!(read_accessor_same_shape_relinks() > old_relinks);
+            assert_eq!(
+                unsafe { try_cached_class_accessor(receiver, &mut slot) }.map(|v| v.as_number()),
+                Some(8.0)
+            );
+        });
     }
 
     #[test]
