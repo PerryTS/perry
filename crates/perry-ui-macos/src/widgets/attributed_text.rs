@@ -34,7 +34,7 @@ use perry_ffi::copy_string_from_raw as str_from_header;
 pub fn create() -> i64 {
     let mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
     let empty = NSString::from_str("");
-    let label = super::padding::label(&empty, mtm);
+    let label = super::text::label(&empty, mtm);
     unsafe {
         let _: () = msg_send![&*label, setTranslatesAutoresizingMaskIntoConstraints: false];
         // Enable wrapping by default — per-range styling is most useful
