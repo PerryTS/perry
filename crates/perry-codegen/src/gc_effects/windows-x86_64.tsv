@@ -49,7 +49,7 @@ js_arguments_bundle_get_slow	Reenters
 js_arguments_bundle_index_get	Reenters
 js_arguments_object_alloc	Reenters
 js_arguments_object_alloc_mapped	Reenters
-js_arguments_object_map_index	Leaf
+js_arguments_object_map_index	Reenters
 js_array_alloc	Reenters
 js_array_alloc_literal	Reenters
 js_array_alloc_with_length	Reenters
@@ -358,14 +358,14 @@ js_blob_slice	Reenters
 js_blob_stream	Reenters
 js_blob_text	Reenters
 js_blob_type	Reenters
-js_bool_box_alloc	Leaf
+js_bool_box_alloc	AllocOnly
 js_bool_box_get	Leaf
 js_bool_box_release	Leaf
 js_bool_box_scope_release	Leaf
 js_bool_box_set	Leaf
 js_bootstrap_cjs_main_module_placeholder	Reenters
-js_box_alloc	Leaf
-js_box_alloc_bits	Leaf
+js_box_alloc	AllocOnly
+js_box_alloc_bits	AllocOnly
 js_box_capture_cell_ptr	Leaf
 js_box_get	Reenters
 js_box_get_bits	Reenters
@@ -1444,7 +1444,7 @@ js_https_global_agent_emit	Reenters
 js_https_global_agent_override_value	Leaf
 js_https_global_agent_sync_maps	Reenters
 js_https_server_construct_with_this	Reenters
-js_i32_box_alloc	Leaf
+js_i32_box_alloc	AllocOnly
 js_i32_box_get	Leaf
 js_i32_box_release	Leaf
 js_i32_box_scope_release	Leaf
@@ -2874,6 +2874,9 @@ js_runtime_init	Reenters
 js_runtime_validate_crypto_key_arg	Reenters
 js_runtime_validate_integer_arg	Reenters
 js_runtime_validate_string_arg	Reenters
+js_scope_alloc	AllocOnly
+js_scope_capture_base	Leaf
+js_scope_set	Leaf
 js_sea_get_asset	Reenters
 js_sea_get_asset_as_blob	Reenters
 js_sea_get_asset_keys	Reenters

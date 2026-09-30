@@ -71,6 +71,10 @@ pub(crate) fn emit_grow_mutator_writeback(
     new_box: &str,
 ) -> Result<()> {
     if ctx.boxed_vars.contains(&array_id) {
+        let new_bits = ctx.block().bitcast_double_to_i64(new_box);
+        if crate::scope_env::access::write_scoped(ctx, array_id, &new_bits)? {
+            return Ok(());
+        }
         // Boxed var: the slot / capture holds the BOX pointer; update the box
         // content so every closure sharing the box sees the new head.
         if let Some(&capture_idx) = ctx.closure_captures.get(&array_id) {
@@ -908,12 +912,7 @@ pub(crate) fn lower_array_method(
                 if let Expr::LocalGet(array_id) = object {
                     let modified_handle = ctx.block().load(I64, &out_slot);
                     let modified_box = nanbox_pointer_inline(ctx.block(), &modified_handle);
-                    if let Some(slot) = ctx.locals.get(array_id).cloned() {
-                        ctx.block().store(DOUBLE, &modified_box, &slot);
-                    } else if let Some(global_name) = ctx.module_globals.get(array_id).cloned() {
-                        let g_ref = format!("@{}", global_name);
-                        emit_root_nanbox_store_on_block(ctx.block(), &modified_box, &g_ref);
-                    }
+                    emit_grow_mutator_writeback(ctx, *array_id, &modified_box)?;
                 }
                 Ok(nanbox_pointer_inline(ctx.block(), &deleted_handle))
             }

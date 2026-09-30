@@ -181,12 +181,13 @@ mod artifact_context;
 mod artifact_display_names;
 mod artifact_source_text;
 mod artifacts;
-mod boxed_locals;
+pub(crate) mod boxed_locals;
 mod cjs_exports;
 mod class_artifacts;
 #[cfg(test)]
 mod clone_suffix_tests;
 mod closure;
+mod closure_capture_cells;
 mod closure_collect;
 mod constructor_contracts;
 #[cfg(test)]
@@ -2697,6 +2698,7 @@ fn compile_module_impl(
         typed_i1_closure_param_reps: std::collections::HashMap::new(),
         compiler_private_async_i32_control_locals,
         compiler_private_async_i1_control_locals,
+        scope_map: Default::default(),
         disable_buffer_fast_path,
         program_shadows_buffer_read_method:
             crate::lower_call::buffer_intrinsic::module_shadows_buffer_read_method(hir),
@@ -2899,6 +2901,11 @@ fn compile_module_impl(
 
     // Module-wide boxed-var union + LocalId→Type map. See `boxed_locals`.
     let module_boxed_vars = boxed_locals::collect_module_boxed_vars(hir);
+    // Scope context objects: the groups `scope_env::group_scope_boxes` formed
+    // (as preallocation statements), validated against this module's
+    // globals. Every capture layout below is computed through this map.
+    cross_module.scope_map =
+        crate::scope_env::ScopeMap::build(hir, &module_boxed_vars, &module_globals);
     // #6369: the *receiver-type oracle* for closure bodies — every module-wide
     // `Stmt::Let` type, with NO representation-driven filtering. `FnCtx.
     // local_types` is what `static_type_of` / `is_array_expr` /
@@ -3172,12 +3179,14 @@ fn compile_module_impl(
         &module_boxed_vars,
         &module_globals,
         &trusted_box_exclusions,
+        &cross_module.scope_map,
     );
     let versioned_loop_callbacks = closure_collect::select_versioned_loop_callbacks(
         &closures,
         &trusted_box_closures,
         &module_boxed_vars,
         &module_globals,
+        &cross_module.scope_map,
     );
 
     // ---- Representation-selection Phase 2: specialized-ABI plan selection.
