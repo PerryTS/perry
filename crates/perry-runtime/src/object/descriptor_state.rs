@@ -641,6 +641,13 @@ pub(crate) fn note_attrs_born_with_keys(obj: usize) {
     GLOBAL_DESCRIPTORS_IN_USE.store(true, Ordering::Relaxed);
 }
 
+/// An accessor born in the object's attributed key layout also needs the
+/// read-path accessor gate, even though no descriptor install runs.
+pub(crate) fn note_accessor_born_with_keys(obj: usize) {
+    note_attrs_born_with_keys(obj);
+    state().descriptors.accessors_in_use.set(true);
+}
+
 /// Look up the property descriptor for (obj, key). Returns None if no entry exists,
 /// in which case the JS default `{ writable: true, enumerable: true, configurable: true }` applies.
 pub(crate) fn get_property_attrs(obj: usize, key: &str) -> Option<PropertyAttrs> {
