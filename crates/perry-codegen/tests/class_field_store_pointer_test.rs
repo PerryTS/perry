@@ -6,7 +6,7 @@
 //! structural properties that make the guard sound:
 //!
 //! 1. the SLOT STORE is unconditional and stays outside the guarded block, and
-//! 2. all three bookkeeping calls — write barrier, layout note, string addref —
+//! 2. both bookkeeping calls — write barrier and string addref —
 //!    are inside it, so none of them can be skipped by a *different* condition
 //!    than the one that proves them dead.
 //!
@@ -246,12 +246,12 @@ fn compile_ir(module: &Module) -> String {
 ///
 /// This used to be a text slice -- from the `gc_bookkeeping.N:` label to the
 /// first `br` -- which is the same thing only while the region is ONE block.
-/// #5094 made it three (`gc_bookkeeping` -> `layout_note` / `layout_note.done`
-/// -> `gc_bookkeeping.done`), and the slice then returned only the prefix, so
+/// A nested barrier block (`gc_bookkeeping` -> `barrier` ->
+/// `gc_bookkeeping.done`) makes that slice return only the prefix, so
 /// `@js_write_barrier_slot` "left the guarded block" without moving at all.
 ///
 /// A wider text slice would not do either: LLVM emits `gc_bookkeeping.done.5`
-/// **between** `gc_bookkeeping.4` and `layout_note.6`, so the region is not
+/// **between** `gc_bookkeeping.4` and `barrier.6`, so the region is not
 /// textually contiguous and "everything up to the done label" is still just
 /// the first block.
 ///
@@ -321,10 +321,10 @@ fn gc_bookkeeping_block(ir: &str) -> Option<String> {
 }
 
 /// An `any`-typed field is the case the whole ticket is about: it takes the
-/// boxed store path, so the three bookkeeping calls exist, and the value is a
+/// boxed store path, so both bookkeeping calls exist, and the value is a
 /// constructor PARAMETER, so no by-construction proof can retire them.
 #[test]
-fn opaque_param_store_guards_all_three_bookkeeping_calls() {
+fn opaque_param_store_guards_both_bookkeeping_calls() {
     assert_default_barrier_env_not_disabled();
     let module = module_with_new(
         class(
@@ -352,11 +352,7 @@ fn opaque_param_store_guards_all_three_bookkeeping_calls() {
     }
 
     let guarded = gc_bookkeeping_block(&ir).expect("a gc_bookkeeping block");
-    for call in [
-        "@js_write_barrier_slot",
-        "@js_gc_note_slot_layout",
-        "@js_string_addref_if_heap_string",
-    ] {
+    for call in ["@js_write_barrier_slot", "@js_string_addref_if_heap_string"] {
         assert!(
             guarded.contains(call),
             "{call} must live inside the guarded block, not beside it:\n{guarded}"
@@ -371,8 +367,8 @@ fn opaque_param_store_guards_all_three_bookkeeping_calls() {
 }
 
 /// **The boundary.** The guard replaces a *runtime* early-out, so it must never
-/// remove a call outright: a module that can store a pointer still has all
-/// three calls present in the emitted IR, reachable on the guard's taken edge.
+/// remove a call outright: a module that can store a pointer still has both
+/// calls present in the emitted IR, reachable on the guard's taken edge.
 /// This is what distinguishes the change from an elision.
 #[test]
 fn every_bookkeeping_call_is_still_emitted_not_removed() {
@@ -389,7 +385,6 @@ fn every_bookkeeping_call_is_still_emitted_not_removed() {
     let ir = compile_ir(&module);
     for call in [
         "call void @js_write_barrier_slot",
-        "call void @js_gc_note_slot_layout",
         "call void @js_string_addref_if_heap_string",
     ] {
         assert!(ir.contains(call), "{call} must still be emitted:\n{ir}");
@@ -462,11 +457,7 @@ fn guarded_store_leaves_every_block_terminated() {
     let ir = compile_ir(&module);
     let guarded = gc_bookkeeping_block(&ir)
         .unwrap_or_else(|| panic!("expected a guarded bookkeeping block in:\n{ir}"));
-    for call in [
-        "@js_write_barrier_slot",
-        "@js_gc_note_slot_layout",
-        "@js_string_addref_if_heap_string",
-    ] {
+    for call in ["@js_write_barrier_slot", "@js_string_addref_if_heap_string"] {
         assert!(
             guarded.contains(call),
             "{call} must live inside the guarded block:\n{guarded}"
