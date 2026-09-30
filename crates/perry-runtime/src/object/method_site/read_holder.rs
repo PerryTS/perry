@@ -532,14 +532,16 @@ mod tests {
             1,
             packed.as_ptr(),
             packed.len() as u32,
+            0,
         );
         let shape_id = crate::object::shapes::js_object_shape_id_for_class_keys(
             keys as usize as u64,
             1,
             CLASS_ID,
+            0,
         );
         let obj = crate::object::js_object_alloc_class_inline_keys_stamped(
-            CLASS_ID, 0, 1, keys, shape_id,
+            CLASS_ID, 0, 1, keys, shape_id, 0,
         );
         let claimed = shape_proto_id(shape_id).expect("class shape must be stamped");
         assert_eq!(claimed, crate::object::shapes::class_proto_id(CLASS_ID));
