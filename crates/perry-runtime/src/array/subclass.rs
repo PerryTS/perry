@@ -1365,6 +1365,9 @@ fn array_subclass_fast_push_one_validated(
     {
         return None;
     }
+    // A numeric-proof sibling has no learned tail edge. Restore the ordinary
+    // shape before the exact-shape transition lookup, including on a miss.
+    unsafe { clear_packed_subclass_numeric_proof(obj) };
     let predecessor_shape_id = unsafe { (*obj).parent_class_id };
     let transition = crate::object::array_tail_transition::lookup_forward_for_owner(
         obj,
@@ -1416,9 +1419,6 @@ fn array_subclass_fast_push_one_validated(
             })
         });
         let (value_stored, length_stored) = if let Some(number) = numeric_entity {
-            // `layout_note_slot` used to retire this proof as a side effect.
-            // Retire it explicitly before bypassing that general hook.
-            clear_packed_subclass_numeric_proof(obj);
             (
                 store_dense_nonpointer_number_slot(
                     obj,
@@ -1494,6 +1494,11 @@ fn array_subclass_fast_pop_validated(receiver: ValidatedObjectReceiver) -> Optio
     {
         return None;
     }
+    // Retire before consulting the exact-shape tail cache: proof siblings do
+    // not carry the ordinary shape's learned reverse edge.
+    if unsafe { clear_packed_subclass_numeric_proof(obj) } {
+        crate::object::prop_plan::prop_plan_epoch_bump();
+    }
     let successor_shape_id = unsafe { (*obj).parent_class_id };
     let transition =
         crate::object::array_tail_transition::lookup_reverse_for_owner(obj, successor_shape_id)?;
@@ -1519,20 +1524,6 @@ fn array_subclass_fast_pop_validated(receiver: ValidatedObjectReceiver) -> Optio
         number.is_finite() && *number >= 0.0 && *number <= i32::MAX as f64 && number.fract() == 0.0
     });
     let obj = obj as *mut ObjectHeader;
-    // Only a proof this call actually retired can invalidate a cached verdict.
-    // A pop loop retires one on its FIRST iteration and nothing afterwards,
-    // while the bump it used to pay unconditionally discarded every cached
-    // store plan in the program — per `pop()`.
-    //
-    // The shape-version install below needs no bump of its own: the sibling
-    // push path (`array_subclass_fast_push_one_validated`) performs the same
-    // `install_cache_carried_object_shape_version` and has never bumped. A
-    // per-object shape version is not an input to the store-plan verdict,
-    // which is keyed on (class_id, interned key) and invalidated by vtable
-    // mutation, descriptor/prototype changes and GC — see `object::prop_plan`.
-    if unsafe { clear_packed_subclass_numeric_proof(obj) } {
-        crate::object::prop_plan::prop_plan_epoch_bump();
-    }
     let installed = unsafe {
         crate::object::shapes::install_cache_carried_object_shape_version(
             obj,

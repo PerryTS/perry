@@ -437,8 +437,6 @@ mod tests {
         "js_gc_note_slot_layout",
         "js_gc_note_slot_layout_aware",
         "js_gc_key_add_layout_unknown",
-        "js_gc_init_typed_shape_layout",
-        "js_gc_declare_typed_shape_layout",
         "js_typed_feedback_record_guard_pass",
         "js_typed_feedback_record_guard_fail",
         "js_typed_feedback_record_fallback_call",

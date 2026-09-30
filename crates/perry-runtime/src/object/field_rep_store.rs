@@ -420,11 +420,6 @@ pub(crate) unsafe fn birth_fill_f64_lanes(obj: *mut ObjectHeader) {
 /// shape holds a canonical double. Run at every trace of an object when
 /// [`field_rep_verify_enabled`], so a writer that skips the store check trips
 /// it at the next collection.
-///
-/// The typed-layout cross-check rides along while #8405's per-object typed
-/// layouts still exist (P4 deletes them): an intact typed layout must never
-/// call a slot the shape gives an `F64` lane a POINTER slot, which is the
-/// one disagreement that would let the two tracers see different children.
 #[cfg(any(
     debug_assertions,
     feature = "field-rep-assert",
@@ -443,35 +438,9 @@ pub(crate) unsafe fn assert_f64_lanes_hold_numbers(
         return;
     }
     let fields = (obj as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64;
-    // T1 reverse direction: a compiled birth id that declares any `F64` lane
-    // declares ALL of its layout's raw-f64 slots below `REP_SLOTS` (the class
-    // proof covers every `number` field or none), so an intact typed layout
-    // may not call a slot raw-f64 that this id leaves `Any`. Runtime-minted
-    // records (a normalized lineage) are exempt: their `Any` lane is a
-    // generalization, not a declaration.
-    let declares_f64 = record.is_external_carrier() && field_rep::f64_lane_slots(rep) != 0;
     for slot in 0..live.min(REP_SLOTS as usize) {
         if slot_rep(rep, slot as u32) == REP_ANY {
-            if declares_f64
-                && matches!(
-                    crate::gc::layout_typed_slot_kinds_for_user(obj as usize, slot),
-                    Some((true, _))
-                )
-            {
-                panic!(
-                    "field-rep typed-layout cross-check: slot {slot} of {obj:p} (shape {:#x}, rep {rep:#x}) is raw-f64 in its intact typed layout but an Any lane of its birth shape",
-                    object_shape_stamp(obj)
-                );
-            }
             continue;
-        }
-        if let Some((_raw_f64, true)) =
-            crate::gc::layout_typed_slot_kinds_for_user(obj as usize, slot)
-        {
-            panic!(
-                "field-rep typed-layout cross-check: slot {slot} of {obj:p} (shape {:#x}, rep {rep:#x}) is an F64 lane but a pointer slot of its intact typed layout",
-                object_shape_stamp(obj)
-            );
         }
         let bits = *fields.add(slot);
         if field_rep::f64_slot_bits(bits) != Some(bits) {

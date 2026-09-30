@@ -16,6 +16,7 @@ pub(in crate::gc) enum LayoutSlotMask {
 }
 
 impl LayoutSlotMask {
+    #[cfg(test)]
     pub(in crate::gc) fn from_words(words: &[u64]) -> Self {
         let mut trimmed = words.len();
         while trimmed > 0 && words[trimmed - 1] == 0 {
@@ -142,23 +143,8 @@ impl LayoutSlotMask {
         count
     }
 
-    /// Reference implementation only. The construction path asks this question
-    /// of the raw mask words (`shape_install::words_intersect`) rather than of
-    /// two built masks — see that module's "mask words" section — and
-    /// `shape_install::tests::mask_word_helpers_agree_with_layout_slot_mask`
-    /// pins the two together, which is what this now exists for.
-    #[cfg(test)]
-    pub(in crate::gc) fn intersects(&self, other: &Self, slot_count: usize) -> bool {
-        let mut found = false;
-        self.visit_slots(slot_count, |slot| {
-            if other.contains_slot(slot) {
-                found = true;
-            }
-        });
-        found
-    }
-
     #[inline]
+    #[cfg(test)]
     pub(in crate::gc) fn contains_slot(&self, slot_index: usize) -> bool {
         match self {
             LayoutSlotMask::Inline(bits) if slot_index < 64 => (*bits & (1u64 << slot_index)) != 0,

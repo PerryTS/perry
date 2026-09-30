@@ -23,10 +23,8 @@
 use super::barrier::{
     GC_BIRTH_EXTRA_FLAGS, INCREMENTAL_MARK_BARRIER_MINOR_ONLY, INCREMENTAL_MARK_BARRIER_VALID_PTRS,
 };
-use super::layout::{LayoutSlotMask, TypedLayoutDescriptor, SHAPE_LAYOUTS};
-use super::layout_tables::{
-    PerObjectLayoutHint, LAYOUT_SLOT_MASKS, PER_OBJECT_LAYOUTS_NONEMPTY, TYPED_LAYOUTS,
-};
+use super::layout::LayoutSlotMask;
+use super::layout_tables::{PerObjectLayoutHint, LAYOUT_SLOT_MASKS, PER_OBJECT_LAYOUTS_NONEMPTY};
 use super::malloc::{ARENA_FREE_LIST, ARENA_FREE_LIST_NONEMPTY};
 use super::trace::ValidPointerSet;
 use std::cell::{Cell, RefCell};
@@ -74,22 +72,10 @@ pub(super) fn hot_incremental_mark_minor_only() -> &'static Cell<bool> {
 // --- gc::layout -------------------------------------------------------------
 
 type SlotMaskMap = crate::fast_hash::PtrHashMap<usize, LayoutSlotMask>;
-type TypedLayoutMap = crate::fast_hash::PtrHashMap<usize, TypedLayoutDescriptor>;
-type ShapeLayoutMap = super::layout::ShapeLayoutTable;
 
 /// Address of this thread's `LAYOUT_SLOT_MASKS`.
 pub(crate) fn layout_slot_masks_hot_addr() -> *mut u8 {
     LAYOUT_SLOT_MASKS.with(|m| m as *const _ as *mut u8)
-}
-
-/// Address of this thread's `TYPED_LAYOUTS`.
-pub(crate) fn typed_layouts_hot_addr() -> *mut u8 {
-    TYPED_LAYOUTS.with(|m| m as *const _ as *mut u8)
-}
-
-/// Address of this thread's `SHAPE_LAYOUTS`.
-pub(crate) fn shape_layouts_hot_addr() -> *mut u8 {
-    SHAPE_LAYOUTS.with(|m| m as *const _ as *mut u8)
 }
 
 /// Address of this thread's `PER_OBJECT_LAYOUTS_NONEMPTY`.
@@ -102,20 +88,6 @@ pub(crate) fn per_object_layouts_nonempty_hot_addr() -> *mut u8 {
 pub(super) fn hot_layout_slot_masks() -> &'static RefCell<SlotMaskMap> {
     // SAFETY: paired with `layout_slot_masks_hot_addr` above.
     unsafe { &*(crate::tls_hot::hot().layout_slot_masks as *const RefCell<SlotMaskMap>) }
-}
-
-/// `TYPED_LAYOUTS` without a TLS resolution.
-#[inline(always)]
-pub(super) fn hot_typed_layouts() -> &'static RefCell<TypedLayoutMap> {
-    // SAFETY: paired with `typed_layouts_hot_addr` above.
-    unsafe { &*(crate::tls_hot::hot().typed_layouts as *const RefCell<TypedLayoutMap>) }
-}
-
-/// `SHAPE_LAYOUTS` without a TLS resolution.
-#[inline(always)]
-pub(super) fn hot_shape_layouts() -> &'static RefCell<ShapeLayoutMap> {
-    // SAFETY: paired with `shape_layouts_hot_addr` above.
-    unsafe { &*(crate::tls_hot::hot().shape_layouts as *const RefCell<ShapeLayoutMap>) }
 }
 
 /// `PER_OBJECT_LAYOUTS_NONEMPTY` without a TLS resolution — the "is there any

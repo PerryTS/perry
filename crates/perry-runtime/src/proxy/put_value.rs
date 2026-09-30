@@ -557,11 +557,7 @@ pub extern "C" fn js_put_value_set_ic_miss(
         // attribute entry, `key_attrs.rs`), checked per key below before
         // anything is primed; every attribute or integrity change moves the
         // ShapeId, so the primed token pins it.
-        const BLOCKING_FLAGS: u16 = crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
-            // A generated hit cannot update/downgrade a typed layout without
-            // calling the runtime. The miss store clears this bit; prime only
-            // once that per-object downgrade is visible.
-            | crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT;
+        const BLOCKING_FLAGS: u16 = crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
         if gc_header.obj_type != crate::gc::GC_TYPE_OBJECT
             || gc_header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
             || gc_header._reserved & BLOCKING_FLAGS != 0
@@ -929,8 +925,7 @@ unsafe fn dyn_ic_try_store(target: f64, token: u64, slot: u32, value: f64) -> Op
         | crate::gc::OBJ_FLAG_SEALED
         | crate::gc::OBJ_FLAG_NO_EXTEND
         | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
-        | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
-        | crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT;
+        | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
     if gc_header.obj_type != crate::gc::GC_TYPE_OBJECT
         || gc_header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || gc_header._reserved & BLOCKING_FLAGS != 0
@@ -1022,7 +1017,6 @@ pub extern "C" fn js_transition_ic_spill_append(
             | crate::gc::OBJ_FLAG_NO_EXTEND
             | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
             | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
-            | crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT
             | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES;
         if gc_header.obj_type != crate::gc::GC_TYPE_OBJECT
             || gc_header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
@@ -1232,8 +1226,7 @@ pub extern "C" fn js_put_value_set_dyn_ic_miss(
             | crate::gc::OBJ_FLAG_SEALED
             | crate::gc::OBJ_FLAG_NO_EXTEND
             | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
-            | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
-            | crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT;
+            | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
         if gc_header.obj_type != crate::gc::GC_TYPE_OBJECT
             || gc_header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
             || gc_header._reserved & BLOCKING_FLAGS != 0
@@ -1575,7 +1568,6 @@ fn object_array_numeric_write_slots(
         *mut crate::array::ArrayHeader,
         u32,
         u32,
-        u16,
     )> {
         if (bits & !POINTER_MASK) != POINTER_TAG {
             return None;
@@ -1613,7 +1605,6 @@ fn object_array_numeric_write_slots(
             keys,
             shape.logical_key_count,
             shape.live_inline_slot_count,
-            gc._reserved,
         ))
     }
 
@@ -1639,7 +1630,7 @@ fn object_array_numeric_write_slots(
         trace_object_array_numeric_write_rejection("first receiver is a hole");
         return None;
     }
-    let (first, shared_shape_id, shared_keys, shared_key_count, first_limit, first_flags) =
+    let (first, shared_shape_id, shared_keys, shared_key_count, first_limit) =
         trace_object_array_numeric_write_stage(
             unsafe { validated_object(first_bits) },
             "first receiver is not an eligible regular shared-shape object",
@@ -1704,28 +1695,6 @@ fn object_array_numeric_write_slots(
             lane_spill[index] = true;
         }
     }
-    if first_flags & crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT != 0 {
-        // Typed-intact receivers keep raw-f64 inline invariants; a spill
-        // lane on one is unexpected — reject conservatively rather than
-        // reason about typed descriptors for out-of-line slots.
-        if lane_spill[..keys.len()].iter().any(|s| *s) {
-            trace_object_array_numeric_write_rejection(
-                "first receiver typed descriptor does not contain every target slot",
-            );
-            return None;
-        }
-        if slots[..keys.len()].iter().any(|slot| {
-            !crate::gc::layout_typed_accepts_finite_number_slot_for_user(
-                first as usize,
-                usize::from(*slot),
-            )
-        }) {
-            trace_object_array_numeric_write_rejection(
-                "first receiver typed descriptor does not contain every target slot",
-            );
-            return None;
-        }
-    }
 
     for i in (receiver_start as usize + 1)..receiver_end as usize {
         let bits = unsafe { (*elements.add(i)).to_bits() };
@@ -1733,7 +1702,7 @@ fn object_array_numeric_write_slots(
             trace_object_array_numeric_write_rejection("receiver prefix contains a hole");
             return None;
         }
-        let (obj, receiver_shape_id, _object_keys, _object_key_count, limit, flags) =
+        let (obj, receiver_shape_id, _object_keys, _object_key_count, limit) =
             trace_object_array_numeric_write_stage(
                 unsafe { validated_object(bits) },
                 "receiver prefix contains an ineligible object",
@@ -1759,25 +1728,6 @@ fn object_array_numeric_write_slots(
             } else if slot >= limit {
                 trace_object_array_numeric_write_rejection(
                     "receiver prefix contains an out-of-bounds target slot",
-                );
-                return None;
-            }
-        }
-        if flags & crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT != 0 {
-            if lane_spill[..keys.len()].iter().any(|s| *s) {
-                trace_object_array_numeric_write_rejection(
-                    "receiver typed descriptor does not contain every target slot",
-                );
-                return None;
-            }
-            if slots[..keys.len()].iter().any(|slot| {
-                !crate::gc::layout_typed_accepts_finite_number_slot_for_user(
-                    obj as usize,
-                    usize::from(*slot),
-                )
-            }) {
-                trace_object_array_numeric_write_rejection(
-                    "receiver typed descriptor does not contain every target slot",
                 );
                 return None;
             }
@@ -1871,7 +1821,9 @@ pub extern "C" fn js_object_array_keytable_write_guard(
 /// stores, whose bits are valid in both raw-f64 and ordinary numeric JSValue
 /// fields, until both loops finish. That call-free interval is load-bearing:
 /// no GC can move the array, its elements, their shared keys array, or their
-/// typed-layout records after this function validates them.
+/// shapes after this function validates them. A finite double is a canonical
+/// value for an `F64` lane and an ordinary Number for an `Any` lane, so no
+/// lane of the receivers' shapes can reject these stores.
 #[no_mangle]
 pub extern "C" fn js_object_array_numeric_write_guard(
     array: f64,

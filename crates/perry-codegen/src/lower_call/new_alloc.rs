@@ -135,11 +135,6 @@ pub(super) struct InstanceAlloc {
     /// allocator provide the structural proof needed by constructor-free
     /// field initialization.
     pub(super) constructor_stores_ready: bool,
-    /// `true` ⟹ the header already reads `GC_LAYOUT_POINTER_FREE |
-    /// GC_OBJ_TYPED_LAYOUT_INTACT`, so the construction site owes the runtime
-    /// only the address-dependent half of `js_gc_declare_typed_shape_layout`
-    /// (clearing a recycled address's stale per-object record).
-    pub(super) typed_layout_baked: bool,
 }
 
 /// The number of distinct static keys the constructor chain of `class` stores
@@ -264,19 +259,11 @@ pub(super) fn emit_instance_alloc(
     class_name: &str,
     class: &Class,
 ) -> InstanceAlloc {
-    let mut typed_layout_baked = false;
     let mut constructor_stores_ready = false;
-    let handle = emit_instance_alloc_inner(
-        ctx,
-        class_name,
-        class,
-        &mut typed_layout_baked,
-        &mut constructor_stores_ready,
-    );
+    let handle = emit_instance_alloc_inner(ctx, class_name, class, &mut constructor_stores_ready);
     InstanceAlloc {
         handle,
         constructor_stores_ready,
-        typed_layout_baked,
     }
 }
 
@@ -284,7 +271,6 @@ fn emit_instance_alloc_inner(
     ctx: &mut FnCtx<'_>,
     class_name: &str,
     class: &Class,
-    typed_layout_baked: &mut bool,
     constructor_stores_ready: &mut bool,
 ) -> String {
     // Compute total field count including inherited parent fields.
@@ -562,6 +548,14 @@ fn emit_instance_alloc_inner(
             let keys_ptr = ctx.block().load(I64, &keys_slot);
             let shape_id =
                 crate::typed_shape::load_class_shape_id(ctx, class_name, &keys_global_name);
+            // Charter step 5, P4: the compiled birth rep travels with the id, so an
+            // agent that installs it installs it with this rep, never all-Any.
+            let birth_rep_str = ctx
+                .class_birth_reps
+                .get(&keys_global_name)
+                .copied()
+                .unwrap_or(0)
+                .to_string();
             ctx.pending_declares.push((
                 "js_object_alloc_class_inline_keys_stamped".to_string(),
                 I64,
@@ -618,11 +612,6 @@ fn emit_instance_alloc_inner(
             // `js_gc_note_slot_layout` so the GC sees real pointer-bearing
             // slots regardless of this initial tag.
             const GC_LAYOUT_POINTER_FREE: u64 = 0x4000;
-            /// `GC_OBJ_TYPED_LAYOUT_INTACT` — the bit
-            /// `class_field_inline_guard` requires before it will read or write
-            /// a raw-f64 slot directly. Runtime-side name:
-            /// `gc::layout::GC_OBJ_TYPED_LAYOUT_INTACT`.
-            const GC_OBJ_TYPED_LAYOUT_INTACT: u64 = 0x1000;
 
             // #7834: when this class's canonical layout is declarable at
             // allocation AND its pointer mask is statically empty, the state
@@ -648,15 +637,12 @@ fn emit_instance_alloc_inner(
             } else {
                 super::typed_shape_init::layout_at_allocation(ctx, class_name, field_count)
             };
-            *typed_layout_baked = inline_typed_layout.is_baked();
-            let (layout_bits, typed_intact_bits) = match inline_typed_layout {
-                crate::target_layout::InlineTypedLayout::None => (GC_LAYOUT_POINTER_FREE, 0),
-                crate::target_layout::InlineTypedLayout::PointerFree => {
-                    (GC_LAYOUT_POINTER_FREE, GC_OBJ_TYPED_LAYOUT_INTACT)
-                }
-                crate::target_layout::InlineTypedLayout::SideMask => {
-                    (0x8000, GC_OBJ_TYPED_LAYOUT_INTACT)
-                }
+            // Charter step 5: no typed-layout-intact bit; the shape's `F64`
+            // lanes are what a raw-f64 slot access trusts.
+            let layout_bits = match inline_typed_layout {
+                crate::target_layout::InlineTypedLayout::None
+                | crate::target_layout::InlineTypedLayout::PointerFree => GC_LAYOUT_POINTER_FREE,
+                crate::target_layout::InlineTypedLayout::SideMask => 0x8000,
             };
 
             let alloc_field_count = std::cmp::max(field_count as u64, MIN_FIELD_SLOTS);
@@ -769,7 +755,7 @@ fn emit_instance_alloc_inner(
                 gc_packed,
                 GC_TYPE_OBJECT
                     | (GC_FLAG_ARENA << 8)
-                    | ((layout_bits | typed_intact_bits) << 16)
+                    | (layout_bits << 16)
                     | ((total_size as u64) << 32),
                 "inline_alloc_gc_packed must reproduce this site's packed header word"
             );

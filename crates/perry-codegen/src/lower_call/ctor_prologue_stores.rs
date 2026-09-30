@@ -212,9 +212,10 @@ pub(super) fn prologue_store_plan(
         // Refuse an unresolved field type rather than guessing boxed: missing
         // a raw-f64 slot here would store NaN-box bits into a slot readers
         // reinterpret as a plain double.
-        let field_type =
-            crate::type_analysis::class_field_declared_type(ctx, class_name, property)?;
-        let requires_raw_f64 = crate::typed_shape::type_is_raw_f64_candidate(&field_type);
+        crate::type_analysis::class_field_declared_type(ctx, class_name, property)?;
+        // Charter step 5, P4: raw exactly for an `F64` lane of the birth rep.
+        let requires_raw_f64 =
+            crate::expr::class_field_inline_guard::class_birth_slot_is_f64(ctx, class_name, slot);
         plan.push(PrologueStore {
             slot,
             arg_index,

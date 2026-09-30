@@ -73,38 +73,6 @@ fn a_class_birth_id_carries_its_minted_rep_and_births_fill_its_f64_lanes() {
     }
 }
 
-/// (a) reverse direction: a compiled birth id that declares an `F64` lane
-/// declares all of its intact layout's raw-f64 slots, so a raw-f64 slot under
-/// an `Any` lane of such an id is a codegen disagreement the invariant trips.
-#[test]
-#[should_panic(expected = "field-rep typed-layout cross-check")]
-fn the_reverse_cross_check_fires_on_a_raw_f64_slot_the_birth_id_leaves_any() {
-    let k = keys(b"x\0y\0p\0", 3);
-    // Slot 0 F64, slot 1 raw-f64 in the layout but `Any` in the id.
-    let id = js_object_shape_id_for_class_keys(k, 3, CID, REP_F64);
-    unsafe {
-        let obj = birth(k, 3, id);
-        let raw = [0b011u64];
-        let pointers = [0b100u64];
-        crate::gc::js_gc_declare_typed_shape_layout(
-            obj as usize as u64,
-            3,
-            raw.as_ptr(),
-            1,
-            pointers.as_ptr(),
-            1,
-        );
-        let fields = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
-        // GC_STORE_AUDIT(INIT): Numbers into the raw slots of a fresh object.
-        *fields.add(1) = 2.5f64.to_bits();
-        super::field_rep_store::assert_f64_lanes_hold_numbers(
-            obj,
-            super::shapes::object_shape_record(obj),
-            3,
-        );
-    }
-}
-
 /// (b) + (c): a non-Number stored into an `F64` birth lane goes through the
 /// checked funnel: the instance moves off the birth id to a shape whose lane
 /// is `Any`; the birth id keeps its `F64` identity and the next birth still

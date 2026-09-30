@@ -1332,12 +1332,10 @@ js_function_bind	Reenters
 js_function_ctor_from_strings	Reenters
 js_function_prototype_value_for_read	Reenters
 js_gc_collect	Reenters
-js_gc_declare_typed_shape_layout	Leaf
 js_gc_enter_unsafe_zone	Leaf
 js_gc_exit_unsafe_zone	Leaf
 js_gc_forget_object_layout	Leaf
 js_gc_init	Leaf
-js_gc_init_typed_shape_layout	Leaf
 js_gc_key_add_layout_unknown	Leaf
 js_gc_loop_safepoint	Reenters
 js_gc_memory_pressure	Reenters
@@ -1359,7 +1357,6 @@ js_gc_temp_root_get	Leaf
 js_gc_temp_root_push	Leaf
 js_gc_temp_root_set	Leaf
 js_gc_temp_root_truncate	Leaf
-js_gc_typed_shape_id_for_keys	Reenters
 js_gc_write_barriers_emitted	Leaf
 js_ge	Reenters
 js_generator_attach_closure_prototype	Reenters

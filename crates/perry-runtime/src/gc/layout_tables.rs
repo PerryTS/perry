@@ -1,36 +1,30 @@
-//! The **per-object** halves of the GC slot-layout metadata, and the emptiness
-//! flag that keeps them off the hot path (#7510).
+//! The **per-object** half of the GC slot-layout metadata, and the emptiness
+//! flag that keeps it off the hot path (#7510).
 //!
-//! Two address-keyed thread-locals live here:
-//!
-//! - [`LAYOUT_SLOT_MASKS`] — which slots of an object hold pointers.
-//! - [`TYPED_LAYOUTS`] — the object's canonical `TypedLayoutDescriptor`.
-//!
-//! Both predate #6893, which moved the *common* case — an object whose live
-//! layout still matches its shape — into the shape-keyed `SHAPE_LAYOUTS` map
-//! in [`super::layout`]. What is left in these two maps is the residue:
-//! objects that **diverged** from their shape, objects with no `keys_array`,
-//! and ambiguous shapes. On a monomorphic workload that residue is empty for
-//! the entire run.
+//! [`LAYOUT_SLOT_MASKS`] — address-keyed: which slots of a payload hold
+//! pointers. Charter step 5: objects are traced by their shape's `rep` word
+//! and carry no typed layout descriptor; the masks remain for the payloads the
+//! shape does not describe. On a monomorphic workload the map is empty for the
+//! entire run.
 //!
 //! Empty is not the same as free, though. Every allocation
-//! (`layout_init_pointer_free`), every typed-shape install, every object death
-//! (`layout_clear_for_ptr`) and every relocation (`layout_transfer`) probed
-//! both maps to clear whatever a previous tenant of a recycled address might
-//! have left. Two `RefCell` round-trips plus two hashes, per object, to remove
+//! (`layout_init_pointer_free`), every object death (`layout_clear_for_ptr`)
+//! and every relocation (`layout_transfer`) probed the maps to clear whatever
+//! a previous tenant of a recycled address might have left. Two `RefCell`
+//! round-trips plus two hashes, per object, to remove
 //! nothing: `layout_forget_object` was 14.5% of self time on the
 //! object-construction profile in #7510, nearly twice the allocator it was
 //! bookkeeping for.
 //!
-//! [`PER_OBJECT_LAYOUTS_NONEMPTY`] answers "is there anything in either map at
+//! [`PER_OBJECT_LAYOUTS_NONEMPTY`] answers "is there anything in the map at
 //! all" in a single load, and every mutating path in this module maintains it.
 //! Callers outside get the guarded accessors, not the maps.
 //!
 //! Split out of `layout.rs` to stay under the repo's 2000-line-per-file cap
 //! (`scripts/check_file_size.sh`).
 
-use super::hot_tls::{hot_layout_slot_masks, hot_per_object_layout_hint, hot_typed_layouts};
-use super::layout::{LayoutSlotMask, TypedLayoutDescriptor};
+use super::hot_tls::{hot_layout_slot_masks, hot_per_object_layout_hint};
+use super::layout::LayoutSlotMask;
 use super::types::{
     GcHeader, GC_FLAG_ARENA, GC_HEADER_SIZE, GC_TYPE_ARRAY, GC_TYPE_CLOSURE, GC_TYPE_OBJECT,
 };
@@ -39,14 +33,12 @@ use std::cell::{Cell, RefCell};
 thread_local! {
     pub(in crate::gc) static LAYOUT_SLOT_MASKS: RefCell<crate::fast_hash::PtrHashMap<usize, LayoutSlotMask>> =
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
-    pub(in crate::gc) static TYPED_LAYOUTS: RefCell<crate::fast_hash::PtrHashMap<usize, TypedLayoutDescriptor>> =
-        RefCell::new(crate::fast_hash::new_ptr_hash_map());
-    /// #7510: "either per-object side table above **may** hold an entry".
+    /// #7510: "the per-object side table above **may** hold an entry".
     ///
-    /// INVARIANT: `false` ⟹ both [`LAYOUT_SLOT_MASKS`] and [`TYPED_LAYOUTS`]
-    /// are empty. Only an insert can break that emptiness, and every insert
-    /// routes through [`typed_layouts_insert`] / [`slot_masks_insert`], which
-    /// arm the flag; the removal paths re-test both maps and clear it again
+    /// INVARIANT: `false` ⟹ [`LAYOUT_SLOT_MASKS`] is empty. Only an insert can
+    /// break that emptiness, and every insert routes through
+    /// [`slot_masks_insert`], which arms the flag; the removal paths re-test the
+    /// map and clear it again
     /// once they are empty. A stale `true` therefore costs exactly the
     /// pre-#7510 probe and nothing else — the flag is an accelerator, never an
     /// authority, and no caller may treat it as one.
@@ -269,7 +261,7 @@ pub(in crate::gc) fn prune_dead_per_object_layout_owners(is_dead_owner: &dyn Fn(
     // [`layout_addr_filter_saturating_occupancy`]. Decide from the pre-prune
     // size, which bounds the survivor count from above, so the decision is one
     // branch captured by the closure rather than a test per key.
-    let occupancy = hot_layout_slot_masks().borrow().len() + hot_typed_layouts().borrow().len();
+    let occupancy = hot_layout_slot_masks().borrow().len();
     let rebuild_filter = occupancy <= layout_addr_filter_saturating_occupancy();
     if rebuild_filter {
         // Cleared FIRST so the bits set below describe survivors only — a key
@@ -313,12 +305,6 @@ pub(in crate::gc) fn prune_dead_per_object_layout_owners(is_dead_owner: &dyn Fn(
         masks.retain(|key, _| keep(*key));
         had && masks.is_empty()
     };
-    let typed_emptied = {
-        let mut typed = hot_typed_layouts().borrow_mut();
-        let had = !typed.is_empty();
-        typed.retain(|key, _| keep(*key));
-        had && typed.is_empty()
-    };
     let prune_walk_us = prune_walk_started.map_or(0, |started| {
         started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64
     });
@@ -343,7 +329,7 @@ pub(in crate::gc) fn prune_dead_per_object_layout_owners(is_dead_owner: &dyn Fn(
     // Runs last: when it finds both tables empty it disarms the flag, zeroes
     // the young count published above and clears the filter, which is the
     // correct end state whichever branch the pass took.
-    refresh_per_object_layouts_flag(masks_emptied || typed_emptied);
+    refresh_per_object_layouts_flag(masks_emptied);
     if layout_diag {
         layout_diag_note_prune(rebuild_filter, prune_walk_us);
     }
@@ -390,8 +376,7 @@ pub(in crate::gc) fn prune_dead_per_object_layout_owners_young(
     // Exactly one arm test per non-empty prune; see the full-prune twin.
     let layout_diag = crate::hot_diag::layout_on();
     let hint = hot_per_object_layout_hint();
-    let table_len =
-        (hot_layout_slot_masks().borrow().len() + hot_typed_layouts().borrow().len()) as u64;
+    let table_len = (hot_layout_slot_masks().borrow().len()) as u64;
     // Rule 2 (`gc/young_log.rs`): re-derive the candidate set from the
     // authoritative maps and refuse to run a partial walk that would miss one.
     // A miss is a writer that published a young-keyed record without arming
@@ -400,10 +385,8 @@ pub(in crate::gc) fn prune_dead_per_object_layout_owners_young(
     {
         let relevant: Vec<usize> = {
             let masks = hot_layout_slot_masks().borrow();
-            let typed = hot_typed_layouts().borrow();
             masks
                 .keys()
-                .chain(typed.keys())
                 .copied()
                 .filter(|key| layout_key_may_be_nursery(*key))
                 .collect()
@@ -419,11 +402,9 @@ pub(in crate::gc) fn prune_dead_per_object_layout_owners_young(
     let mut young: u32 = 0;
     let mut kept = hint.young_keys.borrow_mut().take_spare();
     let prune_walk_started = layout_diag.then(std::time::Instant::now);
-    let (masks_emptied, typed_emptied) = {
+    let masks_emptied = {
         let mut masks = hot_layout_slot_masks().borrow_mut();
-        let mut typed = hot_typed_layouts().borrow_mut();
         let had_masks = !masks.is_empty();
-        let had_typed = !typed.is_empty();
         loop {
             // Re-drained in a loop so a note made while this walk runs (the
             // move hooks fire from inside a collection) is not lost.
@@ -433,30 +414,21 @@ pub(in crate::gc) fn prune_dead_per_object_layout_owners_young(
             }
             logged += batch.len() as u64;
             for key in batch {
-                let in_masks = masks.contains_key(&key);
-                let in_typed = typed.contains_key(&key);
-                if !in_masks && !in_typed {
+                if !masks.contains_key(&key) {
                     continue;
                 }
                 visited += 1;
                 if is_dead_owner(key) {
-                    if in_masks {
-                        masks.remove(&key);
-                    }
-                    if in_typed {
-                        typed.remove(&key);
-                    }
+                    masks.remove(&key);
                     continue;
                 }
                 if layout_key_may_be_nursery(key) {
-                    young = young
-                        .saturating_add(u32::from(in_masks))
-                        .saturating_add(u32::from(in_typed));
+                    young = young.saturating_add(1);
                     kept.push(key);
                 }
             }
         }
-        (had_masks && masks.is_empty(), had_typed && typed.is_empty())
+        had_masks && masks.is_empty()
     };
     let prune_walk_us = prune_walk_started.map_or(0, |started| {
         started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64
@@ -476,7 +448,7 @@ pub(in crate::gc) fn prune_dead_per_object_layout_owners_young(
     publish_young_layout_records(young);
     // Runs last, as in the full prune: with both maps empty it disarms the
     // flag, zeroes the count published above and clears the filter.
-    refresh_per_object_layouts_flag(masks_emptied || typed_emptied);
+    refresh_per_object_layouts_flag(masks_emptied);
     if layout_diag {
         // `rebuilt_filter = false`: a young prune never rebuilds it.
         layout_diag_note_prune(false, prune_walk_us);
@@ -487,10 +459,7 @@ pub(in crate::gc) fn prune_dead_per_object_layout_owners_young(
 /// [`crate::hot_diag::layout_on`] so an unarmed build pays one relaxed load.
 #[cold]
 fn layout_diag_note_prune(rebuilt_filter: bool, prune_walk_us: u64) {
-    let (typed_len, masks_len) = (
-        hot_typed_layouts().borrow().len(),
-        hot_layout_slot_masks().borrow().len(),
-    );
+    let masks_len = hot_layout_slot_masks().borrow().len();
     let residue = layout_residue_histogram(prune_walk_us);
     let hint = hot_per_object_layout_hint();
     // SAFETY: as in the pass above — this thread's own filter, no other
@@ -502,7 +471,6 @@ fn layout_diag_note_prune(rebuilt_filter: bool, prune_walk_us: u64) {
             .sum::<usize>()
     };
     crate::hot_diag::layout_note_prune(
-        typed_len,
         masks_len,
         set,
         LAYOUT_ADDR_FILTER_BITS,
@@ -622,7 +590,6 @@ pub(in crate::gc) fn test_layout_residue_histogram_entries() -> usize {
 #[cfg(test)]
 pub(in crate::gc) fn test_per_object_layout_present(user_ptr: usize) -> bool {
     hot_layout_slot_masks().borrow().contains_key(&user_ptr)
-        || hot_typed_layouts().borrow().contains_key(&user_ptr)
 }
 
 #[cfg(test)]
@@ -759,7 +726,7 @@ pub(in crate::gc) fn layout_addr_filter_note(user_ptr: usize) {
 /// their own (two keys may share one), so this is what keeps a workload that
 /// genuinely churns per-object records from saturating the filter forever.
 fn layout_addr_filter_rebuild() {
-    let occupancy = hot_layout_slot_masks().borrow().len() + hot_typed_layouts().borrow().len();
+    let occupancy = hot_layout_slot_masks().borrow().len();
     if occupancy > layout_addr_filter_saturating_occupancy() {
         // Walking the keys would set almost every bit, so this is where the
         // rebuild lands anyway — reached in O(1) instead of O(live keys).
@@ -781,9 +748,6 @@ fn layout_addr_filter_rebuild() {
         }
     };
     for k in hot_layout_slot_masks().borrow().keys() {
-        set_bit(*k);
-    }
-    for k in hot_typed_layouts().borrow().keys() {
         set_bit(*k);
     }
     hint.sets.set(0);
@@ -927,11 +891,8 @@ impl Drop for ImmortalLayoutScope {
 
 /// Live entry counts of the two per-object side tables, for `PERRY_GC_DIAG`
 /// and for the tests that assert the bootstrap left them alone.
-pub(crate) fn per_object_layout_table_sizes() -> (usize, usize) {
-    (
-        hot_layout_slot_masks().borrow().len(),
-        hot_typed_layouts().borrow().len(),
-    )
+pub(crate) fn per_object_layout_table_sizes() -> usize {
+    hot_layout_slot_masks().borrow().len()
 }
 
 /// Smallest payload slot count for which minting a **per-object pointer mask**
@@ -1156,7 +1117,7 @@ pub(in crate::gc) fn refresh_per_object_layouts_flag(touched_map_emptied: bool) 
     if !touched_map_emptied {
         return;
     }
-    if hot_layout_slot_masks().borrow().is_empty() && hot_typed_layouts().borrow().is_empty() {
+    if hot_layout_slot_masks().borrow().is_empty() {
         if hot_per_object_layout_hint().nonempty.replace(false) {
             per_object_layouts_global_disarm();
         }
@@ -1168,22 +1129,6 @@ pub(in crate::gc) fn refresh_per_object_layouts_flag(touched_map_emptied: bool) 
         // makes the filter's occupancy track LIVE entries rather than every
         // entry the program has ever created.
         layout_addr_filter_clear();
-    }
-}
-
-/// The one way to add a per-object typed descriptor.
-#[inline]
-pub(in crate::gc) fn typed_layouts_insert(user_ptr: usize, descriptor: TypedLayoutDescriptor) {
-    mark_per_object_layouts_nonempty();
-    layout_addr_filter_add(user_ptr);
-    // Armed BEFORE the insert makes the entry findable (young-log rule 1).
-    let young = arm_young_layout_key(user_ptr);
-    let fresh = hot_typed_layouts()
-        .borrow_mut()
-        .insert(user_ptr, descriptor)
-        .is_none();
-    if fresh && young {
-        count_new_young_layout_record();
     }
 }
 
@@ -1228,19 +1173,6 @@ pub(in crate::gc) fn layout_note_store_mask_insert() {
     }
 }
 
-/// Drop `user_ptr`'s per-object typed descriptor (only).
-#[inline]
-pub(in crate::gc) fn typed_layouts_remove(user_ptr: usize) {
-    if !per_object_layouts_maybe_nonempty() || !layout_addr_filter_may_hold(user_ptr) {
-        return;
-    }
-    let emptied = {
-        let mut typed = hot_typed_layouts().borrow_mut();
-        typed.remove(&user_ptr).is_some() && typed.is_empty()
-    };
-    refresh_per_object_layouts_flag(emptied);
-}
-
 /// Drop `user_ptr`'s per-object pointer mask (only).
 #[inline]
 pub(in crate::gc) fn slot_masks_remove(user_ptr: usize) {
@@ -1254,20 +1186,6 @@ pub(in crate::gc) fn slot_masks_remove(user_ptr: usize) {
     refresh_per_object_layouts_flag(emptied);
 }
 
-/// Run `f` against `user_ptr`'s per-object typed descriptor, if it has one.
-/// The borrow is confined to `f` because the callers that act on the answer
-/// (`layout_set_typed_unknown`) take the same map mutably.
-#[inline]
-pub(in crate::gc) fn with_per_object_descriptor<R>(
-    user_ptr: usize,
-    f: impl FnOnce(&TypedLayoutDescriptor) -> R,
-) -> Option<R> {
-    if !per_object_layouts_maybe_nonempty() || !layout_addr_filter_may_hold(user_ptr) {
-        return None;
-    }
-    hot_typed_layouts().borrow().get(&user_ptr).map(f)
-}
-
 /// `user_ptr`'s per-object pointer mask, if it has one. The trace path calls
 /// this once per `SIDE_MASK` object it visits, so the emptiness proof is worth
 /// as much here as it is on the mutator side.
@@ -1277,47 +1195,6 @@ pub(in crate::gc) fn per_object_slot_mask(user_ptr: usize) -> Option<LayoutSlotM
         return None;
     }
     hot_layout_slot_masks().borrow().get(&user_ptr).cloned()
-}
-
-/// Move `old_user`'s per-object typed descriptor to `new_user` (relocation),
-/// clearing anything the destination address inherited from a previous tenant.
-/// Returns whether a descriptor actually made the move — `layout_transfer`
-/// uses that to decide the destination's intact bit.
-///
-/// With both maps provably empty there is nothing to move, and every relocated
-/// object would otherwise pay a `RefCell` round-trip plus two hashes during
-/// evacuation. The shape-keyed half is unaffected: it needs no move at all.
-#[inline]
-pub(in crate::gc) fn transfer_per_object_descriptor(old_user: usize, new_user: usize) -> bool {
-    // BOTH addresses are touched (the destination is cleared of a previous
-    // tenant's record before the source's is moved in), so the filter can only
-    // prove this call unnecessary when it proves both absent.
-    if !per_object_layouts_maybe_nonempty()
-        || (!layout_addr_filter_may_hold(old_user) && !layout_addr_filter_may_hold(new_user))
-    {
-        return false;
-    }
-    let mut typed = hot_typed_layouts().borrow_mut();
-    // The flag and the filter above are shared with `LAYOUT_SLOT_MASKS`, so a
-    // full mask table drags every relocation in here even when this map is
-    // empty — which is cc's steady state (`PERRY_LAYOUT_DIAG`: typed=0,
-    // masks=162,258). An empty map has nothing to remove at either address, so
-    // the two hashes below are pure loss; the `len` test that proves it is one
-    // load. #9792.
-    if typed.is_empty() {
-        return false;
-    }
-    typed.remove(&new_user);
-    match typed.remove(&old_user) {
-        Some(layout) => {
-            arm_moved_layout_key(new_user);
-            typed.insert(new_user, layout);
-            drop(typed);
-            layout_addr_filter_add(new_user);
-            true
-        }
-        None => false,
-    }
 }
 
 /// Move `old_user`'s per-object pointer mask to `new_user` (relocation).
@@ -1386,16 +1263,12 @@ pub(in crate::gc) fn layout_forget_object(user_ptr: usize) {
         let mut masks = hot_layout_slot_masks().borrow_mut();
         !masks.is_empty() && masks.remove(&user_ptr).is_some() && masks.is_empty()
     };
-    let typed_emptied = {
-        let mut typed = hot_typed_layouts().borrow_mut();
-        !typed.is_empty() && typed.remove(&user_ptr).is_some() && typed.is_empty()
-    };
-    refresh_per_object_layouts_flag(masks_emptied || typed_emptied);
+    refresh_per_object_layouts_flag(masks_emptied);
 }
 
 #[cfg(test)]
 pub(in crate::gc) fn test_per_object_tables_are_empty() -> bool {
-    hot_layout_slot_masks().borrow().is_empty() && hot_typed_layouts().borrow().is_empty()
+    hot_layout_slot_masks().borrow().is_empty()
 }
 
 /// An upper bound on the payload slots the tracer would enumerate for

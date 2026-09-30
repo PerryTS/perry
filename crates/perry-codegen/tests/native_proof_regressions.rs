@@ -9564,9 +9564,17 @@ fn typed_f64_receiver_method_positive_module() -> Module {
     let mut point = class(
         211,
         "Point",
+        // Real classes write their number fields at construction; a field
+        // never written there is `undefined` at birth and so not an F64 lane.
         vec![
-            class_field("x", Type::Number),
-            class_field("y", Type::Number),
+            ClassField {
+                init: Some(Expr::Number(0.0)),
+                ..class_field("x", Type::Number)
+            },
+            ClassField {
+                init: Some(Expr::Number(0.0)),
+                ..class_field("y", Type::Number)
+            },
         ],
     );
     point.methods.push(typed_f64_receiver_method_function(
@@ -14487,8 +14495,8 @@ fn scalar_method_boolean_predicate_rejects_unproven_numeric_arguments() {
         "any arg fallback must materialize the scalar receiver with stable class keys before dispatch:\n{ir}"
     );
     assert!(
-        ir.contains("call void @js_gc_init_typed_shape_layout"),
-        "any arg fallback materialization must install typed shape pointer/raw-f64 bitmap evidence:\n{ir}"
+        !ir.contains("js_gc_init_typed_shape_layout"),
+        "charter step 5: the class ShapeId carries the lanes; no per-object layout install:\n{ir}"
     );
     let fallback_block = {
         let start = ir
@@ -16111,7 +16119,16 @@ fn sloppy_class_field_number_store_takes_the_inline_raw_store() {
     }
 
     fn ir_for(strict: bool) -> String {
-        let counter = class(217, "Counter", vec![class_field("value", Type::Number)]);
+        // `value = 0`: a number field is an F64 birth lane only when the
+        // construction writes it, as real classes do.
+        let counter = class(
+            217,
+            "Counter",
+            vec![ClassField {
+                init: Some(Expr::Number(0.0)),
+                ..class_field("value", Type::Number)
+            }],
+        );
         let module = module_with_classes_and_params(
             "sloppy_class_field_store.ts",
             vec![counter],

@@ -1183,23 +1183,37 @@ pub(crate) fn try_lower_instance_method_call(
                             )
                         })
                 });
-                let typed_receiver_direct_name = if typed_receiver_info.is_some()
-                    && ctx
+                // Charter step 5, P4: the clone reads its receiver fields as
+                // bare doubles behind the exact (class id, ShapeId) compare,
+                // which pins lanes, not values. So every field it reads must
+                // be an `F64` lane of the class's birth rep; an `Any` lane can
+                // hold any value under the same ShapeId (#10937).
+                let typed_receiver_direct_name =
+                    if typed_receiver_info.as_ref().is_some_and(|info| {
+                        info.fields.iter().all(|field| {
+                            crate::expr::class_field_inline_guard::class_birth_slot_is_f64(
+                                ctx,
+                                &class_name,
+                                field.index,
+                            )
+                        })
+                    }) && ctx
                         .methods
                         .get(&typed_method_key)
                         .is_some_and(|name| name == &fallback_fn)
-                    && args.len() == typed_formal_count
-                    && args.iter().all(|arg| {
-                        crate::codegen::typed_arg_is_guard_candidate(
-                            ctx,
-                            crate::codegen::TypedParamRep::F64,
-                            arg,
-                        )
-                    }) {
-                    Some(crate::codegen::typed_f64_receiver_method_name(&fallback_fn))
-                } else {
-                    None
-                };
+                        && args.len() == typed_formal_count
+                        && args.iter().all(|arg| {
+                            crate::codegen::typed_arg_is_guard_candidate(
+                                ctx,
+                                crate::codegen::TypedParamRep::F64,
+                                arg,
+                            )
+                        })
+                    {
+                        Some(crate::codegen::typed_f64_receiver_method_name(&fallback_fn))
+                    } else {
+                        None
+                    };
                 let shape_only_guard = typed_receiver_direct_name.is_none()
                     && !class_chain_has_field_named(ctx, &class_name, property);
                 let typed_direct_name = if ctx.typed_f64_methods.contains(&typed_method_key)

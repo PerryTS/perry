@@ -22,9 +22,9 @@ use super::new_helpers::{
     node_stream_parent_kind,
 };
 use crate::expr::{lower_expr, lower_js_args_array, nanbox_pointer_inline, FnCtx};
-use crate::nanbox::{double_literal, POINTER_MASK_I64};
+use crate::nanbox::double_literal;
 use crate::rooting::{self, open_rooted_group, EmittedValue, Repr, RootedGroup};
-use crate::types::{DOUBLE, I16, I32, I64, I8, PTR};
+use crate::types::{DOUBLE, I32, I64, PTR};
 
 /// Does `new <class_name>(…)` run user code — an own or inherited constructor
 /// body, or field initializers — between the instance allocation and the value
@@ -121,7 +121,7 @@ struct Instance {
 }
 
 pub(crate) use super::capture_writeback::emit_class_capture_writeback;
-use super::typed_shape_init::{emit_typed_shape_layout_declare, emit_typed_shape_layout_init};
+use super::typed_shape_init::emit_fresh_instance_layout_forget;
 
 /// Lower `new ClassName(args…)` — Phase C.1.
 ///
@@ -592,20 +592,13 @@ fn lower_new_impl_inner<'a>(
     //
     // The slot is released by the scope cut in `lower_new_impl`, which covers
     // all ~20 return paths below.
-    // #7510: declare the canonical layout HERE — the instance is allocated, its
-    // slots still hold the allocator's `undefined` fill, and the constructor
-    // has not run. That ordering is the whole point: the post-constructor
-    // `emit_typed_shape_layout_init` arrives after the only stores that wanted
-    // the descriptor, so a `number`-declared class field could never pass its
-    // intact-bit guard (#7512). Gated and suppressed as one — see
-    // `layout_declared_at_allocation`.
-    //
-    // Before the instance root's push, so the handle this names is the one the
-    // allocator returned: nothing between here and there can collect.
-    let typed_layout_baked = alloc.typed_layout_baked;
+    // A fresh instance installs no layout of its own (charter step 5: its
+    // class ShapeId carries the lanes); only a previous tenant's per-object
+    // record at this address is cleared. Before the instance root's push, so
+    // the handle this names is the one the allocator returned.
     let constructor_layout_ready = alloc.constructor_stores_ready
         && super::typed_shape_init::layout_declared_at_allocation(ctx, class_name);
-    emit_typed_shape_layout_declare(ctx, class_name, &obj_handle, typed_layout_baked);
+    emit_fresh_instance_layout_forget(ctx, class_name, &obj_handle);
     let instance = {
         let protected = construction_runs_user_code(ctx, class_name);
         Instance {
@@ -769,22 +762,9 @@ fn lower_new_impl_inner<'a>(
                 let flag =
                     blk.load_volatile(crate::types::I8, "@PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED");
                 let mut acc = blk.icmp_eq(crate::types::I8, &flag, "0");
-                // A pointer-bearing layout is installed by the declaration
-                // immediately above. Unlike the pointer-free baked case, its
-                // success is dynamic: an ambiguous ShapeId falls back to a
-                // per-object descriptor, while a rejected declaration clears
-                // INTACT. Test the authoritative header bit before bypassing
-                // the constructor's per-field guards.
-                if !typed_layout_baked {
-                    let obj_ptr = blk.inttoptr(I64, &obj_handle);
-                    // `obj_handle` points just past the 8-byte GcHeader;
-                    // `_reserved: u16` starts two bytes into that header.
-                    let reserved_ptr = blk.gep(I8, &obj_ptr, &[(I64, "-6")]);
-                    let reserved = blk.load(I16, &reserved_ptr);
-                    let intact_bits = blk.and(I16, &reserved, "4096");
-                    let intact = blk.icmp_ne(I16, &intact_bits, "0");
-                    acc = blk.and(crate::types::I1, &acc, &intact);
-                }
+                // Charter step 5: a plain finite double is valid in an `F64` lane
+                // and in an `Any` lane alike, so the per-store number test
+                // below is the whole proof; no header layout bit is read.
                 for (store_index, store) in plan.iter().enumerate() {
                     if !store.requires_raw_f64 {
                         continue;
@@ -867,18 +847,10 @@ fn lower_new_impl_inner<'a>(
             };
             // #7154: the constructor body has run, so every register holding
             // the instance is potentially pre-move. Re-read it from its root
-            // before anything else touches it — `emit_typed_shape_layout_init`
-            // would otherwise install the layout descriptor on the abandoned
-            // from-space copy, and `js_ctor_return_override` would hand the
-            // caller that copy's address.
+            // before anything else touches it — `js_ctor_return_override`
+            // would otherwise hand the caller the abandoned copy's address.
             let (obj_handle, obj_box) =
                 reload_instance(ctx, group, &instance, &obj_handle, &obj_box);
-            // The constructor body has run and set the declared fields; register
-            // the typed raw-f64/pointer slot layout so class-field accesses hit
-            // the slot-direct fast path instead of the by-name hashmap fallback.
-            // The inline-ctor path does this at its tail (below); this
-            // standalone-symbol path returns here, so it must do it too.
-            emit_typed_shape_layout_init(ctx, class_name, &obj_handle);
             // Write-back: propagate constructor mutations to outer captured locals.
             // The standalone constructor symbol receives captured values by value
             // and stores mutations to `this.__perry_cap_*` fields, but never
@@ -904,41 +876,9 @@ fn lower_new_impl_inner<'a>(
         if let Some(save) = &saved_new_target {
             crate::rooting::new_target_restore(ctx, save);
         }
-        // #6921: `call_local_constructor_symbol` returned `None` — this module
-        // has no `<Class>_constructor` entry, so no constructor ran and the
-        // instance leaves here exactly as `js_object_alloc_class_*` produced
-        // it. Every OTHER `new` exit initializes the typed-shape layout; this
-        // one used to return the instance at `GC_LAYOUT_POINTER_FREE` with no
-        // `TypedLayoutDescriptor`, the one state in which the per-store
-        // `layout_note_slot` call is load-bearing for GC correctness rather
-        // than a precision hint — so eliding that note (Phase 4b.1) could
-        // strand a live child on an object the collector scans zero slots of.
-        //
-        // Initialize it here too, so the invariant "a user-class instance
-        // reaching a class-field store carries a typed descriptor, or is
-        // explicitly `GC_LAYOUT_UNKNOWN`" is total. This is safe by
-        // construction rather than by reasoning about this path: the fields
-        // are still `TAG_UNDEFINED` (no ctor ran), and `init_typed_shape_layout`
-        // validates every live field word before promoting — a raw-f64 slot
-        // holding `undefined` fails `layout_raw_f64_bits` and the object lands
-        // in `GC_LAYOUT_UNKNOWN`, the conservative state, instead of a wrong
-        // mask. `emit_typed_shape_layout_init` is itself a no-op for a class
-        // with no `class_keys_globals` entry.
-        //
-        // Reachability, measured (not assumed): this arm is currently DEAD.
-        // `call_local_constructor_symbol` returns `None` only when
-        // `ctx.methods` lacks `(class.name, "<Class>_constructor")`, but
-        // `lower_new_impl` resolves `class` exclusively from `ctx.classes`
-        // (the `class_table`), and `build_method_names` iterates
-        // `class_table.values()` inserting that key unconditionally for every
-        // entry — local and imported alike. So no class reaching here can miss
-        // it. An instrumented compiler over the whole `test_gap_*` corpus plus
-        // hand-written recursive-construction shapes never hit this arm.
-        // The emitter stays anyway: the invariant must hold by construction at
-        // this exit, not by an accident of the registry that a future change
-        // to `build_method_names` (or a new `ctx.classes` population path)
-        // could silently revoke.
-        emit_typed_shape_layout_init(ctx, class_name, &obj_handle);
+        // #6921: `call_local_constructor_symbol` returned `None` — no
+        // constructor ran; the instance leaves as `js_object_alloc_class_*`
+        // produced it, its lanes carried by its class ShapeId.
         return Ok(obj_box);
     }
 
@@ -1958,19 +1898,15 @@ fn lower_new_impl_inner<'a>(
     // constructor body (field initializers, `super(...)`, nested `new`s) can
     // reach a back-edge poll, and the evacuating minor there relocates the
     // instance out from under `obj_handle`/`obj_box`.
-    let (obj_handle, obj_box) = if instance.protected {
+    let obj_box = if instance.protected {
         // `super()` is allowed to replace `this` (an ancestor constructor may
         // return an object).  The rooted this-slot is the authoritative value
         // after constructor execution; the allocation root still names the
         // original leaf allocation in that case.
-        let boxed = ctx.block().load(DOUBLE, &this_slot);
-        let bits = ctx.block().bitcast_double_to_i64(&boxed);
-        let handle = ctx.block().and(I64, &bits, POINTER_MASK_I64);
-        (handle, boxed)
+        ctx.block().load(DOUBLE, &this_slot)
     } else {
-        reload_instance(ctx, group, &instance, &obj_handle, &obj_box)
+        reload_instance(ctx, group, &instance, &obj_handle, &obj_box).1
     };
-    emit_typed_shape_layout_init(ctx, class_name, &obj_handle);
 
     // Close the inline-constructor return: fall through (or branch) to the
     // shared after-block, then apply the spec return-override at construction

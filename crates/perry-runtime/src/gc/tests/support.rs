@@ -1050,3 +1050,36 @@ pub(super) unsafe fn retire_old_test_map(
     (*map).entries = std::ptr::null_mut();
     std::alloc::dealloc(entries as *mut u8, layout);
 }
+
+/// Charter step 5: re-stamp `obj` with the shape that has its current facts
+/// and field representation `rep`. The collector traces an object by its
+/// shape: every non-`Any` lane is skipped, every other slot gets the tag test.
+/// Returns the new ShapeId.
+pub(super) unsafe fn restamp_with_rep(obj: *mut crate::object::ObjectHeader, rep: u64) -> u32 {
+    use crate::object::shapes::{
+        object_shape_stamp, publish_shape_result, shape_descriptor_by_id,
+        shape_descriptor_ensure_with_rep, stamp_object_shape_id_with_carrier_note,
+    };
+    let d = shape_descriptor_by_id(object_shape_stamp(obj)).expect("live shape");
+    let id = publish_shape_result(shape_descriptor_ensure_with_rep(
+        d.keys as usize as *const crate::array::ArrayHeader,
+        d.logical_key_count,
+        d.live_inline_slot_count,
+        d.semantic_generation,
+        d.object_kind,
+        d.hole_count,
+        d.proto_id,
+        d.summary,
+        rep,
+    ));
+    stamp_object_shape_id_with_carrier_note(obj, id);
+    id
+}
+
+/// A field representation with an `F64` lane on each of `slots`.
+pub(super) fn f64_lanes(slots: impl IntoIterator<Item = u32>) -> u64 {
+    use crate::object::field_rep::{with_slot_rep, REP_ANY, REP_F64};
+    slots
+        .into_iter()
+        .fold(REP_ANY, |rep, slot| with_slot_rep(rep, slot, REP_F64))
+}

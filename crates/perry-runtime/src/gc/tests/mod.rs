@@ -107,7 +107,6 @@ mod tls_fill_reentrancy;
 mod trigger_path_tls;
 mod trigger_watermark;
 mod triggers;
-mod typed_layout_intact_residual;
 mod u8_inline_cache;
 mod weak_read_barrier;
 mod young_leaf_route;

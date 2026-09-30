@@ -13,7 +13,7 @@
 //!
 //! Adoption is the runtime's: module init hands the id to the ordinary mint
 //! as `requested` (`js_object_shape_id_for_class_keys_static`,
-//! `js_gc_typed_shape_id_for_keys`), which mints it on a by-facts miss and
+//! `js_object_shape_id_for_class_keys`), which mints it on a by-facts miss and
 //! otherwise returns the existing id; a refused id aborts (ids are by
 //! content, so a refusal is an invariant violation). Births stamp what the
 //! mint RETURNED; only guards compare against the static id as an immediate.
@@ -295,7 +295,7 @@ impl ProgramClassShapeIds {
 pub(crate) struct ClassBirth {
     /// The class id the mint names (0 = none; such a birth has no content).
     pub class_id: u32,
-    /// The class has a typed layout (#8405): `js_gc_typed_shape_id_for_keys`.
+    /// The class has a typed layout (#8405), recorded in the birth content.
     pub typed: bool,
     /// Live inline bound when the class is born wide, else 0.
     pub wide_live: u32,

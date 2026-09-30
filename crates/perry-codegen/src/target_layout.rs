@@ -280,13 +280,6 @@ pub(crate) enum InlineTypedLayout {
     SideMask,
 }
 
-impl InlineTypedLayout {
-    #[inline]
-    pub(crate) fn is_baked(self) -> bool {
-        self != Self::None
-    }
-}
-
 pub(crate) fn inline_alloc_gc_packed(
     target_triple: &str,
     field_count: u32,
@@ -299,14 +292,11 @@ pub(crate) fn inline_alloc_gc_packed(
     // sees real pointer-bearing slots regardless of this initial tag.
     const GC_LAYOUT_POINTER_FREE: u64 = 0x4000;
     const GC_LAYOUT_SIDE_MASK: u64 = 0x8000;
-    /// `GC_OBJ_TYPED_LAYOUT_INTACT` — the bit `class_field_inline_guard`
-    /// requires before it will read or write a raw-f64 slot directly.
-    /// Runtime-side name: `gc::layout::GC_OBJ_TYPED_LAYOUT_INTACT`.
-    const GC_OBJ_TYPED_LAYOUT_INTACT: u64 = 0x1000;
+    // Charter step 5: no typed-layout-intact bit. What a raw-f64 slot holds
+    // is the shape's `F64` lane, not a per-object header bit.
     let reserved = match typed_layout {
-        InlineTypedLayout::None => GC_LAYOUT_POINTER_FREE,
-        InlineTypedLayout::PointerFree => GC_LAYOUT_POINTER_FREE | GC_OBJ_TYPED_LAYOUT_INTACT,
-        InlineTypedLayout::SideMask => GC_LAYOUT_SIDE_MASK | GC_OBJ_TYPED_LAYOUT_INTACT,
+        InlineTypedLayout::None | InlineTypedLayout::PointerFree => GC_LAYOUT_POINTER_FREE,
+        InlineTypedLayout::SideMask => GC_LAYOUT_SIDE_MASK,
     };
     GC_TYPE_OBJECT
         | (GC_FLAG_ARENA << 8)

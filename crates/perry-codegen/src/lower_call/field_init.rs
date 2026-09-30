@@ -692,6 +692,19 @@ pub(crate) fn apply_field_initializers_recursive(
         chain_prologue_assigned_fields(ctx.classes, class_name).filter(|chain| {
             crate::typed_shape::class_chain_layout_declarable_at_allocation(ctx.classes, chain)
         });
+    // Charter step 5 (a): the fields born on an `F64` lane (the birth rep's
+    // own decision, `birth_lanes`). Their `undefined` define is skipped: the
+    // lane holds a double from birth and the field's first write precedes
+    // every observation of `this`, so the define would only move every
+    // instance off its birth shape. Computed for `class_name`; when that is
+    // an ancestor of the object's class (the `SelfOnly` staging), its
+    // construction events are a prefix of the object's, so every field it
+    // admits is written before any observation there as well.
+    let birth_f64: Vec<(String, std::collections::HashSet<String>)> = ctx
+        .class_init_chains
+        .get(class_name)
+        .map(|chain| super::birth_lanes::chain_birth_f64_fields(ctx.classes, chain))
+        .unwrap_or_default();
     let mut chain_field_override: std::collections::HashMap<String, Vec<perry_hir::ClassField>> =
         std::collections::HashMap::new();
     // Collect the inheritance chain from root down.
@@ -880,6 +893,10 @@ pub(crate) fn apply_field_initializers_recursive(
                     .map(ctor_prologue_param_assigned_fields)
                     .unwrap_or_default()
             });
+        let born_f64 = birth_f64
+            .iter()
+            .find(|(name, _)| *name == class_name_in_chain)
+            .map(|(_, set)| set);
         let mut init_pairs: Vec<(String, Expr, bool)> = Vec::new();
         let mut init_pairs_computed: Vec<(String, Expr)> = Vec::new();
         for field in &class_fields {
@@ -906,7 +923,8 @@ pub(crate) fn apply_field_initializers_recursive(
             // `Expr::Undefined` writes — never a real initializer.
             if field.init.is_none()
                 && field.key_expr.is_none()
-                && prologue_assigned.contains(&field.name)
+                && (prologue_assigned.contains(&field.name)
+                    || born_f64.is_some_and(|set| set.contains(&field.name)))
             {
                 continue;
             }

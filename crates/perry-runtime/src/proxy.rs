@@ -3142,26 +3142,9 @@ mod tests {
                     "{reason} must use ordinary [[Set]]"
                 );
             }
-
-            (*header)._reserved = original | crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT;
-            assert_eq!(
-                object_array_numeric_write_guard(array_box, &[a, b, c, d], 2),
-                0,
-                "an intact typed-layout bit without its descriptor must reject"
-            );
             (*header)._reserved = original;
         }
 
-        for object in [first, second] {
-            crate::gc::js_gc_init_typed_shape_layout(
-                object as u64,
-                4,
-                std::ptr::null(),
-                0,
-                std::ptr::null(),
-                0,
-            );
-        }
         assert_eq!(
             object_array_numeric_write_guard(array_box, &[a, b, c, d], 2),
             (4u64 << 48) | (3u64 << 32) | (2u64 << 16) | 1,

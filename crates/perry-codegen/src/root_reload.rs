@@ -186,8 +186,6 @@ const NON_COLLECTING: &[&str] = &[
     "js_gc_temp_root_set",
     "js_gc_temp_root_truncate",
     // layout / barrier bookkeeping
-    "js_gc_init_typed_shape_layout",
-    "js_gc_declare_typed_shape_layout",
     "js_gc_forget_object_layout",
     // The two real slot-layout note exports. `js_gc_layout_note_slot` used to
     // stand here, and no such symbol has ever existed in the tree: the runtime

@@ -401,7 +401,7 @@ pub(crate) fn lower_expr_with_expected_type(
     expected_ty: Option<&HirType>,
 ) -> Result<String> {
     match expr {
-        Expr::Object(props) => super::lower_object_literal(ctx, props, expected_ty),
+        Expr::Object(props) => super::lower_object_literal(ctx, props),
         Expr::NativePodView {
             owner,
             byte_offset,

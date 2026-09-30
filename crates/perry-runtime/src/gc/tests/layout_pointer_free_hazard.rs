@@ -1,5 +1,5 @@
-//! #7635: the `POINTER_FREE` trace-skip hazard is REAL and this test is the
-//! probe that faults — the one the issue asked for.
+//! #7635: the `POINTER_FREE` trace-skip hazard was REAL and this test was the
+//! probe that faulted — the one the issue asked for.
 //!
 //! Why every earlier probe was vacuous: `JSON.parse` of a non-tiny blob is
 //! LAZY by default (#7499's tape). A probe that parses, churns, and only then
@@ -10,20 +10,20 @@
 //! churn → read (the touch defeats the tape); this unit test plants the same
 //! hazard directly, with no env knob and no JSON in the loop.
 //!
-//! Two arms, one plant (the `fromspace_protect` convention):
+//! Charter step 5 retired that hazard: the collector traces an object BY
+//! ITS SHAPE, and a layout state claiming `POINTER_FREE` is no longer read.
+//! The plant is kept, both arms of it:
 //!
-//! - **red control** — the hazard: an object whose only reference to a young
-//!   string sits in a field slot, with its layout state left claiming
-//!   `POINTER_FREE` (what a `layout_finish_deferred_boxed_object` caller
-//!   lying about `saw_pointer` would produce). The copying minor MOVES the
-//!   object but — honoring the state — never visits the field: the slot
-//!   bits survive verbatim and the child is retired with from-space.
-//! - **green arm** — the real contract: identical construction, truthful
-//!   finalize. The minor visits the field, evacuates the string, rewrites
-//!   the slot.
+//! - **the former red control** — the lying finalize leaves the object's
+//!   layout state claiming `POINTER_FREE`. The shape's lane for the field is
+//!   `Any`, so the copying minor visits the field, evacuates the string and
+//!   rewrites the slot: the child is NOT stranded.
+//! - **the truthful arm** — identical construction, truthful finalize, the
+//!   same outcome.
 //!
 //! Subject-liveness is asserted in both arms (the object must MOVE, the
-//! collection must run), so neither arm can pass vacuously.
+//! collection must run, the child must be rewritten), so neither arm can pass
+//! vacuously.
 
 use super::super::*;
 use super::support::*;
@@ -49,7 +49,7 @@ unsafe fn plant_object_with_young_string_child(finalize_truthfully: bool) -> (us
         "premise: the stored value must be pointer-bearing"
     );
     // The plant: a caller lying about what it stored leaves the birth
-    // POINTER_FREE standing over a pointer-bearing payload.
+    // POINTER_FREE layout state standing over a pointer-bearing payload.
     layout_finish_deferred_boxed_object(obj as usize, finalize_truthfully);
     (obj as usize, child)
 }
@@ -58,8 +58,10 @@ unsafe fn field0_bits(obj_user: usize) -> u64 {
     *((obj_user + OBJECT_HEADER_SIZE) as *const u64)
 }
 
+/// The shape, not the layout state, decides what is traced: a lying
+/// `POINTER_FREE` finalize keeps the field child alive across the move.
 #[test]
-fn a_lying_pointer_free_finalize_strands_the_field_child() {
+fn a_lying_pointer_free_finalize_no_longer_strands_the_field_child() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _mode = crate::arena::ProtectionModeGuard::set(FromSpaceProtection::PoisonOnly);
 
@@ -68,26 +70,23 @@ fn a_lying_pointer_free_finalize_strands_the_field_child() {
 
     let _ = gc_collect_minor();
 
-    // Subject-liveness: the minor must have MOVED the object.
     let moved_obj = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
     assert_ne!(moved_obj, obj, "premise: the object must have moved");
 
-    // The hazard, observed twice over:
-    // 1. the slot was never rewritten — the collector skipped the payload;
+    // The shape's lane for the field is `Any`: the payload was visited, the
+    // string evacuated and the slot rewritten to the live copy.
     let child_after = unsafe { field0_bits(moved_obj) };
-    assert_eq!(
+    assert_ne!(
         child_after, child_before,
-        "a POINTER_FREE payload must not have been visited — a rewritten slot \
-         means the skip did not happen and this test is not testing it"
+        "the child slot must have been rewritten: the shape traces the field \
+         whatever the layout state claims"
     );
-    // 2. the child the slot still names was retired with from-space.
     let child_addr = (child_after & POINTER_MASK) as usize;
     let word = unsafe { *(child_addr as *const u64) };
-    assert_eq!(
+    assert_ne!(
         word,
         crate::arena::QUARANTINE_POISON_WORD,
-        "the stranded child must sit in poisoned from-space — anything else \
-         means something rescued it and the hazard is not being exercised"
+        "the evacuated child must be live, not poisoned from-space"
     );
 }
 
@@ -104,8 +103,8 @@ fn a_truthful_finalize_keeps_the_field_child_alive_across_the_move() {
     let moved_obj = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
     assert_ne!(moved_obj, obj, "premise: the object must have moved");
 
-    // The truthful state (UNKNOWN) visits the payload: the string is
-    // evacuated and the slot rewritten to the live copy.
+    // The shape's `Any` lane visits the payload: the string is evacuated
+    // and the slot rewritten to the live copy.
     let child_after = unsafe { field0_bits(moved_obj) };
     assert_ne!(
         child_after, child_before,

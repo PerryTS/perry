@@ -496,8 +496,7 @@ pub extern "C" fn js_object_delete_field(
                         .is_some_and(|shape| shape.object_kind.is_ordinary_layout())
                     && (*obj_gc)._reserved
                         & (crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
-                            | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
-                            | crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT)
+                            | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO)
                         == 0;
                 if stable_candidate {
                     (*obj_gc)._reserved |= crate::gc::OBJ_FLAG_STABLE_TOMBSTONES;
@@ -915,8 +914,7 @@ unsafe fn try_delete_stable_sso(obj: *mut ObjectHeader, key: JSValue) -> Option<
     const BLOCKING_FLAGS: u16 = crate::gc::OBJ_FLAG_FROZEN
         | crate::gc::OBJ_FLAG_SEALED
         | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
-        | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
-        | crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT;
+        | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
     // The flag is admitted by the complete delete path only for class-less or
     // registered anonymous-shape ordinary objects, so class declaration
     // prototypes cannot enter this lane.

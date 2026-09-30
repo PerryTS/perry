@@ -1138,11 +1138,6 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         I64,
         &[PTR, I32, I32, I64, I64, I64, I64, I64, I32, I32, I32],
     );
-    module.declare_function(
-        "js_gc_typed_shape_id_for_keys",
-        I32,
-        &[I32, I64, I32, PTR, I32, PTR, I32, I32, I64],
-    );
     // Design step 4: the per-class mint with the driver's static id, and the
     // literal-shape seed.
     module.declare_function(

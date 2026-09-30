@@ -85,13 +85,35 @@ fn canonicalize_typed_slot_store_bits(
     if value_bits & TAG_MASK != crate::value::INT32_TAG {
         return value_bits;
     }
-    if !crate::gc::layout_slot_is_raw_f64_typed(parent_user, slot_index) {
+    if !slot_holds_raw_f64(parent_user, slot_index) {
         return value_bits;
     }
     match crate::array::value_bits_to_number(value_bits) {
         Some(number) => number.to_bits(),
         None => value_bits,
     }
+}
+
+/// Whether `parent_user`'s slot `slot_index` holds a raw double: for an
+/// object, the lane of its shape (charter step 5: the shape is the
+/// authority). No other payload keeps raw doubles in a boxed-value slot.
+#[inline]
+fn slot_holds_raw_f64(parent_user: usize, slot_index: usize) -> bool {
+    unsafe {
+        let Some(header) = super::layout::layout_header_for_user(parent_user) else {
+            return false;
+        };
+        if (*header).obj_type == GC_TYPE_OBJECT {
+            if (*header).gc_flags & GC_FLAG_FORWARDED != 0 {
+                return false;
+            }
+            return crate::object::field_rep_store::object_slot_rep(
+                parent_user as *const crate::object::ObjectHeader,
+                slot_index,
+            ) != crate::object::field_rep::REP_ANY;
+        }
+    }
+    false
 }
 
 /// #7630: `runtime_store_jsvalue_slot` minus the per-slot layout note, for a

@@ -97,7 +97,8 @@ handle-floor | crates/perry-runtime/src/node_submodules/trace_events.rs | 1
 handle-floor | crates/perry-runtime/src/node_submodules/zlib.rs | 3
 handle-floor | crates/perry-runtime/src/node_v8.rs | 1
 handle-floor | crates/perry-runtime/src/node_vm.rs | 3
-handle-floor | crates/perry-runtime/src/object/alloc.rs | 4
+handle-floor | crates/perry-runtime/src/object/alloc.rs | 2
+handle-floor | crates/perry-runtime/src/object/assign.rs | 2
 handle-floor | crates/perry-runtime/src/object/arguments.rs | 1
 handle-floor | crates/perry-runtime/src/object/array_object_ops.rs | 1
 handle-floor | crates/perry-runtime/src/object/assert.rs | 4

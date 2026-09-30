@@ -283,10 +283,10 @@ fn a_pointer_into_a_pointer_masked_slot_gates_the_note_on_the_header() {
          `class_field_store_layout_note_is_conforming` answered false and this \
          optimization is dead:\n{ir}"
     );
-    // `(GC_LAYOUT_STATE_MASK | GC_OBJ_TYPED_LAYOUT_INTACT)` and the
-    // `(SIDE_MASK | INTACT)` value it is compared against, as i16 literals.
+    // `GC_LAYOUT_STATE_MASK` and the `SIDE_MASK` value it is compared
+    // against, as i16 literals (charter step 5: no intact bit).
     assert!(
-        ir.contains("and i16 ") && ir.contains(", -12288") && ir.contains(", -28672"),
+        ir.contains("and i16 ") && ir.contains(", -16384") && ir.contains(", -32768"),
         "the emitted predicate is not the documented header test:\n{ir}"
     );
     assert!(

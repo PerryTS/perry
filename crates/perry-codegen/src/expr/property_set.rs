@@ -914,13 +914,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                         // ShapeIds it actually sees. A receiver the compiler
                         // proved (ptr-shape) and a raw-f64 field keep the
                         // class route: both depend on the declared class.
-                        let route_raw_f64 = crate::type_analysis::class_field_declared_type(
-                            ctx,
-                            &class_name,
-                            property,
-                        )
-                        .as_ref()
-                        .is_some_and(crate::typed_shape::type_is_raw_f64_candidate);
+                        let route_raw_f64 =
+                            crate::expr::class_field_inline_guard::class_field_site_raw_f64(
+                                ctx,
+                                &class_name,
+                                property,
+                                field_index,
+                            );
                         let route_proven = ctx
                             .ptr_shape_receiver_fact(object.as_ref())
                             .is_some_and(|fact| fact.class_name == class_name);
@@ -977,14 +977,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                                 );
                                 let field_idx_str = field_index.to_string();
                                 let expected_class_id_str = expected_class_id.to_string();
+                                // Charter step 5, P4: raw exactly for an `F64`
+                                // lane of every guarded id's birth rep.
                                 let requires_raw_f64 =
-                                    crate::type_analysis::class_field_declared_type(
+                                    crate::expr::class_field_inline_guard::class_field_site_raw_f64(
                                         ctx,
                                         &class_name,
                                         property,
-                                    )
-                                    .as_ref()
-                                    .is_some_and(crate::typed_shape::type_is_raw_f64_candidate);
+                                        field_index,
+                                    );
                                 let requires_raw_f64_str = if requires_raw_f64 { "1" } else { "0" };
                                 // #5093 loop versioning: inside the fast clone of a
                                 // class-field versioned loop, a tracked raw-f64 field

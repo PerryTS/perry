@@ -15,12 +15,12 @@ use crate::types::{DOUBLE, I1, I16, I32, I64, I8};
 #[path = "generic_overhead_tests.rs"]
 mod generic_overhead_tests;
 
-/// `GC_LAYOUT_STATE_MASK | GC_OBJ_TYPED_LAYOUT_INTACT` (`0xD000`) as a signed
-/// i16 — the emitted IR is textual, so the constant is written the way LLVM
-/// parses an i16 literal (mirrors `class_field_inline_guard`'s convention).
-const LAYOUT_STATE_AND_INTACT_MASK_I16: &str = "-12288";
-/// `GC_LAYOUT_SIDE_MASK | GC_OBJ_TYPED_LAYOUT_INTACT` (`0x9000`), same encoding.
-const LAYOUT_SIDE_MASK_INTACT_I16: &str = "-28672";
+/// `GC_LAYOUT_STATE_MASK` (`0xC000`) as a signed i16 — the emitted IR is
+/// textual, so the constant is written the way LLVM parses an i16 literal
+/// (mirrors `class_field_inline_guard`'s convention).
+const LAYOUT_STATE_MASK_I16: &str = "-16384";
+/// `GC_LAYOUT_SIDE_MASK` (`0x8000`), same encoding.
+const LAYOUT_SIDE_MASK_I16: &str = "-32768";
 
 /// Gen-GC Phase C2 helper: emit a write barrier after heap-store sites
 /// by default. Only explicit `PERRY_WRITE_BARRIERS=0`/`off`/`false`
@@ -921,11 +921,13 @@ pub(crate) fn emit_jsvalue_slot_store_pointer_tested(
             let obj_ptr = blk.inttoptr(I64, layout_parent_bits);
             let res_ptr = blk.gep(I8, &obj_ptr, &[(I64, "-6")]);
             let reserved = blk.load(I16, &res_ptr);
-            // (GC_LAYOUT_STATE_MASK | GC_OBJ_TYPED_LAYOUT_INTACT) == 0xD000,
-            // and the conforming value (GC_LAYOUT_SIDE_MASK | INTACT) == 0x9000.
-            // Written signed because the emitted IR is textual i16.
-            let masked = blk.and(I16, &reserved, LAYOUT_STATE_AND_INTACT_MASK_I16);
-            let conforming = blk.icmp_eq(I16, &masked, LAYOUT_SIDE_MASK_INTACT_I16);
+            // GC_LAYOUT_STATE_MASK == 0xC000, the conforming value
+            // GC_LAYOUT_SIDE_MASK == 0x8000 (charter step 5: no intact bit;
+            // the collector traces an object by its shape, so the note only
+            // maintains a side mask nothing traces by). Written signed because
+            // the emitted IR is textual i16.
+            let masked = blk.and(I16, &reserved, LAYOUT_STATE_MASK_I16);
+            let conforming = blk.icmp_eq(I16, &masked, LAYOUT_SIDE_MASK_I16);
             blk.cond_br(&conforming, &after_label, &note_label);
         }
         ctx.current_block = note_idx;

@@ -124,14 +124,9 @@ mod layout_tables;
 // The immortal-object construction window and the table-occupancy readout, both
 // consumed from OUTSIDE `gc`: `object::global_this` opens the window around the
 // `globalThis` bootstrap and prints the residue under `PERRY_GC_DIAG`.
+pub use layout::*;
 pub(crate) use layout_tables::per_object_layout_table_sizes;
 pub use layout_tables::ImmortalLayoutScope;
-/// #7510 item 1: the construction-side memo that turns an already-installed
-/// typed shape into two header bit-writes instead of a descriptor build plus a
-/// `SHAPE_LAYOUTS` round-trip.
-mod shape_install;
-pub use layout::*;
-pub(crate) use shape_install::shape_install_memo_hot_addr;
 mod trace;
 pub(crate) use trace::*;
 mod barrier;
@@ -1401,14 +1396,10 @@ pub extern "C" fn js_gc_init() {
     // #5093: force every class-field access back through the full guard call —
     // i.e. disable the codegen-inlined fast path — when:
     //   - typed-feedback tracing is on (the guard observes every access), or
-    //   - the intact-bit verifier is on (`PERRY_VERIFY_TYPED_INTACT`): the
-    //     verifier lives in the guard's fast contract, so inline hits would skip
-    //     it; disabling the inline path routes every access through it, or
     //   - the explicit escape hatch `PERRY_DISABLE_CLASS_FIELD_INLINE` is set to
     //     a truthy value (perf bisection / A-B measurement). `=0`/`=false`/`=off`
     //     leave the fast path enabled.
     if crate::typed_feedback::typed_feedback_active()
-        || env_flag_enabled("PERRY_VERIFY_TYPED_INTACT")
         || env_flag_enabled("PERRY_DISABLE_CLASS_FIELD_INLINE")
     {
         crate::object::disable_class_field_inline_guard();

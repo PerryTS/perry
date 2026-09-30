@@ -58,6 +58,7 @@ pub(crate) use test_root_helpers::*;
 pub(crate) mod alloc;
 mod alloc_basic;
 pub(crate) mod alloc_plain;
+mod assign;
 pub use alloc::{
     js_object_alloc, js_object_alloc_fast, js_object_alloc_fast_with_parent,
     js_object_alloc_null_proto, js_object_alloc_with_parent, js_object_coerce,
@@ -65,6 +66,7 @@ pub use alloc::{
 pub(crate) use alloc_basic::object_alloc_plain;
 #[allow(unused_imports)]
 pub(crate) use alloc_plain::mark_object_plain_ordinary;
+pub use assign::*;
 mod json_construction;
 pub(crate) use json_construction::{
     object_from_inline_json_fields, object_from_json_fields_preinstalled,

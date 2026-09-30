@@ -608,9 +608,8 @@ pub(super) fn side_tables() -> Vec<SideTableRow> {
     rows.extend(crate::regex::site_test::side_table_census());
     #[cfg(feature = "regex-engine")]
     rows.push(crate::regex::perex_cache::census());
-    let (masks, typed) = super::layout_tables::per_object_layout_table_sizes();
+    let masks = super::layout_tables::per_object_layout_table_sizes();
     rows.push(("gc.layout_slot_masks", masks, masks * 24));
-    rows.push(("gc.typed_layouts", typed, typed * 24));
     rows.push((
         "gc.external_side_live_bytes(map/set/tape)",
         0,

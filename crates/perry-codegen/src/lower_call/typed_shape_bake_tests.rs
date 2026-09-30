@@ -19,10 +19,9 @@
 //!
 //! ## Pointer-bearing layouts
 //!
-//! #8405 registers their immutable mask once at module init under a dedicated
-//! typed ShapeId. That makes `GC_LAYOUT_SIDE_MASK | GC_OBJ_TYPED_LAYOUT_INTACT`
+//! The class birth ShapeId carries the immutable layout facts at module init. That makes `GC_LAYOUT_SIDE_MASK | GC_OBJ_TYPED_LAYOUT_INTACT`
 //! complete before the first object is allocated, so this case now drops the
-//! per-instance declare too. The test asserts both halves: the one-time typed
+//! per-instance declare too. The test asserts both halves: the one-time class
 //! ShapeId call and the baked header state.
 //!
 //! ## Why the pointer-free bake needs no descriptor
@@ -44,7 +43,7 @@ use perry_hir::{
 
 /// The six-argument per-instance declare this ticket removes.
 const DECLARE_CALL: &str = "call void @js_gc_declare_typed_shape_layout(";
-const TYPED_SHAPE_MINT_CALL: &str = "call i32 @js_gc_typed_shape_id_for_keys(";
+const CLASS_SHAPE_MINT_CALL: &str = "call i32 @js_object_shape_id_for_class_keys(";
 /// The one-argument address-only remainder that replaces it.
 const FORGET_CALL: &str = "call void @js_gc_forget_object_layout(";
 /// The process-global emptiness proof the remainder is gated on.
@@ -65,29 +64,24 @@ const SKETCH_WORD_GEP: &str = "getelementptr i64, ptr @PERRY_LAYOUT_ADDR_FILTER"
 /// ```text
 ///   obj_type  GC_TYPE_OBJECT                     = 0x02   bits  0..7
 ///   gc_flags  GC_FLAG_ARENA                      = 0x02   bits  8..15
-///   _reserved GC_LAYOUT_POINTER_FREE [| INTACT]  = 0x4000 [| 0x1000]  bits 16..31
+///   _reserved GC_LAYOUT_POINTER_FREE             = 0x4000             bits 16..31
 ///   size      8 + 32 + max(2, INLINE_SLOT_FLOOR)*8       bits 32..63
 /// ```
 ///
 /// Computed from `INLINE_SLOT_FLOOR` rather than spelled as a literal: #7916
 /// moved the floor 4 → 2, which changes `size` 72 → 56 and therefore both
 /// words. A hard-coded constant here fails the moment the footprint changes
-/// and says nothing about what this test is actually for (whether
-/// `GC_OBJ_TYPED_LAYOUT_INTACT` is claimed), so derive the part that is
-/// incidental and keep asserting the part that is not.
-fn header_word(layout_state: u64, intact: bool) -> String {
+/// and says nothing about what this test is actually for (the layout state
+/// the image carries), so derive the part that is incidental and keep
+/// asserting the part that is not. Charter step 5: no image carries the
+/// typed-layout-intact bit (0x1000) any more.
+fn header_word(layout_state: u64) -> String {
     const GC_TYPE_OBJECT: u64 = 0x02;
     const GC_FLAG_ARENA: u64 = 0x02;
-    const GC_OBJ_TYPED_LAYOUT_INTACT: u64 = 0x1000;
     let slots = std::cmp::max(2, crate::target_layout::INLINE_SLOT_FLOOR);
     let size =
         8 + crate::target_layout::object_header_size_bytes("aarch64-apple-darwin") + 8 * slots;
-    let reserved = layout_state
-        | if intact {
-            GC_OBJ_TYPED_LAYOUT_INTACT
-        } else {
-            0
-        };
+    let reserved = layout_state;
     let word = (size << 32) | (reserved << 16) | (GC_FLAG_ARENA << 8) | GC_TYPE_OBJECT;
     // #8122: the packed word is no longer a per-site scalar store — it is the
     // constant lane of the per-class `<2 x i64>` header image composed once at
@@ -96,18 +90,14 @@ fn header_word(layout_state: u64, intact: bool) -> String {
     format!("insertelement <2 x i64> <i64 {word}, i64 0>,")
 }
 
-/// The packed word WITH the baked `GC_OBJ_TYPED_LAYOUT_INTACT`.
-fn baked_header_word() -> String {
-    header_word(0x4000, true)
+/// The packed word of a `GC_LAYOUT_POINTER_FREE` birth.
+fn pointer_free_header_word() -> String {
+    header_word(0x4000)
 }
-/// The same word WITHOUT it — what the pointer-bearing class still writes.
-fn unbaked_header_word() -> String {
-    header_word(0x4000, false)
-}
-/// A registered pointer-bearing class starts in SIDE_MASK with an intact
-/// descriptor reachable through its dedicated typed ShapeId.
+/// A registered pointer-bearing class starts in SIDE_MASK, its descriptor
+/// reachable through its dedicated typed ShapeId.
 fn side_mask_baked_header_word() -> String {
-    header_word(0x8000, true)
+    header_word(0x8000)
 }
 
 fn ir_opts() -> CompileOptions {
@@ -398,10 +388,8 @@ pub(super) fn emit(m: &Module) -> String {
 fn a_pointer_free_shape_bakes_its_layout_into_the_header_constant() {
     let ir = emit(&loop_new_module("Pair", Type::Number, Expr::Integer(2)));
     assert!(
-        ir.contains(&baked_header_word()),
-        "the inline-bump header constant does not carry \
-         GC_OBJ_TYPED_LAYOUT_INTACT, so the bake did not fire and every \
-         construction still pays the runtime declare:\n{ir}"
+        ir.contains(&pointer_free_header_word()),
+        "the inline-bump header constant is not the POINTER_FREE image:\n{ir}"
     );
     assert!(
         !ir.contains(DECLARE_CALL),
@@ -441,14 +429,12 @@ fn a_pointer_bearing_shape_registers_once_and_bakes_the_side_mask() {
         "the per-instance declare survived for a pointer-bearing shape:\n{ir}"
     );
     assert!(
-        ir.contains(TYPED_SHAPE_MINT_CALL),
+        ir.contains(CLASS_SHAPE_MINT_CALL),
         "the pointer mask was not registered at module init:\n{ir}"
     );
     assert!(
-        ir.contains(&side_mask_baked_header_word())
-            && !ir.contains(&unbaked_header_word())
-            && !ir.contains(&baked_header_word()),
-        "the header image does not carry SIDE_MASK | TYPED_LAYOUT_INTACT:\n{ir}"
+        ir.contains(&side_mask_baked_header_word()) && !ir.contains(&pointer_free_header_word()),
+        "the header image does not carry SIDE_MASK:\n{ir}"
     );
     assert!(
         ir.contains(FORGET_CALL) && ir.contains(ANY_ATOMIC_LOAD),
@@ -543,7 +529,7 @@ fn a_local_class_shadowing_an_import_keeps_its_layout_proof() {
     let ir =
         String::from_utf8(compile_module(&module, opts).unwrap()).expect("LLVM IR should be UTF-8");
     assert!(
-        ir.contains(TYPED_SHAPE_MINT_CALL) && !ir.contains(DECLARE_CALL),
+        ir.contains(CLASS_SHAPE_MINT_CALL) && !ir.contains(DECLARE_CALL),
         "the local constructor proof was suppressed by a shadowed import:\n{ir}"
     );
 }
@@ -584,12 +570,8 @@ fn imported_pointer_layout_does_not_invent_a_consumer_typed_shape_id() {
         "the consumer must share the producer's canonical structural ShapeId:\n{ir}"
     );
     assert!(
-        !ir.contains(TYPED_SHAPE_MINT_CALL),
-        "an imported stub invented a consumer-local typed ShapeId:\n{ir}"
-    );
-    assert!(
-        !ir.contains(DECLARE_CALL) && ir.contains("call void @js_gc_init_typed_shape_layout("),
-        "the imported layout must be validated after its real constructor, not declared before it:\n{ir}"
+        !ir.contains(DECLARE_CALL) && !ir.contains("call void @js_gc_init_typed_shape_layout("),
+        "charter step 5: no per-instance layout install for an imported class:\n{ir}"
     );
 }
 

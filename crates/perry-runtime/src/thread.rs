@@ -1186,12 +1186,16 @@ unsafe fn parallel_map_impl(array_val: f64, closure_val: f64) -> i64 {
     // #8546: workers never run module init; they dispatch through the
     // spawning image's class tables.
     let class_image = crate::object::class_image::current_image_handle();
+    // Charter step 5, P4: the worker installs the spawner's codegen ShapeIds
+    // (with their reps) before any allocation; see `shapes_worker_seed`.
+    let shape_seed = crate::object::shapes::worker_shape_seed();
     std::thread::scope(|scope| {
         let mut handles = Vec::with_capacity(chunks.len());
 
         for (idx, chunk) in chunks.into_iter().enumerate() {
             let captures_ref = captures_arc.clone();
             let class_image = class_image.clone();
+            let shape_seed = shape_seed.clone();
 
             let handle = scope.spawn(move || {
                 crate::object::class_image::adopt_image(class_image);
@@ -1205,6 +1209,7 @@ unsafe fn parallel_map_impl(array_val: f64, closure_val: f64) -> i64 {
                 // with an empty scanner registry (and an empty shadow stack)
                 // and sweeps everything it just deserialized.
                 crate::gc::ensure_gc_initialized();
+                crate::object::shapes::install_worker_shape_seed(&shape_seed);
                 let mut results = Vec::with_capacity(chunk.len());
 
                 // Reconstruct closure on this thread's arena, rooted for the
@@ -1446,12 +1451,16 @@ unsafe fn parallel_filter_impl(array_val: f64, closure_val: f64) -> i64 {
         (0..chunks.len()).map(|_| Vec::new()).collect();
 
     let class_image = crate::object::class_image::current_image_handle();
+    // Charter step 5, P4: the worker installs the spawner's codegen ShapeIds
+    // (with their reps) before any allocation; see `shapes_worker_seed`.
+    let shape_seed = crate::object::shapes::worker_shape_seed();
     std::thread::scope(|scope| {
         let mut handles = Vec::with_capacity(chunks.len());
 
         for (idx, chunk) in chunks.into_iter().enumerate() {
             let captures_ref = captures_arc.clone();
             let class_image = class_image.clone();
+            let shape_seed = shape_seed.clone();
 
             let handle = scope.spawn(move || {
                 // See parallel_map's worker: adopt the spawning image (#8546),
@@ -1462,6 +1471,7 @@ unsafe fn parallel_filter_impl(array_val: f64, closure_val: f64) -> i64 {
                 crate::object::class_image::adopt_image(class_image);
                 let worker_agent = crate::agent::enter_worker_agent();
                 crate::gc::ensure_gc_initialized();
+                crate::object::shapes::install_worker_shape_seed(&shape_seed);
                 let mut kept = Vec::new();
 
                 let gc_scope = crate::gc::RuntimeHandleScope::new();
@@ -1673,6 +1683,9 @@ unsafe fn spawn_impl(closure_val: f64) -> *mut crate::promise::Promise {
     // class metadata (vtables, parents, constructors, …) must be the spawning
     // image's — captured here, adopted first thing on the worker.
     let class_image = crate::object::class_image::current_image_handle();
+    // Charter step 5, P4: the worker installs the spawner's codegen ShapeIds
+    // (with their reps) before any allocation; see `shapes_worker_seed`.
+    let shape_seed = crate::object::shapes::worker_shape_seed();
 
     // ── 3. Spawn background thread ───────────────────────────────────
     ACTIVE_THREAD_JOBS.fetch_add(1, Ordering::SeqCst);
@@ -1685,6 +1698,7 @@ unsafe fn spawn_impl(closure_val: f64) -> *mut crate::promise::Promise {
         // Register this thread's root scanners before any allocation can
         // cross a GC trigger (see the parallel_map worker for rationale).
         crate::gc::ensure_gc_initialized();
+        crate::object::shapes::install_worker_shape_seed(&shape_seed);
         // Reconstruct closure in this thread's arena, rooted across the
         // capture-deserialization allocations.
         let gc_scope = crate::gc::RuntimeHandleScope::new();

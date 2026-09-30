@@ -390,7 +390,6 @@ const PER_SITE_GLOBAL_PREFIXES: &[&str] = &[
     "@perry_typed_feedback_",
     "@perry_literal_",
     "@perry_const_arr_",
-    "@perry_typed_obj_shape_",
     "@perry_typed_parse_keys_",
     "@perry_typed_shape_mask_",
 ];

@@ -60,11 +60,12 @@
 //!    child's slot still holds its pre-cycle address, and that comparison never
 //!    reads the stale memory.
 //!
-//! [`a_misdeclared_pointer_free_record_strands_its_child`] is the SABOTAGE ARM,
-//! made permanent: it performs the identical construction with the finalize's
-//! `saw_pointer` forced to `false` and asserts the child is stranded. A green
-//! run of the positive tests therefore means the finalize was load-bearing, not
-//! that nothing was tried.
+//! Charter step 5 retired the hazard itself: the collector traces an object
+//! BY ITS SHAPE and no longer reads the layout state. A field whose shape lane
+//! is `Any` is visited whatever the finalize declared.
+//! [`a_misdeclared_pointer_free_record_no_longer_strands_its_child`] keeps
+//! #7635's sabotage arm and asserts the opposite of what it used to: the
+//! misdeclared record enumerates every field, exactly like the honest one.
 
 use super::*;
 
@@ -133,12 +134,12 @@ unsafe fn materialise_record(honest_finalize: bool) -> *mut ObjectHeader {
     obj
 }
 
-/// The finalize's two exact outcomes, pinned so a refactor cannot quietly widen
-/// either one. A record with no pointer stored KEEPS its `POINTER_FREE` birth
-/// state (that is the state's whole value); any pointer stored lands in
-/// `GC_LAYOUT_UNKNOWN`, the tag-checked scan-all-slots state — never in a mask.
+/// What the collector enumerates is the shape's answer, not the finalize's.
+/// A numeric record with `Any` lanes enumerates each of its fields (the tag
+/// test rejects the numbers); the same record re-stamped with `F64` lanes
+/// enumerates none, and its payload is one pointer-free range.
 #[test]
-fn finalize_settles_pointer_free_or_unknown_and_nothing_else() {
+fn the_shape_decides_what_a_finalized_record_enumerates() {
     let _guard = CopyingNurseryTestGuard::new(1);
     unsafe {
         let numeric = crate::object::js_object_alloc(0, 2);
@@ -154,28 +155,29 @@ fn finalize_settles_pointer_free_or_unknown_and_nothing_else() {
         }
         layout_finish_deferred_boxed_object(numeric as usize, false);
         assert_eq!(
-            layout_state_of(numeric as usize),
-            GC_LAYOUT_POINTER_FREE,
-            "a record that stored no pointer keeps the birth state — the \
-             tracer skips its whole payload, which is what #7630 bought"
+            test_heap_child_slot_count(numeric as *mut u8),
+            2,
+            "an `Any` lane is visited (and tag-tested) whatever the finalize said"
         );
+
+        restamp_with_rep(numeric, f64_lanes(0..2));
         assert_eq!(
             test_heap_child_slot_count(numeric as *mut u8),
             0,
-            "and the collector enumerates zero payload slots on it"
+            "`F64` lanes are skipped: the collector enumerates zero payload slots"
+        );
+        assert!(
+            test_heap_child_slots_for_user(numeric as *mut u8)
+                .into_iter()
+                .any(|slot| matches!(slot, HeapChildSlot::PointerFreeRange(_))),
+            "an all-`F64` payload is one pointer-free range"
         );
 
         let pointered = materialise_record(/* honest_finalize = */ true);
         assert_eq!(
-            layout_state_of(pointered as usize),
-            GC_LAYOUT_UNKNOWN,
-            "any pointer stored must settle in the conservative scan-all state"
-        );
-        assert!(
-            !layout_has_typed_descriptor(pointered as usize),
-            "the finalize routes through `layout_mark_unknown`, so a mask a \
-             slow-path by-name store created mid-construction is REMOVED, not \
-             stranded"
+            test_heap_child_slot_count(pointered as *mut u8),
+            FIELD_VALUES.len(),
+            "a record holding strings enumerates every field"
         );
     }
 }
@@ -306,24 +308,19 @@ fn json_parse_record_keeps_its_string_values_traced_and_rewritten_7635() {
     js_shadow_slot_set(0, crate::value::TAG_UNDEFINED);
 }
 
-/// SABOTAGE ARM, made permanent — #7635's exact mutation.
+/// #7635's exact mutation, made permanent — and now harmless.
 ///
 /// The identical construction with the finalize's `saw_pointer` forced to
-/// `false`: the record stays `POINTER_FREE`, `heap_payload_slot_selection`
-/// skips the whole payload, and the collector enumerates NOTHING. That is the
-/// stranded-live-child hazard, and asserting it here is what makes the positive
-/// test above a detector rather than a formality.
+/// `false` leaves the record's layout state claiming `POINTER_FREE`. The
+/// collector traces by the shape, whose lanes are `Any`, so it enumerates
+/// every field exactly as it does for the honest record: the children are
+/// visible to marking, to the evacuation rewrite and to the remembered-set
+/// scan alike.
 ///
-/// Asserted on the ENUMERATOR, not through a collection, so nothing here leaves
-/// a stale pointer behind for a later cycle on this thread.
-///
-/// If a future change makes the collector reach these children anyway — a
-/// conservative payload sweep, a layout-independent rescue pass — this test
-/// goes red. That is the intended signal, not a nuisance: it would mean the
-/// `POINTER_FREE` trace-skip had stopped being load-bearing, and both this file
-/// and the doc comment on `GC_LAYOUT_POINTER_FREE` would need rewriting.
+/// Asserted on the ENUMERATOR, not through a collection; the positive tests
+/// above collect.
 #[test]
-fn a_misdeclared_pointer_free_record_strands_its_child() {
+fn a_misdeclared_pointer_free_record_no_longer_strands_its_child() {
     let _guard = CopyingNurseryTestGuard::new(1);
 
     let honest = unsafe {
@@ -340,18 +337,6 @@ fn a_misdeclared_pointer_free_record_strands_its_child() {
             "the sabotage must actually leave the record misdeclared, or this \
              arm tests nothing"
         );
-        assert_eq!(
-            test_heap_child_slot_count(honest as *mut u8),
-            FIELD_VALUES.len()
-        );
-        assert_eq!(
-            test_heap_child_slot_count(sabotaged as *mut u8),
-            0,
-            "a POINTER_FREE record skips its whole payload — the children are \
-             invisible to marking, to the evacuation rewrite, and to the \
-             remembered-set scan alike"
-        );
-
         // Same fields, same bits, same stores: only the finalize differed.
         for index in 0..FIELD_VALUES.len() {
             assert_eq!(
@@ -360,15 +345,15 @@ fn a_misdeclared_pointer_free_record_strands_its_child() {
                 "field {index} really does hold a heap string in both arms"
             );
         }
-
-        // Leave no stale-pointer landmine: put the misdeclared record back into
-        // the conservative state before the guard drops.
-        layout_mark_unknown(sabotaged as *mut u8);
+        assert_eq!(
+            test_heap_child_slot_count(honest as *mut u8),
+            FIELD_VALUES.len()
+        );
         assert_eq!(
             test_heap_child_slot_count(sabotaged as *mut u8),
             FIELD_VALUES.len(),
-            "and the very same record becomes fully enumerable the moment its \
-             layout state is corrected — the state is the ONLY difference"
+            "the shape traces every `Any` field: a POINTER_FREE layout state no \
+             longer hides the children"
         );
     }
 }

@@ -38,7 +38,7 @@ pub const RECEIVER_HANDLE_FLOOR: usize = 0x10_0000;
 pub const AGENT_PTR_STACK_LIMIT: usize = 2;
 /// `tls_hot::HotTls::agent_ptrs` (Apple aarch64 TSD path; LP64): the first
 /// inline value, behind fixed-size fields only.
-pub const HOT_TLS_AGENT_PTRS_OFFSET: usize = 128;
+pub const HOT_TLS_AGENT_PTRS_OFFSET: usize = 104;
 
 /// `closure::ClosureHeader` (LP64): the u32 capture count at 0, the ShapeId
 /// at 4 (the same word as `ObjectHeader`), the function's

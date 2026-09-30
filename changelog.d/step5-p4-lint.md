@@ -1,0 +1,1 @@
+- lint: drop the unused GC-by-shape re-exports, move the header-constant registry to the shape-only guards (the self-test now perturbs OBJ_FLAG_HAS_DESCRIPTORS), refresh the shape-descriptor census for the class-keys declaration (charter step 5, P4).
