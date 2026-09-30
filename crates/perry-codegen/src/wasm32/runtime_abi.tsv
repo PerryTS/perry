@@ -3351,6 +3351,9 @@ js_runtime_init	void
 js_runtime_validate_crypto_key_arg	void	f64,ptr,i32u
 js_runtime_validate_integer_arg	void	f64,ptr,i32u,f64,f64
 js_runtime_validate_string_arg	void	f64,ptr,i32u
+js_scope_alloc	i64	i32s,i64
+js_scope_capture_base	i64	i64
+js_scope_set	void	i64,i32s,i64
 js_sea_get_asset	f64	f64,f64
 js_sea_get_asset_as_blob	f64	f64,f64
 js_sea_get_asset_keys	f64	

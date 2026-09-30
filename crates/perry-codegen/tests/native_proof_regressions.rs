@@ -7935,9 +7935,13 @@ fn tdz_numeric_const_read_is_not_constant_folded() {
     // the thrown ReferenceError can identify it. Both variants perform the same
     // check, so pinning only the older spelling made a strictly better error
     // message look like a lost guard.
+    // A preallocated binding lives in a scope object: the read is an inline
+    // slot load whose TDZ sentinel compare branches to the trusted accessor.
     assert!(
         ir.contains("call i64 @js_box_get_bits(i64 ")
-            || ir.contains("call i64 @js_box_get_bits_named(i64 "),
+            || ir.contains("call i64 @js_box_get_bits_named(i64 ")
+            || ir.contains("call i64 @js_box_get_bits_trusted(i64 ")
+            || ir.contains("call i64 @js_box_get_bits_trusted_named(i64 "),
         "the pre-declaration read must retain the TDZ box check:\n{ir}"
     );
     // And the read must not be folded to the value the later `Let` installs.
@@ -8218,7 +8222,14 @@ fn compiler_private_async_control_cells_use_primitive_heap_boxes() {
         compiler_private_async_control_body(),
     );
 
-    for symbol in ["call i64 @js_i32_box_alloc", "call i64 @js_bool_box_alloc"] {
+    // The control words share the activation's scope object: its slots are
+    // seeded with the INT32 tag and the non-pointer special tag, and the
+    // typed loads/stores below touch only their low bytes.
+    for symbol in [
+        "call i64 @js_scope_alloc(",
+        "store i64 9222809086901354496, ptr",
+        "store i64 9222246136947933184, ptr",
+    ] {
         assert!(
             ir.contains(symbol),
             "expected compiler-private control lowering to emit {symbol}:\n{ir}"

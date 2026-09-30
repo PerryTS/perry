@@ -194,7 +194,10 @@ fn emit_with_key(ctx: &mut FnCtx<'_>, property: &str) -> (String, String) {
 
 fn store_prelowered_local(ctx: &mut FnCtx<'_>, id: u32, value: &str) -> Result<String> {
     super::invalidate_local_write_facts(ctx, id);
-    if let Some(&capture_idx) = ctx.closure_captures.get(&id) {
+    if ctx.boxed_vars.contains(&id) && crate::scope_env::access::slot(ctx, id).is_some() {
+        let value_bits = ctx.block().bitcast_double_to_i64(value);
+        crate::scope_env::access::write_scoped(ctx, id, &value_bits)?;
+    } else if let Some(&capture_idx) = ctx.closure_captures.get(&id) {
         let closure_ptr = super::current_closure_ptr_value(ctx, "captured with-fallback set")?;
         let idx_str = capture_idx.to_string();
         if ctx.boxed_vars.contains(&id) {
@@ -1536,13 +1539,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // back to the source local.
                 let modified_handle = ctx.block().load(I64, &out_slot);
                 let modified_box = nanbox_pointer_inline(ctx.block(), &modified_handle);
-                if let Some(slot) = ctx.locals.get(array_id).cloned() {
-                    ctx.block().store(DOUBLE, &modified_box, &slot);
-                } else if let Some(global_name) = ctx.module_globals.get(array_id).cloned() {
-                    let g_ref = format!("@{}", global_name);
-                    // GC_STORE_AUDIT(ROOT): module global array slot is a registered mutable GC root.
-                    emit_root_nanbox_store_on_block(ctx.block(), &modified_box, &g_ref);
-                }
+                crate::lower_array_method::emit_grow_mutator_writeback(
+                    ctx,
+                    *array_id,
+                    &modified_box,
+                )?;
                 // Return the deleted array (NaN-boxed) as the splice
                 // expression's value.
                 Ok(nanbox_pointer_inline(ctx.block(), &deleted_handle))

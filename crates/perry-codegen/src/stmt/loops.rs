@@ -371,7 +371,8 @@ fn lower_numeric_bulk_fill_loop(ctx: &mut FnCtx<'_>, matched: NumericBulkFillLoo
         (new_arr, bound_i32)
     };
     let new_box = nanbox_pointer_inline(ctx.block(), &new_arr);
-    if let Some(slot) = ctx.locals.get(&matched.array_id).cloned() {
+    if crate::scope_env::access::write_back_boxed_local(ctx, matched.array_id, &new_box)? {
+    } else if let Some(slot) = ctx.locals.get(&matched.array_id).cloned() {
         ctx.block().store(DOUBLE, &new_box, &slot);
     }
     if let Some(counter_slot) = ctx.locals.get(&matched.counter_id).cloned() {

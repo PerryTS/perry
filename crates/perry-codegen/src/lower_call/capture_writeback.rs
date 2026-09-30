@@ -131,6 +131,11 @@ pub(crate) fn emit_class_capture_writeback(
             // ToInt32 conversion. Observably identical to the pre-phase
             // model, whose readers preferred the i32 mirror written below.
             crate::expr::store_canonical_local_from_double(ctx, outer_id, &val, None);
+        } else if ctx.boxed_vars.contains(&outer_id)
+            && crate::scope_env::access::slot(ctx, outer_id).is_some()
+        {
+            let val_bits = ctx.block().bitcast_double_to_i64(&val);
+            let _ = crate::scope_env::access::write_scoped(ctx, outer_id, &val_bits);
         } else if ctx.boxed_vars.contains(&outer_id) {
             let outer_slot = outer_slot.expect("non-canonical write-back has a slot");
             let box_dbl = ctx.block().load(DOUBLE, &outer_slot);

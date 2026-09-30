@@ -96,7 +96,13 @@ pub const GC_TYPE_REGEXP: u8 = 20;
 /// Immutable Perex program words. All operands are integers/relative offsets;
 /// the allocation is a movable leaf reached through its RegExp owner.
 pub const GC_TYPE_REGEX_PROGRAM: u8 = 21;
-pub const GC_TYPE_MAX: u8 = GC_TYPE_REGEX_PROGRAM;
+pub const GC_TYPE_BOX: u8 = 22;
+pub const GC_TYPE_I32_BOX: u8 = 23;
+pub const GC_TYPE_BOOL_BOX: u8 = 24;
+/// A scope context object: N NaN-boxed binding slots shared by the closures of
+/// one lexical scope activation (`box/scope.rs`).
+pub const GC_TYPE_SCOPE: u8 = 25;
+pub const GC_TYPE_MAX: u8 = GC_TYPE_SCOPE;
 
 pub(super) const MALLOC_KIND_UNKNOWN_INDEX: usize = 0;
 pub(super) const MALLOC_KIND_BUCKET_COUNT: usize = GC_TYPE_MAX as usize + 1;
@@ -301,6 +307,8 @@ pub(crate) enum GcAllocationPolicy {
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GcRewriteDescriptorKind {
+    Box,
+    Scope,
     Leaf,
     Array,
     Object,
@@ -853,6 +861,67 @@ pub(super) static GC_TYPE_INFO_BY_ID: [Option<GcTypeInfo>; MALLOC_KIND_BUCKET_CO
         GcRewriteHookKind::None,
         GcFinalizeHookKind::None,
     )),
+    Some(gc_type_info_entry(
+        GC_TYPE_BOX,
+        "box",
+        GcAllocationPolicy::Arena,
+        true,
+        GcRewriteDescriptorKind::Box,
+        GcLayoutSlotKind::None,
+        true,
+        GcExternalBytePolicy::InlinePayload,
+        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        false,
+        GcMoveHookKind::None,
+        GcRewriteHookKind::None,
+        GcFinalizeHookKind::None,
+    )),
+    Some(gc_type_info_entry(
+        GC_TYPE_I32_BOX,
+        "i32_box",
+        GcAllocationPolicy::Arena,
+        true,
+        GcRewriteDescriptorKind::Leaf,
+        GcLayoutSlotKind::None,
+        true,
+        GcExternalBytePolicy::InlinePayload,
+        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        true,
+        GcMoveHookKind::None,
+        GcRewriteHookKind::None,
+        GcFinalizeHookKind::None,
+    )),
+    Some(gc_type_info_entry(
+        GC_TYPE_BOOL_BOX,
+        "bool_box",
+        GcAllocationPolicy::Arena,
+        true,
+        GcRewriteDescriptorKind::Leaf,
+        GcLayoutSlotKind::None,
+        true,
+        GcExternalBytePolicy::InlinePayload,
+        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        true,
+        GcMoveHookKind::None,
+        GcRewriteHookKind::None,
+        GcFinalizeHookKind::None,
+    )),
+    // Indexed by type id: this entry must stay at position GC_TYPE_SCOPE.
+    Some(gc_type_info_entry(
+        GC_TYPE_SCOPE,
+        "scope",
+        GcAllocationPolicy::Arena,
+        true,
+        GcRewriteDescriptorKind::Scope,
+        GcLayoutSlotKind::None,
+        true,
+        GcExternalBytePolicy::InlinePayload,
+        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        false,
+        GcMoveHookKind::None,
+        GcRewriteHookKind::None,
+        GcFinalizeHookKind::None,
+    )),
 ];
 
 #[inline]
@@ -941,7 +1010,6 @@ pub(crate) fn gc_type_after_payload_move(obj_type: u8, old_user: usize, new_user
         }
         GcMoveHookKind::ClosureDynamicProps => {
             crate::closure::closure_dynamic_props_owner_moved(old_user, new_user);
-            crate::closure::closure_box_captures_owner_moved(old_user, new_user);
             #[cfg(feature = "dyn-eval")]
             crate::dyn_eval::function_owner_moved(old_user, new_user);
         }
@@ -1095,7 +1163,9 @@ pub(crate) fn validate_gc_type_info(info: &GcTypeInfo) -> Result<(), &'static st
                 return Err("closure rewrite descriptor must expose closure capture slots");
             }
         }
-        GcRewriteDescriptorKind::Buffer
+        GcRewriteDescriptorKind::Box
+        | GcRewriteDescriptorKind::Scope
+        | GcRewriteDescriptorKind::Buffer
         | GcRewriteDescriptorKind::MetaOnly
         | GcRewriteDescriptorKind::Promise
         | GcRewriteDescriptorKind::Error

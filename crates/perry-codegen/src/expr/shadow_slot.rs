@@ -293,33 +293,20 @@ pub(crate) fn enable_persistent_shadow_slot_for_array_alias(
 }
 
 pub(crate) fn emit_shadow_slot_bind_for_local(ctx: &mut FnCtx<'_>, local_id: u32) {
+    // A scope group's members share the representative's root.
+    let local_id = crate::scope_env::access::slot(ctx, local_id).map_or(local_id, |s| s.rep);
+    if ctx.boxed_vars.contains(&local_id)
+        && !ctx.module_globals.contains_key(&local_id)
+        && !ctx.shadow_slot_map.contains_key(&local_id)
+    {
+        if let Some(slot) = ctx.func.reserve_shadow_slot() {
+            ctx.shadow_slot_map.insert(local_id, slot);
+        }
+    }
     let Some(slot_idx) = ctx.shadow_slot_map.get(&local_id).copied() else {
         return;
     };
     if ctx.persistent_shadow_slots.contains(&slot_idx) {
-        return;
-    }
-    // #8132: a boxed local's alloca never holds a GC-heap value, so rooting it
-    // protects nothing and (under the RS4GC lowering) costs a relocation of
-    // the box pointer at EVERY statepoint it is live across. Every store site
-    // routes through the same `boxed_vars && !module_globals` test
-    // (`stmt/mod.rs` prealloc, `let_stmt.rs`'s boxed arm,
-    // `codegen/arguments.rs::store_param_slot`, `lower_call/new_ctor_args.rs`),
-    // and each of them stores only a `js_box_alloc_bits`-family result or the
-    // TAG_UNDEFINED sentinel into the slot — the VALUE always goes inside the
-    // box. Boxes are `std::alloc` allocations outside the GC heap: no
-    // collector phase moves them, box.rs never frees them (`BOX_REGISTRY` is
-    // monotonic), and the JSValue inside is traced and rewritten by the
-    // registered `scan_box_roots_mut` scanner. All three premises are pinned
-    // by `scripts/gc_root_dominance_check.py`'s IMMOVABLE_SOURCES "box" entry,
-    // whose probes fail the lint if boxes ever become arena-allocated or grow
-    // a free path — at which point this skip must be reverted with them.
-    //
-    // On the webpack-factory monolith of #8132, ~300 preallocated boxes were
-    // live across ~90% of one function's 5.5k statepoints; unbinding them is
-    // what "not modelling every value as a GC pointer where a proof exists"
-    // means for this shape.
-    if ctx.boxed_vars.contains(&local_id) && !ctx.module_globals.contains_key(&local_id) {
         return;
     }
     let Some(local_slot) = ctx.locals.get(&local_id).cloned() else {
@@ -440,7 +427,10 @@ pub(crate) fn root_inlined_ctor_pointer_locals(
     let pointer_locals =
         crate::collectors::collect_pointer_typed_locals(params, body, &flat_const_ids);
     // Slot indices must not depend on HashMap iteration order.
-    let mut ids: Vec<u32> = pointer_locals.keys().copied().collect();
+    let mut ids: Vec<u32> = crate::scope_env::compact_root_slots(pointer_locals, ctx.scope_map)
+        .keys()
+        .copied()
+        .collect();
     ids.sort_unstable();
     for id in ids {
         if !ctx.shadow_slot_map.contains_key(&id) {

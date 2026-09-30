@@ -56,6 +56,39 @@ fn store_fresh(target: f64, key: *const crate::StringHeader, value: f64) -> (f64
 
 const SRC: &[u8] = br#"{"a":1,"n":2,"b":3}"#;
 
+/// #10500: pool literals such as `name` can differ from the runtime's
+/// interned copy. A static overwrite must still publish its packed store
+/// entry; otherwise every iteration falls through the slow miss path.
+#[test]
+fn pooled_runtime_key_names_prime_static_overwrites() {
+    let target = parsed(br#"{"name":0,"nam":0,"E":0,"X":0,"length":0,"len":0,"now":0,"later":0}"#);
+    for (index, name) in [
+        b"name".as_slice(),
+        b"nam",
+        b"E",
+        b"X",
+        b"length",
+        b"len",
+        b"now",
+        b"later",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let runtime_key = interned(name);
+        let pooled_key =
+            crate::string::js_string_pool_atom(name.as_ptr(), name.len() as u32, fnv1a(name), 0);
+        assert_ne!(
+            pooled_key as *const _, runtime_key,
+            "fixture must use the pooled copy"
+        );
+        let (stored, word) = store_fresh(target, pooled_key, index as f64 + 1.0);
+        assert_eq!(stored, index as f64 + 1.0);
+        assert_eq!(word as u32, stamp(target), "{name:?} did not prime");
+        assert_eq!(word >> 32, index as u64, "{name:?} primed the wrong slot");
+    }
+}
+
 #[test]
 fn packed_set_empty_matches_codegen() {
     // perry-codegen `expr/put_value_store_ic.rs::PACKED_SET_EMPTY`.

@@ -706,6 +706,8 @@ pub(crate) struct FnCtx<'a> {
     /// `__gen_done` / `__gen_executing` use boolean cells.
     pub compiler_private_async_i32_control_locals: &'a std::collections::HashSet<u32>,
     pub compiler_private_async_i1_control_locals: &'a std::collections::HashSet<u32>,
+    /// Module-wide scope context object groups (`crate::scope_env`).
+    pub scope_map: &'a crate::scope_env::ScopeMap,
     /// Closure rest param index: closure `FuncId` → index of the rest
     /// parameter. Built once in `compile_module` from the collected
     /// closures. Used by the closure call site in `lower_call` to
@@ -1734,10 +1736,14 @@ pub(crate) struct FnCtx<'a> {
 
 #[derive(Clone)]
 pub(crate) struct TrustedBoxCapturePtr {
-    /// Integer form used as the write-barrier parent.
+    /// Integer form used as the write-barrier parent: the box itself, or the
+    /// scope object that holds the binding's slot.
     pub bits: String,
     /// Opaque LLVM pointer used by direct box-cell loads and stores.
     pub ptr: String,
+    /// Integer address of the cell (`bits` for a box, `bits + 8 * index` for
+    /// a scope slot), for the trusted accessor's cold TDZ arm.
+    pub cell_bits: String,
 }
 
 /// (Issue #50) Info about a flat-folded const 2D int array.
@@ -3478,6 +3484,10 @@ pub(crate) fn is_compiler_private_async_i1_control_local(ctx: &FnCtx<'_>, id: u3
 }
 
 pub(crate) fn load_boxed_local_pointer(ctx: &mut FnCtx<'_>, id: u32) -> Result<Option<String>> {
+    // A scoped binding's cell is its slot inside the scope object.
+    if let Some((slot, base)) = crate::scope_env::access::load_base(ctx, id)? {
+        return Ok(Some(crate::scope_env::access::cell_addr(ctx, slot, &base)));
+    }
     if let Some(&capture_idx) = ctx.closure_captures.get(&id) {
         let closure_ptr = current_closure_ptr_value(ctx, "boxed local capture")?;
         let cap_bits = ctx.block().call(
