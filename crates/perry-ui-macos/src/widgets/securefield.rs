@@ -99,7 +99,7 @@ define_class!(
 
         #[unsafe(method(setStringValue:))]
         fn set_string_value(&self, value: &NSString) {
-            let value = super::textfield::one_line_value(value);
+            let value = super::textfield::strip_line_breaks(value);
             unsafe { msg_send![super(self), setStringValue: &*value] }
         }
 
@@ -110,7 +110,7 @@ define_class!(
             range: NSRange,
             replacement: Option<&NSString>,
         ) -> bool {
-            match super::textfield::entered_text_with_spaces(replacement) {
+            match replacement.and_then(super::textfield::replace_line_breaks_with_spaces) {
                 // Inserting the spaced text asks this method again, now with no
                 // line break, so the edit still passes through super.
                 Some(spaced) => {
