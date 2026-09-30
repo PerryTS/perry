@@ -81,7 +81,8 @@ pub const HOLDER_SHAPE: usize = crate::codegen_abi::PIC_HOLDER_SHAPE_WORD;
 pub const HOLDER_KIND: usize = crate::codegen_abi::PIC_HOLDER_KIND_WORD;
 /// First of three intermediate hop addresses (depth 2..=4).
 pub const HOLDER_HOPS: usize = HOLDER_KIND + 1;
-/// Low 32 bits: the first hop's ShapeId. High 32 bits: the second hop's.
+/// Data/absence: first and second hop ShapeIds. Class accessor: the class
+/// lookup-surface generation at prime time (no hop pointer uses this word).
 pub const HOLDER_HOP_SHAPES: usize = HOLDER_HOPS + 3;
 /// The site's holder state: [`STATE_REGISTERED`], [`STATE_LATCHED`] and the
 /// count of re-primes for a different receiver shape.
@@ -398,8 +399,8 @@ pub(super) unsafe fn admitted_proto_id(obj: *const ObjectHeader) -> Option<u64> 
 }
 
 /// A MIXED identity records an explicit serial link. A bare CLASS identity
-/// does not pin its registry-resolved prototype, so the accessor-only hit must
-/// compare the LIVE declared-prototype pointer with the cached holder.
+/// does not pin its registry-resolved prototype, so priming resolves the live
+/// declared-prototype pointer and the hit checks the registry's generation.
 unsafe fn class_link(recv: *const ObjectHeader) -> Option<*const ObjectHeader> {
     let pid = shape_proto_id(object_shape_stamp(recv))?;
     if object_proto_id(recv) != pid {
@@ -413,6 +414,27 @@ unsafe fn class_link(recv: *const ObjectHeader) -> Option<*const ObjectHeader> {
         return None;
     };
     (!holder.is_null() && holder != recv).then_some(holder)
+}
+
+/// The accessor's prime-time holder is still the direct prototype. Explicit
+/// MIXED links are checked by pointer. Every writer that can replace a bare
+/// CLASS registry link bumps the lookup-surface generation; GC rewrites both
+/// this site's rooted holder and the registry root without changing it.
+#[inline]
+unsafe fn accessor_link_still_current(recv: *const ObjectHeader, stamp: u32, c: &PicCache) -> bool {
+    let Some(pid) = shape_proto_id(stamp) else {
+        return false;
+    };
+    if object_proto_id(recv) != pid || c[HOLDER_OBJ] as usize == recv as usize {
+        return false;
+    }
+    if (PROTO_ID_CLASS..PROTO_ID_MIXED).contains(&pid) {
+        c[HOLDER_HOP_SHAPES] as u64 == crate::object::class_lookup_surface_generation()
+    } else if (PROTO_ID_MIXED..PROTO_ID_UNIQUE).contains(&pid) {
+        next_prototype(recv) as usize == c[HOLDER_OBJ] as usize
+    } else {
+        false
+    }
 }
 
 struct ClassAccessor {
@@ -520,7 +542,7 @@ pub(crate) unsafe fn try_cached_class_accessor(
     let stamp = object_shape_stamp(recv);
     if stamp == 0
         || c[HOLDER_RECV] != (u64::from(stamp) | PIC_ID_TOKEN_BIT) as i64
-        || class_link(recv)? as usize != c[HOLDER_OBJ] as usize
+        || !accessor_link_still_current(recv, stamp, c)
     {
         return None;
     }
@@ -843,7 +865,11 @@ unsafe fn publish(cache: *mut PicCache, recv: *const ObjectHeader, w: &Walk, acc
     for i in 0..HOLDER_MAX_DEPTH - 1 {
         c[HOLDER_HOPS + i] = w.hops[i].0 as i64;
     }
-    c[HOLDER_HOP_SHAPES] = (u64::from(w.hops[0].1) | u64::from(w.hops[1].1) << 32) as i64;
+    c[HOLDER_HOP_SHAPES] = if accessor {
+        crate::object::class_lookup_surface_generation() as i64
+    } else {
+        (u64::from(w.hops[0].1) | u64::from(w.hops[1].1) << 32) as i64
+    };
     if c[HOLDER_STATE] & STATE_REGISTERED == 0 {
         c[HOLDER_STATE] |= STATE_REGISTERED;
         if let Ok(mut sites) = HOLDER_SITES.lock() {
@@ -986,6 +1012,11 @@ mod tests {
                 depth: 1,
             };
             unsafe { publish(cache, receiver, &w, true) };
+            let first_generation = cache[HOLDER_HOP_SHAPES];
+            assert_eq!(
+                first_generation as u64,
+                crate::object::class_lookup_surface_generation()
+            );
             assert_eq!(
                 unsafe { try_cached_class_accessor(receiver, &mut slot) }.map(|v| v.as_number()),
                 Some(2.0)
@@ -995,6 +1026,10 @@ mod tests {
             p2.with_const_ptr::<ObjectHeader, _>(|ptr| {
                 crate::object::test_seed_class_decl_prototype_object_root(CID, ptr as usize);
             });
+            assert_ne!(
+                cache[HOLDER_HOP_SHAPES] as u64,
+                crate::object::class_lookup_surface_generation()
+            );
             assert_eq!(unsafe { object_shape_stamp(receiver) }, recv_shape);
             assert!(
                 unsafe { try_cached_class_accessor(receiver, &mut slot) }.is_none(),
