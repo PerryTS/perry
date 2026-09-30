@@ -215,7 +215,7 @@ define_class!(
 
         #[unsafe(method(setStringValue:))]
         fn set_string_value(&self, value: &NSString) {
-            let value = one_line_value(value);
+            let value = strip_line_breaks(value);
             unsafe { msg_send![super(self), setStringValue: &*value] }
         }
 
@@ -226,7 +226,7 @@ define_class!(
             range: NSRange,
             replacement: Option<&NSString>,
         ) -> bool {
-            match entered_text_with_spaces(replacement) {
+            match replacement.and_then(replace_line_breaks_with_spaces) {
                 // Inserting the spaced text asks this method again, now with no
                 // line break, so the edit still passes through super.
                 Some(spaced) => {
@@ -633,21 +633,31 @@ pub fn set_text_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
     }
 }
 
-/// `value` as a TextField stores it: `without_line_breaks` applied.
-pub(crate) fn one_line_value(value: &NSString) -> Retained<NSString> {
-    match without_line_breaks(&value.to_string()) {
-        std::borrow::Cow::Borrowed(_) => value.retain(),
-        std::borrow::Cow::Owned(text) => NSString::from_str(&text),
+/// The characters that a web `<input>` treats as a line break.
+const LINE_BREAKS: [char; 2] = ['\r', '\n'];
+
+/// Removes every line break from `value`, as a web `<input>` does when code
+/// sets its value. A TextField and a SecureField each hold one line.
+pub(crate) fn strip_line_breaks(value: &NSString) -> Retained<NSString> {
+    let text = value.to_string();
+    if text.contains(LINE_BREAKS) {
+        NSString::from_str(&text.replace(LINE_BREAKS, ""))
+    } else {
+        value.retain()
     }
 }
 
-/// The text to insert in place of `entered`, when it holds a line break.
-pub(crate) fn entered_text_with_spaces(entered: Option<&NSString>) -> Option<Retained<NSString>> {
-    line_breaks_as_spaces(&entered?.to_string()).map(|text| NSString::from_str(&text))
+/// Replaces each line break in typed, pasted or dropped text with one space,
+/// as a web `<input>` does. `None` when `text` has no line break.
+pub(crate) fn replace_line_breaks_with_spaces(text: &NSString) -> Option<Retained<NSString>> {
+    let text = text.to_string();
+    text.contains(LINE_BREAKS)
+        .then(|| NSString::from_str(&text.replace("\r\n", " ").replace(LINE_BREAKS, " ")))
 }
 
 /// The field editor commands that would insert a line break. A web `<input>`
-/// ignores Option-Return and Control-Return, so a TextField does too.
+/// ignores Option-Return and Control-Return, so a TextField does too. Return
+/// sends `insertNewline:`, which is not in this list, so Return still submits.
 pub(crate) fn is_line_break_command(command: Sel) -> bool {
     [
         objc2::sel!(insertNewlineIgnoringFieldEditor:),
@@ -655,23 +665,6 @@ pub(crate) fn is_line_break_command(command: Sel) -> bool {
         objc2::sel!(insertParagraphSeparator:),
     ]
     .contains(&command)
-}
-
-/// A TextField holds one line, as a web `<input>` does. A value set in code
-/// drops its line breaks, as `input.value = …` does.
-pub(crate) fn without_line_breaks(text: &str) -> std::borrow::Cow<'_, str> {
-    if text.contains(['\r', '\n']) {
-        text.replace(['\r', '\n'], "").into()
-    } else {
-        text.into()
-    }
-}
-
-/// Text typed, pasted or dropped into a TextField turns each line break into
-/// one space, as a web `<input>` does. `None` when the text has no line break.
-pub(crate) fn line_breaks_as_spaces(text: &str) -> Option<String> {
-    text.contains(['\r', '\n'])
-        .then(|| text.replace("\r\n", " ").replace(['\r', '\n'], " "))
 }
 
 #[cfg(test)]
@@ -686,12 +679,13 @@ mod tests {
             ("trailing\n", "trailing", Some("trailing ")),
             ("a\u{2028}b\u{2029}c\td", "a\u{2028}b\u{2029}c\td", None),
         ] {
+            let text = NSString::from_str(text);
             assert_eq!(
                 (
-                    without_line_breaks(text).as_ref(),
-                    line_breaks_as_spaces(text).as_deref()
+                    strip_line_breaks(&text).to_string(),
+                    replace_line_breaks_with_spaces(&text).map(|spaced| spaced.to_string())
                 ),
-                (set_in_code, entered),
+                (set_in_code.to_string(), entered.map(str::to_string)),
                 "{text:?}"
             );
         }
