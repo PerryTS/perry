@@ -1,53 +1,53 @@
-// Eleven receiver shapes at one read site, sharing one absent null-prototype
-// terminal. The last shape rotates the ten-shape site and must remain correct.
-const terminal: any = Object.create(null);
+// Eleven receiver shapes at one read site share Object.prototype as their
+// absent terminal. Ten warm shapes must hit; the last rotates the site.
+const terminal: any = Object.prototype;
 const receivers: any[] = [];
 for (let n = 0; n < 11; n++) {
-  const o: any = Object.create(terminal);
+  const o: any = {};
   for (let k = 0; k < n; k++) o["field" + k] = k;
   receivers.push(o);
 }
 
 function read(o: any): number {
-  const value = o.missing;
+  const value = o.a2MissingFacet;
   return value === undefined ? 0 : value;
 }
 
 let sum = 0;
-for (let i = 0; i < 550; i++) sum += read(receivers[i % receivers.length]);
+for (let i = 0; i < 550; i++) sum += read(receivers[i % 10]);
+sum += read(receivers[10]);
 console.log("all-absent", sum);
 
-// The terminal is young when the site primes. A forced collection must keep
-// and rewrite the site's rooted holder; a later own-key shadow cannot reuse
-// the same receiver ShapeId and must win over the absent entry.
+// A forced collection must keep and rewrite the site's rooted terminal. A
+// later own-key shadow changes the receiver ShapeId and must win.
 let churn: any[] = [];
 for (let i = 0; i < 20000; i++) churn.push({ i });
 (globalThis as any).gc();
 churn = [];
-receivers[3].missing = 5;
+receivers[3].a2MissingFacet = 5;
 sum = 0;
-for (let i = 0; i < 550; i++) sum += read(receivers[i % receivers.length]);
+for (let i = 0; i < 550; i++) sum += read(receivers[i % 10]);
 console.log("own-shadow", sum);
 
-// A new terminal shape invalidates every stored receiver shape. Reassigning
-// the terminal value without changing its shape must be observed as well.
-terminal.missing = 7;
+// A new terminal shape invalidates every stored absent proof. Reassigning
+// its value without changing the shape must also be observed.
+terminal.a2MissingFacet = 7;
 sum = 0;
-for (let i = 0; i < 550; i++) sum += read(receivers[i % receivers.length]);
+for (let i = 0; i < 550; i++) sum += read(receivers[i % 10]);
 console.log("terminal-add", sum);
-terminal.missing = 9;
+terminal.a2MissingFacet = 9;
 sum = 0;
-for (let i = 0; i < 550; i++) sum += read(receivers[i % receivers.length]);
+for (let i = 0; i < 550; i++) sum += read(receivers[i % 10]);
 console.log("terminal-value", sum);
-delete terminal.missing;
+delete terminal.a2MissingFacet;
 sum = 0;
-for (let i = 0; i < 550; i++) sum += read(receivers[i % receivers.length]);
+for (let i = 0; i < 550; i++) sum += read(receivers[i % 10]);
 console.log("terminal-delete", sum);
 
 // Two receivers with the same own key list can have different prototype
 // identities. Their absent facts must not be shared through the site.
 const otherTerminal: any = Object.create(null);
-otherTerminal.missing = 13;
+otherTerminal.a2MissingFacet = 13;
 const otherReceiver: any = Object.create(otherTerminal);
 otherReceiver.field0 = 0;
 sum = 0;
