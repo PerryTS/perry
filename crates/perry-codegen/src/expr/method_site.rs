@@ -134,7 +134,18 @@ pub(crate) fn emit_method_site(
     // takes the universal dispatcher directly, with its string and primitive
     // arms, exactly as without a site. A heap object takes the site: its memo
     // if the site has one, else the miss, which primes it.
-    let ic = crate::expr::emit_inline_cache_slot(ctx, &cache_name);
+    // The runtime publishes this process-global slot with an AtomicPtr CAS.
+    // A worker may enter the site just as the primary agent first publishes
+    // it, before the sticky worker gate below is loaded. Pair the load with
+    // that publication even though the worker will then take the miss path.
+    let slot_ref = format!("@{cache_name}");
+    let cache = ctx.block().load_atomic_acquire(PTR, &slot_ref, 8);
+    let present = ctx.block().icmp_ne(PTR, &cache, "null");
+    let ic = crate::expr::InlineCacheSlot {
+        slot_ref,
+        cache,
+        present,
+    };
     let prim_idx = ctx.new_block("msite.primitive");
     let object_idx = ctx.new_block("msite.object");
     let prim_l = ctx.block_label(prim_idx);
