@@ -818,7 +818,12 @@ pub fn close(id: i64) -> NetResult<()> {
             }
             entry.closing = true;
             #[cfg(windows)]
-            windows_pipe::cancel_eof(driver, id, entry);
+            {
+                windows_pipe::cancel_eof(driver, id, entry);
+                if let Some(op) = entry.pipe_drain.take() {
+                    driver.cancel(op);
+                }
+            }
             census::note_submit(OP_CLOSE);
             driver
                 .close(entry.handle, token(OP_CLOSE, id))

@@ -510,20 +510,31 @@ fn resolve_application(command: &Command) -> io::Result<std::path::PathBuf> {
         .find(|(k, _)| k.to_string_lossy().eq_ignore_ascii_case("PATH"))
         .and_then(|(_, v)| v.map(OsStr::to_os_string))
         .or_else(|| std::env::var_os("PATH"));
-    let name = if program.extension().is_none() {
-        program.with_extension("exe")
-    } else {
-        program.to_path_buf()
-    };
+    // libuv tries the literal name only when it has a nonempty extension,
+    // then appends (rather than replaces) .com and .exe. It ignores PATHEXT.
+    let mut names = Vec::new();
+    if program
+        .extension()
+        .is_some_and(|extension| !extension.is_empty())
+    {
+        names.push(program.to_path_buf());
+    }
+    for extension in [".com", ".exe"] {
+        let mut name = program.as_os_str().to_os_string();
+        name.push(extension);
+        names.push(std::path::PathBuf::from(name));
+    }
     for dir in std::iter::once(cwd.clone()).chain(
         path.as_deref()
             .map(std::env::split_paths)
             .into_iter()
             .flatten(),
     ) {
-        let candidate = cwd.join(dir).join(&name);
-        if candidate.is_file() {
-            return Ok(candidate);
+        for name in &names {
+            let candidate = cwd.join(&dir).join(name);
+            if candidate.is_file() {
+                return Ok(candidate);
+            }
         }
     }
     Err(io::Error::from_raw_os_error(2))

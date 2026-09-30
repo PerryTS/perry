@@ -6,6 +6,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+from windows_pipe_drain_cancel import check as check_drain_cancel
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -55,6 +56,7 @@ def main():
                 raise RuntimeError(f"{fixture.name}\nNode: {oracle}\nPerry: {actual}")
             Path(exe).unlink()
             print(f"PASS {fixture.name}", flush=True)
+        check_drain_cancel(args.compiler.resolve(), env, directory)
     print(f"{len(fixtures)} Windows regressions match Node {pin}")
 
 
