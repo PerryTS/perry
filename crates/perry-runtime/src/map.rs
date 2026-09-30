@@ -3533,17 +3533,25 @@ mod tests {
 
     #[test]
     fn ordered_delete_repairs_mixed_side_indexes_and_preserves_order() {
-        let map = js_map_alloc(32);
         let scope = crate::gc::RuntimeHandleScope::new();
-        let string_keys = (0..12)
-            .map(|i| {
-                let bytes = format!("key-{i:02}").into_bytes();
-                scope.root_nanbox_f64(boxed_heap_string_key(js_string_from_bytes(
-                    bytes.as_ptr(),
-                    bytes.len() as u32,
-                )))
-            })
-            .collect::<Vec<_>>();
+        let map_handle = scope.root_raw_mut_ptr(js_map_alloc(32));
+        // String allocation may move the Map. Reload its address only after
+        // all twelve allocating calls, while the handle keeps it live.
+        let (string_keys, map) = map_handle.across_mut::<MapHeader, _>(|| {
+            (0..12)
+                .map(|i| {
+                    let bytes = format!("key-{i:02}").into_bytes();
+                    scope.root_nanbox_f64(boxed_heap_string_key(js_string_from_bytes(
+                        bytes.as_ptr(),
+                        bytes.len() as u32,
+                    )))
+                })
+                .collect::<Vec<_>>()
+        });
+        // The setters below append 28 entries, delete three, then append
+        // three more: raw extent 31 < capacity 32. Their ensure_capacity
+        // therefore returns before its GC-triggering external-allocation path.
+        assert_eq!(unsafe { (*map).capacity }, 32);
 
         let string_key_ptr = |i: usize| {
             (string_keys[i].get_nanbox_f64().to_bits() & crate::value::POINTER_MASK)
