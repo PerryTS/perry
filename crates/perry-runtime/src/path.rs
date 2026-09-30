@@ -1729,8 +1729,9 @@ pub extern "C" fn js_path_win32_delimiter_get() -> *mut StringHeader {
 }
 
 /// `path.win32.resolve(...)` chains via this binary helper, mirroring the
-/// POSIX `js_path_resolve_join` rule: if `b` is absolute, drop `a` entirely;
-/// else concatenate with `\` and normalize. Drive-relative segments (`C:foo`)
+/// POSIX `js_path_resolve_join` rule: if `b` is absolute, reset the directory;
+/// retain `a`'s device when `b` has none. Else concatenate with `\` and normalize.
+/// Drive-relative segments (`C:foo`)
 /// inherit the prior absolute prefix only if the drives match Node's rule
 /// (we treat them as restart-of-drive for simplicity — see test fixtures).
 #[no_mangle]
@@ -1742,7 +1743,14 @@ pub extern "C" fn js_path_win32_resolve_join(
     let b = string_from_header_or_throw(b_ptr);
     let b_split = split_win32(&b);
     let joined = if b_split.is_absolute {
-        b.clone()
+        // A rooted RHS resets the directory, but keeps an earlier device.
+        // `resolve('D:\\base', '\\leaf')` must remain on D:, even if cwd is C:.
+        let a_split = split_win32(&a);
+        if b_split.prefix.is_empty() && !a_split.prefix.is_empty() {
+            format!("{}{}", a_split.prefix, b)
+        } else {
+            b.clone()
+        }
     } else if b.is_empty() {
         a.clone()
     } else if is_win32_drive_prefix(b_split.prefix) {

@@ -1,4 +1,5 @@
 import os from 'node:os';
+import importedProcess from 'node:process';
 
 if (process.platform !== 'win32') {
   console.log('Windows only');
@@ -6,6 +7,8 @@ if (process.platform !== 'win32') {
   console.log('errno:', os.constants.errno.ECONNRESET, os.constants.errno.ETIMEDOUT);
   console.log('dlopen:', typeof os.constants.dlopen.RTLD_LAZY, typeof os.constants.dlopen.RTLD_NOW);
   console.log('credentials:', typeof process.getuid, typeof process.geteuid, typeof process.getgid, typeof process.getegid);
+  const savedGetuid = importedProcess.getuid;
+  console.log('saved credential:', typeof savedGetuid);
   console.log('release libUrl:', typeof process.release.libUrl);
   const report = process.report.getReport();
   console.log('report limits:', typeof report.userLimits);
