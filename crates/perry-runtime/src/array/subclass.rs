@@ -24,7 +24,7 @@ pub use packed_index::{ArrayLikePicCache, ArrayLikePicCacheSlot, ARRAYLIKE_PIC_W
 // The loop-guard entry points are exported C symbols; only the unit tests
 // reach them through Rust paths.
 #[cfg(test)]
-pub(super) use loop_guard::{js_packed_arraylike_loop_guard, js_packed_ecs_u32_loop_guard};
+pub(crate) use loop_guard::{js_packed_arraylike_loop_guard, js_packed_ecs_u32_loop_guard};
 
 // #8690: `ObjectMeta::flags` carries the move-stable scalar payload for a
 // numeric packed-prefix proof. The GcHeader authority bit prevents a record

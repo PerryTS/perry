@@ -178,6 +178,39 @@ fn a_class_birth_with_an_f64_lane_adopts_its_static_id() {
     );
 }
 
+/// An importing module can initialize before its defining module. Its
+/// all-Any stub must take its own static id and leave every slot undefined;
+/// the later definer's F64 birth keeps its distinct id and +0.0 birth fill.
+#[test]
+fn importer_first_birth_keeps_definer_rep_and_stub_slots_distinct() {
+    use super::static_shapes::js_object_shape_id_for_class_keys_static;
+    let k = keys(b"ifa\0ifb\0", 2);
+    let any_id = crate::object::shapes::SHAPE_ID_BASE + 0x3a71;
+    let f64_id = crate::object::shapes::SHAPE_ID_BASE + 0x3a72;
+
+    let importer = js_object_shape_id_for_class_keys_static(k, 2, 2, CID, any_id, REP_ANY);
+    assert_eq!(importer, any_id);
+    let imported_birth = unsafe { birth(k, 2, importer) };
+    assert_eq!(unsafe { object_shape_stamp(imported_birth) }, any_id);
+    assert_eq!(
+        unsafe { slot_bits(imported_birth, 0) },
+        crate::value::TAG_UNDEFINED
+    );
+
+    let definer = js_object_shape_id_for_class_keys_static(k, 2, 2, CID, f64_id, REP_F64);
+    assert_eq!(definer, f64_id);
+    assert_ne!(definer, importer);
+    let defined_birth = unsafe { birth(k, 2, definer) };
+    assert_eq!(unsafe { object_shape_stamp(defined_birth) }, f64_id);
+    assert_eq!(unsafe { slot_bits(defined_birth, 0) }, 0.0f64.to_bits());
+    assert_eq!(
+        unsafe { slot_bits(defined_birth, 1) },
+        crate::value::TAG_UNDEFINED
+    );
+    assert_eq!(rep_of(importer), REP_ANY);
+    assert_eq!(rep_of(definer), REP_F64);
+}
+
 /// (e) The shape is the truth: a literal (anonymous shape class) or a class
 /// born with `F64` lanes has ONE birth shape, whichever allocator runs. The
 /// compiled inline `new` stamps the module-init birth id (the stamped
