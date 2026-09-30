@@ -615,7 +615,9 @@ mod tests {
             );
             leaf += usize::from(classify_direct_callee(name) == GcCallEffect::CannotCollect);
         }
-        assert!(leaf >= 15, "only {leaf} of the #11523 helpers are Leaf");
+        // P4 retired three object-layout helpers that were Leaf. The surviving
+        // list has 14 Leaf helpers and six helpers that reenter on their own paths.
+        assert_eq!(leaf, ISSUE_11523.len() - 6, "#11523 Leaf census changed");
     }
 
     /// The box/closure family's containment in the root-dominance checker's
