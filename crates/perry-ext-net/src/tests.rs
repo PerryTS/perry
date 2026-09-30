@@ -479,43 +479,6 @@ fn upgraded_stream_adoption_is_on_the_callers_loop_or_refused() {
             handles_before + 1,
             "the adoption must be on this thread's loop when the call returns"
         );
-        // Accepted/upgraded sockets carry both endpoints already; the dynamic
-        // property path must serve the same getters as a statically typed one.
-        for (name, expected) in unsafe {
-            [
-                ("remoteAddress", js_net_socket_get_remote_address(id)),
-                ("remotePort", js_net_socket_get_remote_port(id)),
-                ("remoteFamily", js_net_socket_get_remote_family(id)),
-                ("localAddress", js_net_socket_get_local_address(id)),
-                ("localPort", js_net_socket_get_local_port(id)),
-                ("localFamily", js_net_socket_get_local_family(id)),
-            ]
-        } {
-            assert_ne!(
-                expected.to_bits(),
-                dispatch::undefined().to_bits(),
-                "{name} has an endpoint"
-            );
-            let mut actual = dispatch::undefined();
-            assert_eq!(
-                unsafe {
-                    dispatch::js_ext_net_handle_property_dispatch(
-                        id,
-                        name.as_ptr(),
-                        name.len(),
-                        &mut actual,
-                    )
-                },
-                1,
-                "{name} is claimed"
-            );
-            // Address/family reads allocate strings; compare their JS values.
-            assert_ne!(
-                perry_runtime::value::js_jsvalue_equals(expected, actual),
-                0,
-                "{name} matches"
-            );
-        }
         crate::lifecycle::js_ext_net_destroy_socket(id);
         let _ = unsafe { js_net_process_pending() };
         perry_runtime::agent::retire_agent(agent);

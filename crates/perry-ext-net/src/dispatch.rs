@@ -610,24 +610,6 @@ pub unsafe extern "C" fn js_ext_net_handle_property_dispatch(
             "port" => crate::js_net_socket_address_get_port(handle),
             _ => crate::js_net_socket_address_get_flowlabel(handle),
         })
-    } else if matches!(
-        prop,
-        "localAddress"
-            | "localPort"
-            | "localFamily"
-            | "remoteAddress"
-            | "remotePort"
-            | "remoteFamily"
-    ) && crate::js_ext_net_is_socket_handle(handle) != 0
-    {
-        Some(match prop {
-            "localAddress" => crate::js_net_socket_get_local_address(handle),
-            "localPort" => crate::js_net_socket_get_local_port(handle),
-            "localFamily" => crate::js_net_socket_get_local_family(handle),
-            "remoteAddress" => crate::js_net_socket_get_remote_address(handle),
-            "remotePort" => crate::js_net_socket_get_remote_port(handle),
-            _ => crate::js_net_socket_get_remote_family(handle),
-        })
     } else if prop == "_handle" && crate::js_ext_net_is_socket_handle(handle) != 0 {
         Some(socket_private_handle(handle))
     } else if prop == "parser"
