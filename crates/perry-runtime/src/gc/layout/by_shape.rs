@@ -63,6 +63,7 @@ fn selection_for_rep(rep: u64, payload: HeapSlotRange) -> HeapPayloadSlotSelecti
 }
 
 /// Does `selection` visit payload slot `index`?
+#[cfg(any(debug_assertions, test))]
 fn selection_visits(selection: &HeapPayloadSlotSelection, index: usize) -> bool {
     match selection {
         HeapPayloadSlotSelection::Empty | HeapPayloadSlotSelection::PointerFree { .. } => false,
@@ -80,6 +81,7 @@ fn selection_visits(selection: &HeapPayloadSlotSelection, index: usize) -> bool 
 /// The first payload slot `selection` skips although it holds a heap pointer
 /// (index, bits). A canonical double whose raw bits fall in the untagged
 /// pointer range (a subnormal) is a Number, so skipping it is right.
+#[cfg(any(debug_assertions, test))]
 pub(super) unsafe fn skipped_pointer_slot(
     payload: HeapSlotRange,
     selection: &HeapPayloadSlotSelection,
