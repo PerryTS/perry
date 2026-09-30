@@ -1384,7 +1384,7 @@ pub struct NativeAddonModule {
     pub source_path: PathBuf,
     pub package_dir: PathBuf,
     pub entry_relative: PathBuf,
-    /// Package entries ship their complete package-local payload so adjacent
+    /// Package entries ship their runtime package-local payload so adjacent
     /// data/shared libraries remain available. Exact project-path entries ship
     /// only the explicitly authorized `.node` file.
     pub ship_package_payload: bool,

@@ -491,7 +491,32 @@ app.perry-native/
 ```
 
 The compiler copies the selected platform package payload, preserving its
-relative layout so `$ORIGIN`/`@loader_path` dependencies keep working. The
+relative layout so `$ORIGIN`/`@loader_path` dependencies keep working. Runtime
+data (including unknown extensions and JSON), shared libraries with versioned
+names, package metadata, and redistribution licenses remain included. Recognized
+source files, compiled JS/TS wrappers, documentation, build scripts and workflows
+are omitted. For `prebuilds/<platform>/...` entries only the selected platform
+subtree is copied; a flat `prebuilds/<platform>.node` entry omits other `.node`
+prebuilds. This reduces shipped bytes and build-cache inputs together.
+
+Unusual runtime inputs with development-like names can be retained by the
+project manifest, using exact package-relative files or directories (no globs):
+
+```json
+{ "perry": { "nativeAddons": ["demo"],
+  "nativeAddonFiles": { "demo": ["data/table.js", "scripts/runtime"] } } }
+```
+
+Paths must exist, stay inside the owning package, and exclude `.git` and nested
+`node_modules`. This changes payload selection only, without authorizing addon
+loading. Unknown data is retained by default; library dependency discovery
+across packages remains separate work.
+
+Copying preserves the platform file-copy behavior, including permissions and
+macOS extended attributes. SHA-256 authentication streams with a 256 KiB
+buffer. Runtime verification also streams with bounded memory and still checks
+every shipped file before the first `dlopen` in each process. Repeated loads in
+the same Node-API environment return its existing exports without rehashing. The
 manifest records package name and version, target tuple, relative entry path,
 SHA-256 for every copied file, and the Node-API policy version. Runtime loading
 never consults the build machine's `node_modules` tree.
