@@ -193,23 +193,19 @@ pub(crate) unsafe fn entry_answer(c: &PicCache, token: i64) -> Option<u64> {
     if token == 0 {
         return None;
     }
-    let kind = c[HOLDER_KIND];
-    if kind as u64 & HOLDER_ACCESSOR != 0 {
-        return None;
+    // The common data/stub entry checks its receiver token before decoding
+    // kinds. Only a token miss can search the extra ABSENT shapes; keeping
+    // that search off the ordinary inherited hit avoids taxing every read.
+    if c[HOLDER_RECV] != token {
+        return multi_absent_extra_answer(c, token);
     }
-    if kind as u64 & HOLDER_MULTI_ABSENT != 0 {
-        if c[HOLDER_RECV] == 0
-            || kind as u64 & HOLDER_ABSENT_BIT == 0
-            || (c[HOLDER_RECV] != token
-                && !(0..MULTI_ABSENT_EXTRA_IDS).any(|i| multi_absent_id(c, i) == token as u32))
-        {
+    let kind = c[HOLDER_KIND];
+    if kind as u64 & (HOLDER_ACCESSOR | HOLDER_MULTI_ABSENT) != 0 {
+        if kind as u64 & HOLDER_ACCESSOR != 0 || kind as u64 & HOLDER_ABSENT_BIT == 0 {
             return None;
         }
         return (shape_word(c[HOLDER_OBJ] as usize) == c[HOLDER_SHAPE] as u32)
             .then_some(crate::value::TAG_UNDEFINED);
-    }
-    if c[HOLDER_RECV] != token {
-        return None;
     }
     let (depth, absent, slot) = if kind >= 0 {
         (1, kind == HOLDER_ABSENT_DEPTH1, kind as u32)
@@ -240,6 +236,25 @@ pub(crate) unsafe fn entry_answer(c: &PicCache, token: i64) -> Option<u64> {
         return Some(crate::value::TAG_UNDEFINED);
     }
     Some(slot_bits(holder, slot))
+}
+
+/// A second through tenth ABSENT receiver shape is a rare path relative to
+/// one-token data hits. It shares the terminal holder but must still prove the
+/// entry is live and its ShapeId has not changed.
+#[cold]
+#[inline(never)]
+unsafe fn multi_absent_extra_answer(c: &PicCache, token: i64) -> Option<u64> {
+    let kind = c[HOLDER_KIND] as u64;
+    if c[HOLDER_RECV] == 0
+        || kind & (HOLDER_MULTI_ABSENT | HOLDER_ABSENT_BIT)
+            != HOLDER_MULTI_ABSENT | HOLDER_ABSENT_BIT
+        || kind & HOLDER_ACCESSOR != 0
+        || !(0..MULTI_ABSENT_EXTRA_IDS).any(|i| multi_absent_id(c, i) == token as u32)
+    {
+        return None;
+    }
+    (shape_word(c[HOLDER_OBJ] as usize) == c[HOLDER_SHAPE] as u32)
+        .then_some(crate::value::TAG_UNDEFINED)
 }
 
 /// Spare depth-1 ABSENT words: the upper half of the holder-shape word and
