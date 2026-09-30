@@ -944,6 +944,16 @@ mod tests {
     #[test]
     fn class_accessor_rechecks_same_shape_holder_link() {
         let _lock = crate::gc::global_side_table_test_lock();
+        // Earlier runtime tests may have started a worker. Reset the sticky
+        // process gate only for this isolated site test, then restore it even
+        // when an assertion fails.
+        struct RestoreWorkerGate(u8);
+        impl Drop for RestoreWorkerGate {
+            fn drop(&mut self) {
+                WORKER_AGENTS_EXIST.store(self.0, Ordering::SeqCst);
+            }
+        }
+        let _gate = RestoreWorkerGate(WORKER_AGENTS_EXIST.swap(0, Ordering::SeqCst));
         const CID: u32 = 0x0C3C_79A3;
         let scope = crate::gc::RuntimeHandleScope::new();
         let p1 = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 2));
