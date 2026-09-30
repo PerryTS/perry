@@ -151,6 +151,13 @@ pub(crate) unsafe fn nm_field_set_override(
     let property_name =
         std::str::from_utf8(std::slice::from_raw_parts(key_ptr, key_len)).unwrap_or("");
     let module_name = get_module_name_from_namespace(crate::value::js_nanbox_pointer(obj as i64));
+    // Dynamic process values share the same live status as the bare intrinsic.
+    // Do not record exitCode as a namespace override: that would shadow the
+    // getter while process.exit() and natural exit still read the old status.
+    if module_name == "process" && property_name == "exitCode" {
+        crate::process::js_process_exit_code_set(value);
+        return true;
+    }
     if module_name == "buffer.Buffer" && property_name == "poolSize" {
         super::set_buffer_pool_size(value);
         return true;
