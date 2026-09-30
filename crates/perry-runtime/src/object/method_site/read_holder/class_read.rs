@@ -374,5 +374,24 @@ mod tests {
         }
         crate::object::class_decl_prototype_object_root_store(CID, b);
         assert_eq!(unsafe { answer(&entry, recv) }, None);
+
+        crate::object::class_decl_prototype_object_root_store(CID, a);
+        let record = Box::into_raw(Box::new(Site {
+            entries: [entry; WAYS],
+            next: 0,
+        }));
+        let mut cache = [0i64; crate::object::PIC_CACHE_WORDS];
+        cache[SITE_WORD] = (SITE_TAG | record as usize as u64) as i64;
+        cache[HOLDER_STATE] = STATE_CLASS_SITE;
+        let mut slot = &mut cache as *mut PicCache;
+        let gate = WORKER_AGENTS_EXIST.swap(0, Ordering::SeqCst);
+        assert_eq!(
+            unsafe { try_hit(recv, &mut slot) }.map(|v| v.bits()),
+            Some(crate::value::TAG_UNDEFINED)
+        );
+        WORKER_AGENTS_EXIST.store(1, Ordering::SeqCst);
+        assert!(unsafe { try_hit(recv, &mut slot) }.is_none());
+        WORKER_AGENTS_EXIST.store(gate, Ordering::SeqCst);
+        unsafe { drop(Box::from_raw(record)) };
     }
 }
