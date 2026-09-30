@@ -200,6 +200,16 @@ pub(crate) unsafe fn entry_answer(c: &PicCache, token: i64) -> Option<u64> {
         return multi_absent_extra_answer(c, token);
     }
     let kind = c[HOLDER_KIND];
+    // A depth-1 data holder is the common inherited-read hit. Its kind is
+    // exactly an inline slot number; answer it before the absent, accessor,
+    // multi-shape and deeper-hop decoding below.
+    if (kind as u64) <= u32::MAX as u64 {
+        let holder = c[HOLDER_OBJ] as usize;
+        if shape_word(holder) != c[HOLDER_SHAPE] as u32 {
+            return None;
+        }
+        return Some(slot_bits(holder, kind as u32));
+    }
     if kind as u64 & (HOLDER_ACCESSOR | HOLDER_MULTI_ABSENT) != 0 {
         if kind as u64 & HOLDER_ACCESSOR != 0 || kind as u64 & HOLDER_ABSENT_BIT == 0 {
             return None;
