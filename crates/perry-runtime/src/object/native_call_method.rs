@@ -54,7 +54,8 @@ pub(crate) use object_proto::{
     js_object_prototype_to_locale_string,
 };
 pub(crate) use proto_dispatch::{
-    try_dispatch_instance_method_value, try_dispatch_value_called_proto_method,
+    is_self_redispatching_proto_method, try_dispatch_instance_method_value,
+    try_dispatch_value_called_proto_method,
 };
 pub(super) use typed_array::dispatch_typed_array_method;
 
@@ -2313,7 +2314,15 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
                         )
                     });
             if let Some(field_val) = inherited {
-                if !field_val.is_undefined() && !field_val.is_null() {
+                // #11700: an inherited no-op-backed built-in method re-enters
+                // this tower by name; fall through to the native arms below.
+                if !field_val.is_undefined()
+                    && !field_val.is_null()
+                    && !is_self_redispatching_proto_method(
+                        f64::from_bits(field_val.bits()),
+                        method_name,
+                    )
+                {
                     let bound = crate::closure::clone_closure_rebind_this(
                         field_val.bits(),
                         f64::from_bits(jsval().bits()),
