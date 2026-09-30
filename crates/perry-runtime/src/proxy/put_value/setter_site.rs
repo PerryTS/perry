@@ -149,7 +149,11 @@ unsafe fn candidate(
         return None;
     }
     let recv_shape = crate::object::shapes::object_shape_descriptor(recv)?;
-    if !recv_shape.object_kind.is_ordinary_layout() {
+    if !matches!(
+        recv_shape.object_kind,
+        crate::object::shapes::ShapeObjectKind::Ordinary
+            | crate::object::shapes::ShapeObjectKind::OrdinaryNumericProof
+    ) {
         return None;
     }
     let recv_keys = recv_shape.keys as usize as *const crate::array::ArrayHeader;
