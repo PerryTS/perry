@@ -1,35 +1,10 @@
-//! Phase 4b.2 (#5094): a pointer stored into a slot the class's own pointer
-//! mask declares no longer *calls* `js_gc_note_slot_layout` when the receiver
-//! carries an intact side-mask descriptor.
-//!
-//! These are IR-census tests, and both directions matter.
-//!
-//! The positive one asserts the subject is LIVE — an elision predicate that
-//! silently answers `false` everywhere still compiles, still prints the right
-//! answer, and shows up in no other test. Only the emitted block label
-//! separates "implemented" from "reached" (CLAUDE.md, "a gate must assert its
-//! subject was live").
-//!
-//! The negatives are the safety half. The elision rests on the emitted header
-//! test being paired with a slot the mask really declares a POINTER; if the
-//! predicate ever widened to a raw-f64 slot, `layout_note_slot`'s downgrade arm
-//! — the one that MUST fire, because a pointer in a raw-f64 slot is a
-//! descriptor contradiction — would be skipped, and the collector would keep
-//! reading a mask that says "not a pointer" over a live child. That is a silent
-//! use-after-free, so it gets a test that fails rather than a comment.
-//!
-//! The fallback call is asserted PRESENT in the positive case too: the change
-//! is "skip the call when the header proves it a no-op", never "elide it
-//! outright" — a receiver that reached the store with no descriptor (any path
-//! `class_field_store_layout_note_is_conforming`'s reasoning did not enumerate)
-//! must still take the real note.
+//! Object field stores keep string-alias and write-barrier bookkeeping while
+//! ShapeId, rather than an object layout note, determines GC slot tracing.
 
 use crate::{compile_module, AppMetadata, CompileOptions};
 use perry_hir::types::Type;
 use perry_hir::{Class, ClassField, Expr, Function, Module, ModuleInitKind, Param, Stmt};
 
-/// The block that exists only when the conforming-store elision was emitted.
-const NOTE_BLOCK: &str = "class_field_set.layout_note";
 const NOTE_CALL: &str = "call void @js_gc_note_slot_layout(";
 
 fn ir_opts() -> CompileOptions {
@@ -272,83 +247,32 @@ fn emit(m: &Module) -> String {
     String::from_utf8(compile_module(m, ir_opts()).unwrap()).expect("LLVM IR should be UTF-8")
 }
 
-/// `a.next = b` — a pointer into the pointer-masked slot 0. The store must
-/// reach the header test, and must keep the call on its cold arm.
+/// A pointer-valued store into a declared pointer slot must retain the
+/// barrier while emitting no object layout note.
 #[test]
-fn a_pointer_into_a_pointer_masked_slot_gates_the_note_on_the_header() {
+fn pointer_slot_store_keeps_barrier_without_layout_note() {
     let ir = emit(&store_module("next", Expr::LocalGet(B_ID)));
     assert!(
-        ir.contains(NOTE_BLOCK),
-        "the conforming-store elision was not emitted for `a.next = b`; \
-         `class_field_store_layout_note_is_conforming` answered false and this \
-         optimization is dead:\n{ir}"
-    );
-    // `GC_LAYOUT_STATE_MASK` and the `SIDE_MASK` value it is compared
-    // against, as i16 literals (charter step 5: no intact bit).
-    assert!(
-        ir.contains("and i16 ") && ir.contains(", -16384") && ir.contains(", -32768"),
-        "the emitted predicate is not the documented header test:\n{ir}"
+        !ir.contains(NOTE_CALL),
+        "object store emitted a layout note:\n{ir}"
     );
     assert!(
-        ir.contains(NOTE_CALL),
-        "the real note must survive on the cold arm — the elision is \
-         'skip when the header proves it a no-op', never 'never call':\n{ir}"
+        ir.contains("class_field_set.barrier"),
+        "pointer store lost its barrier arm:\n{ir}"
     );
 }
 
-/// The same store shape into a slot the masks do **not** declare a pointer
-/// (`flag: boolean` — neither pointer-bearing nor a raw-f64 candidate).
-///
-/// This is the load-bearing negative. There the note is not a no-op that can be
-/// skipped: it is the only thing that ever sets the pointer-mask bit the
-/// collector reads for that slot, so eliding it would leave a live child in an
-/// object the tracer scans zero pointers of.
-///
-/// (The raw-f64 slot is not tested by emission: `a.v = b` with a `Link`-typed
-/// value never reaches this emitter at all — `requires_raw_f64` routes it to
-/// the guarded raw-f64 arm, which side-exits a non-finite value to
-/// `js_put_value_set`. Asserting an absent block there would pass for a reason
-/// unrelated to the elision. The mask half is covered directly, below.)
+/// A class field whose declared type is scalar can still receive a heap
+/// pointer through dynamic JS. The emitted barrier must survive that case too.
 #[test]
-fn a_store_into_an_undeclared_slot_keeps_an_unconditional_note() {
+fn dynamically_pointer_valued_scalar_slot_keeps_barrier_without_layout_note() {
     let ir = emit(&store_module("flag", Expr::LocalGet(B_ID)));
     assert!(
-        ir.contains(NOTE_CALL),
-        "a store into a slot no mask declares must still note its layout — \
-         that note is what sets the collector's pointer bit:\n{ir}"
+        !ir.contains(NOTE_CALL),
+        "object store emitted a layout note:\n{ir}"
     );
     assert!(
-        !ir.contains(NOTE_BLOCK),
-        "a slot outside the pointer mask must NOT take the conforming elision: \
-         `layout_note_slot` there is load-bearing, not a no-op:\n{ir}"
-    );
-}
-
-/// The mask predicate itself, independent of emission: it answers the pointer
-/// mask, refuses a raw-f64 slot, and refuses an out-of-range index.
-#[test]
-fn layout_declares_pointer_slot_answers_the_pointer_mask_only() {
-    use crate::typed_shape::{class_typed_layout, layout_declares_pointer_slot};
-    let class = link_class();
-    let mut classes = std::collections::HashMap::new();
-    classes.insert("Link".to_string(), &class);
-    let layout = class_typed_layout(&classes, "Link");
-
-    assert_eq!(layout.slot_count, 3);
-    assert!(
-        layout_declares_pointer_slot(&layout, 0),
-        "slot 0 is `Link | null` — pointer-masked"
-    );
-    assert!(
-        !layout_declares_pointer_slot(&layout, 1),
-        "slot 1 is `number` — raw-f64-masked, never pointer-masked"
-    );
-    assert!(
-        !layout_declares_pointer_slot(&layout, 2),
-        "slot 2 is `boolean` — in neither mask, so not pointer-declared"
-    );
-    assert!(
-        !layout_declares_pointer_slot(&layout, 3),
-        "slot 3 is past `slot_count`; a descriptor cannot describe it"
+        ir.contains("class_field_set.barrier"),
+        "dynamic pointer store lost its barrier arm:\n{ir}"
     );
 }

@@ -16,7 +16,12 @@ pub(crate) unsafe fn store_object_field_slot(
     let value_bits = super::field_rep_store::checked_slot_bits(obj, field_index, value_bits);
     let fields_ptr = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
     let slot = fields_ptr.add(field_index);
-    crate::gc::runtime_store_jsvalue_slot(obj as usize, slot as usize, field_index, value_bits);
+    crate::gc::runtime_store_object_jsvalue_slot(
+        obj as usize,
+        slot as usize,
+        field_index,
+        value_bits,
+    );
 }
 
 /// #7630: `store_object_field_slot` without the per-slot layout note, for the

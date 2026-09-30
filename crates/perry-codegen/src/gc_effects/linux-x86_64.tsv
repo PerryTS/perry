@@ -1336,7 +1336,6 @@ js_gc_enter_unsafe_zone	Leaf
 js_gc_exit_unsafe_zone	Leaf
 js_gc_forget_object_layout	Leaf
 js_gc_init	Leaf
-js_gc_key_add_layout_unknown	Leaf
 js_gc_loop_safepoint	Reenters
 js_gc_memory_pressure	Reenters
 js_gc_module_collect	Reenters

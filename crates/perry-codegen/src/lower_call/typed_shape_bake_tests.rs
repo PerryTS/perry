@@ -1,38 +1,6 @@
-//! #7834: the at-allocation typed-shape layout, folded into the header
-//! constant — and the `undefined` return-override decided inline.
-//!
-//! Both are IR-census tests, and both are the "assert the subject was live"
-//! kind (CLAUDE.md). An optimisation whose predicate quietly answers `false`
-//! everywhere still compiles, still prints the right answer, and shows up in no
-//! other test — `js_gc_declare_typed_shape_layout` was 30% of `churn_alloc` and
-//! nothing but a profile said so.
-//!
-//! ## What the positive asserts
-//!
-//! For a class whose pointer mask is statically EMPTY, the canonical layout is
-//! the constant `GC_LAYOUT_POINTER_FREE | GC_OBJ_TYPED_LAYOUT_INTACT`, so the
-//! inline-bump path stamps it into the packed `GcHeader` store it was already
-//! emitting and drops the per-instance call. What survives is the one half that
-//! depends on the recycled ADDRESS rather than on the shape — clearing a
-//! previous tenant's per-object record — behind a `PERRY_PER_OBJECT_LAYOUTS_ANY`
-//! test whose `0` state proves every thread's tables empty.
-//!
-//! ## Pointer-bearing layouts
-//!
-//! The class birth ShapeId carries the immutable layout facts at module init. That makes `GC_LAYOUT_SIDE_MASK | GC_OBJ_TYPED_LAYOUT_INTACT`
-//! complete before the first object is allocated, so this case now drops the
-//! per-instance declare too. The test asserts both halves: the one-time class
-//! ShapeId call and the baked header state.
-//!
-//! ## Why the pointer-free bake needs no descriptor
-//!
-//! `heap_payload_slot_selection` skips a `GC_LAYOUT_POINTER_FREE` payload
-//! outright, without consulting any map — so the collector's view is
-//! bit-identical to the pre-#7834 one, which also reached `POINTER_FREE` for an
-//! empty pointer mask. And a later pointer store still downgrades: with no
-//! descriptor to classify against, `layout_note_slot` falls through to its
-//! generic pointer-mask branch, which mints a per-object mask and flips the
-//! state to `SIDE_MASK`. That branch needs no descriptor at all.
+//! The class birth ShapeId carries the field representation. Inline object
+//! allocation writes one header image with no object layout-state bits, for
+//! both pointer-free and pointer-bearing classes.
 
 use crate::{compile_module, AppMetadata, CompileOptions, ImportedClass};
 use perry_hir::types::Type;
@@ -41,63 +9,20 @@ use perry_hir::{
     UpdateOp,
 };
 
-/// The six-argument per-instance declare this ticket removes.
 const DECLARE_CALL: &str = "call void @js_gc_declare_typed_shape_layout(";
 const CLASS_SHAPE_MINT_CALL: &str = "call i32 @js_object_shape_id_for_class_keys(";
-/// The one-argument address-only remainder that replaces it.
 const FORGET_CALL: &str = "call void @js_gc_forget_object_layout(";
-/// The process-global emptiness proof the remainder is gated on.
-const ANY_GLOBAL: &str = "@PERRY_PER_OBJECT_LAYOUTS_ANY";
-const ANY_ATOMIC_LOAD: &str =
-    "load atomic i32, ptr @PERRY_PER_OBJECT_LAYOUTS_ANY monotonic, align 4";
-/// The second gate: records keyed by an address this allocator could have
-/// recycled. Read only once the armed count is non-zero, and before the
-/// address sketch — a long-lived masked object on an old page keeps the
-/// armed count non-zero forever while this stays at zero.
-const YOUNG_ATOMIC_LOAD: &str =
-    "load atomic i32, ptr @PERRY_YOUNG_LAYOUT_RECORDS monotonic, align 4";
-const SKETCH_WORD_GEP: &str = "getelementptr i64, ptr @PERRY_LAYOUT_ADDR_FILTER";
 
-/// The packed `GcHeader` word the inline bump writes for a two-`number`-field
-/// class:
-///
-/// ```text
-///   obj_type  GC_TYPE_OBJECT                     = 0x02   bits  0..7
-///   gc_flags  GC_FLAG_ARENA                      = 0x02   bits  8..15
-///   _reserved GC_LAYOUT_POINTER_FREE             = 0x4000             bits 16..31
-///   size      8 + 32 + max(2, INLINE_SLOT_FLOOR)*8       bits 32..63
-/// ```
-///
-/// Computed from `INLINE_SLOT_FLOOR` rather than spelled as a literal: #7916
-/// moved the floor 4 → 2, which changes `size` 72 → 56 and therefore both
-/// words. A hard-coded constant here fails the moment the footprint changes
-/// and says nothing about what this test is actually for (the layout state
-/// the image carries), so derive the part that is incidental and keep
-/// asserting the part that is not. Charter step 5: no image carries the
-/// typed-layout-intact bit (0x1000) any more.
-fn header_word(layout_state: u64) -> String {
+/// The packed object header has type, arena flag, and size; object layout
+/// state in the reserved halfword is zero regardless of birth rep.
+fn object_header_word() -> String {
     const GC_TYPE_OBJECT: u64 = 0x02;
     const GC_FLAG_ARENA: u64 = 0x02;
     let slots = std::cmp::max(2, crate::target_layout::INLINE_SLOT_FLOOR);
     let size =
         8 + crate::target_layout::object_header_size_bytes("aarch64-apple-darwin") + 8 * slots;
-    let reserved = layout_state;
-    let word = (size << 32) | (reserved << 16) | (GC_FLAG_ARENA << 8) | GC_TYPE_OBJECT;
-    // #8122: the packed word is no longer a per-site scalar store — it is the
-    // constant lane of the per-class `<2 x i64>` header image composed once at
-    // module init (`insertelement <2 x i64> <i64 WORD, i64 0>, i64 %shape_word,
-    // i32 1`), which every inline `new` of the class stores as one vector.
+    let word = (size << 32) | (GC_FLAG_ARENA << 8) | GC_TYPE_OBJECT;
     format!("insertelement <2 x i64> <i64 {word}, i64 0>,")
-}
-
-/// The packed word of a `GC_LAYOUT_POINTER_FREE` birth.
-fn pointer_free_header_word() -> String {
-    header_word(0x4000)
-}
-/// A registered pointer-bearing class starts in SIDE_MASK, its descriptor
-/// reachable through its dedicated typed ShapeId.
-fn side_mask_baked_header_word() -> String {
-    header_word(0x8000)
 }
 
 fn ir_opts() -> CompileOptions {
@@ -383,63 +308,56 @@ pub(super) fn emit(m: &Module) -> String {
     String::from_utf8(compile_module(m, ir_opts()).unwrap()).expect("LLVM IR should be UTF-8")
 }
 
-/// `class Pair { a: number; b: number }` — pointer mask statically empty.
+/// A numeric birth carries its rep in the ShapeId and leaves header
+/// layout-state bits clear.
 #[test]
-fn a_pointer_free_shape_bakes_its_layout_into_the_header_constant() {
+fn a_pointer_free_birth_uses_the_shape_rep_and_no_object_layout_state() {
     let ir = emit(&loop_new_module("Pair", Type::Number, Expr::Integer(2)));
     assert!(
-        ir.contains(&pointer_free_header_word()),
-        "the inline-bump header constant is not the POINTER_FREE image:\n{ir}"
+        ir.contains(&object_header_word()),
+        "missing object header image:
+{ir}"
     );
     assert!(
         !ir.contains(DECLARE_CALL),
-        "the per-instance `js_gc_declare_typed_shape_layout` is still emitted \
-         for a pointer-free shape — this is the 30% of `churn_alloc` the \
-         ticket removes:\n{ir}"
+        "per-instance typed layout declaration survived:
+{ir}"
     );
     assert!(
-        ir.contains(FORGET_CALL) && ir.contains(ANY_GLOBAL) && ir.contains(ANY_ATOMIC_LOAD),
-        "the address-dependent half must survive, gated on the global \
-         emptiness proof: a recycled address can carry a previous tenant's \
-         per-object mask, and `layout_note_slot` would then OR the new \
-         object's pointer bits into it:\n{ir}"
-    );
-    let any_at = ir.find(ANY_ATOMIC_LOAD).expect("armed-count load");
-    let young_at = ir.find(YOUNG_ATOMIC_LOAD).expect("young-record load");
-    let sketch_at = ir.find(SKETCH_WORD_GEP).expect("address sketch probe");
-    assert!(
-        any_at < young_at && young_at < sketch_at,
-        "the gate must read the armed count, then the young-record count, and \
-         only then hash the address into the sketch — each load is the cheap \
-         proof that skips everything after it:\n{ir}"
+        !ir.contains(FORGET_CALL),
+        "object address-keyed layout cleanup survived:
+{ir}"
     );
 }
 
-/// `class Link { a: number; b: Link | null }` — one declared type differs;
-/// everything else about the program is identical.
+/// A pointer-bearing birth uses the same header image; its ShapeId carries
+/// the different rep and the collector traces that rep exactly.
 #[test]
-fn a_pointer_bearing_shape_registers_once_and_bakes_the_side_mask() {
+fn a_pointer_bearing_birth_uses_the_same_header_image_and_its_own_shape() {
     let ir = emit(&loop_new_module(
         "Link",
         Type::Union(vec![Type::Named("Link".to_string()), Type::Null]),
         Expr::Null,
     ));
     assert!(
-        !ir.contains(DECLARE_CALL),
-        "the per-instance declare survived for a pointer-bearing shape:\n{ir}"
-    );
-    assert!(
         ir.contains(CLASS_SHAPE_MINT_CALL),
-        "the pointer mask was not registered at module init:\n{ir}"
+        "birth ShapeId mint absent:
+{ir}"
     );
     assert!(
-        ir.contains(&side_mask_baked_header_word()) && !ir.contains(&pointer_free_header_word()),
-        "the header image does not carry SIDE_MASK:\n{ir}"
+        ir.contains(&object_header_word()),
+        "birth header differs by rep:
+{ir}"
     );
     assert!(
-        ir.contains(FORGET_CALL) && ir.contains(ANY_ATOMIC_LOAD),
-        "the address-dependent stale-record cleanup must survive behind its \
-         global emptiness gate:\n{ir}"
+        !ir.contains(DECLARE_CALL),
+        "per-instance typed layout declaration survived:
+{ir}"
+    );
+    assert!(
+        !ir.contains(FORGET_CALL),
+        "object address-keyed layout cleanup survived:
+{ir}"
     );
 }
 

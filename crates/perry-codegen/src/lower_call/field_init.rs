@@ -417,7 +417,7 @@ fn ctor_prologue_assigned_fields_inner(
 /// an at-allocation typed-shape declaration, so *every* raw-f64 field store in
 /// *every* constructor on its chain — including the base class's own
 /// `this.x = x`, which is textually in a heritage-free class — misses its
-/// `GC_OBJ_TYPED_LAYOUT_INTACT` guard and falls back to `js_put_value_set`.
+/// exact ShapeId/rep guard and falls back to `js_put_value_set`.
 /// Measured on `shapes.ts`: 528 000 by-name field stores, and a two-class
 /// probe (`gc-handoff/bench/shapes_baseclass_field.ts`) runs **2.0x** slower
 /// than the hand-flattened single class doing identical work.
@@ -1105,7 +1105,7 @@ pub(crate) fn apply_field_initializers_recursive(
                 if can_store_predeclared_public_field(ctx, &class_name_in_chain, &prop) {
                     // The field is already an own key in the freshly allocated
                     // exact class shape. Store by name so the runtime fills the
-                    // existing slot without `mark_object_dynamic_shape_unknown`.
+                    // existing slot without a structural ShapeId transition.
                     // This matters for the exact-shape guards emitted inside a
                     // hot captures-`this` arrow: full DefineOwnProperty used to
                     // change the receiver's shape before the arrow was ever

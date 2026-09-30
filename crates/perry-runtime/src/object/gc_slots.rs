@@ -75,7 +75,6 @@ pub(crate) unsafe fn gc_field_slot_range(
 #[inline]
 pub(crate) unsafe fn rebuild_object_field_layout(obj: *mut ObjectHeader, slot_count: usize) {
     let fields = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
-    crate::gc::layout_rebuild_from_slots(obj as *mut u8, fields, slot_count);
     if crate::arena::pointer_in_old_gen(obj as usize) {
         for i in 0..slot_count {
             let slot = fields.add(i);

@@ -320,7 +320,7 @@ fn derived_class_refuses_the_elision() {
 // The single-class rule bails to the empty set on any heritage, so a subclass
 // instance never got an at-allocation typed-shape declaration and every
 // raw-f64 store in every constructor on its chain — the BASE class's own
-// `this.x = x` included — missed `GC_OBJ_TYPED_LAYOUT_INTACT` and fell back to
+// `this.x = x` included — missed the old header layout guard and fell back to
 // the by-name `js_put_value_set`. Counted on `shapes.ts`: 528 000 by-name
 // stores, and a two-class probe measured 2.0x against the flattened class.
 // ───────────────────────────────────────────────────────────────────────────

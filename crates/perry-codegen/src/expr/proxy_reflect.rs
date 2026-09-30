@@ -41,7 +41,7 @@ use crate::type_analysis::{is_array_expr, is_string_expr, receiver_class_name};
 use crate::types::{LlvmType, DOUBLE, I1, I16, I32, I64, I8, PTR};
 
 use super::{
-    downgrade_buffer_aliases_in_expr, emit_jsvalue_slot_store_scalar_aware_on_block, lower_expr,
+    downgrade_buffer_aliases_in_expr, emit_jsvalue_slot_store_with_flags_on_block, lower_expr,
     nanbox_pointer_inline, unbox_str_handle, unbox_to_i64, FnCtx,
 };
 
@@ -707,8 +707,8 @@ fn lower_put_value_dyn_ic_inline(
         let fields_base = ctx.block().add(I64, &t_handle, &header_bytes.to_string());
         let slot_addr = ctx.block().add(I64, &fields_base, &slot_offset);
         let blk = ctx.block();
-        emit_jsvalue_slot_store_scalar_aware_on_block(
-            blk, &slot_ptr, v, &t_handle, &slot_i32, true, &t_bits, &slot_addr, true,
+        emit_jsvalue_slot_store_with_flags_on_block(
+            blk, &slot_ptr, v, &t_handle, &slot_i32, true, false, &t_bits, &slot_addr, true,
         );
         blk.br(&merge_label);
     }
@@ -732,7 +732,7 @@ fn lower_put_value_dyn_ic_inline(
         let k_is_str = blk.icmp_eq(I64, &k_tag, "32767");
         let k_handle = blk.and(I64, &k_bits, POINTER_MASK_I64);
         let k_above = blk.icmp_ugt(I64, &k_handle, "1048575");
-        // `mark_object_dynamic_shape_unknown` must be a no-op for the hit to
+        // ShapeId guards and owner store handling must be sufficient for the hit to
         // skip it: layout state 0 means no side-table entry and no typed
         // descriptor. Anything else takes the ordinary path, which calls it.
         let layout_bits = blk.and(I16, &reserved, "49152"); // GC_LAYOUT_STATE_MASK
@@ -909,8 +909,8 @@ fn lower_put_value_dyn_ic_inline(
         let slot_ptr = ctx.block().inttoptr(I64, &slot_addr);
         let slot_i32 = ctx.block().trunc(I64, &e_slot64, I32);
         let blk = ctx.block();
-        emit_jsvalue_slot_store_scalar_aware_on_block(
-            blk, &slot_ptr, &fixed_v, &t_handle, &slot_i32, true, &t_bits, &slot_addr, true,
+        emit_jsvalue_slot_store_with_flags_on_block(
+            blk, &slot_ptr, &fixed_v, &t_handle, &slot_i32, true, false, &t_bits, &slot_addr, true,
         );
         blk.br(&trans_stamp_label);
     }

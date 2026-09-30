@@ -2765,7 +2765,7 @@
     "N"
    ],
    "verdict": "no_heap_address",
-   "why": "(layout_tables.rs:964, layout_mask_min_slots) cached PERRY_LAYOUT_MASK_MIN_SLOTS env value (default 4); config. | (second declaration) (layout_tables.rs:1018, layout_object_mask_min_slots) cached PERRY_LAYOUT_OBJECT_MASK_MIN_SLOTS env value (default 8); config."
+   "why": "(layout_tables.rs:964, layout_mask_min_slots) cached PERRY_LAYOUT_MASK_MIN_SLOTS env value (default 4); config."
   },
   {
    "file": "crates/perry-runtime/src/bun_ffi/dlopen.rs",

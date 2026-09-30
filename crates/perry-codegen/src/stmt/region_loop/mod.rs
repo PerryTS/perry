@@ -74,8 +74,8 @@ pub(crate) use self::arrays::{
 use self::bare::note;
 pub(crate) use self::bare::{try_lower_bare_get, try_lower_bare_put, try_lower_fact_add_tree};
 use self::guard::{
-    decode_slots, emit_body_guard_direct, emit_guard, emit_guard_word, field_i16, field_i32,
-    handle_of, lower_recv, store_admission,
+    decode_slots, emit_body_guard_direct, emit_guard, emit_guard_word, field_i32, handle_of,
+    lower_recv, store_admission,
 };
 use self::plan::{
     accesses, assigned, body_nodes, body_refused, fact_tree_leaves, plan, receiver_eligible, Plan,

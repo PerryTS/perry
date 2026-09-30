@@ -295,8 +295,6 @@ impl ProgramClassShapeIds {
 pub(crate) struct ClassBirth {
     /// The class id the mint names (0 = none; such a birth has no content).
     pub class_id: u32,
-    /// The class has a typed layout (#8405), recorded in the birth content.
-    pub typed: bool,
     /// Live inline bound when the class is born wide, else 0.
     pub wide_live: u32,
     /// Its content, when it is nameable.
@@ -316,7 +314,7 @@ pub(crate) fn class_birth(
     class_birth_reps: &HashMap<String, u64>,
     class_ids: &HashMap<String, u32>,
 ) -> ClassBirth {
-    let (global_name, packed, field_count, raw_mask_words, pointer_mask_words) = entry;
+    let (global_name, packed, field_count, _raw_mask_words, _pointer_mask_words) = entry;
     // The global is `perry_class_keys_<modprefix>__<sanitized class>`. Several
     // names can sanitize alike; take the smallest name so the choice is
     // deterministic (the pre-pass and codegen must agree).
@@ -328,14 +326,9 @@ pub(crate) fn class_birth(
         .min_by(|a, b| a.0.cmp(b.0))
         .map(|(_, &v)| v)
         .unwrap_or(0);
-    const GC_LAYOUT_AND_INTACT_MASK: u64 = 0xD000;
-    const GC_SIDE_MASK_AND_INTACT: u64 = 0x9000;
     let image = class_header_image_inits.get(global_name);
-    let typed = image.is_some_and(|&(_, packed, _)| {
-        ((packed >> 16) & GC_LAYOUT_AND_INTACT_MASK) == GC_SIDE_MASK_AND_INTACT
-    });
     let wide_live = match image {
-        Some(&(_, _, birth_live)) if !typed && birth_live > *field_count => birth_live,
+        Some(&(_, _, birth_live)) if birth_live > *field_count => birth_live,
         _ => 0,
     };
     // An empty literal names the runtime's own empty shape, which the runtime
@@ -356,15 +349,11 @@ pub(crate) fn class_birth(
         } else {
             BirthProto::Class(class_id)
         },
-        typed: typed.then(|| TypedMasks {
-            raw_f64_words: raw_mask_words.clone(),
-            pointer_words: pointer_mask_words.clone(),
-        }),
+        typed: None,
         rep: class_birth_reps.get(global_name).copied().unwrap_or(0),
     });
     ClassBirth {
         class_id,
-        typed,
         wide_live,
         shape,
     }

@@ -278,7 +278,6 @@ pub(crate) unsafe fn publish_key_add_edge(
     let rep = key_add_rep(pred_rep, slot, value_bits, inline);
     if inline && slot >= super::object_live_slot_count(obj) {
         super::set_object_keys(obj, new_keys);
-        super::mark_object_dynamic_shape_unknown(obj);
         super::shapes::publish_object_live_slot_count_rep(obj, slot + 1, Some(rep));
     } else {
         if slot_rep(rep, slot) == field_rep::REP_F64 {
@@ -288,7 +287,6 @@ pub(crate) unsafe fn publish_key_add_edge(
         }
         let live = super::object_live_slot_count(obj);
         super::set_object_keys_with_live_rep(obj, new_keys, live, rep);
-        super::mark_object_dynamic_shape_unknown(obj);
     }
     let id = publish_key_add_rep(obj, pred_rep, slot, value_bits, inline);
     match value_bits {

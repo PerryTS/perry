@@ -606,14 +606,6 @@ fn materialize_scalar_receiver(
         };
         let keys_ptr = ctx.block().load(I64, &keys_slot);
         let shape_id = crate::typed_shape::load_class_shape_id(ctx, class_name, &keys_global_name);
-        // Charter step 5, P4: the compiled birth rep travels with the id, so an
-        // agent that installs it installs it with this rep, never all-Any.
-        let birth_rep_str = ctx
-            .class_birth_reps
-            .get(&keys_global_name)
-            .copied()
-            .unwrap_or(0)
-            .to_string();
         ctx.pending_declares.push((
             "js_object_alloc_class_inline_keys_stamped".to_string(),
             I64,
@@ -726,7 +718,7 @@ fn emit_materialized_scalar_receiver_direct_field_store(
             value,
             obj_handle,
             &field_idx_str,
-            true,
+            false,
             obj_handle,
             &field_addr,
             true,

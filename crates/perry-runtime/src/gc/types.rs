@@ -1396,7 +1396,7 @@ pub(crate) const GC_ARRAY_NAMED_PROPS: u16 = 0x100;
 /// MUST match `PLAIN_ORDINARY_OBJ_FLAG` in
 /// `perry-codegen/src/expr/proxy_reflect.rs`, which emits it as a literal.
 pub const OBJ_FLAG_PLAIN_ORDINARY: u16 = 0x200;
-/// # `GcHeader::_reserved` IS FULL — the authoritative bit map
+/// # `GcHeader::_reserved` bit map by GC kind
 ///
 /// Read this before spending a bit. It is the only place both namespaces are
 /// written down together, and the reason it exists is that they are not:
@@ -1410,29 +1410,18 @@ pub const OBJ_FLAG_PLAIN_ORDINARY: u16 = 0x200;
 /// | 0..2 | `OBJ_FLAG_FROZEN` / `SEALED` / `NO_EXTEND` | same | |
 /// | 3..5 | | | `GC_COPY_SURVIVAL_AGE_MASK` |
 /// | 6 | `OBJ_FLAG_NULL_PROTO` | `GC_ARRAY_CUSTOM_PROTO` (alias) | `GC_RESIDUAL_PROTO_OWNER` (non-object) |
-/// | 7 | | `GC_ARRAY_RAW_F64_LAYOUT` | BUFFER: `GC_BUFFER_FOREIGN_DATA` |
+/// | 7 | available | `GC_ARRAY_RAW_F64_LAYOUT` | BUFFER: `GC_BUFFER_FOREIGN_DATA` |
 /// | 8 | `OBJ_FLAG_TYPED_ARRAY_PROTO` | `GC_ARRAY_NAMED_PROPS` | |
 /// | 9 | `OBJ_FLAG_PLAIN_ORDINARY` | `GC_ARRAY_ARGUMENTS_OBJECT` | |
 /// | 10 | `OBJ_FLAG_STABLE_TOMBSTONES` | `OBJ_FLAG_ARRAY_DESCRIPTORS` | |
 /// | 11 | `OBJ_FLAG_HAS_DESCRIPTORS` | element shape (#7480) | |
-/// | 12 | `GC_OBJ_TYPED_LAYOUT_INTACT` (`gc/layout.rs`) | `GC_ARRAY_RAW_F64_HOLES` | |
-/// | 13 | | | `GC_LAYOUT_ALL_POINTERS` (`gc/layout.rs`) |
-/// | 14..15 | | | `GC_LAYOUT_STATE_MASK` (`gc/layout.rs`) |
+/// | 12 | available | `GC_ARRAY_RAW_F64_HOLES` | |
+/// | 13 | available | `GC_LAYOUT_ALL_POINTERS` | closure/array layout only |
+/// | 14..15 | available | `GC_LAYOUT_STATE_MASK` | closure/array layout only |
 ///
-/// **There are no free bits.** Bits 12 and 13 are the dangerous ones to
-/// mistake for free, because `layout::set_layout_state` CLEARS bit 13 (and the
-/// typed-layout helpers clear bit 12) on transitions that have nothing to do
-/// with whatever a new flag would mean. A flag placed there is not merely
-/// shared — it is silently ERASED, so its reader answers `false` for an object
-/// the writer marked. #8690 hit this and left its warning in
-/// `ObjectMeta::flags`' doc comment; #10842 hit it again and left this table.
-///
-/// The next bit back is 10, `OBJ_FLAG_STABLE_TOMBSTONES`, which becomes dead
-/// when #10826 makes `delete` a shape transition. Until then, a new per-object
-/// fact belongs in **`ObjectMeta::flags`** (a `u64`, bits 5/6/7 free, out of
-/// reach of the layout machinery entirely) — and for any fact a hot read path
-/// consults, that is the better home anyway whenever the path already loads
-/// `meta`.
+/// Object layout is a ShapeId fact. Bits 7 and 12..15 have no object
+/// layout meaning; array and closure layout metadata still uses its listed
+/// bits. Any new header use must be checked against every GC kind.
 pub const OBJ_FLAG_RESERVED_BIT_MAP_SEE_DOC: () = ();
 /// #6011: every element slot in `[0, length)` holds either canonical raw-f64
 /// number bits or `TAG_HOLE` — the hole-tolerant sibling of
@@ -1460,7 +1449,7 @@ pub(crate) const GC_ARRAY_RAW_F64_HOLES: u16 = 0x1000;
 ///
 /// Bit 11 — shared with `OBJ_FLAG_HAS_DESCRIPTORS`, which is only
 /// meaningful for `GC_TYPE_OBJECT`, exactly as `GC_ARRAY_RAW_F64_HOLES`
-/// (bit 12) shares with `GC_OBJ_TYPED_LAYOUT_INTACT`. Only meaningful for
+/// (bit 12) is free on ordinary objects. Only meaningful for
 /// `GC_TYPE_ARRAY`; every accessor goes through `array::element_shape`,
 /// which checks `obj_type` first.
 pub(crate) const GC_ARRAY_ELEMENT_SHAPE: u16 = 0x800;

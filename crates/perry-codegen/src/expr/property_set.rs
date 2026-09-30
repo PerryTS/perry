@@ -39,7 +39,6 @@ use crate::type_analysis::{
 use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 
 use super::{
-    class_field_store_layout_note_is_conforming, class_field_store_needs_layout_note,
     class_field_store_needs_string_addref, emit_jsvalue_slot_store_pointer_tested,
     emit_typed_feedback_register_site, expr_produces_non_pointer_bits_by_construction, lower_expr,
     lower_expr_native, raw_f64_layout_fact, try_lower_pod_field_set,
@@ -1225,8 +1224,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                                         // into a pointer-masked slot is deliberately
                                         // NOT elided, is on
                                         // `class_field_store_needs_layout_note`.
-                                        let layout_note_needed =
-                                            class_field_store_needs_layout_note(ctx, value);
                                         let string_addref_needed =
                                             class_field_store_needs_string_addref(ctx, value);
                                         let field_addr = ctx.block().ptrtoint(&field_ptr, I64);
@@ -1239,17 +1236,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                                             &field_ptr,
                                             &val_double,
                                             &obj_handle,
-                                            &field_idx_str,
                                             string_addref_needed,
-                                            layout_note_needed,
                                             &obj_bits,
                                             &field_addr,
                                             field_set_barrier_needed,
-                                            class_field_store_layout_note_is_conforming(
-                                                ctx,
-                                                &class_name,
-                                                field_index,
-                                            ),
                                             "class_field_set",
                                         );
                                     }
@@ -1467,8 +1457,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                                 // note on the guarded arm — computed here because the
                                 // predicates take `&FnCtx` and the block builder is
                                 // borrowed below.
-                                let guarded_note_needed =
-                                    class_field_store_needs_layout_note(ctx, value);
                                 let guarded_addref_needed =
                                     class_field_store_needs_string_addref(ctx, value);
                                 let raw_stored_value = {
@@ -1535,17 +1523,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                                             &field_ptr,
                                             &val_double,
                                             &obj_handle,
-                                            &field_idx_str,
                                             guarded_addref_needed,
-                                            guarded_note_needed,
                                             &obj_bits,
                                             &field_addr,
                                             field_set_barrier_needed,
-                                            class_field_store_layout_note_is_conforming(
-                                                ctx,
-                                                &class_name,
-                                                field_index,
-                                            ),
                                             "class_field_set",
                                         );
                                         None

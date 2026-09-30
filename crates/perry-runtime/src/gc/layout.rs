@@ -1,5 +1,5 @@
-//! Per-object pointer-slot states, store maintenance and child-slot
-//! enumeration. Mask storage is in `layout/slot_mask.rs`; typed descriptor
+//! Array/closure pointer-slot states, store maintenance and child-slot
+//! enumeration. Object children are selected by ShapeId. Mask storage is in `layout/slot_mask.rs`; typed descriptor
 //! installation is in `layout/typed_shape.rs`; the relocation funnel every
 //! moving-GC and growth path calls is in `layout/transfer.rs`.
 
@@ -16,7 +16,7 @@ pub(super) const GC_COPY_SURVIVAL_AGE_SHIFT: usize = 3;
 pub(super) const GC_COPY_SURVIVAL_AGE_MASK: u16 = 0x0038;
 pub(super) const GC_COPY_PROMOTION_SURVIVALS: u8 = 4;
 
-// Pointer-slot layout state in high `_reserved` bits; low bits remain object flags.
+// Array/closure pointer-slot layout state in high `_reserved` bits.
 pub const GC_LAYOUT_STATE_MASK: u16 = 0xC000;
 pub(super) const GC_LAYOUT_UNKNOWN: u16 = 0x0000;
 /// No payload slot holds a pointer, so `heap_payload_slot_selection` skips the
@@ -55,10 +55,8 @@ pub(crate) const GC_LAYOUT_SIDE_MASK: u16 = 0x8000;
 pub(crate) const GC_LAYOUT_ALL_POINTERS: u16 = 0x2000;
 
 // #5093: bit 12 of `GcHeader._reserved`. For an ARRAY it is the typed-literal
-// layout claim (`array::header_gc_slots`). Charter step 5: no object carries a
-// typed layout descriptor any more (the shape record's `rep` word is the
-// authority), and nothing sets this bit on an object; `layout_note_slot` clears
-// a stale one.
+// layout claim (`array::header_gc_slots`). Objects never set this bit; their
+// ShapeId rep is authoritative.
 pub const GC_OBJ_TYPED_LAYOUT_INTACT: u16 = 0x1000;
 
 #[inline]
@@ -274,6 +272,9 @@ pub(crate) unsafe fn layout_init_pointer_free(user_ptr: *mut u8) {
     let Some(header) = layout_header_for_user(user_ptr as usize) else {
         return;
     };
+    if (*header).obj_type == GC_TYPE_OBJECT {
+        return;
+    }
     set_layout_state(header, GC_LAYOUT_POINTER_FREE);
     layout_forget_object(user_ptr as usize);
     header_clear_typed_layout_intact(header);
@@ -341,11 +342,9 @@ pub(crate) unsafe fn layout_all_pointer_slots_would_hold(
 ///   `layout_mark_unknown`, not a bare state store, so a mask that a
 ///   slow-path by-name store DID create mid-construction (shape-overflow
 ///   records) is removed with the state change rather than stranded.
-pub(crate) unsafe fn layout_finish_deferred_boxed_object(user_ptr: usize, saw_pointer: bool) {
-    if !saw_pointer {
-        return;
-    }
-    layout_mark_unknown(user_ptr as *mut u8);
+pub(crate) unsafe fn layout_finish_deferred_boxed_object(_user_ptr: usize, _saw_pointer: bool) {
+    // A boxed object is traced by ShapeId rep, including a newborn whose
+    // construction stores took the note-free barrier path.
 }
 
 /// Settle a FRESH closure/object whose every payload slot is a word the
@@ -385,6 +384,9 @@ pub(crate) unsafe fn layout_mark_unknown(user_ptr: *mut u8) {
     let Some(header) = layout_header_for_user(user_ptr as usize) else {
         return;
     };
+    if (*header).obj_type == GC_TYPE_OBJECT {
+        return;
+    }
     header_clear_typed_layout_intact(header);
     let state = (*header)._reserved & GC_LAYOUT_STATE_MASK;
     if state == GC_LAYOUT_UNKNOWN {
@@ -415,13 +417,6 @@ pub(crate) fn layout_clear_for_ptr(user_ptr: usize) {
             (*header_from_user_ptr(user_ptr as *const u8))._reserved &= !GC_LAYOUT_ALL_POINTERS;
         }
     }
-}
-
-/// Reads the `GC_OBJ_TYPED_LAYOUT_INTACT` header bit. Charter step 5: nothing
-/// sets it on an object any more, so for an object this answers `false`; the
-/// object-side callers go with the object layout-state bits.
-pub(crate) fn layout_has_typed_descriptor(user_ptr: usize) -> bool {
-    layout_typed_intact_for_user(user_ptr)
 }
 
 /// True when `slot_index` is the **append position** of an array whose live
@@ -487,34 +482,17 @@ pub(crate) fn layout_note_slot(parent_user: usize, slot_index: usize, value_bits
                 slot_index,
                 value_bits,
             );
-        } else if (*header).obj_type == GC_TYPE_OBJECT
-            && crate::object::shapes::store_kind::receiver_carries_numeric_proof(
-                parent_user as *const crate::object::ObjectHeader,
-            )
-        {
-            // The proof is a shape fact. Retire it on an owner write before
-            // leaving the object arm; object-owned spill writes use their
-            // matching owner hook because their physical note names an Array.
-            crate::array::clear_packed_subclass_numeric_proof(
-                parent_user as *mut crate::object::ObjectHeader,
-            );
         }
         if (*header).obj_type == GC_TYPE_OBJECT {
-            // The collector selects object fields from their shape's rep
-            // word, so an object store never needs a per-address pointer
-            // mask or a layout-state transition. Keep this entry until the
-            // proof retirement is moved into the object store funnel.
-            header_clear_typed_layout_intact(header);
+            // Object stores retire the numeric proof in their owner funnel.
+            // GC tracing uses the ShapeId rep, never an address-keyed mask.
             return;
         }
         if (*header)._reserved & GC_LAYOUT_STATE_MASK == GC_LAYOUT_UNKNOWN {
             return;
         }
-        // Charter step 5: no object carries a typed layout descriptor (the
-        // shape record's `rep` word is the authority), so a set
-        // `GC_OBJ_TYPED_LAYOUT_INTACT` here has nothing behind it: clear it
-        // before the pointer-mask path below (`set_layout_state` masks
-        // `!0xE000` and does not touch this `0x1000` bit).
+        // An array typed-literal claim is retired before generic mask updates.
+        // Object layout is handled above by ShapeId and never reaches here.
         let claimed_intact = (*header)._reserved & GC_OBJ_TYPED_LAYOUT_INTACT != 0;
         if claimed_intact {
             header_clear_typed_layout_intact(header);
@@ -660,8 +638,8 @@ pub(crate) fn layout_note_slot(parent_user: usize, slot_index: usize, value_bits
 /// pointer-bearing value with another leaves that bit unchanged. Arrays also
 /// maintain a homogeneous element-shape record, so the pointer-over-pointer path
 /// runs that hook after validating/chasing the owner header and then stops
-/// before the typed-layout and per-slot-mask machinery. Object-backed packed
-/// numeric proofs are retired for the same reason as in [`layout_note_slot`].
+/// before the typed-layout and per-slot-mask machinery. Object stores retire
+/// numeric proofs in their owner store funnel.
 /// Scalar-over-scalar keeps the historical fast return. A change in either
 /// direction uses the complete note so pointer masks and typed descriptors are
 /// updated exactly as before.
@@ -697,14 +675,6 @@ pub(crate) fn layout_note_slot_aware(
                     parent_user as *mut crate::array::ArrayHeader,
                     slot_index,
                     value_bits,
-                );
-            } else if (*header).obj_type == GC_TYPE_OBJECT
-                && crate::object::shapes::store_kind::receiver_carries_numeric_proof(
-                    parent_user as *const crate::object::ObjectHeader,
-                )
-            {
-                crate::array::clear_packed_subclass_numeric_proof(
-                    parent_user as *mut crate::object::ObjectHeader,
                 );
             }
         }
@@ -751,6 +721,9 @@ pub(super) unsafe fn layout_rebuild_from_slots_with_policy(
     let Some(header) = layout_header_for_user(user_ptr as usize) else {
         return;
     };
+    if (*header).obj_type == GC_TYPE_OBJECT {
+        return;
+    }
     // The rebuild reconstructs only the pointer mask (no raw-f64 layout), so the
     // object no longer has a canonical typed descriptor: drop the intact bit.
     header_clear_typed_layout_intact(header);
@@ -924,16 +897,4 @@ pub(crate) fn layout_visit_pointer_slots_for_user<F: FnMut(usize)>(
     visit: F,
 ) -> bool {
     layout_visit_pointer_slots(user_ptr, slot_count, visit)
-}
-
-/// #5093: read the per-object "typed shape layout intact" bit. This is the same
-/// bit the old typed-layout protocol tests read.
-pub(crate) fn layout_typed_intact_for_user(user_ptr: usize) -> bool {
-    if user_ptr < GC_HEADER_SIZE + 0x1000 {
-        return false;
-    }
-    unsafe {
-        let header = header_from_user_ptr(user_ptr as *const u8);
-        (*header)._reserved & GC_OBJ_TYPED_LAYOUT_INTACT != 0
-    }
 }

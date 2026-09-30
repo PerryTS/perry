@@ -121,7 +121,6 @@ struct Instance {
 }
 
 pub(crate) use super::capture_writeback::emit_class_capture_writeback;
-use super::typed_shape_init::emit_fresh_instance_layout_forget;
 
 /// Lower `new ClassName(args…)` — Phase C.1.
 ///
@@ -592,13 +591,8 @@ fn lower_new_impl_inner<'a>(
     //
     // The slot is released by the scope cut in `lower_new_impl`, which covers
     // all ~20 return paths below.
-    // A fresh instance installs no layout of its own (charter step 5: its
-    // class ShapeId carries the lanes); only a previous tenant's per-object
-    // record at this address is cleared. Before the instance root's push, so
-    // the handle this names is the one the allocator returned.
     let constructor_layout_ready = alloc.constructor_stores_ready
         && super::typed_shape_init::layout_declared_at_allocation(ctx, class_name);
-    emit_fresh_instance_layout_forget(ctx, class_name, &obj_handle);
     let instance = {
         let protected = construction_runs_user_code(ctx, class_name);
         Instance {

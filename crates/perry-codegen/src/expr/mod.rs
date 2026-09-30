@@ -144,8 +144,7 @@ pub(crate) use channel::{
 pub(crate) use collection_receiver::unbox_collection_receiver;
 pub(crate) use helpers::{
     array_or_sso_index_get, array_store_needs_layout_note, array_store_needs_write_barrier,
-    buffer_alias_metadata_suffix, class_field_store_layout_note_is_conforming,
-    class_field_store_needs_layout_note, class_field_store_needs_string_addref,
+    buffer_alias_metadata_suffix, class_field_store_needs_string_addref,
     emit_all_pointer_array_declaration, emit_string_addref_if_heap_string,
     expr_has_numeric_pointer_free_array_layout, expr_produces_fresh_heap_allocation,
     expr_produces_non_pointer_bits_by_construction, is_global_this_builtin_function_name,

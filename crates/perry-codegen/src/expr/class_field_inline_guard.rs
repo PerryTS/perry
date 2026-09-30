@@ -29,11 +29,9 @@
 //! `typed_feedback/guards.rs`): if it passes, the guard call would have returned
 //! "fast". On any miss it falls through to the unchanged guard-call path, so the
 //! optimization is purely additive — it can never take the fast path the guard
-//! would have rejected. The single per-object `GC_OBJ_TYPED_LAYOUT_INTACT` bit
-//! (runtime `gc/layout.rs`) stands in for the thread-local raw-f64 layout probe:
-//! it is set exactly when the object's canonical typed descriptor is installed
-//! and cleared on any downgrade, so "intact bit set + class_id/keys match" ⟹
-//! "slot K is raw-f64" for any field the class declares as a raw-f64 candidate.
+//! would have rejected. The exact ShapeId carries the raw-f64 lane rep, so a
+//! representation change must move to a different ShapeId before this guard
+//! can pass again.
 
 use crate::types::{I1, I16, I32, I64, I8};
 
@@ -706,12 +704,8 @@ pub(crate) fn emit_class_field_inline_precheck(
 ///   extends Pt {}` instances all carry `Pt`'s ShapeId, each with its own
 ///   class id (scenario 1 of
 ///   `test-files/test_gap_class_field_read_guard_shape_authority.ts`).
-/// * **raw-f64 sites: `GC_OBJ_TYPED_LAYOUT_INTACT`.** A store that
-///   contradicts the typed descriptor (`gc/layout.rs` `SlotVerdict::
-///   Downgrade`) clears this per-object bit WITHOUT a shape transition, so
-///   the ShapeId says nothing about whether the slot still holds a raw
-///   double. Measured: a downgraded `Pt` keeps its ShapeId with the bit
-///   clear (scenario 2 of the same fixture).
+/// * **raw-f64 sites: exact ShapeId birth rep.** The compared id carries
+///   the F64 lane fact; a contradictory store moves to a sibling id.
 ///
 /// On success the IR branches to `fast_label`; on any miss to a fresh
 /// `class_field_inline.guardcall` block, which is left current (the caller
@@ -817,38 +811,4 @@ fn expected_class_identity(
     let shape_bits = blk.zext(I32, shape_id, I64);
     let shape_high = blk.shl(I64, &shape_bits, "32");
     blk.or(I64, &shape_high, &class_bits)
-}
-
-/// The shape check a provenance-proven receiver still needs before a
-/// typed-receiver clone (`$typed_f64_recv`) runs: provenance proves the
-/// receiver's CLASS, not its field representations. An alias the local
-/// escaped to may store a non-Number into a field, which moves the object off
-/// its birth shape (`field_rep_store`). The clone reads its fields as raw
-/// doubles, so it runs only while the (class id, ShapeId) pair is the class's
-/// own: the shape pins the `F64` lanes. Branches to `typed_label` on a match,
-/// to `generic_label` otherwise.
-pub(crate) fn emit_proven_receiver_clone_guard(
-    ctx: &mut FnCtx,
-    class_name: &str,
-    recv_box: &str,
-    typed_label: &str,
-    generic_label: &str,
-) {
-    let class_id = ctx.class_ids.get(class_name).copied();
-    let keys_global = ctx.class_keys_globals.get(class_name).cloned();
-    let (Some(class_id), Some(keys_global)) = (class_id, keys_global) else {
-        ctx.block().br(generic_label);
-        return;
-    };
-    let obj_bits = ctx.block().bitcast_double_to_i64(recv_box);
-    emit_class_field_read_precheck(
-        ctx,
-        &obj_bits,
-        &class_id.to_string(),
-        true,
-        typed_label,
-        &[],
-        &keys_global,
-    );
-    ctx.block().br(generic_label);
 }

@@ -1471,7 +1471,6 @@ js_gc_enter_unsafe_zone	void
 js_gc_exit_unsafe_zone	void	
 js_gc_forget_object_layout	void	i64
 js_gc_init	void	
-js_gc_key_add_layout_unknown	void	i64
 js_gc_loop_safepoint	void	
 js_gc_memory_pressure	i32u	i32u
 js_gc_module_collect	f64	

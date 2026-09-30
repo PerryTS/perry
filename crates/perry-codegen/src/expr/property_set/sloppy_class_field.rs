@@ -290,7 +290,6 @@ fn try_lower_sloppy_class_field_boxed_store(
     with_class_store_operands(ctx, object, value, |ctx, recv_box, val_double| {
         // Computed before the block builder is borrowed below.
         let barrier_needed = !expr_produces_non_pointer_bits_by_construction(ctx, value);
-        let layout_note_needed = class_field_store_needs_layout_note(ctx, value);
         let string_addref_needed = class_field_store_needs_string_addref(ctx, value);
 
         let key_idx = ctx.strings.intern(property);
@@ -370,13 +369,10 @@ fn try_lower_sloppy_class_field_boxed_store(
                 &field_ptr,
                 &val_double,
                 &obj_handle,
-                &field_idx_str,
                 string_addref_needed,
-                layout_note_needed,
                 &obj_bits,
                 &field_addr,
                 barrier_needed,
-                class_field_store_layout_note_is_conforming(ctx, class_name, field_index),
                 "class_field_set",
             );
             ctx.block().br(&merge_label);

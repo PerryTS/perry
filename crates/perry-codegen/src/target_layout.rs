@@ -250,57 +250,14 @@ pub(crate) fn inline_alloc_total_size_bytes(target_triple: &str, field_count: u3
     (GC_HEADER_SIZE_BYTES + payload_size).next_multiple_of(FIELD_SLOT_SIZE_BYTES)
 }
 
-/// The packed `GcHeader` word the inline `new` path stores at byte 0 of a
-/// freshly bump-allocated class instance (little-endian):
-///
-/// ```text
-///   bits  0..7   = obj_type   (u8)   GC_TYPE_OBJECT
-///   bits  8..15  = gc_flags   (u8)   GC_FLAG_ARENA
-///   bits 16..31  = _reserved  (u16)  GC_LAYOUT_POINTER_FREE [| GC_OBJ_TYPED_LAYOUT_INTACT]
-///   bits 32..63  = size       (u32)  inline_alloc_total_size_bytes
-/// ```
-///
-/// `typed_layout` is the allocation-time bake selected by
-/// `lower_call::typed_shape_init`. Pointer-free layouts need no descriptor;
-/// pointer-bearing layouts use a module-init ShapeId whose descriptor is
-/// registered once for the process, so both can fold their final state into
-/// this constant and skip the per-instance layout call.
-///
-/// #8122: ONE definition, shared by the allocation site
-/// (`lower_call/new_alloc.rs`) and the module-level header-image table
-/// (`codegen/mod.rs`) that pre-composes `[gc_packed | class_id | ShapeId<<32]`
-/// into a per-class global at module init. Both sides must agree byte for
-/// byte — a divergence would publish objects whose recorded size or layout
-/// state the collector cannot trust — so the arithmetic lives here and the
-/// site cross-checks the table's value against its own before using it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum InlineTypedLayout {
-    None,
-    PointerFree,
-    SideMask,
-}
-
-pub(crate) fn inline_alloc_gc_packed(
-    target_triple: &str,
-    field_count: u32,
-    typed_layout: InlineTypedLayout,
-) -> u64 {
+/// The packed `GcHeader` word an inline `new` stores. The object
+/// `_reserved` layout-state field is zero: GC tracing reads the birth
+/// ShapeId's rep, while arrays and closures retain their layout states.
+pub(crate) fn inline_alloc_gc_packed(target_triple: &str, field_count: u32) -> u64 {
     const GC_TYPE_OBJECT: u64 = 2;
     const GC_FLAG_ARENA: u64 = 0x02;
-    // PR #1146: pointer-free hint for inline-allocated regular objects. The
-    // field-store sites issue per-slot `js_gc_note_slot_layout` so the GC
-    // sees real pointer-bearing slots regardless of this initial tag.
-    const GC_LAYOUT_POINTER_FREE: u64 = 0x4000;
-    const GC_LAYOUT_SIDE_MASK: u64 = 0x8000;
-    // Charter step 5: no typed-layout-intact bit. What a raw-f64 slot holds
-    // is the shape's `F64` lane, not a per-object header bit.
-    let reserved = match typed_layout {
-        InlineTypedLayout::None | InlineTypedLayout::PointerFree => GC_LAYOUT_POINTER_FREE,
-        InlineTypedLayout::SideMask => GC_LAYOUT_SIDE_MASK,
-    };
     GC_TYPE_OBJECT
         | (GC_FLAG_ARENA << 8)
-        | (reserved << 16)
         | (inline_alloc_total_size_bytes(target_triple, field_count) << 32)
 }
 

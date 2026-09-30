@@ -144,6 +144,25 @@ pub(crate) fn runtime_store_jsvalue_slot_layout_deferred(
     super::layout::layout_pointer_bearing_bits(value_bits)
 }
 
+/// Object-inline owner store. Retire the numeric-prefix proof before
+/// writing any bits, then perform string alias demotion and the generational
+/// barrier. Object tracing reads the ShapeId rep, so it needs no layout note.
+#[inline]
+pub(crate) fn runtime_store_object_jsvalue_slot(
+    parent_user: usize,
+    slot_addr: usize,
+    slot_index: usize,
+    value_bits: u64,
+) {
+    unsafe {
+        crate::array::clear_packed_subclass_numeric_proof(
+            parent_user as *mut crate::object::ObjectHeader,
+        );
+    }
+    let _ =
+        runtime_store_jsvalue_slot_layout_deferred(parent_user, slot_addr, slot_index, value_bits);
+}
+
 #[inline]
 pub(crate) fn runtime_store_jsvalue_slot(
     parent_user: usize,

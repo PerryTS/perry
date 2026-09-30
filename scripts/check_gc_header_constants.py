@@ -116,18 +116,12 @@ REGISTRY: list[Restatement] = [
      "GC_TYPE_OBJECT", "byte 0 of the baked header word"),
     ("crates/perry-codegen/src/target_layout.rs", "GC_FLAG_ARENA",
      "GC_FLAG_ARENA", "byte 1 of the baked header word"),
-    ("crates/perry-codegen/src/target_layout.rs", "GC_LAYOUT_POINTER_FREE",
-     "GC_LAYOUT_POINTER_FREE", "_reserved half of the baked header word"),
-    ("crates/perry-codegen/src/target_layout.rs", "GC_LAYOUT_SIDE_MASK",
-     "GC_LAYOUT_SIDE_MASK", "_reserved half of the baked header word"),
     # `new_alloc.rs` re-derives the same word at the allocation site and
     # cross-checks it against the per-class table; both copies are pinned.
     ("crates/perry-codegen/src/lower_call/new_alloc.rs", "GC_TYPE_OBJECT",
      "GC_TYPE_OBJECT", "allocation-site copy of the baked header word"),
     ("crates/perry-codegen/src/lower_call/new_alloc.rs", "GC_FLAG_ARENA",
      "GC_FLAG_ARENA", "allocation-site copy of the baked header word"),
-    ("crates/perry-codegen/src/lower_call/new_alloc.rs", "GC_LAYOUT_POINTER_FREE",
-     "GC_LAYOUT_POINTER_FREE", "allocation-site copy of the baked header word"),
 
     # --- the class-field inline guard ---------------------------------------
     ("crates/perry-codegen/src/expr/class_field_inline_guard.rs", "GC_TYPE_OBJECT",
@@ -142,9 +136,6 @@ REGISTRY: list[Restatement] = [
     ("crates/perry-codegen/src/expr/put_value_store_ic.rs", "ADD_REFUSE_RESERVED",
      "OBJ_FLAG_HAS_DESCRIPTORS | OBJ_FLAG_STABLE_TOMBSTONES",
      "key-add hit: per-object flags refused before the stamp"),
-    ("crates/perry-codegen/src/expr/put_value_store_ic.rs", "ADD_LAYOUT_RESERVED",
-     "GC_LAYOUT_SIDE_MASK | GC_OBJ_TYPED_LAYOUT_INTACT",
-     "key-add hit: layout states whose record is retired before the stamp"),
     ("crates/perry-codegen/src/expr/class_field_inline_guard.rs",
      "OBJ_FLAG_READ_FAST_PATH_BLOCKED",
      "OBJ_FLAG_ARRAY_DESCRIPTORS | OBJ_FLAG_HAS_DESCRIPTORS",
@@ -202,12 +193,7 @@ REGISTRY: list[Restatement] = [
      "OBJ_FLAG_PLAIN_ORDINARY", "proxy/reflect: plain-ordinary veto"),
     ("crates/perry-codegen/src/expr/proxy_reflect_write_ic.rs", "STABLE_TOMBSTONES_OBJ_FLAG",
      "OBJ_FLAG_STABLE_TOMBSTONES", "proxy write IC: stable-tombstones veto"),
-    ("crates/perry-codegen/src/codegen/static_shape_ids.rs", "GC_LAYOUT_AND_INTACT_MASK",
-     "GC_LAYOUT_POINTER_FREE | GC_LAYOUT_SIDE_MASK | GC_OBJ_TYPED_LAYOUT_INTACT",
-     "module init: the header-image layout bits it may rewrite"),
-    ("crates/perry-codegen/src/codegen/static_shape_ids.rs", "GC_SIDE_MASK_AND_INTACT",
-     "GC_LAYOUT_SIDE_MASK | GC_OBJ_TYPED_LAYOUT_INTACT",
-     "module init: the side-mask + intact pair it writes"),
+
 ]
 
 # Declared constants this checker deliberately does not anchor, each with the

@@ -143,20 +143,6 @@ impl LayoutSlotMask {
         count
     }
 
-    #[inline]
-    #[cfg(test)]
-    pub(in crate::gc) fn contains_slot(&self, slot_index: usize) -> bool {
-        match self {
-            LayoutSlotMask::Inline(bits) if slot_index < 64 => (*bits & (1u64 << slot_index)) != 0,
-            LayoutSlotMask::Inline(_) => false,
-            LayoutSlotMask::Heap(words) => {
-                let word = slot_index / 64;
-                word < words.len() && (words[word] & (1u64 << (slot_index % 64))) != 0
-            }
-            LayoutSlotMask::AllPointers => true,
-        }
-    }
-
     pub(in crate::gc) fn next_slot_at_or_after(
         &self,
         cursor: usize,

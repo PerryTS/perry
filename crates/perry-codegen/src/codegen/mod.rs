@@ -2404,26 +2404,7 @@ fn compile_module_impl(
             let Some(&class_id) = class_ids.get(class_name) else {
                 continue;
             };
-            // An imported stub has no defining constructor body, so this
-            // module cannot prove that its layout is declarable before that
-            // constructor runs. More importantly, minting a typed ShapeId
-            // here while the producer minted an ordinary one gives the same
-            // runtime class two exact identities across modules. Keep the
-            // consumer on the canonical structural identity and validate the
-            // typed layout after the producer's constructor returns.
-            let typed_layout = if imported_stub_names.contains(class_name.as_str()) || slack > 0 {
-                crate::target_layout::InlineTypedLayout::None
-            } else {
-                crate::lower_call::typed_shape_init::layout_at_allocation_in(
-                    &class_table,
-                    &class_keys_globals_map,
-                    &class_init_chains_map,
-                    class_name,
-                    field_count,
-                )
-            };
-            let gc_packed =
-                crate::target_layout::inline_alloc_gc_packed(&triple, field_count, typed_layout);
+            let gc_packed = crate::target_layout::inline_alloc_gc_packed(&triple, field_count);
             match inits.get(keys_global) {
                 // Two names (an alias) sharing one keys global must agree on
                 // the word module init writes; if they do not, neither may use

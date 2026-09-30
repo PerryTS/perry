@@ -99,7 +99,9 @@ pub(crate) unsafe fn layout_transfer(old_user: *mut u8, new_user: *mut u8) {
     // hot thread-local slot #7510 keeps them in. Each is the same question the
     // record mover behind it asks first, hoisted so the common case — no
     // record anywhere near either address — never leaves this function.
-    let per_object = per_object_layouts_may_hold_either(old_user as usize, new_user as usize);
+    let mask_owner = matches!((*old_header).obj_type, GC_TYPE_ARRAY | GC_TYPE_CLOSURE);
+    let per_object =
+        mask_owner && per_object_layouts_may_hold_either(old_user as usize, new_user as usize);
     let element_shape = is_array && reserved & GC_ARRAY_ELEMENT_SHAPE != 0;
     if per_object || element_shape {
         transfer_address_keyed_records(old_user as usize, new_user as usize, is_array);
@@ -108,7 +110,9 @@ pub(crate) unsafe fn layout_transfer(old_user: *mut u8, new_user: *mut u8) {
     // The source is a dead evacuation original or a growth forwarding stub the
     // moment we return. Drop its claim to a descriptor rather than leave the
     // bit readable at an address whose records now belong to the destination.
-    header_clear_typed_layout_intact(old_header);
+    if mask_owner {
+        header_clear_typed_layout_intact(old_header);
+    }
 }
 
 /// The residual prototype registry's rekey. Cold and out of line so the funnel
@@ -133,9 +137,7 @@ unsafe fn transfer_address_keyed_records(old_user: usize, new_user: usize, is_ar
         // when no record follows the move.
         crate::array::transfer_element_shape(old_user, new_user);
     }
-    // #7510's per-object slot mask. It re-tests the gate above for its own
-    // address pair, so calling it when only a sibling gate fired costs one
-    // predictable branch.
+    // Only arrays and closures retain address-keyed slot masks.
     transfer_per_object_slot_mask(old_user, new_user);
 }
 

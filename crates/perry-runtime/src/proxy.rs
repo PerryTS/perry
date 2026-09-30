@@ -3306,7 +3306,7 @@ mod tests {
         assert_eq!(crate::gc::OBJ_FLAG_PLAIN_ORDINARY & 0x1100, 0);
         // Bit 9 is shared with the array-only arguments-object flag, disjoint
         // by `obj_type`; and it must not collide with any object-meaningful
-        // flag or with the survival-age / layout-state fields the GC owns.
+        // flag or with the survival-age field the GC owns.
         for other in [
             crate::gc::OBJ_FLAG_FROZEN,
             crate::gc::OBJ_FLAG_SEALED,
@@ -3314,9 +3314,7 @@ mod tests {
             crate::gc::OBJ_FLAG_NULL_PROTO,
             crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO,
             crate::gc::OBJ_FLAG_HAS_DESCRIPTORS,
-            crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT,
             0x0038, // GC_COPY_SURVIVAL_AGE_MASK
-            0xC000, // GC_LAYOUT_STATE_MASK
         ] {
             assert_eq!(
                 crate::gc::OBJ_FLAG_PLAIN_ORDINARY & other,

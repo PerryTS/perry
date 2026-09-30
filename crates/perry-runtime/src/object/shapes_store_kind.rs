@@ -201,7 +201,7 @@ unsafe fn stamp_twin(obj: *mut ObjectHeader, id: u32) {
 
 /// Mint (or find) the twin of `shape_id` with `kind`. Never reads the keys
 /// array (see [`super::shape_descriptor_kind_twin`]), so it is safe on the
-/// proof-retire path inside `layout_note_slot`.
+/// proof-retire path inside the owner store funnel.
 fn twin_of(shape_id: u32, kind: ShapeObjectKind) -> Option<u32> {
     if super::shape_object_kind_by_id(shape_id)? != kind {
         audit::note_twin_mint();

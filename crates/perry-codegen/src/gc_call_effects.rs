@@ -436,7 +436,6 @@ mod tests {
     const ISSUE_11523: &[&str] = &[
         "js_gc_note_slot_layout",
         "js_gc_note_slot_layout_aware",
-        "js_gc_key_add_layout_unknown",
         "js_typed_feedback_record_guard_pass",
         "js_typed_feedback_record_guard_fail",
         "js_typed_feedback_record_fallback_call",
