@@ -488,7 +488,7 @@ extern "C" fn collecting_pair_getter(
     _this: perry_runtime::closure::JsThis,
 ) -> f64 {
     // Only a numeric stream handle is held in Rust across the collection.
-    let endpoint = unsafe { perry_runtime::closure::js_closure_get_capture_f64(closure, 0) };
+    let endpoint = perry_runtime::closure::js_closure_get_capture_f64(closure, 0);
     perry_runtime::gc::gc_collect_minor();
     endpoint
 }
