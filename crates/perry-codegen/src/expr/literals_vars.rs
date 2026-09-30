@@ -323,7 +323,25 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // This lets closures read captured outer variables, regular
         // functions read their own params/lets, and any function read
         // module-scope `let`s (the ones in `hir.init` at top level).
+        Expr::ScopedTemp { id, value, body } => {
+            let value = super::lower_expr(ctx, value)?;
+            let root = crate::rooting::temp_root_push_double(ctx, &value);
+            ctx.scoped_temp_roots.push((*id, root.clone()));
+            let result = super::lower_expr(ctx, body);
+            ctx.scoped_temp_roots.pop();
+            crate::rooting::temp_root_truncate(ctx, &root);
+            result
+        }
         Expr::LocalGet(id) => {
+            if let Some((_, root)) = ctx
+                .scoped_temp_roots
+                .iter()
+                .rev()
+                .find(|(temp, _)| temp == id)
+            {
+                let root = root.clone();
+                return Ok(crate::rooting::temp_root_get_double(ctx, &root));
+            }
             if ctx.pod_records.contains_key(id) {
                 return materialize_pod_value_copy(ctx, *id);
             }

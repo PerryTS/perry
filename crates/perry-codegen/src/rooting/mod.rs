@@ -344,7 +344,10 @@ mod tests {
 /// poll shares (`crate::loop_purity`).
 mod temp_root;
 
-pub(crate) use temp_root::{expr_is_inert_primitive, TempRootPool};
+pub(crate) use temp_root::{
+    expr_is_inert_primitive, temp_root_get_double, temp_root_push_double, temp_root_truncate,
+    TempRootPool,
+};
 
 use anyhow::Result;
 use perry_hir::Expr;

@@ -170,7 +170,7 @@ pub(in crate::rooting) fn temp_root_push_i64(ctx: &mut FnCtx<'_>, value_i64: &st
 }
 
 /// Push a NaN-boxed `double` temporary and return the slot-index register.
-pub(in crate::rooting) fn temp_root_push_double(ctx: &mut FnCtx<'_>, value: &str) -> String {
+pub(crate) fn temp_root_push_double(ctx: &mut FnCtx<'_>, value: &str) -> String {
     let bits = ctx.block().bitcast_double_to_i64(value);
     temp_root_push_i64(ctx, &bits)
 }
@@ -188,7 +188,7 @@ pub(in crate::rooting) fn temp_root_get_i64(ctx: &mut FnCtx<'_>, idx: &str) -> S
 }
 
 /// Re-read slot `idx` as a NaN-boxed `double`.
-pub(in crate::rooting) fn temp_root_get_double(ctx: &mut FnCtx<'_>, idx: &str) -> String {
+pub(crate) fn temp_root_get_double(ctx: &mut FnCtx<'_>, idx: &str) -> String {
     let bits = temp_root_get_i64(ctx, idx);
     ctx.block().bitcast_i64_to_double(&bits)
 }
@@ -218,7 +218,7 @@ pub(in crate::rooting) fn temp_root_set_double(ctx: &mut FnCtx<'_>, idx: &str, v
 }
 
 /// Drop slot `idx` and everything pushed above it.
-pub(in crate::rooting) fn temp_root_truncate(ctx: &mut FnCtx<'_>, idx: &str) {
+pub(crate) fn temp_root_truncate(ctx: &mut FnCtx<'_>, idx: &str) {
     if ctx.temp_roots.alloca_mode == Some(true) {
         // Mirror the FFI contract exactly: drop `idx` and everything acquired
         // above it. Each released slot is zeroed (dropping its retention) and
