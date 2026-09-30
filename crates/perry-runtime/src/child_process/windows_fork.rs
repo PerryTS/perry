@@ -502,9 +502,7 @@ fn resolve_application(command: &Command) -> io::Result<std::path::PathBuf> {
         .get_current_dir()
         .map(|dir| parent_cwd.join(dir))
         .unwrap_or(parent_cwd);
-    if program.is_absolute() || program.components().count() > 1 {
-        return Ok(cwd.join(program));
-    }
+    let path_qualified = program.is_absolute() || program.components().count() > 1;
     let path = command
         .get_envs()
         .find(|(k, _)| k.to_string_lossy().eq_ignore_ascii_case("PATH"))
@@ -513,19 +511,30 @@ fn resolve_application(command: &Command) -> io::Result<std::path::PathBuf> {
     // libuv tries the literal name only when it has a nonempty extension,
     // then appends (rather than replaces) .com and .exe. It ignores PATHEXT.
     let mut names = Vec::new();
-    if program
-        .extension()
-        .is_some_and(|extension| !extension.is_empty())
+    let filename: Vec<u16> = program
+        .file_name()
+        .unwrap_or_else(|| OsStr::new(""))
+        .encode_wide()
+        .collect();
+    if filename
+        .iter()
+        .position(|&c| c == b'.' as u16)
+        .is_some_and(|dot| dot + 1 < filename.len())
     {
         names.push(program.to_path_buf());
     }
     for extension in [".com", ".exe"] {
         let mut name = program.as_os_str().to_os_string();
-        name.push(extension);
+        name.push(if filename.last() == Some(&(b'.' as u16)) {
+            &extension[1..]
+        } else {
+            extension
+        });
         names.push(std::path::PathBuf::from(name));
     }
     for dir in std::iter::once(cwd.clone()).chain(
         path.as_deref()
+            .filter(|_| !path_qualified)
             .map(std::env::split_paths)
             .into_iter()
             .flatten(),
