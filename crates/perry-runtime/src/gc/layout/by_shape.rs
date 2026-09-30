@@ -210,6 +210,7 @@ mod tests {
                     d.proto_id,
                     d.summary,
                     field_rep::with_slot_rep(d.rep, 1, field_rep::REP_F64),
+                    None,
                 ),
             );
             // Straight to the selection and its verify: the collector entry

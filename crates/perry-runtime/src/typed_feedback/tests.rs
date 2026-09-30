@@ -134,6 +134,7 @@ fn stamp_f64_lane(obj: *mut crate::object::ObjectHeader, slot: u32) -> u32 {
             d.proto_id,
             d.summary,
             with_slot_rep(REP_ANY, slot, REP_F64),
+            None,
         ));
         stamp_object_shape_id_with_carrier_note(obj, id);
         id

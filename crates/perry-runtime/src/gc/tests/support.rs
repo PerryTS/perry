@@ -1071,6 +1071,7 @@ pub(super) unsafe fn restamp_with_rep(obj: *mut crate::object::ObjectHeader, rep
         d.proto_id,
         d.summary,
         rep,
+        None,
     ));
     stamp_object_shape_id_with_carrier_note(obj, id);
     id

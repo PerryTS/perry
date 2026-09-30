@@ -925,6 +925,7 @@ mod tests {
                 d.proto_id,
                 d.summary,
                 rep,
+                None,
             ));
             stamp_object_shape_id_with_carrier_note(object, id);
         }

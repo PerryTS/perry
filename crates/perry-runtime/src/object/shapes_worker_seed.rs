@@ -88,7 +88,7 @@ mod tests {
         let rep = REP_F64 | (REP_F64 << 4);
         let (id, seed) = std::thread::spawn(move || {
             crate::object::class_image::enter_current_thread_image();
-            let k = crate::object::js_build_class_keys_array(CID, 3, b"x\0y\0z\0".as_ptr(), 6)
+            let k = crate::object::js_build_class_keys_array(CID, 3, b"x\0y\0z\0".as_ptr(), 6, rep)
                 as usize as u64;
             let id = js_object_shape_id_for_class_keys(k, 3, CID, rep);
             let image = crate::object::class_image::current_image_handle();
