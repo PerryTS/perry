@@ -1,10 +1,10 @@
 const { parentPort } = require("node:worker_threads");
-class Meter {
+class WorkerMeter {
   constructor() { this.value = 0; this.writes = 0; }
   get points() { return this.value; }
   set points(next) { this.value = next; this.writes++; }
 }
-const meter = new Meter();
+const meter = new WorkerMeter();
 function write(target, next) { target.points = next; }
 parentPort.on("message", (message) => {
   if (message !== "go") return;
