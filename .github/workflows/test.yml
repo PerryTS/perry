@@ -61,11 +61,12 @@ jobs:
           CARGO_PROFILE_TEST_DEBUG: "0"
           CARGO_PROFILE_DEV_DEBUG: "0"
         run: |
+          set +e
           set -uo pipefail
           cargo build --release -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static || exit $?
           export PERRY_RUNTIME_DIR="$PWD/target/release"
           export CARGO_BUILD_JOBS=1
-          cargo test -p perry --no-fail-fast --test class_field_miss_one_path --test issue_10058_push_spread_scaling --test issue_4926_boxed_slot_skipped_init --test issue_10893_getter_call --test issue_4909_client_write_end_timeouts --test issue_5621_native_camel_export_routing
+          cargo test -p perry --no-fail-fast --test issue_6559_real_libs_e2e --test issue_6560_bun_globals
           perry_status=$?
           cargo test -p perry-hir --test issue_5833_global_code_cluster
           hir_status=$?
