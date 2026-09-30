@@ -585,6 +585,34 @@ pub unsafe extern "C" fn js_ext_net_handle_method_dispatch(
     }
 }
 
+// Endpoint reads are resolved only after the existing property/method paths.
+// Keep this added dispatch code out of their decision tree and hot code pages.
+#[cold]
+#[inline(never)]
+#[cfg_attr(target_os = "macos", link_section = "__TEXT,__perry_cold")]
+unsafe fn socket_endpoint_property(handle: i64, prop: &str) -> Option<f64> {
+    if !matches!(
+        prop,
+        "localAddress"
+            | "localPort"
+            | "localFamily"
+            | "remoteAddress"
+            | "remotePort"
+            | "remoteFamily"
+    ) || crate::js_ext_net_is_socket_handle(handle) == 0
+    {
+        return None;
+    }
+    Some(match prop {
+        "localAddress" => crate::js_net_socket_get_local_address(handle),
+        "localPort" => crate::js_net_socket_get_local_port(handle),
+        "localFamily" => crate::js_net_socket_get_local_family(handle),
+        "remoteAddress" => crate::js_net_socket_get_remote_address(handle),
+        "remotePort" => crate::js_net_socket_get_remote_port(handle),
+        _ => crate::js_net_socket_get_remote_family(handle),
+    })
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn js_ext_net_handle_property_dispatch(
     handle: i64,
@@ -713,26 +741,8 @@ pub unsafe extern "C" fn js_ext_net_handle_property_dispatch(
             "maxConnections" => crate::js_net_server_get_max_connections(handle),
             _ => crate::js_net_server_get_drop_max_connection(handle),
         })
-    } else if matches!(
-        prop,
-        "localAddress"
-            | "localPort"
-            | "localFamily"
-            | "remoteAddress"
-            | "remotePort"
-            | "remoteFamily"
-    ) && crate::js_ext_net_is_socket_handle(handle) != 0
-    {
-        Some(match prop {
-            "localAddress" => crate::js_net_socket_get_local_address(handle),
-            "localPort" => crate::js_net_socket_get_local_port(handle),
-            "localFamily" => crate::js_net_socket_get_local_family(handle),
-            "remoteAddress" => crate::js_net_socket_get_remote_address(handle),
-            "remotePort" => crate::js_net_socket_get_remote_port(handle),
-            _ => crate::js_net_socket_get_remote_family(handle),
-        })
     } else {
-        None
+        socket_endpoint_property(handle, prop)
     };
 
     if let Some(value) = value {
