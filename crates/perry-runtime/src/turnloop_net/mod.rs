@@ -65,6 +65,8 @@ pub mod abi;
 pub mod census;
 pub(crate) mod errors;
 mod sink;
+#[cfg(windows)]
+mod windows_pipe;
 mod write_queue;
 
 #[cfg(test)]
@@ -92,6 +94,10 @@ const OP_CLOSE: u64 = 6;
 const OP_RESOLVE: u64 = 7;
 /// P5: a subsystem-owned one-shot deadline (server timeouts).
 const OP_TIMER: u64 = 8;
+#[cfg(windows)]
+const OP_PIPE_DRAIN: u64 = 9;
+#[cfg(windows)]
+const OP_PIPE_EOF: u64 = 10;
 
 /// The low 56 bits of a token hold the Perry-side id.
 const ID_BITS: u32 = 56;
@@ -214,6 +220,10 @@ struct Entry {
     /// `close` was submitted; the entry survives until its `Closed` arrives.
     closing: bool,
     referenced: bool,
+    #[cfg(windows)]
+    pipe_drain: Option<OpId>,
+    #[cfg(windows)]
+    pipe_eof_timer: Option<Handle>,
     local: Option<SocketAddr>,
     peer: Option<SocketAddr>,
     /// Bound path of a local listener, so the caller can unlink it on close.
@@ -234,6 +244,10 @@ impl Entry {
             connecting: false,
             closing: false,
             referenced: true,
+            #[cfg(windows)]
+            pipe_drain: None,
+            #[cfg(windows)]
+            pipe_eof_timer: None,
             local: None,
             peer: None,
             path: None,
@@ -803,6 +817,8 @@ pub fn close(id: i64) -> NetResult<()> {
                 return Ok(());
             }
             entry.closing = true;
+            #[cfg(windows)]
+            windows_pipe::cancel_eof(driver, id, entry);
             census::note_submit(OP_CLOSE);
             driver
                 .close(entry.handle, token(OP_CLOSE, id))
@@ -872,7 +888,11 @@ pub(crate) fn dispatch(completion: Completion) {
     let (op_class, id) = token_parts(completion.token);
     census::note_completion(op_class);
     let Completion {
-        result, terminal, ..
+        result,
+        terminal,
+        op: _op,
+        handle: _handle,
+        ..
     } = completion;
 
     // A deadline has no `Entry`, so it is routed before the lookup below. Its
@@ -913,6 +933,77 @@ pub(crate) fn dispatch(completion: Completion) {
         return;
     };
 
+    #[cfg(windows)]
+    if op_class == OP_PIPE_EOF {
+        let live = NET.with(|net| {
+            net.borrow()
+                .entries
+                .get(&id)
+                .is_some_and(|entry| !entry.closing && entry.pipe_eof_timer == _handle)
+        });
+        if live && matches!(result, OpResult::Timer) {
+            sink::emit(subsystem, NetCompletion::eof(id));
+            let _ = close(id);
+        }
+        return;
+    }
+
+    #[cfg(windows)]
+    if op_class == OP_PIPE_DRAIN {
+        let live = NET.with(|net| {
+            net.borrow()
+                .entries
+                .get(&id)
+                .is_some_and(|entry| !entry.closing && entry.pipe_drain == _op)
+        });
+        if !live {
+            return;
+        }
+        match result {
+            OpResult::Blocking(_) => {
+                let user = NET.with(|net| {
+                    write_queue::retire(&mut net.borrow_mut(), id, OP_SHUTDOWN)
+                        .first()
+                        .map_or(0, |r| r.0)
+                });
+                sink::emit(subsystem, NetCompletion::shutdown(id, user));
+                let armed = with_driver(|driver| {
+                    NET.with(|net| {
+                        let mut net = net.borrow_mut();
+                        let entry = net
+                            .entries
+                            .get_mut(&id)
+                            .ok_or_else(|| Error::new(ErrorKind::InvalidInput))?;
+                        windows_pipe::arm_eof(driver, id, entry)
+                    })
+                });
+                if !matches!(armed, Some(Ok(()))) {
+                    sink::emit(subsystem, NetCompletion::eof(id));
+                    let _ = close(id);
+                }
+            }
+            OpResult::Err(error) => {
+                let users: Vec<_> = NET.with(|net| {
+                    write_queue::retire(&mut net.borrow_mut(), id, OP_SHUTDOWN)
+                        .into_iter()
+                        .map(|r| r.0)
+                        .collect()
+                });
+                write_queue::report_error(
+                    subsystem,
+                    id,
+                    &users,
+                    0,
+                    map_error(error, "shutdown"),
+                    true,
+                );
+                let _ = close(id);
+            }
+            _ => {}
+        }
+        return;
+    }
+
     if op_class == OP_RESOLVE {
         resolve_completed(subsystem, id, result);
         return;
@@ -949,6 +1040,16 @@ pub(crate) fn dispatch(completion: Completion) {
             accept_connection(subsystem, id, conn, None);
         }
         OpResult::Read { n, lease } => {
+            #[cfg(windows)]
+            with_driver(|driver| {
+                NET.with(|net| {
+                    if let Some(entry) = net.borrow_mut().entries.get_mut(&id) {
+                        if entry.pipe_eof_timer.is_some() {
+                            let _ = windows_pipe::arm_eof(driver, id, entry);
+                        }
+                    }
+                })
+            });
             let bytes = lease.as_ref().map(|l| l.as_slice()).unwrap_or(&[]);
             debug_assert!(bytes.len() == n || lease.is_none());
             sink::emit(subsystem, NetCompletion::data(id, bytes));
@@ -957,6 +1058,14 @@ pub(crate) fn dispatch(completion: Completion) {
             drop(lease);
         }
         OpResult::Eof => {
+            #[cfg(windows)]
+            with_driver(|driver| {
+                NET.with(|net| {
+                    if let Some(entry) = net.borrow_mut().entries.get_mut(&id) {
+                        windows_pipe::cancel_eof(driver, id, entry);
+                    }
+                })
+            });
             NET.with(|net| {
                 if let Some(entry) = net.borrow_mut().entries.get_mut(&id) {
                     entry.read_op = None;
