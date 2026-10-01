@@ -949,7 +949,8 @@ unsafe fn analyze(function: LLVMValueRef) -> FunctionLiveness {
     // ---- per-value backward liveness walk, accumulated into difference
     // arrays over the global safepoint order.
     let mut diff = vec![0i64; nsp + 1];
-    let mut derived_diff = if out.derived_values > 0 {
+    // Existing phi/select bases can need a second relocation without a GEP or cast.
+    let mut derived_diff = if maybe_derived.iter().any(|&derived| derived) {
         vec![0i64; nsp + 1]
     } else {
         Vec::new()
