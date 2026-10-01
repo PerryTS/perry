@@ -28,7 +28,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 extern "C" {
-    fn js_closure_call0(closure: *const u8) -> f64;
+    fn js_closure_call0(closure: *const u8, this: perry_ffi::JsThis) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
 }
 
@@ -378,7 +378,7 @@ pub fn handle_callback_message(wparam: usize, lparam: isize) {
         WM_LBUTTONUP => {
             if !callback_ptr.is_null() {
                 unsafe {
-                    js_closure_call0(callback_ptr);
+                    js_closure_call0(callback_ptr, perry_ffi::JsThis::UNDEFINED);
                 }
             }
         }

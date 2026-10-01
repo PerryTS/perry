@@ -75,16 +75,17 @@ pub(super) unsafe fn dispatch_common(
             if crate::symbol::js_is_symbol(key_value) != 0 {
                 return Some(super::object_ops::js_object_has_own(object, key_value));
             }
-            if (object.to_bits() >> 48) == 0x7FFE {
+            if let Some(class_id) =
+                crate::object::class_value::legacy_class_value_word(object.to_bits())
+            {
                 let key_str = crate::builtins::js_string_coerce(key_value);
-                let class_id = (object.to_bits() & 0xFFFF_FFFF) as u32;
                 let present = if key_str.is_null() {
                     false
                 } else {
                     super::has_own_helpers::str_from_string_header(key_str)
                         .map(|key| {
                             matches!(key, "length" | "name" | "prototype")
-                                && !super::class_registry::class_is_key_deleted(class_id, key)
+                                && !super::class_registry::class_static_key_deleted(class_id, key)
                         })
                         .unwrap_or(false)
                 };
@@ -105,24 +106,20 @@ pub(super) unsafe fn dispatch_common(
                 if let Some(class_id) = super::class_ref_id(object) {
                     let present = super::has_own_helpers::str_from_string_header(key_str)
                         .map(|key| {
-                            if super::class_registry::class_is_key_deleted(class_id, key) {
+                            if super::class_registry::class_static_key_deleted(class_id, key) {
                                 false
                             } else if key == "name"
-                                && super::class_registry::lookup_static_method_in_chain(
+                                && !crate::object::class_value::class_static_owns_method(
                                     class_id, key,
                                 )
-                                .is_none()
                             {
                                 super::class_registry::class_name_for_id(class_id).is_some()
                             } else {
-                                CLASS_DYNAMIC_PROPS.with(|m| {
-                                    m.borrow()
-                                        .get(&class_id)
-                                        .is_some_and(|props| props.contains_key(key))
-                                }) || super::class_registry::lookup_static_method_in_chain(
-                                    class_id, key,
-                                )
-                                .is_some()
+                                crate::object::class_value::class_static_get(class_id, key)
+                                    .is_some()
+                                    || crate::object::class_value::class_static_owns_method(
+                                        class_id, key,
+                                    )
                             }
                         })
                         .unwrap_or(false);
@@ -717,8 +714,10 @@ pub(crate) unsafe fn dispatch_function_proto_method(
         "call" => {
             // Class constructors have no [[Call]] slot. `C.call(...)` must
             // reject instead of treating the INT32-tagged ClassRef payload as
-            // a closure pointer in the generic Function.prototype path.
-            if super::class_ref_id(object).is_some() {
+            // a closure pointer in the generic Function.prototype path. (A
+            // class FUNCTION OBJECT needs no gate: its code is the throwing
+            // [[Call]] `js_class_constructor_called`.)
+            if (object.to_bits() >> 48) == 0x7FFE && super::class_ref_id(object).is_some() {
                 throw_fn_proto_not_callable("call");
             }
             // Proxy receiver (#3656): `p.call(thisArg, ...args)` routes through
@@ -774,16 +773,14 @@ pub(crate) unsafe fn dispatch_function_proto_method(
                 ) {
                     return Some(result);
                 }
-                // The callee, the explicit `this`, and the saved previous
-                // implicit-`this` all cross the invocation — a moving
+                // The callee and the explicit `this` both cross the
+                // invocation — a moving
                 // collection inside the callee relocates them (#8082: the
                 // forced gate faulted reading the stale callee closure in
                 // `maybe_alias_explicit_this_construction` after the call).
                 let scope = crate::gc::RuntimeHandleScope::new();
                 let callee_h = scope.root_nanbox_f64(object);
                 let this_h = scope.root_nanbox_f64(this_arg);
-                let prev_this_h =
-                    scope.root_nanbox_u64(IMPLICIT_THIS.with(|c| c.replace(this_arg.to_bits())));
                 // Static bound-method value (`C.m.call(x)`): arm the one-shot
                 // static-`this` override so the method body sees `x` instead
                 // of the lexical class-ref (static private brand checks).
@@ -792,17 +789,21 @@ pub(crate) unsafe fn dispatch_function_proto_method(
                     super::static_this_arm(this_arg);
                 }
                 // A concise/object-literal method reads `this` from a baked
-                // capture slot, not IMPLICIT_THIS; rebind to the explicit
+                // capture slot, not the `this` argument; rebind to the explicit
                 // `.call(thisArg)` receiver (no-op for arrows / plain fns).
                 let call_target = crate::closure::rebind_explicit_this(
                     callee_h.get_nanbox_f64(),
                     this_h.get_nanbox_f64(),
                 );
-                let result = crate::closure::js_native_call_value(call_target, rest_ptr, rest_len);
+                let result = crate::closure::native_call_value_this(
+                    call_target,
+                    crate::closure::JsThis::from_f64(this_h.get_nanbox_f64()),
+                    rest_ptr,
+                    rest_len,
+                );
                 if static_target {
                     super::static_this_disarm();
                 }
-                IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
                 // #4973: `http.Server.call(this, handler)` — the inherits
                 // pattern. Alias the explicit `this` object to the handle the
                 // native class export constructed.
@@ -820,7 +821,7 @@ pub(crate) unsafe fn dispatch_function_proto_method(
             }
         }
         "apply" => {
-            if super::class_ref_id(object).is_some() {
+            if (object.to_bits() >> 48) == 0x7FFE && super::class_ref_id(object).is_some() {
                 throw_fn_proto_not_callable("apply");
             }
             // Proxy receiver (#3656): `p.apply(thisArg, argsArray)` routes
@@ -940,14 +941,11 @@ pub(crate) unsafe fn dispatch_function_proto_method(
                 ) {
                     return Some(result);
                 }
-                // Same rooting discipline as the `call` arm (#8082): callee,
-                // explicit `this`, and the saved implicit-`this` cross the
-                // invocation and must survive a moving collection inside it.
+                // Same rooting discipline as the `call` arm (#8082): callee
+                // and explicit `this` cross the invocation and must survive a moving collection inside it.
                 let scope = crate::gc::RuntimeHandleScope::new();
                 let callee_h = scope.root_nanbox_f64(object);
                 let this_h = scope.root_nanbox_f64(this_arg);
-                let prev_this_h =
-                    scope.root_nanbox_u64(IMPLICIT_THIS.with(|c| c.replace(this_arg.to_bits())));
                 // Static bound-method value — see the matching `call` arm.
                 let static_target = super::native_module::is_static_bound_method_value(object);
                 if static_target {
@@ -960,15 +958,15 @@ pub(crate) unsafe fn dispatch_function_proto_method(
                     callee_h.get_nanbox_f64(),
                     this_h.get_nanbox_f64(),
                 );
-                let result = crate::closure::js_native_call_value(
+                let result = crate::closure::native_call_value_this(
                     apply_target,
+                    crate::closure::JsThis::from_f64(this_h.get_nanbox_f64()),
                     call_args_ptr,
                     call_args_len,
                 );
                 if static_target {
                     super::static_this_disarm();
                 }
-                IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
                 // #4973: `http.Server.apply(this, args)` — same inherits
                 // pattern as the `call` arm above.
                 super::native_this_alias::maybe_alias_explicit_this_construction(

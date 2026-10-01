@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use anyhow::{Context, Result};
 
-use crate::types::{LlvmType, DOUBLE, I64, VOID};
+use crate::types::{LlvmType, DOUBLE, VOID};
 
 use super::artifact_context::{ModuleArtifactsCtx, OptsView};
 use super::class_artifacts::{emit_class_artifacts, ClassArtifactsCtx};
@@ -116,7 +116,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         crate::collectors::spec_abi_sites::single_binding_closure_locals(hir)
             .into_iter()
             // A closure with a trusted-box clone is better served by the
-            // ENTRY-RESOLVED path: `js_closure_resolve_arrow_direct_call`
+            // ENTRY-RESOLVED path: `js_closure_resolve_plain_direct_call`
             // hands back the trusted clone with its entry-cached box-capture
             // pointers, which beats the known arm's public/typed call for
             // capturing bodies (measured: 2.5 vs 5.1 ns). Seeding such an id
@@ -304,19 +304,19 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
     // so `Expr::SuperPropertyGet` (value-form `super.<method>`) can
     // materialize them via `js_closure_alloc_singleton(@__perry_wrap_<method>)`.
     // Methods have signature `perry_method_<...>(this_box, args...)`;
-    // the closure-call ABI is `(i64 closure, double a0, ...)` and
-    // doesn't carry a separate `this`. The receiver therefore comes from
-    // IMPLICIT_THIS, set by the dispatcher right before the call:
+    // the JS body ABI is `(i64 closure, i64 this, double a0, ...)`, so the
+    // wrapper forwards its receiver parameter as the method's `this`. The
+    // receiver is the call site's:
     //   * A method-style invocation of a stored super-method value
     //     (`this._complete = super._complete; obj._complete()` — rxjs's
     //     `OperatorSubscriber` forwarding `complete`/`error`/`next` to the
-    //     base `Subscriber` when no override callback was supplied) sets
-    //     IMPLICIT_THIS to the receiver, so the base method runs with the
+    //     base `Subscriber` when no override callback was supplied) passes
+    //     the receiver, so the base method runs with the
     //     right `this`. Pre-fix this hardcoded `this=undefined`, so the
     //     forwarded `complete` never reached `this.destination.complete()`
     //     and the pipeline stalled (top-level await never settled, #5138).
-    //   * A bare call (`const fn = super.greet; fn(x)`) leaves
-    //     IMPLICIT_THIS undefined, matching strict-mode `this`.
+    //   * A bare call (`const fn = super.greet; fn(x)`) passes `undefined`,
+    //     matching strict-mode `this`.
     let mut emitted_wrappers: std::collections::HashSet<String> = std::collections::HashSet::new();
     for class in &hir.classes {
         for method in &class.methods {
@@ -331,16 +331,15 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 continue;
             }
             let arity = method.params.len();
-            let mut wrap_params: Vec<(LlvmType, String)> = vec![(I64, "%this_closure".to_string())];
-            for i in 0..arity {
-                wrap_params.push((DOUBLE, format!("%a{}", i)));
-            }
+            let wrap_params =
+                crate::expr::body_call::js_body_params((0..arity).map(|i| format!("%a{}", i)));
             let wf = llmod.define_function(&wrap_name, DOUBLE, wrap_params);
             let _ = wf.create_block("entry");
             let blk = wf.block_mut(0).unwrap();
-            // Forward the call-site receiver (IMPLICIT_THIS) as `this`,
-            // then the args. See the block comment above (#5138).
-            let this_box = blk.call(DOUBLE, "js_implicit_this_get", &[]);
+            // Forward the call-site receiver (the `this` parameter) as the
+            // method's `this`, then the args. See the block comment above
+            // (#5138).
+            let this_box = blk.bitcast_i64_to_double(crate::expr::body_call::JS_BODY_THIS);
             let mut call_args: Vec<(LlvmType, String)> = Vec::with_capacity(arity + 1);
             call_args.push((DOUBLE, this_box));
             for i in 0..arity {
@@ -380,14 +379,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         let wf = llmod.define_function(
             &wrap_name,
             DOUBLE,
-            vec![
-                (I64, "%this_closure".to_string()),
-                (DOUBLE, "%a0".to_string()),
-                (DOUBLE, "%a1".to_string()),
-                (DOUBLE, "%a2".to_string()),
-                (DOUBLE, "%a3".to_string()),
-                (DOUBLE, "%a4".to_string()),
-            ],
+            crate::expr::body_call::js_body_params((0..5).map(|i| format!("%a{i}"))),
         );
         // Fix #420 (v0.5.576): internal linkage keeps unsplit modules' copies
         // dead-code-eliminable. Split units promote the definition so calls
@@ -448,7 +440,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                     let wrapper = llmod.define_function(
                         &wrapper_name,
                         DOUBLE,
-                        vec![(I64, "%this_closure".to_string())],
+                        crate::expr::body_call::js_body_params(std::iter::empty::<String>()),
                     );
                     let _ = wrapper.create_block("entry");
                     let blk = wrapper.block_mut(0).unwrap();
@@ -465,7 +457,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                     let wrapper = llmod.define_function(
                         &wrapper_name,
                         DOUBLE,
-                        vec![(I64, "%this_closure".to_string())],
+                        crate::expr::body_call::js_body_params(std::iter::empty::<String>()),
                     );
                     let _ = wrapper.create_block("entry");
                     let blk = wrapper.block_mut(0).unwrap();
@@ -489,7 +481,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
             let wrapper = llmod.define_function(
                 &wrapper_name,
                 DOUBLE,
-                vec![(I64, "%this_closure".to_string())],
+                crate::expr::body_call::js_body_params(std::iter::empty::<String>()),
             );
             let _ = wrapper.create_block("entry");
             let blk = wrapper.block_mut(0).unwrap();
@@ -701,11 +693,11 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
     // the renamed export as a VALUE and called it via `.apply`/`.call`
     // (`compose`'s `pipe.apply(this, reverse(arguments))` in ramda — `pipe` is
     // `export default function pipe()` with a synthetic `arguments`) reached
-    // `js_native_call_value` with an unregistered wrapper func_ptr, so
-    // `lookup_closure_rest_full` missed and the args were dispatched positionally
-    // instead of bundled — the variadic function saw `arguments.length === 0`.
-    // Register the exported-alias wrapper symbol with the same metadata as the
-    // local one so the runtime bundles correctly through the rename.
+    // `js_native_call_value` with a wrapper that recorded no rest fact, so the
+    // args were dispatched positionally instead of bundled — the variadic
+    // function saw `arguments.length === 0`. Give the exported-alias wrapper's
+    // `JsFunctionInfo` the same facts as the local one so the runtime bundles
+    // correctly through the rename.
     {
         let func_by_local_name: HashMap<&str, &perry_hir::Function> =
             hir.functions.iter().map(|f| (f.name.as_str(), f)).collect();
@@ -724,9 +716,9 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 module_prefix,
                 sanitize(exported)
             );
-            // The registration loop (`string_pool.rs`) iterates
+            // The fact recorder (`string_pool.rs`) iterates
             // `user_fn_wrapper_rest`; the synthetic/rest_and_arguments sets only
-            // *refine* which runtime fn each entry uses. So the alias must be
+            // *refine* which rest kind each entry gets. So the alias must be
             // added to `user_fn_wrapper_rest` (keyed on the rest param index) in
             // EVERY case, plus the matching refinement set.
             let Some(rest_idx) = f.params.iter().position(|p| p.is_rest) else {
@@ -1010,9 +1002,10 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         output_type,
         class_keys_init_data,
         class_header_image_inits,
+        &cross_module.class_birth_reps,
         class_ids,
         class_table,
-        imported_class_stubs,
+        &hir.classes,
         &hir.class_display_names,
         &class_source_text,
         &ctor_arity_overrides,

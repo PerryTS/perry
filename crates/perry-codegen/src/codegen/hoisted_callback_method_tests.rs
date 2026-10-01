@@ -137,7 +137,7 @@ fn immutable_alias_resolves_once_without_an_identity_guard_and_keeps_the_fallbac
         "@perry_method_hoisted_callback_method_ts__Iterator__visit(",
     );
     assert_eq!(
-        body.matches("@js_closure_resolve_arrow_direct_call(")
+        body.matches("@js_closure_resolve_plain_direct_call(")
             .count(),
         1,
         "the method must resolve one target before all callback calls:\n{body}"
@@ -168,7 +168,7 @@ fn direct_parameter_call_needs_no_alias_identity_guard() {
         "@perry_method_hoisted_callback_method_ts__Iterator__visit(",
     );
     assert_eq!(
-        body.matches("@js_closure_resolve_arrow_direct_call(")
+        body.matches("@js_closure_resolve_plain_direct_call(")
             .count(),
         1
     );
@@ -195,7 +195,7 @@ fn reassigned_callback_parameter_is_not_hoisted() {
         &ir,
         "@perry_method_hoisted_callback_method_ts__Iterator__visit(",
     );
-    assert!(!body.contains("@js_closure_resolve_arrow_direct_call("));
+    assert!(!body.contains("@js_closure_resolve_plain_direct_call("));
     assert!(body.contains("@js_closure_call3("));
 }
 
@@ -207,7 +207,7 @@ fn more_than_four_call_arities_declines_the_parameter() {
         &ir,
         "@perry_method_hoisted_callback_method_ts__Iterator__visit(",
     );
-    assert!(!body.contains("@js_closure_resolve_arrow_direct_call("));
+    assert!(!body.contains("@js_closure_resolve_plain_direct_call("));
     for arity in 0..=4 {
         assert!(body.contains(&format!("@js_closure_call{arity}(")));
     }
@@ -244,5 +244,5 @@ fn nested_closure_calls_are_not_assigned_the_outer_methods_ssa_target() {
         &ir,
         "@perry_method_hoisted_callback_method_ts__Iterator__visit(",
     );
-    assert!(!body.contains("@js_closure_resolve_arrow_direct_call("));
+    assert!(!body.contains("@js_closure_resolve_plain_direct_call("));
 }

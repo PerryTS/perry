@@ -60,7 +60,11 @@ pub(crate) unsafe fn try_function_shape_method_call(
         return dictionary_function_proto_method_call(object, addr, name, args_ptr, args_len);
     }
     if !crate::closure::shape::function_shape_inherits_from_function_prototype(word, name) {
-        return None;
+        // A class constructor (`C.m()` on a class value): the class arm —
+        // statics, callable static data, Function.prototype methods. Reached
+        // only once the ordinary function test failed, so no other receiver
+        // pays for it.
+        return function_shape_decline(object, addr, name, args_ptr, args_len);
     }
     // (2) The prototype the shape names, and its own data slot for the key.
     let proto =
@@ -89,6 +93,24 @@ pub(crate) unsafe fn try_function_shape_method_call(
 /// from the receiver's ACTUAL prototype (`reify_function_method_value`, which
 /// reads `getPrototypeOf(fn)`). The intrinsic runs the tower's semantics; any
 /// other callable (`p.call`) is invoked with the function as `this`.
+/// The shape arm declined an inherited Function.prototype method: a class
+/// constructor goes to the class arm; anything else back to the tower. Out of
+/// line so the inlined arm stays small.
+#[cold]
+#[inline(never)]
+unsafe fn function_shape_decline(
+    object: f64,
+    addr: usize,
+    name: &[u8],
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    if crate::closure::shape::is_class_info((*(addr as *const ClosureHeader)).info) {
+        return super::primitive_methods::class_value_method_call(object, name, args_ptr, args_len);
+    }
+    None
+}
+
 unsafe fn dictionary_function_proto_method_call(
     object: f64,
     addr: usize,
@@ -130,14 +152,14 @@ unsafe fn dictionary_function_proto_method_call(
     }
     // A user callable inherited from the recorded prototype: an ordinary
     // method call with the function as `this`.
-    let prev_this_h = scope.root_nanbox_u64(
-        super::IMPLICIT_THIS.with(|c| c.replace(receiver_h.get_nanbox_f64().to_bits())),
-    );
     let callee =
         crate::closure::rebind_explicit_this(value_h.get_nanbox_f64(), receiver_h.get_nanbox_f64());
-    let result = crate::closure::js_native_call_value(callee, args_ptr, args_len);
-    super::IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
-    Some(result)
+    Some(crate::closure::native_call_value_this(
+        callee,
+        crate::closure::JsThis::from_f64(receiver_h.get_nanbox_f64()),
+        args_ptr,
+        args_len,
+    ))
 }
 
 #[cfg(test)]
@@ -152,7 +174,7 @@ mod tests {
     use super::*;
     use std::sync::atomic::Ordering;
 
-    extern "C" fn target_body(_c: *const ClosureHeader) -> f64 {
+    extern "C" fn target_body(_c: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
         42.0
     }
 
@@ -160,11 +182,14 @@ mod tests {
         crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32)
     }
 
-    /// A prototype object whose `bind` slot holds `func` (the intrinsic thunk
-    /// or anything else), published as this agent's Function.prototype.
-    unsafe fn install_proto(func: *const u8) -> *mut crate::object::ObjectHeader {
+    /// A prototype object whose `bind` slot holds a closure over `info` (the
+    /// intrinsic thunk or anything else), published as this agent's
+    /// Function.prototype.
+    unsafe fn install_proto(
+        info: *const crate::closure::JsFunctionInfo,
+    ) -> *mut crate::object::ObjectHeader {
         let proto = crate::object::js_object_alloc(0, 0);
-        let method = crate::closure::js_closure_alloc(func, 0);
+        let method = crate::closure::js_closure_alloc(info, 0);
         crate::object::js_object_set_field_by_name(
             proto,
             key("bind"),
@@ -185,7 +210,7 @@ mod tests {
         unsafe {
             let saved = crate::closure::shape::FUNCTION_PROTOTYPE_PTR.load(Ordering::Acquire);
             install_proto(crate::object::global_this::function_prototype_bind_thunk_for_test());
-            let target = crate::closure::js_closure_alloc(target_body as *const u8, 0);
+            let target = crate::closure::js_closure_alloc(crate::fn_info!(target_body, 0), 0);
             let target_v = crate::value::js_nanbox_pointer(target as i64);
             let this_arg = [f64::from_bits(crate::value::TAG_UNDEFINED)];
             let before = hits();
@@ -193,11 +218,11 @@ mod tests {
                 .expect("the shape path must answer bind on a base-shaped function");
             assert_eq!(hits(), before + 1, "the path must FIRE, not only agree");
             let bound_ptr = JSValue::from_bits(bound.to_bits()).as_pointer::<ClosureHeader>();
+            assert_eq!((*bound_ptr).code(), crate::closure::BOUND_FUNCTION_FUNC_PTR);
             assert_eq!(
-                (*bound_ptr).func_ptr,
-                crate::closure::BOUND_FUNCTION_FUNC_PTR
+                crate::closure::js_closure_call0(bound_ptr, crate::closure::plain_call_receiver()),
+                42.0
             );
-            assert_eq!(crate::closure::js_closure_call0(bound_ptr), 42.0);
             crate::closure::shape::FUNCTION_PROTOTYPE_PTR.store(saved, Ordering::Release);
         }
     }
@@ -209,8 +234,8 @@ mod tests {
         unsafe {
             let saved = crate::closure::shape::FUNCTION_PROTOTYPE_PTR.load(Ordering::Acquire);
             // The slot holds something else: identity by VALUE says no.
-            install_proto(target_body as *const u8);
-            let target = crate::closure::js_closure_alloc(target_body as *const u8, 0);
+            install_proto(crate::fn_info!(target_body, 0));
+            let target = crate::closure::js_closure_alloc(crate::fn_info!(target_body, 0), 0);
             let target_v = crate::value::js_nanbox_pointer(target as i64);
             let this_arg = [f64::from_bits(crate::value::TAG_UNDEFINED)];
             let before = hits();

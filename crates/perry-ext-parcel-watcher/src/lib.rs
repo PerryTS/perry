@@ -553,7 +553,11 @@ fn fire_events(id: u64, events: Vec<ParcelEvent>) -> bool {
     let callback = scope.root_addr(callback);
     let closure = unsafe { JsClosure::from_raw(callback.get() as *const RawClosureHeader) };
     unsafe {
-        closure.call2(f64::from_bits(JsValue::NULL.bits()), events_value.get());
+        closure.call2(
+            perry_ffi::JsThis::UNDEFINED,
+            f64::from_bits(JsValue::NULL.bits()),
+            events_value.get(),
+        );
     }
     true
 }
@@ -575,7 +579,7 @@ fn fire_error(id: u64, message: &str) -> bool {
     let callback = scope.root_addr(callback);
     let closure = unsafe { JsClosure::from_raw(callback.get() as *const RawClosureHeader) };
     unsafe {
-        closure.call2(error.get(), events.get());
+        closure.call2(perry_ffi::JsThis::UNDEFINED, error.get(), events.get());
     }
     true
 }

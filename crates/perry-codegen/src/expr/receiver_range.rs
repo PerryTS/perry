@@ -34,7 +34,7 @@ use crate::types::{I32, I64, I8};
 
 /// Payloads below this are native-registry handles, never heap cells
 /// (`js_native_call_method`'s small-handle test, `addr_class::HANDLE_BAND_MAX`).
-pub(crate) const HANDLE_FLOOR: u64 = 0x10_0000;
+pub(crate) const HANDLE_FLOOR: u64 = crate::runtime_abi::RECEIVER_HANDLE_FLOOR as u64;
 /// `POINTER_TAG | HANDLE_FLOOR`: subtracting it maps exactly the heap-object
 /// receivers onto `[0, RECEIVER_SPAN)`.
 pub(crate) const RECEIVER_BIAS: u64 = crate::nanbox::POINTER_TAG | HANDLE_FLOOR;
@@ -88,7 +88,10 @@ pub(crate) enum Route {
     Generic = 0,
     /// ...and was served by the compact MRU word.
     GenericMruHit = 1,
-    /// ...and was served by one of the polymorphic ways.
+    /// ...and was served by one of the polymorphic ways. No longer emitted:
+    /// the ways are read by the runtime's miss entry (first-read D3). The
+    /// number stays reserved: it indexes `RECV_ROUTE_NAMES`.
+    #[allow(dead_code)]
     GenericWayHit = 2,
     /// A read region's receiver test passed (R1 part 1).
     Region = 3,
@@ -101,8 +104,32 @@ pub(crate) enum Route {
     /// The cached field-index early return's receiver test passed.
     CachedFieldIndex = 7,
     /// A generic read served from the receiver's SPILL buffer by the compact
-    /// word's flipped entry (S5, `pic.spill.hit`).
+    /// word's flipped entry (S5). No longer emitted: the runtime's miss entry
+    /// serves it (first-read D3). The number stays reserved, as above.
+    #[allow(dead_code)]
     GenericSpillHit = 8,
+    // 9 and 10 are runtime-counted (`hot_diag::RT_ROUTE_*`).
+    /// Step 4b (#10884): a loop/body region's guard ran (loop entry, or one
+    /// body-region iteration).
+    RloopGuard = 11,
+    /// ...and its word was not retired, so the receiver was tested.
+    RloopOpen = 12,
+    /// A loop region's preheader chose the split loop (guard passed).
+    RloopSplit = 13,
+    /// ...or the plain loop (guard failed).
+    RloopPlain = 14,
+    /// One iteration of F-body.
+    RloopF = 15,
+    /// One iteration of G-body inside a split loop / body region.
+    RloopG = 16,
+    /// A latch re-check ran (dirty flag set, or `Recheck::Always`).
+    RloopRecheck = 17,
+    /// One bare access (read, store, or fact-tree leaf) executed.
+    RloopBare = 18,
+    // 19..=27 are runtime-counted (`hot_diag::RT_ROUTE_RLOOP_*`).
+    /// A region guard's STATIC supplier matched (DESIGN §4.1): the receiver
+    /// carries the driver's static id, so the region ran with no word.
+    RloopStatic = 28,
 }
 
 /// `PERRY_RECV_ROUTE_COUNT=1` at COMPILE time: emit one

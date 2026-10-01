@@ -3,10 +3,17 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Mutex;
 
 extern "C" {
-    fn js_closure_call0(closure: *const u8) -> f64;
-    fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
-    fn js_closure_call2(closure: *const u8, arg1: f64, arg2: f64) -> f64;
-    fn js_closure_call4(closure: *const u8, arg0: f64, arg1: f64, arg2: f64, arg3: f64) -> f64;
+    fn js_closure_call0(closure: *const u8, this: perry_ffi::JsThis) -> f64;
+    fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
+    fn js_closure_call2(closure: *const u8, this: perry_ffi::JsThis, arg1: f64, arg2: f64) -> f64;
+    fn js_closure_call4(
+        closure: *const u8,
+        this: perry_ffi::JsThis,
+        arg0: f64,
+        arg1: f64,
+        arg2: f64,
+        arg3: f64,
+    ) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
     fn js_string_from_bytes(ptr: *const u8, len: i64) -> *const u8;
     fn js_nanbox_string(ptr: i64) -> f64;
@@ -119,7 +126,7 @@ pub fn invoke0(key: i64) {
                 key,
                 closure_ptr,
             );
-            js_closure_call0(closure_ptr);
+            js_closure_call0(closure_ptr, perry_ffi::JsThis::UNDEFINED);
             __android_log_print(
                 3,
                 b"PerryCallback\0".as_ptr(),
@@ -149,7 +156,7 @@ pub fn invoke1(key: i64, arg: f64) {
         // Unbox NaN-boxed closure — see invoke0 for details.
         let closure_ptr = unsafe { js_nanbox_get_pointer(closure_f64) } as *const u8;
         unsafe {
-            js_closure_call1(closure_ptr, arg);
+            js_closure_call1(closure_ptr, perry_ffi::JsThis::UNDEFINED, arg);
         }
     }
 }
@@ -164,7 +171,7 @@ pub fn invoke2(key: i64, arg1: f64, arg2: f64) {
         // Unbox NaN-boxed closure — see invoke0 for details.
         let closure_ptr = unsafe { js_nanbox_get_pointer(closure_f64) } as *const u8;
         unsafe {
-            js_closure_call2(closure_ptr, arg1, arg2);
+            js_closure_call2(closure_ptr, perry_ffi::JsThis::UNDEFINED, arg1, arg2);
         }
     }
 }
@@ -180,7 +187,14 @@ pub fn invoke4(key: i64, arg0: f64, arg1: f64, arg2: f64, arg3: f64) {
         // Unbox NaN-boxed closure — see invoke0 for details.
         let closure_ptr = unsafe { js_nanbox_get_pointer(closure_f64) } as *const u8;
         unsafe {
-            js_closure_call4(closure_ptr, arg0, arg1, arg2, arg3);
+            js_closure_call4(
+                closure_ptr,
+                perry_ffi::JsThis::UNDEFINED,
+                arg0,
+                arg1,
+                arg2,
+                arg3,
+            );
         }
     }
 }
@@ -206,7 +220,7 @@ pub fn invoke_with_string_array(key: i64, paths: &[String]) {
                 arr = js_array_push_f64(arr, nb_str);
             }
             let nb_arr = js_nanbox_pointer(arr as i64);
-            js_closure_call1(closure_ptr, nb_arr);
+            js_closure_call1(closure_ptr, perry_ffi::JsThis::UNDEFINED, nb_arr);
         }
     }
 }

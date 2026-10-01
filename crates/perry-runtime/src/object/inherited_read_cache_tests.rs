@@ -815,7 +815,10 @@ fn a_null_prototype_receiver_never_primes() {
     }
 }
 
-extern "C" fn forty_two_getter(_c: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn forty_two_getter(
+    _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     42.0
 }
 
@@ -826,7 +829,7 @@ extern "C" fn forty_two_raw_getter(_this: f64) -> f64 {
 /// A CLASS accessor on `proto`: its pair carries a compiled getter entry, as
 /// a ClassBody `get` does (`decl_accessors.rs`).
 unsafe fn install_class_getter(proto: *mut ObjectHeader, name: &str) {
-    let getter = crate::closure::js_closure_alloc(forty_two_getter as *const u8, 0);
+    let getter = crate::closure::js_closure_alloc(crate::fn_info!(forty_two_getter, 0), 0);
     crate::object::set_builtin_accessor_pair(
         proto as usize,
         name.to_string(),
@@ -834,7 +837,7 @@ unsafe fn install_class_getter(proto: *mut ObjectHeader, name: &str) {
             get: crate::value::js_nanbox_pointer(getter as i64).to_bits(),
             set: 0,
             raw_get: forty_two_raw_getter as *const () as usize,
-            raw_set: 0,
+            ..Default::default()
         },
         crate::object::PropertyAttrs::new(true, false, true),
     );
@@ -850,7 +853,7 @@ fn a_closure_only_accessor_is_not_primed() {
     unsafe {
         let proto = crate::object::js_object_alloc(0, 4);
         set(proto, "irc_closure", 7.0);
-        let getter = crate::closure::js_closure_alloc(forty_two_getter as *const u8, 0);
+        let getter = crate::closure::js_closure_alloc(crate::fn_info!(forty_two_getter, 0), 0);
         crate::object::descriptor_state::set_accessor_descriptor(
             proto as usize,
             "irc_closure".to_string(),

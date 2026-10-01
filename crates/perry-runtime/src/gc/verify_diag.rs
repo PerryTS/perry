@@ -115,6 +115,8 @@ fn layout_visitor_name(kind: GcLayoutSlotKind) -> &'static str {
 
 fn rewrite_visitor_name(kind: GcRewriteDescriptorKind) -> &'static str {
     match kind {
+        GcRewriteDescriptorKind::Box => "BoxValue",
+        GcRewriteDescriptorKind::Scope => "ScopeSlots",
         GcRewriteDescriptorKind::Leaf => "GcMutableSlotDescriptor",
         GcRewriteDescriptorKind::Array => "ArrayFields",
         GcRewriteDescriptorKind::Object => "ObjectSideFields",

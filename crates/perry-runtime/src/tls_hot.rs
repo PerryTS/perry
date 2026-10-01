@@ -151,11 +151,7 @@ pub(crate) struct HotTls {
     pub(crate) incremental_mark_minor_only: *mut u8,
     // gc/layout.rs
     pub(crate) layout_slot_masks: *mut u8,
-    pub(crate) typed_layouts: *mut u8,
-    pub(crate) shape_layouts: *mut u8,
     pub(crate) per_object_layouts_nonempty: *mut u8,
-    // gc/shape_install.rs
-    pub(crate) shape_install_memo: *mut u8,
     // object/spill.rs
     pub(crate) learned_inline_fields: *mut u8,
     // gc/roots/temp_roots.rs
@@ -170,17 +166,11 @@ pub(crate) struct HotTls {
     // measurable part. Only small `Copy` values with a `const` initial state
     // belong here; anything needing `Drop` stays a slot.
     // ------------------------------------------------------------------
-    /// `object::this_binding` — the implicit `this` of the current
-    /// dynamically-dispatched method call, NaN-boxed (`TAG_UNDEFINED` when
-    /// none). FIRST inline value on purpose: generated code on Apple
-    /// aarch64 reads and writes it at the fixed byte offset
-    /// [`HOT_TLS_IMPLICIT_THIS_OFFSET`] (see `hot_tls_layout_is_what_codegen_assumes`).
-    pub(crate) implicit_this: Cell<u64>,
     /// `agent_ptrs::PERRY_AGENT_PTRS` — this thread's per-agent pointer block.
     /// Generated code on Apple aarch64 reads it at the fixed byte offset
     /// [`HOT_TLS_AGENT_PTRS_OFFSET`] (`perry-codegen/src/expr/agent_ptr.rs`),
-    /// so it sits right after `implicit_this`, where only fixed-size fields
-    /// precede it: an array sized by a tunable constant (the prototype rows,
+    /// so it is the FIRST inline value, where only fixed-size fields precede
+    /// it: an array sized by a tunable constant (the prototype rows,
     /// the box caches, the generic slots) must never come before a field
     /// whose offset generated code bakes in.
     pub(crate) agent_ptrs: Cell<*mut u8>,
@@ -200,10 +190,6 @@ pub(crate) struct HotTls {
     /// addresses, `usize::MAX` = not yet computed. Rewritten by the
     /// collector's root scan like the slot it replaced.
     pub(crate) prototype_addrs: [Cell<usize>; INLINE_PROTOTYPE_ADDR_ROWS],
-    /// `box` — direct-mapped positive caches over the three box registries.
-    pub(crate) box_ptr_cache: [Cell<usize>; INLINE_BOX_PTR_CACHE_SLOTS],
-    pub(crate) i32_box_ptr_cache: [Cell<usize>; INLINE_BOX_PTR_CACHE_SLOTS],
-    pub(crate) bool_box_ptr_cache: [Cell<usize>; INLINE_BOX_PTR_CACHE_SLOTS],
     /// Generic slots, one per [`crate::perry_thread_local`] declaration that
     /// this thread has resolved at least once. Kept at its established offset
     /// so the named fields and inline values above do not move.
@@ -222,14 +208,9 @@ pub(crate) struct HotTls {
 /// not emit the inline path there (ILP32 codegen is refused until #11378).
 #[cfg(target_pointer_width = "64")]
 pub const HOT_TLS_INLINE_STATE_OFFSET: usize = 8;
-#[cfg(target_pointer_width = "64")]
-pub const HOT_TLS_IMPLICIT_THIS_OFFSET: usize = 128;
 #[cfg(target_pointer_width = "32")]
 pub const HOT_TLS_INLINE_STATE_OFFSET: usize = 4;
-#[cfg(target_pointer_width = "32")]
-pub const HOT_TLS_IMPLICIT_THIS_OFFSET: usize = 64;
 const _: () = assert!(std::mem::offset_of!(HotTls, inline_state) == HOT_TLS_INLINE_STATE_OFFSET);
-const _: () = assert!(std::mem::offset_of!(HotTls, implicit_this) == HOT_TLS_IMPLICIT_THIS_OFFSET);
 /// `HotTls::agent_ptrs` (`perry-abi`), read by generated code on Apple aarch64.
 pub use crate::codegen_abi::HOT_TLS_AGENT_PTRS_OFFSET;
 #[cfg(target_pointer_width = "64")]
@@ -239,8 +220,6 @@ const _: () = assert!(std::mem::offset_of!(crate::arena::InlineArenaState, data)
 /// Rows of [`HotTls::prototype_addrs`]; `array::prototype_addr` sizes its
 /// builtin-name table from this.
 pub(crate) const INLINE_PROTOTYPE_ADDR_ROWS: usize = 3;
-/// Slots of each [`HotTls`] box-pointer cache; `box` indexes with this.
-pub(crate) const INLINE_BOX_PTR_CACHE_SLOTS: usize = 8;
 
 impl HotTls {
     /// Read a claimed slot. `idx` must have passed the `< HOT_SLOT_CAPACITY`
@@ -272,20 +251,13 @@ impl HotTls {
         incremental_mark_valid_ptrs: std::ptr::null_mut(),
         incremental_mark_minor_only: std::ptr::null_mut(),
         layout_slot_masks: std::ptr::null_mut(),
-        typed_layouts: std::ptr::null_mut(),
-        shape_layouts: std::ptr::null_mut(),
         per_object_layouts_nonempty: std::ptr::null_mut(),
-        shape_install_memo: std::ptr::null_mut(),
         learned_inline_fields: std::ptr::null_mut(),
         temp_roots: std::ptr::null_mut(),
-        implicit_this: Cell::new(crate::value::TAG_UNDEFINED),
         dirty_old_pages: [const { Cell::new(usize::MAX) }; 16],
         last_external_dirty_page: Cell::new(usize::MAX),
         last_external_dirty_header: Cell::new(usize::MAX),
         prototype_addrs: [const { Cell::new(usize::MAX) }; INLINE_PROTOTYPE_ADDR_ROWS],
-        box_ptr_cache: [const { Cell::new(0) }; INLINE_BOX_PTR_CACHE_SLOTS],
-        i32_box_ptr_cache: [const { Cell::new(0) }; INLINE_BOX_PTR_CACHE_SLOTS],
-        bool_box_ptr_cache: [const { Cell::new(0) }; INLINE_BOX_PTR_CACHE_SLOTS],
         slots: [const { Cell::new(std::ptr::null_mut()) }; HOT_SLOT_CAPACITY],
         runtime_handle_stack: Cell::new(std::ptr::null_mut()),
         agent_ptrs: Cell::new(std::ptr::null_mut()),
@@ -329,10 +301,7 @@ fn fill(slots: *mut HotTls) {
         (*slots).incremental_mark_valid_ptrs = crate::gc::incremental_mark_valid_ptrs_hot_addr();
         (*slots).incremental_mark_minor_only = crate::gc::incremental_mark_minor_only_hot_addr();
         (*slots).layout_slot_masks = crate::gc::layout_slot_masks_hot_addr();
-        (*slots).typed_layouts = crate::gc::typed_layouts_hot_addr();
-        (*slots).shape_layouts = crate::gc::shape_layouts_hot_addr();
         (*slots).per_object_layouts_nonempty = crate::gc::per_object_layouts_nonempty_hot_addr();
-        (*slots).shape_install_memo = crate::gc::shape_install_memo_hot_addr();
         (*slots).learned_inline_fields = crate::object::learned_inline_fields_hot_addr();
         (*slots)
             .runtime_handle_stack
@@ -1175,24 +1144,9 @@ mod tests {
             "layout_slot_masks"
         );
         assert_eq!(
-            hot.typed_layouts,
-            crate::gc::typed_layouts_hot_addr(),
-            "typed_layouts"
-        );
-        assert_eq!(
-            hot.shape_layouts,
-            crate::gc::shape_layouts_hot_addr(),
-            "shape_layouts"
-        );
-        assert_eq!(
             hot.per_object_layouts_nonempty,
             crate::gc::per_object_layouts_nonempty_hot_addr(),
             "per_object_layouts_nonempty"
-        );
-        assert_eq!(
-            hot.shape_install_memo,
-            crate::gc::shape_install_memo_hot_addr(),
-            "shape_install_memo"
         );
         assert_eq!(
             hot.learned_inline_fields,
@@ -1233,13 +1187,10 @@ mod tests {
                 hot.incremental_mark_minor_only,
             ),
             ("layout_slot_masks", hot.layout_slot_masks),
-            ("typed_layouts", hot.typed_layouts),
-            ("shape_layouts", hot.shape_layouts),
             (
                 "per_object_layouts_nonempty",
                 hot.per_object_layouts_nonempty,
             ),
-            ("shape_install_memo", hot.shape_install_memo),
             ("learned_inline_fields", hot.learned_inline_fields),
             ("temp_roots", hot.temp_roots),
             ("runtime_handle_stack", hot.runtime_handle_stack.get()),

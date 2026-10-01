@@ -167,6 +167,12 @@ use crate::types::LlvmType;
 /// checker would not have demanded — a load, not a bug. A helper that is here
 /// and is NOT in the checker's set would be the unsafe direction, so the
 /// invariant to preserve on edit is one-way containment.
+/// Is `callee` on the audited non-collecting list? (`stmt::region_loop`'s
+/// verifier treats these as unable to run JS.)
+pub(crate) fn is_non_collecting(callee: &str) -> bool {
+    NON_COLLECTING.contains(&callee)
+}
+
 const NON_COLLECTING: &[&str] = &[
     // shadow stack / roots
     "js_shadow_slot_bind",
@@ -180,8 +186,6 @@ const NON_COLLECTING: &[&str] = &[
     "js_gc_temp_root_set",
     "js_gc_temp_root_truncate",
     // layout / barrier bookkeeping
-    "js_gc_init_typed_shape_layout",
-    "js_gc_declare_typed_shape_layout",
     "js_gc_forget_object_layout",
     // The two real slot-layout note exports. `js_gc_layout_note_slot` used to
     // stand here, and no such symbol has ever existed in the tree: the runtime
@@ -205,6 +209,8 @@ const NON_COLLECTING: &[&str] = &[
     "js_inherited_read_cache_hit_f64",
     // S2 GC-leaf IC hits; proven `Leaf` by the generated call-effects table.
     "js_object_get_field_ic_fast",
+    // First-read D3: a generic read's miss front, proven `Leaf` likewise.
+    "js_object_get_field_ic_front",
     "js_class_field_get_ic_fast",
     "js_class_field_set_ic_fast",
     "js_put_value_set_packed_fast",
@@ -310,7 +316,9 @@ const MAX_RECIPE: usize = 8;
 /// re-tag, which is the entire population this pass needs; admitting `add`
 /// would be sound by the same argument but buys nothing today and widens what
 /// a reader has to check.
-const TRANSPARENT_BIN: &[&str] = &["and", "or", "xor"];
+/// `add` derives a scope-slot address (`base + 8 * index`) from the scope
+/// object's root load (`crate::scope_env`).
+const TRANSPARENT_BIN: &[&str] = &["and", "or", "xor", "add"];
 
 /// Conversions that are pure re-interpretations of a bit pattern.
 const TRANSPARENT_CAST: &[&str] = &["bitcast", "ptrtoint", "inttoptr", "trunc", "zext", "sext"];

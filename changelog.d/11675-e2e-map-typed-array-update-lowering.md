@@ -1,0 +1,1 @@
+**CI:** registered `typed_array_update_lowering` (added by #11666) in `scripts/ci_e2e_scope.py`. It was missing from the suite map, so `e2e-scoped` failed its scope step on every PR that touched perry-codegen.

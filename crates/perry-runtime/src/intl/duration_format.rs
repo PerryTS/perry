@@ -309,26 +309,20 @@ pub(super) fn configure(obj: *mut ObjectHeader, options: f64) {
     super::install_function_from_handle(
         &obj_handle,
         "format",
-        format_thunk as *const u8,
+        crate::fn_info!(format_thunk, 1; with_declared(1)),
         1,
-        1,
-        false,
     );
     super::install_function_from_handle(
         &obj_handle,
         "formatToParts",
-        to_parts_thunk as *const u8,
+        crate::fn_info!(to_parts_thunk, 1; with_declared(1)),
         1,
-        1,
-        false,
     );
     super::install_function_from_handle(
         &obj_handle,
         "resolvedOptions",
-        resolved_options_thunk as *const u8,
+        crate::fn_info!(resolved_options_thunk, 0; with_declared(0)),
         0,
-        0,
-        false,
     );
 }
 
@@ -367,8 +361,11 @@ fn resolved_options_object(obj: *const ObjectHeader) -> f64 {
     js_nanbox_pointer(out as i64)
 }
 
-pub(super) extern "C" fn resolved_options_thunk(_closure: *const ClosureHeader) -> f64 {
-    let obj = this_intl_object("resolvedOptions", super::KIND_DURATION_FORMAT);
+pub(super) extern "C" fn resolved_options_thunk(
+    _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    let obj = this_intl_object(this, "resolvedOptions", super::KIND_DURATION_FORMAT);
     resolved_options_object(obj)
 }
 
@@ -881,18 +878,30 @@ pub(super) fn format_temporal_duration(duration: f64, locales: f64, options: f64
     format_value(obj, duration)
 }
 
-pub(super) extern "C" fn format_thunk(_closure: *const ClosureHeader, duration: f64) -> f64 {
-    let obj = this_intl_object("format", super::KIND_DURATION_FORMAT);
+pub(super) extern "C" fn format_thunk(
+    _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+    duration: f64,
+) -> f64 {
+    let obj = this_intl_object(this, "format", super::KIND_DURATION_FORMAT);
     format_value(obj, duration)
 }
 
-pub(super) extern "C" fn to_parts_thunk(_closure: *const ClosureHeader, duration: f64) -> f64 {
-    let obj = this_intl_object("formatToParts", super::KIND_DURATION_FORMAT);
+pub(super) extern "C" fn to_parts_thunk(
+    _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+    duration: f64,
+) -> f64 {
+    let obj = this_intl_object(this, "formatToParts", super::KIND_DURATION_FORMAT);
     let vals = to_duration_record(duration);
     df_parts_to_js_array(&partition(obj, &vals))
 }
 
-pub(super) extern "C" fn constructor_thunk(closure: *const ClosureHeader, rest: f64) -> f64 {
+pub(super) extern "C" fn constructor_thunk(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    rest: f64,
+) -> f64 {
     // `Intl.DurationFormat` is `[[Construct]]`-only: a bare call is a TypeError.
     if crate::object::js_new_target_get().to_bits() == crate::value::TAG_UNDEFINED {
         throw_type_error("Constructor Intl.DurationFormat requires 'new'");

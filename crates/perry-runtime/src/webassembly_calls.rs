@@ -4,6 +4,7 @@ use super::*;
 
 extern "C" fn js_wasm_instance_result_then(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     on_fulfilled: f64,
     _on_rejected: f64,
 ) -> f64 {
@@ -13,6 +14,7 @@ extern "C" fn js_wasm_instance_result_then(
     let outcome = crate::exception::catch_js_throw(|| unsafe {
         crate::closure::js_native_call_value(
             on_fulfilled.get_nanbox_f64(),
+            crate::closure::plain_call_receiver(),
             [value.get_nanbox_f64()].as_ptr(),
             1,
         )
@@ -45,6 +47,7 @@ macro_rules! wasm_export_call_shim {
     ($name:ident $(, $arg:ident)*) => {
         pub(super) extern "C" fn $name(
             closure: *const crate::closure::ClosureHeader,
+            _this: crate::closure::JsThis,
             $($arg: f64),*
         ) -> f64 {
             call_captured_wasm_export(closure, &[$($arg),*])
@@ -175,25 +178,78 @@ wasm_export_call_shim!(
     a15
 );
 
-pub(super) fn wasm_export_call_shim_for_arity(arity: usize) -> (*const u8, u32) {
+pub(super) fn wasm_export_call_shim_for_arity(
+    arity: usize,
+) -> (*const crate::closure::JsFunctionInfo, u32) {
     match arity {
-        0 => (js_wasm_export_call_0 as *const u8, 0),
-        1 => (js_wasm_export_call_1 as *const u8, 1),
-        2 => (js_wasm_export_call_2 as *const u8, 2),
-        3 => (js_wasm_export_call_3 as *const u8, 3),
-        4 => (js_wasm_export_call_4 as *const u8, 4),
-        5 => (js_wasm_export_call_5 as *const u8, 5),
-        6 => (js_wasm_export_call_6 as *const u8, 6),
-        7 => (js_wasm_export_call_7 as *const u8, 7),
-        8 => (js_wasm_export_call_8 as *const u8, 8),
-        9 => (js_wasm_export_call_9 as *const u8, 9),
-        10 => (js_wasm_export_call_10 as *const u8, 10),
-        11 => (js_wasm_export_call_11 as *const u8, 11),
-        12 => (js_wasm_export_call_12 as *const u8, 12),
-        13 => (js_wasm_export_call_13 as *const u8, 13),
-        14 => (js_wasm_export_call_14 as *const u8, 14),
-        15 => (js_wasm_export_call_15 as *const u8, 15),
-        _ => (js_wasm_export_call_16 as *const u8, 16),
+        0 => (
+            crate::fn_info!(js_wasm_export_call_0, 0; with_declared(0)),
+            0,
+        ),
+        1 => (
+            crate::fn_info!(js_wasm_export_call_1, 1; with_declared(1)),
+            1,
+        ),
+        2 => (
+            crate::fn_info!(js_wasm_export_call_2, 2; with_declared(2)),
+            2,
+        ),
+        3 => (
+            crate::fn_info!(js_wasm_export_call_3, 3; with_declared(3)),
+            3,
+        ),
+        4 => (
+            crate::fn_info!(js_wasm_export_call_4, 4; with_declared(4)),
+            4,
+        ),
+        5 => (
+            crate::fn_info!(js_wasm_export_call_5, 5; with_declared(5)),
+            5,
+        ),
+        6 => (
+            crate::fn_info!(js_wasm_export_call_6, 6; with_declared(6)),
+            6,
+        ),
+        7 => (
+            crate::fn_info!(js_wasm_export_call_7, 7; with_declared(7)),
+            7,
+        ),
+        8 => (
+            crate::fn_info!(js_wasm_export_call_8, 8; with_declared(8)),
+            8,
+        ),
+        9 => (
+            crate::fn_info!(js_wasm_export_call_9, 9; with_declared(9)),
+            9,
+        ),
+        10 => (
+            crate::fn_info!(js_wasm_export_call_10, 10; with_declared(10)),
+            10,
+        ),
+        11 => (
+            crate::fn_info!(js_wasm_export_call_11, 11; with_declared(11)),
+            11,
+        ),
+        12 => (
+            crate::fn_info!(js_wasm_export_call_12, 12; with_declared(12)),
+            12,
+        ),
+        13 => (
+            crate::fn_info!(js_wasm_export_call_13, 13; with_declared(13)),
+            13,
+        ),
+        14 => (
+            crate::fn_info!(js_wasm_export_call_14, 14; with_declared(14)),
+            14,
+        ),
+        15 => (
+            crate::fn_info!(js_wasm_export_call_15, 15; with_declared(15)),
+            15,
+        ),
+        _ => (
+            crate::fn_info!(js_wasm_export_call_16, 16; with_declared(16)),
+            16,
+        ),
     }
 }
 
@@ -241,9 +297,10 @@ pub(super) fn make_instance_result(module: *mut c_void, inst: *mut c_void, impor
         module.get_nanbox_f64(),
         instance.get_nanbox_f64(),
     ));
-    let function = js_wasm_instance_result_then as *const u8;
-    crate::closure::js_register_closure_arity(function, 2);
-    let then = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(function, 1));
+    let then = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
+        crate::fn_info!(js_wasm_instance_result_then, 2; with_declared(2)),
+        1,
+    ));
     then.with_mut_ptr(|t: *mut crate::closure::ClosureHeader| {
         crate::closure::js_closure_set_capture_f64(t, 0, settlement.get_nanbox_f64())
     });

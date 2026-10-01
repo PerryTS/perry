@@ -44,12 +44,13 @@ fn throw_brand(member: &str) -> ! {
 }
 
 /// Shared accessor getter for every `Temporal.<Type>.prototype` field. Reads
-/// `IMPLICIT_THIS`, derives the property name from the closure (`"get hour"` →
+/// its `this` argument, derives the property name from the closure (`"get hour"` →
 /// `"hour"`), and routes to the brand router; a non-Temporal `this` throws.
 pub(super) extern "C" fn temporal_proto_getter_thunk(
     c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let recv = f64::from_bits(IMPLICIT_THIS.with(|x| x.get()));
+    let recv = f64::from_bits(this.bits());
     let full = closure_name(c);
     let prop = full.strip_prefix("get ").unwrap_or(&full);
     match tdispatch::get_property(recv, prop) {
@@ -59,13 +60,14 @@ pub(super) extern "C" fn temporal_proto_getter_thunk(
 }
 
 /// Shared method thunk for every `Temporal.<Type>.prototype` method. Reads
-/// `IMPLICIT_THIS`, derives the method name from the closure, brand-checks the
+/// its `this` argument, derives the method name from the closure, brand-checks the
 /// receiver, and routes to the brand router with the rest-array args.
 pub(super) extern "C" fn temporal_proto_method_thunk(
     c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
-    let recv = f64::from_bits(IMPLICIT_THIS.with(|x| x.get()));
+    let recv = f64::from_bits(this.bits());
     let name = closure_name(c);
     if crate::temporal::temporal_kind(recv).is_none() {
         throw_brand(&name);
@@ -81,10 +83,11 @@ fn install_getter(proto_obj: *mut ObjectHeader, name: &str) {
     if proto_obj.is_null() {
         return;
     }
-    let func_ptr = temporal_proto_getter_thunk as *const u8;
     unsafe {
-        crate::closure::js_register_closure_arity(func_ptr, 0);
-        let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+        let closure = crate::closure::js_closure_alloc(
+            crate::fn_info!(temporal_proto_getter_thunk, 0; with_declared(0)),
+            0,
+        );
         if closure.is_null() {
             return;
         }
@@ -115,9 +118,8 @@ fn install_method(proto_obj: *mut ObjectHeader, name: &str, spec_length: u32) {
     super::global_this::install_proto_method_rest_with_length(
         proto_obj,
         name,
-        temporal_proto_method_thunk as *const u8,
+        crate::fn_info!(temporal_proto_method_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
         spec_length,
-        0,
     );
 }
 

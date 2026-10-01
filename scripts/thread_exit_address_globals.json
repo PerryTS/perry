@@ -460,6 +460,14 @@
    "why": "Census counts keyed by (&'static event, &'static owner-kind name); owner address is only classified, never stored."
   },
   {
+   "file": "crates/perry-runtime/src/object/shapes_store_kind.rs",
+   "names": [
+    "COUNTERS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "shape-fact-audit diagnostic counters: an array of eight AtomicU64, only ever bumped by fetch_add(1) (audit::bump) and read by the atexit report; no store of a computed value, so it cannot hold an address. Absent unless the shape-fact-audit feature is on."
+  },
+  {
    "file": "crates/perry-runtime/src/event_pump.rs",
    "names": [
     "WAKE_CALLBACK"
@@ -490,22 +498,6 @@
    ],
    "verdict": "no_heap_address",
    "why": "Code address of the stdlib reader.read callback registered by js_register_stream_consumer_callbacks (consumers.rs:125); function pointer."
-  },
-  {
-   "file": "crates/perry-runtime/src/object/prop_plan.rs",
-   "names": [
-    "HITS"
-   ],
-   "verdict": "no_heap_address",
-   "why": "PLAN-DIAG counter of load-plan cache hits (prop_plan.rs:205), only under plan_diag_enabled."
-  },
-  {
-   "file": "crates/perry-runtime/src/object/prop_plan.rs",
-   "names": [
-    "RECORDS"
-   ],
-   "verdict": "no_heap_address",
-   "why": "PLAN-DIAG counter of store-plan records (prop_plan.rs:238); key_ptr is only printed, not stored here."
   },
   {
    "file": "crates/perry-stdlib/src/framework/server.rs",
@@ -547,14 +539,6 @@
    ],
    "verdict": "no_heap_address",
    "why": "Queue of Arc<AsyncWorkInner> (Rust-heap) whose env_address is the Rust Box of the owning thread's NODE_API_ENV and data/execute/complete are native addon pointers; drained only when work.owner == current ThreadId and env serial matches via with_env (async_work.rs:270-288, mod.rs:421-433), so no GC arena address and a dead owner's entries can never be dereferenced (ThreadIds are never reused)."
-  },
-  {
-   "file": "crates/perry-runtime/src/object/field_get_set/for_in_stable.rs",
-   "names": [
-    "HITS"
-   ],
-   "verdict": "no_heap_address",
-   "why": "FOR-IN-DIAG counter of stable single-shape for-in hits (for_in_stable.rs:223)."
   },
   {
    "file": "crates/perry-runtime/src/perf_hooks.rs",
@@ -1617,16 +1601,16 @@
    "why": "Pointer to the `static FS_THREAD_CODEC_IMPL` (fs/filehandle.rs:1470) holding two fn pointers, armed by arm_fs_thread_codec; address of a static."
   },
   {
-   "file": "crates/perry-runtime/src/thread.rs",
+   "file": "crates/perry-runtime/src/thread/pending_results.rs",
    "names": [
     "PENDING_THREAD_RESULTS"
    ],
    "verdict": "thread_exit_invalidated",
-   "why": "Queue of spawn results: owner AgentId, raw promise address in the owner's heap, and a SerializedValue; drained only by the owning agent, and agent::retire_agent (agent.rs:164) calls thread::purge_agent_thread_results (thread.rs:1926) to drop every entry owned by an exiting worker agent.",
+   "why": "Queue of spawn results: owner AgentId, raw promise address in the owner's heap, and a SerializedValue; drained only by the owning agent, and agent::retire_agent (agent.rs:164) calls thread::purge_agent_thread_results (thread/pending_results.rs:217) to drop every entry owned by an exiting worker agent.",
    "hook": "purge_agent_thread_results"
   },
   {
-   "file": "crates/perry-runtime/src/thread.rs",
+   "file": "crates/perry-runtime/src/thread/pending_results.rs",
    "names": [
     "PENDING_THREAD_RESULTS_LEN"
    ],
@@ -2014,15 +1998,6 @@
   {
    "file": "crates/perry-runtime/src/buffer/header.rs",
    "names": [
-    "EXTERNAL_BUFFER_REGISTRY"
-   ],
-   "verdict": "thread_exit_invalidated",
-   "why": "Addresses of externally-registered buffers, removed only by the dead-buffer finalizer or re-registration; freed addresses are dropped at thread exit.",
-   "hook": "release_external_buffer_registries_in_freed_ranges"
-  },
-  {
-   "file": "crates/perry-runtime/src/buffer/header.rs",
-   "names": [
     "EXTERNAL_UINT8ARRAY_REGISTRY"
    ],
    "verdict": "thread_exit_invalidated",
@@ -2052,7 +2027,7 @@
     "BUFFER_LIKE_ADDR_WINDOW"
    ],
    "verdict": "conservative_filter",
-   "why": "Monotone lo/hi address window over every buffer-like registration; a stale bound only admits more addresses to the slow path. Authoritative: BUFFER_REGISTRY (thread-local), EXTERNAL_BUFFER_REGISTRY, shared_sab's registry via is_registered_buffer_slow."
+   "why": "Monotone lo/hi address window over every buffer-like registration; a stale bound only admits more addresses to the slow path. Authoritative: BUFFER_REGISTRY (thread-local), shared_sab's registry via is_registered_buffer_slow."
   },
   {
    "file": "crates/perry-runtime/src/buffer/header.rs",
@@ -2279,14 +2254,6 @@
    ],
    "verdict": "no_heap_address",
    "why": "Stores the RenderStreamFn fn pointer registered by perry-stdlib via js_register_jsx_render_stream (hono_jsx.rs:81); code address."
-  },
-  {
-   "file": "crates/perry-runtime/src/object/inherited_read_cache.rs",
-   "names": [
-    "HITS"
-   ],
-   "verdict": "no_heap_address",
-   "why": "Hit counter for the inherited-read inline cache; fetch_add / reset only."
   },
   {
    "file": "crates/perry-runtime/src/process.rs",
@@ -2679,6 +2646,14 @@
   {
    "file": "crates/perry-runtime/src/object/native_module_registry.rs",
    "names": [
+    "NM_STREAM_SUBCLASS_INIT"
+   ],
+   "verdict": "no_heap_address",
+   "why": "The node_stream_subclass_init NmStreamSubclassInitFn fn pointer, its only store at native_module_registry.rs:518 (js_nm_install_stream); a code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/native_module_registry.rs",
+   "names": [
     "NM_CONST_REGISTRY"
    ],
    "verdict": "no_heap_address",
@@ -2758,7 +2733,7 @@
     "N"
    ],
    "verdict": "no_heap_address",
-   "why": "(layout_tables.rs:964, layout_mask_min_slots) cached PERRY_LAYOUT_MASK_MIN_SLOTS env value (default 4); config. | (second declaration) (layout_tables.rs:1018, layout_object_mask_min_slots) cached PERRY_LAYOUT_OBJECT_MASK_MIN_SLOTS env value (default 8); config."
+   "why": "(layout_tables.rs:964, layout_mask_min_slots) cached PERRY_LAYOUT_MASK_MIN_SLOTS env value (default 4); config."
   },
   {
    "file": "crates/perry-runtime/src/bun_ffi/dlopen.rs",
@@ -2848,14 +2823,6 @@
    ],
    "verdict": "no_heap_address",
    "why": "Lazily built unwinder over loaded images' .eh_frame sections plus a rows cache keyed by code PC; addresses are of mapped image sections/code, not the GC heap."
-  },
-  {
-   "file": "crates/perry-runtime/src/gc/layout/typed_shape.rs",
-   "names": [
-    "REGISTERED_TYPED_SHAPES"
-   ],
-   "verdict": "no_heap_address",
-   "why": "Module-init registry of typed ShapeIds: layout keys (class id, proto id from class_proto_id = tag|class id, mask words), descriptors, and ImportedShapeSlot addresses of executable data-section globals (typed_shape.rs:106-118); no GC-heap addresses."
   },
   {
    "file": "crates/perry-runtime/src/object/chain_store.rs",
@@ -3560,23 +3527,6 @@
    "why": "Monotonic u64 id counter handed out by next_id() to every new SymbolHeader."
   },
   {
-   "file": "crates/perry-runtime/src/symbol.rs",
-   "names": [
-    "CLASS_STATIC_SYMBOLS"
-   ],
-   "verdict": "thread_exit_invalidated",
-   "why": "Class ids are process-global but members hold symbol addresses and JS values from the writing thread; members with a freed symbol or value are dropped at thread exit.",
-   "hook": "release_symbol_tables_in_freed_ranges"
-  },
-  {
-   "file": "crates/perry-runtime/src/symbol.rs",
-   "names": [
-    "CLASS_STATIC_SYMBOL_ORDER"
-   ],
-   "verdict": "no_heap_address",
-   "why": "class_id -> Vec of SymbolHeader::id (monotonic u64 ids, stable across moves) recording creation order (symbol.rs:1162-1172); holds no addresses."
-  },
-  {
    "file": "crates/perry-runtime/src/intl/segments_view.rs",
    "names": [
     "OPENS"
@@ -3956,15 +3906,6 @@
    "hook": "release_buffer_own_props_in_freed_ranges"
   },
   {
-   "file": "crates/perry-runtime/src/event_target.rs",
-   "names": [
-    "DOM_EXCEPTION_ERRORS"
-   ],
-   "verdict": "thread_exit_invalidated",
-   "why": "Addresses of DOMException error objects, removed only by the error finalizer; freed addresses are dropped at thread exit.",
-   "hook": "release_dom_exception_errors_in_freed_ranges"
-  },
-  {
    "file": "crates/perry-runtime/src/ios_game_loop.rs",
    "names": [
     "CONNECTED_SCENE"
@@ -4085,12 +4026,46 @@
    "why": "Diagnostic refusal counters indexed by a reason code: the only writes are `SITE_REFUSED[reason].fetch_add(1, ..)` and the only reads are loads in the counter dump; never stores an address."
   },
   {
+   "file": "crates/perry-runtime/src/object/method_site/read_holder.rs",
+   "names": [
+    "HOLDER_SITES"
+   ],
+   "verdict": "process_global_allocation",
+   "why": "The addresses of read-site `PicCache`s, each allocated by `field_get_set::ic_slot::pic_arena_alloc` from `std::alloc::alloc_zeroed` chunks that are never freed and belong to no thread's arena, so thread exit cannot free or reuse them. The primary-heap holder and hop addresses the caches hold are written only by the primary agent (`prime_read_holder` checks `current_agent() == PRIMARY_AGENT` and `WORKER_AGENTS_EXIST`), are strong roots visited by `scan_read_holder_roots_mut`, and are emptied by `empty_read_holder_entries` when the first worker agent starts."
+  },
+  {
    "file": "crates/perry-stdlib/src/common/handle_lifecycle.rs",
    "names": [
     "ORPHANS"
    ],
    "verdict": "no_heap_address",
    "why": "Holds (Handle, Parked) rows: a Handle is a native-registry id in [1, 0x40000) minted by the process-global shared pool (perry_ffi::shared_handle_id_pool), never an arena address, and Parked is {kind, NativeRegistrationIdentity{domain, serial, numeric_id}, epoch}. Payloads live in the process-global common HANDLES map, not in any thread's arena. A row cannot name a different object after reuse: release() retires only via begin_retirement_of(identity), which rejects any registration whose serial differs, and ids are reissued only after a full trace proves them unreferenced (#11453)."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/shapes_store.rs",
+   "names": [
+    "ORDINARY_DIR"
+   ],
+   "verdict": "per_thread",
+   "why": "`#[thread_local]` static (not `thread_local!`, so the megamorphic read reaches it with one thread-pointer-relative load): each thread mirrors ITS OWN ShapeSlab page directory (a Rust-heap Vec pointer and length, never an arena address), republished on every change to `pages` and cleared by ShapeSlab::drop before the Vec is freed; const-initialised to (null, 0) with no drop glue."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/shapes_store.rs",
+   "names": [
+    "EMPTY_CHUNK",
+    "EMPTY_PAGE",
+    "PERRY_EMPTY_SHAPE_DIR"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Shared all-empty shape-slab structure (a chunk of EMPTY records, a page of pointers to that chunk, an empty page directory). Every pointer inside is the address of another immutable static in the program image, never an arena or heap address; nothing ever writes them, so an exited thread's Arena::drop cannot leave them dangling."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/static_shapes.rs",
+   "names": [
+    "STATIC_SEED"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Holds the address of the generated seed unit's `extern \"C\" fn()` (a code address in the program image, stored by js_shape_register_static_seed from a global_ctors entry before any heap exists), or 0 for none. It is never an arena or heap address, so an exited thread's Arena::drop cannot leave it dangling."
   }
  ]
 }

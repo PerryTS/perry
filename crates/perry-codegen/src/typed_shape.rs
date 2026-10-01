@@ -231,9 +231,60 @@ pub(crate) fn class_layout_declarable_at_allocation(
     worth_declaring
 }
 
+/// Slots with a birth representation lane (the runtime's `field_rep::REP_SLOTS`).
+pub(crate) const BIRTH_REP_SLOTS: u32 = 32;
+/// The `F64` lane value (`field_rep::REP_F64`).
+const BIRTH_REP_F64: u64 = 0b01;
+
+/// Charter step 5: a class's birth representation word — `F64` for exactly
+/// the `number` fields that are written before any code can observe the
+/// instance (`lower_call::birth_lanes::chain_birth_f64_fields`), `Any`
+/// everywhere else.
+///
+/// This is THE decision. The string pool passes it to the runtime mint
+/// (`js_object_shape_id_for_class_keys{,_live}`),
+/// the inline allocation birth-fills its `F64` lanes with `+0.0`, the
+/// field-initializer phase skips the `undefined` define of those fields, and
+/// every class-field site that reads or writes a lane raw takes its answer
+/// from this word. The runtime takes the word as given; nothing re-derives it
+/// from the environment. An imported class stub has no constructor body to
+/// prove anything from, so it is `Any`.
+pub(crate) fn class_birth_rep_in(
+    classes: &std::collections::HashMap<String, &perry_hir::Class>,
+    class_keys_globals: &std::collections::HashMap<String, String>,
+    class_init_chains: &std::collections::HashMap<
+        String,
+        Vec<(String, Vec<perry_hir::ClassField>)>,
+    >,
+    imported_stub: bool,
+    class_name: &str,
+) -> u64 {
+    if imported_stub || !class_keys_globals.contains_key(class_name) {
+        return 0;
+    }
+    let Some(chain) = class_init_chains.get(class_name) else {
+        return 0;
+    };
+    crate::lower_call::birth_lanes::chain_birth_rep(classes, chain)
+}
+
+/// The `F64` lane bit pattern for `slot` (zero past [`BIRTH_REP_SLOTS`]: those
+/// slots have no lane and stay `Any`).
+pub(crate) fn birth_rep_f64_lane(slot: u32) -> u64 {
+    if slot < BIRTH_REP_SLOTS {
+        BIRTH_REP_F64 << (2 * slot)
+    } else {
+        0
+    }
+}
+
+/// Is `slot` an `F64` lane of birth rep `rep`?
+pub(crate) fn birth_rep_slot_is_f64(rep: u64, slot: u32) -> bool {
+    slot < BIRTH_REP_SLOTS && (rep >> (2 * slot)) & 0b11 == BIRTH_REP_F64
+}
+
 #[derive(Clone, Debug, Default)]
 pub(crate) struct TypedShapeLayout {
-    pub(crate) slot_count: u32,
     pub(crate) raw_f64_mask_words: Vec<u64>,
     pub(crate) pointer_mask_words: Vec<u64>,
 }
@@ -323,40 +374,9 @@ fn typed_layout_from_fields<'a>(
     }
 
     TypedShapeLayout {
-        slot_count,
         raw_f64_mask_words: trim_mask_words(raw_f64_mask_words),
         pointer_mask_words: trim_mask_words(pointer_mask_words),
     }
-}
-
-/// Does `layout`'s **pointer** mask declare `slot`?
-///
-/// The masks are word-packed exactly as `typed_layout_from_fields` builds them
-/// and as `js_gc_{init,declare}_typed_shape_layout` consumes them, so a `true`
-/// here is the same bit the runtime's `TypedLayoutDescriptor::pointer_mask`
-/// will carry for this shape.
-pub(crate) fn layout_declares_pointer_slot(layout: &TypedShapeLayout, slot: u32) -> bool {
-    let slot = slot as usize;
-    if slot >= layout.slot_count as usize {
-        return false;
-    }
-    let word = slot / 64;
-    // A pointer-masked slot may not also be raw-f64-masked. `init_typed_shape_layout`
-    // rejects an intersecting pair outright (`words_intersect` -> UNKNOWN), so a
-    // shape that reaches an installed descriptor has disjoint masks — but this
-    // predicate licenses eliding a store's layout note, so it re-establishes
-    // disjointness locally rather than importing it.
-    let raw_f64_here = layout
-        .raw_f64_mask_words
-        .get(word)
-        .is_some_and(|w| w & (1u64 << (slot % 64)) != 0);
-    if raw_f64_here {
-        return false;
-    }
-    layout
-        .pointer_mask_words
-        .get(word)
-        .is_some_and(|w| w & (1u64 << (slot % 64)) != 0)
 }
 
 pub(crate) fn mask_global_name_from_keys_global(keys_global_name: &str) -> String {
@@ -412,6 +432,57 @@ pub(crate) fn load_class_shape_id(
 ) -> String {
     let shape_slot = ensure_class_shape_slot(ctx, class_name, keys_global_name);
     ctx.block().load(crate::types::I32, &shape_slot)
+}
+
+/// The ShapeId a GUARD compares a receiver against (design step 4).
+///
+/// The driver's static id for the class's birth content when it assigned one
+/// to this module's keys global: an immediate, so the compare needs no load.
+/// Otherwise the entry-cached load of the mint's global ([`load_class_shape_id`]).
+///
+/// Only guards may use this, never births: a birth stamps the id the mint
+/// RETURNED. The two agree whenever the mint adopted the static id; when it
+/// declined (the content's facts were minted first under another id), no
+/// object ever carries the static id, so the compare misses and the site
+/// takes its slow path, never a wrong hit.
+pub(crate) fn class_shape_id_operand(
+    ctx: &mut crate::expr::FnCtx<'_>,
+    class_name: &str,
+    keys_global_name: &str,
+) -> String {
+    match static_class_shape_id(keys_global_name) {
+        Some(id) => id.to_string(),
+        None => load_class_shape_id(ctx, class_name, keys_global_name),
+    }
+}
+
+/// The driver's static ShapeId for this module's class keys global, if any
+/// (guards only, see [`class_shape_id_operand`]). A keys global of another
+/// module has none here: its guard loads that module's global.
+pub(crate) fn static_class_shape_id(keys_global_name: &str) -> Option<u32> {
+    crate::codegen::static_shape_id_for_keys_global(keys_global_name)
+}
+
+/// The guard operand for a site that reads the shape global directly on
+/// `blk` rather than through the entry cache: the static immediate when there
+/// is one, else that load (volatile when `volatile`).
+pub(crate) fn class_shape_id_operand_on_block(
+    blk: &mut crate::block::LlBlock,
+    keys_global_name: &str,
+    volatile: bool,
+) -> String {
+    if let Some(id) = static_class_shape_id(keys_global_name) {
+        return id.to_string();
+    }
+    let global = format!(
+        "@{}",
+        shape_id_global_name_from_keys_global(keys_global_name)
+    );
+    if volatile {
+        blk.load_volatile(crate::types::I32, &global)
+    } else {
+        blk.load(crate::types::I32, &global)
+    }
 }
 
 /// The function-entry alloca that caches a class's ShapeId global (see

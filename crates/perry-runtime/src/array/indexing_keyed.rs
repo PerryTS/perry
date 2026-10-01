@@ -37,7 +37,7 @@ pub extern "C" fn js_array_set_string_key(
     // its high bits are set, so the `is_array` GC-header probe below would
     // dereference unmapped memory. Route to the by-name object setter, which
     // detects the class-ref tag and stores into the static-field tables.
-    if (arr as u64) >> 48 == 0x7FFE {
+    if crate::object::class_value::legacy_class_ptr_word(arr as u64).is_some() {
         crate::object::js_object_set_field_by_name(
             arr as *mut crate::object::ObjectHeader,
             key,

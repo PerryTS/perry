@@ -95,15 +95,13 @@ pub(crate) use emitter::{
     cp_method_kill, cp_method_on, cp_method_pipe, cp_method_read, cp_method_ref,
     cp_method_remove_all_listeners, cp_method_remove_listener, cp_method_send,
     cp_method_set_encoding, cp_method_stdin_end, cp_method_stdin_write, cp_method_this0,
-    cp_method_this1, cp_method_unref, cp_readable_end, cp_register, cp_send_callback_thunk,
-    cp_stream_callback_thunk, js_fork_child,
+    cp_method_unref, cp_readable_end, cp_register, js_fork_child,
 };
 
 // builder.rs — heap object construction + shape ids.
 pub(crate) use builder::{
     cp_build_object, cp_build_readable, cp_build_unstarted_child_process, cp_build_writable,
-    cp_cast0, cp_cast1, cp_cast2, cp_cast4, cp_install_dispose, cp_register_arities, CpFn,
-    CP_SHAPE_ID,
+    cp_install_dispose, CpFn, CP_SHAPE_ID,
 };
 
 // options.rs — command option application (cwd/env/uid/gid/argv0/detached/stdio).

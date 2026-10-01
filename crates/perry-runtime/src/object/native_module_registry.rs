@@ -508,6 +508,14 @@ pub extern "C" fn js_nm_install_stream() {
         Ordering::Relaxed,
     );
     nm_register_ctor(NmBucket::Stream, nm_ctor_stream);
+    // `black_box` for the reason `js_nm_enable_install_all` gives: this is the
+    // only value ever stored to the single-pointer slot, and without it
+    // whole-program optimization devirtualizes the load in
+    // `nm_stream_subclass_init` into a direct call, re-pinning node_stream.
+    let init = std::hint::black_box(
+        super::native_this_alias::node_stream_subclass_init as NmStreamSubclassInitFn,
+    );
+    NM_STREAM_SUBCLASS_INIT.store(init as *mut (), Ordering::Relaxed);
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_timers() {
@@ -720,6 +728,34 @@ pub(crate) fn nm_ctor_lookup(module: &str) -> Option<NmCtorFn> {
 /// bucket id, like NM_DISPATCH_REGISTRY — not speculatively devirtualizable).
 fn nm_register_ctor(b: NmBucket, f: NmCtorFn) {
     NM_CTOR_REGISTRY[b as usize].store(f as *mut (), Ordering::Relaxed);
+}
+
+type NmStreamSubclassInitFn = fn(&str, f64, f64) -> bool;
+
+/// The stream bucket's subclass-init shim (`Readable.call(this, opts)`, a
+/// dynamic `super(opts)` onto a stream base). Registered by
+/// `js_nm_install_stream` so the always-linked call paths that reach it do not
+/// pin node_stream into programs that never import `stream`.
+static NM_STREAM_SUBCLASS_INIT: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
+
+/// Run the installed stream subclass-init shim for stream base `method` on
+/// `this`. False when `method` is no stream base or `stream` was never
+/// installed (then no stream base callee can exist either).
+pub(crate) fn nm_stream_subclass_init(method: &str, this: f64, opts: f64) -> bool {
+    let p = NM_STREAM_SUBCLASS_INIT.load(Ordering::Relaxed);
+    // See nm_dispatch_lookup: unit tests run without the codegen install.
+    #[cfg(test)]
+    let p = if p.is_null() && nm_lazy_install_enabled() {
+        js_nm_install_all();
+        NM_STREAM_SUBCLASS_INIT.load(Ordering::Relaxed)
+    } else {
+        p
+    };
+    if p.is_null() {
+        return false;
+    }
+    let f = unsafe { std::mem::transmute::<*mut (), NmStreamSubclassInitFn>(p) };
+    f(method, this, opts)
 }
 
 /// Per-module callable-export "attach" handlers: prototype/statics decoration

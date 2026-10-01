@@ -48,6 +48,8 @@ use perry_hir::{Expr, Function, Module, ModuleInitKind, Param, Stmt};
 /// THE shape compare, and the block holding the slot store.
 const HIT: &str = "put.pic.token";
 const HIT_STORE: &str = "put.pic.hit.store";
+/// Charter step 5 (P2c): the store check between the admission and the store.
+const HIT_REP: &str = "put.pic.hit.rep";
 /// The pointer-bearing arm. The IC passes the `"put.pic"` stem precisely so an
 /// assertion about THIS site cannot be satisfied by a class-field store
 /// elsewhere in the same module.
@@ -58,8 +60,6 @@ const CLASSIFY: &str = "put.pic.classify";
 const SCALAR: &str = "put.pic.scalar.tagged";
 /// The string alias demotion, gated on the STRING tag inside the pointer arm.
 const STRING_ALIAS: &str = "put.pic.string_alias";
-/// The layout note, gated inside the pointer arm on the receiver's header.
-const LAYOUT_NOTE: &str = "put.pic.layout_note";
 const BARRIER: &str = "put.pic.barrier";
 
 /// Every runtime helper gets a `declare` line whether or not it is called, so
@@ -346,9 +346,8 @@ fn static_write_pic_guards_its_bookkeeping_behind_a_live_pointer_test() {
          block:\n{hit_store}"
     );
 
-    // (f) The arm still does all three jobs, each behind its own live test:
-    // the string demotion behind the STRING tag, the layout note behind the
-    // receiver's header state.
+    // (f) The string demotion remains behind the STRING tag. Object layout
+    // comes from ShapeId, so neither note call may appear.
     let (alias_branch, alias_pred) = branch_into_block(&ir, STRING_ALIAS).unwrap_or_else(|| {
         panic!("no `br i1 ..., label %{STRING_ALIAS}` — the string demotion is unreachable:\n{ir}")
     });
@@ -362,22 +361,9 @@ fn static_write_pic_guards_its_bookkeeping_behind_a_live_pointer_test() {
         alias.contains(ADDREF),
         "a uniquely-owned string aliased into the slot must still be demoted:\n{alias}"
     );
-    let (note_branch, note_pred) = branch_into_block(&ir, LAYOUT_NOTE).unwrap_or_else(|| {
-        panic!("no `br i1 ..., label %{LAYOUT_NOTE}` — the layout note is unreachable:\n{ir}")
-    });
     assert!(
-        note_branch.trim_start().starts_with("br i1 %"),
-        "the layout-note gate must be a LIVE header test: {note_branch}"
-    );
-    assert!(
-        note_pred.contains("and i16") && note_pred.contains(", -12288"),
-        "the layout-note gate must test GC_LAYOUT_STATE_MASK | TYPED_LAYOUT_INTACT:\n{note_pred}"
-    );
-    let note =
-        block(&ir, LAYOUT_NOTE).unwrap_or_else(|| panic!("the layout-note arm must exist:\n{ir}"));
-    assert!(
-        note.contains(NOTE),
-        "the pointer-bearing store must still record the slot's GC layout:\n{note}"
+        !ir.contains(NOTE) && !ir.contains(NOTE_AWARE),
+        "object write IC still emits a layout note:\n{ir}"
     );
 
     // (g) The barrier is reached, behind the #7871 parent-generation test, and
@@ -451,14 +437,7 @@ fn static_write_pic_keeps_a_bare_store_for_a_provably_non_pointer_value() {
 #[test]
 fn store_ic_hit_path_reads_no_gc_kind_or_forwarded_byte() {
     let ir = write_pic_ir("store_ic_header_reads", Expr::LocalGet(VALUE));
-    for stem in [
-        HIT,
-        "put.pic.kind",
-        "put.pic.class",
-        "put.pic.classless",
-        HIT_STORE,
-        CLASSIFY,
-    ] {
+    for stem in [HIT, "put.pic.kind", HIT_STORE, CLASSIFY] {
         let body = block(&ir, stem)
             .unwrap_or_else(|| panic!("the store IC block `{stem}` must exist:\n{ir}"));
         assert!(
@@ -479,51 +458,42 @@ fn store_ic_hit_path_reads_no_gc_kind_or_forwarded_byte() {
     );
 }
 
-/// The per-object facts the ShapeId does NOT carry stand between the shape
-/// compare and the store, as live header tests, on EVERY path into the store
-/// block: the Array-subclass numeric proof (`_reserved & 0x80`), then the
-/// receiver kind — a class id other than 0 / native-module / `u32::MAX`
-/// (`class_id + 2 >u 2`), or a class-less receiver marked ordinary and not a
-/// typed-array prototype (`_reserved & 0x300 == 0x200`, `class_id == 0`).
-/// Sabotage: branching the kind block straight to the store turns this red.
+/// Charter step 3: the receiver kind and the Array-subclass numeric proof are
+/// SHAPE facts (`perry_runtime::object::shapes::store_kind` — the runtime
+/// publishes a word only for an `Ordinary` shape), so nothing per object
+/// stands between the shape compare and the store check: the hit block loads
+/// `_reserved` for the barrier only and branches straight to the rep block, with
+/// no `class_id` read and no proof or ordinary-mark mask. Sabotage:
+/// re-inserting any of the old per-object tests turns this red.
 #[test]
-fn store_ic_hit_requires_the_per_object_receiver_tests() {
+fn store_ic_hit_reads_no_per_object_receiver_fact() {
     let ir = write_pic_ir("store_ic_receiver_kind", Expr::LocalGet(VALUE));
-    let kind = block(&ir, "put.pic.kind").unwrap_or_else(|| panic!("kind block:\n{ir}"));
-    let class = block(&ir, "put.pic.class").unwrap_or_else(|| panic!("class block:\n{ir}"));
-    let classless =
-        block(&ir, "put.pic.classless").unwrap_or_else(|| panic!("classless block:\n{ir}"));
-    let term = |b: &str| b.lines().last().unwrap_or("").trim().to_string();
-
     assert!(
-        kind.contains("load i16") && kind.contains(", 128"),
-        "the kind block must test the numeric-proof bit of `_reserved`:\n{kind}"
+        block(&ir, "put.pic.class").is_none() && block(&ir, "put.pic.classless").is_none(),
+        "no class / class-less admission block may exist:\n{ir}"
     );
-    let (k_cond, k_true, k_false) = branch_targets(&term(&kind));
+    let kind = block(&ir, "put.pic.kind").unwrap_or_else(|| panic!("hit block:\n{ir}"));
+    let term = kind.lines().last().unwrap_or("").trim().to_string();
     assert!(
-        label_is(&k_true, "put.pic.class") && label_is(&k_false, "put.pic.miss"),
-        "no proof -> class test, proof -> miss: {k_cond}\n{kind}"
+        term.starts_with("br label %") && label_is(term.trim_start_matches("br label %"), HIT_REP),
+        "a matched shape goes straight on to the store check: {term}\n{kind}"
     );
-
     assert!(
-        class.contains("load i32") && class.contains(", 2"),
-        "the class block must test `class_id + 2 >u 2`:\n{class}"
+        !kind.contains("load i32") && !kind.contains(", 128") && !kind.contains(", 768"),
+        "the hit reads no class id and tests no proof / ordinary-mark bit:\n{kind}"
     );
-    let (_, c_true, c_false) = branch_targets(&term(&class));
+    // The store check (DESIGN §3.2): a word whose sign bit is set (an `F64`
+    // lane) refuses a value whose exponent is all ones to the miss; every
+    // other store goes on to the store block.
+    let rep = block(&ir, HIT_REP).unwrap_or_else(|| panic!("rep block:\n{ir}"));
     assert!(
-        label_is(&c_true, HIT_STORE) && label_is(&c_false, "put.pic.classless"),
-        "a class instance stores, anything else asks the ordinary mark:\n{class}"
+        rep.contains("icmp slt i64") && rep.contains("9218868437227405312"),
+        "the rep block must test the word's F64 flag and the value's exponent:\n{rep}"
     );
-
+    let (_, r_true, r_false) = branch_targets(rep.lines().last().unwrap_or("").trim());
     assert!(
-        classless.contains(", 768") && classless.contains(", 512"),
-        "the class-less block must require the ordinary mark without the \
-         typed-array-prototype bit:\n{classless}"
-    );
-    let (_, l_true, l_false) = branch_targets(&term(&classless));
-    assert!(
-        label_is(&l_true, HIT_STORE) && label_is(&l_false, "put.pic.miss"),
-        "a marked ordinary receiver stores, anything else misses:\n{classless}"
+        label_is(&r_true, "put.pic.miss") && label_is(&r_false, HIT_STORE),
+        "a refused value misses, anything else stores:\n{rep}"
     );
 
     // No other edge reaches the store.
@@ -538,8 +508,8 @@ fn store_ic_hit_requires_the_per_object_receiver_tests() {
         })
         .count();
     assert_eq!(
-        into_store, 2,
-        "only the class and class-less tests may enter the store:\n{ir}"
+        into_store, 1,
+        "only the store check may enter the store:\n{ir}"
     );
 }
 
@@ -611,12 +581,7 @@ fn dyn_ic_reference_store_ir() -> String {
 
 /// #8108: a reference-tagged value stored through the inline dynamic-key write
 /// IC takes a BARRIERED inline arm instead of leaving the inline path.
-///
-/// The reference arm is byte-for-byte the static write PIC's pre-#8184
-/// pointer-capable store reached under strictly stronger conditions — the tag
-/// is already known — so this test pins all three bookkeeping calls. Dropping
-/// any one of them is the #5094 / #7511 family of silent-stranding bugs, and
-/// none of them is visible to a runtime GC probe.
+/// The tag is already known, but string alias demotion and the barrier remain.
 #[test]
 fn dyn_ic_inline_store_barriers_a_reference_value() {
     assert_default_barrier_env_not_disabled();
@@ -637,13 +602,16 @@ fn dyn_ic_inline_store_barriers_a_reference_value() {
         "the reference arm must be a branch target, not dead IR:\n{ir}"
     );
 
-    for helper in [ADDREF, NOTE_AWARE, BARRIER_CALL] {
+    for helper in [ADDREF, BARRIER_CALL] {
         assert!(
             reference.contains(helper),
-            "the reference store arm must keep the full layout-note / string-alias / \
-             write-barrier path; missing {helper}:\n{reference}"
+            "the reference store arm lost {helper}:\n{reference}"
         );
     }
+    assert!(
+        !reference.contains(NOTE_AWARE) && !reference.contains(NOTE),
+        "object reference store still emits a layout note:\n{reference}"
+    );
     assert!(
         reference.contains("store double"),
         "the reference arm must still perform the slot store:\n{reference}"

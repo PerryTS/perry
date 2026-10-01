@@ -43,13 +43,16 @@
 //!   unrolled stmts. Out of scope for v1.
 //! - **`Stmt::Labeled`** — same reason; the label is loop-scoped and
 //!   would alias with siblings post-unroll.
-//! - **Closures capturing the IV** — each iteration needs to capture a
-//!   different value of `i`, but unrolling produces stmts at the caller
-//!   scope where `i` no longer exists. Substituting `LocalGet(i)` to
-//!   `Integer(N)` inside the closure body works only for closures that
-//!   capture-by-value at construction time AND aren't called after the
-//!   IV's loop-scope ends. Conservative: reject all closures referencing
-//!   the IV.
+//! - **Function literals** (closures, arrows, object-literal and
+//!   prototype-literal methods, class expressions) — one source function
+//!   literal must stay ONE function. Cloning the body would give every copy
+//!   its own compiled body (a fresh FuncId, #456), so a receiver built in
+//!   the loop carries a different code pointer per iteration and every
+//!   identity-keyed memo on it (method sites, call-site feedback) sees N
+//!   functions where the program has one: `for (let i = 0; i < 8; i++)
+//!   objs.push({ m() {} })` latched its method site megamorphic. The
+//!   unroller exists to fold constant indices into kernels, which never
+//!   create functions per iteration.
 //! - **`LocalSet(i, ...)` or `Update { id: i }` inside body** — user is
 //!   manually mutating the IV; unrolling would lose those writes.
 //!   Allowed only in the for-loop's own `update` slot (by definition).
@@ -502,8 +505,7 @@ fn try_unroll_for(
     //      * codegen emits one `@perry_global_*__<id>` per module-init
     //        Stmt::Let with a referenced id, and N copies of the same
     //        id cause LLVM duplicate-global errors (issue #456); and
-    //      * each iteration's `() => captured` closure is supposed to
-    //        bind a distinct value, which requires distinct capture ids.
+    //      * a later read of a per-copy `let` must see its own copy.
     let mut out: Vec<Stmt> = Vec::with_capacity((trips as usize) * body.len());
     for n in 0..trips {
         let value = lo + n;
@@ -625,31 +627,9 @@ fn expr_is_unrollable(e: &Expr, iv_id: LocalId) -> bool {
     match e {
         Expr::LocalSet(id, _) if *id == iv_id => return false,
         Expr::Update { id, .. } if *id == iv_id => return false,
-        // Closures: reject any closure that even mentions the IV. A
-        // closure captured-by-value at construction would semantically
-        // freeze the IV's current value, but our HIR captures are by
-        // ID; substituting LocalGet(iv) → Integer(N) inside the
-        // closure body works only if the closure isn't called outside
-        // the IV's live range. The image_convolution kernel doesn't
-        // create closures inside its blur loops, so this restriction
-        // is free for the target workload.
-        Expr::Closure { body, captures, .. } => {
-            if captures.contains(&iv_id) {
-                return false;
-            }
-            // Defensive: walk the closure body to catch any direct
-            // `LocalGet(iv_id)` reference that wasn't materialized as a
-            // capture entry (shouldn't happen in well-formed HIR, but
-            // checking is cheap). Closure body's break/continue are
-            // always lexically scoped to a loop *inside* the closure
-            // (free `break` outside a loop is a JS syntax error), so we
-            // start at loop_depth=1 to suppress the always-true Break/
-            // Continue rejection.
-            if !body.iter().all(|s| stmt_is_unrollable(s, iv_id, 1)) {
-                return false;
-            }
-            return true;
-        }
+        // A function literal is refused whatever it captures: the copies
+        // would each be a distinct function (see the module doc).
+        Expr::Closure { .. } | Expr::ClassExprFresh { .. } => return false,
         _ => {}
     }
     // Recurse into all sub-expressions.
@@ -1038,12 +1018,12 @@ fn refresh_in_expr(
             mutable_captures,
             ..
         } => {
-            // Each cloned closure must get its own FuncId. Codegen keys
-            // compiled functions by FuncId, so two cloned `() => captured`
-            // closures sharing one FuncId would collapse into a single
-            // compiled function — every iteration's `fns[i]()` would then
-            // read the same global. Bumping FuncId per clone keeps each
-            // closure on its own compiled body.
+            // `expr_is_unrollable` refuses bodies that contain a function
+            // literal, so an unrolled body must not be assumed to reach
+            // here; the arm keeps the refresher total for any caller. If a
+            // closure is cloned, each clone needs its own FuncId: codegen
+            // keys compiled functions by FuncId, so two clones sharing one
+            // would collapse into a single compiled function.
             *func_id = *next_func_id;
             *next_func_id = next_func_id.saturating_add(1);
 
@@ -1596,10 +1576,10 @@ mod tests {
     /// disturb.
     #[test]
     fn loop_local_let_still_refreshed_per_copy() {
-        // for (let i = 0; i < 3; i++) { let x = i; fns.push(() => x); }
+        // for (let i = 0; i < 3; i++) { let x = i; xs.push(x); }
         let i = 1u32;
         let x = 2u32;
-        let fns = 3u32; // declared outside the loop (not refreshed)
+        let xs = 3u32; // declared outside the loop (not refreshed)
         let body = vec![
             Stmt::Let {
                 id: x,
@@ -1609,22 +1589,8 @@ mod tests {
                 init: Some(ivar(i)),
             },
             Stmt::Expr(Expr::ArrayPush {
-                array_id: fns,
-                value: Box::new(Expr::Closure {
-                    func_id: 0,
-                    params: vec![],
-                    return_type: Type::Number,
-                    body: vec![Stmt::Return(Some(Expr::LocalGet(x)))],
-                    captures: vec![x],
-                    mutable_captures: vec![],
-                    captures_this: false,
-                    captures_new_target: false,
-                    enclosing_class: None,
-                    is_arrow: false,
-                    is_strict: false,
-                    is_async: false,
-                    is_generator: false,
-                }),
+                array_id: xs,
+                value: Box::new(Expr::LocalGet(x)),
                 field_writeback: None,
             }),
         ];
@@ -1635,7 +1601,7 @@ mod tests {
         assert!(changed, "expected unroll to fire");
         assert_eq!(stmts.len(), 6, "3 trips * 2 body stmts");
         // Collect the `let x` id of each copy — they must all be DISTINCT
-        // (refreshed), and the closure in each copy must capture its own id.
+        // (refreshed), and the push in each copy must read its own id.
         let mut let_ids = Vec::new();
         for pair in stmts.chunks(2) {
             let decl_id = match &pair[0] {
@@ -1644,10 +1610,10 @@ mod tests {
             };
             match &pair[1] {
                 Stmt::Expr(Expr::ArrayPush { value, .. }) => match value.as_ref() {
-                    Expr::Closure { captures, .. } => {
-                        assert_eq!(captures, &vec![decl_id], "closure captures its copy's x");
+                    Expr::LocalGet(id) => {
+                        assert_eq!(*id, decl_id, "the push reads its copy's x");
                     }
-                    other => panic!("expected Closure, got {:?}", other),
+                    other => panic!("expected LocalGet, got {:?}", other),
                 },
                 other => panic!("expected ArrayPush, got {:?}", other),
             }
@@ -1659,6 +1625,40 @@ mod tests {
             let_ids.len(),
             3,
             "each copy's `let x` must be a distinct id"
+        );
+    }
+
+    /// Sabotage: allow a closure that does not mention the IV -> this is red.
+    /// A function literal in the body would be cloned into one function per
+    /// copy, splitting the identity every method-site memo keys on.
+    #[test]
+    fn rejects_loop_with_a_function_literal_that_ignores_the_iv() {
+        // for (let i = 0; i < 3; i++) { fns.push(function () { return 1; }); }
+        let i = 1u32;
+        let fns = 2u32;
+        let body = vec![Stmt::Expr(Expr::ArrayPush {
+            array_id: fns,
+            value: Box::new(Expr::Closure {
+                func_id: 0,
+                params: vec![],
+                return_type: Type::Number,
+                body: vec![Stmt::Return(Some(integer(1)))],
+                captures: vec![],
+                mutable_captures: vec![],
+                captures_this: false,
+                captures_new_target: false,
+                enclosing_class: None,
+                is_arrow: false,
+                is_strict: false,
+                is_async: false,
+                is_generator: false,
+            }),
+            field_writeback: None,
+        })];
+        let f = make_for(i, 0, 3, body, CompareOp::Lt);
+        assert!(
+            try_unroll(&f).is_none(),
+            "a function literal must not be cloned"
         );
     }
 

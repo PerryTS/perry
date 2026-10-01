@@ -394,6 +394,7 @@ fn take_block(block: PromotedBlock) -> Option<ArenaBlock> {
                 object_starts: Box::new([]),
                 dead_cycles: 0,
                 old_free_holes: false,
+                pinned_summary: false,
             },
         ))
     };

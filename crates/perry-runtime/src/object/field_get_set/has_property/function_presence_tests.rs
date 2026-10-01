@@ -1,6 +1,9 @@
 use super::*;
 
-extern "C" fn noop(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn noop(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
@@ -9,7 +12,7 @@ fn function_presence_follows_prototypes_without_reading_values() {
     let _lock = crate::gc::global_side_table_test_lock();
     let scope = crate::gc::RuntimeHandleScope::new();
     let function = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
-        crate::closure::js_closure_alloc(noop as *const u8, 0) as i64,
+        crate::closure::js_closure_alloc(crate::fn_info!(noop, 0), 0) as i64,
     ));
     let has = |receiver: f64, name: &str| {
         let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
@@ -47,13 +50,18 @@ fn function_presence_follows_prototypes_without_reading_values() {
 #[test]
 fn generator_presence_initializes_function_parents() {
     let _lock = crate::gc::global_side_table_test_lock();
-    extern "C" fn generator_body(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    extern "C" fn generator_body(
+        _closure: *const crate::closure::ClosureHeader,
+        _this: crate::closure::JsThis,
+    ) -> f64 {
         f64::from_bits(crate::value::TAG_UNDEFINED)
     }
-    crate::closure::js_register_closure_generator_function(generator_body as *const u8);
     let scope = crate::gc::RuntimeHandleScope::new();
     let function = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
-        crate::closure::js_closure_alloc(generator_body as *const u8, 0) as i64,
+        crate::closure::js_closure_alloc(
+            crate::fn_info!(generator_body, 0; with_flags(crate::closure::FN_GENERATOR)),
+            0,
+        ) as i64,
     ));
     let key = crate::string::js_string_from_bytes(b"call".as_ptr(), 4);
     assert_ne!(

@@ -48,6 +48,7 @@ pub mod vstack;
 pub mod webview;
 pub mod zstack;
 
+use crate::srgb;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject};
 use objc2::{msg_send, AnyThread, DefinedClass};
@@ -678,15 +679,6 @@ pub fn reorder_child(parent_handle: i64, from_index: i64, to_index: i64) {
 // Widget Styling (Background, Gradient, Corner Radius)
 // =============================================================================
 
-use std::ffi::c_void;
-
-type CGFloat = f64;
-
-extern "C" {
-    fn CGColorCreateGenericRGB(r: CGFloat, g: CGFloat, b: CGFloat, a: CGFloat) -> *mut c_void;
-    fn CGColorRelease(color: *mut c_void);
-}
-
 /// Set a solid background color on any widget via its layer.
 /// Also caches the color so it can be re-applied after NSStackView detach/re-attach.
 pub fn set_background_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
@@ -704,9 +696,8 @@ fn apply_background_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
             let _: () = objc2::msg_send![&*view, setWantsLayer: true];
             let layer: *mut AnyObject = objc2::msg_send![&*view, layer];
             if !layer.is_null() {
-                let cg_color = CGColorCreateGenericRGB(r, g, b, a);
-                let _: () = objc2::msg_send![layer, setBackgroundColor: cg_color];
-                CGColorRelease(cg_color);
+                let cg_color = srgb::CgColor::new(r, g, b, a);
+                let _: () = objc2::msg_send![layer, setBackgroundColor: cg_color.as_ptr()];
             }
         }
     }
@@ -767,23 +758,19 @@ pub fn set_background_gradient(
             let _: () = objc2::msg_send![gradient, setFrame: bounds];
 
             // Create colors array
-            let color1 = CGColorCreateGenericRGB(r1, g1, b1, a1);
-            let color2 = CGColorCreateGenericRGB(r2, g2, b2, a2);
+            let color1 = srgb::CgColor::new(r1, g1, b1, a1);
+            let color2 = srgb::CgColor::new(r2, g2, b2, a2);
 
             // Wrap in NSArray via obj-c id
             let colors: Retained<AnyObject> = {
                 let arr_cls = AnyClass::get(c"NSMutableArray").unwrap();
                 let arr: *mut AnyObject = objc2::msg_send![arr_cls, arrayWithCapacity: 2usize];
-                let _: () = objc2::msg_send![arr, addObject: color1 as *mut AnyObject];
-                let _: () = objc2::msg_send![arr, addObject: color2 as *mut AnyObject];
+                let _: () = objc2::msg_send![arr, addObject: color1.as_ptr() as *mut AnyObject];
+                let _: () = objc2::msg_send![arr, addObject: color2.as_ptr() as *mut AnyObject];
                 Retained::retain(arr).unwrap()
             };
 
             let _: () = objc2::msg_send![gradient, setColors: &*colors];
-
-            CGColorRelease(color1);
-            CGColorRelease(color2);
-
             // Set direction
             if direction < 0.5 {
                 // Vertical: top to bottom
@@ -817,9 +804,8 @@ pub fn set_border_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
             let _: () = objc2::msg_send![&*view, setWantsLayer: true];
             let layer: *mut AnyObject = objc2::msg_send![&*view, layer];
             if !layer.is_null() {
-                let cg_color = CGColorCreateGenericRGB(r, g, b, a);
-                let _: () = objc2::msg_send![layer, setBorderColor: cg_color];
-                CGColorRelease(cg_color);
+                let cg_color = srgb::CgColor::new(r, g, b, a);
+                let _: () = objc2::msg_send![layer, setBorderColor: cg_color.as_ptr()];
             }
         }
     }
@@ -864,9 +850,8 @@ pub fn set_shadow(
             let layer: *mut AnyObject = objc2::msg_send![&*view, layer];
             if !layer.is_null() {
                 // Color: opaque CGColor; alpha rides on shadowOpacity.
-                let cg_color = CGColorCreateGenericRGB(r, g, b, 1.0);
-                let _: () = objc2::msg_send![layer, setShadowColor: cg_color];
-                CGColorRelease(cg_color);
+                let cg_color = srgb::CgColor::new(r, g, b, 1.0);
+                let _: () = objc2::msg_send![layer, setShadowColor: cg_color.as_ptr()];
                 let _: () = objc2::msg_send![layer, setShadowOpacity: a as f32];
                 let _: () = objc2::msg_send![layer, setShadowRadius: blur];
                 // CGSize is {f64 width, f64 height}; objc2_core_foundation
@@ -1081,7 +1066,7 @@ pub fn match_parent_width(child_handle: i64) {
 // =============================================================================
 
 extern "C" {
-    fn js_closure_call0(closure: *const u8) -> f64;
+    fn js_closure_call0(closure: *const u8, this: perry_ffi::JsThis) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
 }
 
@@ -1254,7 +1239,7 @@ objc2::define_class!(
                 if let Some(closure_f64) = closure_f64 {
                     let closure_ptr = unsafe { js_nanbox_get_pointer(closure_f64) };
                     unsafe {
-                        js_closure_call0(closure_ptr as *const u8);
+                        js_closure_call0(closure_ptr as *const u8, perry_ffi::JsThis::UNDEFINED);
                     }
                 }
             }));

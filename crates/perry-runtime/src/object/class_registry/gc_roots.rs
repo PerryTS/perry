@@ -2,10 +2,6 @@ use super::*;
 
 #[derive(Clone)]
 enum ClassSideTableRootSlot {
-    DynamicProp {
-        class_id: u32,
-        name: String,
-    },
     PrototypeMethod {
         class_id: u32,
         name: String,
@@ -18,9 +14,6 @@ enum ClassSideTableRootSlot {
         class_id: u32,
     },
     DeclPrototypeObject {
-        class_id: u32,
-    },
-    StaticPrototype {
         class_id: u32,
     },
     ParentClosure {
@@ -81,15 +74,6 @@ pub fn scan_class_side_table_roots(mark: &mut dyn FnMut(f64)) {
 }
 
 pub fn scan_class_side_table_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    CLASS_DYNAMIC_PROPS.with(|m| {
-        let mut m = m.borrow_mut();
-        for props in m.values_mut() {
-            for value in props.values_mut() {
-                visitor.visit_nanbox_f64_slot(value);
-            }
-        }
-    });
-
     CLASS_PROTOTYPE_METHODS.with(|table| {
         if let Ok(mut guard) = table.write() {
             if let Some(map) = guard.as_mut() {
@@ -127,16 +111,6 @@ pub fn scan_class_side_table_roots_mut(visitor: &mut crate::gc::RuntimeRootVisit
                 map.visit_root_slots(|proto_addr| {
                     visitor.visit_usize_slot(proto_addr);
                 });
-            }
-        }
-    });
-
-    CLASS_STATIC_PROTOTYPES.with(|table| {
-        if let Ok(mut guard) = table.write() {
-            if let Some(map) = guard.as_mut() {
-                for proto_addr in map.values_mut() {
-                    visitor.visit_usize_slot(proto_addr);
-                }
             }
         }
     });
@@ -235,18 +209,6 @@ fn scan_class_symbol_member_keys_mut(visitor: &mut crate::gc::RuntimeRootVisitor
 fn class_side_table_root_snapshot() -> Vec<ClassSideTableRootSlot> {
     let mut slots = Vec::new();
 
-    CLASS_DYNAMIC_PROPS.with(|m| {
-        let m = m.borrow();
-        for (&class_id, props) in m.iter() {
-            for name in props.keys() {
-                slots.push(ClassSideTableRootSlot::DynamicProp {
-                    class_id,
-                    name: name.clone(),
-                });
-            }
-        }
-    });
-
     CLASS_PROTOTYPE_METHODS.with(|table| {
         if let Ok(guard) = table.read() {
             if let Some(map) = guard.as_ref() {
@@ -287,16 +249,6 @@ fn class_side_table_root_snapshot() -> Vec<ClassSideTableRootSlot> {
             if let Some(map) = guard.as_ref() {
                 for class_id in map.class_ids() {
                     slots.push(ClassSideTableRootSlot::DeclPrototypeObject { class_id });
-                }
-            }
-        }
-    });
-
-    CLASS_STATIC_PROTOTYPES.with(|table| {
-        if let Ok(guard) = table.read() {
-            if let Some(map) = guard.as_ref() {
-                for &class_id in map.keys() {
-                    slots.push(ClassSideTableRootSlot::StaticPrototype { class_id });
                 }
             }
         }
@@ -385,17 +337,6 @@ fn scan_class_side_table_root_slot(
     slot: &ClassSideTableRootSlot,
 ) {
     match slot {
-        ClassSideTableRootSlot::DynamicProp { class_id, name } => {
-            CLASS_DYNAMIC_PROPS.with(|m| {
-                if let Some(value) = m
-                    .borrow_mut()
-                    .get_mut(class_id)
-                    .and_then(|props| props.get_mut(name))
-                {
-                    visitor.visit_nanbox_f64_slot(value);
-                }
-            });
-        }
         ClassSideTableRootSlot::PrototypeMethod { class_id, name } => {
             CLASS_PROTOTYPE_METHODS.with(|table| {
                 if let Ok(mut guard) = table.write() {
@@ -434,15 +375,6 @@ fn scan_class_side_table_root_slot(
                         map.visit_root_slot_for(*class_id, |proto_addr| {
                             visitor.visit_usize_slot(proto_addr);
                         });
-                    }
-                }
-            });
-        }
-        ClassSideTableRootSlot::StaticPrototype { class_id } => {
-            CLASS_STATIC_PROTOTYPES.with(|table| {
-                if let Ok(mut guard) = table.write() {
-                    if let Some(proto_addr) = guard.as_mut().and_then(|map| map.get_mut(class_id)) {
-                        visitor.visit_usize_slot(proto_addr);
                     }
                 }
             });
@@ -654,13 +586,7 @@ fn visit_metadata_nanbox_key(
 
 #[cfg(test)]
 pub(crate) fn test_clear_class_side_table_roots() {
-    // Disambiguate: CLASS_DELETED_KEYS is reachable via both `use super::*`
-    // and `use crate::object::*`; name the canonical definition explicitly.
-    use super::state::CLASS_DELETED_KEYS;
-    CLASS_DYNAMIC_PROPS.with(|m| m.borrow_mut().clear());
     super::state::CLASS_DECLARED_STATIC_GLOBAL_SLOTS.with(|m| m.borrow_mut().clear());
-    crate::object::CLASS_DYNAMIC_PROP_ORDER.with(|order| order.borrow_mut().clear());
-    CLASS_DELETED_KEYS.with(|m| m.borrow_mut().clear());
     CLASS_PROTOTYPE_METHOD_VALUES.with(|cache| cache.borrow_mut().clear());
     CLASS_PROTOTYPE_METHODS.with(|table| {
         if let Ok(mut guard) = table.write() {
@@ -684,11 +610,6 @@ pub(crate) fn test_clear_class_side_table_roots() {
     });
     super::state::CLASS_PROTOTYPE_ADDR_COUNTS.with(|index| index.borrow_mut().clear());
     CLASS_DECL_PROTOTYPE_OBJECTS.with(|table| {
-        if let Ok(mut guard) = table.write() {
-            *guard = None;
-        }
-    });
-    CLASS_STATIC_PROTOTYPES.with(|table| {
         if let Ok(mut guard) = table.write() {
             *guard = None;
         }
@@ -731,13 +652,9 @@ pub(crate) fn test_seed_class_dynamic_prop_root(class_id: u32, name: &str, value
 
 #[cfg(test)]
 pub(crate) fn test_class_dynamic_prop_root_bits(class_id: u32, name: &str) -> u64 {
-    CLASS_DYNAMIC_PROPS.with(|m| {
-        m.borrow()
-            .get(&class_id)
-            .and_then(|props| props.get(name))
-            .map(|value| value.to_bits())
-            .unwrap_or(0)
-    })
+    crate::object::class_value::class_static_get(class_id, name)
+        .map(f64::to_bits)
+        .unwrap_or(0)
 }
 
 #[cfg(test)]

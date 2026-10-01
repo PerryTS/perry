@@ -74,7 +74,7 @@ fn load_trusted_box_capture_bits(
     // before entering that observable cold arm, just like a PIC miss or
     // dynamic `+` fallback.
     crate::expr::emit_versioned_loop_callback_deopt(ctx);
-    let slow_bits = emit_box_read(ctx, id, &capture.bits, true);
+    let slow_bits = emit_box_read(ctx, id, &capture.cell_bits, true);
     let slow_end = ctx.block().label.clone();
     ctx.block().br(&merge_label);
 
@@ -339,6 +339,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         demote_extracted_string_binding(ctx, *id, &value);
                         return Ok(value);
                     }
+                    if let Some(bits) = crate::scope_env::access::read_scoped(ctx, *id)? {
+                        let value = ctx.block().bitcast_i64_to_double(&bits);
+                        demote_extracted_string_binding(ctx, *id, &value);
+                        return Ok(value);
+                    }
                     let closure_ptr =
                         super::current_closure_ptr_value(ctx, "captured boxed local")?;
                     let box_ptr = load_closure_capture_bits_inline(ctx, &closure_ptr, capture_idx);
@@ -370,6 +375,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // union — which every closure inherits wholesale — was read
             // back as garbage (`NaN`) there.
             if ctx.boxed_vars.contains(id) && !ctx.module_globals.contains_key(id) {
+                if let Some(bits) = crate::scope_env::access::read_scoped(ctx, *id)? {
+                    let value = ctx.block().bitcast_i64_to_double(&bits);
+                    demote_extracted_string_binding(ctx, *id, &value);
+                    return Ok(value);
+                }
                 if let Some(slot) = ctx.locals.get(id).cloned() {
                     let blk = ctx.block();
                     let box_ptr = blk.load(I64, &slot);
@@ -654,7 +664,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // arms below keep their calls.
             let needs_numeric_coerce = !ctx.integer_locals.contains(id)
                 && !ctx.unsigned_i32_locals.contains(id)
-                && !ctx.number_by_construction_locals.contains(id);
+                && !crate::type_analysis::local_is_number(ctx, *id);
             let is_increment_arg = match op {
                 UpdateOp::Increment => "1",
                 UpdateOp::Decrement => "0",
@@ -685,26 +695,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let idx_str = capture_idx.to_string();
                 // Boxed captured var: deref box bits, modify, store back.
                 //
-                // `box_ptr` deliberately survives the `coerce_old`/`step_new`
-                // calls below even though those can collect: a box is
-                // `std::alloc::alloc`'d by `js_box_alloc_bits`, its memory is
-                // never handed back to the allocator, and it is never relocated
-                // (`scan_box_roots_mut` rewrites the JSValue *inside* the box,
-                // not the box's address), so an address read before a
-                // collection still names the same live cell after it. The
-                // closure pointer has no such guarantee, which is why the
-                // non-boxed arm below re-reads it.
-                //
-                // #8208 added a release/reuse path for completed async
-                // activations, so "never freed" is no longer literally true and
-                // the argument is now stated on the properties that ARE:
-                // (1) cell memory is never returned to the allocator, so the
-                // address never stops naming 8 bytes of box cell; (2) the
-                // runtime counts each raw box capture; and (3) a
-                // terminal cell stays live until both queued/running steps and
-                // capturing closures are gone. A capture from an enclosing
-                // activation therefore cannot become reusable inside the
-                // nested user frame `coerce_old`/`step_new` may enter.
+                // Cells move with the GC heap. Reload captures after calls
+                // that can invoke user coercion before publishing the update.
                 if ctx.boxed_vars.contains(id) {
                     if let Some(capture) = ctx.trusted_box_capture_ptrs.get(id).cloned() {
                         let old_bits = load_trusted_box_capture_bits(ctx, *id, &capture);
@@ -762,6 +754,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         emit_write_barrier(ctx, &capture.bits, &new_bits);
                         return Ok(if *prefix { new } else { old });
                     }
+                    if let Some((slot, base)) = crate::scope_env::access::load_base(ctx, *id)? {
+                        let old_bits = crate::scope_env::access::read_bits(ctx, *id, slot, &base);
+                        let blk = ctx.block();
+                        let old = blk.bitcast_i64_to_double(&old_bits);
+                        let old = coerce_old(blk, &old);
+                        let new = step_new(blk, &old);
+                        let new_bits = blk.bitcast_double_to_i64(&new);
+                        // The coercion can collect: reload the base.
+                        let (slot, base) = crate::scope_env::access::load_base(ctx, *id)?
+                            .expect("scoped base reloads");
+                        crate::scope_env::access::write_bits(ctx, slot, &base, &new_bits);
+                        return Ok(if *prefix { new } else { old });
+                    }
                     let closure_ptr =
                         super::current_closure_ptr_value(ctx, "captured boxed local update")?;
                     let setter = if ctx.trusted_box_captures {
@@ -781,7 +786,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let old = coerce_old(blk, &old);
                     let new = step_new(blk, &old);
                     let new_bits = blk.bitcast_double_to_i64(&new);
-                    blk.call_void(setter, &[(I64, &box_ptr), (I64, &new_bits)]);
+                    let closure_ptr =
+                        super::current_closure_ptr_value(ctx, "boxed update after coercion")?;
+                    let box_ptr = ctx.block().call(
+                        I64,
+                        "js_closure_get_capture_bits",
+                        &[(I64, &closure_ptr), (I32, &idx_str)],
+                    );
+                    ctx.block()
+                        .call_void(setter, &[(I64, &box_ptr), (I64, &new_bits)]);
                     // Gen-GC Phase C2: `++`/`--` on a BigInt yields a heap
                     // pointer via js_numeric_step — barrier the box parent.
                     emit_write_barrier(ctx, &box_ptr, &new_bits);
@@ -827,6 +840,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // increment, box_set_bits. Skip for module globals (they
             // have their own shared storage).
             if ctx.boxed_vars.contains(id) && !ctx.module_globals.contains_key(id) {
+                if let Some((slot, base)) = crate::scope_env::access::load_base(ctx, *id)? {
+                    let old_bits = crate::scope_env::access::read_bits(ctx, *id, slot, &base);
+                    let blk = ctx.block();
+                    let old = blk.bitcast_i64_to_double(&old_bits);
+                    let old = coerce_old(blk, &old);
+                    let new = step_new(blk, &old);
+                    let new_bits = blk.bitcast_double_to_i64(&new);
+                    // The coercion can collect: reload the base.
+                    let (slot, base) = crate::scope_env::access::load_base(ctx, *id)?
+                        .expect("scoped base reloads");
+                    crate::scope_env::access::write_bits(ctx, slot, &base, &new_bits);
+                    return Ok(if *prefix { new } else { old });
+                }
                 if let Some(slot) = ctx.locals.get(id).cloned() {
                     let blk = ctx.block();
                     let box_ptr = blk.load(I64, &slot);
@@ -836,6 +862,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let old = coerce_old(blk, &old);
                     let new = step_new(blk, &old);
                     let new_bits = blk.bitcast_double_to_i64(&new);
+                    let box_ptr = blk.load(I64, &slot);
                     blk.call_void("js_box_set_bits", &[(I64, &box_ptr), (I64, &new_bits)]);
                     // Gen-GC Phase C2: barrier — box is the parent (BigInt
                     // `++`/`--` can store a young heap pointer).
@@ -1116,52 +1143,12 @@ pub(crate) fn typeof_compile_time_answer(ctx: &FnCtx<'_>, operand: &Expr) -> Opt
                     }
                 }
             } else {
-                // Refs #915 (gap 2 from #899): `typeof C.staticMethod`
-                // where `C` is `Expr::ClassRef` or a `LocalGet`
-                // aliased to a class. Without this fold, the
-                // generic PropertyGet path returns `undefined`
-                // for static methods (the runtime `class_has_own_method`
-                // checks the prototype vtable, not the static
-                // method registry), so `typeof Cls.pipe` reported
-                // `"undefined"` instead of `"function"`. The actual
-                // dispatch fix lives in `lower_call.rs`'s ClassRef
-                // static-method arm — but a typeof read isn't a
-                // call, so it needs its own fold here.
-                let cls_opt: Option<String> = match object.as_ref() {
-                    Expr::ClassRef(cls_name) => Some(cls_name.clone()),
-                    Expr::LocalGet(id) => ctx
-                        .local_id_to_name
-                        .get(id)
-                        .and_then(|name| ctx.local_class_aliases.get(name).cloned()),
-                    _ => None,
-                };
-                if let Some(cls) = cls_opt {
-                    // Walk own static methods + extends chain.
-                    let mut cur = Some(cls);
-                    let mut found = false;
-                    while let Some(c) = cur {
-                        if let Some(class_info) = ctx.classes.get(&c) {
-                            if class_info
-                                .static_methods
-                                .iter()
-                                .any(|m| m.name == *property)
-                            {
-                                found = true;
-                                break;
-                            }
-                            cur = class_info.extends_name.clone();
-                        } else {
-                            break;
-                        }
-                    }
-                    if found {
-                        Some("function")
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
+                // A class static method is an own property of the class
+                // function object (charter step 3f): the generic read returns
+                // its current value, so `typeof C.m` after `delete C.m` or
+                // `C.m = 5` must come from that read, never from the
+                // declaration list.
+                None
             }
         }
         _ => None,
@@ -1215,6 +1202,9 @@ pub(crate) fn bind_lowered_value_to_local(
                 ctx.block().store(I64, &v_bits, &capture.ptr);
                 // Gen-GC Phase C2: barrier — box is the parent.
                 emit_write_barrier(ctx, &capture.bits, &v_bits);
+            } else if crate::scope_env::access::slot(ctx, id).is_some() {
+                let v_bits = ctx.block().bitcast_double_to_i64(v);
+                crate::scope_env::access::write_scoped(ctx, id, &v_bits)?;
             } else {
                 let closure_ptr =
                     super::current_closure_ptr_value(ctx, "captured boxed local set")?;
@@ -1250,10 +1240,12 @@ pub(crate) fn bind_lowered_value_to_local(
         // Without the !module_globals guard, closures that
         // modify a module-level variable would silently skip
         // the store (ctx.locals doesn't have the global's slot).
-        if let Some(slot) = ctx.locals.get(&id).cloned() {
+        let v_bits = ctx.block().bitcast_double_to_i64(v);
+        if crate::scope_env::access::slot(ctx, id).is_some() {
+            crate::scope_env::access::write_scoped(ctx, id, &v_bits)?;
+        } else if let Some(slot) = ctx.locals.get(&id).cloned() {
             let blk = ctx.block();
             let box_ptr = blk.load(I64, &slot);
-            let v_bits = blk.bitcast_double_to_i64(v);
             blk.call_void("js_box_set_bits", &[(I64, &box_ptr), (I64, &v_bits)]);
             // Gen-GC Phase C2: barrier — box is the parent (mirror the
             // captured-box path above; an old box can else miss a young

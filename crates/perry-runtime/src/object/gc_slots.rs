@@ -60,6 +60,14 @@ pub(crate) unsafe fn gc_field_slot_range(
     if field_count > 1_000_000 {
         return None;
     }
+    #[cfg(any(
+        debug_assertions,
+        feature = "field-rep-assert",
+        feature = "gc-instruments"
+    ))]
+    if super::field_rep_store::field_rep_verify_enabled() {
+        super::field_rep_store::assert_f64_lanes_hold_numbers(obj, record, field_count);
+    }
     let fields = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
     Some(crate::gc::HeapSlotRange::new(fields, field_count))
 }
@@ -67,7 +75,6 @@ pub(crate) unsafe fn gc_field_slot_range(
 #[inline]
 pub(crate) unsafe fn rebuild_object_field_layout(obj: *mut ObjectHeader, slot_count: usize) {
     let fields = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
-    crate::gc::layout_rebuild_from_slots(obj as *mut u8, fields, slot_count);
     if crate::arena::pointer_in_old_gen(obj as usize) {
         for i in 0..slot_count {
             let slot = fields.add(i);

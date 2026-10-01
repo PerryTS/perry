@@ -12,10 +12,13 @@ use crate::nanbox::double_literal;
 use crate::type_analysis::receiver_class_name;
 use crate::types::{DOUBLE, I1, I32, I64};
 
+#[path = "dynamic_dispatch_collapse.rs"]
+mod collapse;
 #[path = "dispatch_receiver_class.rs"]
 mod dispatch_receiver_class;
 #[path = "dynamic_dispatch_tower.rs"]
 mod tower;
+use collapse::{emit_collapsed_instance_dispatch, method_dispatch_collapse_enabled};
 use dispatch_receiver_class::*;
 use tower::{emit_tower_pshape_call, tower_pshape_route};
 
@@ -407,25 +410,27 @@ pub(crate) fn try_lower_instance_method_call(
             // canonical shapes. Classes whose canonical layout itself may
             // contain `property` stay on the old probe, as do wide towers to
             // keep code-size growth bounded.
-            let shape_probe_arms: Vec<(u32, String)> = if implementors.len()
-                <= MAX_SUBCLASS_DISPATCH_ARMS
-            {
-                implementors
-                    .iter()
-                    .zip(impl_class.iter())
-                    .filter_map(|((class_id, _), class_name)| {
-                        if !canonical_shape_excludes_own_property(ctx, class_name, property) {
-                            return None;
-                        }
-                        let keys_global = ctx.class_keys_globals.get(class_name)?;
-                        let expected_shape =
-                            crate::typed_shape::load_class_shape_id(ctx, class_name, keys_global);
-                        Some((*class_id, expected_shape))
-                    })
-                    .collect()
-            } else {
-                Vec::new()
-            };
+            let shape_probe_arms: Vec<(u32, String)> =
+                if implementors.len() <= MAX_SUBCLASS_DISPATCH_ARMS {
+                    implementors
+                        .iter()
+                        .zip(impl_class.iter())
+                        .filter_map(|((class_id, _), class_name)| {
+                            if !canonical_shape_excludes_own_property(ctx, class_name, property) {
+                                return None;
+                            }
+                            let keys_global = ctx.class_keys_globals.get(class_name)?;
+                            let expected_shape = crate::typed_shape::class_shape_id_operand(
+                                ctx,
+                                class_name,
+                                keys_global,
+                            );
+                            Some((*class_id, expected_shape))
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
             let mut shape_probe_cid: Option<String> = None;
             if !shape_probe_arms.is_empty() {
                 let (cid, shape_id) =
@@ -506,27 +511,23 @@ pub(crate) fn try_lower_instance_method_call(
                 ));
                 (ptr_reg, user_arg_count_probe.to_string())
             };
-            // Issue #632: bind IMPLICIT_THIS to the receiver around
-            // the override call. The stored function may be a class
-            // field assigning a non-arrow function (`class X { match
-            // = match; }` — hono RegExpRouter — where the imported
-            // `match` body reads `this.buildAllMatchers()`). Without
-            // the bind, the body sees stale IMPLICIT_THIS and reads
-            // garbage. Mirrors `lower_call.rs:2607` for the closure-
-            // call fallthrough pattern (#519).
-            let recv_for_this_probe = recv_box.clone();
-            // #7211: rooted save/restore across the user-code dispatch.
-            let prev_this_probe = crate::rooting::implicit_this_save(ctx, &recv_for_this_probe);
+            // Issue #632: pass the receiver as `this` to the override
+            // call. The stored function may be a class field assigning a
+            // non-arrow function (`class X { match = match; }` — hono
+            // RegExpRouter — where the imported `match` body reads
+            // `this.buildAllMatchers()`). Mirrors the closure-call
+            // fallthrough pattern (#519).
+            let this_bits_probe = ctx.block().bitcast_double_to_i64(&recv_box);
             let v_override_probe = ctx.block().call(
                 DOUBLE,
                 "js_native_call_value",
                 &[
                     (DOUBLE, &own_method_probe),
+                    (I64, &this_bits_probe),
                     (crate::types::PTR, &probe_args_ptr),
                     (I64, &probe_args_len_str),
                 ],
             );
-            crate::rooting::implicit_this_restore(ctx, prev_this_probe);
             let after_override_probe = ctx.block().label.clone();
             if !ctx.block().is_terminated() {
                 ctx.block().br(&probe_outer_merge_label);
@@ -1182,23 +1183,37 @@ pub(crate) fn try_lower_instance_method_call(
                             )
                         })
                 });
-                let typed_receiver_direct_name = if typed_receiver_info.is_some()
-                    && ctx
+                // Charter step 5, P4: the clone reads its receiver fields as
+                // bare doubles behind the exact (class id, ShapeId) compare,
+                // which pins lanes, not values. So every field it reads must
+                // be an `F64` lane of the class's birth rep; an `Any` lane can
+                // hold any value under the same ShapeId (#10937).
+                let typed_receiver_direct_name =
+                    if typed_receiver_info.as_ref().is_some_and(|info| {
+                        info.fields.iter().all(|field| {
+                            crate::expr::class_field_inline_guard::class_birth_slot_is_f64(
+                                ctx,
+                                &class_name,
+                                field.index,
+                            )
+                        })
+                    }) && ctx
                         .methods
                         .get(&typed_method_key)
                         .is_some_and(|name| name == &fallback_fn)
-                    && args.len() == typed_formal_count
-                    && args.iter().all(|arg| {
-                        crate::codegen::typed_arg_is_guard_candidate(
-                            ctx,
-                            crate::codegen::TypedParamRep::F64,
-                            arg,
-                        )
-                    }) {
-                    Some(crate::codegen::typed_f64_receiver_method_name(&fallback_fn))
-                } else {
-                    None
-                };
+                        && args.len() == typed_formal_count
+                        && args.iter().all(|arg| {
+                            crate::codegen::typed_arg_is_guard_candidate(
+                                ctx,
+                                crate::codegen::TypedParamRep::F64,
+                                arg,
+                            )
+                        })
+                    {
+                        Some(crate::codegen::typed_f64_receiver_method_name(&fallback_fn))
+                    } else {
+                        None
+                    };
                 let shape_only_guard = typed_receiver_direct_name.is_none()
                     && !class_chain_has_field_named(ctx, &class_name, property);
                 let typed_direct_name = if ctx.typed_f64_methods.contains(&typed_method_key)
@@ -1518,15 +1533,43 @@ pub(crate) fn try_lower_instance_method_call(
                                 None => ok,
                             });
                         }
+                        let shape_idx = ctx.new_block("ptr_shape_method.shape");
                         let typed_idx = ctx.new_block("ptr_shape_method.typed");
                         let generic_idx = ctx.new_block("ptr_shape_method.generic");
                         let merge_idx = ctx.new_block("ptr_shape_method.merge");
+                        let shape_label = ctx.block_label(shape_idx);
                         let typed_label = ctx.block_label(typed_idx);
                         let generic_label = ctx.block_label(generic_idx);
                         let merge_label = ctx.block_label(merge_idx);
                         match all_plain {
-                            Some(cond) => ctx.block().cond_br(&cond, &typed_label, &generic_label),
-                            None => ctx.block().br(&typed_label),
+                            Some(cond) => ctx.block().cond_br(&cond, &shape_label, &generic_label),
+                            None => ctx.block().br(&shape_label),
+                        }
+                        // Provenance proves the receiver's CLASS, not its
+                        // field representations: an alias the local escaped
+                        // to may store a non-Number into a field, which moves
+                        // the object off its birth shape (`field_rep_store`).
+                        // The clone reads its fields as raw doubles, so it
+                        // runs only while the (class id, ShapeId) pair is the
+                        // class's own — the shape pins the `F64` lanes.
+                        ctx.current_block = shape_idx;
+                        let class_id = ctx.class_ids.get(&class_name).copied();
+                        let keys_global = ctx.class_keys_globals.get(&class_name).cloned();
+                        match (class_id, keys_global) {
+                            (Some(class_id), Some(keys_global)) => {
+                                let obj_bits = ctx.block().bitcast_double_to_i64(&recv_box);
+                                crate::expr::class_field_inline_guard::emit_class_field_read_precheck(
+                                    ctx,
+                                    &obj_bits,
+                                    &class_id.to_string(),
+                                    true,
+                                    &typed_label,
+                                    &[],
+                                    &keys_global,
+                                );
+                                ctx.block().br(&generic_label);
+                            }
+                            _ => ctx.block().br(&generic_label),
                         }
                         ctx.current_block = typed_idx;
                         let mut typed_args: Vec<(crate::types::LlvmType, &str)> =
@@ -1820,157 +1863,4 @@ pub(crate) fn try_lower_instance_method_call(
         }
     }
     Ok(None)
-}
-
-/// Whether to collapse the instance method-dispatch tower in full-outline mode.
-/// On by default whenever full-outline is active; `PERRY_OUTLINE_METHOD_DISPATCH=0`
-/// / `off` / `false` keeps the inline class-id switch tower (escape hatch /
-/// differential-test isolation).
-fn method_dispatch_collapse_enabled() -> bool {
-    !matches!(
-        std::env::var("PERRY_OUTLINE_METHOD_DISPATCH").as_deref(),
-        Ok("0") | Ok("off") | Ok("false")
-    )
-}
-
-/// #5391 path 4: full-outlined collapse of the instance method-dispatch tower
-/// (see the call site in `try_lower_instance_method_call`).
-///
-/// Emits the own-property override probe (unchanged semantics) and, on the
-/// non-override path, a SINGLE by-name `js_native_call_method` instead of the
-/// per-implementor class-id switch tower. `js_native_call_method` is the tower's
-/// own default arm and resolves the user-class method through its (class_id,
-/// name) vtable registry, so behavior is preserved while the per-site IR shrinks
-/// from ~6 + N blocks (N = implementor count) to a fixed 3 blocks. The raw user
-/// args are marshalled once into an entry-block array and shared by both arms;
-/// `js_native_call_method` / `js_native_call_value` apply their own arity / rest
-/// adaptation at runtime (the same contract the tower's default + override arms
-/// already rely on).
-fn emit_collapsed_instance_dispatch(
-    ctx: &mut FnCtx<'_>,
-    recv_box: &str,
-    property: &str,
-    static_user_args: &[String],
-    call_byte_offset: u32,
-    with_override_probe: bool,
-) -> Result<String> {
-    let key_idx = ctx.strings.intern(property);
-    let entry = ctx.strings.entry(key_idx);
-    let bytes_global = format!("@{}", entry.bytes_global);
-    let name_len_str = entry.byte_len.to_string();
-
-    // Marshal the raw user args into an entry-block array once; both arms pass
-    // the same flat (ptr, len). `js_native_call_value` (override) and
-    // `js_native_call_method` (dispatch) each do their own rest-bundling /
-    // arity padding at runtime, so the un-bundled args are correct for both.
-    let n = static_user_args.len();
-    let (args_ptr, args_len) = if n == 0 {
-        ("null".to_string(), "0".to_string())
-    } else {
-        let buf = ctx.func.alloca_entry_array(DOUBLE, n);
-        for (i, a) in static_user_args.iter().enumerate() {
-            let slot = ctx.block().gep(DOUBLE, &buf, &[(I64, &format!("{}", i))]);
-            ctx.block().store(DOUBLE, a, &slot);
-        }
-        let ptr = ctx.block().next_reg();
-        ctx.block().emit_raw(format!(
-            "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
-            ptr, n, buf
-        ));
-        (ptr, n.to_string())
-    };
-
-    // The virtual-dispatch switch this collapses (overriding-subclass case) has
-    // NO own-property override probe, so its collapse must be a bare by-name
-    // dispatch to stay behavior-identical; the dynamic-dispatch tower DOES probe
-    // first, so its collapse keeps the probe. `with_override_probe` selects.
-    // `js_native_call_method` handles a non-pointer (primitive) receiver at
-    // runtime, so no codegen POINTER_TAG guard is needed on this path.
-    if !with_override_probe {
-        crate::expr::calls::emit_call_location_at(ctx, call_byte_offset);
-        return Ok(ctx.block().call(
-            DOUBLE,
-            "js_native_call_method",
-            &[
-                (DOUBLE, recv_box),
-                (crate::types::PTR, &bytes_global),
-                (I64, &name_len_str),
-                (crate::types::PTR, &args_ptr),
-                (I64, &args_len),
-            ],
-        ));
-    }
-
-    // Override probe: an own-property method override (e.g. hono SmartRouter
-    // rebinding `this.method = X`) wins over the class method.
-    let own_method = ctx.block().call(
-        DOUBLE,
-        "js_object_get_own_field_or_undef",
-        &[
-            (DOUBLE, recv_box),
-            (crate::types::PTR, &bytes_global),
-            (I64, &name_len_str),
-        ],
-    );
-    let own_bits = ctx.block().bitcast_double_to_i64(&own_method);
-    let undef_bits_str = format!("{}", crate::nanbox::TAG_UNDEFINED as i64);
-    let is_undef = ctx.block().icmp_eq(I64, &own_bits, &undef_bits_str);
-    let override_idx = ctx.new_block("idispc.override");
-    let dispatch_idx = ctx.new_block("idispc.dispatch");
-    let merge_idx = ctx.new_block("idispc.merge");
-    let override_label = ctx.block_label(override_idx);
-    let dispatch_label = ctx.block_label(dispatch_idx);
-    let merge_label = ctx.block_label(merge_idx);
-    ctx.block()
-        .cond_br(&is_undef, &dispatch_label, &override_label);
-
-    // Override arm: bind IMPLICIT_THIS to the receiver and call the stored
-    // function value (#632 — a class-field non-arrow function reads `this`).
-    ctx.current_block = override_idx;
-    // #7211: rooted save/restore across the user-code dispatch.
-    let prev_this = crate::rooting::implicit_this_save(ctx, recv_box);
-    let v_override = ctx.block().call(
-        DOUBLE,
-        "js_native_call_value",
-        &[
-            (DOUBLE, &own_method),
-            (crate::types::PTR, &args_ptr),
-            (I64, &args_len),
-        ],
-    );
-    crate::rooting::implicit_this_restore(ctx, prev_this);
-    let after_override = ctx.block().label.clone();
-    if !ctx.block().is_terminated() {
-        ctx.block().br(&merge_label);
-    }
-
-    // Dispatch arm: one by-name runtime dispatch (replaces the class-id tower).
-    ctx.current_block = dispatch_idx;
-    // #5247: record the call location so a runtime "X is not a function" carries
-    // `at <file>:<line>`.
-    crate::expr::calls::emit_call_location_at(ctx, call_byte_offset);
-    let v_dispatch = ctx.block().call(
-        DOUBLE,
-        "js_native_call_method",
-        &[
-            (DOUBLE, recv_box),
-            (crate::types::PTR, &bytes_global),
-            (I64, &name_len_str),
-            (crate::types::PTR, &args_ptr),
-            (I64, &args_len),
-        ],
-    );
-    let after_dispatch = ctx.block().label.clone();
-    if !ctx.block().is_terminated() {
-        ctx.block().br(&merge_label);
-    }
-
-    ctx.current_block = merge_idx;
-    Ok(ctx.block().phi(
-        DOUBLE,
-        &[
-            (v_override.as_str(), after_override.as_str()),
-            (v_dispatch.as_str(), after_dispatch.as_str()),
-        ],
-    ))
 }

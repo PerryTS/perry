@@ -11,6 +11,9 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // by a `PERRY_RECV_ROUTE_COUNT=1` build; declared unconditionally so the
     // declaration set does not depend on a diagnostic knob.
     module.declare_function("js_recv_route_note", VOID, &[I32]);
+    // OrdinaryCallBindThis for a sloppy body's receiver parameter
+    // (`expr::body_call::emit_receiver_prologue`). Can allocate: a safepoint.
+    module.declare_function("js_this_coerce_sloppy", DOUBLE, &[DOUBLE]);
     // RegExp exec
     module.declare_function("js_regexp_exec", I64, &[I64, I64]);
     module.declare_function("js_number_to_precision", I64, &[DOUBLE, DOUBLE]);
@@ -246,7 +249,7 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function(
         "js_register_class_computed_method",
         VOID,
-        &[I64, DOUBLE, I64, I64, I64, I64, I64],
+        &[I64, DOUBLE, I64, I64, I64, I64, I64, I64],
     );
     module.declare_function(
         "js_register_class_computed_accessor",

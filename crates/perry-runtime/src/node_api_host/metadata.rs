@@ -104,25 +104,6 @@ pub(crate) fn attach_external_finalizer(
     });
 }
 
-pub(crate) fn attach_owner_finalizer(
-    owner: usize,
-    data: *mut c_void,
-    callback: NapiFinalize,
-    hint: *mut c_void,
-) {
-    let Some(finalizer) = finalizer(callback, data, hint) else {
-        return;
-    };
-    OBJECT_METADATA.with(|table| {
-        table
-            .borrow_mut()
-            .entry(owner)
-            .or_default()
-            .finalizers
-            .push(finalizer);
-    });
-}
-
 pub(crate) fn is_external_owner(owner: usize) -> bool {
     OBJECT_METADATA.with(|table| {
         table

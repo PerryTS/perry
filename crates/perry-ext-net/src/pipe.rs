@@ -16,7 +16,7 @@
 //! `perry-runtime`, which does `Get(value, "then")` then invokes it with
 //! `this` bound to the thenable): fetch `dest.write` / `dest.end` by name
 //! through `js_dynamic_object_get_property` and invoke whatever comes back
-//! through `js_native_call_value` with `dest` as the implicit receiver.
+//! through `js_native_call_value` with `dest` as the receiver.
 //! That resolves correctly regardless of what representation `dest` is —
 //! another handle-backed socket, a node:stream object, or a plain user
 //! object that overrides `write` — the same way real Node duck-types its
@@ -35,8 +35,7 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 use perry_ffi::{
-    alloc_closure, closure_capture_f64, register_closure_arity, set_closure_capture_f64,
-    GcRootVisitor, RawClosureHeader,
+    alloc_closure, closure_capture_f64, set_closure_capture_f64, GcRootVisitor, RawClosureHeader,
 };
 
 use crate::statics;
@@ -45,8 +44,8 @@ const TAG_UNDEFINED_BITS: u64 = 0x7FFC_0000_0000_0001;
 const TAG_NULL_BITS: u64 = 0x7FFC_0000_0000_0002;
 const TAG_FALSE_BITS: u64 = 0x7FFC_0000_0000_0003;
 
-// `js_dynamic_object_get_property` / `js_implicit_this_set` /
-// `js_native_call_value` aren't wrapped by perry-ffi (unlike the closure
+// `js_dynamic_object_get_property` / `js_native_call_value` aren't
+// wrapped by perry-ffi (unlike the closure
 // helpers above); declare them the same way `dispatch.rs` declares its own
 // direct `perry-runtime` FFI symbols (`js_class_method_bind`,
 // `js_promise_resolve`, …) — resolved at final link time, not a Rust-level
@@ -57,8 +56,12 @@ extern "C" {
         property_name_ptr: *const i8,
         property_name_len: usize,
     ) -> f64;
-    fn js_implicit_this_set(value: f64) -> f64;
-    fn js_native_call_value(func_value: f64, args_ptr: *const f64, args_len: usize) -> f64;
+    fn js_native_call_value(
+        func_value: f64,
+        this: perry_ffi::JsThis,
+        args_ptr: *const f64,
+        args_len: usize,
+    ) -> f64;
 }
 
 fn is_nullish(v: f64) -> bool {
@@ -80,32 +83,50 @@ fn is_callable(v: f64) -> bool {
 
 /// `Get(dest, "write")(chunk)` with `this` bound to `dest`.
 fn generic_write(dest: f64, chunk: f64) {
+    // The `Get` can run a getter (user code): root the receiver and the
+    // argument across it and re-read both.
+    let scope = perry_ffi::TransientRootScope::enter();
+    let dest = scope.root_nanbox(dest);
+    let chunk = scope.root_nanbox(chunk);
     unsafe {
-        let write_fn = js_dynamic_object_get_property(dest, c"write".as_ptr(), 5);
+        let write_fn = js_dynamic_object_get_property(dest.get(), c"write".as_ptr(), 5);
         if !is_callable(write_fn) {
             return;
         }
-        let prev = js_implicit_this_set(dest);
-        let args = [chunk];
-        let _ = js_native_call_value(write_fn, args.as_ptr(), args.len());
-        js_implicit_this_set(prev);
+        let args = [chunk.get()];
+        let _ = js_native_call_value(
+            write_fn,
+            perry_ffi::JsThis::from_f64(dest.get()),
+            args.as_ptr(),
+            args.len(),
+        );
     }
 }
 
 /// `Get(dest, "end")()` with `this` bound to `dest`.
 fn generic_end(dest: f64) {
+    // The `Get` can run a getter (user code): root the receiver across it.
+    let scope = perry_ffi::TransientRootScope::enter();
+    let dest = scope.root_nanbox(dest);
     unsafe {
-        let end_fn = js_dynamic_object_get_property(dest, c"end".as_ptr(), 3);
+        let end_fn = js_dynamic_object_get_property(dest.get(), c"end".as_ptr(), 3);
         if !is_callable(end_fn) {
             return;
         }
-        let prev = js_implicit_this_set(dest);
-        let _ = js_native_call_value(end_fn, std::ptr::null(), 0);
-        js_implicit_this_set(prev);
+        let _ = js_native_call_value(
+            end_fn,
+            perry_ffi::JsThis::from_f64(dest.get()),
+            std::ptr::null(),
+            0,
+        );
     }
 }
 
-extern "C" fn pipe_data_forward(closure: *const RawClosureHeader, chunk: f64) -> f64 {
+extern "C" fn pipe_data_forward(
+    closure: *const RawClosureHeader,
+    _this: perry_ffi::JsThis,
+    chunk: f64,
+) -> f64 {
     if !closure.is_null() {
         let dest = unsafe { closure_capture_f64(closure, 0) };
         generic_write(dest, chunk);
@@ -113,7 +134,7 @@ extern "C" fn pipe_data_forward(closure: *const RawClosureHeader, chunk: f64) ->
     f64::from_bits(TAG_UNDEFINED_BITS)
 }
 
-extern "C" fn pipe_end_forward(closure: *const RawClosureHeader) -> f64 {
+extern "C" fn pipe_end_forward(closure: *const RawClosureHeader, _this: perry_ffi::JsThis) -> f64 {
     if !closure.is_null() {
         let dest = unsafe { closure_capture_f64(closure, 0) };
         let end_on_finish = unsafe { closure_capture_f64(closure, 1) };
@@ -122,15 +143,6 @@ extern "C" fn pipe_end_forward(closure: *const RawClosureHeader) -> f64 {
         }
     }
     f64::from_bits(TAG_UNDEFINED_BITS)
-}
-
-static ARITY_REGISTERED: std::sync::Once = std::sync::Once::new();
-
-fn ensure_pipe_closure_arities_registered() {
-    ARITY_REGISTERED.call_once(|| {
-        register_closure_arity(pipe_data_forward as *const u8, 1);
-        register_closure_arity(pipe_end_forward as *const u8, 0);
-    });
 }
 
 /// One socket -> destination pipe route, tracked so `unpipe` can remove
@@ -198,7 +210,6 @@ pub(crate) fn socket_pipe(handle: i64, dest: f64, options: f64) -> f64 {
         return f64::from_bits(TAG_UNDEFINED_BITS);
     }
     crate::ensure_gc_scanner_registered();
-    ensure_pipe_closure_arities_registered();
 
     let end_on_finish = unsafe {
         if is_nullish(options) {
@@ -213,8 +224,8 @@ pub(crate) fn socket_pipe(handle: i64, dest: f64, options: f64) -> f64 {
         }
     };
 
-    let data_closure = alloc_closure(pipe_data_forward as *const u8, 1);
-    let end_closure = alloc_closure(pipe_end_forward as *const u8, 2);
+    let data_closure = alloc_closure(&PIPE_DATA_FORWARD_INFO, 1);
+    let end_closure = alloc_closure(&PIPE_END_FORWARD_INFO, 2);
     if data_closure.is_null() || end_closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED_BITS);
     }
@@ -326,3 +337,9 @@ pub unsafe extern "C" fn js_net_socket_unpipe(handle: i64, dest: f64) -> i64 {
     socket_unpipe(handle, dest);
     handle
 }
+
+static PIPE_DATA_FORWARD_INFO: perry_ffi::JsFunctionInfo =
+    perry_ffi::JsFunctionInfo::of(pipe_data_forward as perry_ffi::JsBody1).with_declared(1);
+
+static PIPE_END_FORWARD_INFO: perry_ffi::JsFunctionInfo =
+    perry_ffi::JsFunctionInfo::of(pipe_end_forward as perry_ffi::JsBody0).with_declared(0);

@@ -5,7 +5,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 extern "C" {
-    fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+    fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
 }
 
@@ -45,7 +45,8 @@ pub fn create(count: f64, render_closure: f64) -> i64 {
 
     // Render all items
     for i in 0..item_count {
-        let child_handle = unsafe { js_closure_call1(closure_ptr, i as f64) };
+        let child_handle =
+            unsafe { js_closure_call1(closure_ptr, perry_ffi::JsThis::UNDEFINED, i as f64) };
         let child = child_handle as i64;
         if child > 0 {
             super::add_child(vstack_handle, child);
@@ -81,7 +82,9 @@ pub fn update(handle: i64, count: i64) {
 
             // Re-render all items
             for i in 0..count {
-                let child_handle = unsafe { js_closure_call1(closure_ptr, i as f64) };
+                let child_handle = unsafe {
+                    js_closure_call1(closure_ptr, perry_ffi::JsThis::UNDEFINED, i as f64)
+                };
                 let child = child_handle as i64;
                 if child > 0 {
                     super::add_child(vstack_handle, child);

@@ -327,6 +327,7 @@ unsafe fn global_agent_build_name(options: f64, is_https: bool) -> String {
 
 extern "C" fn global_agent_get_name_thunk(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     first: f64,
     second: f64,
 ) -> f64 {
@@ -339,6 +340,7 @@ extern "C" fn global_agent_get_name_thunk(
 
 extern "C" fn global_agent_keep_socket_alive_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _socket: f64,
 ) -> f64 {
     f64::from_bits(JSValue::bool(true).bits())
@@ -346,6 +348,7 @@ extern "C" fn global_agent_keep_socket_alive_thunk(
 
 extern "C" fn global_agent_reuse_socket_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _socket: f64,
     _request: f64,
 ) -> f64 {
@@ -354,6 +357,7 @@ extern "C" fn global_agent_reuse_socket_thunk(
 
 extern "C" fn global_agent_listener_thunk(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     first: f64,
     second: f64,
     third: f64,
@@ -395,12 +399,16 @@ extern "C" fn global_agent_listener_thunk(
     }
 }
 
-extern "C" fn global_agent_destroy_thunk(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn global_agent_destroy_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     f64::from_bits(JSValue::undefined().bits())
 }
 
 extern "C" fn global_agent_add_request_thunk(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     first: f64,
     second: f64,
     third: f64,
@@ -491,14 +499,12 @@ extern "C" fn global_agent_add_request_thunk(
 
 fn global_agent_method_value(
     name: &str,
-    func_ptr: *const u8,
-    call_arity: u32,
+    info: *const crate::closure::JsFunctionInfo,
     exposed_length: u32,
     capture: Option<i64>,
 ) -> f64 {
-    crate::closure::js_register_closure_arity(func_ptr, call_arity);
     let captures = if capture.is_some() { 1 } else { 0 };
-    let closure = crate::closure::js_closure_alloc(func_ptr, captures);
+    let closure = crate::closure::js_closure_alloc(info, captures);
     if let Some(capture) = capture {
         crate::closure::js_closure_set_capture_ptr(closure, 0, capture);
     }
@@ -509,8 +515,10 @@ fn global_agent_method_value(
 }
 
 fn global_agent_listener_value(is_https: bool, once: bool) -> f64 {
-    crate::closure::js_register_closure_arity(global_agent_listener_thunk as *const u8, 3);
-    let closure = crate::closure::js_closure_alloc(global_agent_listener_thunk as *const u8, 2);
+    let closure = crate::closure::js_closure_alloc(
+        crate::fn_info!(global_agent_listener_thunk, 3; with_declared(3)),
+        2,
+    );
     crate::closure::js_closure_set_capture_ptr(closure, 0, i64::from(is_https));
     crate::closure::js_closure_set_capture_ptr(closure, 1, i64::from(once));
     let name = if once { "once" } else { "on" };
@@ -529,8 +537,7 @@ unsafe fn global_agent_prototype(is_https: bool, agent: *mut ObjectHeader) -> f6
             "keepSocketAlive",
             global_agent_method_value(
                 "keepSocketAlive",
-                global_agent_keep_socket_alive_thunk as *const u8,
-                1,
+                crate::fn_info!(global_agent_keep_socket_alive_thunk, 1; with_declared(1)),
                 1,
                 None,
             ),
@@ -539,8 +546,7 @@ unsafe fn global_agent_prototype(is_https: bool, agent: *mut ObjectHeader) -> f6
             "reuseSocket",
             global_agent_method_value(
                 "reuseSocket",
-                global_agent_reuse_socket_thunk as *const u8,
-                2,
+                crate::fn_info!(global_agent_reuse_socket_thunk, 2; with_declared(2)),
                 2,
                 None,
             ),
@@ -549,8 +555,7 @@ unsafe fn global_agent_prototype(is_https: bool, agent: *mut ObjectHeader) -> f6
             "getName",
             global_agent_method_value(
                 "getName",
-                global_agent_get_name_thunk as *const u8,
-                2,
+                crate::fn_info!(global_agent_get_name_thunk, 2; with_declared(2)),
                 0,
                 Some(i64::from(is_https)),
             ),
@@ -559,8 +564,7 @@ unsafe fn global_agent_prototype(is_https: bool, agent: *mut ObjectHeader) -> f6
             "addRequest",
             global_agent_method_value(
                 "addRequest",
-                global_agent_add_request_thunk as *const u8,
-                5,
+                crate::fn_info!(global_agent_add_request_thunk, 5; with_declared(5)),
                 4,
                 Some(agent as i64),
             ),
@@ -569,8 +573,7 @@ unsafe fn global_agent_prototype(is_https: bool, agent: *mut ObjectHeader) -> f6
             "destroy",
             global_agent_method_value(
                 "destroy",
-                global_agent_destroy_thunk as *const u8,
-                0,
+                crate::fn_info!(global_agent_destroy_thunk, 0; with_declared(0)),
                 0,
                 None,
             ),
@@ -665,8 +668,12 @@ pub unsafe extern "C" fn js_https_global_agent_emit(
         let ptr =
             (callback_bits & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
         if crate::closure::is_closure_ptr(ptr as usize) {
-            let _ =
-                crate::closure::js_closure_call2(ptr, arg0.get_nanbox_f64(), arg1.get_nanbox_f64());
+            let _ = crate::closure::js_closure_call2(
+                ptr,
+                crate::closure::plain_call_receiver(),
+                arg0.get_nanbox_f64(),
+                arg1.get_nanbox_f64(),
+            );
         }
     }
 }

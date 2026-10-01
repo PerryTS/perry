@@ -31,8 +31,9 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 extern "C" {
-    fn js_closure_call2(closure: *const u8, a: f64, b: f64) -> f64;
-    fn js_closure_call3(closure: *const u8, a: f64, b: f64, c: f64) -> f64;
+    fn js_closure_call2(closure: *const u8, this: perry_ffi::JsThis, a: f64, b: f64) -> f64;
+    fn js_closure_call3(closure: *const u8, this: perry_ffi::JsThis, a: f64, b: f64, c: f64)
+        -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
 }
 
@@ -216,9 +217,15 @@ fn dispatch(callback: f64, code: KeyCode, mods: u32, is_down: bool, is_repeat: b
     unsafe {
         if is_down {
             let repeat_f = if is_repeat { 1.0 } else { 0.0 };
-            js_closure_call3(closure_ptr, key_f, mods_f, repeat_f);
+            js_closure_call3(
+                closure_ptr,
+                perry_ffi::JsThis::UNDEFINED,
+                key_f,
+                mods_f,
+                repeat_f,
+            );
         } else {
-            js_closure_call2(closure_ptr, key_f, mods_f);
+            js_closure_call2(closure_ptr, perry_ffi::JsThis::UNDEFINED, key_f, mods_f);
         }
     }
 }

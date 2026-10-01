@@ -210,8 +210,8 @@ impl Hasher for FastKeyHasherImpl {
     // derived `Hash` fed ~36 bytes -- ~36 serial multiplies -- through the byte
     // loop for a key that six folds mix just as well. #9706 replaced that map
     // with a pre-folded `u64` key (`object/shapes_store.rs::facts_key`), but
-    // the same shape of key remains on this hasher: `RegisteredTypedShapeKey`
-    // (`gc/layout/typed_shape.rs`) and the `(usize, String)` descriptor keys.
+    // the same shape of key remains on this hasher: the `(usize, String)`
+    // descriptor keys.
     //
     // `write_u8` is deliberately included even though it is exactly equivalent
     // to the byte path for a single byte: routing it here keeps every integer

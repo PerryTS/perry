@@ -9,24 +9,10 @@ use crate::object::{
 };
 use crate::value::JSValue;
 
-pub(crate) type StubFn = unsafe extern "C" fn();
-
-#[allow(clippy::missing_transmute_annotations)]
-pub(crate) fn cast0(f: extern "C" fn(*const ClosureHeader) -> f64) -> StubFn {
-    unsafe { std::mem::transmute(f) }
-}
-#[allow(clippy::missing_transmute_annotations)]
-pub(crate) fn cast1(f: extern "C" fn(*const ClosureHeader, f64) -> f64) -> StubFn {
-    unsafe { std::mem::transmute(f) }
-}
-#[allow(clippy::missing_transmute_annotations)]
-pub(crate) fn cast2(f: extern "C" fn(*const ClosureHeader, f64, f64) -> f64) -> StubFn {
-    unsafe { std::mem::transmute(f) }
-}
-#[allow(clippy::missing_transmute_annotations)]
-pub(super) fn cast3(f: extern "C" fn(*const ClosureHeader, f64, f64, f64) -> f64) -> StubFn {
-    unsafe { std::mem::transmute(f) }
-}
+/// A stream-method body's static info: what a method table lists and
+/// `build_object` / `install_methods_on_existing_object` allocate from
+/// (`crate::fn_info!(body, N)`).
+pub(crate) type StubFn = *const crate::closure::JsFunctionInfo;
 
 // ─────────────────────────────────────────────────────────────────
 // Build the host object: allocate an ObjectHeader sized to the
@@ -35,8 +21,6 @@ pub(super) fn cast3(f: extern "C" fn(*const ClosureHeader, f64, f64, f64) -> f64
 // ─────────────────────────────────────────────────────────────────
 
 pub(super) fn build_object(methods: &[(&str, StubFn)], shape_id: u32) -> *mut ObjectHeader {
-    register_stub_arities();
-
     // Pack the method names as a NUL-separated byte sequence, matching
     // the layout `js_object_alloc_with_shape` parses for shape keys.
     let mut packed: Vec<u8> = Vec::new();
@@ -65,7 +49,7 @@ pub(super) fn build_object(methods: &[(&str, StubFn)], shape_id: u32) -> *mut Ob
                 continue;
             }
         }
-        let closure = scope.root_raw_mut_ptr(js_closure_alloc(*func as *const u8, 1));
+        let closure = scope.root_raw_mut_ptr(js_closure_alloc(*func, 1));
         // Reuse `set_capture_ptr` (i64 payload). We only need 64 bits
         // and the NaN-boxed pattern fits cleanly when reinterpreted.
         closure.with_mut_ptr(|closure| {
@@ -159,7 +143,6 @@ pub(crate) fn install_methods_on_existing_object(
     methods: &[(&str, StubFn)],
     skip_names: &[&str],
 ) {
-    register_stub_arities();
     // `js_closure_alloc` and the key interning below both allocate and can
     // therefore GC-move the receiver, so root it and re-read the raw pointer at
     // every use rather than trusting the `obj` snapshot across the loop. The
@@ -192,7 +175,7 @@ pub(crate) fn install_methods_on_existing_object(
                 continue;
             }
         }
-        let closure = js_closure_alloc(*func as *const u8, 1);
+        let closure = js_closure_alloc(*func, 1);
         crate::closure::js_closure_set_capture_ptr(
             closure,
             0,
@@ -235,7 +218,6 @@ fn native_or_plain_key(name: &str, overridden: bool) -> *mut crate::string::Stri
 pub(crate) fn install_event_emitter_prototype_methods(proto: *mut ObjectHeader) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let proto = scope.root_raw_mut_ptr(proto);
-    register_stub_arities();
     let methods = super::emitter_methods();
     let mut on_method: Option<crate::gc::RuntimeHandle<'_>> = None;
     for (name, func) in methods {
@@ -250,7 +232,7 @@ pub(crate) fn install_event_emitter_prototype_methods(proto: *mut ObjectHeader) 
                 continue;
             }
         }
-        let closure = js_closure_alloc(func as *const u8, 1);
+        let closure = js_closure_alloc(func, 1);
         crate::closure::js_closure_set_capture_ptr(closure, 0, crate::value::TAG_UNDEFINED as i64);
         let val = scope.root_nanbox_f64(f64::from_bits(
             JSValue::pointer(closure as *const u8).bits(),
@@ -309,8 +291,9 @@ fn event_emitter_async_resource_backing(receiver: f64) -> Option<EventEmitterAsy
 
 fn require_event_emitter_async_resource_receiver(
     closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
 ) -> EventEmitterAsyncResourceBacking {
-    if let Some(backing) = event_emitter_async_resource_backing(this_value(closure)) {
+    if let Some(backing) = event_emitter_async_resource_backing(this_value(closure, this)) {
         return backing;
     }
     crate::node_submodules::diagnostics::throw_type_error_no_code(
@@ -320,10 +303,11 @@ fn require_event_emitter_async_resource_receiver(
 
 extern "C" fn ns_ee_async_resource_emit_rest(
     closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
     event: f64,
     rest: f64,
 ) -> f64 {
-    let backing = require_event_emitter_async_resource_receiver(closure);
+    let backing = require_event_emitter_async_resource_receiver(closure, this);
     let runtime_async_id = match backing {
         EventEmitterAsyncResourceBacking::RuntimeResource(resource) => {
             crate::async_hooks::js_async_resource_async_id(resource) as u64
@@ -333,15 +317,18 @@ extern "C" fn ns_ee_async_resource_emit_rest(
     if runtime_async_id != 0 {
         crate::async_hooks::js_async_hooks_provider_enter(runtime_async_id);
     }
-    let result = ns_emit_rest(closure, event, rest);
+    let result = ns_emit_rest(closure, this, event, rest);
     if runtime_async_id != 0 {
         crate::async_hooks::js_async_hooks_provider_leave(runtime_async_id);
     }
     result
 }
 
-extern "C" fn ns_ee_async_resource_destroy(closure: *const ClosureHeader) -> f64 {
-    match require_event_emitter_async_resource_receiver(closure) {
+extern "C" fn ns_ee_async_resource_destroy(
+    closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    match require_event_emitter_async_resource_receiver(closure, this) {
         EventEmitterAsyncResourceBacking::ExternalEmitter(handle) => {
             crate::object::event_emitter_async_resource_dispatch()
                 .map(|dispatch| unsafe { dispatch(handle, 3) })
@@ -353,9 +340,26 @@ extern "C" fn ns_ee_async_resource_destroy(closure: *const ClosureHeader) -> f64
     }
 }
 
-extern "C" fn ns_ee_async_resource_getter(closure: *const ClosureHeader) -> f64 {
+/// `EventEmitterAsyncResource.prototype.emit`'s body: `(event, ...args)`.
+static NS_EE_ASYNC_RESOURCE_EMIT_REST: crate::closure::JsFunctionInfo =
+    crate::closure::JsFunctionInfo::of(
+        ns_ee_async_resource_emit_rest as crate::codegen_abi::JsBody2<ClosureHeader>,
+    )
+    .with_rest(1);
+
+/// `emitDestroy`'s body.
+static NS_EE_ASYNC_RESOURCE_DESTROY: crate::closure::JsFunctionInfo =
+    crate::closure::JsFunctionInfo::of(
+        ns_ee_async_resource_destroy as crate::codegen_abi::JsBody0<ClosureHeader>,
+    )
+    .with_declared(0);
+
+extern "C" fn ns_ee_async_resource_getter(
+    closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
     let operation = crate::closure::js_closure_get_capture_ptr(closure, 1) as u32;
-    match require_event_emitter_async_resource_receiver(closure) {
+    match require_event_emitter_async_resource_receiver(closure, this) {
         EventEmitterAsyncResourceBacking::ExternalEmitter(handle) => {
             crate::object::event_emitter_async_resource_dispatch()
                 .map(|dispatch| unsafe { dispatch(handle, operation) })
@@ -376,11 +380,7 @@ extern "C" fn ns_ee_async_resource_getter(closure: *const ClosureHeader) -> f64 
 pub(crate) unsafe fn install_event_emitter_async_resource_prototype(proto: *mut ObjectHeader) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let proto = scope.root_raw_mut_ptr(proto);
-    crate::closure::js_register_closure_rest(ns_ee_async_resource_emit_rest as *const u8, 1);
-    crate::closure::js_register_closure_arity(ns_ee_async_resource_destroy as *const u8, 0);
-    crate::closure::js_register_closure_arity(ns_ee_async_resource_getter as *const u8, 0);
-
-    let install_method = |name: &str, function: *const u8| {
+    let install_method = |name: &str, function: *const crate::closure::JsFunctionInfo| {
         let closure = js_closure_alloc(function, 1);
         crate::closure::js_closure_set_capture_ptr(closure, 0, crate::value::TAG_UNDEFINED as i64);
         let closure = scope.root_raw_mut_ptr(closure);
@@ -404,15 +404,18 @@ pub(crate) unsafe fn install_event_emitter_async_resource_prototype(proto: *mut 
             );
         });
     };
-    install_method("emit", ns_ee_async_resource_emit_rest as *const u8);
-    install_method("emitDestroy", ns_ee_async_resource_destroy as *const u8);
+    install_method("emit", &NS_EE_ASYNC_RESOURCE_EMIT_REST);
+    install_method("emitDestroy", &NS_EE_ASYNC_RESOURCE_DESTROY);
 
     for (name, operation) in [
         ("asyncId", 0_i64),
         ("triggerAsyncId", 1),
         ("asyncResource", 2),
     ] {
-        let closure = js_closure_alloc(ns_ee_async_resource_getter as *const u8, 2);
+        let closure = js_closure_alloc(
+            crate::fn_info!(ns_ee_async_resource_getter, 0; with_declared(0)),
+            2,
+        );
         crate::closure::js_closure_set_capture_ptr(closure, 0, crate::value::TAG_UNDEFINED as i64);
         crate::closure::js_closure_set_capture_ptr(closure, 1, operation);
         let closure = scope.root_raw_mut_ptr(closure);
@@ -449,12 +452,9 @@ pub(crate) unsafe fn install_event_emitter_async_resource_instance_methods(
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj = scope.root_raw_mut_ptr(obj);
     let this_value = scope.root_nanbox_f64(this_value);
-    crate::closure::js_register_closure_rest(ns_ee_async_resource_emit_rest as *const u8, 1);
-    crate::closure::js_register_closure_arity(ns_ee_async_resource_destroy as *const u8, 0);
-    crate::closure::js_register_closure_arity(ns_ee_async_resource_getter as *const u8, 0);
     for (name, function) in [
-        ("emit", ns_ee_async_resource_emit_rest as *const u8),
-        ("emitDestroy", ns_ee_async_resource_destroy as *const u8),
+        ("emit", &NS_EE_ASYNC_RESOURCE_EMIT_REST),
+        ("emitDestroy", &NS_EE_ASYNC_RESOURCE_DESTROY),
     ] {
         let closure = js_closure_alloc(function, 1);
         crate::closure::js_closure_set_capture_ptr(
@@ -486,7 +486,10 @@ pub(crate) unsafe fn install_event_emitter_async_resource_instance_methods(
         ("triggerAsyncId", 1),
         ("asyncResource", 2),
     ] {
-        let closure = js_closure_alloc(ns_ee_async_resource_getter as *const u8, 2);
+        let closure = js_closure_alloc(
+            crate::fn_info!(ns_ee_async_resource_getter, 0; with_declared(0)),
+            2,
+        );
         crate::closure::js_closure_set_capture_ptr(
             closure,
             0,
@@ -526,113 +529,6 @@ pub extern "C" fn js_event_emitter_async_resource_subclass_backing(receiver: i64
     }
 }
 
-pub(super) fn register_stub_arities() {
-    let register = |func: *const u8, arity: u32| {
-        crate::closure::js_register_closure_arity(func, arity);
-    };
-    register(ns_chain0 as *const u8, 0);
-    register(ns_chain1 as *const u8, 1);
-    register(ns_wrap1 as *const u8, 1);
-    register(ns_wrap_data as *const u8, 1);
-    register(ns_wrap_end as *const u8, 0);
-    register(ns_wrap_error as *const u8, 1);
-    register(ns_wrap_close as *const u8, 0);
-    register(ns_destroy_error_microtask as *const u8, 0);
-    register(ns_stream_abort_listener as *const u8, 0);
-    register(ns_destroy1 as *const u8, 1);
-    register(ns_chain2 as *const u8, 2);
-    register(ns_chain3 as *const u8, 3);
-    register(ns_on2 as *const u8, 2);
-    register(ns_once2 as *const u8, 2);
-    register(ns_prepend_listener2 as *const u8, 2);
-    register(ns_prepend_once_listener2 as *const u8, 2);
-    register(ns_remove_listener2 as *const u8, 2);
-    register(ns_off2 as *const u8, 2);
-    register(ns_remove_all_listeners1 as *const u8, 1);
-    register(ns_readable_from_drain as *const u8, 0);
-    register(ns_readable_event_microtask as *const u8, 0);
-    register(ns_readable_end_microtask as *const u8, 0);
-    register(ns_writable_finish_microtask as *const u8, 0);
-    register(ns_construct_callback_done as *const u8, 1);
-    register(ns_writable_final_callback_done as *const u8, 1);
-    register(ns_capture_rejection as *const u8, 1);
-    register(ns_emit2 as *const u8, 2);
-    crate::closure::js_register_closure_rest(ns_emit_rest as *const u8, 1);
-    register(ns_resume0 as *const u8, 0);
-    register(ns_async_dispose as *const u8, 0);
-    register(ns_read1 as *const u8, 1);
-    register(ns_pipe2 as *const u8, 2);
-    register(ns_writable_write_done as *const u8, 1);
-    register(pipe_unpipe_callback as *const u8, 1);
-    register(pipe_error_callback as *const u8, 1);
-    register(pipe_close_callback as *const u8, 0);
-    register(pipe_finish_callback as *const u8, 0);
-    register(pipe_drain_callback as *const u8, 0);
-    register(pipe_finish_destination_callback as *const u8, 0);
-    register(writable_write_callback_noop as *const u8, 0);
-    register(duplex_pair_write_callback as *const u8, 3);
-    register(duplex_pair_final_callback as *const u8, 1);
-    register(transform_write_callback as *const u8, 2);
-    register(transform_flush_callback as *const u8, 2);
-    register(pipeline_success_callback as *const u8, 0);
-    register(pipeline_error_callback as *const u8, 1);
-    register(pipeline_close_callback as *const u8, 0);
-    register(compose_stage_error_callback as *const u8, 1);
-    register(compose_source_data_callback as *const u8, 1);
-    register(compose_source_end_callback as *const u8, 0);
-    register(compose_source_error_callback as *const u8, 1);
-    register(compose_duplex_write_callback as *const u8, 3);
-    register(compose_duplex_final_callback as *const u8, 1);
-    register(ns_write3 as *const u8, 3);
-    register(ns_end3 as *const u8, 3);
-    register(ns_cork0 as *const u8, 0);
-    register(ns_uncork0 as *const u8, 0);
-    register(ns_set_max_listeners as *const u8, 1);
-    register(ns_get_max_listeners as *const u8, 0);
-    register(ns_event_names as *const u8, 0);
-    register(ns_listener_count as *const u8, 1);
-    register(ns_listeners as *const u8, 1);
-    register(ns_raw_listeners as *const u8, 1);
-    register(ns_undefined0 as *const u8, 0);
-    register(ns_push1 as *const u8, 1);
-    register(ns_unshift1 as *const u8, 1);
-    register(ns_compose1 as *const u8, 1);
-    register(ns_pause0 as *const u8, 0);
-    register(ns_is_paused0 as *const u8, 0);
-    register(ns_unpipe1 as *const u8, 1);
-    register(ns_readable_resume_microtask as *const u8, 0);
-    register(
-        super::readable_from_promises::ns_readable_from_promise_fulfilled as *const u8,
-        1,
-    );
-    register(
-        super::readable_from_promises::ns_readable_from_promise_rejected as *const u8,
-        1,
-    );
-    register(ns_finished_error_false_close as *const u8, 0);
-    register(ns_finished_default_completion as *const u8, 0);
-    register(ns_finished_signal_abort as *const u8, 0);
-    register(ns_iter_to_array as *const u8, 1);
-    register(ns_iter_map as *const u8, 2);
-    register(ns_iter_filter as *const u8, 2);
-    register(ns_iter_reduce as *const u8, 3);
-    register(ns_iter_for_each as *const u8, 2);
-    register(ns_iter_find as *const u8, 2);
-    register(ns_iter_some as *const u8, 2);
-    register(ns_iter_every as *const u8, 2);
-    register(ns_iter_flat_map as *const u8, 2);
-    register(ns_iter_take as *const u8, 1);
-    register(ns_take_source_next as *const u8, 0);
-    register(ns_take_source_return as *const u8, 0);
-    register(ns_take_source_fulfilled as *const u8, 1);
-    register(ns_take_source_rejected as *const u8, 1);
-    register(ns_take_limit_fulfilled as *const u8, 1);
-    register(ns_take_limit_rejected as *const u8, 1);
-    register(ns_iter_drop as *const u8, 1);
-    register_consume_arities();
-    async_iterator::register_arities();
-}
-
 #[inline]
 pub(super) fn box_pointer(ptr: *const u8) -> f64 {
     f64::from_bits(JSValue::pointer(ptr).bits())
@@ -643,7 +539,7 @@ pub(super) fn install_stream_async_dispose_symbol(stream: f64) {
     if async_dispose.is_null() {
         return;
     }
-    let closure = js_closure_alloc(ns_async_dispose as *const u8, 1);
+    let closure = js_closure_alloc(crate::fn_info!(ns_async_dispose, 0; with_declared(0)), 1);
     crate::closure::js_closure_set_capture_ptr(closure, 0, stream.to_bits() as i64);
     set_hidden_value(
         stream,

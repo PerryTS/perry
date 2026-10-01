@@ -12,6 +12,7 @@
 //! hotkey wiring — user code binds `commandPaletteShow()` to ⌘K
 //! themselves via `addKeyboardShortcut`.
 
+use crate::srgb;
 use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Sel};
@@ -22,7 +23,7 @@ use objc2_foundation::{NSObject, NSString};
 use std::cell::{Cell, RefCell};
 
 extern "C" {
-    fn js_closure_call0(closure: *const u8) -> f64;
+    fn js_closure_call0(closure: *const u8, this: perry_ffi::JsThis) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
 }
 
@@ -185,7 +186,7 @@ unsafe fn invoke_row(row: i64) {
     let on_run = COMMANDS.with(|c| c.borrow().get(cmd_idx).map(|cmd| cmd.on_run).unwrap_or(0.0));
     if on_run != 0.0 {
         let closure_ptr = js_nanbox_get_pointer(on_run) as *const u8;
-        js_closure_call0(closure_ptr);
+        js_closure_call0(closure_ptr, perry_ffi::JsThis::UNDEFINED);
     }
     hide();
 }
@@ -277,14 +278,8 @@ pub fn show() {
         let layer: *mut AnyObject = msg_send![content, layer];
         let _: () = msg_send![layer, setCornerRadius: 12.0_f64 as CGFloat];
         let _: () = msg_send![layer, setMasksToBounds: true];
-        let bg_color: *mut AnyObject = msg_send![
-            AnyClass::get(c"NSColor").unwrap(),
-            colorWithCalibratedRed: 0.96 as CGFloat,
-            green: 0.96 as CGFloat,
-            blue: 0.96 as CGFloat,
-            alpha: 0.98 as CGFloat
-        ];
-        let cg: *mut AnyObject = msg_send![bg_color, CGColor];
+        let bg_color = srgb::ns_color(0.96, 0.96, 0.96, 0.98);
+        let cg: *mut AnyObject = msg_send![&*bg_color, CGColor];
         let _: () = msg_send![layer, setBackgroundColor: cg];
 
         // Search field at the top.

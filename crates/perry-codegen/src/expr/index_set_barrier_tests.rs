@@ -424,98 +424,84 @@ fn runtime_array_setter_is_not_followed_by_a_duplicate_opaque_barrier() {
 /// live head is re-validated in `deref.live`, and the fast arm's element
 /// address is derived from that live head rather than from the original box.
 #[test]
-fn the_guarded_property_receiver_store_follows_one_forwarding_edge_inline() {
+fn the_guarded_property_receiver_store_guards_on_one_word_and_follows_a_stub_cold() {
     let ir = ir();
     let deref =
         block_body(&ir, "idxset.recv_prop.deref.").expect("guarded store emits its `deref` block");
-    let follow = block_body(&ir, "idxset.recv_prop.deref.follow.")
-        .expect("guarded store emits its `deref.follow` block");
+    let target = block_body(&ir, "idxset.recv_prop.deref.follow.target.")
+        .expect("guarded store emits its `deref.follow.target` block");
+    let check = block_body(&ir, "idxset.recv_prop.deref.follow.check.")
+        .expect("guarded store emits its `deref.follow.check` block");
     let live = block_body(&ir, "idxset.recv_prop.deref.live.")
         .expect("guarded store emits its `deref.live` block");
-    let fast =
-        block_body(&ir, "idxset.recv_prop.fast.").expect("guarded store emits its `fast` block");
+    let probe =
+        block_body(&ir, "idxset.recv_prop.probe.").expect("guarded store emits its `probe` block");
 
-    // (0) #10513: `deref` decides on the ARRAY brand byte alone, so a receiver
-    // that is not an Array leaves before any forwarding or integrity work.
+    // (0) ONE header word: `[h-8]` as an i32 under the store mask (type byte,
+    // FORWARDED, descriptors, frozen / sealed / non-extensible) must equal
+    // GC_TYPE_ARRAY. Everything else leaves for the cold `deref.follow`.
     assert!(
-        deref.contains("sub i64") && deref.contains("load i8"),
-        "`deref` reads the brand byte:\n{deref}"
+        deref.contains("load i32") && deref.contains(", 67600639") && deref.contains("icmp eq i32"),
+        "`deref` tests the header word under 0x0407_80FF:\n{deref}"
     );
     assert!(
-        deref.contains("br i1") && deref.contains("idxset.recv_prop.deref.follow."),
-        "`deref` must branch into `deref.follow` on the ARRAY brand:\n{deref}"
+        deref.contains("idxset.recv_prop.deref.live.")
+            && deref.contains("idxset.recv_prop.deref.follow."),
+        "`deref` branches to `deref.live` or the cold follow:\n{deref}"
     );
-
-    // (1) `deref.follow` reads the stub's first payload word and selects it as
-    // the live handle when the header says FORWARDED.
-    let select_line = follow
+    // (1) The cold follow reads the stub's first payload word and re-tests
+    // the destination's word under the same mask.
+    assert!(
+        target.contains("load i64"),
+        "`deref.follow.target` loads the forwarding word:\n{target}"
+    );
+    assert!(
+        check.contains("load i32") && check.contains(", 67600639"),
+        "`deref.follow.check` re-tests the destination's word:\n{check}"
+    );
+    // (2) `deref.live` joins the receiver and the followed destination.
+    let phi_line = live
         .lines()
         .map(str::trim)
-        .find(|line| line.contains("select i1") && line.contains("i64"))
-        .expect("`deref.follow` selects between the forwarding target and the receiver");
-    let live_handle = select_line
-        .split(" = ")
-        .next()
-        .expect("select defines a register")
-        .to_string();
-    let target = operand(select_line, 2).expect("select's taken operand");
-    let target_def =
-        def_of(&follow, &target).expect("forwarding target is defined in `deref.follow`");
+        .find(|line| line.contains("= phi i64"))
+        .expect("`deref.live` joins the live head in a phi");
+    let live_handle = phi_line.split(" = ").next().unwrap().to_string();
     assert!(
-        target_def.contains("load i64"),
-        "the forwarding target must be the stub's first payload word, got `{target_def}`"
+        phi_line.contains("idxset.recv_prop.deref.follow.check."),
+        "the phi takes the followed destination from `deref.follow.check`: {phi_line}"
+    );
+    // (3) The probe addresses the element from the live head and sends a hole
+    // (an add, which may reach a prototype setter) to the slow arm.
+    assert!(
+        probe.contains(&format!("sub i64 {live_handle}"))
+            || probe.contains(&format!("add i64 {live_handle}")),
+        "the probe must address the element relative to the live head:\n{probe}"
     );
     assert!(
-        follow.contains("br i1") && follow.contains("idxset.recv_prop.deref.live."),
-        "`deref.follow` must branch into `deref.live` after the heap-band test of the live handle"
-    );
-
-    // (2) `deref.live` re-reads the ARRAY brand and the FORWARDED bit from the
-    // LIVE handle (not from the original box) before admitting the fast arm.
-    assert!(
-        live.contains(&format!("sub i64 {live_handle}, 8"))
-            && live.contains(&format!("sub i64 {live_handle}, 7")),
-        "`deref.live` must re-validate the header of the selected live head"
-    );
-    assert!(
-        live.contains("idxset.recv_prop.fast."),
-        "`deref.live` is the fast arm's predecessor"
-    );
-
-    // (3) The fast arm's element address is computed from the live head.
-    assert!(
-        fast.contains(&format!("add i64 {live_handle}, ")),
-        "the fast arm must address the element relative to the live head, not the stub"
+        probe.contains(&format!("icmp eq i64")) && probe.contains(crate::nanbox::TAG_HOLE_I64),
+        "the probe must test the slot for TAG_HOLE:\n{probe}"
     );
 }
 
-/// The fast arm's raw-f64 downgrade note is gated on the live head's
-/// `_reserved` word rather than called unconditionally: `js_array_note_numeric_write`
-/// is exactly "clear the raw-f64 bits if the value is not a Number", and it
-/// re-resolves the receiver through the tracked resolver on every call, so a
-/// pointer store into an array whose raw-f64 bits are already clear must not
-/// reach it at all.
 /// The scalar-aware layout note (`js_gc_note_slot_layout_aware`) returns
 /// without acting when the old and new values share a pointer classification,
 /// unless both are pointers and the array carries an element-shape proof. The
-/// guarded fast arm now decides that inline — the exact runtime
+/// guarded fast arm decides that inline — the exact runtime
 /// `layout_pointer_bearing_bits` predicate on both values plus the
-/// `GC_ARRAY_ELEMENT_SHAPE` bit of the `_reserved` word `deref.live` loaded —
-/// and calls the note only from the gated `laynote` block.
+/// `GC_ARRAY_ELEMENT_SHAPE` bit of the live head's `_reserved` word — and calls
+/// the note only from the gated `laynote` block.
 #[test]
 fn the_fast_arm_layout_note_is_gated_on_the_pointer_classification_and_shape_bit() {
     let ir = ir();
-    let live = block_body(&ir, "idxset.recv_prop.deref.live.")
-        .expect("guarded store emits its `deref.live` block");
-    let reserved = live
+    // The fast arm continues in `kind.done` once the element kind is settled.
+    let fast = block_body(&ir, "idxset.recv_prop.kind.done.").expect("kind.done block");
+    let reserved = fast
         .lines()
         .map(str::trim)
         .find(|line| line.contains("load i16"))
         .and_then(|line| line.split(" = ").next())
-        .expect("`deref.live` loads the live head's `_reserved` word")
+        .expect("the store arm loads the live head's `_reserved` word")
         .to_string();
-
-    let fast = block_body(&ir, "idxset.recv_prop.fast.").expect("fast block");
     assert!(
         !fast.contains("js_gc_note_slot_layout_aware"),
         "the fast arm must not call the layout note unconditionally:\n{fast}"
@@ -549,46 +535,51 @@ fn the_fast_arm_layout_note_is_gated_on_the_pointer_classification_and_shape_bit
     );
 }
 
+/// DESIGN arrayread §3: the element kind is settled BEFORE the value is
+/// written. The fast arm tests the F64 bits (0x1080) of the live head's
+/// `_reserved`; an F64 array takes a plain double canonicalized inline (NaN ->
+/// the canonical NaN, a select), and a NaN-boxed value reaches the cold arm,
+/// whose `js_array_note_numeric_write` clears the kind before `kind.done`
+/// writes the slot. No note call is left after the store.
 #[test]
-fn the_fast_arm_numeric_note_is_gated_on_the_raw_f64_header_bits() {
+fn the_store_settles_the_f64_kind_before_the_value() {
     let ir = ir();
-    let live = block_body(&ir, "idxset.recv_prop.deref.live.")
-        .expect("guarded store emits its `deref.live` block");
-    let reserved_line = live
-        .lines()
-        .map(str::trim)
-        .find(|line| line.contains("load i16"))
-        .expect("`deref.live` loads the live head's `_reserved` word");
-    let reserved = reserved_line
-        .split(" = ")
-        .next()
-        .expect("load defines a register")
-        .to_string();
-
-    let (gate, gate_body) = branch_into_block(&ir, "idxset.recv_prop.numnote.")
-        .expect("the numeric note sits behind a conditional branch");
-    let cond = operand(&gate, 0).expect("cond_br has a condition");
-    let cond_def = def_of(&gate_body, &cond).expect("gate condition is defined in its block");
-    assert!(
-        cond_def.contains("icmp ne i16"),
-        "gate must test the raw-f64 bits for non-zero, got `{cond_def}`"
-    );
-    let masked = operand(cond_def, 0).expect("icmp operand");
-    let masked_def = def_of(&gate_body, &masked).expect("masked bits are defined in the block");
-    assert!(
-        masked_def.contains(&format!("and i16 {reserved}, 4224")),
-        "gate must mask GC_ARRAY_RAW_F64_LAYOUT|GC_ARRAY_RAW_F64_HOLES (0x1080) out of the \\
-         live head's `_reserved`, got `{masked_def}`"
-    );
-
-    let note = block_body(&ir, "idxset.recv_prop.numnote.").expect("the numeric note block exists");
-    assert!(
-        note.contains("call void @js_array_note_numeric_write("),
-        "the note call must live inside the gated block:\n{note}"
-    );
     let fast = block_body(&ir, "idxset.recv_prop.fast.").expect("fast block");
     assert!(
-        !fast.contains("js_array_note_numeric_write"),
-        "the fast arm must not call the note unconditionally:\n{fast}"
+        fast.contains(", 4224") && fast.contains("icmp ne i16"),
+        "the fast arm must test the F64 kind bits (0x1080):\n{fast}"
+    );
+    assert!(
+        fast.contains("idxset.recv_prop.kind.f64.") && fast.contains("idxset.recv_prop.kind.done."),
+        "an Any array goes straight to the store:\n{fast}"
+    );
+    let f64_arm = block_body(&ir, "idxset.recv_prop.kind.f64.").expect("kind.f64 block");
+    assert!(
+        f64_arm.contains("lshr i64") && f64_arm.contains(", 32761"),
+        "the F64 arm tests the value for the NaN-box band 0x7FF9..=0x7FFF:\n{f64_arm}"
+    );
+    let canon = block_body(&ir, "idxset.recv_prop.kind.canon.").expect("kind.canon block");
+    assert!(
+        canon.contains("fcmp uno double")
+            && canon.contains("select i1")
+            && !canon.contains("call "),
+        "a double is canonicalized inline, with no call:\n{canon}"
+    );
+    let cold = block_body(&ir, "idxset.recv_prop.kind.cold.").expect("kind.cold block");
+    let note_at = cold
+        .find("call void @js_array_note_numeric_write(")
+        .expect("the cold arm clears the kind through the runtime note");
+    assert!(
+        !cold[..note_at].contains("store "),
+        "the kind is cleared before anything is stored:\n{cold}"
+    );
+    let done = block_body(&ir, "idxset.recv_prop.kind.done.").expect("kind.done block");
+    assert!(
+        done.contains("= phi double"),
+        "the store takes the settled value from a phi:\n{done}"
+    );
+    assert!(
+        !done.contains("js_array_note_numeric_write"),
+        "no numeric note may follow the store:\n{done}"
     );
 }
