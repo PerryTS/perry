@@ -7,3 +7,5 @@
   - Tests:
     - `crates/perry/tests/issue_11495_trace_llvm_temp_leak.rs` compiles plainly and with `--trace llvm` into a private `TMPDIR` and asserts it stays empty, while the trace dir did receive its `.ll`. Sabotage-checked: re-adding the `set_var` fails it with exactly `["perry_llvm_scratch_…", "perry_native_reps_….json"]`.
     - `temp_path_guard_removes_unless_retained` is sabotage-checked too: a no-op `Drop` fails it.
+
+Keep both target-specific Inkwell generations in Cargo.lock after the main dependency refresh: Windows retains 0.9 while other targets use 0.10, so locked builds include both internal macro packages.
