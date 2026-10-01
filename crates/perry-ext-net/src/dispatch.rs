@@ -624,7 +624,42 @@ pub unsafe extern "C" fn js_ext_net_handle_property_dispatch(
     out: *mut f64,
 ) -> i32 {
     let prop = property_name(property_name_ptr, property_name_len);
-    let value = if let Some(name) = crate::bun_tcp::method_name(handle, prop) {
+    // These Node-only flags are unsupported by both Bun helpers. Resolve
+    // them first without their four irrelevant ownership-map probes.
+    let value = if prop == "destroyed" && crate::js_ext_net_is_socket_handle(handle) != 0 {
+        Some(crate::js_net_socket_get_destroyed(handle))
+    } else if matches!(
+        prop,
+        "writable" | "readable" | "connecting" | "pending" | "writableEnded" | "readableEnded"
+    ) && crate::js_ext_net_is_socket_handle(handle) != 0
+    {
+        // #10465 — the untyped (`(sock: any)`/plain-JS-driver) dispatch path
+        // had NO arm at all for these; every driver holds its socket through
+        // an untyped field (`this.stream`), so this — not the typed-receiver
+        // table in `net_events.rs` — is the path pg/ioredis/iovalkey/
+        // @redis/client actually hit.
+        Some(match prop {
+            "writable" => crate::js_net_socket_get_writable(handle),
+            "readable" => crate::js_net_socket_get_readable(handle),
+            "connecting" => crate::js_net_socket_get_connecting(handle),
+            "pending" => crate::js_net_socket_get_pending(handle),
+            "writableEnded" => crate::js_net_socket_get_writable_ended(handle),
+            _ => crate::js_net_socket_get_readable_ended(handle),
+        })
+    } else if matches!(
+        prop,
+        "writableLength" | "writableHighWaterMark" | "writableNeedDrain" | "bufferSize"
+    ) && crate::js_ext_net_is_socket_handle(handle) != 0
+    {
+        // #11111 — the write-queue surface a drain-aware writer reads next to
+        // `write()`'s return value.
+        Some(match prop {
+            "writableLength" => crate::js_net_socket_get_writable_length(handle),
+            "writableHighWaterMark" => crate::js_net_socket_get_writable_high_water_mark(handle),
+            "writableNeedDrain" => crate::js_net_socket_get_writable_need_drain(handle),
+            _ => crate::js_net_socket_get_buffer_size(handle),
+        })
+    } else if let Some(name) = crate::bun_tcp::method_name(handle, prop) {
         Some(bind_handle_method(handle, name))
     } else if let Some(value) = crate::bun_tcp::property(handle, prop) {
         Some(value)
@@ -651,48 +686,10 @@ pub unsafe extern "C" fn js_ext_net_handle_property_dispatch(
             .contains_key(&handle)
     {
         Some(null())
-    } else if prop == "destroyed" && crate::js_ext_net_is_socket_handle(handle) != 0 {
-        Some(crate::js_net_socket_get_destroyed(handle))
-    } else if matches!(
-        prop,
-        "writable"
-            | "readable"
-            | "readyState"
-            | "connecting"
-            | "pending"
-            | "writableEnded"
-            | "readableEnded"
-    ) && crate::js_ext_net_is_socket_handle(handle) != 0
-    {
-        // #10465 — the untyped (`(sock: any)`/plain-JS-driver) dispatch path
-        // had NO arm at all for these; every driver holds its socket through
-        // an untyped field (`this.stream`), so this — not the typed-receiver
-        // table in `net_events.rs` — is the path pg/ioredis/iovalkey/
-        // @redis/client actually hit.
-        Some(match prop {
-            "writable" => crate::js_net_socket_get_writable(handle),
-            "readable" => crate::js_net_socket_get_readable(handle),
-            "connecting" => crate::js_net_socket_get_connecting(handle),
-            "pending" => crate::js_net_socket_get_pending(handle),
-            "writableEnded" => crate::js_net_socket_get_writable_ended(handle),
-            "readableEnded" => crate::js_net_socket_get_readable_ended(handle),
-            _ => f64::from_bits(
-                JsValue::from_string_ptr(crate::js_net_socket_get_ready_state(handle)).bits(),
-            ),
-        })
-    } else if matches!(
-        prop,
-        "writableLength" | "writableHighWaterMark" | "writableNeedDrain" | "bufferSize"
-    ) && crate::js_ext_net_is_socket_handle(handle) != 0
-    {
-        // #11111 — the write-queue surface a drain-aware writer reads next to
-        // `write()`'s return value.
-        Some(match prop {
-            "writableLength" => crate::js_net_socket_get_writable_length(handle),
-            "writableHighWaterMark" => crate::js_net_socket_get_writable_high_water_mark(handle),
-            "writableNeedDrain" => crate::js_net_socket_get_writable_need_drain(handle),
-            _ => crate::js_net_socket_get_buffer_size(handle),
-        })
+    } else if prop == "readyState" && crate::js_ext_net_is_socket_handle(handle) != 0 {
+        Some(f64::from_bits(
+            JsValue::from_string_ptr(crate::js_net_socket_get_ready_state(handle)).bits(),
+        ))
     } else if prop == "_writableState" && crate::js_ext_net_is_socket_handle(handle) != 0 {
         Some(json_str_to_value(crate::js_net_socket_get_writable_state(
             handle,
