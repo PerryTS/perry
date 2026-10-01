@@ -156,7 +156,7 @@ unsafe fn try_dispatch_external_http_client(
     super::super::dispatch_http::dispatch_client_incoming_method(handle, method_name, args)
 }
 
-/// Dispatch a method call on a handle-based object.
+/// Select a GC-stable spelling for known methods in the native stream id band.
 #[cfg(feature = "bundled-streams")]
 fn static_stream_method_name(handle: i64, name: &[u8]) -> Option<&'static str> {
     if handle < crate::streams::STREAM_HANDLE_ID_START as i64
@@ -185,6 +185,7 @@ fn static_stream_method_name(handle: i64, name: &[u8]) -> Option<&'static str> {
     }
 }
 
+/// Dispatch a method call on a handle-based object.
 #[no_mangle]
 pub unsafe extern "C" fn js_handle_method_dispatch(
     handle: i64,
@@ -193,38 +194,54 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
-    try_arm!(
-        RAW_EXTERNAL_ZLIB,
-        handle,
-        method_name_ptr,
-        method_name_len,
-        args_ptr,
-        args_len,
-    );
-    try_arm!(
-        RAW_EXTERNAL_HTTP_CLIENT,
-        handle,
-        method_name_ptr,
-        method_name_len,
-        args_ptr,
-        args_len,
-    );
+    #[cfg(feature = "bundled-streams")]
+    let static_name = if method_name_ptr.is_null() || method_name_len == 0 {
+        None
+    } else {
+        static_stream_method_name(
+            handle,
+            std::slice::from_raw_parts(method_name_ptr, method_name_len),
+        )
+    };
+    #[cfg(not(feature = "bundled-streams"))]
+    let static_name: Option<&'static str> = None;
+
+    // These are the only known stream spellings also handled by external
+    // zlib. Retain its precedence: its monotonically allocated ids can reach
+    // the stream band. All other known spellings cannot match its vocabulary.
+    if static_name.is_none() || matches!(static_name, Some("write" | "close")) {
+        try_arm!(
+            RAW_EXTERNAL_ZLIB,
+            handle,
+            method_name_ptr,
+            method_name_len,
+            args_ptr,
+            args_len,
+        );
+    }
+    // No known stream spelling is an external HTTP client method.
+    if static_name.is_none() {
+        try_arm!(
+            RAW_EXTERNAL_HTTP_CLIENT,
+            handle,
+            method_name_ptr,
+            method_name_len,
+            args_ptr,
+            args_len,
+        );
+    }
 
     let method_name_owned;
     let method_name = if method_name_ptr.is_null() || method_name_len == 0 {
         method_name_owned = String::new();
         method_name_owned.as_str()
     } else {
-        let method_bytes = std::slice::from_raw_parts(method_name_ptr, method_name_len);
-        #[cfg(feature = "bundled-streams")]
-        let static_name = static_stream_method_name(handle, method_bytes);
-        #[cfg(not(feature = "bundled-streams"))]
-        let static_name: Option<&'static str> = None;
         match static_name {
             // Static spellings remain valid across moving GC; retain no
             // reference to the caller's name buffer during dispatch.
             Some(name) => name,
             None => {
+                let method_bytes = std::slice::from_raw_parts(method_name_ptr, method_name_len);
                 method_name_owned = String::from_utf8_lossy(method_bytes).into_owned();
                 method_name_owned.as_str()
             }
@@ -253,11 +270,19 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     let _ = args;
     let _ = handle;
 
+    // Domain methods have no spelling in common with this stream vocabulary.
+    // Try the owning dispatcher before touching the unrelated Common map.
+    if static_name.is_some() {
+        try_arm!(ARM_STREAMS, handle, method_name, &args);
+    }
+
     if let Some(v) = crate::domain::dispatch_domain_method(handle, method_name, &args) {
         return v;
     }
 
-    try_arm!(ARM_STREAMS, handle, method_name, &args);
+    if static_name.is_none() {
+        try_arm!(ARM_STREAMS, handle, method_name, &args);
+    }
 
     // Dispatchers below gate on registry membership plus method vocabulary
     // because native handle id spaces are not unified (#91).

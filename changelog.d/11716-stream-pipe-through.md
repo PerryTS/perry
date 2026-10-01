@@ -16,3 +16,6 @@ register roots directly from the caller's buffer before refreshing owned argumen
 
 Use static spellings for known methods on native stream handles, avoiding
 method-name allocation while retaining owned conversion for other names.
+
+Route known stream methods before unrelated HTTP and domain lookups, retaining
+external zlib precedence for shared method spellings and existing fallback routing.
