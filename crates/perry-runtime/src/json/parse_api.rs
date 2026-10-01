@@ -1046,6 +1046,7 @@ pub(crate) unsafe fn build_shape_hint(
         field_count,
         packed_keys,
         packed_keys_len,
+        0,
     );
 
     Some(ObjectShapeHint {

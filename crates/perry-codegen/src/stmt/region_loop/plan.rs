@@ -129,6 +129,10 @@ pub(super) struct Planner<'p, 'a> {
     in_inner: bool,
     trees: HashSet<usize>,
     bare_stores: HashSet<Recv>,
+    /// Per receiver, the keys a planned-bare store may write a value the
+    /// compiler does not prove a canonical double into (charter step 5): the
+    /// runtime then refuses a word whose shape has a non-`Any` lane there.
+    boxed_stores: HashMap<Recv, HashSet<String>>,
     continues: Vec<St>,
     record: bool,
 }
@@ -147,13 +151,20 @@ impl Planner<'_, '_> {
             .is_some_and(|k| k.iter().any(|x| x == key))
     }
 
-    fn access(&mut self, e: &Expr, r: Recv, key: &str, store: bool, st: &mut St) {
+    /// `boxed`: a store whose value is not proven a canonical double.
+    fn access(&mut self, e: &Expr, r: Recv, key: &str, store: bool, boxed: bool, st: &mut St) {
         let fresh = st.as_ref().is_some_and(|m| m.get(&r) == Some(&FRESH));
         if fresh && self.cands.contains(&r) && self.covered(r, key) {
             if self.record {
                 self.bare.insert(e as *const Expr as usize);
                 if store {
                     self.bare_stores.insert(r);
+                    if boxed {
+                        self.boxed_stores
+                            .entry(r)
+                            .or_default()
+                            .insert(key.to_string());
+                    }
                 }
             }
             return;
@@ -193,7 +204,7 @@ impl Planner<'_, '_> {
             } => {
                 st = self.expr(object, st);
                 match Recv::of(object) {
-                    Some(r) => self.access(e, r, property, false, &mut st),
+                    Some(r) => self.access(e, r, property, false, false, &mut st),
                     None => kill(&mut st),
                 }
                 st
@@ -210,7 +221,12 @@ impl Planner<'_, '_> {
                 st = self.expr(value, st);
                 match (Recv::of(target), key.as_ref()) {
                     (Some(r), Expr::String(k)) if Recv::of(receiver) == Some(r) => {
-                        self.access(e, r, k, true, &mut st)
+                        // The same predicate the bare store lowers with
+                        // (`bare::try_lower_bare_put`): a proven canonical
+                        // double is a valid value of every lane.
+                        let boxed =
+                            !crate::type_analysis::expr_produces_canonical_raw_f64(self.ctx, value);
+                        self.access(e, r, k, true, boxed, &mut st)
                     }
                     _ => kill(&mut st),
                 }
@@ -781,7 +797,8 @@ pub(super) fn receiver_eligible(ctx: &FnCtx<'_>, r: Recv) -> bool {
 }
 
 pub(super) struct Plan {
-    pub(super) receivers: Vec<(Recv, Vec<String>, bool, u32)>,
+    /// `(receiver, keys, has a bare store, stored mask, boxed-store mask)`.
+    pub(super) receivers: Vec<(Recv, Vec<String>, bool, u32, u32)>,
     pub(super) bare: HashSet<usize>,
     pub(super) trees: HashSet<usize>,
     pub(super) recheck: Recheck,
@@ -853,6 +870,7 @@ pub(super) fn plan(
         in_inner: false,
         trees: HashSet::new(),
         bare_stores: HashSet::new(),
+        boxed_stores: HashMap::new(),
         continues: Vec::new(),
         record: true,
     };
@@ -911,6 +929,7 @@ pub(super) fn plan(
     let bare = std::mem::take(&mut p.bare);
     let trees = std::mem::take(&mut p.trees);
     let bare_stores = std::mem::take(&mut p.bare_stores);
+    let boxed_stores = std::mem::take(&mut p.boxed_stores);
     let mut plan_arrays: Vec<(Recv, u32)> = std::mem::take(&mut p.bare_arrays)
         .into_iter()
         .map(|r| (r, arrays[&r]))
@@ -940,18 +959,26 @@ pub(super) fn plan(
             }
         }
     }
-    let mut receivers: Vec<(Recv, Vec<String>, bool, u32)> = used
+    let mut receivers: Vec<(Recv, Vec<String>, bool, u32, u32)> = used
         .into_iter()
         .map(|r| {
+            let boxed = boxed_stores.get(&r).map_or(0, |ks| {
+                keys[&r]
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, k)| ks.contains(*k))
+                    .fold(0u32, |m, (i, _)| m | 1 << i)
+            });
             (
                 r,
                 keys[&r].clone(),
                 bare_stores.contains(&r),
                 stored.get(&r).copied().unwrap_or(0),
+                boxed,
             )
         })
         .collect();
-    receivers.sort_by_key(|(r, _, _, _)| *r);
+    receivers.sort_by_key(|(r, _, _, _, _)| *r);
     Some(Plan {
         receivers,
         bare,

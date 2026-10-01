@@ -39,6 +39,7 @@ impl SH for Expr {
             Expr::String(s) => { tag(h, 6); s.hash(h); }
             Expr::WtfString(b) => { tag(h, 7); b.hash(h); }
             Expr::I18nString { key, string_idx, params, plural_forms, plural_param, } => { tag(h, 8); key.hash(h); string_idx.hash(h); params.hash(h); plural_forms.hash(h); plural_param.hash(h); }
+            Expr::ScopedTemp { id, value, body } => { tag(h, 10000); id.hash(h); value.as_ref().hash(h); body.as_ref().hash(h); }
             Expr::LocalGet(id) => { tag(h, 9); id.hash(h); }
             Expr::LocalSet(id, e) => { tag(h, 10); id.hash(h); e.as_ref().hash(h); }
             Expr::GlobalGet(id) => { tag(h, 11); id.hash(h); }

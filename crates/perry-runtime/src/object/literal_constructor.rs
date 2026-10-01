@@ -85,9 +85,13 @@ mod tests {
             crate::value::js_nanbox_string(head_key as i64),
             crate::value::js_nanbox_pointer(descriptor as i64),
         );
-        let keys =
-            crate::object::js_build_class_keys_array(1017302, 3, b"head\0text\0n\0".as_ptr(), 12)
-                as u64;
+        let keys = crate::object::js_build_class_keys_array(
+            1017302,
+            3,
+            b"head\0text\0n\0".as_ptr(),
+            12,
+            0,
+        ) as u64;
         let text = b"later value must survive the first setter";
         let string = crate::js_string_from_bytes(text.as_ptr(), text.len() as u32);
         // The caller's plain buffer is deliberately NOT rooted. The helper

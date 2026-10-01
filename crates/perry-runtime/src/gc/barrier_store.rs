@@ -85,7 +85,7 @@ fn canonicalize_typed_slot_store_bits(
     if value_bits & TAG_MASK != crate::value::INT32_TAG {
         return value_bits;
     }
-    if !crate::gc::layout_slot_is_raw_f64_typed(parent_user, slot_index) {
+    if !slot_holds_raw_f64(parent_user, slot_index) {
         return value_bits;
     }
     match crate::array::value_bits_to_number(value_bits) {
@@ -94,16 +94,32 @@ fn canonicalize_typed_slot_store_bits(
     }
 }
 
-/// #7630: `runtime_store_jsvalue_slot` minus the per-slot layout note, for a
-/// caller that OWNS the object's whole construction and settles its layout
-/// state once at the end (`layout_finish_deferred_boxed_object`). The JSON
-/// materialiser is the caller: per record it performed ~13 `layout_note_slot`
-/// calls whose only net effect was to build a per-object side-table pointer
-/// mask — the profile's top cost family. Everything else is kept bit-for-bit:
-/// the typed-slot canonicalization, the string addref demote, and the write
-/// barrier (whose SATB shade must never be dropped — the #7602 lesson).
-/// Returns whether the stored bits carry a heap pointer, so the caller can
-/// accumulate the one fact the elided notes were computing.
+/// Whether `parent_user`'s slot `slot_index` holds a raw double: for an
+/// object, the lane of its shape (charter step 5: the shape is the
+/// authority). No other payload keeps raw doubles in a boxed-value slot.
+#[inline]
+fn slot_holds_raw_f64(parent_user: usize, slot_index: usize) -> bool {
+    unsafe {
+        let Some(header) = super::layout::layout_header_for_user(parent_user) else {
+            return false;
+        };
+        if (*header).obj_type == GC_TYPE_OBJECT {
+            if (*header).gc_flags & GC_FLAG_FORWARDED != 0 {
+                return false;
+            }
+            return crate::object::field_rep_store::object_slot_rep(
+                parent_user as *const crate::object::ObjectHeader,
+                slot_index,
+            ) != crate::object::field_rep::REP_ANY;
+        }
+    }
+    false
+}
+
+/// Newborn object slot store: canonicalize representation, demote a heap
+/// string alias and publish the generational/incremental barrier. Object
+/// tracing uses ShapeId rep, so no per-slot layout note is needed. The
+/// returned pointer classification is retained for construction witnesses.
 #[inline]
 pub(crate) fn runtime_store_jsvalue_slot_layout_deferred(
     parent_user: usize,
@@ -120,6 +136,25 @@ pub(crate) fn runtime_store_jsvalue_slot_layout_deferred(
     }
     runtime_write_barrier_slot(parent_user, slot_addr, value_bits);
     super::layout::layout_pointer_bearing_bits(value_bits)
+}
+
+/// Object-inline owner store. Retire the numeric-prefix proof before
+/// writing any bits, then perform string alias demotion and the generational
+/// barrier. Object tracing reads the ShapeId rep, so it needs no layout note.
+#[inline]
+pub(crate) fn runtime_store_object_jsvalue_slot(
+    parent_user: usize,
+    slot_addr: usize,
+    slot_index: usize,
+    value_bits: u64,
+) {
+    unsafe {
+        crate::array::clear_packed_subclass_numeric_proof(
+            parent_user as *mut crate::object::ObjectHeader,
+        );
+    }
+    let _ =
+        runtime_store_jsvalue_slot_layout_deferred(parent_user, slot_addr, slot_index, value_bits);
 }
 
 #[inline]

@@ -36,6 +36,10 @@ crate-type = ["rlib"]
 # they look gets this backwards, so every call site is gated rather than
 # argued about.
 shape-mint-diag = []
+# Charter step 5: check at every object trace that each F64 lane holds a
+# canonical double (always on in a debug build; this turns it on in release,
+# for the gap subset and the tsc/Zod runs).
+field-rep-assert = []
 # Charter step 3: default-off `PERRY_ATTR_DIAG` census of the attribute
 # machinery (where attributes are written, read, and which key-list paths run).
 attr-census = []

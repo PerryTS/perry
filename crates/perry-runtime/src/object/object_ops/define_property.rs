@@ -1552,7 +1552,6 @@ pub extern "C" fn js_object_define_property(
         if super::super::string_wrapper::has_index_key(obj as usize, key_str) {
             return obj_value;
         }
-        super::super::mark_object_dynamic_shape_unknown(obj);
         // Extract descriptor object
         if extract_obj_ptr(descriptor_value).is_null() {
             return obj_value;

@@ -24,7 +24,7 @@
 //! The step is field *stores*, not bytes.
 //!
 //! The allocation establishes the structural conditions, and the pre-constructor
-//! layout declaration establishes the representation condition. This module
+//! birth ShapeId establishes the representation condition. This module
 //! recognizes that case and stores the fields straight into their packed slots
 //! at the `new` site, with no call and no per-field guard.
 //!
@@ -44,7 +44,7 @@
 //! | `keys_array == @perry_class_keys_<C>` | the header store loads the same global the precheck compares against |
 //! | no property descriptors | the instance is freshly allocated and unpublished |
 //! | not frozen | same fresh-instance proof |
-//! | typed layout INTACT | baked by #7834 for pointer-free shapes; checked after the runtime declaration otherwise |
+//! | field representation | the birth ShapeId carries each F64 lane |
 //!
 //! Nothing can invalidate any of it in between: the instance has not escaped,
 //! and the arguments were lowered *before* the allocation (they are re-read from
@@ -59,10 +59,6 @@
 //!   or typed-feedback tracing arms. Honouring it keeps the escape hatch real —
 //!   a knob whose off-state is not on the path it claims to gate is the failure
 //!   mode `CLAUDE.md`'s kill-policy section is about.
-//! * **The typed-layout result** for pointer-bearing shapes. The declaration
-//!   can reject an ambiguous layout, so the fast arm reads the authoritative
-//!   INTACT header bit after the call. Pointer-free shapes retain #7834's
-//!   compile-time bake and pay no extra check.
 //! * **The values.** A raw slot may hold only a plain finite double. The
 //!   conjunction of the per-value finite tests decides the whole construction,
 //!   so a single non-number sends *all* fields to the constructor call, which is
@@ -77,14 +73,11 @@
 //! `js_array_numeric_value_to_raw_f64` canonicalization (the only inputs that
 //! helper rewrites are exactly the ones the finite test rejects).
 //!
-//! Pointer-bearing typed layouts are also eligible once
-//! `js_gc_declare_typed_shape_layout` has established the descriptor. The fast
-//! arm checks `GC_OBJ_TYPED_LAYOUT_INTACT` after that call, so an ambiguous or
-//! rejected layout stays on the constructor path. Only raw-f64 fields need the
-//! finite-value check; pointer/boxed slots keep their NaN-boxed bits.
+//! Pointer-bearing layouts share the same birth ShapeId protocol: the rep
+//! is part of the shape identity and cannot be confused with a header bit.
 //!
 //! GC: the instance is fresh and unpublished. Pointer stores are already
-//! covered by the declared shape mask, so no per-slot layout note is due; each
+//! covered by ShapeId tracing, so no per-slot layout note is due; each
 //! pointer/boxed field still emits the ordinary value-and-generation-tested
 //! write barrier for old-generation and incremental-marking correctness.
 
@@ -212,9 +205,10 @@ pub(super) fn prologue_store_plan(
         // Refuse an unresolved field type rather than guessing boxed: missing
         // a raw-f64 slot here would store NaN-box bits into a slot readers
         // reinterpret as a plain double.
-        let field_type =
-            crate::type_analysis::class_field_declared_type(ctx, class_name, property)?;
-        let requires_raw_f64 = crate::typed_shape::type_is_raw_f64_candidate(&field_type);
+        crate::type_analysis::class_field_declared_type(ctx, class_name, property)?;
+        // Charter step 5, P4: raw exactly for an `F64` lane of the birth rep.
+        let requires_raw_f64 =
+            crate::expr::class_field_inline_guard::class_birth_slot_is_f64(ctx, class_name, slot);
         plan.push(PrologueStore {
             slot,
             arg_index,

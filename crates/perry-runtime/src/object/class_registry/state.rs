@@ -57,7 +57,7 @@ pub(crate) fn class_proto_key_deleted(class_id: u32, name: &str) -> bool {
     let declared = name == "constructor"
         || class_own_accessor_ptrs(class_id, name).is_some()
         || super::super::native_module::class_has_own_method(class_id, name);
-    if !declared {
+    if !declared || proto_member_has_no_string_key(class_id, name) {
         return false;
     }
     let proto = class_decl_prototype_object(class_id);
@@ -89,6 +89,29 @@ pub(crate) fn class_proto_key_deleted(class_id: u32, name: &str) -> bool {
                 )
                 .is_some()
         }
+}
+
+/// A declared prototype member that the reflective prototype object never
+/// carries under the string key `name`, so the absence of that key proves
+/// nothing about a `delete` (#11692): a `#private` method (not a property at
+/// all; `delete` cannot reach it) and the synthetic dispatch alias of a
+/// well-known-symbol method (`@@iterator` stands in for `[Symbol.iterator]`,
+/// which lives under its symbol key). A source method literally named
+/// `"@@iterator"` has a string-member order registration and is a real key.
+fn proto_member_has_no_string_key(class_id: u32, name: &str) -> bool {
+    if name.starts_with('#') {
+        return true;
+    }
+    internal_symbol_dispatch_alias(name)
+        && !CLASS_STRING_MEMBER_ORDERS
+            .read()
+            .ok()
+            .and_then(|guard| {
+                guard
+                    .as_ref()
+                    .map(|map| map.contains_key(&(class_id, false, name.to_string())))
+            })
+            .unwrap_or(false)
 }
 
 /// Has `delete` removed class `class_id`'s own static member `name` (a
@@ -1120,6 +1143,18 @@ fn class_parent_prototype_bits(value: f64) -> Option<u64> {
 /// have their own dedicated instance/prototype modeling and don't reach this
 /// fallback the same way.
 fn reserved_native_parent_prototype_bits(parent_id: u32) -> Option<u64> {
+    let web = match parent_id {
+        crate::native_class_ids::EVENT_TARGET => Some("EventTarget"),
+        crate::native_class_ids::EVENT => Some("Event"),
+        crate::native_class_ids::CUSTOM_EVENT => Some("CustomEvent"),
+        crate::native_class_ids::ABORT_CONTROLLER => Some("AbortController"),
+        crate::native_class_ids::ABORT_SIGNAL => Some("AbortSignal"),
+        crate::native_class_ids::DOM_EXCEPTION => Some("DOMException"),
+        _ => None,
+    };
+    if let Some(name) = web {
+        return class_parent_prototype_bits(super::super::builtin_prototype_value(name));
+    }
     const CLASS_ID_EVENT_EMITTER: u32 = 0xFFFF0076;
     const CLASS_ID_EVENT_EMITTER_ASYNC_RESOURCE: u32 = 0xFFFF0077;
     let (module, symbol) = match parent_id {
@@ -1169,7 +1204,7 @@ pub(crate) fn class_decl_prototype_value(class_id: u32) -> f64 {
     // read of one is then served by the inherited-read cache (spilled slots
     // never prime there).
     let members = class_prototype_member_names(class_id).len() as u32;
-    let proto = js_object_alloc(class_id, members + 1);
+    let proto = crate::object::js_object_alloc(class_id, members + 1);
     if proto.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }

@@ -213,7 +213,7 @@ fn a_bare_pointer_store_keeps_the_store_ics_gc_bookkeeping() {
 }
 
 #[test]
-fn a_storing_regions_guard_tests_the_two_per_object_store_facts() {
+fn a_storing_region_guards_exact_shape_and_classless_receiver() {
     let ir = loop_ir(
         "region_loop_admission",
         vec![
@@ -237,12 +237,16 @@ fn a_storing_regions_guard_tests_the_two_per_object_store_facts() {
     for l in chk {
         let body = bl[l].0.join("\n");
         assert!(
-            body.contains("and i16") && body.contains(", 128"),
-            "F-B (Array-subclass numeric proof, `_reserved & 0x80`) missing from {l}:\n{body}"
+            body.contains("load i32") && body.contains("icmp eq i32"),
+            "proof-bearing ShapeId guard missing from {l}:\n{body}"
         );
         assert!(
             body.contains(", 768"),
             "F-A (class-less receiver kind, `_reserved & 0x300`) missing from {l}:\n{body}"
+        );
+        assert!(
+            !body.contains(", 128"),
+            "retired numeric-proof header guard reappeared in {l}:\n{body}"
         );
     }
 }
@@ -335,5 +339,53 @@ fn a_region_that_stores_every_key_it_names_has_no_spill_copy() {
         !bl.keys()
             .any(|l| l.starts_with("rloop.version.spill") || l.starts_with("rloop.slot.spill")),
         "a stored key is published only inline, so no spill copy is needed:\n{ir}"
+    );
+}
+
+/// The prime call's last argument: the boxed-store mask (charter step 5).
+fn prime_boxed_masks(ir: &str) -> Vec<u32> {
+    ir.lines()
+        .filter(|l| l.contains("@js_region_loop_prime("))
+        .filter_map(|l| {
+            // The call can carry trailing attributes after its closing parenthesis.
+            let call = l.split_once(')')?.0;
+            let last_arg = call.rsplit_once("i32 ")?.1;
+            last_arg.trim().parse().ok()
+        })
+        .collect()
+}
+
+/// Charter step 5: a bare store runs no field-representation check, so the
+/// region tells the runtime which keys it may store a value not proven a
+/// canonical double into; the runtime refuses a word whose shape has a
+/// non-`Any` lane at such a key (`region_loop_pack`, `F64Stored`).
+#[test]
+fn a_bare_store_of_a_value_not_proven_a_double_names_its_key_to_the_prime() {
+    let boxed = loop_ir("region_loop_boxed", vec![put("x", Expr::LocalGet(V))]);
+    let masks = prime_boxed_masks(&boxed);
+    assert!(!masks.is_empty(), "no prime call in\n{boxed}");
+    assert!(
+        masks.iter().all(|&m| m == 1),
+        "the `any` store to `x` must name key 0: {masks:?}"
+    );
+    let raw = loop_ir(
+        "region_loop_raw",
+        vec![
+            put("x", Expr::Number(1.5)),
+            Stmt::Expr(Expr::LocalSet(
+                H,
+                Box::new(Expr::Binary {
+                    op: BinaryOp::Add,
+                    left: Box::new(Expr::LocalGet(H)),
+                    right: Box::new(get("x")),
+                }),
+            )),
+        ],
+    );
+    let masks = prime_boxed_masks(&raw);
+    assert!(!masks.is_empty(), "no prime call in\n{raw}");
+    assert!(
+        masks.iter().all(|&m| m == 0),
+        "a literal double is a valid value of every lane: {masks:?}"
     );
 }

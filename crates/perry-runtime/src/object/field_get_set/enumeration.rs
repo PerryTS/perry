@@ -1552,7 +1552,8 @@ fn js_object_keys_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
                 // path below skips holes for free (`js_string_key_bytes`
                 // rejects them); this raw-push path must skip explicitly or
                 // `Object.keys` would emit the hole marker itself.
-                if key_val.bits() == crate::value::TAG_HOLE
+                if !key_val.is_any_string()
+                    || key_val.bits() == crate::value::TAG_HOLE
                     || key_val.bits() == crate::value::TAG_UNDEFINED
                 {
                     // Tombstoned slot from an O(1) delete. `js_array_get` translates

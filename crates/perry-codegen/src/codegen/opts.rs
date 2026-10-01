@@ -988,6 +988,10 @@ pub(crate) struct CrossModuleCtx {
     /// both come from `target_layout::inline_alloc_gc_packed`, but a header
     /// word is not something to trust by argument.
     pub class_header_images: std::collections::HashMap<String, (String, u64, u32)>,
+    /// Keys global -> the class's birth rep word (charter step 5, T1;
+    /// `typed_shape::class_birth_rep_in`): what module init mints and what
+    /// every inline allocation and class-field store of the class obeys.
+    pub class_birth_reps: std::collections::HashMap<String, u64>,
     /// Imported class constructor function names. Maps class_name →
     /// full constructor symbol (e.g. "Editor" → "hone_editor_...__Editor_constructor").
     /// Populated from `opts.imported_classes`.
@@ -1199,6 +1203,8 @@ pub(crate) struct CrossModuleCtx {
     /// primitive heap cells while preserving closure-shared lifetime.
     pub compiler_private_async_i32_control_locals: std::collections::HashSet<u32>,
     pub compiler_private_async_i1_control_locals: std::collections::HashSet<u32>,
+    /// Scope context object groups (`crate::scope_env`), module-wide.
+    pub scope_map: crate::scope_env::ScopeMap,
     /// Debug/benchmark switch that forces Buffer/Uint8Array accesses through
     /// the generic helper path.
     pub disable_buffer_fast_path: bool,

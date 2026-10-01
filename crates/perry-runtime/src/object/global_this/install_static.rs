@@ -44,6 +44,42 @@ pub extern "C" fn js_promise_static_function_value(name_ptr: *const u8, name_len
     value
 }
 
+extern "C" fn abort_signal_abort_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    reason: f64,
+) -> f64 {
+    let signal = crate::url::abort::js_abort_signal_abort(reason);
+    crate::value::js_nanbox_pointer(signal as i64)
+}
+
+extern "C" fn abort_signal_timeout_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    ms: f64,
+) -> f64 {
+    let signal = crate::url::abort::js_abort_signal_timeout(ms);
+    crate::value::js_nanbox_pointer(signal as i64)
+}
+
+extern "C" fn abort_signal_any_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    signals: f64,
+) -> f64 {
+    let is_array = crate::array::js_array_is_array(signals).to_bits() == 0x7FFC_0000_0000_0004;
+    let array = if is_array {
+        crate::value::js_nanbox_get_pointer(signals) as *mut crate::array::ArrayHeader
+    } else {
+        std::ptr::null_mut()
+    };
+    if array.is_null() {
+        crate::validators::throw_invalid_arg_type("signals", "Array", signals);
+    }
+    let signal = crate::url::abort::js_abort_signal_any(array);
+    crate::value::js_nanbox_pointer(signal as i64)
+}
+
 extern "C" fn url_can_parse_thunk(
     _closure: *const crate::closure::ClosureHeader,
     _this: crate::closure::JsThis,
@@ -628,6 +664,29 @@ pub(crate) fn install_builtin_constructor_statics(
                 ctor,
                 "isView",
                 crate::fn_info!(array_buffer_is_view_thunk, 1; with_declared(1)),
+                1,
+            );
+        }
+        "AbortSignal" => {
+            // The call forms are codegen intrinsics; these are the real own
+            // data properties a value read (`const f = AbortSignal.abort`)
+            // and reflection see.
+            install_constructor_static(
+                ctor,
+                "abort",
+                crate::fn_info!(abort_signal_abort_thunk, 1; with_declared(0)),
+                0,
+            );
+            install_constructor_static(
+                ctor,
+                "timeout",
+                crate::fn_info!(abort_signal_timeout_thunk, 1; with_declared(1)),
+                1,
+            );
+            install_constructor_static(
+                ctor,
+                "any",
+                crate::fn_info!(abort_signal_any_thunk, 1; with_declared(1)),
                 1,
             );
         }

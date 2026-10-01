@@ -295,15 +295,12 @@ pub(crate) fn try_lower_bare_put(
         stat(3, 1);
         return Ok(Some(val_double));
     }
-    let reserved = field_i16(ctx, &h, -6);
     // GC_STORE_AUDIT(BARRIERED): the obligations follow, from the stored bits.
     ctx.block().store(DOUBLE, &val_double, &p);
     crate::expr::put_value_store_ic::emit_static_store_ic_bookkeeping(
         ctx,
         &h,
-        &slot,
         &p,
-        &reserved,
         &val_double,
         &val_bits,
         "put.pic",

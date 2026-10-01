@@ -386,23 +386,29 @@ fn boxed_class_field_read_guard_is_one_shape_compare() {
 /// per-object typed-layout intact bit (a downgrade clears it without a shape
 /// transition). Nothing else — no GcHeader word.
 #[test]
-fn raw_f64_class_field_read_guard_keeps_class_id_and_intact_bit() {
-    let ir = ir(Type::Number);
+fn raw_f64_class_field_read_guard_is_the_shape_compare_without_an_intact_test() {
+    // `x = 0`: born on an `F64` lane, so the read is raw.
+    let mut m = probe_module(Type::Number);
+    m.classes[0].fields[0].init = Some(Expr::Number(0.0));
+    let ir = String::from_utf8(
+        compile_module(&m, super::class_field_barrier_tests::ir_opts()).expect("module compiles"),
+    )
+    .expect("LLVM IR should be UTF-8");
     let deref = block_body(&ir, "class_field_inline.deref").expect("deref block");
     let deref_loads = loads(deref);
     assert_eq!(
         deref_loads.len(),
-        3,
-        "raw-f64 read guard: the (class id, ShapeId) word, the expectation and \
-         the _reserved half-word, nothing else:\n{deref}"
+        2,
+        "raw-f64 read guard: the (class id, ShapeId) word and the expectation, \
+         nothing else:\n{deref}"
     );
     assert!(
         deref_loads.iter().any(|l| l.contains("load i64")),
         "the class id must stay in the raw-f64 compare:\n{deref}"
     );
     assert!(
-        deref.contains("load i16, ") && deref.contains("and i16 ") && deref.contains(", 4096"),
-        "the raw-f64 guard must test GC_OBJ_TYPED_LAYOUT_INTACT:\n{deref}"
+        !deref.contains("load i16") && !deref.contains(", 4096"),
+        "the ShapeId pins the lanes; no GC_OBJ_TYPED_LAYOUT_INTACT test:\n{deref}"
     );
     assert!(
         !ir.contains("469795071"),

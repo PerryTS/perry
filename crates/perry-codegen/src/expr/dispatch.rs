@@ -75,6 +75,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::String(..)
         | Expr::WtfString(..)
         | Expr::LocalGet(..)
+        | Expr::ScopedTemp { .. }
         | Expr::LocalSet(..)
         | Expr::Update { .. }
         | Expr::DateNow

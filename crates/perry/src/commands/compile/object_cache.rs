@@ -329,6 +329,8 @@ fn compute_object_cache_key_with_env(
     // embeds as immediates. A cached object is reused exactly when every id
     // it embeds is unchanged.
     h.field("static_shape_ids", &format!("{:?}", opts.static_shape_ids));
+    // The seed sidecar's line format: an entry of another format is a miss.
+    h.field("static_seed_format", perry_codegen::STATIC_SEED_FORMAT);
     h.field(
         "program_class_shape_ids",
         &format!("{:?}", opts.program_class_shape_ids),

@@ -1107,15 +1107,19 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function(
         "js_object_alloc_class_inline_keys_stamped",
         I64,
-        &[I32, I32, I32, I64, I32],
+        &[I32, I32, I32, I64, I32, I64],
     );
-    module.declare_function("js_build_class_keys_array", I64, &[I32, I32, PTR, I32]);
+    module.declare_function("js_build_class_keys_array", I64, &[I32, I32, PTR, I32, I64]);
     module.declare_function("js_object_shape_id_for_keys", I32, &[I64, I32]);
-    module.declare_function("js_object_shape_id_for_class_keys", I32, &[I64, I32, I32]);
+    module.declare_function(
+        "js_object_shape_id_for_class_keys",
+        I32,
+        &[I64, I32, I32, I64],
+    );
     module.declare_function(
         "js_object_shape_id_for_class_keys_live",
         I32,
-        &[I64, I32, I32, I32],
+        &[I64, I32, I32, I32, I64],
     );
     // #10123: (shape_id, NaN-boxed key) -> inline slot index, or -1. The
     // element-shape loop clone's shape-keyed preheader resolves each tracked
@@ -1132,21 +1136,16 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function(
         "js_region_loop_prime",
         I64,
-        &[PTR, I32, I32, I64, I64, I64, I64, I64, I32, I32],
-    );
-    module.declare_function(
-        "js_gc_typed_shape_id_for_keys",
-        I32,
-        &[I32, I64, I32, PTR, I32, PTR, I32, I32],
+        &[PTR, I32, I32, I64, I64, I64, I64, I64, I32, I32, I32],
     );
     // Design step 4: the per-class mint with the driver's static id, and the
     // literal-shape seed.
     module.declare_function(
         "js_object_shape_id_for_class_keys_static",
         I32,
-        &[I64, I32, I32, I32, I32],
+        &[I64, I32, I32, I32, I32, I64],
     );
-    module.declare_function("js_shape_seed_plain", I32, &[I32, PTR, I32, I32, I32]);
+    module.declare_function("js_shape_seed_plain", I32, &[I32, PTR, I32, I32, I32, I64]);
     module.declare_function("js_shape_register_static_seed", VOID, &[PTR]);
     module.declare_function("js_shape_run_static_seed", VOID, &[]);
     // Inline bump-allocator state accessor + slow path. Ordinary allocation
@@ -1379,6 +1378,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_to_numeric", DOUBLE, &[DOUBLE]);
     module.declare_function("js_numeric_step", DOUBLE, &[DOUBLE, I32]);
     module.declare_function("js_box_capture_cell_ptr", I64, &[I64]);
+    // Scope context objects (`crate::scope_env`, runtime `box/scope.rs`).
+    module.declare_function("js_scope_alloc", I64, &[I32, I64]);
+    module.declare_function("js_scope_capture_base", I64, &[I64]);
     // Refs #486: dispatch path for `+` when neither operand has a static
     // type (string|number|bigint). Per JS spec, string concat takes
     // priority; otherwise BigInt or numeric add. Hono's

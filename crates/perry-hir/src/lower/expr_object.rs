@@ -648,7 +648,7 @@ fn accessor_key_expr(key: MethodKeyKind) -> Expr {
 /// `__AnonShape_*` record — which is NOT merely a hint (#10348).
 ///
 /// Codegen turns these field types into the class's compile-time GC masks
-/// (`typed_shape::typed_layout_from_fields`), `js_gc_typed_shape_id_for_keys`
+/// (`typed_shape::typed_layout_from_fields`), the class birth ShapeId
 /// registers them against a dedicated ShapeId, and every allocation of the
 /// record then stamps `SIDE_MASK | TYPED_LAYOUT_INTACT` from the baked header
 /// image (#8405) — with no per-object validation and no downgrade. A field the

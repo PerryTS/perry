@@ -31,12 +31,12 @@ pub(super) fn field_i32(ctx: &mut FnCtx<'_>, handle: &str, offset: i64) -> Strin
 /// DESIGN §6.5a: F-A (receiver kind) and F-B (no Array-subclass numeric
 /// proof), as an i1, for a receiver whose handle is proven an object.
 pub(super) fn store_admission(ctx: &mut FnCtx<'_>, handle: &str, with_kind: bool) -> String {
-    let reserved = field_i16(ctx, handle, -6);
-    let proof = ctx.block().and(I16, &reserved, PROOF_FLAG_I16);
-    let no_proof = ctx.block().icmp_eq(I16, &proof, "0");
+    // Both the learned word and the static birth word name an Ordinary
+    // ShapeId. An OrdinaryNumericProof sibling cannot match either word.
     if !with_kind {
-        return no_proof;
+        return "true".to_string();
     }
+    let reserved = field_i16(ctx, handle, -6);
     let class_id = field_i32(ctx, handle, 0);
     let biased = ctx.block().add(I32, &class_id, "2");
     let has_class = ctx.block().icmp_ugt(I32, &biased, "2");
@@ -45,7 +45,7 @@ pub(super) fn store_admission(ctx: &mut FnCtx<'_>, handle: &str, with_kind: bool
     let classless = ctx.block().icmp_eq(I32, &class_id, "0");
     let plain = ctx.block().and(I1, &admitted, &classless);
     let kind_ok = ctx.block().or(I1, &has_class, &plain);
-    ctx.block().and(I1, &kind_ok, &no_proof)
+    kind_ok
 }
 
 /// Emit the full guard for one receiver from the CURRENT block. Returns the
@@ -91,6 +91,7 @@ pub(super) fn emit_prime_call(
             (I64, &key_bits[4]),
             (I32, &last),
             (I32, &rv.stored_mask.to_string()),
+            (I32, &rv.boxed_mask.to_string()),
         ],
     )
 }
@@ -209,7 +210,7 @@ fn static_region_word(ctx: &FnCtx<'_>, rv: &Receiver) -> Option<u64> {
             }
         })?;
     let keys_global = ctx.class_keys_globals.get(&class_name)?;
-    let (id, slots) = crate::codegen::static_region_slots(keys_global, &rv.keys)?;
+    let (id, slots) = crate::codegen::static_region_slots(keys_global, &rv.keys, rv.boxed_mask)?;
     let mut word = u64::from(id);
     for (i, slot) in slots.iter().enumerate() {
         word |= u64::from(*slot) << (32 + SLOT_BITS * i as u32);

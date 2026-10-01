@@ -135,11 +135,6 @@ pub(super) struct InstanceAlloc {
     /// allocator provide the structural proof needed by constructor-free
     /// field initialization.
     pub(super) constructor_stores_ready: bool,
-    /// `true` ⟹ the header already reads `GC_LAYOUT_POINTER_FREE |
-    /// GC_OBJ_TYPED_LAYOUT_INTACT`, so the construction site owes the runtime
-    /// only the address-dependent half of `js_gc_declare_typed_shape_layout`
-    /// (clearing a recycled address's stale per-object record).
-    pub(super) typed_layout_baked: bool,
 }
 
 /// The number of distinct static keys the constructor chain of `class` stores
@@ -264,19 +259,11 @@ pub(super) fn emit_instance_alloc(
     class_name: &str,
     class: &Class,
 ) -> InstanceAlloc {
-    let mut typed_layout_baked = false;
     let mut constructor_stores_ready = false;
-    let handle = emit_instance_alloc_inner(
-        ctx,
-        class_name,
-        class,
-        &mut typed_layout_baked,
-        &mut constructor_stores_ready,
-    );
+    let handle = emit_instance_alloc_inner(ctx, class_name, class, &mut constructor_stores_ready);
     InstanceAlloc {
         handle,
         constructor_stores_ready,
-        typed_layout_baked,
     }
 }
 
@@ -284,7 +271,6 @@ fn emit_instance_alloc_inner(
     ctx: &mut FnCtx<'_>,
     class_name: &str,
     class: &Class,
-    typed_layout_baked: &mut bool,
     constructor_stores_ready: &mut bool,
 ) -> String {
     // Compute total field count including inherited parent fields.
@@ -533,11 +519,7 @@ fn emit_instance_alloc_inner(
         let wide_birth_image = slack > 0
             && module_image
                 == Some((
-                    crate::target_layout::inline_alloc_gc_packed(
-                        ctx.target_triple,
-                        field_count,
-                        crate::target_layout::InlineTypedLayout::None,
-                    ),
+                    crate::target_layout::inline_alloc_gc_packed(ctx.target_triple, field_count),
                     cid,
                 ));
         let descriptor_facts_exact = (inline_shape_descriptor_facts_exact(
@@ -565,8 +547,16 @@ fn emit_instance_alloc_inner(
             ctx.pending_declares.push((
                 "js_object_alloc_class_inline_keys_stamped".to_string(),
                 I64,
-                vec![I32, I32, I32, I64, I32],
+                vec![I32, I32, I32, I64, I32, I64],
             ));
+            // The birth rep module init minted that id with (T1): a birth
+            // the runtime cannot stamp with it verbatim still carries it.
+            let rep = ctx
+                .class_birth_reps
+                .get(&keys_global_name)
+                .copied()
+                .unwrap_or(0)
+                .to_string();
             ctx.block().call(
                 I64,
                 "js_object_alloc_class_inline_keys_stamped",
@@ -576,6 +566,7 @@ fn emit_instance_alloc_inner(
                     (I32, &field_count.to_string()),
                     (I64, &keys_ptr),
                     (I32, &shape_id),
+                    (I64, &rep),
                 ],
             )
         } else {
@@ -604,52 +595,8 @@ fn emit_instance_alloc_inner(
             const MIN_FIELD_SLOTS: u64 = crate::target_layout::INLINE_SLOT_FLOOR;
             const GC_TYPE_OBJECT: u64 = 2;
             const GC_FLAG_ARENA: u64 = 0x02;
-            // PR #1146: pointer-free hint for inline-allocated regular
-            // objects. The field-store sites issue per-slot
-            // `js_gc_note_slot_layout` so the GC sees real pointer-bearing
-            // slots regardless of this initial tag.
-            const GC_LAYOUT_POINTER_FREE: u64 = 0x4000;
-            /// `GC_OBJ_TYPED_LAYOUT_INTACT` — the bit
-            /// `class_field_inline_guard` requires before it will read or write
-            /// a raw-f64 slot directly. Runtime-side name:
-            /// `gc::layout::GC_OBJ_TYPED_LAYOUT_INTACT`.
-            const GC_OBJ_TYPED_LAYOUT_INTACT: u64 = 0x1000;
-
-            // #7834: when this class's canonical layout is declarable at
-            // allocation AND its pointer mask is statically empty, the state
-            // this header already carries (`GC_LAYOUT_POINTER_FREE`) is the
-            // FINAL one, and the only thing `js_gc_declare_typed_shape_layout`
-            // would add per instance is the intact bit. Stamping it into the
-            // same constant store removes the call: on `churn_alloc` /
-            // `push_cls` that call was ~30% of the program, almost all of it
-            // re-deriving per object a fact that is a property of the SHAPE
-            // (see `gc::shape_install`'s module docs — the memo already reduced
-            // the map round-trip to a direct-mapped probe, and what is left is
-            // that probe, the type-table lookup, and the call itself).
-            //
-            // Requires `field_count == slot_count`: that mismatch is the one
-            // case `init_typed_shape_layout` answers by DOWNGRADING
-            // (`layout_set_typed_unknown`), and a constant cannot express "it
-            // depends". Computed here, before `ctx.block()` takes its mutable
-            // borrow.
-            // A wide birth carries no typed layout (the module image was
-            // composed without one); its stores settle the layout per slot.
-            let inline_typed_layout = if wide_birth_image {
-                crate::target_layout::InlineTypedLayout::None
-            } else {
-                super::typed_shape_init::layout_at_allocation(ctx, class_name, field_count)
-            };
-            *typed_layout_baked = inline_typed_layout.is_baked();
-            let (layout_bits, typed_intact_bits) = match inline_typed_layout {
-                crate::target_layout::InlineTypedLayout::None => (GC_LAYOUT_POINTER_FREE, 0),
-                crate::target_layout::InlineTypedLayout::PointerFree => {
-                    (GC_LAYOUT_POINTER_FREE, GC_OBJ_TYPED_LAYOUT_INTACT)
-                }
-                crate::target_layout::InlineTypedLayout::SideMask => {
-                    (0x8000, GC_OBJ_TYPED_LAYOUT_INTACT)
-                }
-            };
-
+            // The packed object header has no layout state: the birth
+            // ShapeId carries the rep used by GC tracing.
             let alloc_field_count = std::cmp::max(field_count as u64, MIN_FIELD_SLOTS);
             let payload_size = object_header_size + alloc_field_count * FIELD_SLOT_SIZE;
             // Round the whole allocation up to FIELD_SLOT_SIZE (8). The inline
@@ -751,17 +698,11 @@ fn emit_instance_alloc_inner(
             // site — measured +4.5 instructions per `new`. The vector image is
             // one live register (or one reload) and one `str q` per
             // allocation, the shape the pre-#8113 constant pair compiled to.
-            let gc_packed: u64 = crate::target_layout::inline_alloc_gc_packed(
-                ctx.target_triple,
-                field_count,
-                inline_typed_layout,
-            );
+            let gc_packed: u64 =
+                crate::target_layout::inline_alloc_gc_packed(ctx.target_triple, field_count);
             debug_assert_eq!(
                 gc_packed,
-                GC_TYPE_OBJECT
-                    | (GC_FLAG_ARENA << 8)
-                    | ((layout_bits | typed_intact_bits) << 16)
-                    | ((total_size as u64) << 32),
+                GC_TYPE_OBJECT | (GC_FLAG_ARENA << 8) | ((total_size as u64) << 32),
                 "inline_alloc_gc_packed must reproduce this site's packed header word"
             );
             // Prefer the module-level image global — composed once at module
@@ -803,6 +744,11 @@ fn emit_instance_alloc_inner(
                 ctx.class_header_images.insert(image_key, source.clone());
                 source
             };
+            let birth_rep = ctx
+                .class_birth_reps
+                .get(&keys_global_name)
+                .copied()
+                .unwrap_or(0);
             let header_image = match image_source {
                 crate::expr::HeaderImageSource::EntrySlot(slot) => {
                     ctx.block().load("<2 x i64>", &slot)
@@ -837,11 +783,23 @@ fn emit_instance_alloc_inner(
             // `undefined`/pointer (e.g. `marked`'s `this.defaults`), the constructor
             // crashed with "Cannot read properties of undefined". Slots start
             // at raw + GcHeader(8) + ObjectHeader(16) = raw + 24 (#8047).
+            //
+            // Charter step 5, T1: an `F64` lane of the class's birth rep starts
+            // as +0.0 instead (the same word module init minted the ShapeId
+            // with), so the representation invariant holds before the
+            // constructor's stores; the constructor proof behind the lane says
+            // nothing reads the slot first. The runtime allocator does the same
+            // (`field_rep_store::birth_fill_f64_lanes`).
             for i in 0..alloc_field_count {
                 let slot_off = GC_HEADER_SIZE + object_header_size + i * FIELD_SLOT_SIZE;
                 let slot_ptr = blk.gep(I8, &raw, &[(I64, &slot_off.to_string())]);
-                // GC_STORE_AUDIT(INIT): freshly allocated inline object slot initialized to undefined.
-                blk.store(I64, crate::nanbox::TAG_UNDEFINED_I64, &slot_ptr);
+                if crate::typed_shape::birth_rep_slot_is_f64(birth_rep, i as u32) {
+                    // GC_STORE_AUDIT(INIT): fresh F64 birth lane initialized to +0.0 (T1).
+                    blk.store(I64, "0", &slot_ptr);
+                } else {
+                    // GC_STORE_AUDIT(INIT): freshly allocated inline object slot initialized to undefined.
+                    blk.store(I64, crate::nanbox::TAG_UNDEFINED_I64, &slot_ptr);
+                }
             }
 
             // User pointer = raw + 8 (the ObjectHeader address — what the

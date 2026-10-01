@@ -2587,3 +2587,97 @@ pub unsafe extern "C" fn js_readable_stream_pipe_through(
     js_promise_mark_internally_handled(pipe);
     output
 }
+
+/// Resolve a WHATWG transform pair and start piping, keeping object-backed
+/// transforms and options live across arbitrary getter callbacks. Numeric
+/// TransformStream handles without options take no runtime handle slots.
+#[no_mangle]
+pub unsafe extern "C" fn js_readable_stream_pipe_through_pair(
+    readable_handle: f64,
+    pair: f64,
+    options: f64,
+) -> f64 {
+    if JSValue::from_bits(pair.to_bits()).is_pointer()
+        || JSValue::from_bits(options.to_bits()).is_pointer()
+    {
+        return pipe_through_rooted_pair(readable_handle, pair, options);
+    }
+    let transform = js_stream_unwrap_handle(pair);
+    let readable = js_transform_stream_readable(transform);
+    let writable = js_transform_stream_writable(transform);
+    let output =
+        js_readable_stream_pipe_through_validate(readable_handle, writable, readable, options);
+    let pipe = js_readable_stream_pipe_to(readable_handle, writable, options);
+    js_promise_mark_internally_handled(pipe);
+    output
+}
+
+// Keep the scoped-root frame out of the numeric handle path. The object path
+// needs those roots across arbitrary getter callbacks; numeric streams do not.
+#[cold]
+#[inline(never)]
+unsafe fn pipe_through_rooted_pair(readable_handle: f64, pair: f64, options: f64) -> f64 {
+    let pair_is_object = JSValue::from_bits(pair.to_bits()).is_pointer();
+    let options_is_object = JSValue::from_bits(options.to_bits()).is_pointer();
+    // The caller enters this cold helper only for object-backed pairs or
+    // options. The scope always exists here; individual numeric values need
+    // no handle slots.
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let pair_root = pair_is_object.then(|| scope.root_nanbox_f64(pair));
+    let options_root = options_is_object.then(|| scope.root_nanbox_f64(options));
+    let transform = match pair_root {
+        Some(root) => subclass::unwrap_rooted_pair_stream_handle(root),
+        None => pair,
+    };
+    let transform_root = JSValue::from_bits(transform.to_bits())
+        .is_pointer()
+        .then(|| {
+            // Unwrapping can move the receiver. Compare with the root only
+            // after it returns, and reuse its slot when the pair is itself
+            // the transform. A distinct object still needs its own root.
+            pair_root
+                .filter(|root| root.get_nanbox_f64().to_bits() == transform.to_bits())
+                .unwrap_or_else(|| scope.root_nanbox_f64(transform))
+        });
+    let transform_value = || {
+        transform_root
+            .as_ref()
+            .map(|root| root.get_nanbox_f64())
+            .unwrap_or(transform)
+    };
+    let options_value = || {
+        options_root
+            .as_ref()
+            .map(|root| root.get_nanbox_f64())
+            .unwrap_or(options)
+    };
+    let transform_field = |name: &[u8]| {
+        let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        // The key allocation can move the pair. Read the already-rooted
+        // receiver only after it, and again for each getter.
+        let object = js_nanbox_get_pointer(transform_value()) as *const ObjectHeader;
+        f64::from_bits(js_object_get_field_by_name(object, key).bits())
+    };
+    let (readable, writable) = if JSValue::from_bits(transform.to_bits()).is_pointer() {
+        // Keep object-specific property dispatch out of the numeric endpoint
+        // getters, so merely reading TransformStream endpoints does not link
+        // the generic object-property machinery into an otherwise lean binary.
+        let readable = subclass::unwrap_pair_stream_handle(transform_field(b"readable"));
+        let writable = subclass::unwrap_pair_stream_handle(transform_field(b"writable"));
+        (readable, writable)
+    } else {
+        (
+            js_transform_stream_readable(transform),
+            js_transform_stream_writable(transform),
+        )
+    };
+    let output = js_readable_stream_pipe_through_validate(
+        readable_handle,
+        writable,
+        readable,
+        options_value(),
+    );
+    let pipe = js_readable_stream_pipe_to(readable_handle, writable, options_value());
+    js_promise_mark_internally_handled(pipe);
+    output
+}

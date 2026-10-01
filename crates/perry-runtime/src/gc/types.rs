@@ -96,7 +96,13 @@ pub const GC_TYPE_REGEXP: u8 = 20;
 /// Immutable Perex program words. All operands are integers/relative offsets;
 /// the allocation is a movable leaf reached through its RegExp owner.
 pub const GC_TYPE_REGEX_PROGRAM: u8 = 21;
-pub const GC_TYPE_MAX: u8 = GC_TYPE_REGEX_PROGRAM;
+pub const GC_TYPE_BOX: u8 = 22;
+pub const GC_TYPE_I32_BOX: u8 = 23;
+pub const GC_TYPE_BOOL_BOX: u8 = 24;
+/// A scope context object: N NaN-boxed binding slots shared by the closures of
+/// one lexical scope activation (`box/scope.rs`).
+pub const GC_TYPE_SCOPE: u8 = 25;
+pub const GC_TYPE_MAX: u8 = GC_TYPE_SCOPE;
 
 pub(super) const MALLOC_KIND_UNKNOWN_INDEX: usize = 0;
 pub(super) const MALLOC_KIND_BUCKET_COUNT: usize = GC_TYPE_MAX as usize + 1;
@@ -301,6 +307,8 @@ pub(crate) enum GcAllocationPolicy {
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GcRewriteDescriptorKind {
+    Box,
+    Scope,
     Leaf,
     Array,
     Object,
@@ -853,6 +861,67 @@ pub(super) static GC_TYPE_INFO_BY_ID: [Option<GcTypeInfo>; MALLOC_KIND_BUCKET_CO
         GcRewriteHookKind::None,
         GcFinalizeHookKind::None,
     )),
+    Some(gc_type_info_entry(
+        GC_TYPE_BOX,
+        "box",
+        GcAllocationPolicy::Arena,
+        true,
+        GcRewriteDescriptorKind::Box,
+        GcLayoutSlotKind::None,
+        true,
+        GcExternalBytePolicy::InlinePayload,
+        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        false,
+        GcMoveHookKind::None,
+        GcRewriteHookKind::None,
+        GcFinalizeHookKind::None,
+    )),
+    Some(gc_type_info_entry(
+        GC_TYPE_I32_BOX,
+        "i32_box",
+        GcAllocationPolicy::Arena,
+        true,
+        GcRewriteDescriptorKind::Leaf,
+        GcLayoutSlotKind::None,
+        true,
+        GcExternalBytePolicy::InlinePayload,
+        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        true,
+        GcMoveHookKind::None,
+        GcRewriteHookKind::None,
+        GcFinalizeHookKind::None,
+    )),
+    Some(gc_type_info_entry(
+        GC_TYPE_BOOL_BOX,
+        "bool_box",
+        GcAllocationPolicy::Arena,
+        true,
+        GcRewriteDescriptorKind::Leaf,
+        GcLayoutSlotKind::None,
+        true,
+        GcExternalBytePolicy::InlinePayload,
+        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        true,
+        GcMoveHookKind::None,
+        GcRewriteHookKind::None,
+        GcFinalizeHookKind::None,
+    )),
+    // Indexed by type id: this entry must stay at position GC_TYPE_SCOPE.
+    Some(gc_type_info_entry(
+        GC_TYPE_SCOPE,
+        "scope",
+        GcAllocationPolicy::Arena,
+        true,
+        GcRewriteDescriptorKind::Scope,
+        GcLayoutSlotKind::None,
+        true,
+        GcExternalBytePolicy::InlinePayload,
+        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        false,
+        GcMoveHookKind::None,
+        GcRewriteHookKind::None,
+        GcFinalizeHookKind::None,
+    )),
 ];
 
 #[inline]
@@ -941,7 +1010,6 @@ pub(crate) fn gc_type_after_payload_move(obj_type: u8, old_user: usize, new_user
         }
         GcMoveHookKind::ClosureDynamicProps => {
             crate::closure::closure_dynamic_props_owner_moved(old_user, new_user);
-            crate::closure::closure_box_captures_owner_moved(old_user, new_user);
             #[cfg(feature = "dyn-eval")]
             crate::dyn_eval::function_owner_moved(old_user, new_user);
         }
@@ -1095,7 +1163,9 @@ pub(crate) fn validate_gc_type_info(info: &GcTypeInfo) -> Result<(), &'static st
                 return Err("closure rewrite descriptor must expose closure capture slots");
             }
         }
-        GcRewriteDescriptorKind::Buffer
+        GcRewriteDescriptorKind::Box
+        | GcRewriteDescriptorKind::Scope
+        | GcRewriteDescriptorKind::Buffer
         | GcRewriteDescriptorKind::MetaOnly
         | GcRewriteDescriptorKind::Promise
         | GcRewriteDescriptorKind::Error
@@ -1248,18 +1318,10 @@ pub const OBJ_FLAG_NO_EXTEND: u16 = 0x04;
 // (`GC_COPY_SURVIVAL_AGE_MASK = 0x0038`) and bits 14..15 the layout state,
 // so 0x08 would be clobbered on every minor GC. Bits 6..13 are free.
 pub const OBJ_FLAG_NULL_PROTO: u16 = 0x40;
-/// #8690: this `GC_TYPE_OBJECT` carries a cached proof that the packed
-/// Array-subclass element prefix recorded in `ObjectMeta::flags` is numeric.
-/// The bit is the address-reuse-safe authority: fresh allocations start with
-/// it clear, and the whole `_reserved` word rides copying/compacting GC moves.
-/// Every ordinary object-slot store clears it through `layout_note_slot`; the
-/// object-owned spill store has the matching owner-side hook.
-///
-/// Bit 7 is shared with `GC_ARRAY_RAW_F64_LAYOUT`, which is only meaningful
-/// for `GC_TYPE_ARRAY`. The two facts deliberately mean the same thing to the
-/// loop guard — direct loads over the admitted prefix are raw numeric f64s —
-/// but their payload layouts and invalidation funnels remain type-specific.
-pub(crate) const OBJ_FLAG_PACKED_NUMERIC_PROOF: u16 = 0x80;
+/// The GC_TYPE_BUFFER payload contains a native data pointer after BufferHeader.
+/// Bit 7 is kind-disjoint from object/array numeric-layout proofs. Generic age
+/// and layout transitions preserve it; no Buffer reader interprets those proofs.
+pub(crate) const GC_BUFFER_FOREIGN_DATA: u16 = 0x80;
 // Array carries properties outside its ordinary dense-element representation:
 // per-index descriptors (accessors or custom attrs installed via
 // `Object.defineProperty`), a non-writable `length`, or named properties in
@@ -1404,7 +1466,7 @@ pub(crate) const GC_ARRAY_NAMED_PROPS: u16 = 0x100;
 /// MUST match `PLAIN_ORDINARY_OBJ_FLAG` in
 /// `perry-codegen/src/expr/proxy_reflect.rs`, which emits it as a literal.
 pub const OBJ_FLAG_PLAIN_ORDINARY: u16 = 0x200;
-/// # `GcHeader::_reserved` IS FULL — the authoritative bit map
+/// # `GcHeader::_reserved` bit map by GC kind
 ///
 /// Read this before spending a bit. It is the only place both namespaces are
 /// written down together, and the reason it exists is that they are not:
@@ -1418,29 +1480,18 @@ pub const OBJ_FLAG_PLAIN_ORDINARY: u16 = 0x200;
 /// | 0..2 | `OBJ_FLAG_FROZEN` / `SEALED` / `NO_EXTEND` | same | |
 /// | 3..5 | | | `GC_COPY_SURVIVAL_AGE_MASK` |
 /// | 6 | `OBJ_FLAG_NULL_PROTO` | `GC_ARRAY_CUSTOM_PROTO` (alias) | `GC_RESIDUAL_PROTO_OWNER` (non-object) |
-/// | 7 | `OBJ_FLAG_PACKED_NUMERIC_PROOF` | `GC_ARRAY_RAW_F64_LAYOUT` | |
+/// | 7 | available | `GC_ARRAY_RAW_F64_LAYOUT` | BUFFER: `GC_BUFFER_FOREIGN_DATA` |
 /// | 8 | `OBJ_FLAG_TYPED_ARRAY_PROTO` | `GC_ARRAY_NAMED_PROPS` | |
 /// | 9 | `OBJ_FLAG_PLAIN_ORDINARY` | `GC_ARRAY_ARGUMENTS_OBJECT` | |
 /// | 10 | `OBJ_FLAG_STABLE_TOMBSTONES` | `OBJ_FLAG_ARRAY_DESCRIPTORS` | |
 /// | 11 | `OBJ_FLAG_HAS_DESCRIPTORS` | element shape (#7480) | |
-/// | 12 | `GC_OBJ_TYPED_LAYOUT_INTACT` (`gc/layout.rs`) | `GC_ARRAY_RAW_F64_HOLES` | |
-/// | 13 | | | `GC_LAYOUT_ALL_POINTERS` (`gc/layout.rs`) |
-/// | 14..15 | | | `GC_LAYOUT_STATE_MASK` (`gc/layout.rs`) |
+/// | 12 | available | `GC_ARRAY_RAW_F64_HOLES` | |
+/// | 13 | available | `GC_LAYOUT_ALL_POINTERS` | closure/array layout only |
+/// | 14..15 | available | `GC_LAYOUT_STATE_MASK` | closure/array layout only |
 ///
-/// **There are no free bits.** Bits 12 and 13 are the dangerous ones to
-/// mistake for free, because `layout::set_layout_state` CLEARS bit 13 (and the
-/// typed-layout helpers clear bit 12) on transitions that have nothing to do
-/// with whatever a new flag would mean. A flag placed there is not merely
-/// shared — it is silently ERASED, so its reader answers `false` for an object
-/// the writer marked. #8690 hit this and left its warning in
-/// `ObjectMeta::flags`' doc comment; #10842 hit it again and left this table.
-///
-/// The next bit back is 10, `OBJ_FLAG_STABLE_TOMBSTONES`, which becomes dead
-/// when #10826 makes `delete` a shape transition. Until then, a new per-object
-/// fact belongs in **`ObjectMeta::flags`** (a `u64`, bits 5/6/7 free, out of
-/// reach of the layout machinery entirely) — and for any fact a hot read path
-/// consults, that is the better home anyway whenever the path already loads
-/// `meta`.
+/// Object layout is a ShapeId fact. Bits 7 and 12..15 have no object
+/// layout meaning; array and closure layout metadata still uses its listed
+/// bits. Any new header use must be checked against every GC kind.
 pub const OBJ_FLAG_RESERVED_BIT_MAP_SEE_DOC: () = ();
 /// #6011: every element slot in `[0, length)` holds either canonical raw-f64
 /// number bits or `TAG_HOLE` — the hole-tolerant sibling of
@@ -1468,7 +1519,7 @@ pub(crate) const GC_ARRAY_RAW_F64_HOLES: u16 = 0x1000;
 ///
 /// Bit 11 — shared with `OBJ_FLAG_HAS_DESCRIPTORS`, which is only
 /// meaningful for `GC_TYPE_OBJECT`, exactly as `GC_ARRAY_RAW_F64_HOLES`
-/// (bit 12) shares with `GC_OBJ_TYPED_LAYOUT_INTACT`. Only meaningful for
+/// (bit 12) is free on ordinary objects. Only meaningful for
 /// `GC_TYPE_ARRAY`; every accessor goes through `array::element_shape`,
 /// which checks `obj_type` first.
 pub(crate) const GC_ARRAY_ELEMENT_SHAPE: u16 = 0x800;
