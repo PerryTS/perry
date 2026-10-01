@@ -99,6 +99,7 @@ pub(crate) fn test_seed_decl_class_prototype_root(class_id: u32, proto_ptr: usiz
             .get_or_insert_with(Default::default)
             .insert(class_id, proto_ptr);
     });
+    super::class_lookup_surface_gen_bump();
 }
 
 #[cfg(test)]
@@ -165,4 +166,5 @@ pub(crate) fn test_clear_class_inheritance_roots(proto_cid: u32, closure_cid: u3
             m.remove(&closure_cid);
         }
     });
+    super::class_lookup_surface_gen_bump();
 }

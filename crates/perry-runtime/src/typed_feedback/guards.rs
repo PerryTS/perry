@@ -845,7 +845,7 @@ fn class_field_get_one_path(
     }
     let key = (key as u64 & crate::value::POINTER_MASK) as *const crate::StringHeader;
     if probe_mru {
-        if let Some(value) = unsafe { class_field_get_from_shape(bits, key, cache_slot, false) } {
+        if let Some(value) = unsafe { class_field_get_from_shape(bits, cache_slot) } {
             return value;
         }
     }
@@ -861,24 +861,14 @@ fn class_field_get_one_path(
 
 /// The answers the receiver's shape gives without the ladder, in the order
 /// the emitted generic read asks them: the site's own word, the site's holder
-/// entry, then (on its declined edge) the inherited-read cache. `None` for
-/// everything else.
-///
-/// `leaf`: the caller is the S2 GC-leaf entry, so an inherited ACCESSOR entry
-/// (which runs a getter) is declined, as `js_inherited_read_cache_hit_f64`
-/// declines it for the emitted read. Otherwise the cache is asked once, as
-/// the ladder's own first question (`get_field_ic_miss_impl`'s hook A) asks
-/// it, getter included.
+/// entry. `None` for everything else.
 ///
 /// # Safety
-/// `cache_slot` is null or the site's live read cache; `key` is the interned
-/// key with its tag masked off.
+/// `cache_slot` is null or the site's live read cache.
 #[inline(always)]
 unsafe fn class_field_get_from_shape(
     bits: u64,
-    key: *const crate::StringHeader,
     cache_slot: *mut crate::object::PicCacheSlot,
-    leaf: bool,
 ) -> Option<f64> {
     // POINTER tag above the handle band: the receiver test every emitted
     // generic read makes before either lookup.
@@ -900,22 +890,7 @@ unsafe fn class_field_get_from_shape(
         crate::hot_diag::recv_route_note_runtime(crate::hot_diag::RT_ROUTE_CLASS_MISS_SHAPE);
         return Some(value);
     }
-    let value = if leaf {
-        let value =
-            crate::object::inherited_read_cache::js_inherited_read_cache_hit_f64(handle, key);
-        (value.to_bits() != crate::value::TAG_HOLE).then_some(value)
-    } else {
-        match crate::object::inherited_read_cache::inherited_read_cache_lookup(handle, key) {
-            crate::object::inherited_read_cache::Lookup::Hit(value) => {
-                Some(f64::from_bits(value.bits()))
-            }
-            _ => None,
-        }
-    };
-    if value.is_some() {
-        crate::hot_diag::recv_route_note_runtime(crate::hot_diag::RT_ROUTE_CLASS_MISS_SHAPE);
-    }
-    value
+    None
 }
 
 /// `js_class_field_get_ic`'s guard-FAIL arm with typed feedback on.
@@ -1050,9 +1025,8 @@ pub extern "C" fn js_class_field_get_ic_fast(
         if !typed_feedback_enabled()
             && !crate::value::JSValue::from_bits(key as u64).is_short_string()
         {
-            let key = (key as u64 & crate::value::POINTER_MASK) as *const crate::StringHeader;
             if let Some(value) =
-                unsafe { class_field_get_from_shape(receiver.to_bits(), key, cache_slot, true) }
+                unsafe { class_field_get_from_shape(receiver.to_bits(), cache_slot) }
             {
                 return value;
             }

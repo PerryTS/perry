@@ -1676,8 +1676,6 @@ js_import_meta_resolve	f64	f64,f64,f64
 js_import_meta_resolve_value	f64	f64
 js_in_operator	f64	f64,f64
 js_in_operator_presence_ic	f64	f64,f64,ptr
-js_inherited_read_cache_hit_f64	f64	ptr,ptr
-js_inherited_read_cache_stats	f64	i32s
 js_inline_arena_slow_alloc	ptr	ptr,usize,usize
 js_inline_arena_state	ptr	
 js_install_global_value_surfaces	void	

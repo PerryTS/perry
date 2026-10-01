@@ -1087,15 +1087,6 @@ fn generic_property_get_slot_load_is_reached_only_through_every_guard() {
         "the overflow-bit test must not gate the inline slot load — a spill \
          entry is refused by the ShapeId compare itself:\n{chain}"
     );
-    // The inherited-read hook (#10834/#10842) lives on the DECLINED edge. Its
-    // answer must never be a condition on the way to the own slot load: if it
-    // were, an own read would pay a call, and this walk would have collected
-    // the call's result in the chain.
-    assert!(
-        !chain.contains("js_inherited_read_cache_hit_f64"),
-        "the inherited-read hook must not gate the inline slot load:\n{chain}"
-    );
-
     // The GC header is not read on the way to the slot load at all: neither
     // the kind byte (#10828 closed rule 3 — a `+4` word equal to a live
     // ShapeId proves `GC_TYPE_OBJECT`) nor the descriptor flag (#10824 closed
@@ -1621,7 +1612,6 @@ fn the_generic_tower_is_one_leaf_call_two_exits_and_a_bounded_number_of_blocks()
         .filter(|c| {
             c.starts_with("js_object_get_field")
                 || c.starts_with("js_typed_feedback_object_get_field")
-                || c.starts_with("js_inherited_read_cache")
                 || *c == "js_throw_type_error_property_access"
         })
         .collect();
@@ -1748,45 +1738,13 @@ fn a_spill_entry_is_recognised_by_the_front_and_nowhere_at_the_site() {
     );
 }
 
-/// The inherited-read cache (#10834/#10842) is asked on the NEVER-PRIMED edge
-/// and nowhere else. A read whose key lives on the prototype chain is never an
-/// own slot on the receiver's shape, so a site that only reads such a key never
-/// resolves its per-site cache. The first placement asked on EVERY path into
-/// the exit and charged each own-key miss a declining probe (+88 on a
-/// megamorphic site, +89 on a spill read, measured).
-///
-/// First-read D3: the probe moved into the slow entry
-/// (`js_object_get_field_ic_slow`, which asks it only when the site's cache
-/// slot is unresolved), behind the leaf front — so an own-key way, spill or
-/// latched read never reaches it, and the site expands none of it. Pinned
-/// here, each of which would otherwise fail silently (the program still
-/// computes the right value through the slow entry):
-///
-/// 1. no block of the site calls the hook — in particular none on a path to
-///    the inline slot load (the CFG-walk test asserts the same from the other
-///    side);
-/// 2. the slow entry is called from `pic.miss.call` only, with the same four
-///    operands (the never-primed test reads the cache slot);
-/// 3. `pic.miss.call` is reached from the front only on its `TAG_HOLE`
-///    decline, so a front-served read never pays the probe;
-/// 4. the merge takes the slow entry's value from `pic.miss.call`.
+/// The generic read's collecting slow entry belongs on the miss-front decline.
+/// Own-word and holder-shape hits bypass it. The call keeps all four operands,
+/// and the merge uses the value returned by that one miss entry.
 #[test]
-fn the_inherited_read_cache_is_asked_on_the_never_primed_edge_only() {
+fn the_generic_slow_read_is_called_only_after_the_front_declines() {
     let ir = emit(false, None);
     let blocks = tower_blocks(&ir);
-    // 1.
-    let holders: Vec<&str> = blocks
-        .iter()
-        .filter(|(_, body)| {
-            body.iter()
-                .any(|l| l.contains("@js_inherited_read_cache_hit_f64("))
-        })
-        .map(|(l, _)| l.as_str())
-        .collect();
-    assert!(
-        holders.is_empty(),
-        "the inherited hook belongs to the slow entry, not the site: {holders:?}"
-    );
     // 2.
     let slow_callers: Vec<(&str, &String)> = blocks
         .iter()
