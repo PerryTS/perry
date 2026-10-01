@@ -2619,25 +2619,20 @@ pub unsafe extern "C" fn js_readable_stream_pipe_through_pair(
 unsafe fn pipe_through_rooted_pair(readable_handle: f64, pair: f64, options: f64) -> f64 {
     let pair_is_object = JSValue::from_bits(pair.to_bits()).is_pointer();
     let options_is_object = JSValue::from_bits(options.to_bits()).is_pointer();
-    let scope =
-        (pair_is_object || options_is_object).then(perry_runtime::gc::RuntimeHandleScope::new);
-    let pair_root = scope
-        .as_ref()
-        .filter(|_| pair_is_object)
-        .map(|scope| scope.root_nanbox_f64(pair));
-    let options_root = scope
-        .as_ref()
-        .filter(|_| options_is_object)
-        .map(|scope| scope.root_nanbox_f64(options));
+    // The caller enters this cold helper only for object-backed pairs or
+    // options. The scope always exists here; individual numeric values need
+    // no handle slots.
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let pair_root = pair_is_object.then(|| scope.root_nanbox_f64(pair));
+    let options_root = options_is_object.then(|| scope.root_nanbox_f64(options));
     let pair = pair_root
         .as_ref()
         .map(|root| root.get_nanbox_f64())
         .unwrap_or(pair);
     let transform = subclass::unwrap_pair_stream_handle(pair);
-    let transform_root = scope
-        .as_ref()
-        .filter(|_| JSValue::from_bits(transform.to_bits()).is_pointer())
-        .map(|scope| scope.root_nanbox_f64(transform));
+    let transform_root = JSValue::from_bits(transform.to_bits())
+        .is_pointer()
+        .then(|| scope.root_nanbox_f64(transform));
     let transform_value = || {
         transform_root
             .as_ref()
