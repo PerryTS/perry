@@ -1572,7 +1572,8 @@ const RECV_ROUTE_NAMES: [&str; 33] = [
     // site-less by-name walk.
     "rt_class_miss_ladder",
     // Runtime-counted: a by-name overwrite of a live inline slot on an object
-    // holding a typed layout, which keeps it (it used to declare it unknown).
+    // whose ShapeId carries an `F64` lane, which keeps that ShapeId (it used
+    // to declare the object's layout unknown).
     "rt_overwrite_kept_typed",
     // Runtime-counted by `js_region_loop_prime`: refused because a key a bare
     // store may write a non-double into is not an `Any` lane (charter step 5).
@@ -1584,6 +1585,7 @@ pub(crate) const RT_ROUTE_MEGA_SPILL: u32 = 9;
 pub(crate) const RT_ROUTE_SPILL_MISS: u32 = 10;
 pub(crate) const RT_ROUTE_CLASS_MISS_SHAPE: u32 = 29;
 pub(crate) const RT_ROUTE_CLASS_MISS_LADDER: u32 = 30;
+pub(crate) const RT_ROUTE_OVERWRITE_KEPT_TYPED: u32 = 31;
 pub(crate) const RT_ROUTE_RLOOP_PRIME_OK: u32 = 19;
 pub(crate) const RT_ROUTE_RLOOP_REFUSE_BAND: u32 = 20;
 pub(crate) const RT_ROUTE_RLOOP_REFUSE_SUMMARY: u32 = 21;
@@ -1602,6 +1604,13 @@ static RECV_ROUTES_REPORT: std::sync::Once = std::sync::Once::new();
 /// compiled with `PERRY_RECV_ROUTE_COUNT=1`; the runtime-counted routes are a
 /// relaxed load and a not-taken branch everywhere else.
 static RECV_ROUTES_ARMED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Is this a census build (see [`RECV_ROUTES_ARMED`])? For a runtime route
+/// whose classification costs more than the count.
+#[inline]
+pub(crate) fn recv_routes_armed() -> bool {
+    RECV_ROUTES_ARMED.load(Ordering::Relaxed)
+}
 
 /// Count a runtime-side route in a census build (see
 /// [`RECV_ROUTES_ARMED`]); nothing otherwise.
