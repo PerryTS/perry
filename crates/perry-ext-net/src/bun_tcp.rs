@@ -994,3 +994,209 @@ pub(crate) fn scan_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn node_flags_preserve_bun_socket_and_server_surfaces() {
+        let _lock = crate::tests::GC_TEST_LOCK.lock().unwrap();
+        const SOCKET: i64 = 900_010;
+        const SERVER: i64 = 900_011;
+        const MISSING: i64 = 900_012;
+        struct Cleanup;
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                sockets().lock().unwrap().remove(&SOCKET);
+                servers().lock().unwrap().remove(&SERVER);
+                statics::sockets().lock().unwrap().remove(&SOCKET);
+            }
+        }
+        let _cleanup = Cleanup;
+        sockets().lock().unwrap().insert(
+            SOCKET,
+            BunSocket {
+                handlers: Handlers::default(),
+                data_bits: 42.0f64.to_bits(),
+                connect_promise: 0,
+                listener: None,
+                opened: false,
+                paused: false,
+                paused_data: VecDeque::new(),
+                paused_end: false,
+                paused_close: false,
+                shutting_down: false,
+                needs_drain: false,
+                last_error: None,
+            },
+        );
+        servers().lock().unwrap().insert(
+            SERVER,
+            BunServer {
+                handlers: Handlers::default(),
+                data_bits: 43.0f64.to_bits(),
+                refed: false,
+                ready: false,
+            },
+        );
+        for name in [
+            "write",
+            "end",
+            "close",
+            "terminate",
+            "ref",
+            "unref",
+            "pause",
+            "resume",
+            "flush",
+            "reload",
+            "shutdown",
+            "stop",
+            "destroyed",
+            "connecting",
+            "writableLength",
+            "",
+            "unknown",
+        ] {
+            assert_eq!(
+                method_name(SOCKET, name),
+                (!matches!(
+                    name,
+                    "stop" | "destroyed" | "connecting" | "writableLength" | "" | "unknown"
+                ))
+                .then_some(name.as_bytes()),
+                "socket method {name}"
+            );
+            assert_eq!(
+                method_name(SERVER, name),
+                matches!(name, "stop" | "ref" | "unref" | "reload").then_some(name.as_bytes()),
+                "server method {name}"
+            );
+            assert_eq!(method_name(MISSING, name), None, "missing method {name}");
+        }
+        for name in [
+            "data",
+            "listener",
+            "remoteAddress",
+            "remotePort",
+            "remoteFamily",
+            "localAddress",
+            "localPort",
+            "localFamily",
+            "bytesWritten",
+            "readyState",
+            "port",
+            "hostname",
+            "unix",
+            "destroyed",
+            "connecting",
+            "writableLength",
+            "",
+            "unknown",
+        ] {
+            assert_eq!(
+                property(SOCKET, name).is_some(),
+                matches!(
+                    name,
+                    "data"
+                        | "listener"
+                        | "remoteAddress"
+                        | "remotePort"
+                        | "remoteFamily"
+                        | "localAddress"
+                        | "localPort"
+                        | "localFamily"
+                        | "bytesWritten"
+                        | "readyState"
+                ),
+                "socket property {name}"
+            );
+            assert_eq!(
+                property(SERVER, name).is_some(),
+                matches!(name, "data" | "port" | "hostname" | "unix"),
+                "server property {name}"
+            );
+            assert!(property(MISSING, name).is_none(), "missing property {name}");
+        }
+        assert_eq!(property(SOCKET, "data"), Some(42.0));
+        assert_eq!(property(SERVER, "data"), Some(43.0));
+        for name in [
+            "listener",
+            "remoteAddress",
+            "remotePort",
+            "remoteFamily",
+            "localAddress",
+            "localPort",
+            "localFamily",
+        ] {
+            assert_eq!(
+                property(SOCKET, name).unwrap().to_bits(),
+                TAG_UNDEFINED,
+                "unset {name}"
+            );
+        }
+        assert_eq!(property(SOCKET, "readyState"), Some(0.0));
+        assert_eq!(property(SERVER, "port"), Some(0.0));
+        assert_eq!(property(SERVER, "unix").unwrap().to_bits(), TAG_UNDEFINED);
+        // Bun's numeric readyState differs from node:net's string property.
+        // The shared name must keep Bun precedence after Node-only flags move.
+        statics::sockets()
+            .lock()
+            .unwrap()
+            .insert(SOCKET, crate::SocketState::for_test(false));
+        for (handle, name, expected) in [
+            (SOCKET, "destroyed", unsafe {
+                crate::js_net_socket_get_destroyed(SOCKET)
+            }),
+            (SOCKET, "connecting", unsafe {
+                crate::js_net_socket_get_connecting(SOCKET)
+            }),
+            (SOCKET, "writableLength", unsafe {
+                crate::js_net_socket_get_writable_length(SOCKET)
+            }),
+            (SOCKET, "data", 42.0),
+            (SERVER, "data", 43.0),
+            (
+                SOCKET,
+                "readyState",
+                property(SOCKET, "readyState").unwrap(),
+            ),
+        ] {
+            let mut actual = undefined();
+            assert_eq!(
+                unsafe {
+                    crate::dispatch::js_ext_net_handle_property_dispatch(
+                        handle,
+                        name.as_ptr(),
+                        name.len(),
+                        &mut actual,
+                    )
+                },
+                1,
+                "whole dispatch {name}"
+            );
+            assert_eq!(
+                actual.to_bits(),
+                expected.to_bits(),
+                "whole dispatch value {name}"
+            );
+        }
+        for (handle, name) in [(SOCKET, "write"), (SERVER, "stop")] {
+            let mut actual = undefined();
+            assert_eq!(
+                unsafe {
+                    crate::dispatch::js_ext_net_handle_property_dispatch(
+                        handle,
+                        name.as_ptr(),
+                        name.len(),
+                        &mut actual,
+                    )
+                },
+                1,
+                "bound method {name}"
+            );
+            assert_ne!(actual.to_bits(), TAG_UNDEFINED, "bound method value {name}");
+        }
+    }
+}
