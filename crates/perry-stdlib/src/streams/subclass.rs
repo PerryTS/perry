@@ -222,6 +222,24 @@ pub(crate) unsafe fn dispatch_stream_method(
             "tee" => return Some(js_readable_stream_tee(handle)),
             "pipeTo" => return Some(box_promise(js_readable_stream_pipe_to(handle, arg0, arg1))),
             "pipeThrough" => {
+                // Preserve the legacy numeric dispatch without entering the
+                // object-pair helper. Endpoint lookup validates membership in
+                // TRANSFORM_STREAMS; the finite integral band guard also keeps
+                // boxed JS values out of the numeric handle conversion.
+                if arg1.to_bits() == TAG_UNDEFINED
+                    && arg0 >= STREAM_HANDLE_ID_START as f64
+                    && arg0 < STREAM_HANDLE_ID_END as f64
+                    && arg0 == (arg0 as usize) as f64
+                {
+                    let transform = js_stream_unwrap_handle(arg0);
+                    let writable = js_transform_stream_writable(transform);
+                    let readable = js_transform_stream_readable(transform);
+                    let output =
+                        js_readable_stream_pipe_through_validate(handle, writable, readable, arg1);
+                    let pipe = js_readable_stream_pipe_to(handle, writable, arg1);
+                    js_promise_mark_internally_handled(pipe);
+                    return Some(output);
+                }
                 return Some(js_readable_stream_pipe_through_pair(handle, arg0, arg1));
             }
             // #1644: a readable handle is also its own controller. The
