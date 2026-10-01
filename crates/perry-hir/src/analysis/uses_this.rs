@@ -3,7 +3,7 @@
 //! of the HIR analysis helpers.
 
 use crate::ir::*;
-use crate::walker::walk_expr_children;
+use crate::walker::{stmt_any_expr, walk_expr_children};
 
 pub(crate) fn uses_this_expr(expr: &Expr) -> bool {
     match expr {
@@ -52,66 +52,7 @@ pub(crate) fn uses_this_expr(expr: &Expr) -> bool {
 
 /// Check if a statement or its children use `this`
 pub(crate) fn uses_this_stmt(stmt: &Stmt) -> bool {
-    match stmt {
-        Stmt::Let {
-            init: Some(expr), ..
-        } => uses_this_expr(expr),
-        Stmt::Expr(expr) => uses_this_expr(expr),
-        Stmt::Return(Some(expr)) => uses_this_expr(expr),
-        Stmt::If {
-            condition,
-            then_branch,
-            else_branch,
-        } => {
-            uses_this_expr(condition)
-                || then_branch.iter().any(uses_this_stmt)
-                || else_branch
-                    .as_ref()
-                    .map(|b| b.iter().any(uses_this_stmt))
-                    .unwrap_or(false)
-        }
-        Stmt::While { condition, body } => {
-            uses_this_expr(condition) || body.iter().any(uses_this_stmt)
-        }
-        Stmt::For {
-            init,
-            condition,
-            update,
-            body,
-        } => {
-            init.as_ref().map(|s| uses_this_stmt(s)).unwrap_or(false)
-                || condition.as_ref().map(uses_this_expr).unwrap_or(false)
-                || update.as_ref().map(uses_this_expr).unwrap_or(false)
-                || body.iter().any(uses_this_stmt)
-        }
-        Stmt::Try {
-            body,
-            catch,
-            finally,
-        } => {
-            body.iter().any(uses_this_stmt)
-                || catch
-                    .as_ref()
-                    .map(|c| c.body.iter().any(uses_this_stmt))
-                    .unwrap_or(false)
-                || finally
-                    .as_ref()
-                    .map(|f| f.iter().any(uses_this_stmt))
-                    .unwrap_or(false)
-        }
-        Stmt::Throw(expr) => uses_this_expr(expr),
-        Stmt::Switch {
-            discriminant,
-            cases,
-        } => {
-            uses_this_expr(discriminant)
-                || cases.iter().any(|c| {
-                    c.test.as_ref().map(uses_this_expr).unwrap_or(false)
-                        || c.body.iter().any(uses_this_stmt)
-                })
-        }
-        _ => false,
-    }
+    stmt_any_expr(stmt, &mut uses_this_expr)
 }
 
 /// Check if a closure body uses `this`
@@ -139,71 +80,7 @@ pub(crate) fn uses_new_target_expr(expr: &Expr) -> bool {
 }
 
 pub(crate) fn uses_new_target_stmt(stmt: &Stmt) -> bool {
-    match stmt {
-        Stmt::Let {
-            init: Some(expr), ..
-        } => uses_new_target_expr(expr),
-        Stmt::Expr(expr) => uses_new_target_expr(expr),
-        Stmt::Return(Some(expr)) => uses_new_target_expr(expr),
-        Stmt::If {
-            condition,
-            then_branch,
-            else_branch,
-        } => {
-            uses_new_target_expr(condition)
-                || then_branch.iter().any(uses_new_target_stmt)
-                || else_branch
-                    .as_ref()
-                    .map(|b| b.iter().any(uses_new_target_stmt))
-                    .unwrap_or(false)
-        }
-        Stmt::While { condition, body } => {
-            uses_new_target_expr(condition) || body.iter().any(uses_new_target_stmt)
-        }
-        Stmt::For {
-            init,
-            condition,
-            update,
-            body,
-        } => {
-            init.as_ref()
-                .map(|s| uses_new_target_stmt(s.as_ref()))
-                .unwrap_or(false)
-                || condition
-                    .as_ref()
-                    .map(uses_new_target_expr)
-                    .unwrap_or(false)
-                || update.as_ref().map(uses_new_target_expr).unwrap_or(false)
-                || body.iter().any(uses_new_target_stmt)
-        }
-        Stmt::Try {
-            body,
-            catch,
-            finally,
-        } => {
-            body.iter().any(uses_new_target_stmt)
-                || catch
-                    .as_ref()
-                    .map(|c| c.body.iter().any(uses_new_target_stmt))
-                    .unwrap_or(false)
-                || finally
-                    .as_ref()
-                    .map(|f| f.iter().any(uses_new_target_stmt))
-                    .unwrap_or(false)
-        }
-        Stmt::Throw(expr) => uses_new_target_expr(expr),
-        Stmt::Switch {
-            discriminant,
-            cases,
-        } => {
-            uses_new_target_expr(discriminant)
-                || cases.iter().any(|c| {
-                    c.test.as_ref().map(uses_new_target_expr).unwrap_or(false)
-                        || c.body.iter().any(uses_new_target_stmt)
-                })
-        }
-        _ => false,
-    }
+    stmt_any_expr(stmt, &mut uses_new_target_expr)
 }
 
 pub(crate) fn closure_uses_new_target(body: &[Stmt]) -> bool {
