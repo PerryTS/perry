@@ -236,27 +236,19 @@ pub(crate) const BIRTH_REP_SLOTS: u32 = 32;
 /// The `F64` lane value (`field_rep::REP_F64`).
 const BIRTH_REP_F64: u64 = 0b01;
 
-/// Charter step 5, T1: a class's birth representation word — `F64` for
-/// exactly the slots its typed layout marks raw-f64 when that layout is
-/// declared at allocation, `Any` everywhere else.
+/// Charter step 5: a class's birth representation word — `F64` for exactly
+/// the `number` fields that are written before any code can observe the
+/// instance (`lower_call::birth_lanes::chain_birth_f64_fields`), `Any`
+/// everywhere else.
 ///
 /// This is THE decision. The string pool passes it to the runtime mint
-/// (`js_object_shape_id_for_class_keys{,_live}`, `js_gc_typed_shape_id_for_keys`),
-/// the inline allocation birth-fills its `F64` lanes with `+0.0`, and the
-/// class-field store precheck finite-tests every value bound for one. The
-/// runtime takes the word as given; nothing re-derives it from the
-/// environment.
-///
-/// Why "declared at allocation" is the per-field condition: that proof
-/// (`class_layout_declarable_at_allocation` and its chain form) holds exactly
-/// when every `number` field is written by the constructor prologue before
-/// anything can read `this` — so no JS code observes the `+0.0` birth fill.
-/// A class with even one `number` field that could be read first (a field
-/// initializer, a `this` read before the store, heritage without the chain
-/// proof) gets no `F64` lane at all, because its typed layout is then only
-/// validated after the constructor and "requires raw f64" would not hold at
-/// birth. An imported class stub has no constructor body to prove anything
-/// from, so it is `Any` too.
+/// (`js_object_shape_id_for_class_keys{,_live}`),
+/// the inline allocation birth-fills its `F64` lanes with `+0.0`, the
+/// field-initializer phase skips the `undefined` define of those fields, and
+/// every class-field site that reads or writes a lane raw takes its answer
+/// from this word. The runtime takes the word as given; nothing re-derives it
+/// from the environment. An imported class stub has no constructor body to
+/// prove anything from, so it is `Any`.
 pub(crate) fn class_birth_rep_in(
     classes: &std::collections::HashMap<String, &perry_hir::Class>,
     class_keys_globals: &std::collections::HashMap<String, String>,
@@ -267,32 +259,23 @@ pub(crate) fn class_birth_rep_in(
     imported_stub: bool,
     class_name: &str,
 ) -> u64 {
-    if imported_stub
-        || !crate::lower_call::typed_shape_init::layout_declared_at_allocation_in(
-            classes,
-            class_keys_globals,
-            class_name,
-        )
-    {
+    if imported_stub || !class_keys_globals.contains_key(class_name) {
         return 0;
     }
     let Some(chain) = class_init_chains.get(class_name) else {
         return 0;
     };
-    birth_rep_from_raw_f64_mask(&class_typed_layout_from_chain(chain).raw_f64_mask_words)
+    crate::lower_call::birth_lanes::chain_birth_rep(classes, chain)
 }
 
-/// The birth rep word for a raw-f64 mask: one `F64` lane per raw-f64 slot
-/// below [`BIRTH_REP_SLOTS`] (slots past it have no lane and stay `Any`).
-pub(crate) fn birth_rep_from_raw_f64_mask(raw_f64_mask_words: &[u64]) -> u64 {
-    let mut low = raw_f64_mask_words.first().copied().unwrap_or(0) & 0xFFFF_FFFF;
-    let mut rep = 0u64;
-    while low != 0 {
-        let slot = low.trailing_zeros();
-        low &= low - 1;
-        rep |= BIRTH_REP_F64 << (2 * slot);
+/// The `F64` lane bit pattern for `slot` (zero past [`BIRTH_REP_SLOTS`]: those
+/// slots have no lane and stay `Any`).
+pub(crate) fn birth_rep_f64_lane(slot: u32) -> u64 {
+    if slot < BIRTH_REP_SLOTS {
+        BIRTH_REP_F64 << (2 * slot)
+    } else {
+        0
     }
-    rep
 }
 
 /// Is `slot` an `F64` lane of birth rep `rep`?
@@ -302,7 +285,6 @@ pub(crate) fn birth_rep_slot_is_f64(rep: u64, slot: u32) -> bool {
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct TypedShapeLayout {
-    pub(crate) slot_count: u32,
     pub(crate) raw_f64_mask_words: Vec<u64>,
     pub(crate) pointer_mask_words: Vec<u64>,
 }
@@ -392,40 +374,9 @@ fn typed_layout_from_fields<'a>(
     }
 
     TypedShapeLayout {
-        slot_count,
         raw_f64_mask_words: trim_mask_words(raw_f64_mask_words),
         pointer_mask_words: trim_mask_words(pointer_mask_words),
     }
-}
-
-/// Does `layout`'s **pointer** mask declare `slot`?
-///
-/// The masks are word-packed exactly as `typed_layout_from_fields` builds them
-/// and as `js_gc_{init,declare}_typed_shape_layout` consumes them, so a `true`
-/// here is the same bit the runtime's `TypedLayoutDescriptor::pointer_mask`
-/// will carry for this shape.
-pub(crate) fn layout_declares_pointer_slot(layout: &TypedShapeLayout, slot: u32) -> bool {
-    let slot = slot as usize;
-    if slot >= layout.slot_count as usize {
-        return false;
-    }
-    let word = slot / 64;
-    // A pointer-masked slot may not also be raw-f64-masked. `init_typed_shape_layout`
-    // rejects an intersecting pair outright (`words_intersect` -> UNKNOWN), so a
-    // shape that reaches an installed descriptor has disjoint masks — but this
-    // predicate licenses eliding a store's layout note, so it re-establishes
-    // disjointness locally rather than importing it.
-    let raw_f64_here = layout
-        .raw_f64_mask_words
-        .get(word)
-        .is_some_and(|w| w & (1u64 << (slot % 64)) != 0);
-    if raw_f64_here {
-        return false;
-    }
-    layout
-        .pointer_mask_words
-        .get(word)
-        .is_some_and(|w| w & (1u64 << (slot % 64)) != 0)
 }
 
 pub(crate) fn mask_global_name_from_keys_global(keys_global_name: &str) -> String {

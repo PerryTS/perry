@@ -73,38 +73,6 @@ fn a_class_birth_id_carries_its_minted_rep_and_births_fill_its_f64_lanes() {
     }
 }
 
-/// (a) reverse direction: a compiled birth id that declares an `F64` lane
-/// declares all of its intact layout's raw-f64 slots, so a raw-f64 slot under
-/// an `Any` lane of such an id is a codegen disagreement the invariant trips.
-#[test]
-#[should_panic(expected = "field-rep typed-layout cross-check")]
-fn the_reverse_cross_check_fires_on_a_raw_f64_slot_the_birth_id_leaves_any() {
-    let k = keys(b"x\0y\0p\0", 3);
-    // Slot 0 F64, slot 1 raw-f64 in the layout but `Any` in the id.
-    let id = js_object_shape_id_for_class_keys(k, 3, CID, REP_F64);
-    unsafe {
-        let obj = birth(k, 3, id);
-        let raw = [0b011u64];
-        let pointers = [0b100u64];
-        crate::gc::js_gc_declare_typed_shape_layout(
-            obj as usize as u64,
-            3,
-            raw.as_ptr(),
-            1,
-            pointers.as_ptr(),
-            1,
-        );
-        let fields = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
-        // GC_STORE_AUDIT(INIT): Numbers into the raw slots of a fresh object.
-        *fields.add(1) = 2.5f64.to_bits();
-        super::field_rep_store::assert_f64_lanes_hold_numbers(
-            obj,
-            super::shapes::object_shape_record(obj),
-            3,
-        );
-    }
-}
-
 /// (b) + (c): a non-Number stored into an `F64` birth lane goes through the
 /// checked funnel: the instance moves off the birth id to a shape whose lane
 /// is `Any`; the birth id keeps its `F64` identity and the next birth still
@@ -208,6 +176,39 @@ fn a_class_birth_with_an_f64_lane_adopts_its_static_id() {
         typed,
         "a second registration resolves to the same id"
     );
+}
+
+/// An importing module can initialize before its defining module. Its
+/// all-Any stub must take its own static id and leave every slot undefined;
+/// the later definer's F64 birth keeps its distinct id and +0.0 birth fill.
+#[test]
+fn importer_first_birth_keeps_definer_rep_and_stub_slots_distinct() {
+    use super::static_shapes::js_object_shape_id_for_class_keys_static;
+    let k = keys(b"ifa\0ifb\0", 2);
+    let any_id = crate::object::shapes::SHAPE_ID_BASE + 0x3a71;
+    let f64_id = crate::object::shapes::SHAPE_ID_BASE + 0x3a72;
+
+    let importer = js_object_shape_id_for_class_keys_static(k, 2, 2, CID, any_id, REP_ANY);
+    assert_eq!(importer, any_id);
+    let imported_birth = unsafe { birth(k, 2, importer) };
+    assert_eq!(unsafe { object_shape_stamp(imported_birth) }, any_id);
+    assert_eq!(
+        unsafe { slot_bits(imported_birth, 0) },
+        crate::value::TAG_UNDEFINED
+    );
+
+    let definer = js_object_shape_id_for_class_keys_static(k, 2, 2, CID, f64_id, REP_F64);
+    assert_eq!(definer, f64_id);
+    assert_ne!(definer, importer);
+    let defined_birth = unsafe { birth(k, 2, definer) };
+    assert_eq!(unsafe { object_shape_stamp(defined_birth) }, f64_id);
+    assert_eq!(unsafe { slot_bits(defined_birth, 0) }, 0.0f64.to_bits());
+    assert_eq!(
+        unsafe { slot_bits(defined_birth, 1) },
+        crate::value::TAG_UNDEFINED
+    );
+    assert_eq!(rep_of(importer), REP_ANY);
+    assert_eq!(rep_of(definer), REP_F64);
 }
 
 /// (e) The shape is the truth: a literal (anonymous shape class) or a class

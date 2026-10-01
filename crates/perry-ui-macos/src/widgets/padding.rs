@@ -1,11 +1,9 @@
-use objc2::rc::Retained;
+use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{AnyClass, AnyObject};
-use objc2::{define_class, msg_send, DefinedClass, MainThreadOnly};
-use objc2_app_kit::{
-    NSColor, NSEvent, NSSecureTextFieldCell, NSText, NSTextField, NSTextFieldCell, NSView,
-};
+use objc2::{define_class, msg_send, DefinedClass};
+use objc2_app_kit::{NSEvent, NSSecureTextFieldCell, NSText, NSTextFieldCell, NSView};
 use objc2_core_foundation::CGRect;
-use objc2_foundation::{MainThreadMarker, NSEdgeInsets, NSObjectProtocol};
+use objc2_foundation::{NSEdgeInsets, NSObjectProtocol, NSString};
 use std::cell::Cell;
 
 mod button;
@@ -51,10 +49,20 @@ define_class!(
     pub struct PerryInsetTextFieldCell;
 
     impl PerryInsetTextFieldCell {
-        #[unsafe(method(drawingRectForBounds:))]
-        fn drawing_rect_for_bounds(&self, bounds: CGRect) -> CGRect {
-            let bounds = inset_rect(bounds, self.ivars().get(), unsafe { self.controlView() }.is_some_and(|view| view.isFlipped()));
-            unsafe { msg_send![super(self), drawingRectForBounds: bounds] }
+        #[unsafe(method_id(initTextCell:))]
+        fn init_text_cell(this: Allocated<Self>, string: &NSString) -> Retained<Self> {
+            let this = this.set_ivars(PerryInsetCellIvars::new());
+            unsafe { msg_send![super(this), initTextCell: string] }
+        }
+
+        // Padding goes on the frames AppKit hands in to draw and to edit, not
+        // in drawingRectForBounds:. AppKit's editing path for a borderless
+        // cell never calls drawingRectForBounds:, so padding there would put
+        // the editing text somewhere other than the idle text.
+        #[unsafe(method(drawInteriorWithFrame:inView:))]
+        fn draw_interior(&self, frame: CGRect, view: &NSView) {
+            let frame = inset_rect(frame, self.ivars().get(), view.isFlipped());
+            unsafe { msg_send![super(self), drawInteriorWithFrame: frame, inView: view] }
         }
 
         #[unsafe(method(cellSizeForBounds:))]
@@ -107,10 +115,20 @@ define_class!(
     pub struct PerryInsetSecureTextFieldCell;
 
     impl PerryInsetSecureTextFieldCell {
-        #[unsafe(method(drawingRectForBounds:))]
-        fn drawing_rect_for_bounds(&self, bounds: CGRect) -> CGRect {
-            let bounds = inset_rect(bounds, self.ivars().get(), unsafe { self.controlView() }.is_some_and(|view| view.isFlipped()));
-            unsafe { msg_send![super(self), drawingRectForBounds: bounds] }
+        #[unsafe(method_id(initTextCell:))]
+        fn init_text_cell(this: Allocated<Self>, string: &NSString) -> Retained<Self> {
+            let this = this.set_ivars(PerryInsetCellIvars::new());
+            unsafe { msg_send![super(this), initTextCell: string] }
+        }
+
+        // Padding goes on the frames AppKit hands in to draw and to edit, not
+        // in drawingRectForBounds:. AppKit's editing path for a borderless
+        // cell never calls drawingRectForBounds:, so padding there would put
+        // the editing text somewhere other than the idle text.
+        #[unsafe(method(drawInteriorWithFrame:inView:))]
+        fn draw_interior(&self, frame: CGRect, view: &NSView) {
+            let frame = inset_rect(frame, self.ivars().get(), view.isFlipped());
+            unsafe { msg_send![super(self), drawInteriorWithFrame: frame, inView: view] }
         }
 
         #[unsafe(method(cellSizeForBounds:))]
@@ -187,51 +205,6 @@ fn padded_size(
             size.height + insets.top + insets.bottom
         },
     )
-}
-
-pub(crate) fn install_text_field_cell(field: &NSTextField, mtm: MainThreadMarker) {
-    let this = PerryInsetTextFieldCell::alloc(mtm).set_ivars(PerryInsetCellIvars::new());
-    let cell: Retained<PerryInsetTextFieldCell> = unsafe { msg_send![super(this), init] };
-    unsafe {
-        let _: () = msg_send![field, setCell: &*cell];
-    }
-}
-
-pub(crate) fn install_secure_text_field_cell(field: &NSTextField, mtm: MainThreadMarker) {
-    let this = PerryInsetSecureTextFieldCell::alloc(mtm).set_ivars(PerryInsetCellIvars::new());
-    let cell: Retained<PerryInsetSecureTextFieldCell> = unsafe { msg_send![super(this), init] };
-    unsafe {
-        let _: () = msg_send![field, setCell: &*cell];
-    }
-}
-
-/// Install at label creation, before callers apply attributed text or styles.
-/// Keep the factory label's text, font and line-breaking defaults.
-pub(crate) fn install_label_cell(field: &NSTextField, mtm: MainThreadMarker) {
-    // Restore the text as a plain stringValue, never the factory label's
-    // attributedStringValue. An NSTextField holding an attributed string
-    // ignores setTextColor: — the string's baked-in color attribute wins — so
-    // an attributedStringValue here silently defeats textSetColor (#10856).
-    // The font is restored separately below, and labelColor is set explicitly
-    // to keep the label's default appearance.
-    let text = field.stringValue();
-    let font = field.font();
-    let original = field.cell().expect("label has a cell");
-    install_text_field_cell(field, mtm);
-    field.setBezeled(false);
-    field.setBordered(false);
-    field.setEditable(false);
-    field.setSelectable(false);
-    field.setDrawsBackground(false);
-    field.setFont(font.as_deref());
-    field.setStringValue(&text);
-    field.setTextColor(Some(&NSColor::labelColor()));
-    if let Some(cell) = field.cell() {
-        cell.setWraps(original.wraps());
-        cell.setScrollable(original.isScrollable());
-        cell.setUsesSingleLineMode(original.usesSingleLineMode());
-        cell.setLineBreakMode(original.lineBreakMode());
-    }
 }
 
 /// Apply padding to AppKit widgets with a native content-inset mechanism.

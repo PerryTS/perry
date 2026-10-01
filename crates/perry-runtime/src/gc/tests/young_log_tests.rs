@@ -779,128 +779,32 @@ fn shape_mutation_to_new_young_key_rearms_minor_log() {
     }
 }
 
-/// N old box payloads plus k young payloads must price exactly k registry
-/// entries. The counter is recorded inside `scan_box_young_roots_mut`.
-#[test]
-fn box_roots_minor_walk_visits_exactly_k_young_entries() {
-    const N: usize = 128;
-    const K: usize = 4;
-    let _guard = CopyingNurseryTestGuard::new(0);
-    gc_register_mutable_root_scanner(crate::r#box::scan_box_roots_mut);
-    for _ in 0..N {
-        crate::r#box::js_box_alloc_bits(string_bits(old_leaf()) as i64);
-    }
-    for _ in 0..K {
-        crate::r#box::js_box_alloc_bits(string_bits(young_leaf()) as i64);
-    }
-
-    let _ = gc_collect_minor();
-    let row = walk("box.roots");
-    assert!(row.partial, "{row:?}");
-    assert_eq!(
-        row.visited, K as u64,
-        "minor work must be young-sized: {row:?}"
-    );
-    assert_eq!(
-        row.table_len,
-        (N + K) as u64,
-        "fixture registry mismatch: {row:?}"
-    );
-}
-
-/// Suppress the real `js_box_set_bits` arming site and prove the full-registry
-/// re-derivation catches the omission.
-#[test]
-fn box_root_rederivation_rejects_a_suppressed_mutation_hook() {
-    let _guard = CopyingNurseryTestGuard::new(0);
-    let cell = crate::r#box::js_box_alloc_bits(string_bits(old_leaf()) as i64);
-    let young = young_leaf();
-    {
-        let _sabotage = crate::r#box::TestBoxYoungLogSuppression::new();
-        crate::r#box::js_box_set_bits(cell, string_bits(young) as i64);
-    }
-    let valid = build_valid_pointer_set();
-    let mut visitor = RuntimeRootVisitor::for_mark_scoped(&valid, true);
-    let rejected = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        crate::r#box::scan_box_roots_mut(&mut visitor);
-    }));
-    assert!(
-        rejected.is_err(),
-        "a missing box mutation note must be detected"
-    );
-}
-
-#[test]
-fn box_mutation_to_new_young_object_is_visited() {
-    let _guard = CopyingNurseryTestGuard::new(0);
-    gc_register_mutable_root_scanner(crate::r#box::scan_box_roots_mut);
-    let cell = crate::r#box::js_box_alloc_bits(string_bits(old_leaf()) as i64);
-    let young = young_leaf();
-    crate::r#box::js_box_set_bits(cell, string_bits(young) as i64);
-
-    let _ = gc_collect_minor();
-    let moved = (crate::r#box::js_box_get_bits(cell) as u64 & POINTER_MASK) as usize;
-    assert_ne!(moved, young, "setter must re-arm a previously old box");
-    assert_eq!(walk("box.roots").visited, 1);
-}
-
-#[test]
-fn promoted_box_root_leaves_log_and_is_found_by_full_walk() {
-    let _guard = CopyingNurseryTestGuard::new(0);
-    gc_register_mutable_root_scanner(crate::r#box::scan_box_roots_mut);
-    let cell = crate::r#box::js_box_alloc_bits(string_bits(young_leaf()) as i64);
-    for _ in 0..4 {
-        let _ = gc_collect_minor();
-    }
-    let promoted_bits = crate::r#box::js_box_get_bits(cell) as u64;
-    let promoted = (promoted_bits & POINTER_MASK) as usize;
-    assert!(
-        !crate::arena::pointer_in_nursery(promoted),
-        "fixture must promote"
-    );
-    assert_eq!(walk("box.roots").kept, 0);
-
-    let mut seen = false;
-    crate::r#box::scan_box_roots(&mut |value| {
-        if value.to_bits() == promoted_bits {
-            seen = true;
-        }
-    });
-    assert!(
-        seen,
-        "the unchanged full walk must still enumerate promoted roots"
-    );
-    assert!(!walk("box.roots").partial);
-}
-
 // -------------------------------------------------- per-object layout tables
 //
-// #9841: the DEATH PRUNE of `LAYOUT_SLOT_MASKS + TYPED_LAYOUTS`, not a root
-// scanner. Its predicate is `layout_key_may_be_nursery`, which excludes
-// `Longlived` AND `Old` — strictly stronger than the scanners'
-// `addr_is_minor_relevant` — so an old-keyed record is not merely cheap to
-// visit, it is provably impossible for a minor to remove.
+// Only arrays and closures retain address-keyed masks. The young prune
+// excludes Longlived and Old keys because a minor cannot kill them.
 
 use crate::gc::layout_tables::{test_per_object_layout_present, LAYOUT_YOUNG_LOG_NAME};
 
-/// A nursery object whose header says POINTER_FREE and which then takes a
-/// pointer store — the mutator path that mints a mask from inside
-/// `layout_note_slot`'s own `borrow_mut` (WRITER 3). On cc that is the
-/// dominant insert path: `TYPED_LAYOUTS` is empty there and every one of the
-/// ~66k live keys is a `LAYOUT_SLOT_MASKS` entry.
+/// A nursery array whose pointer-free birth is followed by a pointer store.
+/// That mutator path mints an address-keyed slot mask inside layout_note_slot.
 fn young_masked_object() -> usize {
-    let obj = crate::object::js_object_alloc(0, 8);
-    crate::object::js_object_set_field(obj, 0, crate::value::JSValue::number(1.0));
-    crate::object::js_object_set_field(obj, 1, crate::value::JSValue::number(2.0));
-    crate::gc::layout_clear_for_ptr(obj as usize);
-    unsafe { crate::gc::layout_init_pointer_free(obj as *mut u8) };
+    let arr = crate::array::js_array_alloc_with_length(8);
+    crate::array::js_array_set_f64(arr, 0, 1.0);
+    crate::array::js_array_set_f64(arr, 1, 2.0);
+    crate::gc::layout_clear_for_ptr(arr as usize);
+    unsafe { crate::gc::layout_init_pointer_free(arr as *mut u8) };
     let child = crate::string::js_string_from_bytes(b"late-pointer".as_ptr(), 12);
-    crate::object::js_object_set_field(obj, 1, crate::value::JSValue::string_ptr(child));
-    assert!(
-        test_per_object_layout_present(obj as usize),
-        "premise: the in-place mask mint published a per-object record"
+    crate::array::js_array_set_f64(
+        arr,
+        1,
+        f64::from_bits(crate::value::JSValue::string_ptr(child).bits()),
     );
-    obj as usize
+    assert!(
+        test_per_object_layout_present(arr as usize),
+        "premise: the in-place array mask mint published a per-owner record"
+    );
+    arr as usize
 }
 
 /// WRITER 3's arming site. Delete `arm_young_layout_key` from
@@ -980,7 +884,7 @@ fn old_layout_records_are_skipped_by_a_minor() {
     // below is about the record installed after it.
     let _ = gc_collect_minor();
 
-    let (owner, _) = unsafe { alloc_old_test_object(2) };
+    let (owner, _) = unsafe { alloc_old_test_array(2) };
     crate::gc::layout_tables::slot_masks_insert(
         owner as usize,
         crate::gc::layout::LayoutSlotMask::from_words(&[1]),

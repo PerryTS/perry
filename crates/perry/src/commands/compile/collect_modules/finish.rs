@@ -324,6 +324,10 @@ pub(crate) fn collect_module_finish(
             ..Default::default()
         });
         transform_generators(&mut hir_module);
+        // Scope context objects: group captured-and-mutated bindings into one
+        // GC cell per scope activation. Last, so it sees the preallocation
+        // statements the async/generator transforms emitted.
+        perry_codegen::scope_env::group_scope_boxes(&mut hir_module);
     }
 
     // Set optional-feature gates (regex/temporal/url/crypto/events/etc.) so

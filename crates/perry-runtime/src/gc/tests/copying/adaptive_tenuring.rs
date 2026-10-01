@@ -196,10 +196,13 @@ fn allocation_census_seeds_the_first_cap_before_any_minor() {
         seeded,
         crate::gc::tenuring::NURSERY_CAP_REFERENCE_OBJECT_BYTES
     );
-    // ...and the first cap already reflects it — before any collection.
+    // ...and the first cap already reflects it — before any collection. The
+    // first cap is the ladder's floor (#11549), a quarter of the base.
     assert_eq!(
         crate::gc::tenuring::influx_driven_nursery_cap_bytes(),
-        base * crate::gc::tenuring::nursery_cap_object_scale_permille(seeded) / 1000
+        crate::gc::tenuring::nursery_cap_floor_bytes()
+            * crate::gc::tenuring::nursery_cap_object_scale_permille(seeded)
+            / 1000
     );
 
     // One-shot: a different population allocated afterwards does not move

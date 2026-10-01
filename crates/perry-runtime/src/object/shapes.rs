@@ -40,6 +40,8 @@ mod shapes_birth_width;
 mod shapes_slot_list;
 #[path = "shapes_store.rs"]
 mod shapes_store;
+#[path = "shapes_worker_seed.rs"]
+mod shapes_worker_seed;
 #[path = "shapes_store_kind.rs"]
 pub(crate) mod store_kind;
 pub(crate) use shapes_birth_width::{keyless_birth_width, note_spill_width};
@@ -58,6 +60,7 @@ use shapes_store::{
     RECORD_FLAG_CARRIED_SEEN, RECORD_FLAG_EXTERNAL_CARRIER, RECORD_FLAG_FACTS_INDEXED,
     RECORD_FLAG_OLD_CARRIER, RECORD_FLAG_OLD_CARRIER_SEEN,
 };
+pub(crate) use shapes_worker_seed::{install_worker_shape_seed, worker_shape_seed};
 
 #[derive(Clone)]
 pub(crate) struct ShapeIndex {
@@ -235,15 +238,6 @@ impl ShapeRecordRef {
     #[inline]
     pub(crate) fn keys_slot(self) -> *mut u64 {
         self.0.as_ptr() as *mut u64
-    }
-
-    /// Was this record minted or installed for a compiled image (a class
-    /// birth id, a literal's module-init id)? Codegen owns what such an id
-    /// declares.
-    #[inline]
-    pub(crate) fn is_external_carrier(self) -> bool {
-        // SAFETY: a live slab record (type docs).
-        unsafe { (*self.0.as_ptr()).has(RECORD_FLAG_EXTERNAL_CARRIER) }
     }
 
     /// The record's field-representation word (`field_rep`), deprecated
@@ -1384,7 +1378,7 @@ pub(crate) fn shape_descriptor_find_with_rep(
 /// array: re-deriving the summary goes through `keys_attrs`, and the static
 /// GC call-effects analysis proves that edge can reach a lazy materializer
 /// that re-enters JS. A proof retire runs this path from inside
-/// `layout_note_slot`, which the runtime ABI promises is a `Leaf`, so the
+/// the owner store funnel, which must remain non-collecting, so the
 /// twin mint must touch only the shape table's own Rust storage.
 #[cfg_attr(feature = "shape-mint-diag", track_caller)]
 pub(crate) fn shape_descriptor_kind_twin(source: u32, object_kind: ShapeObjectKind) -> Option<u32> {
@@ -1692,25 +1686,6 @@ pub(crate) fn shape_id_for_keys_ensure(keys: *const ArrayHeader, key_count: u32)
     publish_shape_result(shape_descriptor_ensure(keys, key_count, key_count))
 }
 
-/// [`shape_id_for_keys_ensure`] for an instance of `class_id`: the birth shape
-/// carries the prototype identity that class implies ([`class_proto_id`]).
-#[cfg_attr(feature = "shape-mint-diag", track_caller)]
-pub(crate) fn shape_id_for_class_keys_ensure(
-    keys: *const ArrayHeader,
-    key_count: u32,
-    class_id: u32,
-) -> u32 {
-    publish_shape_result(shape_descriptor_ensure_with_generation(
-        keys,
-        key_count,
-        key_count,
-        0,
-        ShapeObjectKind::Ordinary,
-        class_proto_id(class_id),
-        0,
-    ))
-}
-
 /// One FIELD of a shape's descriptor, without lifting the whole record.
 ///
 /// [`shape_descriptor_by_id`] returns `ShapeDescriptor` **by value**, so every
@@ -1792,6 +1767,22 @@ pub(crate) unsafe fn note_old_generation_carrier(record: Option<ShapeRecordRef>)
     if first_note_this_epoch {
         note_shape_carrier_candidate(keys);
     }
+}
+
+/// Would [`note_old_generation_carrier`] change nothing for `record` right now?
+///
+/// True when both of its flags are already set — the note then re-sets them
+/// and finds it is not the first this epoch — or when there is no record. The
+/// copying drain asks this BEFORE classifying the receiver's generation, so a
+/// shape whose carrier was already noted this epoch skips that page-map probe
+/// entirely (#11549). Exact: it reads the same two flags the note would.
+#[inline]
+pub(crate) unsafe fn old_generation_carrier_already_noted(record: Option<ShapeRecordRef>) -> bool {
+    let Some(record) = record else {
+        return true;
+    };
+    let record = record.0.as_ptr();
+    (*record).has(RECORD_FLAG_OLD_CARRIER) && (*record).has(RECORD_FLAG_OLD_CARRIER_SEEN)
 }
 
 /// Note that a complete full trace visited a receiver carrying this shape.
@@ -2481,63 +2472,6 @@ static KEEP_JS_REGION_LOOP_PRIME: unsafe extern "C" fn(
     u32,
 ) -> u64 = js_region_loop_prime;
 
-/// Mint a fresh (counter) ShapeId for a codegen-registered typed layout and
-/// install its structural descriptor in the current agent. Unlike
-/// [`shape_id_for_keys_ensure`], this deliberately does not canonicalise by
-/// keys alone: two objects with identical property names but different raw
-/// slot representations must never share a pre-baked GC descriptor. The
-/// fallback of [`install_static_typed_shape_id`].
-pub(crate) fn mint_typed_shape_id(
-    keys: *const ArrayHeader,
-    key_count: u32,
-    proto_id: u64,
-    rep: u64,
-) -> u32 {
-    let id = alloc_shape_id().unwrap_or_else(|_| shape_id_exhausted_abort());
-    if !shapes_slot_list::install_external_shape_id(
-        id,
-        keys,
-        key_count,
-        key_count,
-        proto_id,
-        // A codegen-registered typed layout is a class allocation's: F-A
-        // admitted (charter step 3).
-        ShapeObjectKind::Ordinary,
-        rep,
-    ) {
-        invalid_shape_facts_abort();
-    }
-    id
-}
-
-/// Install the driver's static id for a typed layout in this agent (design
-/// step 4). The id's content includes the layout's masks, so it names one
-/// typed layout in the program. Accepted when the id is in the static band
-/// and either absent from this agent or present with exactly these facts —
-/// an importing module's structural mint adopted it first. `false` means the
-/// caller mints a fresh id instead ([`mint_typed_shape_id`]): code comparing
-/// against the static id then only misses.
-pub(crate) fn install_static_typed_shape_id(
-    id: u32,
-    keys: *const ArrayHeader,
-    key_count: u32,
-    proto_id: u64,
-    rep: u64,
-) -> bool {
-    is_static_shape_id(id)
-        && shapes_slot_list::install_external_shape_id(
-            id,
-            keys,
-            key_count,
-            key_count,
-            proto_id,
-            // A codegen-registered typed layout is a class allocation's: F-A
-            // admitted (charter step 3).
-            ShapeObjectKind::Ordinary,
-            rep,
-        )
-}
-
 // ---------------------------------------------------------------------------
 // #8067 — THE SHAPE WORD IS UNIFORM AND AUTHORITATIVE.
 //
@@ -2686,7 +2620,6 @@ unsafe fn install_cached_object_shape_version_impl(
 
     // Match `set_object_keys_array_with_live`: representation feedback must be
     // invalidated while the predecessor stamp is still authoritative.
-    super::mark_object_dynamic_shape_unknown(obj);
     if target_is_cache_carried {
         // `cache_carrier` already roots the target descriptor for the
         // cache's lifetime — strictly stronger than the epoch-scoped

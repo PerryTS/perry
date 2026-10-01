@@ -1639,13 +1639,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             );
                             return Ok(val);
                         }
-                        let requires_raw_f64 = crate::type_analysis::class_field_declared_type(
-                            ctx,
-                            &class_name,
-                            property,
-                        )
-                        .as_ref()
-                        .is_some_and(crate::typed_shape::type_is_raw_f64_candidate);
+                        let requires_raw_f64 =
+                            crate::expr::class_field_inline_guard::class_field_site_raw_f64(
+                                ctx,
+                                &class_name,
+                                property,
+                                field_index,
+                            );
                         let subclass_arms =
                             crate::expr::class_field_inline_guard::class_field_subclass_arms(
                                 ctx,

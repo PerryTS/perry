@@ -996,7 +996,7 @@ fn test_live_symbol_accessor_owner_survives_full_gc() {
     js_shadow_slot_set(0, 0);
 }
 
-// --- per-object layout tables (LAYOUT_SLOT_MASKS + TYPED_LAYOUTS) -----------
+// --- per-object layout tables (LAYOUT_SLOT_MASKS) ------------------------------
 //
 // The inline allocator's forget probe is gated on
 // `PERRY_YOUNG_LAYOUT_RECORDS`: the count of records keyed by an address the
@@ -1011,14 +1011,9 @@ fn young_layout_records() -> u32 {
 }
 
 unsafe fn install_typed_record(addr: usize) {
-    let pointer_mask = [0b10u64];
-    crate::gc::js_gc_init_typed_shape_layout(
-        addr as u64,
-        2,
-        std::ptr::null(),
-        0,
-        pointer_mask.as_ptr(),
-        pointer_mask.len() as u32,
+    crate::gc::layout_tables::slot_masks_insert(
+        addr,
+        crate::gc::layout::LayoutSlotMask::from_words(&[0b10]),
     );
 }
 

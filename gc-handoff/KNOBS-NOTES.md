@@ -38,7 +38,6 @@ tests. "Was" = state on `origin/main@55fd197d5`.
 | `PERRY_GC_VERIFY_MARK` | **presence-only** | 3 | `gc_verify_mark_enabled()`, cached |
 | `PERRY_GC_VERIFY_RS_NONFATAL` | **presence-only** | 1 | `env_flag_enabled`, cached |
 | `PERRY_GC_VERIFY_EVACUATION` | **split-brain** | 2 | both value-parsed |
-| `PERRY_SHAPE_LAYOUT_KEYED` | `v != "0"` | 1 | `env_default_on_enabled` |
 | `PERRY_GC_TRACE` | `1\|on\|true` | 1 | `env_flag_enabled` |
 | `PERRY_GC_VERIFY_CLASSIFIER` | `1\|on\|true` | 1 | `env_flag_enabled` |
 | `PERRY_GC_FORCE_EVACUATE` | `1\|on\|true` | 1 | `env_flag_enabled` |

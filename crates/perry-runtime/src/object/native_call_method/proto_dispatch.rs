@@ -24,6 +24,43 @@ pub(crate) unsafe fn try_dispatch_value_called_proto_method(
     args_ptr: *const f64,
     args_len: usize,
 ) -> Option<f64> {
+    let name = value_called_proto_method_name(closure)?;
+    let receiver = this.as_f64();
+    Some(js_native_call_method(
+        receiver,
+        name.as_ptr() as *const i8,
+        name.len(),
+        args_ptr,
+        args_len,
+    ))
+}
+
+/// #11700: whether `value` is a no-op-backed built-in prototype method that
+/// [`try_dispatch_value_called_proto_method`] would re-dispatch as
+/// `receiver.<method_name>(…)`. The by-name tower must not invoke such a value
+/// for that same name: the call re-enters the tower, finds the same inherited
+/// method, and recurses until the call-depth guard returns `{}`. The caller
+/// keeps walking instead, so the tower's native arms (the fetch-subclass body
+/// forward, for one) answer the call.
+pub(crate) unsafe fn is_self_redispatching_proto_method(value: f64, method_name: &str) -> bool {
+    let jsval = JSValue::from_bits(value.to_bits());
+    if !jsval.is_pointer() {
+        return false;
+    }
+    let addr = (value.to_bits() & crate::value::POINTER_MASK) as usize;
+    if !crate::closure::is_closure_ptr(addr) {
+        return false;
+    }
+    value_called_proto_method_name(addr as *const crate::closure::ClosureHeader)
+        .is_some_and(|name| name == method_name)
+}
+
+/// The method name `try_dispatch_value_called_proto_method` re-dispatches a
+/// no-op-backed built-in prototype method under, or `None` when the closure is
+/// not one (see that function for the gates).
+unsafe fn value_called_proto_method_name<'a>(
+    closure: *const crate::closure::ClosureHeader,
+) -> Option<&'a str> {
     if closure.is_null() {
         return None;
     }
@@ -70,14 +107,7 @@ pub(crate) unsafe fn try_dispatch_value_called_proto_method(
     {
         return None;
     }
-    let receiver = this.as_f64();
-    Some(js_native_call_method(
-        receiver,
-        name.as_ptr() as *const i8,
-        name.len(),
-        args_ptr,
-        args_len,
-    ))
+    Some(name)
 }
 
 /// #3662: classify a `Function.prototype.{apply,call,bind}` receiver. Returns

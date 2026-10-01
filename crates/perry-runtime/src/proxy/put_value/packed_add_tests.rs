@@ -64,11 +64,6 @@ fn packed_add_refuse_bits_match_codegen() {
     // Charter step 3: the numeric proof is a shape kind, not a refused bit.
     let reserved = crate::gc::OBJ_FLAG_HAS_DESCRIPTORS | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES;
     assert_eq!(reserved, 0x0C00);
-    // ADD_LAYOUT_RESERVED: the states `mark_object_dynamic_shape_unknown` acts on.
-    assert_eq!(
-        crate::gc::GC_LAYOUT_SIDE_MASK | crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT,
-        0x9000
-    );
     assert_eq!(crate::gc::GC_FLAG_TENURED, 0x20);
     assert_eq!(std::mem::offset_of!(crate::gc::GcHeader, obj_type), 0);
     assert_eq!(std::mem::offset_of!(crate::gc::GcHeader, gc_flags), 1);

@@ -238,7 +238,7 @@ pub(crate) unsafe fn object_from_json_fields_preinstalled(
         if batch.is_none() {
             // Allocate-black births retain their normal remembering and
             // shading. Suppression alone cannot elide those.
-            saw_pointer |= store_object_field_slot_layout_deferred(obj, index, value.bits());
+            store_object_field_slot_layout_deferred(obj, index, value.bits());
         } else {
             // GC_STORE_AUDIT(INIT): unpublished record, no marking or callbacks;
             // final layout and old-to-young pages are published below.
@@ -252,7 +252,6 @@ pub(crate) unsafe fn object_from_json_fields_preinstalled(
         // GC_STORE_AUDIT(INIT): physical slack is not a live shape field.
         slots.add(index).write(JSValue::undefined());
     }
-    crate::gc::layout_finish_deferred_boxed_object(obj as usize, saw_pointer);
     if saw_pointer {
         if let Some(batch) = batch {
             batch.finish_json_slots(obj.cast(), slots.cast(), count);

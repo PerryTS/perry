@@ -1351,3 +1351,6 @@ fn replace_this_in_expr(expr: &mut Expr, this_id: LocalId) {
         _ => walk_expr_children_mut(expr, &mut |child| replace_this_in_expr(child, this_id)),
     }
 }
+
+#[cfg(test)]
+mod uses_this_tests;

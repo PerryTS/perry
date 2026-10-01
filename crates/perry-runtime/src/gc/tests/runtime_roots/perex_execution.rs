@@ -41,20 +41,24 @@ fn compile<'s>(
 fn perex_host_buffers_account_overlap_failure_and_unwind() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    // #11549: operation scratch is bounded by its budget and released by the
+    // operation, so the budget accounts the overlap and the collector's
+    // external-side reading never moves.
     let before = external_side_live_bytes();
     let memory = MemoryBudget::new(128);
     {
         let first = Buffer::<u8>::new(&memory, 64).unwrap();
-        assert_eq!(external_side_live_bytes(), before + memory.live_bytes());
+        assert_eq!(memory.live_bytes(), 64);
         assert!(matches!(
             Buffer::<u8>::new(&memory, 65),
             Err(StorageError::Limit)
         ));
         let replacement = Buffer::<u8>::new(&memory, 64).unwrap();
         assert_eq!(memory.peak_bytes(), 128);
-        assert_eq!(external_side_live_bytes(), before + 128);
+        assert_eq!(memory.live_bytes(), 128);
+        assert_eq!(external_side_live_bytes(), before);
         drop(first);
-        assert_eq!(external_side_live_bytes(), before + 64);
+        assert_eq!(memory.live_bytes(), 64);
         drop(replacement);
     }
     let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

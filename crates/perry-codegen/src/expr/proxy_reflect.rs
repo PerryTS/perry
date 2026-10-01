@@ -41,7 +41,7 @@ use crate::type_analysis::{is_array_expr, is_string_expr, receiver_class_name};
 use crate::types::{LlvmType, DOUBLE, I1, I16, I32, I64, I8, PTR};
 
 use super::{
-    downgrade_buffer_aliases_in_expr, emit_jsvalue_slot_store_scalar_aware_on_block, lower_expr,
+    downgrade_buffer_aliases_in_expr, emit_jsvalue_slot_store_with_flags_on_block, lower_expr,
     nanbox_pointer_inline, unbox_str_handle, unbox_to_i64, FnCtx,
 };
 
@@ -51,18 +51,16 @@ use proxy_reflect_write_ic::StableTombstoneSlotCheck;
 
 /// Runtime write-PIC flags that force the miss path. Class-vs-instance kind is
 /// encoded by the authoritative ShapeId and therefore owns no header flag.
-// Includes the packed Array-subclass numeric-proof authority bit (0x80).
-// A proof-active receiver takes one ordinary miss so the runtime store's
-// unconditional layout note retires the proof even for pointer-free tagged
-// values such as SSO strings and booleans. After that miss, the PIC is eligible
-// again. This keeps proof retirement out of every ordinary-object hit.
+// The runtime prime accepts only an Ordinary ShapeId; a proof sibling
+// cannot match an existing cached token. The transition cache also declines
+// proof predecessors, so a generated transition hit cannot bypass retirement.
 //
 // Charter step 3 (#10871): FROZEN/SEALED/NO_EXTEND (0x7) and HAS_DESCRIPTORS
 // (0x800) are NOT here. The prime that publishes this cache's tokens checks,
 // per KEY, that the receiver's keys record the key as a plain writable data
 // property (`key_attrs::entry_is_plain_writable_data`), and every attribute or
 // integrity change moves the ShapeId, so the token compare proves it.
-const WRITE_PIC_BLOCKING_FLAGS: u16 = 0x1180;
+const WRITE_PIC_BLOCKING_FLAGS: u16 = 0x1100;
 
 /// #8098: `GcHeader::_reserved` bit 9 — the runtime birth-marked this
 /// class-less receiver an ORDINARY plain object (`JSON.parse` output), so it is
@@ -463,8 +461,7 @@ fn guarded_declared_class_property_candidate(ctx: &FnCtx<'_>, target: &Expr) -> 
 /// Registers arrive in k → v → t evaluation order (see the call site); from
 /// the target register onward the path is call-free until the store or the
 /// outlined slow call. Guards are byte-for-byte the static write PIC's
-/// (GcHeader -8/-7/-6 with BLOCKING 0x1180 incl. typed-intact and the packed
-/// numeric-proof authority, ObjectHeader
+/// (GcHeader -8/-7/-6 with BLOCKING 0x1100 incl. typed-intact, ObjectHeader
 /// regular/class/token via the #6804 discriminated shape-token select).
 /// The raw store fires only for non-reference VALUE tags (not pointer/
 /// string/bigint), so it needs no barrier and no layout note; every other
@@ -710,8 +707,8 @@ fn lower_put_value_dyn_ic_inline(
         let fields_base = ctx.block().add(I64, &t_handle, &header_bytes.to_string());
         let slot_addr = ctx.block().add(I64, &fields_base, &slot_offset);
         let blk = ctx.block();
-        emit_jsvalue_slot_store_scalar_aware_on_block(
-            blk, &slot_ptr, v, &t_handle, &slot_i32, true, &t_bits, &slot_addr, true,
+        emit_jsvalue_slot_store_with_flags_on_block(
+            blk, &slot_ptr, v, &t_handle, &slot_i32, true, false, &t_bits, &slot_addr, true,
         );
         blk.br(&merge_label);
     }
@@ -735,7 +732,7 @@ fn lower_put_value_dyn_ic_inline(
         let k_is_str = blk.icmp_eq(I64, &k_tag, "32767");
         let k_handle = blk.and(I64, &k_bits, POINTER_MASK_I64);
         let k_above = blk.icmp_ugt(I64, &k_handle, "1048575");
-        // `mark_object_dynamic_shape_unknown` must be a no-op for the hit to
+        // ShapeId guards and owner store handling must be sufficient for the hit to
         // skip it: layout state 0 means no side-table entry and no typed
         // descriptor. Anything else takes the ordinary path, which calls it.
         let layout_bits = blk.and(I16, &reserved, "49152"); // GC_LAYOUT_STATE_MASK
@@ -912,8 +909,8 @@ fn lower_put_value_dyn_ic_inline(
         let slot_ptr = ctx.block().inttoptr(I64, &slot_addr);
         let slot_i32 = ctx.block().trunc(I64, &e_slot64, I32);
         let blk = ctx.block();
-        emit_jsvalue_slot_store_scalar_aware_on_block(
-            blk, &slot_ptr, &fixed_v, &t_handle, &slot_i32, true, &t_bits, &slot_addr, true,
+        emit_jsvalue_slot_store_with_flags_on_block(
+            blk, &slot_ptr, &fixed_v, &t_handle, &slot_i32, true, false, &t_bits, &slot_addr, true,
         );
         blk.br(&trans_stamp_label);
     }
@@ -1684,7 +1681,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 if let Some(class) = ctx.classes.get(cn.as_str()).copied() {
                     let bits = ctx.block().bitcast_double_to_i64(&result);
                     let inst_handle = ctx.block().and(I64, &bits, POINTER_MASK_I64);
-                    crate::lower_call::emit_class_capture_writeback(ctx, class, &inst_handle, &[]);
+                    crate::lower_call::emit_class_capture_writeback(ctx, class, &inst_handle, &[])?;
                 }
             }
             Ok(result)

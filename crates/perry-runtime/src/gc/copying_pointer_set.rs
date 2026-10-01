@@ -90,6 +90,21 @@ impl CopyingPointerSet {
 
     #[inline]
     pub(super) fn classify_arena(&self, addr: usize) -> Option<CopyingPointer> {
+        self.classify_arena_inline(addr)
+    }
+
+    /// [`Self::classify`] inlined into its caller: the copying drain's mark
+    /// (`CopyingNurseryCollector::mark_addr`), which classifies once per
+    /// visited reference. Out of line, the call frame alone was a fifth of the
+    /// classification. Same answer as `classify`, by construction.
+    #[inline(always)]
+    pub(super) fn classify_inline(&self, addr: usize) -> Option<CopyingPointer> {
+        self.classify_arena_inline(addr)
+            .or_else(|| self.classify_malloc(addr))
+    }
+
+    #[inline(always)]
+    fn classify_arena_inline(&self, addr: usize) -> Option<CopyingPointer> {
         if addr < GC_HEADER_SIZE {
             return None;
         }
