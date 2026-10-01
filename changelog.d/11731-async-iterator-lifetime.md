@@ -5,4 +5,6 @@ Fix the async iterator lifetime leaks behind MongoDB's growing command listeners
 - Keep the original throw continuation on the generator instance and queued requests, rather than permanently rooting every generator from idle queue metadata. Pending requests remain GC roots.
 - Add Node parity regressions for nested iterator cleanup, awaited finalizer chaining, and collection of abandoned generators, plus HIR and runtime root-scanner tests.
 
+Linux MongoDB insert/find validation: instructions fall from 207.7M to 37.4M per operation; peak RSS falls from 1,005 MiB to 207 MiB (1.78× Node); all GC buckets total 4.65% of instructions, below 10%. Full measurement details are in `benchmarks/packages/profile/issue-11726/`.
+
 No version bump.

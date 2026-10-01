@@ -1,0 +1,934 @@
+{
+ "callgraph": "fp",
+ "perry_bin_dir": "/root/codex-11726-results/candidate-bins",
+ "perry_commit": "10e5c98faf",
+ "schema": "pkg-bench-callgraph/1",
+ "target_samples": 12000,
+ "workloads": {
+  "mongodb/insert_find": {
+   "binary": "/root/codex-11726-results/candidate-bins/mongodb__insert_find",
+   "bucket_entry": {
+    "accessor_descriptor\tjs_class_field_add": 438336,
+    "bigint\tjs_native_call_method_apply_by_id": 715463,
+    "buffer_typedarray\tjs_class_field_add": 214048,
+    "gc_minor\tperry_runtime::gc::policy::gc_safepoint_moving_minor": 422641,
+    "gc_minor\tperry_runtime::promise::microtasks::run_microtasks": 632617,
+    "gc_other\tjs_closure_set_box_capture_ptr": 191670,
+    "generated_code\t<inline JS>": 774461,
+    "method_dispatch\tjs_native_call_method_by_id": 332301,
+    "promise_async\tperry_runtime::promise::microtasks::run_microtasks": 321114,
+    "prop_lookup\tjs_async_step_chain": 228048,
+    "prop_lookup\tjs_async_step_done": 426463,
+    "prop_lookup\tjs_class_field_add": 2134878,
+    "prop_lookup\tjs_closure_call2": 227250,
+    "prop_lookup\tjs_event_emitter_subclass_init": 762518,
+    "prop_lookup\tjs_instanceof": 435604,
+    "prop_lookup\tjs_method_site_miss": 298226,
+    "prop_lookup\tjs_native_call_method": 433288,
+    "prop_lookup\tjs_native_call_method_apply_by_id": 274963,
+    "prop_lookup\tjs_native_call_method_by_id": 206449,
+    "prop_lookup\tjs_object_assign_one": 1121825,
+    "prop_lookup\tjs_object_delete_dynamic": 456743,
+    "prop_lookup\tjs_object_get_field_by_name_f64": 254698,
+    "prop_lookup\tjs_put_value_set": 246140,
+    "prop_lookup\tjs_put_value_set_packed_miss": 497141,
+    "prop_lookup\tperry_runtime::array::iterator::array_from_spread_value": 574536,
+    "prop_lookup\tperry_runtime::node_stream::event_emitter::ns_on2": 371525,
+    "prop_lookup\tperry_runtime::node_stream::push_chunk": 228008,
+    "prop_lookup\tperry_runtime::object::field_get_set::ic_miss::get_field_ic_miss_impl": 1074096,
+    "prop_lookup\tperry_runtime::promise::microtasks::run_microtasks": 497782,
+    "prop_write\tjs_class_field_add": 724418,
+    "prop_write\tjs_object_assign_one": 311280,
+    "proto_chain_read\tjs_async_step_chain": 779710,
+    "proto_chain_read\tjs_async_step_done": 2066047,
+    "proto_chain_read\tjs_closure_call1": 201721,
+    "proto_chain_read\tjs_closure_call2": 461627,
+    "proto_chain_read\tjs_method_site_miss": 454508,
+    "proto_chain_read\tjs_native_call_method_apply_by_id": 425978,
+    "proto_chain_read\tjs_native_call_method_by_id": 198304,
+    "proto_chain_read\tjs_promise_resolved": 224741,
+    "proto_chain_read\tperry_runtime::node_stream::event_emitter::ns_on2": 792415,
+    "proto_chain_read\tperry_runtime::node_stream::event_emitter::ns_once2": 342507,
+    "proto_chain_read\tperry_runtime::object::field_get_set::ic_miss::get_field_ic_miss_impl": 475044,
+    "proto_chain_read\tperry_runtime::promise::combinators::promise_resolve_fn": 662913,
+    "proto_chain_read\tperry_runtime::promise::microtasks::run_microtasks": 777611,
+    "string\tjs_class_field_add": 409727
+   },
+   "buckets": {
+    "accessor_descriptor": 1299756,
+    "alloc": 245479,
+    "bigint": 715463,
+    "buffer_typedarray": 1810237,
+    "call_overhead": 148642,
+    "closure_box_args": 514552,
+    "dyn_index": 855568,
+    "exceptions": 64806,
+    "gc_major": 45319,
+    "gc_minor": 1067827,
+    "gc_other": 633640,
+    "generated_code": 774461,
+    "json": 6806,
+    "map_set": 379786,
+    "memops": 41174,
+    "method_dispatch": 833912,
+    "number_string": 6203,
+    "numeric_conv": 107057,
+    "other_runtime": 242562,
+    "private_fields": 109327,
+    "promise_async": 752503,
+    "prop_lookup": 13537442,
+    "prop_write": 1655468,
+    "proto_chain_read": 8713829,
+    "raw_alloc": 78204,
+    "regex": -4680,
+    "side_table_hash": -772,
+    "string": 1441113,
+    "symbol": 407938,
+    "unknown": 3709,
+    "utf8_transcode": 122976,
+    "value_typeof": 393073,
+    "write_barrier": 353639
+   },
+   "chains": [
+    {
+     "bucket": "proto_chain_read",
+     "entry": "perry_runtime::promise::microtasks::run_microtasks",
+     "js_fn": "main",
+     "js_loc": null,
+     "leaf": "perry_runtime::object::shapes::shape_descriptor_by_id",
+     "leaf_share": 0.11,
+     "pct": 2.07,
+     "per_iter": 774584
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_event_emitter_subclass_init",
+     "js_fn": "node_modules_mongodb_src_mongo_types_ts::TypedEventEmitter_constructor",
+     "js_loc": null,
+     "leaf": "perry_runtime::object::class_registry::parent_static::method_owner_class_id",
+     "leaf_share": 0.12,
+     "pct": 2.06,
+     "per_iter": 768748
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_class_field_add",
+     "js_fn": "node_modules_mongodb_src_sessions_ts::ClientSession_constructor",
+     "js_loc": null,
+     "leaf": "perry_runtime::object::shapes::shape_descriptor_by_id",
+     "leaf_share": 0.19,
+     "pct": 1.86,
+     "per_iter": 695162
+    },
+    {
+     "bucket": "bigint",
+     "entry": "js_native_call_method_apply_by_id",
+     "js_fn": "node_modules_bson_src_utils_latin_ts::tryReadBasicLatin",
+     "js_loc": null,
+     "leaf": "perry_runtime::object::shapes::shape_descriptor_by_id",
+     "leaf_share": 0.1,
+     "pct": 1.8,
+     "per_iter": 673030
+    },
+    {
+     "bucket": "gc_minor",
+     "entry": "perry_runtime::promise::microtasks::run_microtasks",
+     "js_fn": "main",
+     "js_loc": null,
+     "leaf": "<perry_runtime::object::shapes::ShapeTableInner>::facts_remove",
+     "leaf_share": 0.14,
+     "pct": 1.61,
+     "per_iter": 600906
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "perry_runtime::promise::microtasks::run_microtasks",
+     "js_fn": "main",
+     "js_loc": null,
+     "leaf": "perry_runtime::object::shapes::shape_descriptor_by_id",
+     "leaf_share": 0.13,
+     "pct": 1.26,
+     "per_iter": 470268
+    },
+    {
+     "bucket": "proto_chain_read",
+     "entry": "perry_runtime::node_stream::event_emitter::ns_on2",
+     "js_fn": "node_modules_mongodb_src_sessions_ts::ClientSession_constructor",
+     "js_loc": null,
+     "leaf": "perry_runtime::object::class_meta_registry::get_parent_class_id",
+     "leaf_share": 0.15,
+     "pct": 1.21,
+     "per_iter": 452888
+    },
+    {
+     "bucket": "proto_chain_read",
+     "entry": "js_async_step_done",
+     "js_fn": "node_modules_mongodb_src_cmap_connection_pool_ts::55",
+     "js_loc": null,
+     "leaf": "perry_runtime::buffer::header::is_registered_buffer_slow",
+     "leaf_share": 0.13,
+     "pct": 1.12,
+     "per_iter": 417152
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "perry_runtime::array::iterator::array_from_spread_value",
+     "js_fn": "node_modules_bson_src_utils_latin_ts::tryReadBasicLatin",
+     "js_loc": null,
+     "leaf": "perry_runtime::object::shapes::shape_live_inline_slot_count_by_id",
+     "leaf_share": 0.16,
+     "pct": 1.11,
+     "per_iter": 413701
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_class_field_add",
+     "js_fn": "node_modules_mongodb_src_timeout_ts::Timeout_constructor",
+     "js_loc": null,
+     "leaf": "perry_runtime::object::shapes::shape_descriptor_by_id",
+     "leaf_share": 0.35,
+     "pct": 1.06,
+     "per_iter": 397446
+    },
+    {
+     "bucket": "proto_chain_read",
+     "entry": "js_async_step_done",
+     "js_fn": "node_modules_mongodb_src_cmap_connection_ts::60",
+     "js_loc": null,
+     "leaf": "perry_runtime::object::shapes::shape_descriptor_by_id",
+     "leaf_share": 0.11,
+     "pct": 1.01,
+     "per_iter": 376231
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_class_field_add",
+     "js_fn": "node_modules_mongodb_src_cursor_abstract_cursor_ts::AbstractCursor_constructor",
+     "js_loc": null,
+     "leaf": "perry_runtime::object::shapes::shape_live_inline_slot_count_by_id",
+     "leaf_share": 0.14,
+     "pct": 0.9,
+     "per_iter": 337355
+    },
+    {
+     "bucket": "proto_chain_read",
+     "entry": "perry_runtime::node_stream::event_emitter::ns_once2",
+     "js_fn": "node_modules_mongodb_src_cursor_abstract_cursor_ts::AbstractCursor.trackCursor",
+     "js_loc": null,
+     "leaf": "perry_runtime::object::class_meta_registry::class_generic_origin_slow",
+     "leaf_share": 0.1,
+     "pct": 0.9,
+     "per_iter": 336109
+    },
+    {
+     "bucket": "proto_chain_read",
+     "entry": "js_async_step_done",
+     "js_fn": "node_modules_mongodb_src_sdam_topology_ts::55",
+     "js_loc": null,
+     "leaf": "perry_runtime::object::field_get_set::get_field_by_name_tail::get_field_by_name_object_tail",
+     "leaf_share": 0.11,
+     "pct": 0.88,
+     "per_iter": 327343
+    },
+    {
+     "bucket": "proto_chain_read",
+     "entry": "js_closure_call2",
+     "js_fn": "node_modules_mongodb_src_sdam_server_ts::9",
+     "js_loc": null,
+     "leaf": "perry_runtime::buffer::header::is_registered_buffer_slow",
+     "leaf_share": 0.17,
+     "pct": 0.87,
+     "per_iter": 325365
+    },
+    {
+     "bucket": "promise_async",
+     "entry": "perry_runtime::promise::microtasks::run_microtasks",
+     "js_fn": "main",
+     "js_loc": null,
+     "leaf": "perry_runtime::promise::microtasks::pump_protected",
+     "leaf_share": 0.26,
+     "pct": 0.84,
+     "per_iter": 312269
+    },
+    {
+     "bucket": "proto_chain_read",
+     "entry": "perry_runtime::node_stream::event_emitter::ns_on2",
+     "js_fn": "node_modules_mongodb_src_cursor_abstract_cursor_ts::AbstractCursor_constructor",
+     "js_loc": null,
+     "leaf": "perry_runtime::buffer::header::is_registered_buffer_slow",
+     "leaf_share": 0.17,
+     "pct": 0.81,
+     "per_iter": 303908
+    },
+    {
+     "bucket": "proto_chain_read",
+     "entry": "perry_runtime::promise::combinators::promise_resolve_fn",
+     "js_fn": "node_modules_mongodb_src_sdam_topology_ts::processWaitQueue",
+     "js_loc": null,
+     "leaf": "perry_runtime::object::class_meta_registry::get_parent_class_id",
+     "leaf_share": 0.11,
+     "pct": 0.8,
+     "per_iter": 297032
+    },
+    {
+     "bucket": "proto_chain_read",
+     "entry": "js_async_step_done",
+     "js_fn": "node_modules_mongodb_src_sdam_server_ts::34",
+     "js_loc": null,
+     "leaf": "perry_runtime::object::class_meta_registry::class_generic_origin_slow",
+     "leaf_share": 0.19,
+     "pct": 0.77,
+     "per_iter": 287326
+    },
+    {
+     "bucket": "proto_chain_read",
+     "entry": "perry_runtime::promise::combinators::promise_resolve_fn",
+     "js_fn": "node_modules_mongodb_src_cmap_connection_pool_ts::ConnectionPool.processWaitQueue",
+     "js_loc": null,
+     "leaf": "perry_runtime::object::field_get_set::get_field_by_name::get_field_by_name_past_data_probe",
+     "leaf_share": 0.11,
+     "pct": 0.76,
+     "per_iter": 284901
+    },
+    {
+     "bucket": "proto_chain_read",
+     "entry": "js_method_site_miss",
+     "js_fn": "node_modules_mongodb_src_mongo_client_ts::MongoClient.startSession",
+     "js_loc": null,
+     "leaf": "perry_runtime::object::class_meta_registry::get_parent_class_id",
+     "leaf_share": 0.12,
+     "pct": 0.76,
+     "per_iter": 282218
+    },
+    {
+     "bucket": "proto_chain_read",
+     "entry": "js_native_call_method_apply_by_id",
+     "js_fn": "node_modules_mongodb_src_mongo_types_ts::TypedEventEmitter.emitAndLog",
+     "js_loc": null,
+     "leaf": "perry_runtime::object::class_meta_registry::class_generic_origin_slow",
+     "leaf_share": 0.12,
+     "pct": 0.73,
+     "per_iter": 272453
+    },
+    {
+     "bucket": "proto_chain_read",
+     "entry": "js_async_step_chain",
+     "js_fn": "node_modules_mongodb_src_cmap_connection_ts::54",
+     "js_loc": null,
+     "leaf": "perry_runtime::buffer::header::is_registered_buffer_slow",
+     "leaf_share": 0.13,
+     "pct": 0.72,
+     "per_iter": 268463
+    },
+    {
+     "bucket": "proto_chain_read",
+     "entry": "js_async_step_chain",
+     "js_fn": "node_modules_mongodb_src_cmap_connection_ts::58",
+     "js_loc": null,
+     "leaf": "perry_runtime::object::class_meta_registry::class_generic_origin_slow",
+     "leaf_share": 0.1,
+     "pct": 0.7,
+     "per_iter": 261642
+    },
+    {
+     "bucket": "prop_write",
+     "entry": "js_class_field_add",
+     "js_fn": "node_modules_mongodb_src_sessions_ts::ClientSession_constructor",
+     "js_loc": null,
+     "leaf": "perry_runtime::object::field_set_by_name::tail::set_field_by_name_object_tail",
+     "leaf_share": 0.31,
+     "pct": 0.62,
+     "per_iter": 233182
+    }
+   ],
+   "entry_top": [
+    [
+     "js_class_field_add",
+     4351799,
+     11.65
+    ],
+    [
+     "js_async_step_done",
+     2693507,
+     7.21
+    ],
+    [
+     "perry_runtime::promise::microtasks::run_microtasks",
+     2477052,
+     6.63
+    ],
+    [
+     "js_object_assign_one",
+     2058210,
+     5.51
+    ],
+    [
+     "perry_runtime::object::field_get_set::ic_miss::get_field_ic_miss_impl",
+     1831364,
+     4.9
+    ],
+    [
+     "js_native_call_method_apply_by_id",
+     1703526,
+     4.56
+    ],
+    [
+     "js_async_step_chain",
+     1399263,
+     3.75
+    ],
+    [
+     "perry_runtime::node_stream::event_emitter::ns_on2",
+     1308042,
+     3.5
+    ],
+    [
+     "js_method_site_miss",
+     1169856,
+     3.13
+    ],
+    [
+     "js_native_call_method_by_id",
+     1118404,
+     2.99
+    ],
+    [
+     "js_event_emitter_subclass_init",
+     1103793,
+     2.95
+    ],
+    [
+     "perry_runtime::array::iterator::array_from_spread_value",
+     1071749,
+     2.87
+    ],
+    [
+     "js_native_call_method",
+     899686,
+     2.41
+    ],
+    [
+     "js_closure_call2",
+     876433,
+     2.35
+    ],
+    [
+     "perry_runtime::promise::combinators::promise_resolve_fn",
+     796165,
+     2.13
+    ],
+    [
+     "<inline JS>",
+     774461,
+     2.07
+    ],
+    [
+     "js_object_delete_dynamic",
+     696265,
+     1.86
+    ],
+    [
+     "js_put_value_set_packed_miss",
+     676197,
+     1.81
+    ],
+    [
+     "js_instanceof",
+     634788,
+     1.7
+    ],
+    [
+     "js_put_value_set",
+     487166,
+     1.3
+    ]
+   ],
+   "excess_per_iter": 36558184.01066667,
+   "incl_js_top": [
+    [
+     "mongodb_insert_find_ts::10",
+     11711941,
+     31.35
+    ],
+    [
+     "node_modules_mongodb_src_sdam_server_ts::34",
+     7915447,
+     21.19
+    ],
+    [
+     "node_modules_mongodb_src_collection_ts::93",
+     7808948,
+     20.9
+    ],
+    [
+     "node_modules_mongodb_src_collection_ts::Collection.findOne",
+     7663447,
+     20.51
+    ],
+    [
+     "node_modules_mongodb_src_cursor_abstract_cursor_ts::83",
+     6102060,
+     16.33
+    ],
+    [
+     "node_modules_mongodb_src_cmap_connection_ts::58",
+     5797838,
+     15.52
+    ],
+    [
+     "node_modules_mongodb_src_cmap_connection_ts::54",
+     5602289,
+     15.0
+    ],
+    [
+     "node_modules_mongodb_src_cursor_abstract_cursor_ts::95",
+     5528111,
+     14.8
+    ],
+    [
+     "node_modules_mongodb_src_cmap_connection_ts::60",
+     5304897,
+     14.2
+    ],
+    [
+     "node_modules_mongodb_src_cmap_connection_ts::Connection.command",
+     4893007,
+     13.1
+    ],
+    [
+     "node_modules_mongodb_src_cmap_connection_ts::55",
+     4743741,
+     12.7
+    ],
+    [
+     "node_modules_mongodb_src_operations_execute_operation_ts::14",
+     4450031,
+     11.91
+    ],
+    [
+     "node_modules_mongodb_src_mongo_client_ts::MongoClient.startSession",
+     4339460,
+     11.62
+    ],
+    [
+     "node_modules_mongodb_src_cursor_abstract_cursor_ts::AbstractCursor.next",
+     4100869,
+     10.98
+    ],
+    [
+     "node_modules_mongodb_src_cursor_abstract_cursor_ts::AbstractCursor.fetchBatch",
+     4059642,
+     10.87
+    ],
+    [
+     "node_modules_mongodb_src_cursor_abstract_cursor_ts::97",
+     4059392,
+     10.87
+    ],
+    [
+     "node_modules_mongodb_src_collection_ts::73",
+     4041104,
+     10.82
+    ],
+    [
+     "node_modules_mongodb_src_cursor_abstract_cursor_ts::AbstractCursor.cursorInit",
+     4040809,
+     10.82
+    ],
+    [
+     "node_modules_mongodb_src_collection_ts::Collection.insertOne",
+     4021295,
+     10.76
+    ],
+    [
+     "mongodb_insert_find_ts::2",
+     4018382,
+     10.76
+    ]
+   ],
+   "incl_top": [
+    [
+     "perry_runtime::promise::microtasks::run_microtasks",
+     35948131,
+     96.23
+    ],
+    [
+     "perry_sjlj_try",
+     35369469,
+     94.68
+    ],
+    [
+     "perry_runtime::exception::arm_trap_and_run::invoke::<perry_runtime::promise::microtasks::run_microtasks::{closure#4},",
+     35292424,
+     94.47
+    ],
+    [
+     "perry_runtime::promise::microtasks::pump_protected",
+     35288202,
+     94.46
+    ],
+    [
+     "perry_runtime::promise::async_step::call_async_step_body",
+     31172730,
+     83.45
+    ],
+    [
+     "js_native_call_method",
+     25999221,
+     69.6
+    ],
+    [
+     "perry_runtime::object::class_registry::dispatch::call_vtable_method_value",
+     24110465,
+     64.54
+    ],
+    [
+     "perry_runtime::abi_trampoline::call_all_f64_x86_64",
+     24082596,
+     64.47
+    ],
+    [
+     "js_native_call_method_by_id",
+     22902734,
+     61.31
+    ],
+    [
+     "perry_runtime::object::native_call_method::try_class_vtable_fast_dispatch",
+     19480463,
+     52.15
+    ],
+    [
+     "js_object_get_field_by_name_f64",
+     12735180,
+     34.09
+    ],
+    [
+     "js_native_call_value",
+     12650400,
+     33.86
+    ],
+    [
+     "perry_runtime::object::field_get_set::get_field_by_name_tail::get_field_by_name_object_tail",
+     11863519,
+     31.76
+    ],
+    [
+     "perry_runtime::object::native_call_method::handle_methods::dispatch_handle",
+     11666760,
+     31.23
+    ],
+    [
+     "perry_runtime::object::field_get_set::accessors::ordinary_object_prototype_property_value",
+     8483229,
+     22.71
+    ],
+    [
+     "perry_runtime::object::field_get_set::accessors::prototype_property_value_with_guard",
+     8146221,
+     21.81
+    ],
+    [
+     "perry_runtime::object::own_override::call_own_user_method::<perry_runtime::object::native_call_method::js_native_call_method::{closure#1}, perry_runtime::object::native_call_method::js_native_call_method::{closure#0}>",
+     6345063,
+     16.98
+    ],
+    [
+     "perry_runtime::object::own_override::invoke_own_user_method",
+     5760319,
+     15.42
+    ],
+    [
+     "perry_runtime::object::async_generator_queue::async_generator_request",
+     5627382,
+     15.06
+    ],
+    [
+     "js_dynamic_object_get_property",
+     5357881,
+     14.34
+    ]
+   ],
+   "js_sites": [
+    {
+     "js_fn": "main",
+     "js_loc": null,
+     "pct": 7.86,
+     "per_iter": 2934695
+    },
+    {
+     "js_fn": "node_modules_mongodb_src_sessions_ts::ClientSession_constructor",
+     "js_loc": null,
+     "pct": 7.56,
+     "per_iter": 2824756
+    },
+    {
+     "js_fn": "node_modules_bson_src_utils_latin_ts::tryReadBasicLatin",
+     "js_loc": null,
+     "pct": 4.42,
+     "per_iter": 1652973
+    },
+    {
+     "js_fn": "node_modules_mongodb_src_cursor_abstract_cursor_ts::AbstractCursor_constructor",
+     "js_loc": null,
+     "pct": 3.67,
+     "per_iter": 1372481
+    },
+    {
+     "js_fn": "node_modules_mongodb_src_mongo_types_ts::TypedEventEmitter_constructor",
+     "js_loc": null,
+     "pct": 3.38,
+     "per_iter": 1263283
+    },
+    {
+     "js_fn": "node_modules_bson_src_parser_serializer_ts::serializeInto$spec_b_b_b_b_b_b_b",
+     "js_loc": "perry_module:0",
+     "pct": 3.23,
+     "per_iter": 1208419
+    },
+    {
+     "js_fn": "node_modules_mongodb_src_timeout_ts::Timeout_constructor",
+     "js_loc": null,
+     "pct": 2.77,
+     "per_iter": 1035354
+    },
+    {
+     "js_fn": "node_modules_mongodb_src_cmap_connection_ts::66",
+     "js_loc": null,
+     "pct": 2.28,
+     "per_iter": 853346
+    },
+    {
+     "js_fn": "node_modules_mongodb_src_mongo_types_ts::TypedEventEmitter.emitAndLog",
+     "js_loc": null,
+     "pct": 1.99,
+     "per_iter": 744001
+    },
+    {
+     "js_fn": "node_modules_mongodb_src_cmap_connection_ts::SizedMessageTransform._transform",
+     "js_loc": null,
+     "pct": 1.82,
+     "per_iter": 679858
+    },
+    {
+     "js_fn": "node_modules_mongodb_src_cursor_abstract_cursor_ts::AbstractCursor.trackCursor",
+     "js_loc": null,
+     "pct": 1.73,
+     "per_iter": 645822
+    },
+    {
+     "js_fn": "node_modules_mongodb_src_mongo_client_ts::MongoClient.startSession",
+     "js_loc": null,
+     "pct": 1.71,
+     "per_iter": 639013
+    },
+    {
+     "js_fn": "node_modules_mongodb_src_sdam_topology_ts::55",
+     "js_loc": null,
+     "pct": 1.7,
+     "per_iter": 635715
+    },
+    {
+     "js_fn": "node_modules_mongodb_src_sdam_server_ts::34",
+     "js_loc": null,
+     "pct": 1.61,
+     "per_iter": 601316
+    },
+    {
+     "js_fn": "node_modules_mongodb_src_cmap_wire_protocol_on_data_ts::12",
+     "js_loc": null,
+     "pct": 1.61,
+     "per_iter": 601163
+    },
+    {
+     "js_fn": "node_modules_mongodb_src_utils_ts::resolveOptions",
+     "js_loc": null,
+     "pct": 1.6,
+     "per_iter": 596431
+    },
+    {
+     "js_fn": "node_modules_mongodb_src_cmap_connection_ts::54",
+     "js_loc": null,
+     "pct": 1.56,
+     "per_iter": 582657
+    },
+    {
+     "js_fn": "node_modules_mongodb_src_cmap_connection_ts::58",
+     "js_loc": null,
+     "pct": 1.49,
+     "per_iter": 556854
+    },
+    {
+     "js_fn": "node_modules_mongodb_src_cmap_connection_pool_ts::55",
+     "js_loc": null,
+     "pct": 1.42,
+     "per_iter": 530169
+    },
+    {
+     "js_fn": "node_modules_mongodb_src_sdam_server_ts::9",
+     "js_loc": null,
+     "pct": 1.34,
+     "per_iter": 499216
+    }
+   ],
+   "mechanisms": {
+    "accessor_descriptor": 1730808,
+    "alloc": 19639,
+    "buffer_typedarray": 3249441,
+    "call_overhead": 52465,
+    "closure_box_args": 499660,
+    "dyn_index": 1024994,
+    "exceptions": 64806,
+    "gc_major": 45319,
+    "gc_minor": 1067827,
+    "gc_other": 604605,
+    "generated_code": 774461,
+    "json": 6806,
+    "map_set": 224793,
+    "memops": 586492,
+    "method_dispatch": 675127,
+    "number_string": 6203,
+    "numeric_conv": 163041,
+    "other_runtime": 242562,
+    "private_fields": 63422,
+    "promise_async": 669229,
+    "prop_lookup": 18152124,
+    "prop_write": 1172205,
+    "raw_alloc": 1207843,
+    "regex": 1178,
+    "side_table_hash": 1279015,
+    "string": 1394921,
+    "symbol": 412174,
+    "unknown": 3709,
+    "utf8_transcode": 1144014,
+    "value_typeof": 447100,
+    "write_barrier": 371036
+   },
+   "n1": 500,
+   "n2": 2000,
+   "node_per_iter": 798835.3366666667,
+   "perry_instr_n1": 26395483999,
+   "perry_instr_n2": 82431013020,
+   "perry_per_iter": 37357019.347333334,
+   "pkg_code_on_stack_min_pct": 21.2,
+   "ratio": 46.764355096276184,
+   "regex_detail": {
+    "compile": -6526,
+    "execute": 7768,
+    "result_building_other": -5922
+   },
+   "sample_freq": 1098,
+   "sample_scale": 1.0026,
+   "sampled_per_iter": 37258897.654,
+   "samples": {
+    "n1": 3348,
+    "n2": 10266
+   },
+   "self_top": [
+    [
+     "perry_runtime::object::shapes::shape_descriptor_by_id",
+     2571098,
+     6.88
+    ],
+    [
+     "perry_runtime::buffer::header::is_registered_buffer_slow",
+     2215681,
+     5.93
+    ],
+    [
+     "core::str::converts::from_utf8",
+     1015338,
+     2.72
+    ],
+    [
+     "perry_runtime::object::class_meta_registry::get_parent_class_id",
+     866958,
+     2.32
+    ],
+    [
+     "perry_runtime::object::class_meta_registry::class_generic_origin_slow",
+     853637,
+     2.29
+    ],
+    [
+     "perry_runtime::object::native_get::try_data_get_bytes",
+     733871,
+     1.96
+    ],
+    [
+     "perry_runtime::object::keys_lookup::keys_find_slot_by_bytes",
+     709507,
+     1.9
+    ],
+    [
+     "perry_runtime::object::prototype_chain::meta_capable_object",
+     579044,
+     1.55
+    ],
+    [
+     "perry_runtime::object::field_get_set::get_field_by_name::get_field_by_name_past_data_probe",
+     564309,
+     1.51
+    ],
+    [
+     "perry_runtime::object::field_get_set::get_field_by_name_tail::get_field_by_name_object_tail",
+     558630,
+     1.5
+    ],
+    [
+     "perry_runtime::object::field_set_by_name::tail::set_field_by_name_object_tail",
+     518809,
+     1.39
+    ],
+    [
+     "perry_runtime::object::shapes::shape_live_inline_slot_count_by_id",
+     478820,
+     1.28
+    ],
+    [
+     "__memcmp_evex_movbe",
+     460656,
+     1.23
+    ],
+    [
+     "perry_runtime::typedarray::lookup_registered_typed_array_kind",
+     451822,
+     1.21
+    ],
+    [
+     "perry_runtime::object::keys_lookup::keys_array_dense_slots",
+     428587,
+     1.15
+    ],
+    [
+     "perry_runtime::shared_sab::is_shared_sab",
+     428069,
+     1.15
+    ],
+    [
+     "perry_runtime::object::shapes::shape_descriptor_intern_with_rep",
+     423779,
+     1.13
+    ],
+    [
+     "_mi_page_malloc_zero",
+     382633,
+     1.02
+    ],
+    [
+     "<core::hash::sip::Hasher<core::hash::sip::Sip13Rounds> as core::hash::Hasher>::write",
+     376846,
+     1.01
+    ],
+    [
+     "<std::hash::random::RandomState as core::hash::BuildHasher>::hash_one::<&u32>",
+     363659,
+     0.97
+    ]
+   ],
+   "startup_instr": 7716974325.333332,
+   "status": "OK",
+   "unwind_reached_main": 0.999,
+   "warm": 200
+  }
+ }
+}
