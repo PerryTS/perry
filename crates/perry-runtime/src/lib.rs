@@ -266,12 +266,8 @@ pub mod web_storage;
 /// feature on when `ctx.needs_wasm_runtime` is true.
 #[cfg(feature = "wasm-host")]
 pub mod webassembly;
-// `net` moved to `perry-stdlib::net` (event-driven async) in A1/A1.5.
-// The old sync `perry-runtime::net` module is retained as source but
-// not exported so its `js_net_socket_{write,end,destroy}` symbols don't
-// collide with the new stdlib ones. Delete the file entirely once no
-// in-tree code references it.
-// pub mod net;
+// Networking is provided by perry-ext-net; the retired synchronous provider
+// no longer contributes a second js_net_* export surface (#10678).
 #[cfg(feature = "ohos-napi")]
 pub mod arkts_callbacks;
 pub mod geisterhand_registry;

@@ -185,6 +185,24 @@ their version is usually the better idiom and is theirs to own. Drop yours.
 
 ## 5. Validating
 
+Before and after any lockfile regeneration, compare the resolved registry
+versions. CI applies this to the synthetic PR merge tree versus the event base;
+local merge trains must run it explicitly against their pre-merge main ref:
+
+```bash
+python3 scripts/lock_no_downgrade.py --vs origin/main
+python3 scripts/native_export_collisions.py --no-raise-vs origin/main
+```
+
+The lock check prints every changed package on a pass and names the consumer
+whose pin moved backwards on a failure. Removing a package with all its
+consumers is reported as removal. The export inventory covers runtime, stdlib,
+ffi and every remaining `perry-ext-*` crate, including name-argument macros.
+Existing alternate providers are recorded by exact source path; adding a third
+provider or increasing that record in the same PR fails. Removing a duplicate
+requires pruning its record too. See `docs/native-export-audit.md` for the
+current provider decisions and limits of this source inventory.
+
 Cheap checks first, so a bad train dies in seconds:
 
 ```bash

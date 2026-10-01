@@ -766,18 +766,6 @@
       "why": "Memo of canonicalized module path STRINGS (module_require.rs:857). Key and value are both owned Rust `String`; the map never stores a JSValue, a NaN-boxed word, or a raw pointer into the arena, so there is nothing for a scanner to mark or rewrite. Populated during module resolution from `Path`/`OsStr` text only."
     },
     {
-      "file": "crates/perry-runtime/src/net.rs",
-      "name": "TCP_SERVERS",
-      "verdict": "not_a_gc_pointer",
-      "why": "Keyed by handle id; TcpListenerWrapper is Rust-owned (tokio listener + SocketAddr), no JS values."
-    },
-    {
-      "file": "crates/perry-runtime/src/net.rs",
-      "name": "TCP_SOCKETS",
-      "verdict": "not_a_gc_pointer",
-      "why": "Keyed by handle id; TcpStreamWrapper is Rust-owned (tokio stream + SocketAddr), no JS values."
-    },
-    {
       "file": "crates/perry-runtime/src/node_api_host/loader.rs",
       "name": "LEGACY_CAPTURE",
       "verdict": "not_a_gc_pointer",

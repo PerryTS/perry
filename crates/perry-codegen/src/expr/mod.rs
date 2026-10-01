@@ -1005,6 +1005,8 @@ pub(crate) struct FnCtx<'a> {
     /// [`crate::rooting::TempRootPool`]. Starts empty; grows on the first
     /// protected temporary this function lowers.
     pub temp_roots: crate::rooting::TempRootPool,
+    /// Compiler-only lexical bindings to pooled frame roots.
+    pub scoped_temp_roots: Vec<(perry_hir::types::LocalId, String)>,
 
     /// #7773/#7506: LocalIds whose `Number`/`Int32` value came from an
     /// initializer whose numeric answer is only a declared type — `const v =

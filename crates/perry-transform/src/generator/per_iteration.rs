@@ -613,7 +613,7 @@ fn rename_in_expr(e: &mut Expr, map: &HashMap<LocalId, LocalId>) {
         }
     };
     match e {
-        Expr::LocalGet(id) | Expr::Update { id, .. } => sub(id),
+        Expr::LocalGet(id) | Expr::Update { id, .. } | Expr::ScopedTemp { id, .. } => sub(id),
         Expr::LocalSet(id, _) => sub(id),
         Expr::ArrayPush { array_id, .. }
         | Expr::ArrayPushSpread { array_id, .. }
