@@ -323,7 +323,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // This lets closures read captured outer variables, regular
         // functions read their own params/lets, and any function read
         // module-scope `let`s (the ones in `hir.init` at top level).
+        Expr::ScopedTemp { id, value, body } => {
+            crate::rooting::lower_scoped_binding(ctx, *id, value, body)
+        }
         Expr::LocalGet(id) => {
+            if let Some(value) = crate::rooting::read_scoped_binding(ctx, *id) {
+                return Ok(value);
+            }
             if ctx.pod_records.contains_key(id) {
                 return materialize_pod_value_copy(ctx, *id);
             }

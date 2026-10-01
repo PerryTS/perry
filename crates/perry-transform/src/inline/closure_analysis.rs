@@ -657,7 +657,7 @@ pub fn find_max_local_id(stmts: &[Stmt]) -> LocalId {
     // any new LocalId-bearing variant (issues #167, #169, #214).
     fn check_expr(expr: &Expr, max_id: &mut LocalId) {
         match expr {
-            Expr::LocalGet(id) | Expr::LocalSet(id, _) => {
+            Expr::LocalGet(id) | Expr::LocalSet(id, _) | Expr::ScopedTemp { id, .. } => {
                 *max_id = (*max_id).max(*id);
             }
             Expr::Update { id, .. } => {

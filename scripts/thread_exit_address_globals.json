@@ -1051,22 +1051,6 @@
    "hook": "release_node_sqlite_callbacks_in_freed_ranges"
   },
   {
-   "file": "crates/perry-runtime/src/net.rs",
-   "names": [
-    "TCP_SERVERS"
-   ],
-   "verdict": "no_heap_address",
-   "why": "HashMap<u64, TcpListenerWrapper> keyed by the process-global NEXT_HANDLE counter, holding std TcpListener + SocketAddr (net.rs:17-25); OS resources, no heap addresses."
-  },
-  {
-   "file": "crates/perry-runtime/src/net.rs",
-   "names": [
-    "TCP_SOCKETS"
-   ],
-   "verdict": "no_heap_address",
-   "why": "HashMap<u64, TcpStreamWrapper> keyed by the process-global NEXT_HANDLE counter, holding std TcpStream + Option<SocketAddr> (net.rs:19-30); OS resources."
-  },
-  {
    "file": "crates/perry-runtime/src/object/nm_namespace_hooks.rs",
    "names": [
     "NM_NAMESPACE_OPS"

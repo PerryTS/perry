@@ -573,23 +573,58 @@ impl WasmModuleEmitter {
                 Vec<LocalId>,
             )> = Vec::new();
             collect_closures_from_stmts(&module.init, &mut module_closures);
+            for global in &module.globals {
+                if let Some(init) = &global.init {
+                    collect_closures_from_expr(init, &mut module_closures);
+                }
+            }
             for func in &module.functions {
+                for param in &func.params {
+                    if let Some(default) = &param.default {
+                        collect_closures_from_expr(default, &mut module_closures);
+                    }
+                }
                 collect_closures_from_stmts(&func.body, &mut module_closures);
             }
             for class in &module.classes {
                 if let Some(ctor) = &class.constructor {
+                    for param in &ctor.params {
+                        if let Some(default) = &param.default {
+                            collect_closures_from_expr(default, &mut module_closures);
+                        }
+                    }
                     collect_closures_from_stmts(&ctor.body, &mut module_closures);
                 }
                 for method in &class.methods {
+                    for param in &method.params {
+                        if let Some(default) = &param.default {
+                            collect_closures_from_expr(default, &mut module_closures);
+                        }
+                    }
                     collect_closures_from_stmts(&method.body, &mut module_closures);
                 }
                 for method in &class.static_methods {
+                    for param in &method.params {
+                        if let Some(default) = &param.default {
+                            collect_closures_from_expr(default, &mut module_closures);
+                        }
+                    }
                     collect_closures_from_stmts(&method.body, &mut module_closures);
                 }
                 for (_, getter) in &class.getters {
+                    for param in &getter.params {
+                        if let Some(default) = &param.default {
+                            collect_closures_from_expr(default, &mut module_closures);
+                        }
+                    }
                     collect_closures_from_stmts(&getter.body, &mut module_closures);
                 }
                 for (_, setter) in &class.setters {
+                    for param in &setter.params {
+                        if let Some(default) = &param.default {
+                            collect_closures_from_expr(default, &mut module_closures);
+                        }
+                    }
                     collect_closures_from_stmts(&setter.body, &mut module_closures);
                 }
                 for field in &class.fields {
@@ -1384,11 +1419,21 @@ impl WasmModuleEmitter {
             for (_, module) in modules {
                 let mut mod_map = BTreeMap::new();
                 collect_locals(&module.init, &mut mod_map, &mut total_count, 0);
+                for global in &module.globals {
+                    if let Some(init) = &global.init {
+                        collect_expr_locals(init, &mut mod_map, &mut total_count, 0);
+                    }
+                }
+                for class in &module.classes {
+                    for field in &class.static_fields {
+                        if let Some(init) = &field.init {
+                            collect_expr_locals(init, &mut mod_map, &mut total_count, 0);
+                        }
+                    }
+                }
                 per_module_init_locals.push(mod_map);
             }
-            // Empty fallback map for global initializers and class field inits that
-            // shouldn't reference module-level lets.
-            let init_locals: BTreeMap<LocalId, u32> = BTreeMap::new();
+            // Global and static-field initializers use the module activation locals.
 
             let num_locals = total_count;
             let start_temp_local = num_locals;
@@ -1411,8 +1456,12 @@ impl WasmModuleEmitter {
                 self.current_mod_idx = mod_idx;
                 for global in &module.globals {
                     if let Some(init) = &global.init {
-                        let mut ctx =
-                            FuncEmitCtx::new(self, &init_locals, start_temp_local, start_temp_i32);
+                        let mut ctx = FuncEmitCtx::new(
+                            self,
+                            &per_module_init_locals[mod_idx],
+                            start_temp_local,
+                            start_temp_i32,
+                        );
                         ctx.emit_expr(&mut func, init);
                         let gidx = self.global_map[&global.id];
                         func.instruction(&Instruction::GlobalSet(gidx));
@@ -1549,7 +1598,7 @@ impl WasmModuleEmitter {
                             // Store value
                             let mut ctx = FuncEmitCtx::new(
                                 self,
-                                &init_locals,
+                                &per_module_init_locals[mod_idx],
                                 start_temp_local,
                                 start_temp_i32,
                             );

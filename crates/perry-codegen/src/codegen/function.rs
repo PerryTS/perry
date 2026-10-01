@@ -1308,6 +1308,7 @@ pub(super) fn compile_function(
         shadow_slot_clears_after_stmt,
         shadow_slots_bound: bound_param_slots,
         temp_roots: crate::rooting::TempRootPool::default(),
+        scoped_temp_roots: Vec::new(),
         arena_state_slot,
         arena_state_lazy: false,
         class_keys_slots: HashMap::new(),

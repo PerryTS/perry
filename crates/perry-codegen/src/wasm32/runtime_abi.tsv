@@ -2013,8 +2013,7 @@ js_net_block_list_new	i64
 js_net_block_list_rules	ptr	i64
 js_net_block_list_to_json	f64	i64
 js_net_callback_ptr	i64	f64
-js_net_create_connection	f64	i32s,ptr,ptr
-js_net_create_server	f64	ptr,ptr
+js_net_create_server	i64	i64,i64
 js_net_create_server_handle_stub	f64	f64,f64,f64,f64,f64
 js_net_get_default_auto_select_family	f64	
 js_net_get_default_auto_select_family_attempt_timeout	f64	
@@ -2024,14 +2023,14 @@ js_net_is_ipv4	f64	i64
 js_net_is_ipv6	f64	i64
 js_net_normalize_args	f64	f64
 js_net_process_pending	i32s	
-js_net_server_address	ptr	f64
-js_net_server_close	i32s	f64
+js_net_server_address	ptr	i64
+js_net_server_close	void	i64,i64
 js_net_server_event_names	ptr	i64
 js_net_server_get_connections	f64	i64
 js_net_server_get_drop_max_connection	f64	i64
 js_net_server_get_listening	f64	i64
 js_net_server_get_max_connections	f64	i64
-js_net_server_listen	i32s	f64,i32s,ptr,ptr
+js_net_server_listen	void	i64,f64,f64,f64
 js_net_server_listener_count	f64	i64,i64
 js_net_server_listeners	i64	i64,i64
 js_net_server_listening	i32s	i64
@@ -2056,8 +2055,8 @@ js_net_socket_address_new	i64	f64
 js_net_socket_address_parse	f64	i64
 js_net_socket_alloc	i64	
 js_net_socket_connect	i64	f64,f64,f64
-js_net_socket_destroy	i32s	f64
-js_net_socket_end	i32s	f64
+js_net_socket_destroy	void	i64
+js_net_socket_end	void	i64,i64
 js_net_socket_event_names	ptr	i64
 js_net_socket_get_auto_select_family_attempted_addresses	f64	i64
 js_net_socket_get_buffer_size	f64	i64
@@ -2094,10 +2093,8 @@ js_net_socket_pipe	f64	i64,f64,f64
 js_net_socket_prepend_listener	i64	i64,i64,i64
 js_net_socket_prepend_once_listener	i64	i64,i64,i64
 js_net_socket_raw_listeners	i64	i64,i64
-js_net_socket_read	ptr	f64,i32s
+js_net_socket_read	f64	i64,f64
 js_net_socket_ref	i64	i64
-js_net_socket_remote_address	ptr	f64
-js_net_socket_remote_port	i32s	f64
 js_net_socket_remove_all_listeners	i64	i64,i64
 js_net_socket_remove_listener	i64	i64,i64,i64
 js_net_socket_reset_and_destroy	i64	i64
@@ -2108,7 +2105,7 @@ js_net_socket_set_type_of_service	i64	i64,f64
 js_net_socket_unpipe	i64	i64,f64
 js_net_socket_unref	i64	i64
 js_net_socket_upgrade_tls	ptr	i64,i64,f64
-js_net_socket_write	i32s	f64,ptr
+js_net_socket_write	void	i64,i64
 js_net_throw_invalid_address	void	
 js_net_validate_block_list_prefix	i32s	f64,f64
 js_net_validate_connect_port	void	f64
@@ -3104,6 +3101,7 @@ js_readable_stream_new_from_source_object	f64	f64,f64
 js_readable_stream_new_with_source_type	f64	f64,f64,f64,f64,f64
 js_readable_stream_new_with_strategy_and_source_type	f64	f64,f64,f64,f64,f64
 js_readable_stream_pipe_through	f64	f64,f64,f64
+js_readable_stream_pipe_through_pair	f64	f64,f64,f64
 js_readable_stream_pipe_through_validate	f64	f64,f64,f64,f64
 js_readable_stream_pipe_to	ptr	f64,f64,f64
 js_readable_stream_subclass_init	f64	f64,f64,f64,f64,f64

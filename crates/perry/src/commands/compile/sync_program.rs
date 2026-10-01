@@ -190,6 +190,7 @@ const SYNC_NAMES: &[&str] = &[
     "In",
     "Update",
     "Sequence",
+    "ScopedTemp",
     "Assign",
     "Delete",
     "Void",
@@ -588,6 +589,32 @@ mod tests {
     fn plain_sync_constructs_pass() {
         let hir = r#"Module { init: [Expr(Call { callee: PropertyGet { object: GlobalGet(0), property: "log", byte_offset: 1 }, args: [ArrayMap { array: LocalGet(0), callback: Closure { func_id: 0, is_async: false } }] })] }"#;
         assert_eq!(why_module_not_synchronous(hir), None);
+    }
+
+    #[test]
+    fn scoped_temporaries_preserve_child_scheduling_requirements() {
+        use perry_hir::Expr;
+
+        let synchronous = Expr::ScopedTemp {
+            id: 7,
+            value: Box::new(Expr::LocalGet(0)),
+            body: Box::new(Expr::LocalGet(7)),
+        };
+        assert_eq!(
+            why_module_not_synchronous(&format!("{synchronous:?}")),
+            None
+        );
+        for (value, body) in [
+            (Expr::Await(Box::new(Expr::LocalGet(0))), Expr::LocalGet(7)),
+            (Expr::LocalGet(0), Expr::Await(Box::new(Expr::LocalGet(7)))),
+        ] {
+            let asynchronous = Expr::ScopedTemp {
+                id: 7,
+                value: Box::new(value),
+                body: Box::new(body),
+            };
+            assert!(why_module_not_synchronous(&format!("{asynchronous:?}")).is_some());
+        }
     }
 
     #[test]

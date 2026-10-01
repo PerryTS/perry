@@ -90,6 +90,13 @@ pub fn collect_local_refs_expr(
     visited: &mut std::collections::HashSet<usize>,
 ) {
     match expr {
+        Expr::ScopedTemp { id, value, body } => {
+            collect_local_refs_expr(value, refs, visited);
+            let mut body_refs = Vec::new();
+            collect_local_refs_expr(body, &mut body_refs, visited);
+            refs.extend(body_refs.into_iter().filter(|reference| reference != id));
+            return;
+        }
         Expr::LocalGet(id) => {
             refs.push(*id);
             return;
@@ -941,6 +948,14 @@ fn remap_local_ids_in_stmt(stmt: &mut Stmt, map: &std::collections::HashMap<Loca
 /// `Expr` (issue #212 partial-fix lineage).
 pub fn remap_local_ids_in_expr(expr: &mut Expr, map: &std::collections::HashMap<LocalId, LocalId>) {
     match expr {
+        Expr::ScopedTemp { id, value, body } => {
+            if let Some(new_id) = map.get(id) {
+                *id = *new_id;
+            }
+            remap_local_ids_in_expr(value, map);
+            remap_local_ids_in_expr(body, map);
+            return;
+        }
         Expr::LocalGet(id) => {
             if let Some(&new_id) = map.get(id) {
                 *id = new_id;
@@ -1351,3 +1366,32 @@ fn replace_this_in_expr(expr: &mut Expr, this_id: LocalId) {
         _ => walk_expr_children_mut(expr, &mut |child| replace_this_in_expr(child, this_id)),
     }
 }
+
+#[cfg(test)]
+mod scoped_temp_tests {
+    use super::*;
+    #[test]
+    fn scoped_temp_refs_and_remapping_respect_the_binding() {
+        let mut expr = Expr::ScopedTemp {
+            id: 3,
+            value: Box::new(Expr::LocalGet(4)),
+            body: Box::new(Expr::LocalGet(3)),
+        };
+        let mut refs = Vec::new();
+        collect_local_refs_expr(&expr, &mut refs, &mut Default::default());
+        assert_eq!(refs, vec![4]);
+        remap_local_ids_in_expr(
+            &mut expr,
+            &std::collections::HashMap::from([(3, 13), (4, 14)]),
+        );
+        let Expr::ScopedTemp { id, value, body } = expr else {
+            panic!("missing lexical binding")
+        };
+        assert_eq!(id, 13);
+        assert!(matches!(*value, Expr::LocalGet(14)));
+        assert!(matches!(*body, Expr::LocalGet(13)));
+    }
+}
+
+#[cfg(test)]
+mod uses_this_tests;
