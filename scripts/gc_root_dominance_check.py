@@ -918,27 +918,36 @@ def nm_exported_symbols(archives, readers=None):
     every symbol the other targets' cfgs define, so the invariant to assert is
     `nm <= scanner`, never equality.
 
-    Readers are tried in `_nm_candidates` order and the first one that sees any
-    `js_*` symbol wins. A reader that runs but sees nothing (GNU nm on bitcode)
-    falls through to the next; only when every reader comes back empty is that
-    reported, with what each one said, by the caller's floor.
+    Readers are tried in `_nm_candidates` order. A reader must successfully
+    report definitions from every requested archive: a large readable runtime
+    must not hide an unreadable stdlib behind the combined non-vacuity floor.
+    Incomplete readers fall through; the caller reports all attempts if none
+    can read the complete archive set.
     """
+    archives = tuple(archives)
     tried = []
     for reader in (readers if readers is not None else _nm_candidates()):
         syms = set()
         notes = []
+        complete = bool(archives)
         for archive in archives:
             try:
                 proc = subprocess.run([reader, "-g", "-P", archive],
                                       capture_output=True, text=True)
             except OSError as e:
-                notes.append(str(e))
+                complete = False
+                notes.append(f"{archive}: {e}")
                 continue
-            syms |= parse_nm_posix(proc.stdout)
-            if proc.returncode != 0 and proc.stderr.strip():
-                notes.append(proc.stderr.strip().splitlines()[0])
+            definitions = parse_nm_posix(proc.stdout)
+            syms |= definitions
+            if proc.returncode != 0 or not definitions:
+                complete = False
+                detail = (proc.stderr.strip().splitlines()[0]
+                          if proc.stderr.strip() else
+                          f"exit {proc.returncode}, {len(definitions)} js_* definitions")
+                notes.append(f"{archive}: {detail}")
         tried.append((reader, len(syms), notes))
-        if syms:
+        if complete:
             return syms, reader, tried
     return set(), None, tried
 
@@ -6266,6 +6275,33 @@ def nm_parse_self_test():
         print(f"self-test FAIL: parse_nm_posix read {sorted(got)}, expected "
               f"{sorted(want)} (ELF names carry no `_` prefix; `U` is a "
               "reference, not a definition)", file=sys.stderr)
+        return False
+    # More than the combined floor in one archive must not hide a second
+    # unreadable/empty archive, even when nm emits partial stdout before failing.
+    from unittest.mock import patch
+    from types import SimpleNamespace
+    runtime = "".join(f"js_runtime_{i} T 0 1\n" for i in range(550))
+    for result in (SimpleNamespace(returncode=1, stdout="js_partial T 0 1\n",
+                                   stderr="bad bitcode"),
+                   SimpleNamespace(returncode=0, stdout="", stderr=""),
+                   OSError("reader unavailable")):
+        with patch.object(subprocess, "run", side_effect=[
+                SimpleNamespace(returncode=0, stdout=runtime, stderr=""), result]):
+            symbols, reader, _ = nm_exported_symbols(["runtime.a", "stdlib.a"],
+                                                    readers=["partial-nm"])
+        if symbols or reader is not None:
+            print("self-test FAIL: partial archive read was accepted", file=sys.stderr)
+            return False
+    # A complete later reader must still work, and include BOTH archives.
+    with patch.object(subprocess, "run", side_effect=[
+            SimpleNamespace(returncode=0, stdout=runtime, stderr=""),
+            SimpleNamespace(returncode=0, stdout="", stderr=""),
+            SimpleNamespace(returncode=0, stdout=runtime, stderr=""),
+            SimpleNamespace(returncode=0, stdout="js_stdlib T 0 1\n", stderr="")]):
+        symbols, reader, _ = nm_exported_symbols(["runtime.a", "stdlib.a"],
+                                                readers=["partial-nm", "complete-nm"])
+    if reader != "complete-nm" or len(symbols) != 551 or "js_stdlib" not in symbols:
+        print("self-test FAIL: complete fallback reader lost an archive", file=sys.stderr)
         return False
     return True
 
