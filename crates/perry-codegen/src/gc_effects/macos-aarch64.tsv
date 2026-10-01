@@ -3229,6 +3229,8 @@ js_text_encoder_new	Reenters
 js_text_encoder_stream_new	Reenters
 js_text_encoding_stream_new	Reenters
 js_this_coerce_sloppy	Reenters
+js_thread_global_materialize	Reenters
+js_thread_global_publish	Reenters
 js_thread_has_pending	Leaf
 js_thread_parallel_filter	Reenters
 js_thread_parallel_map	Reenters
