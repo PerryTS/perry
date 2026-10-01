@@ -6,3 +6,5 @@ fields while retaining the numeric TransformStream path.
 Keep object-pair conversion in cold functions using standard platform code
 sections and unwind metadata, so invalid endpoints and throwing getters reach JavaScript
 catch handlers and release their temporary GC roots.
+
+Reuse the scoped receiver root when an object-backed transform pair unwraps to itself, and cover self-aliasing and distinct hidden-handle getters under forced moving collection.
