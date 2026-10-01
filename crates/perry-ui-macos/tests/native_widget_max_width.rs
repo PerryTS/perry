@@ -76,9 +76,7 @@ fn main() {
             );
             let label_view = widgets::get_widget(label).unwrap();
             let label_frame = label_view.convertRect_toView(label_view.bounds(), Some(&original));
-            // NSTextField frames extend two points beyond their alignment rect.
-            let aligned = label_view.alignmentRectForFrame(label_frame);
-            near(aligned.origin.x, 32.0, "content padding");
+            near(label_frame.origin.x, 32.0, "content padding");
         };
         for size in [1200.0, 700.0, 400.0, 1200.0] {
             check(size, 640.0);

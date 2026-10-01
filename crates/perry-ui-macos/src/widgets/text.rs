@@ -134,6 +134,13 @@ define_class!(
     pub struct PerryLabel;
 
     impl PerryLabel {
+        // The cell draws over the 2pt text padding that a stock label's
+        // alignment rect insets hide, so the frame is the text box.
+        #[unsafe(method(alignmentRectInsets))]
+        fn alignment_rect_insets(&self) -> objc2_foundation::NSEdgeInsets {
+            objc2_foundation::NSEdgeInsets { top: 0.0, left: 0.0, bottom: 0.0, right: 0.0 }
+        }
+
         #[unsafe(method(cellClass))]
         fn cell_class() -> &'static AnyClass {
             super::padding::PerryInsetTextFieldCell::class()
@@ -146,6 +153,9 @@ define_class!(
 pub(crate) fn label(string: &NSString, _mtm: MainThreadMarker) -> Retained<NSTextField> {
     let label: Retained<PerryLabel> =
         unsafe { msg_send![PerryLabel::class(), labelWithString: string] };
+    let cell: Retained<super::padding::PerryInsetTextFieldCell> =
+        unsafe { msg_send![&*label, cell] };
+    cell.cancel_line_padding();
     label.into_super()
 }
 
