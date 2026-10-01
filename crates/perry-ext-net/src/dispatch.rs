@@ -653,17 +653,16 @@ pub unsafe extern "C" fn js_ext_net_handle_property_dispatch(
         Some(null())
     } else if prop == "destroyed" && crate::js_ext_net_is_socket_handle(handle) != 0 {
         Some(crate::js_net_socket_get_destroyed(handle))
-    } else if crate::js_ext_net_is_socket_handle(handle) != 0
-        && matches!(
-            prop,
-            "writable"
-                | "readable"
-                | "readyState"
-                | "connecting"
-                | "pending"
-                | "writableEnded"
-                | "readableEnded"
-        )
+    } else if matches!(
+        prop,
+        "writable"
+            | "readable"
+            | "readyState"
+            | "connecting"
+            | "pending"
+            | "writableEnded"
+            | "readableEnded"
+    ) && crate::js_ext_net_is_socket_handle(handle) != 0
     {
         // #10465 — the untyped (`(sock: any)`/plain-JS-driver) dispatch path
         // had NO arm at all for these; every driver holds its socket through
@@ -681,11 +680,10 @@ pub unsafe extern "C" fn js_ext_net_handle_property_dispatch(
                 JsValue::from_string_ptr(crate::js_net_socket_get_ready_state(handle)).bits(),
             ),
         })
-    } else if crate::js_ext_net_is_socket_handle(handle) != 0
-        && matches!(
-            prop,
-            "writableLength" | "writableHighWaterMark" | "writableNeedDrain" | "bufferSize"
-        )
+    } else if matches!(
+        prop,
+        "writableLength" | "writableHighWaterMark" | "writableNeedDrain" | "bufferSize"
+    ) && crate::js_ext_net_is_socket_handle(handle) != 0
     {
         // #11111 — the write-queue surface a drain-aware writer reads next to
         // `write()`'s return value.
@@ -703,11 +701,10 @@ pub unsafe extern "C" fn js_ext_net_handle_property_dispatch(
         Some(json_str_to_value(crate::js_net_socket_get_readable_state(
             handle,
         )))
-    } else if crate::js_ext_net_is_socket_handle(handle) != 0
-        && matches!(
-            prop,
-            "encrypted" | "authorized" | "servername" | "bytesWritten"
-        )
+    } else if matches!(
+        prop,
+        "encrypted" | "authorized" | "servername" | "bytesWritten"
+    ) && crate::js_ext_net_is_socket_handle(handle) != 0
     {
         Some(match prop {
             "encrypted" => crate::js_ext_net_socket_tls_encrypted(handle),
