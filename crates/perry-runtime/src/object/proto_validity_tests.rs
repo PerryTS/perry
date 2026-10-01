@@ -102,7 +102,7 @@ fn a_structural_mutation_of_an_unmarked_object_does_not_bump_validity() {
 }
 
 #[test]
-fn a_plain_value_store_on_a_marked_object_bumps_validity() {
+fn a_plain_value_store_on_a_marked_object_keeps_validity() {
     let _scope = Scope::new();
     unsafe {
         let proto = crate::object::js_object_alloc(0, 4);
@@ -111,12 +111,11 @@ fn a_plain_value_store_on_a_marked_object_bumps_validity() {
 
         let before = proto_validity();
         set(proto, "pv_store_a", 99.0);
-        assert_ne!(
+        assert_eq!(
             proto_validity(),
             before,
-            "owner decision D3(b): an inherited method-site entry memoizes the \
-             VALUE (the method closure), so replacing a value on a marked \
-             prototype must invalidate it"
+            "a plain overwrite leaves the chain-store verdict intact; \
+             inherited method sites reload the holder slot on every hit"
         );
 
         // The same store on an object nobody inherits from stays free.

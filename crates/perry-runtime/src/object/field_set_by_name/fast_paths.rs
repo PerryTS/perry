@@ -152,8 +152,22 @@ pub(crate) unsafe fn try_existing_own_data_overwrite(
     };
     let alloc_limit = std::cmp::max(live_slots, crate::object::INLINE_SLOT_FLOOR as u32) as usize;
     if idx < live_slots {
-        // The owner store funnel retires a numeric-proof ShapeId before
-        // publishing the new value; ordinary shape tracing follows its rep.
+        // An overwrite of a key the shape already places in a live inline
+        // slot keeps the receiver's ShapeId, the layout a class-field read
+        // guard compares. What the VALUE may change (a non-Number into an
+        // `F64` lane) is decided per slot by the store check that
+        // `store_object_field_slot` runs, which generalizes that lane and
+        // restamps; the owner store funnel likewise retires a numeric-proof
+        // ShapeId before publishing the new value.
+        if crate::hot_diag::recv_routes_armed()
+            && crate::object::field_rep::f64_lane_slots(crate::object::field_rep_store::shape_rep(
+                crate::object::shapes::object_shape_stamp(obj),
+            )) != 0
+        {
+            crate::hot_diag::recv_route_note_runtime(
+                crate::hot_diag::RT_ROUTE_OVERWRITE_KEPT_TYPED,
+            );
+        }
         store_object_field_slot(obj, idx as usize, vbits);
     } else if (idx as usize) < alloc_limit {
         // The store widens the shape-visible live bound.

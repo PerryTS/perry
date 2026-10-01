@@ -3379,8 +3379,8 @@ pub(crate) const PROTO_ID_DEFAULT: u64 = 0;
 pub(crate) const PROTO_ID_NULL: u64 = u64::MAX;
 const PROTO_ID_TAG_SHIFT: u32 = 62;
 pub(crate) const PROTO_ID_CLASS: u64 = 1 << PROTO_ID_TAG_SHIFT;
-const PROTO_ID_MIXED: u64 = 2 << PROTO_ID_TAG_SHIFT;
-const PROTO_ID_UNIQUE: u64 = 3 << PROTO_ID_TAG_SHIFT;
+pub(crate) const PROTO_ID_MIXED: u64 = 2 << PROTO_ID_TAG_SHIFT;
+pub(crate) const PROTO_ID_UNIQUE: u64 = 3 << PROTO_ID_TAG_SHIFT;
 /// The prototype identity of a shape that answers nothing about its receiver
 /// (a dictionary-kind shape shared by many receivers): `UNIQUE | 0`, which
 /// [`fresh_unique_proto_id`] never hands out (its counter starts at 1).

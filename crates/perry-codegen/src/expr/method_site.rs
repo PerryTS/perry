@@ -1,6 +1,6 @@
 //! The method-call site: `recv.m(args)` as ONE path — the property read's
-//! receiver test and shape compare, one slot load (or the memoized inherited
-//! closure), then a direct call of the method body with `recv` as `this`.
+//! receiver test and shape compare, a slot load (from the receiver or a
+//! shape-guarded direct holder), then a direct call with `recv` as `this`.
 //!
 //! The site's memo is a runtime `MethodSite`
 //! (`perry-runtime/src/object/method_site.rs`, which states what an entry
@@ -12,8 +12,8 @@
 //!   w   = load [recv]           ; (class_id | ShapeId)
 //!         w == site.word                                     else MISS
 //!   s   = site.slot
-//!   s < 0 (inherited):  PERRY_PROTO_VALIDITY == site.gen     else MISS
-//!                       h = site.closure ; f = site.code
+//!   s < 0 (inherited):  [site.holder] == site.holder_word     else MISS
+//!                       v = load [site.holder + HDR + 8*i]
 //!   own:  v = load [recv + HDR + 8*s] ; v is a heap pointer  else MISS
 //!   fn:   v = load [[recv + PROPS] + HDR + 8*s]  (bit 61: a function's
 //!         own-property object; same checks as own)
@@ -30,7 +30,7 @@
 //! exactly the behaviour it had.
 
 use super::FnCtx;
-use crate::types::{DOUBLE, I1, I32, I64, PTR};
+use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 
 /// Is the One Path method site available for this call?
 /// `PERRY_METHOD_SITE=0` at compile time keeps the old dispatcher (A/B).
@@ -42,7 +42,11 @@ pub(crate) fn method_site_enabled(ctx: &FnCtx<'_>, property: &str, argc: usize) 
     // 64-bit targets only: the site addresses 8-byte slots behind a 16-byte
     // header and compares an 8-byte receiver word.
     let triple = ctx.target_triple;
-    if !(triple.starts_with("x86_64") || triple.starts_with("aarch64")) || triple.contains("32") {
+    if !(triple.starts_with("x86_64")
+        || triple.starts_with("aarch64")
+        || triple.starts_with("arm64"))
+        || triple.contains("32")
+    {
         return false;
     }
     // A typed-feedback (profiling) build records every method call in the
@@ -110,6 +114,7 @@ pub(crate) fn emit_method_site(
     let own_fn_idx = ctx.new_block("msite.own_fn");
     let value_idx = ctx.new_block("msite.value");
     let inh_idx = ctx.new_block("msite.inherited");
+    let inh_value_idx = ctx.new_block("msite.inherited_value");
     let call_idx = ctx.new_block("msite.call");
     let miss_idx = ctx.new_block("msite.miss");
     let merge_idx = ctx.new_block("msite.merge");
@@ -119,6 +124,7 @@ pub(crate) fn emit_method_site(
     let own_fn_l = ctx.block_label(own_fn_idx);
     let value_l = ctx.block_label(value_idx);
     let inh_l = ctx.block_label(inh_idx);
+    let inh_value_l = ctx.block_label(inh_value_idx);
     let call_l = ctx.block_label(call_idx);
     let miss_l = ctx.block_label(miss_idx);
     let merge_l = ctx.block_label(merge_idx);
@@ -128,7 +134,18 @@ pub(crate) fn emit_method_site(
     // takes the universal dispatcher directly, with its string and primitive
     // arms, exactly as without a site. A heap object takes the site: its memo
     // if the site has one, else the miss, which primes it.
-    let ic = crate::expr::emit_inline_cache_slot(ctx, &cache_name);
+    // The runtime publishes this process-global slot with an AtomicPtr CAS.
+    // A worker may enter the site just as the primary agent first publishes
+    // it, before the sticky worker gate below is loaded. Pair the load with
+    // that publication even though the worker will then take the miss path.
+    let slot_ref = format!("@{cache_name}");
+    let cache = ctx.block().load_atomic_acquire(PTR, &slot_ref, 8);
+    let present = ctx.block().icmp_ne(PTR, &cache, "null");
+    let ic = crate::expr::InlineCacheSlot {
+        slot_ref,
+        cache,
+        present,
+    };
     let prim_idx = ctx.new_block("msite.primitive");
     let object_idx = ctx.new_block("msite.object");
     let prim_l = ctx.block_label(prim_idx);
@@ -141,7 +158,16 @@ pub(crate) fn emit_method_site(
         fused.biased
     };
     ctx.current_block = object_idx;
-    ctx.block().cond_br(&ic.present, &deref_l, &miss_l);
+    // Site records are process-global, and inherited holders belong to the
+    // primary heap. A worker's first startup publishes this sticky gate
+    // before executing user code; afterward every agent takes the generic
+    // path. No worker reads a primary holder or races a primary site update.
+    let workers = ctx
+        .block()
+        .load_atomic_seq_cst(I8, "@PERRY_METHOD_SITE_WORKERS_PRESENT", 1);
+    let no_workers = ctx.block().icmp_eq(I8, &workers, "0");
+    let site_enabled = ctx.block().and(I1, &no_workers, &ic.present);
+    ctx.block().cond_br(&site_enabled, &deref_l, &miss_l);
 
     // deref: the receiver word against each entry's word, in order.
     ctx.current_block = deref_idx;
@@ -318,6 +344,33 @@ pub(crate) fn emit_method_site(
         blk.br(&value_l);
         (v, end)
     };
+    // The receiver's shape pins the direct holder. Its word pins the slot;
+    // the slot value itself is loaded on every hit, just like an own method.
+    ctx.current_block = inh_idx;
+    let holder = {
+        let blk = ctx.block();
+        let hp = blk.gep(crate::types::I8, &entry, &[(I64, &abi_closure)]);
+        let holder = blk.load(I64, &hp);
+        let holder_ptr = blk.inttoptr(I64, &holder);
+        let word = blk.load(I64, &holder_ptr);
+        let wp = blk.gep(crate::types::I8, &entry, &[(I64, &abi_gen)]);
+        let saved = blk.load(I64, &wp);
+        let valid = blk.icmp_eq(I64, &word, &saved);
+        blk.cond_br(&valid, &inh_value_l, &miss_l);
+        holder
+    };
+    ctx.current_block = inh_value_idx;
+    let (inh_v, inh_end) = {
+        let blk = ctx.block();
+        let holder_ptr = blk.inttoptr(I64, &holder);
+        let base = blk.gep(crate::types::I8, &holder_ptr, &[(I64, &header.to_string())]);
+        let idx = blk.and(I64, &slot, &index_mask);
+        let vp = blk.gep(I64, &base, &[(I64, &idx)]);
+        let v = blk.load(I64, &vp);
+        let end = blk.label.clone();
+        blk.br(&value_l);
+        (v, end)
+    };
     // value: it must hold a closure running the memoized body.
     ctx.current_block = value_idx;
     let own_ub = {
@@ -328,6 +381,7 @@ pub(crate) fn emit_method_site(
                 (&inline_v, &inline_end),
                 (&spill_v, &spill_end),
                 (&bag_v, &bag_end),
+                (&inh_v, &inh_end),
             ],
         );
         let u = blk.sub(I64, &v, &(RECEIVER_BIAS as i64).to_string());
@@ -336,7 +390,7 @@ pub(crate) fn emit_method_site(
         u
     };
     ctx.current_block = own_fn_idx;
-    let (own_handle, own_func, own_end) = {
+    let (own_handle, own_func, _own_end) = {
         let blk = ctx.block();
         let kp = emit_field_ptr(blk, &own_ub, kind_offset);
         let kind = blk.load(crate::types::I16, &kp);
@@ -387,31 +441,9 @@ pub(crate) fn emit_method_site(
         }
         (h, mf, end)
     };
-    // inherited: the memoized closure, valid while the validity word holds.
-    ctx.current_block = inh_idx;
-    let (inh_handle, inh_func, inh_end) = {
-        let blk = ctx.block();
-        let g = blk.load(I64, "@PERRY_PROTO_VALIDITY");
-        let mg_p = blk.gep(crate::types::I8, &entry, &[(I64, &abi_gen)]);
-        let mg = blk.load(I64, &mg_p);
-        let valid = blk.icmp_eq(I64, &g, &mg);
-        let hp = blk.gep(crate::types::I8, &entry, &[(I64, &abi_closure)]);
-        let h = blk.load(I64, &hp);
-        let fp_p = blk.gep(crate::types::I8, &entry, &[(I64, &abi_code)]);
-        let f = blk.load(I64, &fp_p);
-        let end = blk.label.clone();
-        blk.cond_br(&valid, &call_l, &miss_l);
-        (h, f, end)
-    };
     // call: the body directly, with the receiver as its `this` parameter.
     ctx.current_block = call_idx;
-    let handle = ctx
-        .block()
-        .phi(I64, &[(&own_handle, &own_end), (&inh_handle, &inh_end)]);
-    let func = ctx
-        .block()
-        .phi(I64, &[(&own_func, &own_end), (&inh_func, &inh_end)]);
-    let fptr = ctx.block().inttoptr(I64, &func);
+    let fptr = ctx.block().inttoptr(I64, &own_func);
     let mut call_args: Vec<String> = lowered_args.to_vec();
     // Pad with `undefined` up to the arity the prime admits, so a body that
     // declares a few more parameters than this call passes is entered
@@ -425,7 +457,7 @@ pub(crate) fn emit_method_site(
     let hit_value = crate::expr::body_call::emit_js_body_call(
         ctx.block(),
         crate::expr::body_call::JsBody::Pointer(&fptr),
-        &handle,
+        &own_handle,
         &recv_bits,
         &call_args,
     );
