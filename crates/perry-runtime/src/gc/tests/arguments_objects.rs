@@ -100,6 +100,23 @@ fn arguments_bulk_construction_handles_empty_and_uncached_arities() {
         let accessor = get_accessor_descriptor(args as usize, "callee").unwrap();
         assert_eq!(accessor.get, accessor.set);
         assert_ne!(accessor.get, 0);
+        let descriptors = &crate::state::state().descriptors;
+        assert!(
+            !descriptors
+                .property_descriptors
+                .borrow()
+                .keys()
+                .any(|(owner, _)| *owner == args as usize),
+            "an arguments object must not have address-keyed attributes"
+        );
+        assert!(
+            !descriptors
+                .accessor_descriptors
+                .borrow()
+                .keys()
+                .any(|(owner, _)| *owner == args as usize),
+            "the restricted callee must live in its own slot"
+        );
     }
 }
 
@@ -119,6 +136,30 @@ fn arguments_shared_keys_survive_moving_gc_without_a_live_arguments_owner() {
     );
     assert_eq!(get(after, "0").bits(), 4.0f64.to_bits());
     assert_eq!(get(after, "length").bits(), 3.0f64.to_bits());
+}
+
+#[test]
+fn restricted_callee_accessor_survives_moving_gc_without_descriptor_entries() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    register_scanners();
+    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let args = arguments(&[1.0], undefined, true);
+    js_shadow_slot_set(0, ptr_bits(args as usize));
+    gc_collect_minor();
+
+    let moved = (js_shadow_slot_get(0) & POINTER_MASK) as *mut ObjectHeader;
+    assert_ne!(moved, args, "the arguments object must actually evacuate");
+    let attrs = get_property_attrs(moved as usize, "callee").unwrap();
+    assert!(!attrs.writable() && !attrs.enumerable() && !attrs.configurable());
+    let accessor = get_accessor_descriptor(moved as usize, "callee").unwrap();
+    assert_eq!(accessor.get, accessor.set);
+    assert_ne!(accessor.get, 0);
+    assert!(!crate::state::state()
+        .descriptors
+        .accessor_descriptors
+        .borrow()
+        .keys()
+        .any(|(owner, _)| *owner == moved as usize));
 }
 
 #[test]
