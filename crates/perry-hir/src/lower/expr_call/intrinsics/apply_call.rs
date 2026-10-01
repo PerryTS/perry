@@ -163,6 +163,20 @@ pub(crate) fn try_native_module_method_apply_call(
         return Ok(None);
     }
 
+    // #11725: ServerResponse is an initializer, not a free namespace
+    // function. Keep call/apply reflective so the runtime's explicit-this
+    // construction hook aliases the receiver to the response handle. The
+    // free-function rewrite below would discard this and construct an
+    // unrelated response (including for a literal apply argument array).
+    let module = ctx
+        .lookup_builtin_module_alias(ns_name)
+        .or_else(|| ctx.lookup_native_module(ns_name).map(|(module, _)| module));
+    if module.is_some_and(|module| module.strip_prefix("node:").unwrap_or(module) == "http")
+        && matches!(&inner.prop, ast::MemberProp::Ident(method) if method.sym == "ServerResponse")
+    {
+        return Ok(None);
+    }
+
     // #4973: `http.Server.call(this, handler)` — the util.inherits-era
     // subclass pattern. For native CLASS exports the thisArg is NOT
     // irrelevant: Node initializes `this` as the server. Route to the

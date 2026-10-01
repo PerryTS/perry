@@ -719,6 +719,16 @@ pub(super) fn get_field_ic_miss_impl(
     packed: *const std::sync::atomic::AtomicU64,
 ) -> f64 {
     use crate::hot_diag::IcMissReason as R;
+    // #11725: an explicit-this native subclass reads missing properties
+    // from its aliased handle. The ordinary IC ladder bypasses the f64
+    // getter (and may cache an absent key), so preserve that getter's alias
+    // semantics before consulting or priming shape-based caches.
+    if super::super::native_this_alias::alias_active()
+        && super::super::native_this_alias::alias_handle_for_object(f64::from_bits(obj as u64))
+            .is_some()
+    {
+        return js_object_get_field_by_name_f64(obj, key);
+    }
     if crate::hot_diag::receiver_repr_on() {
         crate::hot_diag::receiver_repr_note_decoded_pointer(obj as usize);
     }

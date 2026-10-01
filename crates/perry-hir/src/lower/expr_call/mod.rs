@@ -77,6 +77,8 @@ mod post_args_dispatch;
 mod prescans;
 mod reflect_args;
 mod regex_string;
+#[cfg(test)]
+mod server_response_call_tests;
 mod static_and_instance;
 mod static_receiver;
 mod stream;

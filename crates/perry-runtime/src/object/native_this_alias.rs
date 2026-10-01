@@ -180,6 +180,10 @@ fn register_this_to_handle_alias(this_arg: f64, result: f64, composite: bool) {
         }
     });
     ALIAS_ACTIVE.with(|c| c.set(true));
+    // Native state is per receiver, not a fact of its ordinary shape. Move
+    // onto an exotic-read lineage so pre-alias cached misses cannot survive
+    // construction or be shared with a sibling receiver (#11725).
+    unsafe { super::proto_validity::mark_exotic_read_receiver(obj_addr) };
 }
 
 /// Called from the `Function.prototype.call` / `.apply` arms after the callee
@@ -383,6 +387,8 @@ unsafe fn construct_native_http_class_with_this(
     while len > 0 && args[len - 1].to_bits() == crate::value::TAG_UNDEFINED {
         len -= 1;
     }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let this_root = scope.root_nanbox_f64(this_val);
     let result = dispatch(
         module.as_ptr(),
         module.len(),
@@ -391,7 +397,11 @@ unsafe fn construct_native_http_class_with_this(
         args.as_ptr(),
         len,
     );
-    register_this_to_handle_alias(this_val, result, method == "ServerResponse");
+    register_this_to_handle_alias(
+        this_root.get_nanbox_f64(),
+        result,
+        method == "ServerResponse",
+    );
     result
 }
 
@@ -634,3 +644,6 @@ pub(crate) fn attach_http_server_response_prototype(constructor_value: f64) -> f
     );
     constructor.get_nanbox_f64()
 }
+
+#[cfg(test)]
+mod tests;
