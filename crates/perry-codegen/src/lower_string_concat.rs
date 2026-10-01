@@ -30,14 +30,25 @@ use crate::rooting::{operand_may_collect, with_operands_rooted, with_rooted_grou
 /// they contain. Keeping that distinction here lets them retain the unique
 /// string bit until an ordinary `LocalGet` extracts the value (#8432).
 enum StringAppendTarget {
+    /// A binding in a scope context object (`crate::scope_env`).
+    Scoped(u32),
     LocalSlot(String),
     BoxedLocal(String),
-    Captured { index: u32, boxed: bool },
+    Captured {
+        index: u32,
+        boxed: bool,
+    },
     ModuleGlobal(String),
 }
 
 impl StringAppendTarget {
     fn for_local(ctx: &FnCtx<'_>, local_id: u32) -> Option<Self> {
+        if ctx.boxed_vars.contains(&local_id)
+            && crate::scope_env::access::slot(ctx, local_id).is_some()
+            && (ctx.closure_captures.contains_key(&local_id) || ctx.locals.contains_key(&local_id))
+        {
+            return Some(Self::Scoped(local_id));
+        }
         if let Some(&index) = ctx.closure_captures.get(&local_id) {
             return Some(Self::Captured {
                 index,
@@ -58,6 +69,11 @@ impl StringAppendTarget {
     fn load(&self, ctx: &mut FnCtx<'_>) -> Result<String> {
         match self {
             Self::LocalSlot(slot) | Self::ModuleGlobal(slot) => Ok(ctx.block().load(DOUBLE, slot)),
+            Self::Scoped(id) => {
+                let bits = crate::scope_env::access::read_scoped(ctx, *id)?
+                    .expect("scoped binding has a base here");
+                Ok(ctx.block().bitcast_i64_to_double(&bits))
+            }
             Self::BoxedLocal(box_slot) => {
                 let blk = ctx.block();
                 let box_ptr = blk.load(I64, box_slot);
@@ -87,6 +103,12 @@ impl StringAppendTarget {
         match self {
             Self::LocalSlot(slot) => ctx.block().store(DOUBLE, value, slot),
             Self::ModuleGlobal(slot) => emit_root_nanbox_store_on_block(ctx.block(), value, slot),
+            Self::Scoped(id) => {
+                // The rhs and append helper can collect: the base is loaded
+                // fresh here.
+                let value_bits = ctx.block().bitcast_double_to_i64(value);
+                crate::scope_env::access::write_scoped(ctx, *id, &value_bits)?;
+            }
             Self::BoxedLocal(box_slot) => {
                 let blk = ctx.block();
                 let box_ptr = blk.load(I64, box_slot);

@@ -753,7 +753,11 @@ fn test_effective_arena_trigger_respects_armed_values() {
     // the cap's own basis.
     let nursery_capped = gc_moving_loop_polls_enabled();
     let ceiling = gc_trigger_absolute_ceiling_bytes();
-    let nursery_cap = gc_scavenge_nursery_cap_bytes();
+    // The cap the clamp applies is the EFFECTIVE one — the survival-driven
+    // ladder's current size (#11549: a fresh thread starts at a quarter of the
+    // base), not the configured base.
+    let nursery_cap = crate::gc::tenuring::scavenge_nursery_cap_effective_bytes();
+    assert!(nursery_cap <= gc_scavenge_nursery_cap_bytes() * 4);
 
     let prev_trigger = GC_NEXT_TRIGGER_BYTES.with(|c| c.get());
     let prev_armed = GC_TRIGGER_ARMED.with(|c| c.get());

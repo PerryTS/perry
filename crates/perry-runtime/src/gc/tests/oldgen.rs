@@ -1499,7 +1499,7 @@ fn test_minor_preserves_old_to_young_edge_across_minors() {
 /// following trace stopped visiting the object's other pointer slots and swept
 /// children that were still referenced.
 #[test]
-fn test_minor_sweep_keeps_unmarked_old_object_layout_mask() {
+fn test_minor_sweep_keeps_unmarked_old_array_layout_mask() {
     let _heap_change = crate::gc::heap_generation::HeapChange::begin(
         crate::gc::heap_generation::HeapChangeKind::Sweep,
     );
@@ -1509,15 +1509,17 @@ fn test_minor_sweep_keeps_unmarked_old_object_layout_mask() {
     clear_mark_seeds();
     crate::arena::old_pages_begin_gc_cycle();
 
-    // A live old-gen object with one pointer slot, plus the slot-layout mask
-    // the collector reads to find that pointer.
-    let old_obj = crate::arena::arena_alloc_gc_old(8 * 8, 8, GC_TYPE_OBJECT) as usize;
+    // Arrays still use a per-address pointer mask. A live old-gen array must
+    // retain it across a minor sweep that leaves old objects unmarked.
+    let old_obj =
+        crate::arena::arena_alloc_gc_old(crate::array::array_byte_size(8), 8, GC_TYPE_ARRAY)
+            as *mut crate::array::ArrayHeader;
     unsafe {
-        std::ptr::write_bytes(old_obj as *mut u8, 0, 4 * 8);
-        // A freshly allocated payload starts pointer-free; the first pointer
-        // store is what promotes it to a side mask.
+        (*old_obj).length = 8;
+        (*old_obj).capacity = 8;
         crate::gc::layout_init_pointer_free(old_obj as *mut u8);
     }
+    let old_obj = old_obj as usize;
     let child = crate::arena::arena_alloc_gc_old(16, 8, GC_TYPE_STRING) as usize;
     layout_note_slot(old_obj, 0, string_bits(child));
     assert_eq!(
@@ -1541,7 +1543,7 @@ fn test_minor_sweep_keeps_unmarked_old_object_layout_mask() {
     remembered_set_clear();
 }
 
-/// Converse of `test_minor_sweep_keeps_unmarked_old_object_layout_mask`: a FULL
+/// Converse of `test_minor_sweep_keeps_unmarked_old_array_layout_mask`: a FULL
 /// trace does visit every live parent, so unmarked really does mean dead there
 /// and old-gen reclamation must still happen. Guards the #6892 fix against
 /// being widened into "never reclaim the old generation".
@@ -1556,13 +1558,15 @@ fn test_full_sweep_still_finalizes_unmarked_old_object() {
     clear_mark_seeds();
     crate::arena::old_pages_begin_gc_cycle();
 
-    let old_obj = crate::arena::arena_alloc_gc_old(8 * 8, 8, GC_TYPE_OBJECT) as usize;
+    let old_obj =
+        crate::arena::arena_alloc_gc_old(crate::array::array_byte_size(8), 8, GC_TYPE_ARRAY)
+            as *mut crate::array::ArrayHeader;
     unsafe {
-        std::ptr::write_bytes(old_obj as *mut u8, 0, 4 * 8);
-        // A freshly allocated payload starts pointer-free; the first pointer
-        // store is what promotes it to a side mask.
+        (*old_obj).length = 8;
+        (*old_obj).capacity = 8;
         crate::gc::layout_init_pointer_free(old_obj as *mut u8);
     }
+    let old_obj = old_obj as usize;
     let child = crate::arena::arena_alloc_gc_old(16, 8, GC_TYPE_STRING) as usize;
     layout_note_slot(old_obj, 0, string_bits(child));
     assert_eq!(test_layout_pointer_slot_count(old_obj, 8), Some(1));

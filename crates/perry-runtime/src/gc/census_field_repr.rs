@@ -70,8 +70,6 @@ pub(super) struct FieldReprCensus {
     forks: HashSet<(u32, u32)>,
     mask_entries: u64,
     mask_bytes: u64,
-    typed_entries: u64,
-    typed_bytes: u64,
 }
 
 impl FieldReprCensus {
@@ -125,12 +123,6 @@ impl FieldReprCensus {
                         super::layout::LayoutSlotMask::Heap(words) => words.capacity() as u64 * 8,
                         _ => 0,
                     };
-            }
-        }
-        if let Ok(typed) = super::hot_tls::hot_typed_layouts().try_borrow() {
-            if typed.contains_key(&user) {
-                self.typed_entries += 1;
-                self.typed_bytes += entry_bytes::<super::layout::TypedLayoutDescriptor>();
             }
         }
     }
@@ -193,8 +185,6 @@ impl FieldReprCensus {
             "fork_multiplier": fork_multiplier,
             "object_slot_mask_entries": self.mask_entries,
             "object_slot_mask_bytes": self.mask_bytes,
-            "object_typed_layout_entries": self.typed_entries,
-            "object_typed_layout_bytes": self.typed_bytes,
         })
     }
 }

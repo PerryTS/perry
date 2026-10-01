@@ -793,7 +793,10 @@ impl BuildCacheProbe {
         // modules so changing an embedded file cannot reuse a stale binary.
         source_paths.extend(ctx.embedded_assets.iter().map(|(_, path)| path.clone()));
         for addon in ctx.native_addons.values() {
-            source_paths.extend(super::native_addon_sidecar::addon_payload_files(addon));
+            source_paths.extend(
+                super::native_addon_sidecar::addon_payload_files(ctx, addon)
+                    .map_err(|_| "native-addon-payload".to_string())?,
+            );
         }
         let sources = source_paths
             .iter()

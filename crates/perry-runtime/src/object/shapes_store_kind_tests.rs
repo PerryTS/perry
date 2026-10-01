@@ -231,20 +231,13 @@ fn the_invariant_reports_every_unmoved_write() {
             "an unmoved typed-array-prototype flag must disagree"
         );
 
-        // Proof bit without transition, and proof shape without the bit.
+        // The proof is now the ShapeId kind itself. A class-id rewrite
+        // that withdraws F-A while on the proof sibling must disagree.
         let d = with_key(crate::object::js_object_alloc(PLAIN_CLASS, 0), "sk_i");
-        (*gc_header(d))._reserved |= crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF;
-        assert!(
-            !store_facts_agree(d),
-            "a proof bit on an Ordinary shape must disagree"
-        );
-        (*gc_header(d))._reserved &= !crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF;
         assert!(stamp_numeric_proof_twin(d).is_some());
-        (*gc_header(d))._reserved &= !crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF;
-        assert!(
-            !store_facts_agree(d),
-            "a proof shape without the bit must disagree"
-        );
+        assert!(store_facts_agree(d));
+        (*d).class_id = 0;
+        assert!(!store_facts_agree(d));
     }
 }
 

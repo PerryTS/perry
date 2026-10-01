@@ -56,10 +56,10 @@ fn a_prologue_only_ctor_stores_its_fields_at_the_new_site() {
 }
 
 /// `class Link { a: number; b: Link | null }` has a non-empty pointer mask.
-/// Its declaration stays runtime-installed, but once INTACT is observed the
-/// new site can store both fields directly and skip the constructor call.
+/// Its birth ShapeId carries the rep, so the new site can store both fields
+/// directly and skip the constructor call.
 #[test]
-fn a_pointer_bearing_shape_checks_intact_then_stores_at_the_new_site() {
+fn a_pointer_bearing_shape_stores_at_the_new_site_without_header_layout() {
     let ir = emit(&loop_new_module(
         "Link",
         Type::Union(vec![Type::Named("Link".to_string()), Type::Null]),
@@ -75,8 +75,8 @@ fn a_pointer_bearing_shape_checks_intact_then_stores_at_the_new_site() {
         "the mixed-layout fast arm must store both the raw-f64 and pointer fields:\n{ir}"
     );
     assert!(
-        ir.contains("and i16") && ir.contains(", 4096"),
-        "the mixed-layout arm must test GC_OBJ_TYPED_LAYOUT_INTACT after the runtime declaration:\n{ir}"
+        !ir.contains("and i16 ") || !ir.contains(", 4096"),
+        "the mixed-layout arm still tests the retired object INTACT bit:\n{ir}"
     );
 }
 

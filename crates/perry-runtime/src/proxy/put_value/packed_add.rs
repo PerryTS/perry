@@ -50,10 +50,6 @@
 //!   proves the receiver young and the note unnecessary;
 //! * no stable tombstones and no descriptor flag (both conservative: the
 //!   shape already covers them);
-//! * the layout state: a `GC_LAYOUT_SIDE_MASK` or typed-layout receiver's
-//!   layout record describes the PRE-shape, so the hit first calls
-//!   [`js_gc_key_add_layout_unknown`] (the transition lane's
-//!   `mark_object_dynamic_shape_unknown`), exactly as the runtime does.
 //!
 //! Everything else takes the miss, which serves the memo in the runtime
 //! ([`packed_add_try`], through the audited stamp funnel and overflow store)
@@ -546,19 +542,6 @@ fn promote_way(ways: &AddWays, home: usize, distance: usize) {
         ways[from].guard.store(to_guard, Ordering::Relaxed);
         ways[from].shapes.store(to_shapes, Ordering::Relaxed);
     }
-}
-
-/// The key-add hit's layout retirement: a receiver whose layout record
-/// (side mask or typed descriptor) described its PRE-shape. Exactly what the
-/// transition lane runs before its stamp. Edits header bits and layout /
-/// feedback side tables; allocates nothing a collection could see and never
-/// collects (`gc_call_effects.rs` lists it as CannotCollect).
-///
-/// # Safety
-/// `obj` is a live, non-forwarded ordinary object's handle.
-#[no_mangle]
-pub unsafe extern "C" fn js_gc_key_add_layout_unknown(obj: u64) {
-    crate::object::mark_object_dynamic_shape_unknown(obj as usize as *mut crate::ObjectHeader);
 }
 
 /// The transition lane's value fix-up (`fast_paths.rs`): a POINTER-tagged

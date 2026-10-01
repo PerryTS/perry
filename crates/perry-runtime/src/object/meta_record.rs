@@ -57,13 +57,9 @@ pub struct ObjectMeta {
     /// prototype-semantic divergence (including runtime wiring); bit 3 records
     /// that a user-facing operation chose the prototype. Keeping those signals
     /// separate prevents internal wiring from masquerading as
-    /// `Object.setPrototypeOf`. #8690 reserves bits 1..2 and 8..63 for the
-    /// packed Array-subclass numeric-prefix proof (kind, verified bound, and
-    /// ShapeId);
-    /// its address-reuse-safe authority is a type-specific GcHeader bit.
-    /// In particular, GcHeader bit 12 is `GC_OBJ_TYPED_LAYOUT_INTACT`, so
-    /// using that word for prototype divergence made every typed-layout
-    /// object appear to have a custom prototype.
+    /// `Object.setPrototypeOf`. Bits 1..2 and 8..63 hold the packed Array-subclass numeric-prefix
+    /// proof payload (verified bound and unproven twin ShapeId). The
+    /// address-reuse-safe authority is the ShapeId proof kind.
     pub flags: u64,
     /// #6812: object-owned overflow storage — a `GC_TYPE_ARRAY` buffer
     /// (`*mut ArrayHeader` bits, 0 = none) holding the NaN-boxed values of

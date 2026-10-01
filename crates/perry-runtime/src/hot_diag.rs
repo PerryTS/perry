@@ -621,9 +621,7 @@ pub(crate) struct LayoutResidueHistogram {
 #[derive(Default)]
 pub struct LayoutDiag {
     prunes: u64,
-    typed_len: usize,
     masks_len: usize,
-    typed_max: usize,
     masks_max: usize,
     /// Set bits in the address filter, and its capacity in bits.
     filter_bits_set: usize,
@@ -660,7 +658,6 @@ pub(crate) fn layout_note_mask_insert(site: LayoutMaskInsertSite) {
 /// prune rebuilt the address filter from its survivors, or found the tables
 /// too full for a 4,096-bit sketch to discriminate and saturated it instead.
 pub(crate) fn layout_note_prune(
-    typed_len: usize,
     masks_len: usize,
     filter_bits_set: usize,
     filter_bits_total: usize,
@@ -671,9 +668,7 @@ pub(crate) fn layout_note_prune(
     LAYOUT_DIAG.with(|d| {
         let mut d = d.borrow_mut();
         d.prunes += 1;
-        d.typed_len = typed_len;
         d.masks_len = masks_len;
-        d.typed_max = d.typed_max.max(typed_len);
         d.masks_max = d.masks_max.max(masks_len);
         d.filter_bits_set = filter_bits_set;
         d.filter_bits_total = filter_bits_total;
@@ -682,7 +677,7 @@ pub(crate) fn layout_note_prune(
         d.residue = residue;
         if rebuilt_filter {
             d.rebuilt += 1;
-            d.rebuilt_keys += (typed_len + masks_len) as u64;
+            d.rebuilt_keys += masks_len as u64;
         } else {
             d.outgrown += 1;
         }
@@ -710,18 +705,10 @@ impl LayoutDiag {
                 100.0 * n as f64 / d as f64
             }
         };
-        let keys = self.typed_len + self.masks_len;
         let _ = writeln!(
             out,
-            "[layout-diag] prunes={} keys_now={} (typed={} masks={}) keys_max={} \
-             (typed={} masks={})",
-            self.prunes,
-            keys,
-            self.typed_len,
-            self.masks_len,
-            self.typed_max + self.masks_max,
-            self.typed_max,
-            self.masks_max
+            "[layout-diag] prunes={} keys_now={} keys_max={}",
+            self.prunes, self.masks_len, self.masks_max
         );
         let _ = writeln!(
             out,
@@ -734,7 +721,7 @@ impl LayoutDiag {
             self.filter_bits_total,
             pct(self.filter_bits_set_max, self.filter_bits_total),
             self.useful_keys,
-            if keys > self.useful_keys {
+            if self.masks_len > self.useful_keys {
                 "OUTGROWN it -- every probe answers `may hold`"
             } else {
                 "within it"
@@ -1613,7 +1600,6 @@ pub(crate) const RT_ROUTE_MEGA_SPILL: u32 = 9;
 pub(crate) const RT_ROUTE_SPILL_MISS: u32 = 10;
 pub(crate) const RT_ROUTE_CLASS_MISS_SHAPE: u32 = 29;
 pub(crate) const RT_ROUTE_CLASS_MISS_LADDER: u32 = 30;
-pub(crate) const RT_ROUTE_OVERWRITE_KEPT_TYPED: u32 = 31;
 pub(crate) const RT_ROUTE_RLOOP_PRIME_OK: u32 = 19;
 pub(crate) const RT_ROUTE_RLOOP_REFUSE_BAND: u32 = 20;
 pub(crate) const RT_ROUTE_RLOOP_REFUSE_SUMMARY: u32 = 21;
@@ -1632,13 +1618,6 @@ static RECV_ROUTES_REPORT: std::sync::Once = std::sync::Once::new();
 /// compiled with `PERRY_RECV_ROUTE_COUNT=1`; the runtime-counted routes are a
 /// relaxed load and a not-taken branch everywhere else.
 static RECV_ROUTES_ARMED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-/// Is this a census build (see [`RECV_ROUTES_ARMED`])? For a runtime route
-/// whose classification costs more than the count.
-#[inline]
-pub(crate) fn recv_routes_armed() -> bool {
-    RECV_ROUTES_ARMED.load(Ordering::Relaxed)
-}
 
 /// Count a runtime-side route in a census build (see
 /// [`RECV_ROUTES_ARMED`]); nothing otherwise.

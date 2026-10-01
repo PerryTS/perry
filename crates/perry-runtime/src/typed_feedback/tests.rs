@@ -114,6 +114,33 @@ fn class_instance(
     (obj, keys, key, receiver)
 }
 
+/// Restamp `obj` with its shape's sibling whose only non-`Any` lane is an
+/// `F64` lane at `slot` (the slot must hold a Number), and return that id.
+fn stamp_f64_lane(obj: *mut crate::object::ObjectHeader, slot: u32) -> u32 {
+    use crate::object::field_rep::{with_slot_rep, REP_ANY, REP_F64};
+    use crate::object::shapes::{
+        object_shape_stamp, publish_shape_result, shape_descriptor_by_id,
+        shape_descriptor_ensure_with_rep, stamp_object_shape_id_with_carrier_note,
+    };
+    unsafe {
+        let d = shape_descriptor_by_id(object_shape_stamp(obj)).expect("live shape");
+        let id = publish_shape_result(shape_descriptor_ensure_with_rep(
+            d.keys as usize as *const crate::array::ArrayHeader,
+            d.logical_key_count,
+            d.live_inline_slot_count,
+            d.semantic_generation,
+            d.object_kind,
+            d.hole_count,
+            d.proto_id,
+            d.summary,
+            with_slot_rep(REP_ANY, slot, REP_F64),
+            None,
+        ));
+        stamp_object_shape_id_with_carrier_note(obj, id);
+        id
+    }
+}
+
 fn shape_id(obj: *const crate::object::ObjectHeader) -> u32 {
     unsafe { crate::object::shapes::object_shape_id(obj) }
 }
@@ -1725,6 +1752,7 @@ fn typed_feedback_class_field_set_guard_fails_for_frozen_object() {
 #[test]
 fn typed_feedback_class_field_set_guard_retires_packed_numeric_proof_for_tagged_values() {
     let _guard = typed_feedback_test_lock();
+    let _global = crate::gc::global_side_table_test_lock();
     reset_typed_feedback_for_tests();
     register(8_690, TypedFeedbackSiteKind::PropertySet, "obj.x=");
 
@@ -1732,14 +1760,13 @@ fn typed_feedback_class_field_set_guard_retires_packed_numeric_proof_for_tagged_
     let (obj, _, key, receiver) = class_instance(class_id, b"x");
     let expected_shape_id = shape_id(obj);
     crate::object::js_object_set_field(obj, 0, crate::JSValue::number(1.0));
-    let header =
-        unsafe { (obj as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader };
     let short = crate::value::JSValue::try_short_string(b"s").expect("inline SSO");
 
     for (name, value_bits) in [("SSO", short.bits()), ("boolean", crate::value::TAG_TRUE)] {
-        unsafe {
-            (*header)._reserved |= crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF;
-        }
+        assert_eq!(
+            unsafe { crate::object::shapes::store_kind::stamp_numeric_proof_twin(obj) },
+            Some(expected_shape_id)
+        );
         let value = f64::from_bits(value_bits);
         assert_eq!(
             js_typed_feedback_class_field_set_guard(
@@ -1756,9 +1783,9 @@ fn typed_feedback_class_field_set_guard_retires_packed_numeric_proof_for_tagged_
             "{name} must not bypass packed numeric proof invalidation"
         );
         crate::object::js_object_set_field(obj, 0, crate::JSValue::from_bits(value_bits));
-        assert_eq!(
-            unsafe { (*header)._reserved } & crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF,
-            0,
+        assert_ne!(
+            crate::object::shapes::shape_object_kind_by_id(shape_id(obj)),
+            Some(crate::object::shapes::ShapeObjectKind::OrdinaryNumericProof),
             "the runtime setter must retire proof authority for {name}"
         );
     }
@@ -1911,18 +1938,8 @@ fn typed_feedback_class_field_get_guard_requires_raw_f64_layout_when_requested()
 
     let class_id = 0x7EED_0043;
     let (obj, _, key_x, receiver) = class_instance(class_id, b"x");
-    let expected_shape_id = shape_id(obj);
     crate::object::js_object_set_field(obj, 0, crate::JSValue::number(5.0));
-    let raw_mask = [0b1u64];
-    crate::gc::js_gc_init_typed_shape_layout(
-        obj as u64,
-        1,
-        raw_mask.as_ptr(),
-        raw_mask.len() as u32,
-        std::ptr::null(),
-        0,
-    );
-    crate::gc::test_reset_typed_raw_f64_descriptor_queries();
+    let expected_shape_id = stamp_f64_lane(obj, 0);
 
     let first = js_typed_feedback_class_field_get_guard(
         43,
@@ -1934,11 +1951,6 @@ fn typed_feedback_class_field_get_guard_requires_raw_f64_layout_when_requested()
         1,
     );
     assert_eq!(first, 1);
-    assert_eq!(
-        crate::gc::test_typed_raw_f64_descriptor_queries(),
-        0,
-        "the production guard must prove the raw slot from the canonical-layout header bit"
-    );
 
     let payload = crate::string::js_string_from_bytes(b"boxed".as_ptr(), 5);
     crate::object::js_object_set_field(obj, 0, crate::JSValue::string_ptr(payload));
@@ -1953,16 +1965,15 @@ fn typed_feedback_class_field_get_guard_requires_raw_f64_layout_when_requested()
         1,
     );
     assert_eq!(second, 0);
-    assert_eq!(
-        crate::gc::test_typed_raw_f64_descriptor_queries(),
-        0,
-        "a cleared intact bit must reject without probing either descriptor map"
-    );
 
     let site = &typed_feedback_snapshot().sites[0];
     assert_eq!(site.guard_passes, 1);
     assert_eq!(site.guard_failures, 1);
-    assert!(site.representation_invalidations >= 1);
+    assert_ne!(
+        shape_id(obj),
+        expected_shape_id,
+        "the boxed store generalizes the F64 lane and restamps the receiver"
+    );
 }
 
 #[test]
@@ -1973,18 +1984,8 @@ fn typed_feedback_class_field_set_guard_requires_raw_f64_value_and_layout() {
 
     let class_id = 0x7EED_0044;
     let (obj, _, key_x, receiver) = class_instance(class_id, b"x");
-    let expected_shape_id = shape_id(obj);
     crate::object::js_object_set_field(obj, 0, crate::JSValue::number(1.0));
-    let raw_mask = [0b1u64];
-    crate::gc::js_gc_init_typed_shape_layout(
-        obj as u64,
-        1,
-        raw_mask.as_ptr(),
-        raw_mask.len() as u32,
-        std::ptr::null(),
-        0,
-    );
-    crate::gc::test_reset_typed_raw_f64_descriptor_queries();
+    let expected_shape_id = stamp_f64_lane(obj, 0);
 
     let first = js_typed_feedback_class_field_set_guard(
         44,
@@ -1997,11 +1998,6 @@ fn typed_feedback_class_field_set_guard_requires_raw_f64_value_and_layout() {
         1,
     );
     assert_eq!(first, 1);
-    assert_eq!(
-        crate::gc::test_typed_raw_f64_descriptor_queries(),
-        0,
-        "the set guard must use the same O(1) canonical-layout proof as the get guard"
-    );
 
     let payload = crate::string::js_string_from_bytes(b"boxed".as_ptr(), 5);
     let payload_value = crate::value::js_nanbox_string(payload as i64);
@@ -2042,11 +2038,6 @@ fn typed_feedback_class_field_set_guard_requires_raw_f64_value_and_layout() {
         1,
     );
     assert_eq!(fourth, 0);
-    assert_eq!(
-        crate::gc::test_typed_raw_f64_descriptor_queries(),
-        0,
-        "value rejections and the intact-bit proof must keep descriptor maps off the hot path"
-    );
 
     let site = &typed_feedback_snapshot().sites[0];
     assert_eq!(site.guard_passes, 1);
@@ -3135,17 +3126,8 @@ fn class_field_get_ic_reads_the_raw_f64_slot_on_a_guard_pass() {
 
     let class_id = 0x7EED_7402;
     let (obj, _, key_x, receiver) = class_instance(class_id, b"x");
-    let expected_shape_id = shape_id(obj);
     crate::object::js_object_set_field(obj, 0, crate::JSValue::number(5.25));
-    let raw_mask = [0b1u64];
-    crate::gc::js_gc_init_typed_shape_layout(
-        obj as u64,
-        1,
-        raw_mask.as_ptr(),
-        raw_mask.len() as u32,
-        std::ptr::null(),
-        0,
-    );
+    let expected_shape_id = stamp_f64_lane(obj, 0);
 
     let got = js_class_field_get_ic(
         7402,

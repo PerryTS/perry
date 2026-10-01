@@ -34,6 +34,9 @@ use crate::expr::{variant_name, FnCtx};
 #[cfg(test)]
 mod alloc_hot_tests;
 mod atomics;
+pub(crate) mod birth_lanes;
+#[cfg(test)]
+mod birth_lanes_tests;
 pub(crate) mod buffer_intrinsic;
 mod builtin;
 mod builtin_table_gate;

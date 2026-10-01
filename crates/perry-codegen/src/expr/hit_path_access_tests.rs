@@ -279,7 +279,7 @@ fn point_class() -> Class {
 /// the poisonable `@perry_class_guard_shape_*` twin that replaced it may come
 /// back: the expectation is the class ShapeId itself (S6).
 #[test]
-fn class_field_read_guard_loads_identity_expectation_and_intact_bit_only() {
+fn class_field_read_guard_loads_identity_and_expectation_only() {
     let mut m = module(
         "class_field_fused",
         vec![param(1, named("Point"))],
@@ -289,16 +289,19 @@ fn class_field_read_guard_loads_identity_expectation_and_intact_bit_only() {
             byte_offset: 0,
         }))],
     );
-    m.classes = vec![point_class()];
+    // `x = 0`: born on an `F64` lane, so the read is raw.
+    let mut point = point_class();
+    point.fields[0].init = Some(Expr::Number(0.0));
+    m.classes = vec![point];
     let ir = probe_ir(&m);
     let deref = block_body(&ir, "class_field_inline.deref")
         .unwrap_or_else(|| panic!("no inline guard:\n{ir}"));
     let loads: Vec<&str> = deref.lines().filter(|l| l.contains(" = load ")).collect();
     assert_eq!(
         loads.len(),
-        3,
-        "the read guard must load the identity word, the live expectation and \
-         the _reserved half-word, and nothing else (no GcHeader word):\n{deref}"
+        2,
+        "the read guard must load the identity word and the live expectation, \
+         and nothing else (no GcHeader word, no intact half-word):\n{deref}"
     );
     assert!(
         !ir.contains("@PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED"),
@@ -313,7 +316,7 @@ fn class_field_read_guard_loads_identity_expectation_and_intact_bit_only() {
     );
     assert!(
         loads.iter().any(|l| l.contains("load i64"))
-            && loads.iter().any(|l| l.contains("load i16")),
-        "one 64-bit (class id, ShapeId) identity word and the intact half-word:\n{deref}"
+            && !loads.iter().any(|l| l.contains("load i16")),
+        "one 64-bit (class id, ShapeId) identity word and no intact half-word:\n{deref}"
     );
 }

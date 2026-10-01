@@ -65,7 +65,7 @@ fn a_rep_literal_seed_is_the_shape_its_lazy_mints_reach_and_keeps_its_f64_lanes(
     use crate::object::field_rep::{slot_rep, with_slot_rep, REP_F64};
     use crate::object::shapes::object_shape_stamp;
     let _lock = crate::gc::global_side_table_test_lock();
-    const ANON_CLASS_ID: u32 = 0x0075_5eed;
+    const REP_SEED_ANON_CLASS_ID: u32 = 0x0075_5eed;
     let rep = with_slot_rep(with_slot_rep(0, 0, REP_F64), 1, REP_F64);
     let requested = SHAPE_ID_BASE + 0x5678;
     let id = seed_with_rep(requested, &["lt5s_a", "lt5s_b"], rep);
@@ -76,27 +76,34 @@ fn a_rep_literal_seed_is_the_shape_its_lazy_mints_reach_and_keeps_its_f64_lanes(
 
     // The literal's module-init mint WITHOUT a static id (a module whose
     // guards embed none): the lazy mint of the same facts is the seeded id.
-    unsafe { crate::object::js_register_anon_shape_class_id(ANON_CLASS_ID) };
+    unsafe { crate::object::js_register_anon_shape_class_id(REP_SEED_ANON_CLASS_ID) };
     let packed = b"lt5s_a\0lt5s_b\0";
     let keys = crate::object::js_build_class_keys_array(
-        ANON_CLASS_ID,
+        REP_SEED_ANON_CLASS_ID,
         2,
         packed.as_ptr(),
         packed.len() as u32,
         0,
     ) as u64;
     assert_eq!(
-        shapes::js_object_shape_id_for_class_keys(keys, 2, ANON_CLASS_ID, rep),
+        shapes::js_object_shape_id_for_class_keys(keys, 2, REP_SEED_ANON_CLASS_ID, rep),
         requested,
         "the literal's lazy mint must resolve to the seeded id"
     );
     // ...and its static request (module init with the id) hits.
     assert_eq!(
-        js_object_shape_id_for_class_keys_static(keys, 2, 2, ANON_CLASS_ID, requested, rep),
+        js_object_shape_id_for_class_keys_static(
+            keys,
+            2,
+            2,
+            REP_SEED_ANON_CLASS_ID,
+            requested,
+            rep
+        ),
         requested
     );
     // The all-`Any` sibling is other facts: never the static id.
-    let any = shapes::js_object_shape_id_for_class_keys(keys, 2, ANON_CLASS_ID, 0);
+    let any = shapes::js_object_shape_id_for_class_keys(keys, 2, REP_SEED_ANON_CLASS_ID, 0);
     assert_ne!(
         any, requested,
         "the rep is identity: Any lanes are another shape"

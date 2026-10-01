@@ -82,7 +82,7 @@ impl Reader<'_> {
                 if shape.keys_slot.is_null() || shape.shape_id_slot.is_null() {
                     return None;
                 }
-                let object = crate::object::js_object_alloc_class_inline_keys_stamped(
+                let object = crate::object::alloc::js_object_alloc_class_inline_keys_stamped(
                     shape.class_id,
                     0,
                     shape.field_count,
@@ -94,16 +94,6 @@ impl Reader<'_> {
                     let value = self.value(depth + 1)?;
                     crate::object::js_object_set_field(object, i, value);
                 }
-                // Use the very same immutable masks and typed ShapeId as new.
-                // Validate the completed fields before enabling direct reads.
-                crate::gc::js_gc_init_typed_shape_layout(
-                    object as u64,
-                    shape.field_count,
-                    shape.raw_mask,
-                    shape.raw_mask_len,
-                    shape.pointer_mask,
-                    shape.pointer_mask_len,
-                );
                 Some(JSValue::pointer(object as *const u8))
             }
             _ => None,
@@ -150,17 +140,8 @@ mod tests {
         let keys =
             crate::object::js_build_class_keys_array(CLASS_ID, 2, b"id\0name\0".as_ptr(), 8, 0)
                 as u64;
-        let shape_id = crate::gc::js_gc_typed_shape_id_for_keys(
-            CLASS_ID,
-            keys,
-            2,
-            RAW.as_ptr(),
-            1,
-            POINTERS.as_ptr(),
-            1,
-            0,
-            0,
-        );
+        let shape_id =
+            crate::object::shapes::js_object_shape_id_for_class_keys(keys, 2, CLASS_ID, 0);
         let shape = LiteralShape {
             class_id: CLASS_ID,
             field_count: 2,
@@ -203,9 +184,8 @@ mod tests {
             unsafe { crate::object::shapes::object_shape_stamp(a_ptr) },
             shape_id
         );
-        let header = unsafe { crate::value::addr_class::try_read_gc_header(a_ptr as usize) }
+        let _header = unsafe { crate::value::addr_class::try_read_gc_header(a_ptr as usize) }
             .expect("the descriptor must allocate a managed object");
-        assert_ne!(header._reserved & crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT, 0);
         assert_eq!(
             crate::object::js_object_get_field(a_ptr, 0).bits(),
             (-0.0_f64).to_bits()

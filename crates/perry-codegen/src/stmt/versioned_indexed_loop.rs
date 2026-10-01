@@ -412,7 +412,7 @@ pub(super) fn emit_iteration_guard(ctx: &mut FnCtx<'_>) -> bool {
     let object_ptr = ctx.block().inttoptr(I64, &this_handle);
     let gc_header_ptr = ctx.block().gep(I8, &object_ptr, &[(I64, "-8")]);
     let gc_header = ctx.block().load(I32, &gc_header_ptr);
-    let guarded_gc_bits = ctx.block().and(I32, &gc_header, "142639359");
+    let guarded_gc_bits = ctx.block().and(I32, &gc_header, "134250751");
     let gc_ok = ctx.block().icmp_eq(I32, &guarded_gc_bits, "2");
     let class_shape = ctx.block().load(I64, &object_ptr);
     let expected_shape_i64 = ctx.block().zext(I32, &fact.method.expected_shape_id, I64);

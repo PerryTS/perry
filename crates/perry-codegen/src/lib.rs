@@ -58,6 +58,7 @@ pub mod opt_report;
 pub(crate) mod root_reload;
 pub mod rooting;
 pub mod runtime_decls;
+pub mod scope_env;
 pub mod statepoint_report;
 pub(crate) mod stmt;
 pub mod strings;

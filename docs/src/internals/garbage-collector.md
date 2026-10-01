@@ -132,11 +132,22 @@ forwarding stub without queueing it.
 `PERRY_GC_SCAVENGE` is on by default and lets nursery pressure route to the
 direct minor. `PERRY_GC_SCAVENGE_NURSERY_MB` tunes its base high-water cap,
 16 MiB by default
-<!-- gc-fact: SCAVENGE_NURSERY_CAP_DEFAULT_MB = 16 in crates/perry-runtime/src/gc/policy.rs -->;
-tenuring feedback may grow the effective cap by up to 4×
-<!-- gc-fact: NURSERY_CAP_SCALE_MAX = 4 in crates/perry-runtime/src/gc/tenuring.rs -->
-on live-set-bound workloads, where a fixed cap would multiply the per-collection
-fixed cost by an enormous collection count. Generated write barriers are also on
+<!-- gc-fact: SCAVENGE_NURSERY_CAP_DEFAULT_MB = 16 in crates/perry-runtime/src/gc/policy.rs -->.
+The effective cap is a survival-driven ladder over that base, counted in
+quarters of it
+<!-- gc-fact: NURSERY_CAP_SCALE_UNIT = 4 in crates/perry-runtime/src/gc/tenuring.rs -->:
+each thread starts at a quarter of the base
+<!-- gc-fact: NURSERY_CAP_SCALE_MIN = 1 in crates/perry-runtime/src/gc/tenuring.rs -->
+(4 MiB) and stays there while its minors find little alive, which keeps the
+young generation's footprint small. While survivor influx stays above 4% of
+the cap the ladder grows in debounced ×2 steps, up to 4× the base
+<!-- gc-fact: NURSERY_CAP_SCALE_MAX = 16 in crates/perry-runtime/src/gc/tenuring.rs -->
+(64 MiB), and it shrinks back while influx stays below 1%. On survivor-heavy
+and live-set-bound workloads copying survivors, not a minor's fixed cost,
+dominates, and a bigger Eden gives them time to die. The survivor target, the
+promoted-cohort floor and the allocation-census seed point stay keyed on the
+base: they measure lifetimes in bytes allocated, which a smaller Eden must not
+shorten. Generated write barriers are also on
 by default. Turning them off makes generational minors unsound, so the runtime
 deliberately falls back to full mark-sweep.
 

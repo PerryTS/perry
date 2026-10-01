@@ -1,9 +1,9 @@
 use crate::ffi::{js_gc_pin_user_ptr, js_string_from_bytes};
 use crate::srgb;
 use objc2::rc::Retained;
-use objc2::runtime::{AnyObject, Sel};
-use objc2::{define_class, msg_send, AnyThread, DefinedClass};
-use objc2_app_kit::{NSLineBreakMode, NSTextField, NSView};
+use objc2::runtime::{AnyClass, AnyObject, Sel};
+use objc2::{define_class, msg_send, AnyThread, ClassType, DefinedClass, Message};
+use objc2_app_kit::{NSTextField, NSTextView, NSView};
 use objc2_foundation::{
     MainThreadMarker, NSNotification, NSNotificationCenter, NSObject, NSRange, NSRunLoop, NSString,
 };
@@ -202,6 +202,59 @@ impl PerryTextFieldSubmitObserver {
     }
 }
 
+define_class!(
+    #[unsafe(super(NSTextField))]
+    #[name = "PerryTextField"]
+    pub struct PerryTextField;
+
+    impl PerryTextField {
+        #[unsafe(method(cellClass))]
+        fn cell_class() -> &'static AnyClass {
+            super::padding::PerryInsetTextFieldCell::class()
+        }
+
+        #[unsafe(method(setStringValue:))]
+        fn set_string_value(&self, value: &NSString) {
+            let value = strip_line_breaks(value);
+            unsafe { msg_send![super(self), setStringValue: &*value] }
+        }
+
+        #[unsafe(method(textView:shouldChangeTextInRange:replacementString:))]
+        fn should_change_text(
+            &self,
+            editor: &NSTextView,
+            range: NSRange,
+            replacement: Option<&NSString>,
+        ) -> bool {
+            match replacement.and_then(replace_line_breaks_with_spaces) {
+                // Inserting the spaced text asks this method again, now with no
+                // line break, so the edit still passes through super.
+                Some(spaced) => {
+                    let _: () = unsafe { msg_send![editor, insertText: &*spaced, replacementRange: range] };
+                    false
+                }
+                None => unsafe {
+                    msg_send![super(self), textView: editor, shouldChangeTextInRange: range, replacementString: replacement]
+                },
+            }
+        }
+
+        #[unsafe(method(textView:doCommandBySelector:))]
+        fn do_command(&self, editor: &NSTextView, command: Sel) -> bool {
+            is_line_break_command(command)
+                || unsafe { msg_send![super(self), textView: editor, doCommandBySelector: command] }
+        }
+    }
+);
+
+/// An editable one-line text field, as `textFieldWithString:` builds it, with
+/// an inset cell so `set_edge_insets` can pad it.
+pub(crate) fn text_field(string: &NSString, _mtm: MainThreadMarker) -> Retained<NSTextField> {
+    let field: Retained<PerryTextField> =
+        unsafe { msg_send![PerryTextField::class(), textFieldWithString: string] };
+    field.into_super()
+}
+
 /// Extract a &str from a *const StringHeader pointer.
 use perry_ffi::copy_string_from_raw as str_from_header;
 
@@ -214,24 +267,8 @@ pub fn create(placeholder_ptr: *const u8, on_change: f64) -> i64 {
     let ns_placeholder = NSString::from_str(&placeholder);
 
     unsafe {
-        let text_field = NSTextField::textFieldWithString(&NSString::from_str(""), mtm);
-        super::padding::install_text_field_cell(&text_field, mtm);
+        let text_field = text_field(&NSString::from_str(""), mtm);
         text_field.setPlaceholderString(Some(&ns_placeholder));
-
-        // Make it editable
-        text_field.setEditable(true);
-        text_field.setBezeled(true);
-
-        // Single-line, to match TextField on every other backend; TextArea is
-        // the multiline widget. textFieldWithString: hands back a cell that
-        // wraps and grows tall, so a fixed-width field must be told to keep one
-        // line and scroll horizontally instead.
-        if let Some(cell) = text_field.cell() {
-            cell.setUsesSingleLineMode(true);
-            cell.setScrollable(true);
-            cell.setWraps(false);
-            cell.setLineBreakMode(NSLineBreakMode::ByClipping);
-        }
 
         let view: Retained<NSView> = Retained::cast_unchecked(text_field);
         let handle = super::register_widget(view);
@@ -550,12 +587,12 @@ pub fn set_borderless(handle: i64, borderless: f64) {
 /// Set the background color of the text field.
 pub fn set_background_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
     if let Some(view) = super::get_widget(handle) {
-        unsafe {
-            let tf: &NSTextField = &*(Retained::as_ptr(&view) as *const NSTextField);
-            tf.setDrawsBackground(true);
-            let color = srgb::ns_color(r, g, b, a);
-            tf.setBackgroundColor(Some(&color));
-        }
+        // If the cell drew the background, it would fill only the text area
+        // inside the padding. The layer fills the whole field, as a CSS
+        // background does.
+        let tf: &NSTextField = unsafe { &*(Retained::as_ptr(&view) as *const NSTextField) };
+        tf.setDrawsBackground(false);
+        super::set_background_color(handle, r, g, b, a);
     }
 }
 
@@ -592,6 +629,65 @@ pub fn set_text_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
             let tf: &NSTextField = &*(Retained::as_ptr(&view) as *const NSTextField);
             let color = srgb::ns_color(r, g, b, a);
             tf.setTextColor(Some(&color));
+        }
+    }
+}
+
+/// The characters that a web `<input>` treats as a line break.
+const LINE_BREAKS: [char; 2] = ['\r', '\n'];
+
+/// Removes every line break from `value`, as a web `<input>` does when code
+/// sets its value. A TextField and a SecureField each hold one line.
+pub(crate) fn strip_line_breaks(value: &NSString) -> Retained<NSString> {
+    let text = value.to_string();
+    if text.contains(LINE_BREAKS) {
+        NSString::from_str(&text.replace(LINE_BREAKS, ""))
+    } else {
+        value.retain()
+    }
+}
+
+/// Replaces each line break in typed, pasted or dropped text with one space,
+/// as a web `<input>` does. `None` when `text` has no line break.
+pub(crate) fn replace_line_breaks_with_spaces(text: &NSString) -> Option<Retained<NSString>> {
+    let text = text.to_string();
+    text.contains(LINE_BREAKS)
+        .then(|| NSString::from_str(&text.replace("\r\n", " ").replace(LINE_BREAKS, " ")))
+}
+
+/// The field editor commands that would insert a line break. A web `<input>`
+/// ignores Option-Return and Control-Return, so a TextField does too. Return
+/// sends `insertNewline:`, which is not in this list, so Return still submits.
+pub(crate) fn is_line_break_command(command: Sel) -> bool {
+    [
+        objc2::sel!(insertNewlineIgnoringFieldEditor:),
+        objc2::sel!(insertLineBreak:),
+        objc2::sel!(insertParagraphSeparator:),
+    ]
+    .contains(&command)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn line_breaks_match_a_web_input() {
+        for (text, set_in_code, entered) in [
+            ("one line", "one line", None),
+            ("a\nb\r\nc\rd", "abcd", Some("a b c d")),
+            ("trailing\n", "trailing", Some("trailing ")),
+            ("a\u{2028}b\u{2029}c\td", "a\u{2028}b\u{2029}c\td", None),
+        ] {
+            let text = NSString::from_str(text);
+            assert_eq!(
+                (
+                    strip_line_breaks(&text).to_string(),
+                    replace_line_breaks_with_spaces(&text).map(|spaced| spaced.to_string())
+                ),
+                (set_in_code.to_string(), entered.map(str::to_string)),
+                "{text:?}"
+            );
         }
     }
 }
