@@ -4,7 +4,8 @@ use objc2::runtime::{AnyClass, AnyObject, Sel};
 use objc2::{define_class, msg_send, AnyThread, ClassType, DefinedClass};
 use objc2_app_kit::{NSSecureTextField, NSTextField, NSTextView, NSView};
 use objc2_foundation::{
-    MainThreadMarker, NSNotification, NSNotificationCenter, NSObject, NSRange, NSString,
+    MainThreadMarker, NSEdgeInsets, NSNotification, NSNotificationCenter, NSObject, NSRange,
+    NSString,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -92,6 +93,14 @@ define_class!(
     pub struct PerrySecureTextField;
 
     impl PerrySecureTextField {
+        // A field with no bezel, border, or cell background gets a label's 2pt
+        // side insets from AppKit. The frame would then overhang the width the
+        // field is pinned to, and so would the layer border and background.
+        #[unsafe(method(alignmentRectInsets))]
+        fn alignment_rect_insets(&self) -> NSEdgeInsets {
+            NSEdgeInsets { top: 0.0, left: 0.0, bottom: 0.0, right: 0.0 }
+        }
+
         #[unsafe(method(cellClass))]
         fn cell_class() -> &'static AnyClass {
             super::padding::PerryInsetSecureTextFieldCell::class()
