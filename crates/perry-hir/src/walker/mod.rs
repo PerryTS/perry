@@ -14,6 +14,9 @@
 //! silently fell through and produced runtime miscompiles. Concentrating the
 //! descent in one match (which the compiler enforces) closes that bug class.
 //!
+//! `stmt_any_expr` provides exhaustive statement descent for expression
+//! predicates, leaving expression and closure traversal to the caller.
+//!
 //! ## What this walker does (and doesn't)
 //!
 //! - **Visits direct `Expr` children** — `Box<Expr>`, `Vec<Expr>`, the inner
@@ -51,3 +54,6 @@ mod expr_ref;
 
 pub use expr_mut::walk_expr_children_mut;
 pub use expr_ref::walk_expr_children;
+
+mod stmt_ref;
+pub use stmt_ref::stmt_any_expr;
