@@ -4940,6 +4940,7 @@ dependencies = [
  "perry-codegen-js",
  "perry-dispatch",
  "perry-hir",
+ "perry-parser",
  "wasm-encoder",
 ]
 
