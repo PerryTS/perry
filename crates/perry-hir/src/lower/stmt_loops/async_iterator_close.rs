@@ -64,15 +64,13 @@ pub(crate) fn emit_driver(
                 right: Box::new(Expr::Null),
             },
             then_branch: vec![Stmt::Expr(iterator_result_validated(Expr::Await(
-                Box::new(Expr::Call {
-                    callee: Box::new(Expr::PropertyGet {
-                        byte_offset: 0,
-                        object: Box::new(Expr::LocalGet(method)),
-                        property: "call".to_string(),
-                    }),
-                    args: vec![Expr::LocalGet(iter_id)],
-                    type_args: vec![],
-                    byte_offset: 0,
+                // AsyncIteratorClose uses intrinsic Call, not a lookup of
+                // the return method's overridable `.call` property. This
+                // also rejects non-callable objects with a callable `call`.
+                Box::new(Expr::ReflectApply {
+                    func: Box::new(Expr::LocalGet(method)),
+                    this_arg: Box::new(Expr::LocalGet(iter_id)),
+                    args: Box::new(Expr::Array(vec![])),
                 }),
             )))],
             else_branch: None,

@@ -91,5 +91,21 @@ async function main() {
   log.length = 0;
   for await (const value of getter) { break; }
   console.log('return getter', gets, log.join(','));
+  log.length = 0;
+  const overridden = source('intrinsic');
+  const originalReturn: any = async function(this: any) {
+    log.push('intrinsic receiver:' + (this === overridden));
+    return { done: true };
+  };
+  originalReturn.call = function() { log.push('spoofed call'); throw new Error('spoof'); };
+  overridden.return = originalReturn;
+  for await (const value of overridden) { break; }
+  console.log('intrinsic return', log.join(','));
+  log.length = 0;
+  const nonCallable = source('non-callable');
+  nonCallable.return = { call() { log.push('spoofed call'); return { done: true }; } };
+  try { for await (const value of nonCallable) { break; } }
+  catch (e: any) { log.push('TypeError:' + (e instanceof TypeError)); }
+  console.log('non-callable return', log.join(','));
 }
 main().catch((e: any) => console.log('ERROR', e.message));
