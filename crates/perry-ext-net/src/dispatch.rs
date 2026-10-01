@@ -590,25 +590,33 @@ pub unsafe extern "C" fn js_ext_net_handle_method_dispatch(
 #[cold]
 #[inline(never)]
 unsafe fn socket_endpoint_property(handle: i64, prop: &str, out: *mut f64) -> i32 {
-    if !matches!(
-        prop,
-        "localAddress"
-            | "localPort"
-            | "localFamily"
-            | "remoteAddress"
-            | "remotePort"
-            | "remoteFamily"
-    ) || crate::js_ext_net_is_socket_handle(handle) == 0
-    {
+    enum Endpoint {
+        LocalAddress,
+        LocalPort,
+        LocalFamily,
+        RemoteAddress,
+        RemotePort,
+        RemoteFamily,
+    }
+    let endpoint = match prop {
+        "localAddress" => Endpoint::LocalAddress,
+        "localPort" => Endpoint::LocalPort,
+        "localFamily" => Endpoint::LocalFamily,
+        "remoteAddress" => Endpoint::RemoteAddress,
+        "remotePort" => Endpoint::RemotePort,
+        "remoteFamily" => Endpoint::RemoteFamily,
+        _ => return 0,
+    };
+    if crate::js_ext_net_is_socket_handle(handle) == 0 {
         return 0;
     }
-    let value = match prop {
-        "localAddress" => crate::js_net_socket_get_local_address(handle),
-        "localPort" => crate::js_net_socket_get_local_port(handle),
-        "localFamily" => crate::js_net_socket_get_local_family(handle),
-        "remoteAddress" => crate::js_net_socket_get_remote_address(handle),
-        "remotePort" => crate::js_net_socket_get_remote_port(handle),
-        _ => crate::js_net_socket_get_remote_family(handle),
+    let value = match endpoint {
+        Endpoint::LocalAddress => crate::js_net_socket_get_local_address(handle),
+        Endpoint::LocalPort => crate::js_net_socket_get_local_port(handle),
+        Endpoint::LocalFamily => crate::js_net_socket_get_local_family(handle),
+        Endpoint::RemoteAddress => crate::js_net_socket_get_remote_address(handle),
+        Endpoint::RemotePort => crate::js_net_socket_get_remote_port(handle),
+        Endpoint::RemoteFamily => crate::js_net_socket_get_remote_family(handle),
     };
     if !out.is_null() {
         *out = value;

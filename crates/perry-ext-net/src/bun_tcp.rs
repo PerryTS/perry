@@ -729,26 +729,26 @@ pub(crate) fn on_write_complete(handle: i64, token: u64, succeeded: bool) -> boo
 }
 
 pub(crate) fn method_name(handle: i64, property: &str) -> Option<&'static [u8]> {
+    // Classify the name before touching either ownership map. Ordinary
+    // node:net properties also pass through this facade's dispatch hook.
+    let (name, socket_method, server_method): (&'static [u8], bool, bool) = match property {
+        "write" => (b"write", true, false),
+        "end" => (b"end", true, false),
+        "close" => (b"close", true, false),
+        "terminate" => (b"terminate", true, false),
+        "ref" => (b"ref", true, true),
+        "unref" => (b"unref", true, true),
+        "pause" => (b"pause", true, false),
+        "resume" => (b"resume", true, false),
+        "flush" => (b"flush", true, false),
+        "reload" => (b"reload", true, true),
+        "shutdown" => (b"shutdown", true, false),
+        "stop" => (b"stop", false, true),
+        _ => return None,
+    };
     let socket = is_socket(handle);
     let server = !socket && is_server(handle);
-    match (socket, server, property) {
-        (true, _, "write") => Some(b"write"),
-        (true, _, "end") => Some(b"end"),
-        (true, _, "close") => Some(b"close"),
-        (true, _, "terminate") => Some(b"terminate"),
-        (true, _, "ref") => Some(b"ref"),
-        (true, _, "unref") => Some(b"unref"),
-        (true, _, "pause") => Some(b"pause"),
-        (true, _, "resume") => Some(b"resume"),
-        (true, _, "flush") => Some(b"flush"),
-        (true, _, "reload") => Some(b"reload"),
-        (true, _, "shutdown") => Some(b"shutdown"),
-        (_, true, "stop") => Some(b"stop"),
-        (_, true, "ref") => Some(b"ref"),
-        (_, true, "unref") => Some(b"unref"),
-        (_, true, "reload") => Some(b"reload"),
-        _ => None,
-    }
+    ((socket && socket_method) || (server && server_method)).then_some(name)
 }
 
 pub(crate) unsafe fn dispatch_method(handle: i64, method: &str, args: &[f64]) -> Option<f64> {
@@ -878,6 +878,39 @@ pub(crate) unsafe fn dispatch_method(handle: i64, method: &str, args: &[f64]) ->
 }
 
 pub(crate) fn property(handle: i64, property: &str) -> Option<f64> {
+    // Classify once before probing ownership. Unrelated node:net properties
+    // need neither Bun map, while recognized names keep their lookup order.
+    enum Property {
+        Data,
+        Listener,
+        RemoteAddress,
+        RemotePort,
+        RemoteFamily,
+        LocalAddress,
+        LocalPort,
+        LocalFamily,
+        BytesWritten,
+        ReadyState,
+        Port,
+        Hostname,
+        Unix,
+    }
+    let property = match property {
+        "data" => Property::Data,
+        "listener" => Property::Listener,
+        "remoteAddress" => Property::RemoteAddress,
+        "remotePort" => Property::RemotePort,
+        "remoteFamily" => Property::RemoteFamily,
+        "localAddress" => Property::LocalAddress,
+        "localPort" => Property::LocalPort,
+        "localFamily" => Property::LocalFamily,
+        "bytesWritten" => Property::BytesWritten,
+        "readyState" => Property::ReadyState,
+        "port" => Property::Port,
+        "hostname" => Property::Hostname,
+        "unix" => Property::Unix,
+        _ => return None,
+    };
     if is_socket(handle) {
         let (data_bits, listener, shutting_down) = {
             let sockets = sockets().lock().unwrap();
@@ -885,19 +918,19 @@ pub(crate) fn property(handle: i64, property: &str) -> Option<f64> {
             (socket.data_bits, socket.listener, socket.shutting_down)
         };
         return Some(match property {
-            "data" => f64::from_bits(data_bits),
-            "listener" => listener
+            Property::Data => f64::from_bits(data_bits),
+            Property::Listener => listener
                 .filter(|server| is_server(*server))
                 .map(handle_value)
                 .unwrap_or_else(undefined),
-            "remoteAddress" => unsafe { crate::js_net_socket_get_remote_address(handle) },
-            "remotePort" => unsafe { crate::js_net_socket_get_remote_port(handle) },
-            "remoteFamily" => unsafe { crate::js_net_socket_get_remote_family(handle) },
-            "localAddress" => unsafe { crate::js_net_socket_get_local_address(handle) },
-            "localPort" => unsafe { crate::js_net_socket_get_local_port(handle) },
-            "localFamily" => unsafe { crate::js_net_socket_get_local_family(handle) },
-            "bytesWritten" => unsafe { crate::js_net_socket_get_bytes_written(handle) },
-            "readyState" => {
+            Property::RemoteAddress => unsafe { crate::js_net_socket_get_remote_address(handle) },
+            Property::RemotePort => unsafe { crate::js_net_socket_get_remote_port(handle) },
+            Property::RemoteFamily => unsafe { crate::js_net_socket_get_remote_family(handle) },
+            Property::LocalAddress => unsafe { crate::js_net_socket_get_local_address(handle) },
+            Property::LocalPort => unsafe { crate::js_net_socket_get_local_port(handle) },
+            Property::LocalFamily => unsafe { crate::js_net_socket_get_local_family(handle) },
+            Property::BytesWritten => unsafe { crate::js_net_socket_get_bytes_written(handle) },
+            Property::ReadyState => {
                 let state = statics::sockets()
                     .lock()
                     .unwrap()
@@ -922,14 +955,14 @@ pub(crate) fn property(handle: i64, property: &str) -> Option<f64> {
     }
     let data_bits = servers().lock().unwrap().get(&handle)?.data_bits;
     Some(match property {
-        "data" => f64::from_bits(data_bits),
-        "port" => statics::servers()
+        Property::Data => f64::from_bits(data_bits),
+        Property::Port => statics::servers()
             .lock()
             .unwrap()
             .get(&handle)
             .map(|server| server.bound_port as f64)
             .unwrap_or(0.0),
-        "hostname" => {
+        Property::Hostname => {
             let host = statics::servers()
                 .lock()
                 .unwrap()
@@ -938,7 +971,7 @@ pub(crate) fn property(handle: i64, property: &str) -> Option<f64> {
                 .unwrap_or_default();
             nanbox_string(&host)
         }
-        "unix" => {
+        Property::Unix => {
             let path = statics::servers()
                 .lock()
                 .unwrap()
