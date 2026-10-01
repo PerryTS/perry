@@ -644,6 +644,22 @@ pub(crate) fn note_attrs_born_with_keys(obj: usize) {
 /// Look up the property descriptor for (obj, key). Returns None if no entry exists,
 /// in which case the JS default `{ writable: true, enumerable: true, configurable: true }` applies.
 pub(crate) fn get_property_attrs(obj: usize, key: &str) -> Option<PropertyAttrs> {
+    // A function object's own properties, and their attributes, live in
+    // its bag (`closure::props`): its keys answer.
+    if crate::closure::is_closure_ptr(obj) {
+        // SAFETY: a proven live closure; its bag is null or a live object.
+        let bag = unsafe { crate::closure::props::bag_of(obj) };
+        if !bag.is_null() {
+            let entry = unsafe {
+                super::key_attrs::object_key_entry(bag as *const ObjectHeader, key.as_bytes())
+            };
+            if entry != 0 {
+                return Some(PropertyAttrs {
+                    bits: super::key_attrs::entry_to_attr_bits(entry),
+                });
+            }
+        }
+    }
     // A STORED descriptor wins over the synthesized index default:
     // `Object.defineProperty` / `Object.freeze` on a wrapper installs a real
     // entry, and the §10.4.3 default must not shadow it. Synthesis therefore
@@ -1493,11 +1509,10 @@ pub(crate) unsafe fn json_object_getter_value(
         return Some(f64::from_bits(TAG_UNDEFINED));
     }
     let receiver = crate::value::js_nanbox_pointer(obj as i64);
-    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-    let prev = this_scope.root_nanbox_f64(js_implicit_this_set(receiver));
-    let result = crate::closure::js_closure_call0(closure);
-    js_implicit_this_set(prev.get_nanbox_f64());
-    Some(result)
+    Some(crate::closure::js_closure_call0(
+        closure,
+        crate::closure::JsThis::from_f64(receiver),
+    ))
 }
 
 /// Monotonic (#6386): has an accessor descriptor keyed `"constructor"` ever

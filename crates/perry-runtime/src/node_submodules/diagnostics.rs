@@ -9,10 +9,7 @@ use std::sync::{LazyLock, Mutex, OnceLock};
 use std::thread::ThreadId;
 
 use crate::array::{js_array_alloc, js_array_get_f64, js_array_length, js_array_push_f64};
-use crate::closure::{
-    js_closure_get_capture_f64, js_closure_set_capture_f64,
-    js_register_closure_synthetic_arguments, ClosureHeader,
-};
+use crate::closure::{js_closure_get_capture_f64, js_closure_set_capture_f64, ClosureHeader};
 use crate::object::ObjectHeader;
 use crate::string::{js_string_from_bytes, StringHeader};
 use crate::thread::SerializedValue;
@@ -47,7 +44,11 @@ use super::*;
 // surface as no-op thrower thunks the same way the other submodules do —
 // real-tracing semantics are a follow-up under #793.
 
-pub(crate) extern "C" fn thunk_diag_noop(_closure: *const ClosureHeader, _arg: f64) -> f64 {
+pub(crate) extern "C" fn thunk_diag_noop(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    _arg: f64,
+) -> f64 {
     f64::from_bits(crate::value::JSValue::undefined().bits())
 }
 
@@ -631,129 +632,10 @@ pub enum ErrUserProp {
     Bits(u64),
 }
 
-unsafe fn error_user_prop_string(value: f64) -> String {
-    let ptr = crate::value::js_jsvalue_to_string(value);
-    if ptr.is_null() {
-        return String::new();
-    }
-    let len = (*ptr).byte_len as usize;
-    let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-    String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
-}
-
-/// Record a user-assigned own property on an `Error` object. `error_ptr` is
-/// the `ErrorHeader` pointer (the NaN-box pointer payload). Called from the
-/// `GC_TYPE_ERROR` branch of `js_object_set_field_by_name`.
-pub fn set_error_user_prop(error_ptr: usize, key: &str, value: f64) {
-    if error_ptr == 0 {
-        return;
-    }
-    // #6759 phase 1: the property bag now hangs off the error's own metadata
-    // record instead of a table keyed by its address, so it moves with the
-    // error, dies with it, and cannot be inherited by a later tenant of a
-    // recycled address. Insertion order comes free from the bag object's
-    // `keys_array`.
-    unsafe {
-        let Some(bag) = crate::object::cell_expando_ensure(error_ptr) else {
-            return;
-        };
-        let key_ptr = js_string_from_bytes(key.as_ptr(), key.len() as u32);
-        crate::object::js_object_set_field_by_name(bag, key_ptr, value);
-    }
-}
-
-/// Look up a user-assigned own property on an `Error` object, materialising it
-/// back into a NaN-boxed `f64`. Returns `None` if no such property was set.
-/// Called from the `GC_TYPE_ERROR` branch of `js_object_get_field_by_name`.
-pub fn error_user_prop(error_ptr: usize, key: &str) -> Option<f64> {
-    if error_ptr == 0 {
-        return None;
-    }
-    unsafe {
-        let bag = crate::object::cell_expando_get(error_ptr)?;
-        let key_ptr = js_string_from_bytes(key.as_ptr(), key.len() as u32);
-        // Distinguish "absent" from "present and undefined": a bare get would
-        // return `undefined` for both, and the caller uses `None` to mean the
-        // error has no such own property at all.
-        let key_boxed = f64::from_bits(crate::js_nanbox_string(key_ptr as i64).to_bits());
-        if !crate::object::obj_value_has_own_key(
-            crate::value::js_nanbox_pointer(bag as i64),
-            key_boxed,
-        ) {
-            return None;
-        }
-        Some(f64::from_bits(
-            crate::object::js_object_get_field_by_name(bag, key_ptr).bits(),
-        ))
-    }
-}
-
-/// Remove a user-assigned own property from an Error object. Returns true
-/// when the property existed (used by `delete err.prop` and data↔accessor
-/// descriptor conversions).
-pub fn remove_error_user_prop(error_ptr: usize, key: &str) -> bool {
-    if error_ptr == 0 {
-        return false;
-    }
-    unsafe {
-        let Some(bag) = crate::object::cell_expando_get(error_ptr) else {
-            return false;
-        };
-        let key_ptr = js_string_from_bytes(key.as_ptr(), key.len() as u32);
-        let key_boxed = f64::from_bits(crate::js_nanbox_string(key_ptr as i64).to_bits());
-        if !crate::object::obj_value_has_own_key(
-            crate::value::js_nanbox_pointer(bag as i64),
-            key_boxed,
-        ) {
-            return false;
-        }
-        crate::object::js_object_delete_field(bag, key_ptr);
-        true
-    }
-}
-
-/// Return user-assigned own properties on an Error object as materialized JS
-/// values so util.inspect/console formatting can show them.
-pub fn error_user_props(error_ptr: usize) -> Vec<(String, f64)> {
-    if error_ptr == 0 {
-        return Vec::new();
-    }
-    unsafe {
-        let Some(bag) = crate::object::cell_expando_get(error_ptr) else {
-            return Vec::new();
-        };
-        // The bag is an ordinary object, so its `keys_array` already holds the
-        // keys in ECMA-262 insertion order — no sort, and no ordering of our
-        // own to keep in step with node's.
-        let keys_view = crate::object::object_keys(bag);
-        let keys = keys_view.arr();
-        if keys.is_null() {
-            return Vec::new();
-        }
-        let len = keys_view.count() as usize;
-        let mut out = Vec::with_capacity(len);
-        for i in 0..len {
-            let key_val = crate::array::js_array_get_f64(keys, i as u32);
-            // A tombstoned key slot (#9029) reads back as undefined through
-            // the hole canonicalization (#323); stringifying it would mint a
-            // phantom "undefined" prop. Undefined is never a legal key.
-            if key_val.to_bits() == crate::value::TAG_UNDEFINED {
-                continue;
-            }
-            let name_ptr = crate::value::js_jsvalue_to_string(key_val);
-            if name_ptr.is_null() {
-                continue;
-            }
-            let name = error_user_prop_string(f64::from_bits(
-                crate::js_nanbox_string(name_ptr as i64).to_bits(),
-            ));
-            let value =
-                f64::from_bits(crate::object::js_object_get_field_by_name(bag, name_ptr).bits());
-            out.push((name, value));
-        }
-        out
-    }
-}
+mod user_props;
+pub use user_props::{
+    error_user_prop, error_user_props, remove_error_user_prop, set_error_user_prop,
+};
 
 pub(crate) fn throw_invalid_arg() -> ! {
     let msg = b"The argument is invalid";
@@ -812,32 +694,11 @@ pub(crate) fn get_field_value(obj: *mut ObjectHeader, name: &str) -> f64 {
     }
 }
 
-#[allow(clippy::missing_transmute_annotations)]
-pub(crate) fn cast0(f: extern "C" fn(*const ClosureHeader) -> f64) -> *const u8 {
-    f as *const u8
-}
-#[allow(clippy::missing_transmute_annotations)]
-pub(crate) fn cast1(f: extern "C" fn(*const ClosureHeader, f64) -> f64) -> *const u8 {
-    f as *const u8
-}
-#[allow(clippy::missing_transmute_annotations)]
-pub(crate) fn cast2(f: extern "C" fn(*const ClosureHeader, f64, f64) -> f64) -> *const u8 {
-    f as *const u8
-}
-#[allow(clippy::missing_transmute_annotations)]
-pub(crate) fn cast3(f: extern "C" fn(*const ClosureHeader, f64, f64, f64) -> f64) -> *const u8 {
-    f as *const u8
-}
-#[allow(clippy::missing_transmute_annotations)]
-pub(crate) fn cast4(
-    f: extern "C" fn(*const ClosureHeader, f64, f64, f64, f64) -> f64,
-) -> *const u8 {
-    f as *const u8
-}
-pub(crate) fn method_closure(func: *const u8, arity: u32, id: i64) -> f64 {
-    let c = js_closure_alloc(func, 1);
+/// A method closure capturing the channel `id`; `info` records the method
+/// body's declared arity.
+pub(crate) fn method_closure(info: *const crate::closure::JsFunctionInfo, id: i64) -> f64 {
+    let c = js_closure_alloc(info, 1);
     js_closure_set_capture_ptr(c, 0, id);
-    js_register_closure_arity(func, arity);
     boxed_ptr(c)
 }
 
@@ -851,7 +712,10 @@ pub(crate) fn catch_js<F: FnOnce() -> f64>(f: F) -> Result<f64, f64> {
 
 // #854: diagnostics_channel captured-error helper retained for the subsystem
 #[allow(dead_code)]
-pub(crate) extern "C" fn throw_captured_error(closure: *const ClosureHeader) -> f64 {
+pub(crate) extern "C" fn throw_captured_error(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let err = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
     crate::exception::js_throw(err)
 }
@@ -884,14 +748,6 @@ pub(crate) fn suppress_uncaught_drain<F: FnOnce() -> f64>(f: F) -> f64 {
         let mut n = n.borrow_mut();
         *n = n.saturating_sub(1);
     });
-    result
-}
-
-pub(crate) fn with_implicit_this<F: FnOnce() -> f64>(this_arg: f64, f: F) -> f64 {
-    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-    let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(this_arg));
-    let result = f();
-    crate::object::js_implicit_this_set(prev.get_nanbox_f64());
     result
 }
 
@@ -996,35 +852,49 @@ pub(crate) fn ensure_channel(name: f64) -> i64 {
     set_field_value(
         obj,
         "subscribe",
-        method_closure(cast1(diag_channel_subscribe), 1, id),
+        method_closure(
+            crate::fn_info!(diag_channel_subscribe, 1; with_declared(1)),
+            id,
+        ),
     );
     set_field_value(
         obj,
         "unsubscribe",
-        method_closure(cast1(diag_channel_unsubscribe), 1, id),
+        method_closure(
+            crate::fn_info!(diag_channel_unsubscribe, 1; with_declared(1)),
+            id,
+        ),
     );
     set_field_value(
         obj,
         "publish",
-        method_closure(cast1(diag_channel_publish), 1, id),
+        method_closure(
+            crate::fn_info!(diag_channel_publish, 1; with_declared(1)),
+            id,
+        ),
     );
     set_field_value(
         obj,
         "bindStore",
-        method_closure(cast2(diag_channel_bind_store), 2, id),
+        method_closure(
+            crate::fn_info!(diag_channel_bind_store, 2; with_declared(2)),
+            id,
+        ),
     );
     set_field_value(
         obj,
         "unbindStore",
-        method_closure(cast1(diag_channel_unbind_store), 1, id),
+        method_closure(
+            crate::fn_info!(diag_channel_unbind_store, 1; with_declared(1)),
+            id,
+        ),
     );
     set_field_value(obj, "runStores", run_stores_method_closure(id));
     set_field_value(
         obj,
         "withStoreScope",
         method_closure(
-            cast1(super::diagnostics_tail::diag_channel_with_store_scope),
-            1,
+            crate::fn_info!(super::diagnostics_tail::diag_channel_with_store_scope, 1; with_declared(1)),
             id,
         ),
     );
@@ -1110,7 +980,9 @@ pub(crate) fn publish_channel_local(id: i64, data: f64) {
         // Match Node's safe subscriber behavior for the happy path; exceptions
         // propagate through Perry's exception mechanism and are catchable.
         let cb = closure_ptr(subscriber);
-        if let Err(err) = catch_js(|| js_closure_call2(cb, data, name)) {
+        if let Err(err) =
+            catch_js(|| js_closure_call2(cb, crate::closure::plain_call_receiver(), data, name))
+        {
             schedule_uncaught(err);
         }
     }
@@ -1229,15 +1101,24 @@ pub(crate) fn run_store_wrapped(
     if !valid_closure_value(fn_value) {
         crate::closure::throw_not_callable();
     }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    // The rebind clone allocates, so the receiver is re-read from a root.
+    let this_arg_handle = scope.root_nanbox_f64(this_arg);
     let rebound = crate::closure::clone_closure_rebind_this(fn_value.to_bits(), this_arg);
     let cb = (rebound & crate::value::POINTER_MASK) as *const ClosureHeader;
-    with_implicit_this(this_arg, || unsafe {
-        js_closure_call_array(cb as i64, args.as_ptr(), args.len() as i64)
-    })
+    unsafe {
+        crate::closure::js_closure_call_array(
+            cb as i64,
+            crate::closure::JsThis::from_f64(this_arg_handle.get_nanbox_f64()),
+            args.as_ptr(),
+            args.len() as i64,
+        )
+    }
 }
 
 pub(crate) extern "C" fn diag_channel_subscribe(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     subscriber: f64,
 ) -> f64 {
     add_subscriber(method_id(closure), subscriber);
@@ -1246,18 +1127,24 @@ pub(crate) extern "C" fn diag_channel_subscribe(
 
 pub(crate) extern "C" fn diag_channel_unsubscribe(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     subscriber: f64,
 ) -> f64 {
     bool_value(remove_subscriber(method_id(closure), subscriber))
 }
 
-pub(crate) extern "C" fn diag_channel_publish(closure: *const ClosureHeader, data: f64) -> f64 {
+pub(crate) extern "C" fn diag_channel_publish(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    data: f64,
+) -> f64 {
     publish_channel(method_id(closure), data);
     undefined()
 }
 
 pub(crate) extern "C" fn diag_channel_bind_store(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     store: f64,
     transform: f64,
 ) -> f64 {
@@ -1300,6 +1187,7 @@ pub(crate) extern "C" fn diag_channel_bind_store(
 
 pub(crate) extern "C" fn diag_channel_unbind_store(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     store: f64,
 ) -> f64 {
     let id = method_id(closure);
@@ -1326,7 +1214,7 @@ pub(crate) extern "C" fn diag_channel_unbind_store(
 pub(crate) fn call_store_run(store: f64, context: f64, next: f64) -> f64 {
     fn run_als(handle: i64, context: f64, next: f64) -> f64 {
         crate::async_context::push_store(handle, context);
-        let result = js_closure_call0(closure_ptr(next));
+        let result = js_closure_call0(closure_ptr(next), crate::closure::plain_call_receiver());
         crate::async_context::pop_store(handle);
         result
     }
@@ -1346,10 +1234,18 @@ pub(crate) fn call_store_run(store: f64, context: f64, next: f64) -> f64 {
     }
     let obj = crate::value::js_nanbox_get_pointer(store) as *mut ObjectHeader;
     let run = get_field_value(obj, "run");
-    js_closure_call2(closure_ptr(run), context, next)
+    js_closure_call2(
+        closure_ptr(run),
+        crate::closure::plain_call_receiver(),
+        context,
+        next,
+    )
 }
 
-pub(crate) extern "C" fn store_next_thunk(closure: *const ClosureHeader) -> f64 {
+pub(crate) extern "C" fn store_next_thunk(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = js_closure_get_capture_ptr(closure, 0);
     let data = f64::from_bits(js_closure_get_capture_ptr(closure, 1) as u64);
     let fn_value = f64::from_bits(js_closure_get_capture_ptr(closure, 2) as u64);
@@ -1362,38 +1258,43 @@ pub(crate) extern "C" fn store_next_thunk(closure: *const ClosureHeader) -> f64 
     run_store_wrapped(id, data, fn_value, this_arg, &args)
 }
 
-pub(crate) extern "C" fn store_chain_thunk(closure: *const ClosureHeader) -> f64 {
+pub(crate) extern "C" fn store_chain_thunk(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let store = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
     let context = f64::from_bits(js_closure_get_capture_ptr(closure, 1) as u64);
     let next = f64::from_bits(js_closure_get_capture_ptr(closure, 2) as u64);
     call_store_run(store, context, next)
 }
 
-/// Build the `runStores` method closure. Registered as a synthetic-arguments
+/// Build the `runStores` method closure. Its body is a synthetic-arguments
 /// rest closure (fixed_arity 0) so the dispatcher bundles the FULL argument
 /// list — `context`, `callback`, `thisArg`, and every trailing `...args` — into
 /// a single JS array, regardless of how many arguments the caller passed
 /// (#3082). The fixed five-argument `cast5` entrypoint used previously capped
 /// the forwarded callback arguments at two.
 pub(crate) fn run_stores_method_closure(id: i64) -> f64 {
-    let func = cast1(diag_channel_run_stores);
-    let c = js_closure_alloc(func, 1);
+    let c = js_closure_alloc(
+        crate::fn_info!(diag_channel_run_stores, 1; with_rest_kind(0, crate::closure::FN_REST_SYNTHETIC_ARGUMENTS)),
+        1,
+    );
     js_closure_set_capture_ptr(c, 0, id);
-    js_register_closure_synthetic_arguments(func, 0);
     boxed_ptr(c)
 }
 
-/// Build the `traceCallback` method closure. Like `runStores`, registered as a
+/// Build the `traceCallback` method closure. Like `runStores`, its body is a
 /// synthetic-arguments closure so the FULL argument list — `fn`, `position`,
 /// `context`, `thisArg`, and every trailing `...args` — is bundled into one JS
 /// array, letting `traceCallback` honor `position` and forward all surrounding
 /// arguments (#3086). The fixed seven-argument `cast7` entrypoint used
 /// previously ignored `position` and dropped extra arguments.
 pub(crate) fn trace_callback_method_closure(id: i64) -> f64 {
-    let func = cast1(diag_trace_callback);
-    let c = js_closure_alloc(func, 1);
+    let c = js_closure_alloc(
+        crate::fn_info!(diag_trace_callback, 1; with_rest_kind(0, crate::closure::FN_REST_SYNTHETIC_ARGUMENTS)),
+        1,
+    );
     js_closure_set_capture_ptr(c, 0, id);
-    js_register_closure_synthetic_arguments(func, 0);
     boxed_ptr(c)
 }
 
@@ -1427,6 +1328,7 @@ fn unbox_arg_array(arr_value: f64) -> Vec<f64> {
 
 pub(crate) extern "C" fn diag_channel_run_stores(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     all_args: f64,
 ) -> f64 {
     let id = method_id(closure);
@@ -1457,8 +1359,7 @@ pub(crate) extern "C" fn diag_channel_run_stores(
     // fixed-width scalar slots, so the variadic tail rides in a single array
     // handle).
     let cb_args_arr = unsafe { build_arg_array(&cb_args) };
-    let next = js_closure_alloc(cast0(store_next_thunk), 5);
-    js_register_closure_arity(cast0(store_next_thunk), 0);
+    let next = js_closure_alloc(crate::fn_info!(store_next_thunk, 0; with_declared(0)), 5);
     js_closure_set_capture_ptr(next, 0, id);
     js_closure_set_capture_ptr(next, 1, data.to_bits() as i64);
     js_closure_set_capture_ptr(next, 2, fn_value.to_bits() as i64);
@@ -1468,7 +1369,9 @@ pub(crate) extern "C" fn diag_channel_run_stores(
     for (store, transform) in stores.into_iter().rev() {
         let context = match transform {
             StoreTransform::Callable(t) => {
-                match catch_js(|| js_closure_call1(closure_ptr(t), data)) {
+                match catch_js(|| {
+                    js_closure_call1(closure_ptr(t), crate::closure::plain_call_receiver(), data)
+                }) {
                     Ok(context) => context,
                     Err(err) => {
                         schedule_uncaught(err);
@@ -1485,23 +1388,32 @@ pub(crate) extern "C" fn diag_channel_run_stores(
             }
             StoreTransform::None => data,
         };
-        let chain = js_closure_alloc(cast0(store_chain_thunk), 3);
-        js_register_closure_arity(cast0(store_chain_thunk), 0);
+        let chain = js_closure_alloc(crate::fn_info!(store_chain_thunk, 0; with_declared(0)), 3);
         js_closure_set_capture_ptr(chain, 0, store.to_bits() as i64);
         js_closure_set_capture_ptr(chain, 1, context.to_bits() as i64);
         js_closure_set_capture_ptr(chain, 2, next_value.to_bits() as i64);
         next_value = boxed_ptr(chain);
     }
-    suppress_uncaught_drain(|| js_closure_call0(closure_ptr(next_value)))
+    suppress_uncaught_drain(|| {
+        js_closure_call0(
+            closure_ptr(next_value),
+            crate::closure::plain_call_receiver(),
+        )
+    })
 }
 
-pub(crate) extern "C" fn thunk_diag_channel(closure: *const ClosureHeader, name: f64) -> f64 {
+pub(crate) extern "C" fn thunk_diag_channel(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    name: f64,
+) -> f64 {
     let _ = closure;
     channel_obj(ensure_channel(name))
 }
 
 pub(crate) extern "C" fn thunk_diag_subscribe(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     name: f64,
     subscriber: f64,
 ) -> f64 {
@@ -1512,6 +1424,7 @@ pub(crate) extern "C" fn thunk_diag_subscribe(
 
 pub(crate) extern "C" fn thunk_diag_unsubscribe(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     name: f64,
     subscriber: f64,
 ) -> f64 {
@@ -1521,6 +1434,7 @@ pub(crate) extern "C" fn thunk_diag_unsubscribe(
 
 pub(crate) extern "C" fn thunk_diag_has_subscribers(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     name: f64,
 ) -> f64 {
     let key = match channel_key(name) {
@@ -1578,7 +1492,11 @@ pub(crate) fn channel_from_object_property(obj_value: f64, prop: &str) -> i64 {
     })
 }
 
-pub(crate) extern "C" fn diag_trace_subscribe(closure: *const ClosureHeader, handlers: f64) -> f64 {
+pub(crate) extern "C" fn diag_trace_subscribe(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    handlers: f64,
+) -> f64 {
     let id = method_id(closure);
     let events = DIAG_TRACES.with(|m| m.borrow().get(&id).map(|t| t.events).unwrap_or([0; 5]));
     for (idx, name) in ["start", "end", "asyncStart", "asyncEnd", "error"]
@@ -1606,6 +1524,7 @@ pub(crate) extern "C" fn diag_trace_subscribe(closure: *const ClosureHeader, han
 
 pub(crate) extern "C" fn diag_trace_unsubscribe(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     handlers: f64,
 ) -> f64 {
     let id = method_id(closure);
@@ -1630,15 +1549,24 @@ pub(crate) fn call_fn_value(fn_value: f64, this_arg: f64, args: &[f64]) -> f64 {
     if !valid_closure_value(fn_value) {
         crate::closure::throw_not_callable();
     }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    // The rebind clone allocates, so the receiver is re-read from a root.
+    let this_arg_handle = scope.root_nanbox_f64(this_arg);
     let rebound = crate::closure::clone_closure_rebind_this(fn_value.to_bits(), this_arg);
     let cb = (rebound & crate::value::POINTER_MASK) as *const ClosureHeader;
-    with_implicit_this(this_arg, || unsafe {
-        js_closure_call_array(cb as i64, args.as_ptr(), args.len() as i64)
-    })
+    unsafe {
+        crate::closure::js_closure_call_array(
+            cb as i64,
+            crate::closure::JsThis::from_f64(this_arg_handle.get_nanbox_f64()),
+            args.as_ptr(),
+            args.len() as i64,
+        )
+    }
 }
 
 pub(crate) extern "C" fn diag_trace_sync(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     fn_value: f64,
     context: f64,
     this_arg: f64,
@@ -1685,6 +1613,7 @@ pub(crate) extern "C" fn diag_trace_sync(
 
 pub(crate) extern "C" fn diag_trace_promise(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     fn_value: f64,
     context: f64,
     this_arg: f64,
@@ -1758,12 +1687,13 @@ pub(crate) extern "C" fn diag_trace_promise(
 }
 
 /// The callback installed in place of the user's callback by
-/// `traceCallback`. Registered as a synthetic-arguments closure so it forwards
+/// `traceCallback`. Its body is a synthetic-arguments body so it forwards
 /// every argument the traced function passes (`cb(null, "a", "b")`) to the
 /// user callback, matching Node's `ReflectApply(callback, this, arguments)`
 /// (#3086). `arguments[0]` is `err`, `arguments[1]` is `res`.
 pub(crate) extern "C" fn diag_trace_wrapped_callback(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     all_args: f64,
 ) -> f64 {
     let callback = js_closure_get_capture_f64(closure, 0);
@@ -1806,7 +1736,11 @@ fn throw_trace_callback_not_function() -> ! {
     crate::exception::js_throw(boxed_ptr(err))
 }
 
-pub(crate) extern "C" fn diag_trace_callback(closure: *const ClosureHeader, all_args: f64) -> f64 {
+pub(crate) extern "C" fn diag_trace_callback(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    all_args: f64,
+) -> f64 {
     // Synthetic-arguments rest array: [fn, position, context, thisArg, ...args]
     // (#3086). `position` defaults to -1 (the last trailing arg), the callback
     // lives at `args[position]`, and the wrapped callback is spliced in at that
@@ -1868,13 +1802,16 @@ pub(crate) extern "C" fn diag_trace_callback(closure: *const ClosureHeader, all_
         throw_trace_callback_not_function();
     }
 
-    let wrapped = js_closure_alloc(diag_trace_wrapped_callback as *const u8, 5);
+    let wrapped = js_closure_alloc(
+        crate::fn_info!(diag_trace_wrapped_callback, 1; with_rest_kind(0, crate::closure::FN_REST_SYNTHETIC_ARGUMENTS)),
+        5,
+    );
     js_closure_set_capture_f64(wrapped, 0, callback);
     js_closure_set_capture_f64(wrapped, 1, context);
     js_closure_set_capture_ptr(wrapped, 2, events[2]);
     js_closure_set_capture_ptr(wrapped, 3, events[3]);
     js_closure_set_capture_ptr(wrapped, 4, events[4]);
-    js_register_closure_synthetic_arguments(diag_trace_wrapped_callback as *const u8, 0);
+
     let wrapped_value = boxed_ptr(wrapped);
 
     // Splice the wrapped callback in at the resolved position, preserving all
@@ -1904,6 +1841,7 @@ pub(crate) extern "C" fn diag_trace_callback(closure: *const ClosureHeader, all_
 
 pub(crate) extern "C" fn thunk_diag_tracing_channel(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     name_or_channels: f64,
 ) -> f64 {
     let id = next_diag_id();
@@ -1943,22 +1881,28 @@ pub(crate) extern "C" fn thunk_diag_tracing_channel(
     set_field_value(
         obj,
         "subscribe",
-        method_closure(cast1(diag_trace_subscribe), 1, id),
+        method_closure(
+            crate::fn_info!(diag_trace_subscribe, 1; with_declared(1)),
+            id,
+        ),
     );
     set_field_value(
         obj,
         "unsubscribe",
-        method_closure(cast1(diag_trace_unsubscribe), 1, id),
+        method_closure(
+            crate::fn_info!(diag_trace_unsubscribe, 1; with_declared(1)),
+            id,
+        ),
     );
     set_field_value(
         obj,
         "traceSync",
-        method_closure(cast4(diag_trace_sync), 4, id),
+        method_closure(crate::fn_info!(diag_trace_sync, 4; with_declared(4)), id),
     );
     set_field_value(
         obj,
         "tracePromise",
-        method_closure(cast3(diag_trace_promise), 3, id),
+        method_closure(crate::fn_info!(diag_trace_promise, 3; with_declared(3)), id),
     );
     set_field_value(obj, "traceCallback", trace_callback_method_closure(id));
     DIAG_TRACES.with(|m| {
@@ -1983,7 +1927,7 @@ pub(crate) fn ensure_diag_noop_closure() -> *mut ClosureHeader {
         if let Some(ptr) = *slot.borrow() {
             return ptr;
         }
-        let allocated = js_closure_alloc(thunk_diag_noop as *const u8, 0);
+        let allocated = js_closure_alloc(crate::fn_info!(thunk_diag_noop, 1), 0);
         *slot.borrow_mut() = Some(allocated);
         ANY_SINGLETON_ALLOCATED.store(1, Ordering::Release);
         allocated

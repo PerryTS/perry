@@ -31,6 +31,9 @@ unsafe fn finish_inline_json_object(
     (*object).parent_class_id = 0;
     // GC_STORE_AUDIT(INIT): fresh inline JSON objects have no metadata edge.
     (*object).meta = ptr::null_mut();
+    // Charter step 3: marked plain-ordinary BEFORE the stamp, so the cached
+    // `Ordinary` id is the receiver's (`mark_object_plain_ordinary`).
+    shapes::store_kind::premark_plain_ordinary(object);
     // A JSON record has exactly one key per field.
     let keys_view = super::ObjectKeys::new(keys, count as u32);
     if !shapes::try_birth_stamp_preinstalled_shape(object, shape_id, keys_view, count as u32) {
@@ -40,9 +43,9 @@ unsafe fn finish_inline_json_object(
         // matching descriptor only for the stale-id case.
         let id = shapes::shape_id_for_keys_ensure(keys, count as u32);
         set_object_keys_with_live(object, keys_view, count as u32);
-        shapes::birth_stamp_object_shape(object, id, count as u32);
+        shapes::birth_stamp_object_shape(object, id, count as u32, super::field_rep::REP_ANY);
     }
-    mark_object_plain_ordinary(object);
+    shapes::store_kind::check_store_facts(object);
 
     let slots = object
         .cast::<u8>()
@@ -93,7 +96,9 @@ pub(crate) unsafe fn try_object_from_prevalidated_one_field(
     (*object).class_id = 0;
     (*object).parent_class_id = shape_id;
     (*object).meta = ptr::null_mut();
-    mark_object_plain_ordinary(object);
+    // Charter step 3: the cached id is an `Ordinary` (marked) record's.
+    shapes::store_kind::premark_plain_ordinary(object);
+    shapes::store_kind::check_store_facts(object);
     let slots = raw
         .add(std::mem::size_of::<ObjectHeader>())
         .cast::<JSValue>();
@@ -126,6 +131,10 @@ pub(crate) unsafe fn try_empty_json_object_preinstalled(
     (*object).class_id = 0;
     (*object).parent_class_id = shape_id;
     (*object).meta = ptr::null_mut();
+    // Charter step 3: a keyless JSON object is born marked plain-ordinary,
+    // and its cached id (`parse_empty`) is the marked record's.
+    shapes::store_kind::premark_plain_ordinary(object);
+    shapes::store_kind::check_store_facts(object);
     let slots = raw
         .add(std::mem::size_of::<ObjectHeader>())
         .cast::<JSValue>();
@@ -200,24 +209,26 @@ pub(crate) unsafe fn object_from_json_fields_preinstalled(
         // `js_json_parse_result`, which is why scoping the parse entry alone
         // changed nothing (the allocation saw mask=0).
         let _wide = crate::gc::JsonWideBirthScope::objects();
-        js_object_alloc_class_inline_keys_stamped(0, 0, count as u32, keys, shape_id)
+        super::alloc_plain::alloc_plain_record_inline_keys_stamped(count as u32, keys, shape_id)
     } else {
         let obj = raw.cast::<ObjectHeader>();
         (*obj).class_id = 0;
         (*obj).parent_class_id = 0;
         // GC_STORE_AUDIT(INIT): fresh record has no metadata edge.
         (*obj).meta = ptr::null_mut();
+        shapes::store_kind::premark_plain_ordinary(obj);
         // Keep shape publication in the existing mint-and-stamp funnel.
         let keys_view = super::ObjectKeys::new(keys, count as u32);
         if !shapes::try_birth_stamp_preinstalled_shape(obj, shape_id, keys_view, count as u32) {
             let id = shapes::shape_id_for_keys_ensure(keys, count as u32);
             set_object_keys_with_live(obj, keys_view, count as u32);
-            shapes::birth_stamp_object_shape(obj, id, count as u32);
+            let rep = super::field_rep::REP_ANY;
+            shapes::birth_stamp_object_shape(obj, id, count as u32, rep);
         }
         crate::gc::layout_init_pointer_free(raw);
         obj
     };
-    mark_object_plain_ordinary(obj);
+    shapes::store_kind::check_store_facts(obj);
     let slots = obj
         .cast::<u8>()
         .add(std::mem::size_of::<ObjectHeader>())
@@ -227,7 +238,7 @@ pub(crate) unsafe fn object_from_json_fields_preinstalled(
         if batch.is_none() {
             // Allocate-black births retain their normal remembering and
             // shading. Suppression alone cannot elide those.
-            saw_pointer |= store_object_field_slot_layout_deferred(obj, index, value.bits());
+            store_object_field_slot_layout_deferred(obj, index, value.bits());
         } else {
             // GC_STORE_AUDIT(INIT): unpublished record, no marking or callbacks;
             // final layout and old-to-young pages are published below.
@@ -241,7 +252,6 @@ pub(crate) unsafe fn object_from_json_fields_preinstalled(
         // GC_STORE_AUDIT(INIT): physical slack is not a live shape field.
         slots.add(index).write(JSValue::undefined());
     }
-    crate::gc::layout_finish_deferred_boxed_object(obj as usize, saw_pointer);
     if saw_pointer {
         if let Some(batch) = batch {
             batch.finish_json_slots(obj.cast(), slots.cast(), count);

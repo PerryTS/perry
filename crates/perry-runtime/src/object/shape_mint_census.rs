@@ -213,6 +213,15 @@ static TC_MISS_PLACES: AtomicU64 = AtomicU64::new(0);
 static TC_MISS_UNSHARED: AtomicU64 = AtomicU64::new(0);
 static TC_MISS_TARGET_LEN: AtomicU64 = AtomicU64::new(0);
 static TC_MISS_UNSTABLE: AtomicU64 = AtomicU64::new(0);
+/// Hits the value class refused (charter step 5, T2): counted in `TC_HITS`
+/// too, since the lookup matched before the class guard ran.
+static TC_REP_REFUSED: AtomicU64 = AtomicU64::new(0);
+
+pub(crate) fn note_transition_rep_refused() {
+    if armed() {
+        TC_REP_REFUSED.fetch_add(1, Ordering::Relaxed);
+    }
+}
 static TC_INSERTS: AtomicU64 = AtomicU64::new(0);
 static TC_EVICTIONS: AtomicU64 = AtomicU64::new(0);
 
@@ -584,7 +593,7 @@ pub(crate) fn dump() {
         );
     }
     out.push_str(&format!(
-        "  transition cache ({} entries, direct-mapped):\n    lookups {}  hits {} ({:.1}%)\n             miss_empty {}  miss_COLLIDE {}  miss_places_key {}  miss_unshared {}  miss_target_len {}  miss_unstable {}\n             inserts {}  EVICTIONS {} ({:.1}%)\n",
+        "  transition cache ({} entries, direct-mapped):\n    lookups {}  hits {} ({:.1}%)\n             miss_empty {}  miss_COLLIDE {}  miss_places_key {}  miss_unshared {}  miss_target_len {}  miss_unstable {}\n             rep_refused {} (of the hits: the value class did not fit the target, T2)\n             inserts {}  EVICTIONS {} ({:.1}%)\n",
         16384,
         tc_total,
         tc_h,
@@ -595,6 +604,7 @@ pub(crate) fn dump() {
         tc_s,
         tc_t,
         tc_u,
+        TC_REP_REFUSED.load(Ordering::Relaxed),
         TC_INSERTS.load(Ordering::Relaxed),
         TC_EVICTIONS.load(Ordering::Relaxed),
         100.0 * TC_EVICTIONS.load(Ordering::Relaxed) as f64

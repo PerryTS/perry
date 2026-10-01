@@ -26,7 +26,11 @@ pub(super) fn deliver_parent_port_message(message: &SerializedValue) {
 
     if let Some(callback_ptr) = MESSAGE_CALLBACK.with(|cb| *cb.borrow()) {
         let closure = callback_ptr as *const ClosureHeader;
-        perry_runtime::closure::js_closure_call1(closure, value_h.get_nanbox_f64());
+        perry_runtime::closure::js_closure_call1(
+            closure,
+            perry_runtime::closure::plain_call_receiver(),
+            value_h.get_nanbox_f64(),
+        );
     }
 
     // Root the listener closures BEFORE allocating the `MessageEvent`: that
@@ -59,7 +63,11 @@ pub(super) fn deliver_parent_port_message(message: &SerializedValue) {
             let callback_ptr =
                 perry_runtime::value::js_nanbox_get_pointer(callback_h.get_nanbox_f64());
             let closure = callback_ptr as *const ClosureHeader;
-            perry_runtime::closure::js_closure_call1(closure, event_h.get_nanbox_f64());
+            perry_runtime::closure::js_closure_call1(
+                closure,
+                perry_runtime::closure::plain_call_receiver(),
+                event_h.get_nanbox_f64(),
+            );
         }
     }
 }
@@ -180,7 +188,11 @@ pub extern "C" fn js_worker_threads_process_pending() -> i32 {
 
             // Call the message callback with the parsed value
             let closure = callback_ptr as *const ClosureHeader;
-            perry_runtime::closure::js_closure_call1(closure, parsed);
+            perry_runtime::closure::js_closure_call1(
+                closure,
+                perry_runtime::closure::plain_call_receiver(),
+                parsed,
+            );
             processed += 1;
         }
     }
@@ -191,7 +203,10 @@ pub extern "C" fn js_worker_threads_process_pending() -> i32 {
         let close_cb = CLOSE_CALLBACK.with(|cb| cb.borrow_mut().take());
         if let Some(callback_ptr) = close_cb {
             let closure = callback_ptr as *const ClosureHeader;
-            perry_runtime::closure::js_closure_call0(closure);
+            perry_runtime::closure::js_closure_call0(
+                closure,
+                perry_runtime::closure::plain_call_receiver(),
+            );
         }
     }
 
@@ -342,9 +357,16 @@ fn dispatch_worker_event(worker_id: u64, event: &str, arg: Option<f64>) {
                 arg_handle.as_ref().map(|h| h.get_nanbox_f64())
             };
             if let Some(arg) = call_arg {
-                perry_runtime::closure::js_closure_call1(closure, arg);
+                perry_runtime::closure::js_closure_call1(
+                    closure,
+                    perry_runtime::closure::plain_call_receiver(),
+                    arg,
+                );
             } else {
-                perry_runtime::closure::js_closure_call0(closure);
+                perry_runtime::closure::js_closure_call0(
+                    closure,
+                    perry_runtime::closure::plain_call_receiver(),
+                );
             }
         }
         js_undefined()

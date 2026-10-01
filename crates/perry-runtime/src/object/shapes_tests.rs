@@ -84,16 +84,21 @@ mod c3c_tests {
         let _lock = crate::gc::global_side_table_test_lock();
         const CID: u32 = 0x0C3C_7902;
         let packed = b"birth_a\0birth_b";
-        let keys =
-            crate::object::js_build_class_keys_array(CID, 2, packed.as_ptr(), packed.len() as u32);
-        let shape_id = js_object_shape_id_for_class_keys(keys as usize as u64, 2, CID);
+        let keys = crate::object::js_build_class_keys_array(
+            CID,
+            2,
+            packed.as_ptr(),
+            packed.len() as u32,
+            0,
+        );
+        let shape_id = js_object_shape_id_for_class_keys(keys as usize as u64, 2, CID, 0);
         assert!(
             is_shape_id(shape_id),
             "module init must mint a real ShapeId"
         );
 
         let obj =
-            crate::object::js_object_alloc_class_inline_keys_stamped(CID, 0, 2, keys, shape_id);
+            crate::object::js_object_alloc_class_inline_keys_stamped(CID, 0, 2, keys, shape_id, 0);
         let birth_word = unsafe { (*obj).parent_class_id };
         assert_eq!(
             birth_word, shape_id,
@@ -115,9 +120,14 @@ mod c3c_tests {
         let _lock = crate::gc::global_side_table_test_lock();
         const CID: u32 = 0x0C3C_7903;
         let packed = b"direct_a\0direct_b";
-        let keys =
-            crate::object::js_build_class_keys_array(CID, 2, packed.as_ptr(), packed.len() as u32);
-        let shape_id = js_object_shape_id_for_class_keys(keys as usize as u64, 2, CID);
+        let keys = crate::object::js_build_class_keys_array(
+            CID,
+            2,
+            packed.as_ptr(),
+            packed.len() as u32,
+            0,
+        );
+        let shape_id = js_object_shape_id_for_class_keys(keys as usize as u64, 2, CID, 0);
         let payload = std::mem::size_of::<crate::object::ObjectHeader>()
             + crate::object::INLINE_SLOT_FLOOR * std::mem::size_of::<crate::value::JSValue>();
         let obj = crate::arena::arena_alloc_gc(payload, 8, crate::gc::GC_TYPE_OBJECT)
@@ -157,12 +167,17 @@ mod c3c_tests {
         let _lock = crate::gc::global_side_table_test_lock();
         const CID: u32 = 0x0C3C_7904;
         let packed = b"wide_a\0wide_b";
-        let keys =
-            crate::object::js_build_class_keys_array(CID, 2, packed.as_ptr(), packed.len() as u32);
+        let keys = crate::object::js_build_class_keys_array(
+            CID,
+            2,
+            packed.as_ptr(),
+            packed.len() as u32,
+            0,
+        );
         let narrow_id = js_object_shape_id_for_keys(keys as usize as u64, 2);
 
         let obj =
-            crate::object::js_object_alloc_class_inline_keys_stamped(CID, 0, 3, keys, narrow_id);
+            crate::object::js_object_alloc_class_inline_keys_stamped(CID, 0, 3, keys, narrow_id, 0);
         let actual_id = unsafe { (*obj).parent_class_id };
         assert_ne!(
             actual_id, narrow_id,
@@ -185,8 +200,13 @@ mod c3c_tests {
         let _lock = crate::gc::global_side_table_test_lock();
         const CID: u32 = 0x0C3C_7926;
         let packed = b"count_mismatch";
-        let keys =
-            crate::object::js_build_class_keys_array(CID, 1, packed.as_ptr(), packed.len() as u32);
+        let keys = crate::object::js_build_class_keys_array(
+            CID,
+            1,
+            packed.as_ptr(),
+            packed.len() as u32,
+            0,
+        );
         let stale_id = js_object_shape_id_for_keys(keys as usize as u64, 1);
 
         unsafe {
@@ -196,7 +216,7 @@ mod c3c_tests {
             (*keys).length = 0;
         }
         let obj =
-            crate::object::js_object_alloc_class_inline_keys_stamped(CID, 0, 1, keys, stale_id);
+            crate::object::js_object_alloc_class_inline_keys_stamped(CID, 0, 1, keys, stale_id, 0);
         let actual_id = unsafe { (*obj).parent_class_id };
         assert_ne!(
             actual_id, stale_id,
@@ -553,6 +573,8 @@ mod descriptor_tests_8067 {
             1,
             1,
             PROTO_ID_DEFAULT,
+            ShapeObjectKind::Ordinary,
+            crate::object::field_rep::REP_ANY,
         ));
 
         assert_eq!(
@@ -668,6 +690,8 @@ mod descriptor_tests_8067 {
                 2,
                 2,
                 PROTO_ID_DEFAULT,
+                ShapeObjectKind::Ordinary,
+                crate::object::field_rep::REP_ANY,
             ));
             assert_eq!(
                 shape_descriptor_by_id(module_id).unwrap().keys,
@@ -1168,7 +1192,11 @@ fn the_ordinary_slot_query_declines_a_class_kind_shape() {
         // `transition_object_shape_to_class` keeps the keys array and both
         // counts and changes ONLY the kind, so the pair below differs in
         // exactly the conjunct under test.
-        let obj = crate::object::js_object_alloc_class_inline_keys_stamped(0, 0, 1, keys, ordinary);
+        // Born marked plain-ordinary: a class-less unmarked receiver would
+        // derive `OrdinaryUnmarked` and decline the `Ordinary` id (charter
+        // step 3).
+        let obj =
+            crate::object::alloc_plain::alloc_plain_record_inline_keys_stamped(1, keys, ordinary);
         assert_eq!((*obj).parent_class_id, ordinary, "test premise: stamped");
         let class_kind = transition_object_shape_to_class(obj);
         assert_ne!(
@@ -1240,6 +1268,7 @@ mod prototype_identity_tests {
             0,
             proto_id,
             0,
+            None,
         ))
     }
 
@@ -1315,6 +1344,7 @@ mod region_guard_pack_tests {
             count,
             packed.as_ptr(),
             packed.len() as u32,
+            0,
         );
         js_object_shape_id_for_keys(keys as usize as u64, count)
     }
@@ -1428,5 +1458,123 @@ mod region_guard_pack_tests {
     #[test]
     fn the_empty_word_is_not_a_shape_id() {
         assert!(!is_shape_id(REGION_GUARD_WORD_EMPTY as u32));
+    }
+}
+
+/// Charter step 5: the field representation is a shape fact. Same facts with
+/// a different `rep` identity are different ShapeIds; the deprecated state is
+/// learned, not identity; and an all-`Any` request is exactly today's mint.
+#[cfg(test)]
+mod field_rep_identity_tests {
+    use super::*;
+    use crate::object::field_rep::{with_slot_rep, REP_ANY, REP_F64, REP_F64_DEPRECATED};
+
+    /// A proto serial no other test uses, so the mints are this test's own.
+    const PROTO: u64 = 0x5_7E95;
+
+    fn mint(rep: u64) -> u32 {
+        publish_shape_result(shape_descriptor_ensure_with_rep(
+            std::ptr::null(),
+            0,
+            3,
+            0,
+            ShapeObjectKind::Ordinary,
+            0,
+            PROTO,
+            0,
+            rep,
+            None,
+        ))
+    }
+
+    #[test]
+    fn rep_is_identity_and_deprecated_is_not() {
+        let any = mint(REP_ANY);
+        let f64_at_1 = with_slot_rep(0, 1, REP_F64);
+        let typed = mint(f64_at_1);
+        assert_ne!(any, typed, "same facts, different rep: different shapes");
+        assert_eq!(mint(f64_at_1), typed, "one rep, one shape");
+        assert_eq!(
+            mint(with_slot_rep(0, 1, REP_F64_DEPRECATED)),
+            typed,
+            "a deprecated lane is a learned fact: it finds the F64 record"
+        );
+        assert_eq!(shape_descriptor_by_id(typed).map(|d| d.rep), Some(f64_at_1));
+        assert_eq!(shape_descriptor_by_id(any).map(|d| d.rep), Some(REP_ANY));
+    }
+
+    /// POSBOUND is a fact of every record, a rep-typed one included: a shape
+    /// minted with an `F64` slot through the rep-aware entry carries the
+    /// bound its facts define, the same bound as its all-`Any` sibling
+    /// (`rep` is not an input of the definition), and its stored bound agrees
+    /// with the definition.
+    #[test]
+    fn a_rep_typed_shape_carries_its_own_position_bound() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let keys = crate::array::js_array_alloc_with_length(3);
+        let mint_keys = |rep: u64| {
+            publish_shape_result(shape_descriptor_ensure_with_rep(
+                keys,
+                3,
+                3,
+                0,
+                ShapeObjectKind::Ordinary,
+                0,
+                PROTO,
+                0,
+                rep,
+                None,
+            ))
+        };
+        let any = mint_keys(REP_ANY);
+        let typed = mint_keys(with_slot_rep(0, 1, REP_F64));
+        assert_ne!(any, typed, "premise: the rep makes a different shape");
+        assert_eq!(
+            crate::object::shapes::test_positional_of_id(any),
+            Some((3, 3)),
+            "premise: the all-Any shape answers three positions"
+        );
+        assert_eq!(
+            crate::object::shapes::test_positional_of_id(typed),
+            Some((3, 3)),
+            "the rep-typed shape must carry its own, agreeing POSBOUND"
+        );
+    }
+
+    /// P1 is inert: the all-`Any` entry points mint the same id as an explicit
+    /// `REP_ANY` request, so no existing caller's shape changes.
+    #[test]
+    fn all_any_requests_are_todays_mint() {
+        let explicit = mint(REP_ANY);
+        let legacy = publish_shape_result(shape_descriptor_ensure_with_holes(
+            std::ptr::null(),
+            0,
+            3,
+            0,
+            ShapeObjectKind::Ordinary,
+            0,
+            PROTO,
+            0,
+            None,
+        ));
+        assert_eq!(explicit, legacy);
+    }
+
+    #[test]
+    fn a_reserved_lane_is_refused() {
+        let reserved = with_slot_rep(0, 2, crate::object::field_rep::REP_RESERVED);
+        assert!(shape_descriptor_ensure_with_rep(
+            std::ptr::null(),
+            0,
+            3,
+            0,
+            ShapeObjectKind::Ordinary,
+            0,
+            PROTO,
+            0,
+            reserved,
+            None,
+        )
+        .is_err());
     }
 }

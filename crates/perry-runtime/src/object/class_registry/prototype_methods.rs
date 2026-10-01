@@ -47,6 +47,10 @@ pub unsafe extern "C" fn js_class_register_static_field(
     };
     class_register_declared_static_global_slot(class_id, name, global_slot);
     class_dynamic_prop_root_store(class_id, name, value);
+    // DefineField: a static field is an ordinary writable, enumerable,
+    // configurable own property — also when it replaces the class's
+    // intrinsic `name` / `length`.
+    crate::object::class_value::note_static_field_defined(class_id, name);
 }
 
 /// Read a computed instance-field key resolved at ClassDefinitionEvaluation.
@@ -207,9 +211,6 @@ pub(crate) fn invalidate_class_prototype_fast_guards() {
 }
 
 pub(crate) fn class_prototype_method_root_store(class_id: u32, name: String, value_bits: u64) {
-    // Assignment / defineProperty after `delete C.prototype.m` recreates the
-    // own property and must make it visible to dispatch again.
-    class_unmark_key_deleted(class_id, &name);
     CLASS_PROTOTYPE_METHODS.with(|table| {
         let mut guard = table.write().unwrap();
         if guard.is_none() {

@@ -192,15 +192,22 @@ pub(crate) fn lower_array_pop_inline(ctx: &mut FnCtx<'_>, recv_box: &str) -> Str
         let elem_bits = blk.bitcast_double_to_i64(&elem);
         let is_hole = blk.icmp_eq(I64, &elem_bits, crate::nanbox::TAG_HOLE_I64);
         blk.cond_br(&is_hole, &slow_label, &take_label);
-        elem
+        (elem, elem_ptr)
     };
+    let (elem, elem_ptr) = elem;
 
     ctx.current_block = take_idx;
     {
         let blk = ctx.block();
         let len_ptr = blk.inttoptr(I64, &payload);
         // `length` is a plain i32 word: no pointer, no barrier, no layout
-        // note — exactly the runtime fast path's single store.
+        // note — exactly the runtime fast path's stores. The vacated slot
+        // gets the hole sentinel (`array_truncate_length`): `[length,
+        // capacity)` stays hole-filled, which element reads bounded by
+        // `capacity` rely on. A hole is not an edge, so no barrier.
+        // GC_STORE_AUDIT(POINTER_FREE): TAG_HOLE is not a heap pointer; the
+        // store writes no edge.
+        blk.store(I64, crate::nanbox::TAG_HOLE_I64, &elem_ptr);
         blk.store(I32, &new_length, &len_ptr);
         blk.br(&merge_label);
     }
@@ -407,6 +414,10 @@ mod tests {
         assert!(
             take.contains("store i32") && !take.contains("call "),
             "{what}: the inline arm is one length store and no call:\n{take}"
+        );
+        assert!(
+            take.contains(&format!("store i64 {}", crate::nanbox::TAG_HOLE_I64)),
+            "{what}: the vacated slot must be written with the hole sentinel:\n{take}"
         );
         let slow = super::super::class_field_barrier_tests::block_body(ir, "apop.slow.")
             .expect("slow block");

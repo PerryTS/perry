@@ -14,7 +14,13 @@ thread_local! {
 }
 
 extern "C" {
-    fn js_closure_call3(closure: *const u8, arg1: f64, arg2: f64, arg3: f64) -> f64;
+    fn js_closure_call3(
+        closure: *const u8,
+        this: perry_ffi::JsThis,
+        arg1: f64,
+        arg2: f64,
+        arg3: f64,
+    ) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
     fn js_nanbox_pointer(ptr: i64) -> f64;
 }
@@ -255,6 +261,7 @@ fn schedule_frame_processing(handle: i64) {
                     let closure_ptr = js_nanbox_get_pointer(callback) as *const u8;
                     js_closure_call3(
                         closure_ptr,
+                        perry_ffi::JsThis::UNDEFINED,
                         js_nanbox_pointer(frame_bytes.as_ptr() as i64),
                         w as f64,
                         h as f64,

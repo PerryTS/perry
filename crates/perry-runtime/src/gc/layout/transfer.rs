@@ -22,7 +22,7 @@
 //!   entry, not only the layout kinds (see below);
 //! * the element-shape proof record (#7480), gated by the header bit that is
 //!   authoritative for it;
-//! * the per-object `TYPED_LAYOUTS` and `LAYOUT_SLOT_MASKS` entries, gated by
+//! * the per-object `LAYOUT_SLOT_MASKS` entry, gated by
 //!   #7510's emptiness flag and address filter.
 //!
 //! # The prototype registry is not layout metadata
@@ -38,35 +38,11 @@
 //! same population predicate the collector's value visit uses
 //! (`gc/layout_slot_visit.rs`).
 //!
-//! Until #10362 the funnel re-derived the header half too — rewriting bits
-//! that were already equal, and re-resolving the intact bit through a
-//! ShapeId-keyed `SHAPE_LAYOUTS` probe — once per relocated object. Measured
-//! on #10362's retained-graph workload that was 160 instructions per moved
-//! array and 245 per moved object, 518M instructions (4.2% of the run), of
-//! which zero reached a side-table record: both per-object maps held one key.
-//! The gates below answer the same questions from the header word and two
-//! flags the caller has already brought into cache.
-//!
-//! # Why the intact bit is not re-derived
-//!
-//! `GC_OBJ_TYPED_LAYOUT_INTACT` asks whether a canonical typed descriptor is
-//! reachable for this object. Its inputs are the receiver's stamped ShapeId
-//! (copied verbatim with the payload), `SHAPE_LAYOUTS`, the process-global
-//! registered typed-shape registry (#8405) and the per-object map — and a
-//! relocation changes none of them. Re-asking at move time could therefore
-//! only apply a LAZY downgrade, and only to the objects that happen to move.
-//!
-//! The state that downgrade cleared — intact while no descriptor is reachable
-//! — is legal and handled. `shape_install_shared` poisons a shape's shared
-//! entry to `None` and deliberately leaves "any still-INTACT siblings" to fall
-//! back; #8115 clears the bit at the first contradicting store; the trace path
-//! resolves no mask, sets `GC_LAYOUT_UNKNOWN` and scans every slot; the query
-//! helpers answer "no descriptor". An unmoved sibling in exactly that state
-//! keeps its bit today, so an argument that needed the move to clear it would
-//! already be broken for every object that does not move.
-//! `gc/tests/layout_trace/typed_shape.rs` pins the pair across a real copying
-//! minor: the moved object and its unmoved peer must answer identically, and
-//! the child behind the poisoned shape must survive the cycle.
+//! Until #10362 the funnel re-derived the header half too, once per relocated
+//! object (4.2% of #10362's retained-graph run). The gates below answer the
+//! same questions from the header word and two flags the caller has already
+//! brought into cache. Charter step 5: no object carries a typed layout
+//! descriptor, so only the per-object slot mask moves.
 
 use super::*;
 use crate::gc::layout_tables::per_object_layouts_may_hold_either;
@@ -123,21 +99,20 @@ pub(crate) unsafe fn layout_transfer(old_user: *mut u8, new_user: *mut u8) {
     // hot thread-local slot #7510 keeps them in. Each is the same question the
     // record mover behind it asks first, hoisted so the common case — no
     // record anywhere near either address — never leaves this function.
-    let per_object = per_object_layouts_may_hold_either(old_user as usize, new_user as usize);
+    let mask_owner = matches!((*old_header).obj_type, GC_TYPE_ARRAY | GC_TYPE_CLOSURE);
+    let per_object =
+        mask_owner && per_object_layouts_may_hold_either(old_user as usize, new_user as usize);
     let element_shape = is_array && reserved & GC_ARRAY_ELEMENT_SHAPE != 0;
     if per_object || element_shape {
-        transfer_address_keyed_records(
-            old_user as usize,
-            new_user as usize,
-            header_from_user_ptr(new_user as *const u8),
-            is_array,
-        );
+        transfer_address_keyed_records(old_user as usize, new_user as usize, is_array);
     }
 
     // The source is a dead evacuation original or a growth forwarding stub the
     // moment we return. Drop its claim to a descriptor rather than leave the
     // bit readable at an address whose records now belong to the destination.
-    header_clear_typed_layout_intact(old_header);
+    if mask_owner {
+        header_clear_typed_layout_intact(old_header);
+    }
 }
 
 /// The residual prototype registry's rekey. Cold and out of line so the funnel
@@ -154,12 +129,7 @@ fn transfer_residual_prototype(old_user: usize, new_user: usize) {
 /// every monomorphic program — it is never reached.
 #[cold]
 #[inline(never)]
-unsafe fn transfer_address_keyed_records(
-    old_user: usize,
-    new_user: usize,
-    new_header: *mut GcHeader,
-    is_array: bool,
-) {
+unsafe fn transfer_address_keyed_records(old_user: usize, new_user: usize, is_array: bool) {
     if is_array {
         // #7480: the proof record is keyed by the array's address while the
         // header bit is what a read consults. `transfer_element_shape` decides
@@ -167,18 +137,7 @@ unsafe fn transfer_address_keyed_records(
         // when no record follows the move.
         crate::array::transfer_element_shape(old_user, new_user);
     }
-    // #7510's two per-object maps. Both re-test the gate above for their own
-    // address pair, so calling them when only a sibling gate fired costs one
-    // predictable branch each.
-    //
-    // Re-setting the intact bit for a moved per-object descriptor is parity
-    // with the pre-#10362 funnel rather than a fact the copy lost: a source
-    // whose descriptor existed while its own bit was clear had the bit SET by
-    // the move. Keeping that leaves the lazy downgrade (module docs) as the
-    // single behavioural difference of #10362.
-    if transfer_per_object_descriptor(old_user, new_user) {
-        header_set_typed_layout_intact(new_header);
-    }
+    // Only arrays and closures retain address-keyed slot masks.
     transfer_per_object_slot_mask(old_user, new_user);
 }
 

@@ -569,7 +569,7 @@ unsafe fn allocate_parse_shape_keys_array(keys: &[*const StringHeader]) -> *mut 
             JSValue::string_ptr(key_ptr as *mut StringHeader),
         );
     }
-    let arr = array.finish(&batch);
+    let arr = array.finish(&mut batch);
     let header = (arr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
     (*header).gc_flags |= crate::gc::GC_FLAG_SHAPE_SHARED;
     arr

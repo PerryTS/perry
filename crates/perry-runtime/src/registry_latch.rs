@@ -41,8 +41,8 @@
 //! window in which the feature is live and reachable but the latch still reads
 //! idle, so a concurrent probe takes the fast path and answers `false` for an
 //! address that is genuinely registered. That is not hypothetical: the sibling
-//! latch `buffer::header::EXTERNAL_BUFFERS_NONEMPTY` carries an inline comment
-//! for precisely this reason, and `js_buffer_register_external` latches first.
+//! latch `buffer::header::EXTERNAL_UINT8ARRAYS_NONEMPTY` carries an inline comment
+//! for precisely this reason, and `register_external_uint8array` latches first.
 //!
 //! With the arm placed first, the argument for a reader on *another* thread is:
 //! a thread can only probe an address it holds, and every route by which an

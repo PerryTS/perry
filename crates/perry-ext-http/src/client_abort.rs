@@ -14,7 +14,10 @@ fn abort_event_value() -> f64 {
     f64::from_bits(JsValue::from_string_ptr(alloc_string("abort").as_raw()).bits())
 }
 
-extern "C" fn request_signal_listener(closure: *const RawClosureHeader) -> f64 {
+extern "C" fn request_signal_listener(
+    closure: *const RawClosureHeader,
+    _this: perry_ffi::JsThis,
+) -> f64 {
     let request_handle = unsafe { perry_ffi::closure_capture_f64(closure, 0) } as i64;
     push_event(PendingHttpEvent::SignalAbort { request_handle });
     f64::from_bits(TAG_UNDEFINED)
@@ -37,7 +40,8 @@ pub(crate) unsafe fn attach_request_signal(request_handle: Handle, options: f64)
         return;
     }
 
-    let listener = perry_ffi::alloc_closure(request_signal_listener as *const u8, 1);
+    let listener =
+        perry_ffi::alloc_closure(perry_ffi::js_function_info!(request_signal_listener, 0), 1);
     if listener.is_null() {
         return;
     }

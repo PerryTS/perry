@@ -86,6 +86,12 @@ pub(crate) unsafe fn dispatch_zlib_stream(handle: i64, method: &str, args: &[f64
     not(target_os = "android")
 ))]
 pub(crate) unsafe fn dispatch_external_net_socket(handle: i64, method: &str, args: &[f64]) -> f64 {
+    // A string argument (event name, servername) for an ext-net native that
+    // reads it as a `*const StringHeader` on entry: an inline SSO value goes
+    // through `js_ffi_arg_ptr`'s scratch header, not a bare mask (#11519).
+    fn str_arg(v: f64) -> i64 {
+        perry_runtime::value::js_ffi_arg_ptr(v)
+    }
     fn unbox_to_i64(v: f64) -> i64 {
         (v.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64
     }
@@ -183,7 +189,7 @@ pub(crate) unsafe fn dispatch_external_net_socket(handle: i64, method: &str, arg
             f64::from_bits(0x7FFC_0000_0000_0001)
         }
         "emit" if !args.is_empty() => {
-            let event_ptr = unbox_to_i64(args[0]);
+            let event_ptr = str_arg(args[0]);
             let rest = args.get(1..).unwrap_or(&[]);
             js_ext_net_socket_emit(handle, event_ptr, rest.as_ptr(), rest.len())
         }
@@ -192,7 +198,7 @@ pub(crate) unsafe fn dispatch_external_net_socket(handle: i64, method: &str, arg
             f64::from_bits(0x7FFC_0000_0000_0001)
         }
         "on" | "addListener" if args.len() >= 2 => {
-            let event_ptr = unbox_to_i64(args[0]);
+            let event_ptr = str_arg(args[0]);
             let cb_ptr = unbox_to_i64(args[1]);
             js_ext_net_socket_on(handle, event_ptr, cb_ptr);
             nanbox_handle(handle)
@@ -205,7 +211,7 @@ pub(crate) unsafe fn dispatch_external_net_socket(handle: i64, method: &str, arg
             nanbox_handle(handle)
         }
         "upgradeToTLS" if !args.is_empty() => {
-            let servername_ptr = unbox_to_i64(args[0]);
+            let servername_ptr = str_arg(args[0]);
             let verify = if args.len() >= 2 { args[1] } else { 1.0 };
             let promise = js_net_socket_upgrade_tls(handle, servername_ptr, verify);
             f64::from_bits(0x7FFD_0000_0000_0000u64 | (promise as u64 & 0x0000_FFFF_FFFF_FFFF))
@@ -215,13 +221,13 @@ pub(crate) unsafe fn dispatch_external_net_socket(handle: i64, method: &str, arg
         // is the dominant case; the static class info is lost between
         // the connection event push and the user callback).
         "once" if args.len() >= 2 => {
-            let event_ptr = unbox_to_i64(args[0]);
+            let event_ptr = str_arg(args[0]);
             let cb_ptr = unbox_to_i64(args[1]);
             js_ext_net_socket_once(handle, event_ptr, cb_ptr);
             nanbox_handle(handle)
         }
         "off" | "removeListener" if args.len() >= 2 => {
-            let event_ptr = unbox_to_i64(args[0]);
+            let event_ptr = str_arg(args[0]);
             let cb_ptr = unbox_to_i64(args[1]);
             js_ext_net_socket_remove_listener(handle, event_ptr, cb_ptr);
             nanbox_handle(handle)
@@ -230,12 +236,12 @@ pub(crate) unsafe fn dispatch_external_net_socket(handle: i64, method: &str, arg
             // Bare `removeAllListeners()` passes no event, padded as
             // `undefined`; the FFI treats a null/non-string ptr as
             // "drain every event".
-            let event_ptr = args.first().copied().map(unbox_to_i64).unwrap_or(0);
+            let event_ptr = args.first().copied().map(str_arg).unwrap_or(0);
             js_ext_net_socket_remove_all_listeners(handle, event_ptr);
             nanbox_handle(handle)
         }
         "listenerCount" if !args.is_empty() => {
-            let event_ptr = unbox_to_i64(args[0]);
+            let event_ptr = str_arg(args[0]);
             js_ext_net_socket_listener_count(handle, event_ptr)
         }
         "getMaxListeners" => js_ext_net_socket_get_max_listeners(handle),
@@ -253,12 +259,12 @@ pub(crate) unsafe fn dispatch_external_net_socket(handle: i64, method: &str, arg
         // for any-typed receivers. FFI returns a *mut ArrayHeader cast to i64;
         // NaN-box with POINTER_TAG (0x7FFD) so callers see a real JS array.
         "listeners" if !args.is_empty() => {
-            let event_ptr = unbox_to_i64(args[0]);
+            let event_ptr = str_arg(args[0]);
             let arr = js_ext_net_socket_listeners(handle, event_ptr);
             f64::from_bits(0x7FFD_0000_0000_0000u64 | (arr as u64 & 0x0000_FFFF_FFFF_FFFF))
         }
         "rawListeners" if !args.is_empty() => {
-            let event_ptr = unbox_to_i64(args[0]);
+            let event_ptr = str_arg(args[0]);
             let arr = js_net_socket_raw_listeners(handle, event_ptr);
             f64::from_bits(0x7FFD_0000_0000_0000u64 | (arr as u64 & 0x0000_FFFF_FFFF_FFFF))
         }

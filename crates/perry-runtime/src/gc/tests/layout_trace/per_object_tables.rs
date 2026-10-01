@@ -5,7 +5,7 @@
 //!
 //!   flag == false  ⟹  both maps are empty
 //!
-//! holds, so these tests drive an object through every transition that can
+//! holds, so these tests drive an array through every transition that can
 //! populate or drain the maps and assert the implication after each one. A
 //! stale `true` is merely slow and is deliberately not asserted against.
 
@@ -107,24 +107,25 @@ fn assert_flag_sound(context: &str) {
     }
 }
 
-/// A pointer-masked object with no `keys_array` cannot ride the shape-shared
-/// descriptor, so it lands in the per-object maps — the one regime the flag
-/// has to notice.
+/// Arrays still use per-address pointer masks; objects now trace by shape.
 #[test]
 fn test_per_object_tables_flag_arms_on_install_and_clears_on_death() {
     clear_marks();
     clear_mark_seeds();
     assert_flag_sound("before install");
 
-    let obj = crate::object::js_object_alloc(0, 2);
+    let obj = crate::array::js_array_alloc_with_length(2);
     let pointer_mask = [0b10u64];
-    js_gc_init_typed_shape_layout(
-        obj as u64,
-        2,
-        std::ptr::null(),
-        0,
-        pointer_mask.as_ptr(),
-        pointer_mask.len() as u32,
+    // A per-object record: the SIDE_MASK layout state plus its slot mask.
+    unsafe {
+        crate::gc::layout::set_layout_state(
+            crate::gc::layout::header_from_user_ptr(obj as *const u8),
+            crate::gc::layout::GC_LAYOUT_SIDE_MASK,
+        );
+    }
+    crate::gc::layout_tables::slot_masks_insert(
+        obj as usize,
+        crate::gc::layout::LayoutSlotMask::from_words(&pointer_mask),
     );
 
     assert!(
@@ -153,7 +154,7 @@ fn test_per_object_tables_flag_arms_on_install_and_clears_on_death() {
 }
 
 /// The codegen gate protects this exact address-reuse boundary: a freshly
-/// allocated object must not inherit the previous tenant's per-object mask.
+/// allocated array must not inherit the previous tenant's per-object mask.
 /// The IR census pins the atomic load and call; this runtime half proves the
 /// non-zero authority lets that call find and remove the stale address key.
 #[test]
@@ -161,7 +162,7 @@ fn test_global_gate_exposes_a_recycled_address_record_to_forget() {
     clear_marks();
     clear_mark_seeds();
 
-    let previous_tenant = crate::object::js_object_alloc(0, 8);
+    let previous_tenant = crate::array::js_array_alloc_with_length(8);
     let child = crate::object::js_object_alloc(0, 0);
     crate::gc::layout_note_slot(
         previous_tenant as usize,
@@ -204,13 +205,16 @@ fn test_per_object_tables_flag_survives_a_partial_drain() {
     let second = crate::object::js_object_alloc(0, 2);
     let pointer_mask = [0b10u64];
     for obj in [first, second] {
-        js_gc_init_typed_shape_layout(
-            obj as u64,
-            2,
-            std::ptr::null(),
-            0,
-            pointer_mask.as_ptr(),
-            pointer_mask.len() as u32,
+        // A per-object record: the SIDE_MASK layout state plus its slot mask.
+        unsafe {
+            crate::gc::layout::set_layout_state(
+                crate::gc::layout::header_from_user_ptr(obj as *const u8),
+                crate::gc::layout::GC_LAYOUT_SIDE_MASK,
+            );
+        }
+        crate::gc::layout_tables::slot_masks_insert(
+            obj as usize,
+            crate::gc::layout::LayoutSlotMask::from_words(&pointer_mask),
         );
     }
     assert!(flag(), "two per-object descriptors must arm the flag");
@@ -235,67 +239,30 @@ fn test_per_object_tables_flag_survives_a_partial_drain() {
     clear_mark_seeds();
 }
 
-/// A store that contradicts the descriptor evicts it
-/// (`layout_set_typed_unknown`) — the removal path that does *not* go through
-/// object death.
-#[test]
-fn test_per_object_tables_flag_tracks_a_typed_downgrade() {
-    clear_marks();
-    clear_mark_seeds();
-
-    let obj = crate::object::js_object_alloc(0, 2);
-    // The install validates the live field bits against the mask it is handed,
-    // so the raw-f64 slot has to already hold a number or the descriptor is
-    // rejected before it is ever stored.
-    crate::object::js_object_set_field(obj, 0, crate::value::JSValue::number(1.5));
-    crate::object::js_object_set_field(obj, 1, crate::value::JSValue::number(2.5));
-    let raw_mask = [0b01u64];
-    js_gc_init_typed_shape_layout(
-        obj as u64,
-        2,
-        raw_mask.as_ptr(),
-        raw_mask.len() as u32,
-        std::ptr::null(),
-        0,
-    );
-    assert!(flag(), "a per-object raw-f64 descriptor must arm the flag");
-
-    // Slot 0 is declared raw-f64; storing a string contradicts that and
-    // evicts the whole descriptor.
-    let child = crate::string::js_string_from_bytes(b"downgrade".as_ptr(), 9);
-    crate::object::js_object_set_field(obj, 0, crate::value::JSValue::string_ptr(child));
-
-    assert_flag_sound("after a typed downgrade");
-    assert!(
-        test_per_object_tables_are_empty(),
-        "a downgrade drops the per-object descriptor"
-    );
-    assert!(!flag());
-
-    clear_marks();
-    clear_mark_seeds();
-}
-
 /// The mutator path that grows a mask in place: a pointer written into a
-/// pointer-free object installs a fresh `LAYOUT_SLOT_MASKS` entry from inside
+/// pointer-free array installs a fresh `LAYOUT_SLOT_MASKS` entry from inside
 /// `layout_note_slot`'s own `borrow_mut`, which is the one insert site that
 /// cannot go through the wrappers.
 #[test]
-fn test_per_object_tables_flag_arms_on_a_pointer_store_into_a_pointer_free_object() {
+fn test_per_object_tables_flag_arms_on_a_pointer_store_into_a_pointer_free_array() {
     clear_marks();
     clear_mark_seeds();
 
-    let obj = crate::object::js_object_alloc(0, 8);
-    crate::object::js_object_set_field(obj, 0, crate::value::JSValue::number(1.0));
-    crate::object::js_object_set_field(obj, 1, crate::value::JSValue::number(2.0));
+    let obj = crate::array::js_array_alloc_with_length(8);
+    crate::array::js_array_set_f64(obj, 0, 1.0);
+    crate::array::js_array_set_f64(obj, 1, 2.0);
     crate::gc::layout_clear_for_ptr(obj as usize);
     unsafe {
         crate::gc::layout_init_pointer_free(obj as *mut u8);
     }
-    assert!(!flag(), "a pointer-free object keeps no per-object record");
+    assert!(!flag(), "a pointer-free array keeps no per-object record");
 
     let child = crate::string::js_string_from_bytes(b"late-pointer".as_ptr(), 12);
-    crate::object::js_object_set_field(obj, 1, crate::value::JSValue::string_ptr(child));
+    crate::array::js_array_set_f64(
+        obj,
+        1,
+        f64::from_bits(crate::value::JSValue::string_ptr(child).bits()),
+    );
 
     assert_flag_sound("after a late pointer store");
     assert!(
@@ -303,6 +270,36 @@ fn test_per_object_tables_flag_arms_on_a_pointer_store_into_a_pointer_free_objec
         "the mask grown in place by `layout_note_slot` must arm the flag too"
     );
     assert_eq!(test_layout_pointer_slot_count(obj as usize, 8), Some(1));
+
+    clear_marks();
+    clear_mark_seeds();
+}
+
+/// Object fields are traced from their shape. A pointer store must reach the
+/// child while leaving the array/closure address-keyed mask table untouched.
+#[test]
+fn test_object_pointer_store_traces_by_shape_without_an_address_mask() {
+    clear_marks();
+    clear_mark_seeds();
+
+    let obj = crate::object::js_object_alloc(0, 8);
+    crate::object::js_object_set_field(obj, 0, crate::value::JSValue::number(1.0));
+    let child = crate::string::js_string_from_bytes(b"shape-child".as_ptr(), 11);
+    crate::object::js_object_set_field(obj, 1, crate::value::JSValue::string_ptr(child));
+
+    assert!(test_per_object_tables_are_empty());
+    assert!(!flag());
+
+    let child_header = unsafe { header_from_user_ptr(child as *const u8) };
+    let valid_ptrs = build_valid_pointer_set();
+    assert!(try_mark_value(
+        POINTER_TAG | (obj as u64 & POINTER_MASK),
+        &valid_ptrs
+    ));
+    trace_marked_objects(&valid_ptrs);
+    unsafe {
+        assert_ne!((*child_header).gc_flags & GC_FLAG_MARKED, 0);
+    }
 
     clear_marks();
     clear_mark_seeds();
@@ -320,8 +317,13 @@ fn test_class_keys_array_declares_all_pointer_slots_instead_of_a_mask() {
     clear_mark_seeds();
 
     let packed: &[u8] = b"alpha\0beta\0gamma\0";
-    let keys =
-        crate::object::js_build_class_keys_array(0x7510, 3, packed.as_ptr(), packed.len() as u32);
+    let keys = crate::object::js_build_class_keys_array(
+        0x7510,
+        3,
+        packed.as_ptr(),
+        packed.len() as u32,
+        0,
+    );
     assert!(!keys.is_null());
 
     assert!(
@@ -364,7 +366,7 @@ fn test_class_keys_array_declares_all_pointer_slots_instead_of_a_mask() {
 }
 
 /// The control half of the immortal-scope pair: WITHOUT the scope, the very
-/// same store mints a per-object mask and arms the flag.
+/// same array store mints a per-address mask and arms the flag.
 ///
 /// This exists so the scoped test below cannot pass vacuously. If a future
 /// change stops routing this shape through `layout_note_slot`'s mask-minting
@@ -377,13 +379,13 @@ fn test_pointer_store_outside_an_immortal_scope_still_mints_a_mask() {
     assert_flag_sound("before store");
     assert!(test_per_object_tables_are_empty());
 
-    let obj = crate::object::js_object_alloc(0, 8);
+    let obj = crate::array::js_array_alloc_with_length(8);
     let child = crate::object::js_object_alloc(0, 0);
     crate::gc::layout_note_slot(obj as usize, 1, POINTER_TAG | (child as u64 & POINTER_MASK));
 
     assert!(
         flag(),
-        "a first pointer store into a pointer-free object must mint a mask — \
+        "a first pointer store into a pointer-free array must mint a mask — \
          if it no longer does, the scoped test below proves nothing"
     );
     assert!(!test_per_object_tables_are_empty());
@@ -397,7 +399,7 @@ fn test_pointer_store_outside_an_immortal_scope_still_mints_a_mask() {
 }
 
 /// Inside an [`ImmortalLayoutScope`] the identical store must leave both maps
-/// empty — and the object must still trace its child, because the fallback is
+/// empty — and the array must still trace its child, because the fallback is
 /// `GC_LAYOUT_UNKNOWN` (the tag-checked scan), not "no pointers here".
 #[test]
 fn test_immortal_scope_stores_trace_without_taking_a_side_table_entry() {
@@ -405,13 +407,11 @@ fn test_immortal_scope_stores_trace_without_taking_a_side_table_entry() {
     clear_mark_seeds();
     assert!(test_per_object_tables_are_empty());
 
-    let obj = crate::object::js_object_alloc(0, 2);
+    let obj = crate::array::js_array_alloc_with_length(8);
     let child = crate::object::js_object_alloc(0, 0);
     let child_header = unsafe { header_from_user_ptr(child as *const u8) };
     unsafe {
-        let fields = (obj as *mut u8)
-            .add(std::mem::size_of::<crate::object::ObjectHeader>())
-            .cast::<u64>();
+        let fields = crate::array::array_elements_ptr(obj);
         *fields.add(1) = POINTER_TAG | (child as u64 & POINTER_MASK);
     }
     {
@@ -421,7 +421,7 @@ fn test_immortal_scope_stores_trace_without_taking_a_side_table_entry() {
 
     assert!(
         test_per_object_tables_are_empty(),
-        "an object built inside an ImmortalLayoutScope must not take out a \
+        "an array built inside an ImmortalLayoutScope must not take out a \
          per-object layout record — one permanent entry disables the emptiness \
          fast path for every allocation the process will ever make"
     );
@@ -475,13 +475,12 @@ fn test_global_this_bootstrap_leaves_the_per_object_layout_tables_empty() {
          below is vacuous"
     );
 
-    let (slot_masks, typed) = crate::gc::per_object_layout_table_sizes();
+    let slot_masks = crate::gc::per_object_layout_table_sizes();
     assert_eq!(
-        (slot_masks, typed),
-        (0, 0),
-        "the globalThis bootstrap left {slot_masks} slot-mask and {typed} typed \
-         per-object layout records behind; every one of them is immortal, so \
-         `layout_forget_object` now runs its full two-map probe on every \
+        slot_masks, 0,
+        "the globalThis bootstrap left {slot_masks} slot-mask per-object layout \
+         records behind; every one of them is immortal, so \
+         `layout_forget_object` now runs its full probe on every \
          allocation, death and relocation for the rest of the process"
     );
 }
@@ -500,7 +499,7 @@ fn test_addr_filter_never_hides_a_live_record_across_a_rebuild() {
     // the rebuild path is exercised rather than merely reachable.
     let mut objs = Vec::new();
     for _ in 0..6000 {
-        let obj = crate::object::js_object_alloc(0, 8);
+        let obj = crate::array::js_array_alloc_with_length(8);
         let child = crate::object::js_object_alloc(0, 0);
         crate::gc::layout_note_slot(obj as usize, 1, POINTER_TAG | (child as u64 & POINTER_MASK));
         objs.push(obj);
@@ -544,7 +543,7 @@ fn test_addr_filter_proves_absence_while_the_global_flag_is_armed() {
     clear_marks();
     clear_mark_seeds();
 
-    let live = crate::object::js_object_alloc(0, 8);
+    let live = crate::array::js_array_alloc_with_length(8);
     let child = crate::object::js_object_alloc(0, 0);
     crate::gc::layout_note_slot(
         live as usize,

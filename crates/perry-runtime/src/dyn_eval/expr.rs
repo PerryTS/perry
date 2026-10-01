@@ -808,8 +808,11 @@ fn eval_call(ctx: &Ctx, c: &ast::CallExpr, env_idx: usize) -> f64 {
                     }
                     let callee_idx = (!ctx.strings_allowed
                         && (crate::object::js_value_is_heap_object(root_get(obj_idx))
-                            || (root_get(obj_idx).to_bits() >> 48) == 0x7FFE))
-                        .then(|| root_push(bridge::get_member(root_get(obj_idx), &name)));
+                            || crate::object::class_value::legacy_class_value_word(
+                                root_get(obj_idx).to_bits(),
+                            )
+                            .is_some()))
+                    .then(|| root_push(bridge::get_member(root_get(obj_idx), &name)));
                     let codegen_blocked = !ctx.strings_allowed
                         && ((name == "constructor"
                             && crate::object::value_is_callable(root_get(obj_idx)))
@@ -851,10 +854,11 @@ fn eval_call(ctx: &Ctx, c: &ast::CallExpr, env_idx: usize) -> f64 {
                     let key_idx = root_push(key);
                     let callee_idx = (!ctx.strings_allowed
                         && (crate::object::js_value_is_heap_object(root_get(obj_idx))
-                            || (root_get(obj_idx).to_bits() >> 48) == 0x7FFE))
-                        .then(|| {
-                            root_push(bridge::get_index(root_get(obj_idx), root_get(key_idx)))
-                        });
+                            || crate::object::class_value::legacy_class_value_word(
+                                root_get(obj_idx).to_bits(),
+                            )
+                            .is_some()))
+                    .then(|| root_push(bridge::get_index(root_get(obj_idx), root_get(key_idx))));
                     let codegen_blocked =
                         callee_idx.is_some_and(|idx| is_string_codegen_callee(ctx, root_get(idx)));
                     let method = bridge::read_string(root_get(key_idx)).unwrap_or_default();

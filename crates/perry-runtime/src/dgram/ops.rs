@@ -9,7 +9,10 @@ use super::*;
 
 use std::net::Ipv4Addr;
 
-extern "C" fn dgram_abort_close_task(closure: *const ClosureHeader) -> f64 {
+extern "C" fn dgram_abort_close_task(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     if closure.is_null() {
         return undefined_value();
     }
@@ -20,13 +23,19 @@ extern "C" fn dgram_abort_close_task(closure: *const ClosureHeader) -> f64 {
 fn schedule_abort_close(socket: f64) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let socket = scope.root_nanbox_f64(socket);
-    crate::closure::js_register_closure_arity(dgram_abort_close_task as *const u8, 0);
-    let task = js_closure_alloc(dgram_abort_close_task as *const u8, 1);
+
+    let task = js_closure_alloc(
+        crate::fn_info!(dgram_abort_close_task, 0; with_declared(0)),
+        1,
+    );
     js_closure_set_capture_f64(task, 0, socket.get_nanbox_f64());
     crate::builtins::js_queue_microtask(task as i64);
 }
 
-extern "C" fn dgram_abort_listener(closure: *const ClosureHeader) -> f64 {
+extern "C" fn dgram_abort_listener(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     if !closure.is_null() {
         schedule_abort_close(js_closure_get_capture_f64(closure, 0));
     }
@@ -46,8 +55,10 @@ fn attach_abort_signal(socket: f64, signal: f64) {
         return;
     }
 
-    crate::closure::js_register_closure_arity(dgram_abort_listener as *const u8, 0);
-    let listener = js_closure_alloc(dgram_abort_listener as *const u8, 1);
+    let listener = js_closure_alloc(
+        crate::fn_info!(dgram_abort_listener, 0; with_declared(0)),
+        1,
+    );
     js_closure_set_capture_f64(listener, 0, socket.get_nanbox_f64());
     let listener = scope.root_nanbox_f64(boxed_pointer(listener as *const u8));
     let abort_event = scope.root_nanbox_f64(str_value("abort"));
@@ -485,13 +496,16 @@ fn send_blocked(socket: f64, address: &str) -> bool {
     )) != 0
 }
 
-extern "C" fn lookup_callback(_closure: *const ClosureHeader, _rest: f64) -> f64 {
+extern "C" fn lookup_callback(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    _rest: f64,
+) -> f64 {
     undefined_value()
 }
 
 fn invoke_lookup(socket: f64, lookup: f64, address: &str) {
-    crate::closure::js_register_closure_rest(lookup_callback as *const u8, 0);
-    let callback = js_closure_alloc(lookup_callback as *const u8, 0);
+    let callback = js_closure_alloc(crate::fn_info!(lookup_callback, 1; with_rest(0)), 0);
     let family = if address.contains(':') { 6.0 } else { 4.0 };
     call_function(
         lookup,

@@ -23,7 +23,7 @@ use std::collections::HashMap;
 use crate::widgets::get_widget;
 
 extern "C" {
-    fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+    fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
     fn js_pointer_event_new(x: f64, y: f64, button: u32, pointer_type: u32) -> f64;
 }
@@ -142,7 +142,7 @@ fn dispatch_phase(recog: &PerryPointerRecognizer, touches: &AnyObject, phase: u3
             return;
         }
         let pe = js_pointer_event_new(local.x, local.y, 0, POINTER_TYPE_TOUCH);
-        js_closure_call1(closure_ptr as *const u8, pe);
+        js_closure_call1(closure_ptr as *const u8, perry_ffi::JsThis::UNDEFINED, pe);
     }
 }
 

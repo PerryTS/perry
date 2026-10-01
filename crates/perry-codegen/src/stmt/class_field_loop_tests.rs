@@ -33,6 +33,8 @@ use perry_hir::{
 
 fn ir_opts() -> CompileOptions {
     CompileOptions {
+        static_shape_ids: Vec::new(),
+        program_class_shape_ids: Default::default(),
         target: None,
         is_entry_module: true,
         non_entry_module_prefixes: Vec::new(),
@@ -90,7 +92,7 @@ fn ir_opts() -> CompileOptions {
 }
 
 fn counter_class() -> Class {
-    Class {
+    let mut class = Class {
         id: 101,
         name: "Counter".to_string(),
         type_params: Vec::new(),
@@ -123,6 +125,56 @@ fn counter_class() -> Class {
         is_nested: false,
         alloc_width_hint: 0,
         specialized_from: None,
+    };
+    class.constructor = Some(assigning_ctor(&class.fields));
+    class
+}
+
+/// The constructor a fixture class carries: `constructor(f1, ..) { this.f1 =
+/// f1; .. }`, the shape `perry-hir`'s `mint_anon_shape_class` synthesizes.
+/// Its `number` fields are written before anything can observe the instance,
+/// so they are born on `F64` lanes (`lower_call::birth_lanes`); a class that
+/// never writes a `number` field during construction must answer `undefined`
+/// for it and is born `Any` there.
+fn assigning_ctor(fields: &[ClassField]) -> perry_hir::Function {
+    let params: Vec<perry_hir::Param> = fields
+        .iter()
+        .enumerate()
+        .map(|(i, f)| perry_hir::Param {
+            id: 9000 + i as u32,
+            name: f.name.clone(),
+            ty: f.ty.clone(),
+            default: None,
+            decorators: Vec::new(),
+            is_rest: false,
+            arguments_object: None,
+        })
+        .collect();
+    let body = params
+        .iter()
+        .map(|p| {
+            Stmt::Expr(Expr::PropertySet {
+                object: Box::new(Expr::This),
+                property: p.name.clone(),
+                value: Box::new(Expr::LocalGet(p.id)),
+            })
+        })
+        .collect();
+    perry_hir::Function {
+        id: 9000,
+        name: "constructor".to_string(),
+        type_params: Vec::new(),
+        params,
+        return_type: Type::Void,
+        body,
+        is_async: false,
+        is_generator: false,
+        is_strict: true,
+        was_plain_async: false,
+        was_unrolled: false,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
     }
 }
 

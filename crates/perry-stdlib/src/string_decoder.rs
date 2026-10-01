@@ -173,9 +173,8 @@ unsafe fn define_accessor_property(
     );
 }
 
-unsafe fn function_value(func: *const u8, arity: u32, name: &str) -> f64 {
-    let closure = perry_runtime::closure::js_closure_alloc(func, 0);
-    perry_runtime::closure::js_register_closure_arity(func, arity);
+unsafe fn function_value(info: *const perry_runtime::closure::JsFunctionInfo, name: &str) -> f64 {
+    let closure = perry_runtime::closure::js_closure_alloc(info, 0);
     perry_runtime::closure::closure_set_dynamic_prop(closure as usize, "name", string_value(name));
     boxed_ptr(closure as *const u8)
 }
@@ -192,8 +191,8 @@ unsafe fn string_decoder_constructor_value() -> f64 {
     )
 }
 
-unsafe fn this_string_decoder_handle() -> i64 {
-    let this_value = perry_runtime::object::js_implicit_this_get();
+unsafe fn this_string_decoder_handle(this: perry_runtime::closure::JsThis) -> i64 {
+    let this_value = this.as_f64();
     let bits = this_value.to_bits();
     let handle = if bits >> 48 == 0x7FFD {
         (bits & 0x0000_FFFF_FFFF_FFFF) as i64
@@ -213,42 +212,48 @@ unsafe fn this_string_decoder_handle() -> i64 {
 
 extern "C" fn string_decoder_proto_write(
     _closure: *const perry_runtime::closure::ClosureHeader,
+    this: perry_runtime::closure::JsThis,
     buf: f64,
 ) -> f64 {
-    unsafe { dispatch_string_decoder(this_string_decoder_handle(), "write", &[buf]) }
+    unsafe { dispatch_string_decoder(this_string_decoder_handle(this), "write", &[buf]) }
 }
 
 extern "C" fn string_decoder_proto_end(
     _closure: *const perry_runtime::closure::ClosureHeader,
+    this: perry_runtime::closure::JsThis,
     buf: f64,
 ) -> f64 {
-    unsafe { dispatch_string_decoder(this_string_decoder_handle(), "end", &[buf]) }
+    unsafe { dispatch_string_decoder(this_string_decoder_handle(this), "end", &[buf]) }
 }
 
 extern "C" fn string_decoder_proto_text(
     _closure: *const perry_runtime::closure::ClosureHeader,
+    this: perry_runtime::closure::JsThis,
     buf: f64,
     _offset: f64,
 ) -> f64 {
-    unsafe { dispatch_string_decoder(this_string_decoder_handle(), "write", &[buf]) }
+    unsafe { dispatch_string_decoder(this_string_decoder_handle(this), "write", &[buf]) }
 }
 
 extern "C" fn string_decoder_last_char_getter(
     _closure: *const perry_runtime::closure::ClosureHeader,
+    this: perry_runtime::closure::JsThis,
 ) -> f64 {
-    unsafe { dispatch_string_decoder_property(this_string_decoder_handle(), "lastChar") }
+    unsafe { dispatch_string_decoder_property(this_string_decoder_handle(this), "lastChar") }
 }
 
 extern "C" fn string_decoder_last_need_getter(
     _closure: *const perry_runtime::closure::ClosureHeader,
+    this: perry_runtime::closure::JsThis,
 ) -> f64 {
-    unsafe { dispatch_string_decoder_property(this_string_decoder_handle(), "lastNeed") }
+    unsafe { dispatch_string_decoder_property(this_string_decoder_handle(this), "lastNeed") }
 }
 
 extern "C" fn string_decoder_last_total_getter(
     _closure: *const perry_runtime::closure::ClosureHeader,
+    this: perry_runtime::closure::JsThis,
 ) -> f64 {
-    unsafe { dispatch_string_decoder_property(this_string_decoder_handle(), "lastTotal") }
+    unsafe { dispatch_string_decoder_property(this_string_decoder_handle(this), "lastTotal") }
 }
 
 pub unsafe fn string_decoder_prototype_value() -> f64 {
@@ -267,21 +272,30 @@ pub unsafe fn string_decoder_prototype_value() -> f64 {
     define_data_property(
         proto,
         "write",
-        function_value(string_decoder_proto_write as *const u8, 1, "write"),
+        function_value(
+            perry_runtime::fn_info!(string_decoder_proto_write, 1; with_declared(1)),
+            "write",
+        ),
         true,
         true,
     );
     define_data_property(
         proto,
         "end",
-        function_value(string_decoder_proto_end as *const u8, 1, "end"),
+        function_value(
+            perry_runtime::fn_info!(string_decoder_proto_end, 1; with_declared(1)),
+            "end",
+        ),
         true,
         true,
     );
     define_data_property(
         proto,
         "text",
-        function_value(string_decoder_proto_text as *const u8, 2, "text"),
+        function_value(
+            perry_runtime::fn_info!(string_decoder_proto_text, 2; with_declared(2)),
+            "text",
+        ),
         true,
         true,
     );
@@ -289,8 +303,7 @@ pub unsafe fn string_decoder_prototype_value() -> f64 {
         proto,
         "lastChar",
         function_value(
-            string_decoder_last_char_getter as *const u8,
-            0,
+            perry_runtime::fn_info!(string_decoder_last_char_getter, 0; with_declared(0)),
             "get lastChar",
         ),
         true,
@@ -299,8 +312,7 @@ pub unsafe fn string_decoder_prototype_value() -> f64 {
         proto,
         "lastNeed",
         function_value(
-            string_decoder_last_need_getter as *const u8,
-            0,
+            perry_runtime::fn_info!(string_decoder_last_need_getter, 0; with_declared(0)),
             "get lastNeed",
         ),
         true,
@@ -309,8 +321,7 @@ pub unsafe fn string_decoder_prototype_value() -> f64 {
         proto,
         "lastTotal",
         function_value(
-            string_decoder_last_total_getter as *const u8,
-            0,
+            perry_runtime::fn_info!(string_decoder_last_total_getter, 0; with_declared(0)),
             "get lastTotal",
         ),
         true,
@@ -340,22 +351,15 @@ pub unsafe fn string_decoder_own_property_names(handle: i64) -> f64 {
 /// detected from the top 16 bits.
 unsafe fn encoding_name_from_bits(bits: i64) -> Option<String> {
     let u = bits as u64;
-    let top16 = u >> 48;
-    // SHORT_STRING_TAG = 0x7FFA. Payload is bytes inline in the
-    // remaining 48 bits, length in bits 44..47 of the top 16.
-    if top16 == 0x7FFA {
-        let len = ((u >> 44) & 0xF) as usize;
-        if len == 0 {
-            return Some(String::new());
-        }
-        if len > 6 {
-            return None;
-        }
-        let mut bytes = [0u8; 6];
-        for (i, b) in bytes.iter_mut().enumerate().take(len) {
-            *b = ((u >> (i * 8)) & 0xFF) as u8;
-        }
-        return Some(String::from_utf8_lossy(&bytes[..len]).into_owned());
+    // A NaN-boxed string, heap or inline SSO (#11519). The inline arm here used
+    // to decode tag 0x7FFA -- BIGINT_TAG -- with a made-up layout, so a real SSO
+    // encoding name (SHORT_STRING_TAG 0x7FF9) fell through to the pointer read
+    // below and dereferenced its characters.
+    if JSValue::from_bits(u).is_any_string() {
+        return perry_runtime::string::with_string_value_bytes(f64::from_bits(u), |b| {
+            (b.len() <= 32).then(|| String::from_utf8_lossy(b).into_owned())
+        })
+        .flatten();
     }
     // STRING_TAG / POINTER_TAG / raw pointer — all keep the heap address
     // in the low 48 bits.

@@ -404,6 +404,7 @@ pub extern "C" fn js_perry_tui_use_state_set(slot_idx: f64, value: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn perry_tui_state_setter_trampoline(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     if closure.is_null() {
@@ -455,8 +456,7 @@ pub extern "C" fn js_perry_tui_use_state_tuple(initial: f64) -> i64 {
     drop(s);
 
     // Allocate the setter closure with 1 capture (the slot index).
-    let trampoline = perry_tui_state_setter_trampoline as *const u8;
-    let setter = js_closure_alloc(trampoline, 1);
+    let setter = js_closure_alloc(crate::fn_info!(perry_tui_state_setter_trampoline, 1), 1);
     js_closure_set_capture_f64(setter, 0, idx as f64);
 
     // Build [value, setter_closure] array.
@@ -542,7 +542,10 @@ pub extern "C" fn js_perry_tui_use_effect(fn_closure: i64, deps_array: i64) -> f
         // but possible) doesn't deadlock.
         drop(s);
         if fn_closure != 0 {
-            js_closure_call0(fn_closure as *const ClosureHeader);
+            js_closure_call0(
+                fn_closure as *const ClosureHeader,
+                crate::closure::plain_call_receiver(),
+            );
         }
     }
     f64::from_bits(TAG_UNDEFINED)
@@ -614,7 +617,10 @@ pub extern "C" fn js_perry_tui_use_memo(fn_closure: i64, deps_array: i64) -> f64
     if should_compute {
         drop(s);
         let value = if fn_closure != 0 {
-            js_closure_call0(fn_closure as *const ClosureHeader)
+            js_closure_call0(
+                fn_closure as *const ClosureHeader,
+                crate::closure::plain_call_receiver(),
+            )
         } else {
             f64::from_bits(TAG_UNDEFINED)
         };

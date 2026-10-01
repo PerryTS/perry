@@ -26,59 +26,92 @@ thread_local! {
     static SESSION_STORE: RefCell<BTreeMap<String, String>> = const { RefCell::new(BTreeMap::new()) };
 }
 
-pub extern "C" fn storage_constructor_illegal(_closure: *const ClosureHeader) -> f64 {
+pub extern "C" fn storage_constructor_illegal(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     throw_error("Illegal constructor")
 }
 
-extern "C" fn storage_global_setter(_closure: *const ClosureHeader, _value: f64) -> f64 {
+extern "C" fn storage_global_setter(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    _value: f64,
+) -> f64 {
     f64::from_bits(TAG_UNDEFINED)
 }
 
-extern "C" fn storage_local_global_getter(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn storage_local_global_getter(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     storage_global_value(StorageKind::Local)
 }
 
-extern "C" fn storage_session_global_getter(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn storage_session_global_getter(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     storage_global_value(StorageKind::Session)
 }
 
-extern "C" fn storage_length_getter(_closure: *const ClosureHeader) -> f64 {
-    let Some(kind) = receiver_kind() else {
+extern "C" fn storage_length_getter(
+    _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    let Some(kind) = receiver_kind(this) else {
         return throw_type_error("Illegal invocation");
     };
     with_store(kind, |store| store.len() as f64)
 }
 
-extern "C" fn storage_get_item(_closure: *const ClosureHeader, key: f64) -> f64 {
-    let Some(kind) = receiver_kind() else {
+extern "C" fn storage_get_item(
+    _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+    key: f64,
+) -> f64 {
+    let Some(kind) = receiver_kind(this) else {
         return throw_type_error("Illegal invocation");
     };
     storage_get_item_impl(kind, key)
 }
 
-extern "C" fn storage_set_item(_closure: *const ClosureHeader, key: f64, value: f64) -> f64 {
-    let Some(kind) = receiver_kind() else {
+extern "C" fn storage_set_item(
+    _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+    key: f64,
+    value: f64,
+) -> f64 {
+    let Some(kind) = receiver_kind(this) else {
         return throw_type_error("Illegal invocation");
     };
     storage_set_item_impl(kind, key, value)
 }
 
-extern "C" fn storage_remove_item(_closure: *const ClosureHeader, key: f64) -> f64 {
-    let Some(kind) = receiver_kind() else {
+extern "C" fn storage_remove_item(
+    _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+    key: f64,
+) -> f64 {
+    let Some(kind) = receiver_kind(this) else {
         return throw_type_error("Illegal invocation");
     };
     storage_remove_item_impl(kind, key)
 }
 
-extern "C" fn storage_key(_closure: *const ClosureHeader, index: f64) -> f64 {
-    let Some(kind) = receiver_kind() else {
+extern "C" fn storage_key(
+    _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+    index: f64,
+) -> f64 {
+    let Some(kind) = receiver_kind(this) else {
         return throw_type_error("Illegal invocation");
     };
     storage_key_impl(kind, index)
 }
 
-extern "C" fn storage_clear(_closure: *const ClosureHeader) -> f64 {
-    let Some(kind) = receiver_kind() else {
+extern "C" fn storage_clear(_closure: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
+    let Some(kind) = receiver_kind(this) else {
         return throw_type_error("Illegal invocation");
     };
     storage_clear_impl(kind)
@@ -197,16 +230,31 @@ pub(crate) fn install_storage_globals(
         "Storage".to_string(),
         PropertyAttrs::new(true, false, true),
     );
-    install_method(storage_proto, "clear", storage_clear as *const u8, 0);
-    install_method(storage_proto, "getItem", storage_get_item as *const u8, 1);
-    install_method(storage_proto, "key", storage_key as *const u8, 1);
+    install_method(
+        storage_proto,
+        "clear",
+        crate::fn_info!(storage_clear, 0; with_declared(0)),
+    );
+    install_method(
+        storage_proto,
+        "getItem",
+        crate::fn_info!(storage_get_item, 1; with_declared(1)),
+    );
+    install_method(
+        storage_proto,
+        "key",
+        crate::fn_info!(storage_key, 1; with_declared(1)),
+    );
     install_method(
         storage_proto,
         "removeItem",
-        storage_remove_item as *const u8,
-        1,
+        crate::fn_info!(storage_remove_item, 1; with_declared(1)),
     );
-    install_method(storage_proto, "setItem", storage_set_item as *const u8, 2);
+    install_method(
+        storage_proto,
+        "setItem",
+        crate::fn_info!(storage_set_item, 2; with_declared(2)),
+    );
     install_storage_length_accessor(storage_proto);
 
     let constructor_key = string("constructor");
@@ -231,12 +279,16 @@ pub(crate) fn install_storage_globals(
     set_global_storage_property(global, "sessionStorage", session);
 }
 
-fn install_method(proto: *mut ObjectHeader, name: &str, func_ptr: *const u8, arity: u32) {
-    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+/// `info` records the method's declared arity.
+fn install_method(
+    proto: *mut ObjectHeader,
+    name: &str,
+    info: *const crate::closure::JsFunctionInfo,
+) {
+    let closure = crate::closure::js_closure_alloc(info, 0);
     if closure.is_null() {
         return;
     }
-    crate::closure::js_register_closure_arity(func_ptr, arity);
     crate::object::set_bound_native_closure_name(closure, name);
     crate::object::set_builtin_closure_length(closure as usize, 0);
     crate::object::define_builtin_data_property(
@@ -259,11 +311,14 @@ fn install_method(proto: *mut ObjectHeader, name: &str, func_ptr: *const u8, ari
 }
 
 fn install_storage_length_accessor(proto: *mut ObjectHeader) {
-    let getter = crate::closure::js_closure_alloc(storage_length_getter as *const u8, 0);
+    let getter = crate::closure::js_closure_alloc(
+        crate::fn_info!(storage_length_getter, 0; with_declared(0)),
+        0,
+    );
     if getter.is_null() {
         return;
     }
-    crate::closure::js_register_closure_arity(storage_length_getter as *const u8, 0);
+
     crate::object::set_bound_native_closure_name(getter, "get length");
     crate::object::js_object_set_field_by_name(
         proto,
@@ -289,23 +344,16 @@ fn make_storage_object(kind: StorageKind, proto: *mut ObjectHeader) -> *mut Obje
     let proto_bits = crate::value::js_nanbox_pointer(proto as i64).to_bits();
     crate::object::prototype_chain::object_set_static_prototype(obj as usize, proto_bits);
     update_length_on_obj(obj, 0);
-    for (name, arity) in [
-        ("clear", 0),
-        ("getItem", 1),
-        ("key", 1),
-        ("removeItem", 1),
-        ("setItem", 2),
-    ] {
+    for name in ["clear", "getItem", "key", "removeItem", "setItem"] {
         let func_ptr = match name {
-            "clear" => storage_clear as *const u8,
-            "getItem" => storage_get_item as *const u8,
-            "key" => storage_key as *const u8,
-            "removeItem" => storage_remove_item as *const u8,
-            _ => storage_set_item as *const u8,
+            "clear" => crate::fn_info!(storage_clear, 0; with_declared(0)),
+            "getItem" => crate::fn_info!(storage_get_item, 1; with_declared(1)),
+            "key" => crate::fn_info!(storage_key, 1; with_declared(1)),
+            "removeItem" => crate::fn_info!(storage_remove_item, 1; with_declared(1)),
+            _ => crate::fn_info!(storage_set_item, 2; with_declared(2)),
         };
         let closure = crate::closure::js_closure_alloc(func_ptr, 0);
         if !closure.is_null() {
-            crate::closure::js_register_closure_arity(func_ptr, arity);
             crate::object::set_bound_native_closure_name(closure, name);
             crate::object::set_builtin_closure_length(closure as usize, 0);
             crate::object::define_builtin_data_property(
@@ -334,14 +382,15 @@ fn set_global_storage_property(global: *mut ObjectHeader, name: &str, value: *mu
     );
 
     let getter_fn = match name {
-        "localStorage" => storage_local_global_getter as *const u8,
-        _ => storage_session_global_getter as *const u8,
+        "localStorage" => crate::fn_info!(storage_local_global_getter, 0; with_declared(0)),
+        _ => crate::fn_info!(storage_session_global_getter, 0; with_declared(0)),
     };
     let getter = crate::closure::js_closure_alloc(getter_fn, 0);
-    let setter = crate::closure::js_closure_alloc(storage_global_setter as *const u8, 0);
+    let setter = crate::closure::js_closure_alloc(
+        crate::fn_info!(storage_global_setter, 1; with_declared(1)),
+        0,
+    );
     if !getter.is_null() && !setter.is_null() {
-        crate::closure::js_register_closure_arity(getter_fn, 0);
-        crate::closure::js_register_closure_arity(storage_global_setter as *const u8, 1);
         crate::object::set_bound_native_closure_name(getter, name);
         crate::object::set_builtin_accessor_descriptor(
             global as usize,
@@ -355,8 +404,8 @@ fn set_global_storage_property(global: *mut ObjectHeader, name: &str, value: *mu
     }
 }
 
-fn receiver_kind() -> Option<StorageKind> {
-    let this = crate::object::js_implicit_this_get();
+fn receiver_kind(this: crate::closure::JsThis) -> Option<StorageKind> {
+    let this = this.as_f64();
     storage_kind_from_value(this)
 }
 

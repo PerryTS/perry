@@ -315,15 +315,22 @@ fn lower_captureless_some_inline(
             let elem = blk.bitcast_i64_to_double(&elem_bits);
             let i_double = blk.uitofp(I32, &i, DOUBLE);
             let recv = nanbox_pointer_inline(blk, &raw);
-            let mut args: Vec<(crate::types::LlvmType, &str)> =
-                vec![(I64, "0"), (DOUBLE, elem.as_str())];
+            let mut args: Vec<String> = vec![elem.clone()];
             if param_count >= 2 {
-                args.push((DOUBLE, i_double.as_str()));
+                args.push(i_double.clone());
             }
             if param_count >= 3 {
-                args.push((DOUBLE, recv.as_str()));
+                args.push(recv.clone());
             }
-            let result = blk.call(DOUBLE, callback_func.trim_start_matches('@'), &args);
+            // A captureless arrow: no environment (callee 0) and lexical
+            // `this`, so the receiver parameter is unread.
+            let result = crate::expr::body_call::emit_js_body_call(
+                blk,
+                crate::expr::body_call::JsBody::Symbol(callback_func.trim_start_matches('@')),
+                "0",
+                crate::expr::body_call::JS_THIS_UNDEFINED,
+                &args,
+            );
             let bits = blk.bitcast_double_to_i64(&result);
             let is_true = blk.icmp_eq(I64, &bits, TAG_TRUE_I64);
             blk.cond_br(&is_true, &found_l, &slow_l);
@@ -362,10 +369,14 @@ fn lower_captureless_some_inline(
         let fallback_value = {
             let blk = ctx.block();
             let arr_handle = unbox_to_i64(blk, &arr_box0);
+            // The runtime takes the body's static info (it may have to
+            // materialize the function object for a TypedArray / Buffer
+            // receiver), never its code address.
+            let callback_info = blk.fn_info_ref(callback_func.trim_start_matches('@'));
             let value = blk.call(
                 DOUBLE,
                 "js_array_some_captureless",
-                &[(I64, &arr_handle), (PTR, callback_func)],
+                &[(I64, &arr_handle), (PTR, &callback_info)],
             );
             blk.br(&merge_l);
             value
@@ -656,7 +667,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // conversion happens BELOW the re-read, which is the only
                     // place it can be correct (slice 1b's `BufferSlice` finding).
                     let url_handle = blk.call(I64, "js_fetch_input_ptr", &[(DOUBLE, &vals[0])]);
-                    let method_handle = unbox_to_i64(blk, &vals[1]);
+                    // #11519: `method: "GET"` built at runtime is an inline SSO
+                    // string; the runtime copies it out on entry.
+                    let method_handle = crate::expr::unbox_ffi_str_arg(blk, &vals[1]);
                     // The shared BodyInit classifier: a stream or async-iterable
                     // body is handed to `js_fetch_with_options` out of band.
                     let body_handle =

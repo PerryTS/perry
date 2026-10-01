@@ -821,13 +821,12 @@ pub unsafe extern "C" fn js_node_http_res_write_head(
     let mut headers_value: Option<f64> = None;
     if v3.is_pointer() {
         headers_value = Some(f64::from_bits(arg3 as u64));
-        if v2.is_string() {
-            status_message = read_string_header(v2.as_string_ptr());
-        }
+        // `to_owned_string` also reads an inline SSO message (#11519).
+        status_message = v2.to_owned_string();
     } else if v2.is_pointer() {
         headers_value = Some(f64::from_bits(arg2 as u64));
-    } else if v2.is_string() {
-        status_message = read_string_header(v2.as_string_ptr());
+    } else {
+        status_message = v2.to_owned_string();
     }
 
     let headers_json = headers_value.and_then(|hv| {
@@ -1335,7 +1334,7 @@ pub unsafe extern "C" fn js_node_http_res_on(
         let raw = callback as *const RawClosureHeader;
         let closure = JsClosure::from_raw(raw);
         if !closure.is_null() {
-            let _ = closure.call0();
+            let _ = closure.call0(perry_ffi::JsThis::UNDEFINED);
         }
     }
     handle_to_pointer_f64(handle)
@@ -1377,7 +1376,7 @@ pub unsafe extern "C" fn js_node_http_res_once(
         let raw = callback as *const RawClosureHeader;
         let closure = JsClosure::from_raw(raw);
         if !closure.is_null() {
-            let _ = closure.call0();
+            let _ = closure.call0(perry_ffi::JsThis::UNDEFINED);
         }
     }
     handle_to_pointer_f64(handle)
@@ -1428,8 +1427,9 @@ pub unsafe extern "C" fn js_node_http_server_response_standalone_new(req: f64) -
             (req.to_bits() & PTR_MASK) as *const perry_ffi::ObjectHeader,
             key.as_raw(),
         );
-        if JsValue::from_bits(m.bits()).is_string() {
-            sr.standalone_req_method = read_string_header((m.bits() & PTR_MASK) as *mut _);
+        // Heap or inline SSO (`"GET"`, `"POST"` built at runtime, #11519).
+        if let Some(method) = JsValue::from_bits(m.bits()).to_owned_string() {
+            sr.standalone_req_method = Some(method);
         }
     }
     register_handle(sr)

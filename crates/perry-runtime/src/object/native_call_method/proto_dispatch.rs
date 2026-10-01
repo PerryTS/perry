@@ -5,12 +5,12 @@ use super::*;
 /// `js_native_call_value`, which would invoke the shared no-op thunk
 /// (`global_this_builtin_noop_thunk`) and return `undefined`. This is the final
 /// link in the "uncurry-this" idiom `Function.prototype.call.bind(method)`: the
-/// `Function.prototype.call` thunk stashes the intended receiver in
-/// `IMPLICIT_THIS`, then calls the bound `method` value — which until now no-op'd.
+/// `Function.prototype.call` thunk passes the intended receiver as `this`
+/// to the bound `method` value — which until now no-op'd.
 ///
 /// When the invoked closure is a no-op-backed built-in proto method, recover its
 /// recorded method name and re-dispatch through the real `js_native_call_method`
-/// tower using the current `IMPLICIT_THIS` as the receiver. Returns `None` for
+/// tower using the call's `this` as the receiver. Returns `None` for
 /// any other closure so normal dispatch proceeds untouched.
 ///
 /// Gated on a recorded built-in `.length` (a proto method always has one) AND on
@@ -20,13 +20,51 @@ use super::*;
 /// invariant, and it stopped holding (#7518). See the exclusion below.
 pub(crate) unsafe fn try_dispatch_value_called_proto_method(
     closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     args_ptr: *const f64,
     args_len: usize,
 ) -> Option<f64> {
+    let name = value_called_proto_method_name(closure)?;
+    let receiver = this.as_f64();
+    Some(js_native_call_method(
+        receiver,
+        name.as_ptr() as *const i8,
+        name.len(),
+        args_ptr,
+        args_len,
+    ))
+}
+
+/// #11700: whether `value` is a no-op-backed built-in prototype method that
+/// [`try_dispatch_value_called_proto_method`] would re-dispatch as
+/// `receiver.<method_name>(…)`. The by-name tower must not invoke such a value
+/// for that same name: the call re-enters the tower, finds the same inherited
+/// method, and recurses until the call-depth guard returns `{}`. The caller
+/// keeps walking instead, so the tower's native arms (the fetch-subclass body
+/// forward, for one) answer the call.
+pub(crate) unsafe fn is_self_redispatching_proto_method(value: f64, method_name: &str) -> bool {
+    let jsval = JSValue::from_bits(value.to_bits());
+    if !jsval.is_pointer() {
+        return false;
+    }
+    let addr = (value.to_bits() & crate::value::POINTER_MASK) as usize;
+    if !crate::closure::is_closure_ptr(addr) {
+        return false;
+    }
+    value_called_proto_method_name(addr as *const crate::closure::ClosureHeader)
+        .is_some_and(|name| name == method_name)
+}
+
+/// The method name `try_dispatch_value_called_proto_method` re-dispatches a
+/// no-op-backed built-in prototype method under, or `None` when the closure is
+/// not one (see that function for the gates).
+unsafe fn value_called_proto_method_name<'a>(
+    closure: *const crate::closure::ClosureHeader,
+) -> Option<&'a str> {
     if closure.is_null() {
         return None;
     }
-    if (*closure).func_ptr != super::global_this::global_this_builtin_noop_thunk as *const u8 {
+    if (*closure).code() != super::global_this::global_this_builtin_noop_thunk as *const u8 {
         return None;
     }
     super::native_module::builtin_closure_length(closure as usize)?;
@@ -40,7 +78,7 @@ pub(crate) unsafe fn try_dispatch_value_called_proto_method(
     let name_hdr = crate::builtins::js_string_coerce(name_val);
     let name = super::has_own_helpers::str_from_string_header(name_hdr)?;
     // #7518: a global CONSTRUCTOR reached as a VALUE is never a prototype-method
-    // uncurry, so re-dispatching it as `IMPLICIT_THIS.<Name>(…)` is always wrong:
+    // uncurry, so re-dispatching it as `this.<Name>(…)` is always wrong:
     // the by-name tower has no such method and its catch-all throws
     // `TypeError: <Name> is not a function`. Constructors share the no-op thunk
     // with the proto methods this helper serves, and the `.length` gate above
@@ -50,7 +88,7 @@ pub(crate) unsafe fn try_dispatch_value_called_proto_method(
     // a recorded length and opened the gate — re-breaking #6301: a
     // `class Bus extends EventTarget {}` has no static parent class id, so its
     // `super()` runs the parent VALUE through `js_fetch_or_value_super`, which
-    // binds `IMPLICIT_THIS` to the new instance before the value call. That then
+    // passes the new instance as `this` to the value call. That then
     // re-dispatched `bus.EventTarget()` and threw. Make the exclusion explicit
     // and table-driven so growing the spec-length table cannot re-open it.
     //
@@ -69,14 +107,7 @@ pub(crate) unsafe fn try_dispatch_value_called_proto_method(
     {
         return None;
     }
-    let receiver = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
-    Some(js_native_call_method(
-        receiver,
-        name.as_ptr() as *const i8,
-        name.len(),
-        args_ptr,
-        args_len,
-    ))
+    Some(name)
 }
 
 /// #3662: classify a `Function.prototype.{apply,call,bind}` receiver. Returns

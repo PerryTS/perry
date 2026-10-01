@@ -23,11 +23,11 @@
       "access": "local_type_hint",
       "count": 1,
       "classification": "runtime-validated",
-      "reason": "The declared function type only narrows which loop-called bindings are ATTEMPTED for entry resolution; it licenses no call. The resolution itself goes through js_closure_resolve_arrow_direct_call(handle, arity), which validates the value is an arrow closure of that arity at runtime, so a wrong or stale declared type yields a failed resolution and the ordinary dynamic call, never a wrong callee. Async and generator function types are excluded at this read."
+      "reason": "The declared function type only narrows which loop-called bindings are ATTEMPTED for entry resolution; it licenses no call. The resolution itself goes through js_closure_resolve_plain_direct_call(handle, arity), which validates the value is a directly callable closure of that arity at runtime, so a wrong or stale declared type yields a failed resolution and the ordinary dynamic call, never a wrong callee. Async and generator function types are excluded at this read."
     },
     {
       "path": "crates/perry-codegen/src/codegen/mod.rs",
-      "function": "compile_module",
+      "function": "compile_module_impl",
       "access": "raw:module_local_types",
       "count": 1,
       "classification": "metadata-only",
@@ -300,22 +300,6 @@
     {
       "path": "crates/perry-codegen/src/lower_call/native/mod.rs",
       "function": "util_types_arg_is_async_function_static",
-      "access": "stable_local_type_proof",
-      "count": 1,
-      "classification": "representation-proven",
-      "reason": "The proof API supplies only runtime-derived initializer evidence and rejects the binding after any write in the region."
-    },
-    {
-      "path": "crates/perry-codegen/src/lower_call/options/abort.rs",
-      "function": "is_abort_controller_expr",
-      "access": "stable_local_type_proof",
-      "count": 1,
-      "classification": "representation-proven",
-      "reason": "The proof API supplies only runtime-derived initializer evidence and rejects the binding after any write in the region."
-    },
-    {
-      "path": "crates/perry-codegen/src/lower_call/options/abort.rs",
-      "function": "is_abort_signal_typed_expr",
       "access": "stable_local_type_proof",
       "count": 1,
       "classification": "representation-proven",
@@ -696,6 +680,14 @@
       "count": 1,
       "classification": "runtime-validated",
       "reason": "The declared type is read only to DECLINE the shape-keyed loop clone for a receiver that carries any layout claim (a named class or an anon-shape the resolver found ambiguous); it never selects a layout. A receiver admitted here (no annotation, any, unknown) still goes through the preheader's runtime proof \u2014 js_array_ensure_element_shape_ordinary must return a nonzero ShapeId and js_shape_ordinary_inline_slot_for_key a slot for every tracked key \u2014 and the per-element residual check re-validates that ShapeId on every read, so a stale or wrong hint can only cost the clone, never a wrong offset."
+    },
+    {
+      "path": "crates/perry-codegen/src/stmt/region_loop/guard.rs",
+      "function": "static_region_word",
+      "access": "local_type_hint",
+      "count": 1,
+      "classification": "runtime-validated",
+      "reason": "The declared class only picks a loop region's static supplier (its static ShapeId and slots); the region guard compares the receiver's own ShapeId against that id as an immediate, so a receiver of any other shape misses into the learned supplier and a wrong hint can only cost the static hit, never a wrong slot."
     }
   ]
 }

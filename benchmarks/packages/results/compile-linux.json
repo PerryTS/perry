@@ -1,19 +1,19 @@
 {
  "env": {
-  "PERRY_BUILD_COMMIT": "36420d2e56883493f6296b1c7a5d0bfefbbfeacc",
+  "PERRY_BUILD_COMMIT": "9e29f59d435ee08df161ef460ee6f204fb381d4f",
   "PERRY_LLVM_CLANG": "/usr/bin/clang-22",
   "PERRY_NO_TELEMETRY": "1"
  },
  "flags": "",
  "host": "ideal-mastodon",
- "perry": "/root/claude-pkg-bench-main/target/release/perry",
- "perry_commit": "36420d2e56",
+ "perry": "/root/claude-matrix-rerun/target/release/perry",
+ "perry_commit": "9e29f59d43",
  "perry_version": "perry 0.5.1654",
  "platform": "Linux-6.17.0-23-generic-x86_64-with-glibc2.39",
  "workloads": {
   "axios/get_json": {
-   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile axios/get_json.ts -o /root/claude-pkg-bench-out/linux/axios__get_json",
-   "compile_s": 586.97,
+   "cmd": "/root/claude-matrix-rerun/target/release/perry compile axios/get_json.ts -o /root/claude-matrix-rerun-out/linux/axios__get_json",
+   "compile_s": 3.3,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -51,14 +51,14 @@
     "package_modules_compiled": 63,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 16.06,
-   "runtime_rebuilt": true,
-   "size_bytes": 30759888,
+   "load1": 2.31,
+   "runtime_rebuilt": false,
+   "size_bytes": 31617880,
    "status": "OK"
   },
   "axios/post_json": {
-   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile axios/post_json.ts -o /root/claude-pkg-bench-out/linux/axios__post_json",
-   "compile_s": 80.94,
+   "cmd": "/root/claude-matrix-rerun/target/release/perry compile axios/post_json.ts -o /root/claude-matrix-rerun-out/linux/axios__post_json",
+   "compile_s": 3.26,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -96,14 +96,14 @@
     "package_modules_compiled": 63,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 23.46,
+   "load1": 2.15,
    "runtime_rebuilt": false,
-   "size_bytes": 30759880,
+   "size_bytes": 31621976,
    "status": "OK"
   },
   "big.js/arith_chain": {
-   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile big.js/arith_chain.ts -o /root/claude-pkg-bench-out/linux/big_js__arith_chain",
-   "compile_s": 4.45,
+   "cmd": "/root/claude-matrix-rerun/target/release/perry compile big.js/arith_chain.ts -o /root/claude-matrix-rerun-out/linux/big_js__arith_chain",
+   "compile_s": 0.73,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -115,14 +115,14 @@
     "package_modules_compiled": 1,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 14.04,
+   "load1": 2.13,
    "runtime_rebuilt": false,
-   "size_bytes": 8500048,
+   "size_bytes": 8681000,
    "status": "OK"
   },
   "bignumber.js/arith_chain": {
-   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile bignumber.js/arith_chain.ts -o /root/claude-pkg-bench-out/linux/bignumber_js__arith_chain",
-   "compile_s": 10.49,
+   "cmd": "/root/claude-matrix-rerun/target/release/perry compile bignumber.js/arith_chain.ts -o /root/claude-matrix-rerun-out/linux/bignumber_js__arith_chain",
+   "compile_s": 1.13,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -134,14 +134,14 @@
     "package_modules_compiled": 1,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 13.55,
+   "load1": 2.26,
    "runtime_rebuilt": false,
-   "size_bytes": 11398056,
+   "size_bytes": 11708208,
    "status": "OK"
   },
   "commander/parse_argv": {
-   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile commander/parse_argv.ts -o /root/claude-pkg-bench-out/linux/commander__parse_argv",
-   "compile_s": 468.47,
+   "cmd": "/root/claude-matrix-rerun/target/release/perry compile commander/parse_argv.ts -o /root/claude-matrix-rerun-out/linux/commander__parse_argv",
+   "compile_s": 1.35,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -153,14 +153,14 @@
     "package_modules_compiled": 7,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 27.97,
-   "runtime_rebuilt": true,
-   "size_bytes": 10993248,
+   "load1": 2.13,
+   "runtime_rebuilt": false,
+   "size_bytes": 10993056,
    "status": "OK"
   },
   "control/bare_loop": {
-   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile control/bare_loop.ts -o /root/claude-pkg-bench-out/linux/control__bare_loop",
-   "compile_s": 15.89,
+   "cmd": "/root/claude-matrix-rerun/target/release/perry compile control/bare_loop.ts -o /root/claude-matrix-rerun-out/linux/control__bare_loop",
+   "compile_s": 0.76,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -171,14 +171,14 @@
     "package_modules_compiled": 0,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 68.0,
+   "load1": 2.28,
    "runtime_rebuilt": false,
-   "size_bytes": 7425656,
+   "size_bytes": 7496808,
    "status": "OK"
   },
   "control/prop_read": {
-   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile control/prop_read.ts -o /root/claude-pkg-bench-out/linux/control__prop_read",
-   "compile_s": 18.66,
+   "cmd": "/root/claude-matrix-rerun/target/release/perry compile control/prop_read.ts -o /root/claude-matrix-rerun-out/linux/control__prop_read",
+   "compile_s": 0.78,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -189,14 +189,14 @@
     "package_modules_compiled": 0,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 69.05,
+   "load1": 2.28,
    "runtime_rebuilt": false,
-   "size_bytes": 7425872,
+   "size_bytes": 7500904,
    "status": "OK"
   },
   "cron/next_dates": {
-   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile cron/next_dates.ts -o /root/claude-pkg-bench-out/linux/cron__next_dates",
-   "compile_s": 603.03,
+   "cmd": "/root/claude-matrix-rerun/target/release/perry compile cron/next_dates.ts -o /root/claude-matrix-rerun-out/linux/cron__next_dates",
+   "compile_s": 2.35,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -209,14 +209,14 @@
     "package_modules_compiled": 5,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 36.38,
-   "runtime_rebuilt": true,
-   "size_bytes": 19742296,
+   "load1": 3.0,
+   "runtime_rebuilt": false,
+   "size_bytes": 20163768,
    "status": "OK"
   },
   "date-fns/diff_interval": {
-   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile date-fns/diff_interval.ts -o /root/claude-pkg-bench-out/linux/date-fns__diff_interval",
-   "compile_s": 2.98,
+   "cmd": "/root/claude-matrix-rerun/target/release/perry compile date-fns/diff_interval.ts -o /root/claude-matrix-rerun-out/linux/date-fns__diff_interval",
+   "compile_s": 1.09,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -228,14 +228,14 @@
     "package_modules_compiled": 20,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 23.37,
+   "load1": 2.82,
    "runtime_rebuilt": false,
-   "size_bytes": 7649664,
+   "size_bytes": 7698536,
    "status": "OK"
   },
   "date-fns/format_add": {
-   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile date-fns/format_add.ts -o /root/claude-pkg-bench-out/linux/date-fns__format_add",
-   "compile_s": 6.98,
+   "cmd": "/root/claude-matrix-rerun/target/release/perry compile date-fns/format_add.ts -o /root/claude-matrix-rerun-out/linux/date-fns__format_add",
+   "compile_s": 1.19,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -247,14 +247,14 @@
     "package_modules_compiled": 41,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 25.18,
+   "load1": 2.78,
    "runtime_rebuilt": false,
-   "size_bytes": 8998456,
+   "size_bytes": 9062056,
    "status": "OK"
   },
   "dayjs/diff_startof": {
-   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile dayjs/diff_startof.ts -o /root/claude-pkg-bench-out/linux/dayjs__diff_startof",
-   "compile_s": 3.88,
+   "cmd": "/root/claude-matrix-rerun/target/release/perry compile dayjs/diff_startof.ts -o /root/claude-matrix-rerun-out/linux/dayjs__diff_startof",
+   "compile_s": 0.87,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -266,14 +266,14 @@
     "package_modules_compiled": 2,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 26.15,
+   "load1": 2.68,
    "runtime_rebuilt": false,
-   "size_bytes": 11403512,
+   "size_bytes": 11650808,
    "status": "OK"
   },
   "dayjs/parse_format": {
-   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile dayjs/parse_format.ts -o /root/claude-pkg-bench-out/linux/dayjs__parse_format",
-   "compile_s": 3.47,
+   "cmd": "/root/claude-matrix-rerun/target/release/perry compile dayjs/parse_format.ts -o /root/claude-matrix-rerun-out/linux/dayjs__parse_format",
+   "compile_s": 0.83,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -285,14 +285,14 @@
     "package_modules_compiled": 2,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 26.15,
+   "load1": 2.62,
    "runtime_rebuilt": false,
-   "size_bytes": 11403120,
+   "size_bytes": 11646712,
    "status": "OK"
   },
   "decimal.js/arith_chain": {
-   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile decimal.js/arith_chain.ts -o /root/claude-pkg-bench-out/linux/decimal_js__arith_chain",
-   "compile_s": 16.25,
+   "cmd": "/root/claude-matrix-rerun/target/release/perry compile decimal.js/arith_chain.ts -o /root/claude-matrix-rerun-out/linux/decimal_js__arith_chain",
+   "compile_s": 1.12,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -304,14 +304,14 @@
     "package_modules_compiled": 1,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 16.12,
+   "load1": 2.62,
    "runtime_rebuilt": false,
-   "size_bytes": 11734992,
+   "size_bytes": 12100720,
    "status": "OK"
   },
   "decimal.js/parse_sum": {
-   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile decimal.js/parse_sum.ts -o /root/claude-pkg-bench-out/linux/decimal_js__parse_sum",
-   "compile_s": 14.02,
+   "cmd": "/root/claude-matrix-rerun/target/release/perry compile decimal.js/parse_sum.ts -o /root/claude-matrix-rerun-out/linux/decimal_js__parse_sum",
+   "compile_s": 1.1,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -323,14 +323,14 @@
     "package_modules_compiled": 1,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 15.21,
+   "load1": 2.23,
    "runtime_rebuilt": false,
-   "size_bytes": 11735376,
+   "size_bytes": 12096624,
    "status": "OK"
   },
   "dotenv/parse": {
-   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile dotenv/parse.ts -o /root/claude-pkg-bench-out/linux/dotenv__parse",
-   "compile_s": 658.24,
+   "cmd": "/root/claude-matrix-rerun/target/release/perry compile dotenv/parse.ts -o /root/claude-matrix-rerun-out/linux/dotenv__parse",
+   "compile_s": 0.88,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -342,14 +342,14 @@
     "package_modules_compiled": 1,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 35.34,
-   "runtime_rebuilt": true,
-   "size_bytes": 11837896,
+   "load1": 3.88,
+   "runtime_rebuilt": false,
+   "size_bytes": 12092216,
    "status": "OK"
   },
   "exponential-backoff/retry": {
-   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile exponential-backoff/retry.ts -o /root/claude-pkg-bench-out/linux/exponential-backoff__retry",
-   "compile_s": 1.86,
+   "cmd": "/root/claude-matrix-rerun/target/release/perry compile exponential-backoff/retry.ts -o /root/claude-matrix-rerun-out/linux/exponential-backoff__retry",
+   "compile_s": 0.68,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -361,14 +361,14 @@
     "package_modules_compiled": 10,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 16.21,
+   "load1": 2.8,
    "runtime_rebuilt": false,
-   "size_bytes": 7980056,
+   "size_bytes": 7693800,
    "status": "OK"
   },
   "fastify/inject": {
-   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile fastify/inject.ts -o /root/claude-pkg-bench-out/linux/fastify__inject",
-   "compile_s": 465.57,
+   "cmd": "/root/claude-matrix-rerun/target/release/perry compile fastify/inject.ts -o /root/claude-matrix-rerun-out/linux/fastify__inject",
+   "compile_s": 8.61,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -421,14 +421,14 @@
     "package_modules_compiled": 33,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 13.7,
-   "runtime_rebuilt": true,
-   "size_bytes": 59723304,
+   "load1": 2.76,
+   "runtime_rebuilt": false,
+   "size_bytes": 61850896,
    "status": "OK"
   },
   "fastify/listen_fetch": {
-   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile fastify/listen_fetch.ts -o /root/claude-pkg-bench-out/linux/fastify__listen_fetch",
-   "compile_s": 185.13,
+   "cmd": "/root/claude-matrix-rerun/target/release/perry compile fastify/listen_fetch.ts -o /root/claude-matrix-rerun-out/linux/fastify__listen_fetch",
+   "compile_s": 8.64,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -481,14 +481,14 @@
     "package_modules_compiled": 33,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 12.97,
+   "load1": 2.28,
    "runtime_rebuilt": false,
-   "size_bytes": 59714584,
+   "size_bytes": 61842640,
    "status": "OK"
   },
   "ioredis/pipeline": {
-   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile ioredis/pipeline.ts -o /root/claude-pkg-bench-out/linux/ioredis__pipeline",
-   "compile_s": 49.14,
+   "cmd": "/root/claude-matrix-rerun/target/release/perry compile ioredis/pipeline.ts -o /root/claude-matrix-rerun-out/linux/ioredis__pipeline",
+   "compile_s": 3.0,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -508,14 +508,14 @@
     "package_modules_compiled": 39,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 13.95,
+   "load1": 2.28,
    "runtime_rebuilt": false,
-   "size_bytes": 24238984,
+   "size_bytes": 24875936,
    "status": "OK"
   },
   "ioredis/set_get": {
-   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile ioredis/set_get.ts -o /root/claude-pkg-bench-out/linux/ioredis__set_get",
-   "compile_s": 52.81,
+   "cmd": "/root/claude-matrix-rerun/target/release/perry compile ioredis/set_get.ts -o /root/claude-matrix-rerun-out/linux/ioredis__set_get",
+   "compile_s": 3.03,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -535,14 +535,14 @@
     "package_modules_compiled": 39,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 14.92,
+   "load1": 2.41,
    "runtime_rebuilt": false,
-   "size_bytes": 24230504,
+   "size_bytes": 24867680,
    "status": "OK"
   },
   "jsonwebtoken/decode": {
-   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile jsonwebtoken/decode.ts -o /root/claude-pkg-bench-out/linux/jsonwebtoken__decode",
-   "compile_s": 173.36,
+   "cmd": "/root/claude-matrix-rerun/target/release/perry compile jsonwebtoken/decode.ts -o /root/claude-matrix-rerun-out/linux/jsonwebtoken__decode",
+   "compile_s": 2.27,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -568,14 +568,14 @@
     "package_modules_compiled": 12,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 39.92,
+   "load1": 2.86,
    "runtime_rebuilt": false,
-   "size_bytes": 19913424,
+   "size_bytes": 20526960,
    "status": "OK"
   },
   "jsonwebtoken/hs256": {
-   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile jsonwebtoken/hs256.ts -o /root/claude-pkg-bench-out/linux/jsonwebtoken__hs256",
-   "compile_s": 1132.41,
+   "cmd": "/root/claude-matrix-rerun/target/release/perry compile jsonwebtoken/hs256.ts -o /root/claude-matrix-rerun-out/linux/jsonwebtoken__hs256",
+   "compile_s": 2.35,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -601,14 +601,14 @@
     "package_modules_compiled": 12,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 45.27,
-   "runtime_rebuilt": true,
-   "size_bytes": 19909136,
+   "load1": 3.68,
+   "runtime_rebuilt": false,
+   "size_bytes": 20522800,
    "status": "OK"
   },
   "jsonwebtoken/rs256": {
-   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile jsonwebtoken/rs256.ts -o /root/claude-pkg-bench-out/linux/jsonwebtoken__rs256",
-   "compile_s": 116.57,
+   "cmd": "/root/claude-matrix-rerun/target/release/perry compile jsonwebtoken/rs256.ts -o /root/claude-matrix-rerun-out/linux/jsonwebtoken__rs256",
+   "compile_s": 2.21,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -634,14 +634,14 @@
     "package_modules_compiled": 12,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 33.3,
+   "load1": 3.05,
    "runtime_rebuilt": false,
-   "size_bytes": 19913544,
+   "size_bytes": 20530992,
    "status": "OK"
   },
   "lru-cache/churn": {
-   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile lru-cache/churn.ts -o /root/claude-pkg-bench-out/linux/lru-cache__churn",
-   "compile_s": 630.2,
+   "cmd": "/root/claude-matrix-rerun/target/release/perry compile lru-cache/churn.ts -o /root/claude-matrix-rerun-out/linux/lru-cache__churn",
+   "compile_s": 0.75,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -653,14 +653,14 @@
     "package_modules_compiled": 1,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 23.3,
-   "runtime_rebuilt": true,
-   "size_bytes": 9159352,
+   "load1": 2.69,
+   "runtime_rebuilt": false,
+   "size_bytes": 9027832,
    "status": "OK"
   },
   "lru-cache/ttl_mixed": {
-   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile lru-cache/ttl_mixed.ts -o /root/claude-pkg-bench-out/linux/lru-cache__ttl_mixed",
-   "compile_s": 13.53,
+   "cmd": "/root/claude-matrix-rerun/target/release/perry compile lru-cache/ttl_mixed.ts -o /root/claude-matrix-rerun-out/linux/lru-cache__ttl_mixed",
+   "compile_s": 0.78,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -672,14 +672,14 @@
     "package_modules_compiled": 1,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 29.43,
+   "load1": 2.58,
    "runtime_rebuilt": false,
-   "size_bytes": 9163632,
+   "size_bytes": 9031928,
    "status": "OK"
   },
   "moment/diff_duration": {
-   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile moment/diff_duration.ts -o /root/claude-pkg-bench-out/linux/moment__diff_duration",
-   "compile_s": 111.34,
+   "cmd": "/root/claude-matrix-rerun/target/release/perry compile moment/diff_duration.ts -o /root/claude-matrix-rerun-out/linux/moment__diff_duration",
+   "compile_s": 1.07,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -691,14 +691,14 @@
     "package_modules_compiled": 1,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 23.66,
+   "load1": 2.7,
    "runtime_rebuilt": false,
-   "size_bytes": 13635720,
+   "size_bytes": 14220600,
    "status": "OK"
   },
   "moment/parse_format": {
-   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile moment/parse_format.ts -o /root/claude-pkg-bench-out/linux/moment__parse_format",
-   "compile_s": 563.81,
+   "cmd": "/root/claude-matrix-rerun/target/release/perry compile moment/parse_format.ts -o /root/claude-matrix-rerun-out/linux/moment__parse_format",
+   "compile_s": 1.1,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -710,14 +710,14 @@
     "package_modules_compiled": 1,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 23.37,
-   "runtime_rebuilt": true,
-   "size_bytes": 13635288,
+   "load1": 2.76,
+   "runtime_rebuilt": false,
+   "size_bytes": 14216504,
    "status": "OK"
   },
   "mongodb/batch_query": {
-   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile mongodb/batch_query.ts -o /root/claude-pkg-bench-out/linux/mongodb__batch_query",
-   "compile_s": 124.35,
+   "cmd": "/root/claude-matrix-rerun/target/release/perry compile mongodb/batch_query.ts -o /root/claude-matrix-rerun-out/linux/mongodb__batch_query",
+   "compile_s": 5.78,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -737,14 +737,14 @@
     "package_modules_compiled": 133,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 15.77,
+   "load1": 5.59,
    "runtime_rebuilt": false,
-   "size_bytes": 47418152,
+   "size_bytes": 46065048,
    "status": "OK"
   },
   "mongodb/insert_find": {
-   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile mongodb/insert_find.ts -o /root/claude-pkg-bench-out/linux/mongodb__insert_find",
-   "compile_s": 491.38,
+   "cmd": "/root/claude-matrix-rerun/target/release/perry compile mongodb/insert_find.ts -o /root/claude-matrix-rerun-out/linux/mongodb__insert_find",
+   "compile_s": 8.81,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -764,14 +764,14 @@
     "package_modules_compiled": 133,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 16.45,
-   "runtime_rebuilt": true,
-   "size_bytes": 47404920,
+   "load1": 9.22,
+   "runtime_rebuilt": false,
+   "size_bytes": 46056856,
    "status": "OK"
   },
   "mysql2/insert_batch": {
-   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile mysql2/insert_batch.ts -o /root/claude-pkg-bench-out/linux/mysql2__insert_batch",
-   "compile_s": 83.44,
+   "cmd": "/root/claude-matrix-rerun/target/release/perry compile mysql2/insert_batch.ts -o /root/claude-matrix-rerun-out/linux/mysql2__insert_batch",
+   "compile_s": 5.91,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -792,14 +792,14 @@
     "package_modules_compiled": 92,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 19.2,
+   "load1": 3.11,
    "runtime_rebuilt": false,
-   "size_bytes": 38141360,
+   "size_bytes": 39784008,
    "status": "OK"
   },
   "mysql2/select": {
-   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile mysql2/select.ts -o /root/claude-pkg-bench-out/linux/mysql2__select",
-   "compile_s": 479.34,
+   "cmd": "/root/claude-matrix-rerun/target/release/perry compile mysql2/select.ts -o /root/claude-matrix-rerun-out/linux/mysql2__select",
+   "compile_s": 5.89,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -820,14 +820,14 @@
     "package_modules_compiled": 92,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 22.9,
-   "runtime_rebuilt": true,
-   "size_bytes": 38123904,
+   "load1": 3.8,
+   "runtime_rebuilt": false,
+   "size_bytes": 39771656,
    "status": "OK"
   },
   "nanoid/generate": {
-   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile nanoid/generate.ts -o /root/claude-pkg-bench-out/linux/nanoid__generate",
-   "compile_s": 492.29,
+   "cmd": "/root/claude-matrix-rerun/target/release/perry compile nanoid/generate.ts -o /root/claude-matrix-rerun-out/linux/nanoid__generate",
+   "compile_s": 0.71,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -839,14 +839,14 @@
     "package_modules_compiled": 2,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 26.69,
-   "runtime_rebuilt": true,
-   "size_bytes": 8128168,
+   "load1": 4.06,
+   "runtime_rebuilt": false,
+   "size_bytes": 8201768,
    "status": "OK"
   },
   "node-cron/match": {
-   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile node-cron/match.ts -o /root/claude-pkg-bench-out/linux/node-cron__match",
-   "compile_s": 8.25,
+   "cmd": "/root/claude-matrix-rerun/target/release/perry compile node-cron/match.ts -o /root/claude-matrix-rerun-out/linux/node-cron__match",
+   "compile_s": 1.53,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -858,14 +858,14 @@
     "package_modules_compiled": 2,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 16.58,
+   "load1": 2.87,
    "runtime_rebuilt": false,
-   "size_bytes": 16452136,
+   "size_bytes": 16539192,
    "status": "OK"
   },
   "node-cron/validate_parse": {
-   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile node-cron/validate_parse.ts -o /root/claude-pkg-bench-out/linux/node-cron__validate_parse",
-   "compile_s": 514.5,
+   "cmd": "/root/claude-matrix-rerun/target/release/perry compile node-cron/validate_parse.ts -o /root/claude-matrix-rerun-out/linux/node-cron__validate_parse",
+   "compile_s": 1.53,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -877,46 +877,90 @@
     "package_modules_compiled": 2,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 28.94,
-   "runtime_rebuilt": true,
-   "size_bytes": 16460688,
+   "load1": 3.21,
+   "runtime_rebuilt": false,
+   "size_bytes": 16547448,
    "status": "OK"
   },
   "node-forge/aes_cbc": {
-   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile node-forge/aes_cbc.ts -o /root/claude-pkg-bench-out/linux/node-forge__aes_cbc",
-   "compile_s": 94.11,
-   "load1": 11.25,
-   "reason": "compile failed (exit 1): ns \u2014 so the\nbuild fails here rather than emitting a misleading COMPILE_EXIT=0.\n\nFix the codegen errors above (search for `Error compiling module`),\nor set `PERRY_ALLOW_PARTIAL_CODEGEN=1` to link empty `<prefix>__init`\nstubs for the failed modules and surface deeper errors during\niterative debugging (the resulting binary is inert/unsafe in those\nmodules and may crash at runtime).\n\nError: 1 module(s) failed to compile (see errors above); set PERRY_ALLOW_PARTIAL_CODEGEN=1 to link empty stubs anyway",
+   "cmd": "/root/claude-matrix-rerun/target/release/perry compile node-forge/aes_cbc.ts -o /root/claude-matrix-rerun-out/linux/node-forge__aes_cbc",
+   "compile_s": 3.43,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "node-forge": 42
+    },
+    "native_modules": 44,
+    "package_modules_compiled": 42,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 3.42,
    "runtime_rebuilt": false,
-   "status": "FAIL"
+   "size_bytes": 33065360,
+   "status": "OK"
   },
   "node-forge/hmac": {
-   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile node-forge/hmac.ts -o /root/claude-pkg-bench-out/linux/node-forge__hmac",
-   "compile_s": 94.16,
-   "load1": 12.75,
-   "reason": "compile failed (exit 1): ns \u2014 so the\nbuild fails here rather than emitting a misleading COMPILE_EXIT=0.\n\nFix the codegen errors above (search for `Error compiling module`),\nor set `PERRY_ALLOW_PARTIAL_CODEGEN=1` to link empty `<prefix>__init`\nstubs for the failed modules and surface deeper errors during\niterative debugging (the resulting binary is inert/unsafe in those\nmodules and may crash at runtime).\n\nError: 1 module(s) failed to compile (see errors above); set PERRY_ALLOW_PARTIAL_CODEGEN=1 to link empty stubs anyway",
+   "cmd": "/root/claude-matrix-rerun/target/release/perry compile node-forge/hmac.ts -o /root/claude-matrix-rerun-out/linux/node-forge__hmac",
+   "compile_s": 3.34,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "node-forge": 42
+    },
+    "native_modules": 44,
+    "package_modules_compiled": 42,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 3.51,
    "runtime_rebuilt": false,
-   "status": "FAIL"
+   "size_bytes": 33048848,
+   "status": "OK"
   },
   "node-forge/rsa_sign": {
-   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile node-forge/rsa_sign.ts -o /root/claude-pkg-bench-out/linux/node-forge__rsa_sign",
-   "compile_s": 79.69,
-   "load1": 14.43,
-   "reason": "compile failed (exit 1): ns \u2014 so the\nbuild fails here rather than emitting a misleading COMPILE_EXIT=0.\n\nFix the codegen errors above (search for `Error compiling module`),\nor set `PERRY_ALLOW_PARTIAL_CODEGEN=1` to link empty `<prefix>__init`\nstubs for the failed modules and surface deeper errors during\niterative debugging (the resulting binary is inert/unsafe in those\nmodules and may crash at runtime).\n\nError: 1 module(s) failed to compile (see errors above); set PERRY_ALLOW_PARTIAL_CODEGEN=1 to link empty stubs anyway",
+   "cmd": "/root/claude-matrix-rerun/target/release/perry compile node-forge/rsa_sign.ts -o /root/claude-matrix-rerun-out/linux/node-forge__rsa_sign",
+   "compile_s": 3.37,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 3,
+     "node-forge": 42
+    },
+    "native_modules": 45,
+    "package_modules_compiled": 42,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 3.0,
    "runtime_rebuilt": false,
-   "status": "FAIL"
+   "size_bytes": 33061264,
+   "status": "OK"
   },
   "node-forge/sha256": {
-   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile node-forge/sha256.ts -o /root/claude-pkg-bench-out/linux/node-forge__sha256",
-   "compile_s": 82.72,
-   "load1": 12.93,
-   "reason": "compile failed (exit 1): ns \u2014 so the\nbuild fails here rather than emitting a misleading COMPILE_EXIT=0.\n\nFix the codegen errors above (search for `Error compiling module`),\nor set `PERRY_ALLOW_PARTIAL_CODEGEN=1` to link empty `<prefix>__init`\nstubs for the failed modules and surface deeper errors during\niterative debugging (the resulting binary is inert/unsafe in those\nmodules and may crash at runtime).\n\nError: 1 module(s) failed to compile (see errors above); set PERRY_ALLOW_PARTIAL_CODEGEN=1 to link empty stubs anyway",
+   "cmd": "/root/claude-matrix-rerun/target/release/perry compile node-forge/sha256.ts -o /root/claude-matrix-rerun-out/linux/node-forge__sha256",
+   "compile_s": 3.42,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "node-forge": 42
+    },
+    "native_modules": 44,
+    "package_modules_compiled": 42,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 3.82,
    "runtime_rebuilt": false,
-   "status": "FAIL"
+   "size_bytes": 33048912,
+   "status": "OK"
   },
   "pg/insert_batch": {
-   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile pg/insert_batch.ts -o /root/claude-pkg-bench-out/linux/pg__insert_batch",
-   "compile_s": 40.68,
+   "cmd": "/root/claude-matrix-rerun/target/release/perry compile pg/insert_batch.ts -o /root/claude-matrix-rerun-out/linux/pg__insert_batch",
+   "compile_s": 2.48,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -941,14 +985,14 @@
     "package_modules_compiled": 17,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 21.08,
+   "load1": 3.98,
    "runtime_rebuilt": false,
-   "size_bytes": 22057888,
+   "size_bytes": 22642144,
    "status": "OK"
   },
   "pg/select": {
-   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile pg/select.ts -o /root/claude-pkg-bench-out/linux/pg__select",
-   "compile_s": 427.15,
+   "cmd": "/root/claude-matrix-rerun/target/release/perry compile pg/select.ts -o /root/claude-matrix-rerun-out/linux/pg__select",
+   "compile_s": 2.49,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -973,14 +1017,14 @@
     "package_modules_compiled": 17,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 21.47,
-   "runtime_rebuilt": true,
-   "size_bytes": 22048848,
+   "load1": 4.17,
+   "runtime_rebuilt": false,
+   "size_bytes": 22625696,
    "status": "OK"
   },
   "qs/parse_nested": {
-   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile qs/parse_nested.ts -o /root/claude-pkg-bench-out/linux/qs__parse_nested",
-   "compile_s": 1157.41,
+   "cmd": "/root/claude-matrix-rerun/target/release/perry compile qs/parse_nested.ts -o /root/claude-matrix-rerun-out/linux/qs__parse_nested",
+   "compile_s": 1.53,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -1010,14 +1054,14 @@
     "package_modules_compiled": 5,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 65.59,
-   "runtime_rebuilt": true,
-   "size_bytes": 16545696,
+   "load1": 7.72,
+   "runtime_rebuilt": false,
+   "size_bytes": 17055288,
    "status": "OK"
   },
   "qs/stringify_nested": {
-   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile qs/stringify_nested.ts -o /root/claude-pkg-bench-out/linux/qs__stringify_nested",
-   "compile_s": 33.0,
+   "cmd": "/root/claude-matrix-rerun/target/release/perry compile qs/stringify_nested.ts -o /root/claude-matrix-rerun-out/linux/qs__stringify_nested",
+   "compile_s": 2.45,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -1047,14 +1091,14 @@
     "package_modules_compiled": 5,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 41.1,
+   "load1": 8.19,
    "runtime_rebuilt": false,
-   "size_bytes": 16558144,
+   "size_bytes": 17063288,
    "status": "OK"
   },
   "rate-limiter-flexible/consume": {
-   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile rate-limiter-flexible/consume.ts -o /root/claude-pkg-bench-out/linux/rate-limiter-flexible__consume",
-   "compile_s": 212.92,
+   "cmd": "/root/claude-matrix-rerun/target/release/perry compile rate-limiter-flexible/consume.ts -o /root/claude-matrix-rerun-out/linux/rate-limiter-flexible__consume",
+   "compile_s": 1.81,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -1066,14 +1110,14 @@
     "package_modules_compiled": 36,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 10.51,
-   "runtime_rebuilt": true,
-   "size_bytes": 17782456,
+   "load1": 2.03,
+   "runtime_rebuilt": false,
+   "size_bytes": 18130416,
    "status": "OK"
   },
   "rate-limiter-flexible/get_penalty": {
-   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile rate-limiter-flexible/get_penalty.ts -o /root/claude-pkg-bench-out/linux/rate-limiter-flexible__get_penalty",
-   "compile_s": 41.45,
+   "cmd": "/root/claude-matrix-rerun/target/release/perry compile rate-limiter-flexible/get_penalty.ts -o /root/claude-matrix-rerun-out/linux/rate-limiter-flexible__get_penalty",
+   "compile_s": 1.87,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -1085,14 +1129,14 @@
     "package_modules_compiled": 36,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 9.14,
+   "load1": 2.04,
    "runtime_rebuilt": false,
-   "size_bytes": 17791112,
+   "size_bytes": 18138608,
    "status": "OK"
   },
   "redis/pipeline": {
-   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile redis/pipeline.ts -o /root/claude-pkg-bench-out/linux/redis__pipeline",
-   "compile_s": 284.25,
+   "cmd": "/root/claude-matrix-rerun/target/release/perry compile redis/pipeline.ts -o /root/claude-matrix-rerun-out/linux/redis__pipeline",
+   "compile_s": 16.21,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -1110,14 +1154,14 @@
     "package_modules_compiled": 1,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 11.38,
+   "load1": 2.87,
    "runtime_rebuilt": false,
-   "size_bytes": 73768240,
+   "size_bytes": 75821600,
    "status": "OK"
   },
   "redis/set_get": {
-   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile redis/set_get.ts -o /root/claude-pkg-bench-out/linux/redis__set_get",
-   "compile_s": 537.45,
+   "cmd": "/root/claude-matrix-rerun/target/release/perry compile redis/set_get.ts -o /root/claude-matrix-rerun-out/linux/redis__set_get",
+   "compile_s": 16.27,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -1135,14 +1179,14 @@
     "package_modules_compiled": 1,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 12.62,
-   "runtime_rebuilt": true,
-   "size_bytes": 73763776,
+   "load1": 2.08,
+   "runtime_rebuilt": false,
+   "size_bytes": 75813344,
    "status": "OK"
   },
   "uuid/v4": {
-   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile uuid/v4.ts -o /root/claude-pkg-bench-out/linux/uuid__v4",
-   "compile_s": 790.07,
+   "cmd": "/root/claude-matrix-rerun/target/release/perry compile uuid/v4.ts -o /root/claude-matrix-rerun-out/linux/uuid__v4",
+   "compile_s": 1.08,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -1154,14 +1198,14 @@
     "package_modules_compiled": 13,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 73.08,
-   "runtime_rebuilt": true,
-   "size_bytes": 10728696,
+   "load1": 3.76,
+   "runtime_rebuilt": false,
+   "size_bytes": 10918512,
    "status": "OK"
   },
   "uuid/v5_parse": {
-   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile uuid/v5_parse.ts -o /root/claude-pkg-bench-out/linux/uuid__v5_parse",
-   "compile_s": 4.41,
+   "cmd": "/root/claude-matrix-rerun/target/release/perry compile uuid/v5_parse.ts -o /root/claude-matrix-rerun-out/linux/uuid__v5_parse",
+   "compile_s": 1.08,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -1173,14 +1217,14 @@
     "package_modules_compiled": 10,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 27.1,
+   "load1": 3.66,
    "runtime_rebuilt": false,
-   "size_bytes": 10727968,
+   "size_bytes": 10906160,
    "status": "OK"
   },
   "uuid/v7": {
-   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile uuid/v7.ts -o /root/claude-pkg-bench-out/linux/uuid__v7",
-   "compile_s": 6.23,
+   "cmd": "/root/claude-matrix-rerun/target/release/perry compile uuid/v7.ts -o /root/claude-matrix-rerun-out/linux/uuid__v7",
+   "compile_s": 1.11,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -1192,14 +1236,14 @@
     "package_modules_compiled": 13,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 27.22,
+   "load1": 3.72,
    "runtime_rebuilt": false,
-   "size_bytes": 10750352,
+   "size_bytes": 10931056,
    "status": "OK"
   },
   "validator/batch": {
-   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile validator/batch.ts -o /root/claude-pkg-bench-out/linux/validator__batch",
-   "compile_s": 584.62,
+   "cmd": "/root/claude-matrix-rerun/target/release/perry compile validator/batch.ts -o /root/claude-matrix-rerun-out/linux/validator__batch",
+   "compile_s": 2.74,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -1211,14 +1255,14 @@
     "package_modules_compiled": 113,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 23.22,
-   "runtime_rebuilt": true,
-   "size_bytes": 21998688,
+   "load1": 3.51,
+   "runtime_rebuilt": false,
+   "size_bytes": 22894328,
    "status": "OK"
   },
   "validator/sanitize": {
-   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile validator/sanitize.ts -o /root/claude-pkg-bench-out/linux/validator__sanitize",
-   "compile_s": 232.72,
+   "cmd": "/root/claude-matrix-rerun/target/release/perry compile validator/sanitize.ts -o /root/claude-matrix-rerun-out/linux/validator__sanitize",
+   "compile_s": 2.6,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -1230,9 +1274,9 @@
     "package_modules_compiled": 113,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 39.8,
+   "load1": 3.46,
    "runtime_rebuilt": false,
-   "size_bytes": 21990744,
+   "size_bytes": 22890232,
    "status": "OK"
   }
  }

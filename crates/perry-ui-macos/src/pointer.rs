@@ -29,7 +29,7 @@ use std::collections::HashMap;
 use crate::widgets::get_widget;
 
 extern "C" {
-    fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+    fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
     fn js_pointer_event_new(x: f64, y: f64, button: u32, pointer_type: u32) -> f64;
 }
@@ -296,7 +296,7 @@ unsafe fn handle_event(event: *mut AnyObject) {
             continue;
         }
         let pe = js_pointer_event_new(local_x, local_y, button, POINTER_TYPE_MOUSE);
-        js_closure_call1(closure_ptr as *const u8, pe);
+        js_closure_call1(closure_ptr as *const u8, perry_ffi::JsThis::UNDEFINED, pe);
     }
 }
 
@@ -340,7 +340,11 @@ unsafe fn dispatch_hover_transitions(event_window: *mut AnyObject, win_loc: CGPo
             continue;
         }
         let bool_bits = if inside { TAG_TRUE } else { TAG_FALSE };
-        js_closure_call1(closure_ptr as *const u8, f64::from_bits(bool_bits));
+        js_closure_call1(
+            closure_ptr as *const u8,
+            perry_ffi::JsThis::UNDEFINED,
+            f64::from_bits(bool_bits),
+        );
     }
 }
 

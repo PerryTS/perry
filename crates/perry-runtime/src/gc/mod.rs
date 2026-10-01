@@ -124,14 +124,9 @@ mod layout_tables;
 // The immortal-object construction window and the table-occupancy readout, both
 // consumed from OUTSIDE `gc`: `object::global_this` opens the window around the
 // `globalThis` bootstrap and prints the residue under `PERRY_GC_DIAG`.
+pub use layout::*;
 pub(crate) use layout_tables::per_object_layout_table_sizes;
 pub use layout_tables::ImmortalLayoutScope;
-/// #7510 item 1: the construction-side memo that turns an already-installed
-/// typed shape into two header bit-writes instead of a descriptor build plus a
-/// `SHAPE_LAYOUTS` round-trip.
-mod shape_install;
-pub use layout::*;
-pub(crate) use shape_install::shape_install_memo_hot_addr;
 mod trace;
 pub(crate) use trace::*;
 mod barrier;
@@ -168,6 +163,7 @@ pub(crate) mod prefetch;
 
 mod copying;
 mod copying_first_cycle;
+mod copying_object_scan;
 mod copying_parent_facts;
 mod copying_phase;
 mod copying_pointer_set;
@@ -282,6 +278,7 @@ pub use schedule::{
 pub use verify::*;
 /// Env-gated heap census (`PERRY_GC_CENSUS`); off by default.
 pub(crate) mod census;
+mod census_field_repr;
 #[cfg(feature = "diagnostics")]
 mod heap_snapshot;
 mod heap_stats;
@@ -306,6 +303,7 @@ pub(super) fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCol
     // allocation-free once the collector owns the heap, which is why the build
     // cannot be deferred any further than this.
     roots::ensure_stack_maps_built();
+    verify::verify_array_hole_tails_at_collection();
 
     gc_collect_minor_with_trigger_inner(trigger, FullEscalation::Allowed, CopyingFastPath::Allowed)
 }
@@ -329,6 +327,7 @@ pub(super) enum CopyingFastPath {
 /// the caller a collection that cannot compact — the #6946 argument).
 pub(super) fn gc_collect_compacting_minor(trigger: GcTriggerSnapshot) -> GcCollectOutcome {
     roots::ensure_stack_maps_built();
+    verify::verify_array_hole_tails_at_collection();
     let _armed = oldgen_defrag::IdleCompactDefragArm::new();
     gc_collect_minor_with_trigger_inner(trigger, FullEscalation::Refused, CopyingFastPath::Skipped)
 }
@@ -361,6 +360,7 @@ pub(super) fn gc_collect_forced_evacuating_minor(trigger: GcTriggerSnapshot) -> 
     // allocation-free once the collector owns the heap, which is why the build
     // cannot be deferred any further than this.
     roots::ensure_stack_maps_built();
+    verify::verify_array_hole_tails_at_collection();
 
     gc_collect_minor_with_trigger_inner(trigger, FullEscalation::Refused, CopyingFastPath::Allowed)
 }
@@ -825,6 +825,7 @@ fn gc_collect_full_mark_sweep_with_trigger(trigger: GcTriggerSnapshot) -> GcColl
     // allocation-free once the collector owns the heap, which is why the build
     // cannot be deferred any further than this.
     roots::ensure_stack_maps_built();
+    verify::verify_array_hole_tails_at_collection();
 
     // PERRY_GC_SAFEPOINT_ONLY: see gc_collect_minor_with_trigger. Manual
     // gc() engages its own force_full_scan first, which this detects as
@@ -1078,6 +1079,10 @@ pub fn gc_init() {
     // Method-calls lane: an inherited method-site entry holds the method
     // closure it calls, so the closure is a STRONG root (`object::method_site`).
     reg_scanner!(crate::object::method_site::scan_method_site_roots_mut);
+    // A read site's holder entry names the object that holds the answer (and
+    // the hops to it); the emitted hit loads through it, so each is a STRONG
+    // root (`object::method_site::read_holder`).
+    reg_scanner!(crate::object::method_site::read_holder::scan_read_holder_roots_mut);
     reg_scanner!(crate::map::scan_map_iterator_array_roots_mut);
     reg_scanner!(crate::set::scan_set_iterator_array_roots_mut);
     reg_scanner!(crate::perf_hooks::scan_perf_entries_roots_mut);
@@ -1118,12 +1123,13 @@ pub fn gc_init() {
         crate::symbol::new_symbol_side_table_root_scan_state,
         MutableRootScannerSource::RuntimeMutableScanner,
     );
-    // Issue #1813: the implicit-`this` cell holds the live receiver across a
-    // dynamically-dispatched method body. A moving GC triggered from inside
-    // that body (e.g. @perryts/mysql Pool.acquire → handshake → nativeScramble
-    // under concurrent load) must rewrite the cell, or the body's next
-    // `this`-derived dispatch derefs a relocated receiver → SIGSEGV.
-    reg_scanner!(crate::object::scan_implicit_this_roots_mut);
+    // Issue #1813: the dispatch-binding cells (`new.target`, the one-shot
+    // static-`this` override, the static private-owner stack) hold a live heap
+    // value across a call body. A moving GC triggered from inside that body
+    // (e.g. @perryts/mysql Pool.acquire → handshake → nativeScramble under
+    // concurrent load, when the implicit-`this` cell still existed) must
+    // rewrite them, or the body's next read derefs a relocated value.
+    reg_scanner!(crate::object::scan_dispatch_binding_roots_mut);
     // Fresh class evaluations are lexical environments, not merely template
     // class ids. Method dispatch keeps the active evaluation here so private
     // accesses remain exact across `.call`/`.apply`; root and rewrite those
@@ -1170,6 +1176,10 @@ pub fn gc_init() {
     reg_scanner!(crate::intl::segmenter::scan_segment_record_keys_roots_mut);
     reg_scanner!(small_int_cache_mutable_root_scanner);
     reg_scanner!(concat_memo_mutable_root_scanner);
+    // A pinned object is a root: its holder is an external reference the
+    // collector cannot see. Found through the block / malloc-registry pin
+    // summaries the pin setters maintain (gc/pin.rs, arena/pinned.rs).
+    reg_scanner!(pin::scan_pinned_object_roots_mut);
     reg_scanner!(crate::string::trim_cache::scan_trim_cache_roots_mut);
     reg_scanner!(crate::builtins::scan_console_log_singleton_roots_mut);
     reg_scanner!(crate::builtins::scan_structured_clone_memo_roots_mut);
@@ -1194,10 +1204,6 @@ pub fn gc_init() {
     reg_scanner!(crate::node_submodules::scan_node_submodule_singleton_roots_mut,);
     #[cfg(feature = "mod-node-test")]
     reg_scanner!(crate::node_submodules::test::runner::scan_node_test_runner_roots_mut,);
-    // Box-capture root scanner (mutable closure captures, esp. the
-    // generator state-machine's `__iter` and `__step` boxes that hold
-    // the iter object + step closure across awaits).
-    reg_scanner!(crate::r#box::scan_box_roots_mut);
     // Iter-result scratch slot — the async-step fast path stows the
     // generator's most recent yield value here; it stays live until
     // the step driver reads it back.
@@ -1208,6 +1214,8 @@ pub fn gc_init() {
     // capture heap words, so copied-minor must rewrite them after moving
     // captured young values or future cache hits miss on stale addresses.
     reg_scanner!(crate::closure::scan_singleton_closure_roots_mut);
+    // The per-agent class function objects (`object::class_value`).
+    reg_scanner!(crate::object::class_value::scan_class_value_roots_mut);
     reg_scanner!(crate::closure::scan_closure_dynamic_props_roots_mut);
     // #8393: built-in prototype methods carry per-closure identity metadata
     // keyed by their raw heap address. Copying minor GC moves those closures;
@@ -1384,14 +1392,10 @@ pub extern "C" fn js_gc_init() {
     // #5093: force every class-field access back through the full guard call —
     // i.e. disable the codegen-inlined fast path — when:
     //   - typed-feedback tracing is on (the guard observes every access), or
-    //   - the intact-bit verifier is on (`PERRY_VERIFY_TYPED_INTACT`): the
-    //     verifier lives in the guard's fast contract, so inline hits would skip
-    //     it; disabling the inline path routes every access through it, or
     //   - the explicit escape hatch `PERRY_DISABLE_CLASS_FIELD_INLINE` is set to
     //     a truthy value (perf bisection / A-B measurement). `=0`/`=false`/`=off`
     //     leave the fast path enabled.
     if crate::typed_feedback::typed_feedback_active()
-        || env_flag_enabled("PERRY_VERIFY_TYPED_INTACT")
         || env_flag_enabled("PERRY_DISABLE_CLASS_FIELD_INLINE")
     {
         crate::object::disable_class_field_inline_guard();
@@ -1426,7 +1430,6 @@ pub extern "C" fn js_gc_release_current_thread_collection_side_allocations() {
     // turnloop P0: destroy this thread's agent loop and print the
     // `PERRY_LOOP_STATS=1` line on the same all-exits funnel.
     crate::event_pump::shutdown_wait_driver();
-    crate::r#box::report_box_stats_at_exit();
     crate::arena::alloc_sample::report("exit");
     diag_sites::report_charges("exit");
     diag_sites::report_primitive_dispatch("exit");

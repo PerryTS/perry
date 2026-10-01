@@ -84,7 +84,7 @@ pub(crate) unsafe fn try_existing_own_data_overwrite(
     let Some(shape) = crate::object::shapes::object_shape_descriptor(obj) else {
         return false;
     };
-    if shape.object_kind != crate::object::shapes::ShapeObjectKind::Ordinary {
+    if !shape.object_kind.is_ordinary_layout() {
         return false;
     }
     // #10868 step 2.5 stage 1: this path takes its bound from the descriptor
@@ -150,12 +150,14 @@ pub(crate) unsafe fn try_existing_own_data_overwrite(
     } else {
         vbits
     };
-    super::mark_object_dynamic_shape_unknown(obj);
     let alloc_limit = std::cmp::max(live_slots, crate::object::INLINE_SLOT_FLOOR as u32) as usize;
-    if (idx as usize) < alloc_limit {
-        if idx >= live_slots {
-            set_object_live_slot_count(obj, idx + 1);
-        }
+    if idx < live_slots {
+        // The owner store funnel retires a numeric-proof ShapeId before
+        // publishing the new value; ordinary shape tracing follows its rep.
+        store_object_field_slot(obj, idx as usize, vbits);
+    } else if (idx as usize) < alloc_limit {
+        // The store widens the shape-visible live bound.
+        set_object_live_slot_count(obj, idx + 1);
         store_object_field_slot(obj, idx as usize, vbits);
     } else {
         overflow_set(obj_addr, idx as usize, vbits);
@@ -280,8 +282,7 @@ pub(crate) fn try_readd_stable_tombstone(
             | crate::gc::OBJ_FLAG_SEALED
             | crate::gc::OBJ_FLAG_NO_EXTEND
             | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
-            | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
-            | crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT;
+            | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
         let eligible = obj_handle.with_mut_ptr(|obj: *mut ObjectHeader| {
             let gc = crate::value::addr_class::try_read_gc_header(obj as usize)?;
             Some(
@@ -339,7 +340,6 @@ pub(crate) fn try_readd_stable_tombstone(
         // The stable-tombstone list is private (not shape-shared, checked
         // above), so its header length is its count.
         set_object_keys(obj, crate::object::ObjectKeys::owned(new_keys));
-        super::mark_object_dynamic_shape_unknown(obj);
         if old_keys != new_keys {
             super::shapes::shape_keys_grown(old_keys as usize, new_keys);
         }
@@ -375,8 +375,7 @@ unsafe fn try_readd_stable_tombstone_sso_no_grow(
         | crate::gc::OBJ_FLAG_SEALED
         | crate::gc::OBJ_FLAG_NO_EXTEND
         | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
-        | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
-        | crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT;
+        | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
     // Stable-tombstone admission already excludes real class/prototype
     // receivers; only class-less and registered anonymous-shape ordinary
     // objects can carry the flag into this append lane.
@@ -396,9 +395,7 @@ unsafe fn try_readd_stable_tombstone_sso_no_grow(
         return None;
     }
     let shape = crate::object::shapes::object_shape_descriptor(obj)?;
-    if shape.object_kind != crate::object::shapes::ShapeObjectKind::Ordinary
-        || shape.logical_key_count >= 16
-    {
+    if !shape.object_kind.is_ordinary_layout() || shape.logical_key_count >= 16 {
         return None;
     }
     let keys = shape.keys as usize as *mut ArrayHeader;
@@ -468,7 +465,6 @@ unsafe fn try_readd_stable_tombstone_sso_no_grow(
         return None;
     }
 
-    super::mark_object_dynamic_shape_unknown(obj);
     let mut value_bits = value.to_bits();
     if (value_bits >> 48) == 0x7FFD && (value_bits & 0x0000_FFFF_FFFF_FFFF) == 0 {
         value_bits = crate::value::TAG_UNDEFINED;
@@ -667,7 +663,7 @@ fn object_set_field_by_name_transition_fast_impl_value(
 
         let prev_shape_id = super::shapes::object_shape_stamp(obj);
         let Some((next_keys, slot_idx, target_shape_id)) =
-            transition_cache_lookup(prev_shape_id, interned_key)
+            transition_cache_lookup_for_value(prev_shape_id, interned_key, Some(value.to_bits()))
         else {
             return None;
         };

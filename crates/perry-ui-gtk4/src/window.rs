@@ -86,7 +86,7 @@ pub fn set_size(window_handle: i64, width: f64, height: f64) {
 pub fn on_focus_lost(window_handle: i64, callback: f64) {
     extern "C" {
         fn js_nanbox_get_pointer(value: f64) -> i64;
-        fn js_closure_call0(closure: *const u8) -> f64;
+        fn js_closure_call0(closure: *const u8, this: perry_ffi::JsThis) -> f64;
     }
     WINDOWS.with(|w| {
         if let Some(window) = w.borrow().get(&window_handle) {
@@ -95,7 +95,7 @@ pub fn on_focus_lost(window_handle: i64, callback: f64) {
                 if !window.is_active() {
                     let ptr = unsafe { js_nanbox_get_pointer(callback) } as *const u8;
                     unsafe {
-                        js_closure_call0(ptr);
+                        js_closure_call0(ptr, perry_ffi::JsThis::UNDEFINED);
                     }
                 }
             });

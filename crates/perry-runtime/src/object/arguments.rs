@@ -25,12 +25,13 @@ use super::*;
 //   (strict code or a non-simple parameter list: CreateUnmappedArgumentsObject).
 // * `TAG_FALSE`: a sloppy `callee` with no index aliasing a parameter.
 // * `POINTER_TAG | array`: a sloppy mapped object. The `GC_TYPE_ARRAY` holds one
-//   element per mappable index: that parameter's box address as a plain
-//   Number, or `TAG_HOLE` once the index is unmapped. Boxes are `std::alloc`
-//   cells (`crate::r#box`), never arena objects, and they never move, so the
-//   elements are deliberately not pointer bit patterns and nothing traces or
-//   rewrites them. (The old table's "strong" visit of them was a validated
-//   no-op for the same reason.)
+//   element per mappable index: that parameter's mutable-capture cell as a
+//   NaN-boxed pointer, or `TAG_HOLE` once the index is unmapped. Cells are
+//   movable `GC_TYPE_BOX` arena objects (#11179), so each element is an
+//   ordinary traced child edge of the array: marking keeps the cell alive
+//   while the arguments object is, and a moving collection rewrites the
+//   element to the cell's new address. The array is private to the record and
+//   never exposed to JS, so the pointer never reaches user code.
 const ARGUMENTS_RESTRICTED: u64 = crate::value::TAG_TRUE;
 const ARGUMENTS_UNMAPPED: u64 = crate::value::TAG_FALSE;
 
@@ -88,8 +89,9 @@ impl ArgumentsState {
         matches!(self, ArgumentsState::Restricted)
     }
 
-    /// The box parameter `index` still aliases, if any. Never allocates, and
-    /// the box it names never moves, so the answer survives a collection.
+    /// The cell parameter `index` still aliases, if any. Never allocates. The
+    /// cell is movable, so the answer is valid only until the next collection
+    /// point; callers re-derive it after anything that can allocate.
     unsafe fn mapped_box(self, index: u32) -> Option<*mut crate::r#box::Box> {
         let ArgumentsState::Mapped(map) = self else {
             return None;
@@ -101,7 +103,8 @@ impl ArgumentsState {
         if bits == crate::value::TAG_HOLE {
             return None;
         }
-        Some(f64::from_bits(bits) as usize as *mut crate::r#box::Box)
+        let cell = (bits & crate::value::POINTER_MASK) as usize as *mut crate::r#box::Box;
+        (!cell.is_null()).then_some(cell)
     }
 
     /// Break index `index`'s alias. Never allocates.
@@ -202,7 +205,10 @@ fn bool_value(value: bool) -> f64 {
     })
 }
 
-extern "C" fn arguments_throw_type_error(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn arguments_throw_type_error(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     super::throw_object_type_error(
         b"'caller', 'callee', and 'arguments' properties may not be accessed",
     );
@@ -212,8 +218,9 @@ pub(super) const THROWER_FROZEN_FLAGS: u16 =
     crate::gc::OBJ_FLAG_FROZEN | crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND;
 
 pub(super) fn thrower_closure_value() -> f64 {
-    let closure =
-        crate::closure::js_closure_alloc_singleton(arguments_throw_type_error as *const u8);
+    let closure = crate::closure::js_closure_alloc_singleton(
+        crate::fn_info!(arguments_throw_type_error, 0; with_declared(0)),
+    );
     // #10509: configure the per-thread singleton once, not per strict call.
     // The frozen bits are the last step below and live in the closure's own
     // header; every side table the earlier steps write (closure props,
@@ -227,7 +234,6 @@ pub(super) fn thrower_closure_value() -> f64 {
     {
         return crate::value::js_nanbox_pointer(closure as i64);
     }
-    crate::closure::js_register_closure_arity(arguments_throw_type_error as *const u8, 0);
     super::native_module::set_bound_native_closure_name(closure, "");
     super::native_module::set_builtin_closure_length(closure as usize, 0);
     super::native_module::set_builtin_closure_non_constructable(closure as usize);
@@ -527,7 +533,7 @@ pub extern "C" fn js_arguments_bundle_index_get(raw_args: f64, key: f64) -> f64 
 
 /// #10509: the cold half of [`js_arguments_bundle_index_get`]. Builds the
 /// Arguments object the prologue would have built (`callee_wrapper`, when
-/// non-null, names the function whose singleton closure is `callee`) and
+/// non-null, is the info of the function whose singleton closure is `callee`) and
 /// performs an ordinary `obj[key]` on it, so a non-element key sees the real
 /// object's `callee`, `length`, `Symbol.iterator` and `Object.prototype`
 /// surface. The object is not kept: codegen only takes this path for a
@@ -537,7 +543,7 @@ pub extern "C" fn js_arguments_bundle_get_slow(
     raw_args: f64,
     key: f64,
     callee: f64,
-    callee_wrapper: *const u8,
+    callee_wrapper: *const crate::closure::JsFunctionInfo,
     restricted_callee: i32,
 ) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -574,10 +580,25 @@ pub extern "C" fn js_arguments_object_map_index(
             return;
         };
         if index < (*map).length {
-            // GC_STORE_AUDIT(POINTER_FREE): the box address as a plain Number.
-            // A box is a `std::alloc` cell, never a heap edge.
-            *(crate::array::array_elements_ptr(map) as *mut u64).add(index as usize) =
-                (box_ptr as usize as f64).to_bits();
+            // The cell is a movable heap object, so the element is a traced
+            // pointer edge. Store it through the array's resolved slot store:
+            // it records the element's layout (a pointer where the array was
+            // born all-hole, so the tracer visits the slot) and runs the
+            // in-body slot barrier with the ARRAY as parent, so an OLD mapping
+            // array storing a YOUNG cell is remembered and the next minor
+            // copies the cell and rewrites this element. The mapping array is
+            // a private plain `GC_TYPE_ARRAY` born with `length == capacity`
+            // covering `index`, so the public setter's exotic-receiver,
+            // frozen, sparse and string-addref arms cannot apply; calling the
+            // resolved store directly keeps this prologue helper a GC leaf.
+            let bits = crate::value::POINTER_TAG | (box_ptr as u64 & crate::value::POINTER_MASK);
+            let flags = crate::array::array_object_flags_resolved(map);
+            crate::array::store_array_slot_resolved(
+                map,
+                index as usize,
+                f64::from_bits(bits),
+                flags,
+            );
         }
     }
 }
@@ -694,7 +715,7 @@ pub(crate) unsafe fn arguments_object_get_field(
     });
 
     if name == "callee" && state.restricted_callee() {
-        arguments_throw_type_error(std::ptr::null());
+        arguments_throw_type_error(std::ptr::null(), crate::closure::JsThis::UNDEFINED);
     }
     if let Some(box_ptr) = mapped_box {
         let value = crate::r#box::js_box_get(box_ptr);
@@ -706,7 +727,11 @@ pub(crate) unsafe fn arguments_object_get_field(
                 let closure =
                     (acc.get & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
                 if !closure.is_null() {
-                    let value = crate::closure::js_closure_call0(closure);
+                    // An accessor on the arguments object runs with it as `this`.
+                    let this = crate::closure::JsThis::from_f64(crate::value::js_nanbox_pointer(
+                        obj as i64,
+                    ));
+                    let value = crate::closure::js_closure_call0(closure, this);
                     return Some(JSValue::from_bits(value.to_bits()));
                 }
             }
@@ -737,7 +762,7 @@ pub(crate) unsafe fn arguments_object_set_field(
     });
 
     if name == "callee" && state.restricted_callee() {
-        arguments_throw_type_error(std::ptr::null());
+        arguments_throw_type_error(std::ptr::null(), crate::closure::JsThis::UNDEFINED);
     }
     if !super::own_key_present(obj, key) {
         return false;
@@ -747,7 +772,9 @@ pub(crate) unsafe fn arguments_object_set_field(
             let closure =
                 (acc.set & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
             if !closure.is_null() {
-                crate::closure::js_closure_call1(closure, value);
+                let this =
+                    crate::closure::JsThis::from_f64(crate::value::js_nanbox_pointer(obj as i64));
+                crate::closure::js_closure_call1(closure, this, value);
             }
         }
         return true;
@@ -757,9 +784,15 @@ pub(crate) unsafe fn arguments_object_set_field(
             crate::error::throw_immutable_write(0, &name);
         }
     }
+    let mapped = mapped_box.is_some();
     write_ordinary_own_value(obj, key, value);
-    if let Some(box_ptr) = mapped_box {
-        crate::r#box::js_box_set(box_ptr, value);
+    // The own-value write can allocate and move the cell: re-derive it.
+    if mapped {
+        let cell = super::canonical_array_index(&name)
+            .and_then(|idx| arguments_state(obj).and_then(|state| state.mapped_box(idx)));
+        if let Some(box_ptr) = cell {
+            crate::r#box::js_box_set(box_ptr, value);
+        }
     }
     true
 }

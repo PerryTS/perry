@@ -40,6 +40,10 @@ mod shapes_birth_width;
 mod shapes_slot_list;
 #[path = "shapes_store.rs"]
 mod shapes_store;
+#[path = "shapes_worker_seed.rs"]
+mod shapes_worker_seed;
+#[path = "shapes_store_kind.rs"]
+pub(crate) mod store_kind;
 pub(crate) use shapes_birth_width::{keyless_birth_width, note_spill_width};
 #[cfg(test)]
 pub(crate) use shapes_slot_list::shape_descriptor_keys_slot;
@@ -50,11 +54,13 @@ pub(crate) use shapes_slot_list::{
     shape_index_migrate_after_delete, shape_index_shift_in_place,
     try_update_stable_tombstone_shape, try_update_stable_tombstone_shape_cached, SlotIndex,
 };
+pub(crate) use shapes_store::PERRY_EMPTY_SHAPE_DIR;
 use shapes_store::{
     IdList, ShapeRecord, ShapeSlab, RECORD_FLAG_BIRTH_OWNER, RECORD_FLAG_CACHE_CARRIER,
     RECORD_FLAG_CARRIED_SEEN, RECORD_FLAG_EXTERNAL_CARRIER, RECORD_FLAG_FACTS_INDEXED,
     RECORD_FLAG_OLD_CARRIER, RECORD_FLAG_OLD_CARRIER_SEEN,
 };
+pub(crate) use shapes_worker_seed::{install_worker_shape_seed, worker_shape_seed};
 
 #[derive(Clone)]
 pub(crate) struct ShapeIndex {
@@ -142,6 +148,9 @@ pub(crate) struct ShapeDescriptor {
     /// keys this shape names — what may be an accessor, non-writable,
     /// non-enumerable or non-configurable. Zero for an all-default shape.
     pub(crate) summary: u8,
+    /// Charter step 5: the per-slot field representation (`field_rep`).
+    /// Compared under [`field_rep::identity`](super::field_rep::identity).
+    pub(crate) rep: u64,
 }
 
 /// Shape identity is the FACTS, never the storage address. A descriptor value
@@ -230,6 +239,43 @@ impl ShapeRecordRef {
     pub(crate) fn keys_slot(self) -> *mut u64 {
         self.0.as_ptr() as *mut u64
     }
+
+    /// The record's field-representation word (`field_rep`), deprecated
+    /// lanes included.
+    #[inline]
+    pub(crate) fn rep(self) -> u64 {
+        self.rep_word().load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Mark `slot` deprecated (`F64` -> `10`, `field_rep`): the lineage has
+    /// generalized it. A learned fact of the record, masked out of identity,
+    /// so the record's facts key and its `by_facts` bucket do not move, and
+    /// every object carrying the record still satisfies the `F64` invariant
+    /// at `slot`. The word is written atomically because readers of a
+    /// published record never take the table borrow.
+    #[inline]
+    /// Returns whether this call deprecated the lane (it was `F64`).
+    pub(crate) fn deprecate_rep_slot(self, slot: u32) -> bool {
+        use super::field_rep::{slot_rep, with_slot_rep, REP_F64, REP_F64_DEPRECATED};
+        let word = self.rep_word();
+        let rep = word.load(std::sync::atomic::Ordering::Relaxed);
+        if slot_rep(rep, slot) != REP_F64 {
+            return false;
+        }
+        let next = with_slot_rep(rep, slot, REP_F64_DEPRECATED);
+        word.store(next, std::sync::atomic::Ordering::Release);
+        true
+    }
+
+    #[inline]
+    fn rep_word(self) -> &'static std::sync::atomic::AtomicU64 {
+        // SAFETY: a live slab record (type docs); `rep` is an 8-aligned u64
+        // (the record is `#[repr(C)]`, asserted 8-aligned), and a slab record
+        // is never moved while present.
+        unsafe {
+            &*std::ptr::addr_of_mut!((*self.0.as_ptr()).rep).cast::<std::sync::atomic::AtomicU64>()
+        }
+    }
 }
 
 /// Test instrument: reads the receiver's shape answered at a latched
@@ -249,19 +295,18 @@ impl ShapeRecordRef {
     /// shape's own canonical key list — or `None` when the shape cannot answer
     /// by position alone.
     ///
-    /// The position of a key in the keys list is its slot exactly when the
-    /// shape is `Ordinary`, generation 0 (no descriptor/prototype mutation
-    /// minted it) and hole-free; a position below `live_inline_slot_count` is
-    /// an inline slot of every receiver carrying the shape (the invariant the
-    /// read cache's prime already relies on). The list is bounded by the
-    /// SHAPE's key count, never the backing's length (#10969: one backing per
-    /// growth chain).
+    /// The shape's [`ShapeRecord::position_bound`] says how many leading key
+    /// positions ARE inline slots of every receiver carrying it (0 for a
+    /// dictionary, class, descriptor/prototype-generation or tombstoned
+    /// shape). The list is bounded by that — never by the backing's length
+    /// (#10969: one backing per growth chain).
     ///
-    /// A stored key matches the site's key by identity, or else by (byte
-    /// length, bytes): a canonical list holds the string its first grower
-    /// passed, which is usually NOT the read site's pooled literal. The
-    /// site's slot guess is tried first. Allocation-free, never calls user
-    /// code.
+    /// Key compares go identity first: canonical lists hold their text's ATOM
+    /// (`string::intern::AtomTable`), which is also what a read site's pooled
+    /// key is, so the site's guess, and then any position, matches by one
+    /// pointer compare. A byte pass remains for a list written before its
+    /// atom existed (and for SSO slots) — a pointer MISmatch proves nothing.
+    /// Allocation-free, never calls user code.
     #[inline]
     pub(crate) unsafe fn inline_slot_of_key(
         self,
@@ -269,11 +314,8 @@ impl ShapeRecordRef {
         hint: usize,
     ) -> Option<usize> {
         let r = &*self.0.as_ptr();
-        if r.object_kind() != ShapeObjectKind::Ordinary
-            || r.semantic_generation != 0
-            || r.hole_count != 0
-            || r.keys == 0
-        {
+        let bound = r.position_bound() as usize;
+        if bound == 0 {
             return None;
         }
         let (slots, len) =
@@ -281,14 +323,17 @@ impl ShapeRecordRef {
         if slots.is_null() {
             return None;
         }
-        let bound = len
-            .min(r.logical_key_count as usize)
-            .min(r.live_inline_slot_count as usize);
-        // The site's slot guess first: the receiver's shape confirms it.
-        if hint < bound && stored_key_matches(key, (*slots.add(hint)).to_bits()) {
+        let bound = bound.min(len);
+        let heap_bits = crate::JSValue::string_ptr(key as *mut crate::StringHeader).bits();
+        // The site's slot guess, confirmed by the receiver's own key.
+        if hint < bound && (*slots.add(hint)).to_bits() == heap_bits {
             return Some(hint);
         }
-        (0..bound).find(|&i| i != hint && stored_key_matches(key, (*slots.add(i)).to_bits()))
+        // Identity over the whole list before any byte is compared.
+        if let Some(i) = (0..bound).find(|&i| (*slots.add(i)).to_bits() == heap_bits) {
+            return Some(i);
+        }
+        (0..bound).find(|&i| stored_key_matches(key, (*slots.add(i)).to_bits()))
     }
 
     /// The SPILL position at which this shape stores `key` as an own DATA
@@ -308,7 +353,7 @@ impl ShapeRecordRef {
         key: *const crate::StringHeader,
     ) -> Option<usize> {
         let r = &*self.0.as_ptr();
-        if r.object_kind() != ShapeObjectKind::Ordinary
+        if !r.object_kind().is_ordinary_layout()
             || r.semantic_generation != 0
             || r.hole_count != 0
             || r.keys == 0
@@ -333,11 +378,11 @@ impl ShapeRecordRef {
     }
 }
 
-/// Does the key-list entry `bits` name `key`? A canonical list holds heap
-/// strings of its own (NOT the site's pooled key — measured: every stored key
-/// of a literal-born shape is a distinct heap string) or SSO immediates, so a
-/// stored key matches by identity, by SSO identity, or by (byte length,
-/// bytes).
+/// Does the key-list entry `bits` name `key`? A canonical list holds its
+/// text's ATOM where one exists (the site's pooled key), but must not be
+/// assumed to: a list written before its atom existed holds another heap
+/// string, and a slot may be an SSO immediate. So a stored key matches by
+/// identity, by SSO identity, or by (byte length, bytes).
 #[inline]
 unsafe fn stored_key_matches(key: *const crate::StringHeader, bits: u64) -> bool {
     if bits == crate::JSValue::string_ptr(key as *mut crate::StringHeader).bits() {
@@ -366,6 +411,139 @@ unsafe fn stored_key_matches(key: *const crate::StringHeader, bits: u64) -> bool
         }
         _ => false,
     }
+}
+
+/// The position bound of `obj`'s shape (S3c), or `None` when its word names
+/// no record in this agent.
+#[cfg(test)]
+pub(crate) fn test_position_bound_of(obj: *const crate::object::ObjectHeader) -> Option<u32> {
+    let id = unsafe { object_shape_stamp(obj) };
+    shape_record_by_id(id).map(|r| unsafe { (*r.0.as_ptr()).position_bound() })
+}
+
+/// Walk every present record of this agent's slab: `(records, positional,
+/// ordinary records with an accessor key, disagreements)`, where a
+/// disagreement is a record whose stored POSBOUND differs from
+/// [`ShapeRecord::position_bound_by_facts`].
+#[cfg(test)]
+pub(crate) fn test_positional_census() -> (usize, usize, usize, Vec<u32>) {
+    let table = &crate::state::state().shapes;
+    let (mut n, mut positional, mut accessor, mut bad) = (0usize, 0usize, 0usize, Vec::new());
+    table.slab().for_each(|id, p| {
+        let r = unsafe { &*p };
+        if !r.present() {
+            return;
+        }
+        n += 1;
+        if r.stored_position_bound() > 0 {
+            positional += 1;
+        }
+        if r.object_kind().is_ordinary_layout()
+            && r.summary() & crate::object::key_attrs::SUMMARY_ACCESSOR != 0
+        {
+            accessor += 1;
+        }
+        if r.stored_position_bound() != r.position_bound_by_facts() {
+            bad.push(id);
+        }
+    });
+    (n, positional, accessor, bad)
+}
+
+/// `(stored POSBOUND, its definition)` for shape `id`.
+#[cfg(test)]
+pub(crate) fn test_positional_of_id(id: u32) -> Option<(u32, u32)> {
+    shape_record_by_id(id).map(|r| unsafe {
+        let r = &*r.0.as_ptr();
+        (r.stored_position_bound(), r.position_bound_by_facts())
+    })
+}
+
+/// The address of this thread's ordinary shape-directory mirror, which
+/// [`positional_key_words`] reads through (`agent_ptrs` slot
+/// `AGENT_PTR_SHAPE_DIR`).
+#[inline]
+pub(crate) fn ordinary_dir_addr() -> *const u8 {
+    ShapeSlab::ordinary_dir_addr()
+}
+
+/// The position bound of shape `id` (S3c), or `None` when it names no record.
+#[cfg(test)]
+pub(crate) fn test_position_bound_of_id(id: u32) -> Option<u32> {
+    shape_record_by_id(id).map(|r| unsafe { (*r.0.as_ptr()).position_bound() })
+}
+
+/// Shape `shape_id`'s positional key words, for the megamorphic read confirm
+/// (`ic_miss::read_confirm::js_object_get_field_ic_front`): `(the keys
+/// array, POSBOUND)` when the record answers by position — key position
+/// `i < POSBOUND` IS inline slot `i` of every receiver carrying the shape —
+/// and `None` otherwise (no ordinary record under that id in this agent, or
+/// POSBOUND 0: a dictionary, class, descriptor/prototype-generation,
+/// tombstoned or accessor-keyed shape).
+///
+/// A canonical list holds its text's ATOM, boxed exactly as a site's pool
+/// entry holds it, so the caller compares key WORDS: equality is identity,
+/// and a mismatch proves nothing (a list written before its atom existed, an
+/// SSO slot), which the caller answers by declining to the slow entry.
+///
+/// `dir` is this thread's ordinary directory mirror ([`ordinary_dir_addr`]),
+/// as the agent's pointer block holds it.
+///
+/// Allocation-free, no user code, no formatting path: it is part of a
+/// GC-leaf stub.
+///
+/// # Safety
+/// `dir` is this thread's [`ordinary_dir_addr`] or `PERRY_EMPTY_SHAPE_DIR` (never
+/// null); any `shape_id`.
+/// The words are valid until the next safepoint.
+#[inline(always)]
+pub(crate) unsafe fn positional_key_words(
+    dir: *const u8,
+    shape_id: u32,
+) -> Option<(PositionalKeys, usize)> {
+    let r = ShapeSlab::ordinary_record_in(dir, shape_id)?;
+    Some((
+        PositionalKeys(r.keys as usize as *const ArrayHeader),
+        r.position_bound_raw() as usize,
+    ))
+}
+
+/// A record's canonical keys array, for [`positional_key_words`]: its words
+/// are asked only once POSBOUND is known to be nonzero, so the front-offset
+/// arithmetic runs only on the path that reads a key.
+pub(crate) struct PositionalKeys(*const ArrayHeader);
+
+impl PositionalKeys {
+    /// The first logical key word.
+    ///
+    /// # Safety
+    /// Only when the record's POSBOUND is nonzero: then `keys` names a live
+    /// keys array (the collector marks through and rewrites `keys`) holding
+    /// at least POSBOUND logical keys. Logical element `i` sits past the
+    /// array's FRONT OFFSET, which a canonical list can carry without ever
+    /// being shifted (a size-class round-up alone makes the physical capacity
+    /// exceed the logical one: `keys_front_offset_tests`), so the accessor is
+    /// asked, never `+8`.
+    #[inline(always)]
+    pub(crate) unsafe fn words(&self) -> *const u64 {
+        crate::array::array_elements_ptr(self.0) as *const u64
+    }
+}
+
+/// Does shape `shape_id` store the key whose NaN-boxed bits are `key_bits`
+/// at inline slot `guess`, by position? See [`positional_key_words`].
+///
+/// # Safety
+/// As [`positional_key_words`].
+#[cfg(test)]
+pub(crate) unsafe fn slot_guess_confirmed(
+    dir: *const u8,
+    shape_id: u32,
+    key_bits: u64,
+    guess: usize,
+) -> bool {
+    positional_key_words(dir, shape_id)
+        .is_some_and(|(keys, bound)| guess < bound && *keys.words().add(guess) == key_bits)
 }
 
 /// Byte equality without a libc call for the short keys property names are.
@@ -399,6 +577,7 @@ impl PartialEq for ShapeDescriptor {
             && self.object_kind == other.object_kind
             && self.hole_count == other.hole_count
             && self.summary == other.summary
+            && super::field_rep::identity(self.rep) == super::field_rep::identity(other.rep)
     }
 }
 
@@ -406,6 +585,11 @@ impl Eq for ShapeDescriptor {}
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum ShapeObjectKind {
+    /// An ordinary object whose own slots are proven plain data (a class
+    /// instance, or a class-less receiver a birth site marked
+    /// `OBJ_FLAG_PLAIN_ORDINARY`) and that carries no Array-subclass numeric
+    /// proof. The ONE kind a store may be admitted on by its ShapeId alone
+    /// (charter step 3, `shapes_store_kind`).
     Ordinary,
     Class,
     /// #10868: the receiver's keys live per-object, not in a shared keys
@@ -426,6 +610,18 @@ pub(crate) enum ShapeObjectKind {
     /// deleted or redefined intrinsic, an accessor, a recorded
     /// [[Prototype]]): the answer lives on the object, as for `Dictionary`.
     FunctionDictionary,
+    /// The ordinary layout of [`ShapeObjectKind::Ordinary`], on a receiver
+    /// whose own slots are NOT proven plain data: a class-less receiver no
+    /// birth site marked ordinary (`URL`, `Object.prototype`, a typed-array
+    /// prototype, a runtime-born record) or a native-module receiver. Reads
+    /// treat it as `Ordinary`; a store is never admitted on it by shape.
+    OrdinaryUnmarked,
+    /// [`ShapeObjectKind::Ordinary`] carrying the Array-subclass packed-numeric
+    /// proof (`array::subclass`). Entered only by publishing the proof and
+    /// left by retiring it (or by any other shape change), so the proof is a
+    /// shape transition and a store word naming an `Ordinary` id can never
+    /// match a proof-carrying receiver.
+    OrdinaryNumericProof,
 }
 
 impl ShapeObjectKind {
@@ -435,6 +631,19 @@ impl ShapeObjectKind {
         matches!(
             self,
             ShapeObjectKind::Function | ShapeObjectKind::FunctionDictionary
+        )
+    }
+
+    /// The ordinary object LAYOUT: every kind whose receiver reads exactly as
+    /// an `Ordinary` one. What every layout / read consumer asks; only the
+    /// store admission asks `== Ordinary`.
+    #[inline]
+    pub(crate) fn is_ordinary_layout(self) -> bool {
+        matches!(
+            self,
+            ShapeObjectKind::Ordinary
+                | ShapeObjectKind::OrdinaryUnmarked
+                | ShapeObjectKind::OrdinaryNumericProof
         )
     }
 
@@ -448,6 +657,8 @@ impl ShapeObjectKind {
             ShapeObjectKind::Dictionary => 2,
             ShapeObjectKind::Function => 3,
             ShapeObjectKind::FunctionDictionary => 4,
+            ShapeObjectKind::OrdinaryUnmarked => 5,
+            ShapeObjectKind::OrdinaryNumericProof => 6,
         }
     }
 }
@@ -463,6 +674,8 @@ const SHAPE_KIND_CLASS: u64 = 2;
 const SHAPE_KIND_DICTIONARY: u64 = 3;
 const SHAPE_KIND_FUNCTION: u64 = 4;
 const SHAPE_KIND_FUNCTION_DICTIONARY: u64 = 5;
+const SHAPE_KIND_ORDINARY_UNMARKED: u64 = 6;
+const SHAPE_KIND_ORDINARY_NUMERIC_PROOF: u64 = 7;
 
 #[inline(always)]
 fn shape_kind_cache_slot(shape_id: u32) -> usize {
@@ -483,6 +696,8 @@ fn cached_shape_object_kind(shape_id: u32) -> Option<ShapeObjectKind> {
         SHAPE_KIND_DICTIONARY => Some(ShapeObjectKind::Dictionary),
         SHAPE_KIND_FUNCTION => Some(ShapeObjectKind::Function),
         SHAPE_KIND_FUNCTION_DICTIONARY => Some(ShapeObjectKind::FunctionDictionary),
+        SHAPE_KIND_ORDINARY_UNMARKED => Some(ShapeObjectKind::OrdinaryUnmarked),
+        SHAPE_KIND_ORDINARY_NUMERIC_PROOF => Some(ShapeObjectKind::OrdinaryNumericProof),
         _ => None,
     }
 }
@@ -496,6 +711,8 @@ fn publish_shape_object_kind(shape_id: u32, kind: ShapeObjectKind) {
         ShapeObjectKind::Dictionary => SHAPE_KIND_DICTIONARY,
         ShapeObjectKind::Function => SHAPE_KIND_FUNCTION,
         ShapeObjectKind::FunctionDictionary => SHAPE_KIND_FUNCTION_DICTIONARY,
+        ShapeObjectKind::OrdinaryUnmarked => SHAPE_KIND_ORDINARY_UNMARKED,
+        ShapeObjectKind::OrdinaryNumericProof => SHAPE_KIND_ORDINARY_NUMERIC_PROOF,
     };
     cache[shape_kind_cache_slot(shape_id)] = (u64::from(shape_id) << 32) | tag;
 }
@@ -733,6 +950,8 @@ impl ShapeTable {
 /// stamp in a plain object's `parent_class_id` can never be mistaken for
 /// inheritance data — and vice versa.
 pub(crate) const SHAPE_ID_BASE: u32 = 0x8000_0000;
+// Generated code names static ids relative to the ABI's copy.
+const _: () = assert!(SHAPE_ID_BASE == crate::codegen_abi::SHAPE_ID_BASE);
 /// Exclusive end of the ShapeId range (2^30 ids ≈ one per shape BIRTH,
 /// unreachable in practice).
 pub(crate) const SHAPE_ID_END: u32 = 0xC000_0000;
@@ -773,6 +992,31 @@ pub(crate) const DICTIONARY_SHAPE_ID_BASE: u32 = 0xB000_0000;
 /// needs the shape's IDENTITY (its prototype, its absence of own keys) opts in
 /// explicitly with [`is_exotic_shape_id`].
 pub(crate) const EXOTIC_SHAPE_ID_BASE: u32 = 0xB800_0000;
+/// # The static band: ShapeIds the compiler assigned (design step 4)
+///
+/// `[SHAPE_ID_BASE, STATIC_SHAPE_ID_END)` is never drawn from the counter.
+/// The driver assigns an id in it to every compiler-nameable birth shape,
+/// by content, before codegen, and generated code embeds that id as an
+/// IMMEDIATE. The runtime adopts it at the ordinary mint: a caller that
+/// knows the static id passes it as `requested` to
+/// [`shape_descriptor_ensure_with_holes`], which mints it on a by-facts miss.
+/// The id means the same facts in every agent; each agent gets its own record
+/// under it when it first mints those facts with the id requested.
+///
+/// No id-to-shape table exists: after the seed, the only record of
+/// "these facts have this id" is the shape record itself, in the intern
+/// structure every later mint probes.
+pub(crate) const STATIC_SHAPE_ID_END: u32 =
+    SHAPE_ID_BASE + crate::codegen_abi::STATIC_SHAPE_ID_COUNT;
+const _: () = assert!(STATIC_SHAPE_ID_END < DICTIONARY_SHAPE_ID_BASE);
+
+/// Is `v` in the compiler-assigned band ([`STATIC_SHAPE_ID_END`])? A fact of
+/// the value alone.
+#[inline]
+pub(crate) fn is_static_shape_id(v: u32) -> bool {
+    (SHAPE_ID_BASE..STATIC_SHAPE_ID_END).contains(&v)
+}
+
 const _: () = assert!(DICTIONARY_SHAPE_ID_BASE < EXOTIC_SHAPE_ID_BASE);
 const _: () = assert!(EXOTIC_SHAPE_ID_BASE < SHAPE_ID_END);
 
@@ -786,7 +1030,7 @@ const _: () = assert!(DICTIONARY_SHAPE_ID_BASE < SHAPE_ID_END);
 /// allocated for a different shape. Monotonic — ids are NEVER reused, so
 /// a stale stamp or cache entry can only miss, not falsely hit.
 static SHAPE_ID_NEXT: std::sync::atomic::AtomicU32 =
-    std::sync::atomic::AtomicU32::new(SHAPE_ID_BASE);
+    std::sync::atomic::AtomicU32::new(STATIC_SHAPE_ID_END);
 
 /// The dictionary band's own monotonic counter (see
 /// [`DICTIONARY_SHAPE_ID_BASE`]); never reused, parks at `SHAPE_ID_END`.
@@ -947,7 +1191,20 @@ pub(crate) fn shape_descriptor_ensure_with_generation(
         0,
         proto_id,
         extra_summary,
+        None,
     )
+}
+
+/// A static id the driver assigned by content was refused by the ordinary
+/// mint (see [`shape_descriptor_ensure_with_holes`]).
+#[cold]
+fn static_shape_id_refused_abort(requested: u32, proto_id: u64) -> ! {
+    eprintln!(
+        "Perry internal error: the static ShapeId {requested:#x} (proto {proto_id:#x}) \
+         was refused by the shape mint (it is outside the static band or already \
+         names other facts in this agent); a static id must name one shape"
+    );
+    std::process::abort();
 }
 
 /// [`shape_descriptor_ensure_with_generation`] with an explicit tombstone
@@ -960,6 +1217,22 @@ pub(crate) fn shape_descriptor_ensure_with_generation(
 /// dictionary receiver's private list ([`receiver_extra_summary`]). The
 /// summary of the published keys is derived here, from the keys, so no
 /// caller can publish a shape that under-reports its attributes.
+///
+/// `requested` is the compiler-assigned static id of these facts
+/// ([`STATIC_SHAPE_ID_END`]), or `None`. It changes only what a by-facts MISS
+/// mints: the requested id instead of a counter id, with
+/// `RECORD_FLAG_EXTERNAL_CARRIER` set (generated code holds the id as an
+/// immediate, so the record must never be pruned while no object carries
+/// it). A by-facts HIT returns the existing id whatever was requested — the
+/// static id whenever its seed ran first, which the seeds are placed to
+/// guarantee; otherwise an immediate compare against it only misses.
+///
+/// The driver assigns ids BY CONTENT, so a requested id that cannot be
+/// adopted on a miss — outside the static band, or already present in this
+/// agent under other facts — is an invariant violation, and the mint ABORTS
+/// (as the typed install does): generated code compares against the id as an
+/// immediate, and a counter fallback would leave it naming whatever else
+/// holds it in this agent.
 #[allow(clippy::too_many_arguments)]
 #[cfg_attr(feature = "shape-mint-diag", track_caller)]
 pub(crate) fn shape_descriptor_ensure_with_holes(
@@ -971,7 +1244,50 @@ pub(crate) fn shape_descriptor_ensure_with_holes(
     hole_count: u32,
     proto_id: u64,
     extra_summary: u8,
+    requested: Option<u32>,
 ) -> Result<u32, ShapeDescriptorError> {
+    shape_descriptor_ensure_with_rep(
+        keys,
+        logical_key_count,
+        live_inline_slot_count,
+        semantic_generation,
+        object_kind,
+        hole_count,
+        proto_id,
+        extra_summary,
+        super::field_rep::REP_ANY,
+        requested,
+    )
+}
+
+/// [`shape_descriptor_ensure_with_holes`] with an explicit field
+/// representation (charter step 5, `field_rep`). `rep` is identity under
+/// [`field_rep::identity`](super::field_rep::identity): a request whose only
+/// difference from a live record is a deprecated lane finds that record.
+///
+/// `requested` is the static id of these facts, exactly as for
+/// [`shape_descriptor_ensure_with_holes`]. A static id names a birth
+/// content, whose field representation is the birth rep codegen declared
+/// (charter step 5, T1: `Any` or `F64` lanes, part of the content), so it is
+/// adopted for a rep with no deprecated lane; a request of it with a
+/// deprecated lane is refused (and aborts): no birth is born deprecated.
+#[allow(clippy::too_many_arguments)]
+#[cfg_attr(feature = "shape-mint-diag", track_caller)]
+pub(crate) fn shape_descriptor_ensure_with_rep(
+    keys: *const ArrayHeader,
+    logical_key_count: u32,
+    live_inline_slot_count: u32,
+    semantic_generation: u64,
+    object_kind: ShapeObjectKind,
+    hole_count: u32,
+    proto_id: u64,
+    extra_summary: u8,
+    rep: u64,
+    requested: Option<u32>,
+) -> Result<u32, ShapeDescriptorError> {
+    if !super::field_rep::is_valid(rep) {
+        return Err(ShapeDescriptorError::InvalidFacts);
+    }
     let keys_id = keys as usize as u64;
     if keys_id == 0 && logical_key_count != 0 {
         return Err(ShapeDescriptorError::InvalidFacts);
@@ -985,6 +1301,136 @@ pub(crate) fn shape_descriptor_ensure_with_holes(
         } else {
             unsafe { crate::object::key_attrs::keys_summary_checked(keys, logical_key_count) }
         };
+    shape_descriptor_intern_with_rep(
+        keys,
+        logical_key_count,
+        live_inline_slot_count,
+        semantic_generation,
+        object_kind,
+        hole_count,
+        proto_id,
+        summary,
+        rep,
+        requested,
+    )
+}
+
+/// The id of the indexed record with exactly these facts, if the identity
+/// table holds one. Probe only: never mints (the lookup half of
+/// [`shape_descriptor_intern_with_rep`]).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn shape_descriptor_find_with_rep(
+    keys: *const ArrayHeader,
+    logical_key_count: u32,
+    live_inline_slot_count: u32,
+    semantic_generation: u64,
+    object_kind: ShapeObjectKind,
+    hole_count: u32,
+    proto_id: u64,
+    summary: u8,
+    rep: u64,
+) -> Option<u32> {
+    if !super::field_rep::is_valid(rep) {
+        return None;
+    }
+    let keys_id = keys as usize as u64;
+    let facts = shapes_store::facts_key_proto(
+        keys_id,
+        logical_key_count,
+        live_inline_slot_count,
+        semantic_generation,
+        object_kind,
+        hole_count,
+        proto_id,
+        summary,
+        rep,
+    );
+    let table = &crate::state::state().shapes;
+    let inner = table.inner.borrow();
+    let ids = inner.by_facts.get(&facts)?;
+    let slab = table.slab();
+    ids.as_slice().iter().copied().find(|&id| {
+        slab.record_ptr(id).is_some_and(|record| {
+            // SAFETY: live slab record, read immediately.
+            let record = unsafe { *record };
+            record.has(RECORD_FLAG_FACTS_INDEXED)
+                && record.facts_match_proto(
+                    keys_id,
+                    logical_key_count,
+                    live_inline_slot_count,
+                    semantic_generation,
+                    object_kind,
+                    hole_count,
+                    proto_id,
+                    summary,
+                    rep,
+                )
+        })
+    })
+}
+
+/// The twin of an existing shape that differs only in `object_kind` (charter
+/// step 3: the store facts are kinds). Every other fact, the attribute summary
+/// included, is copied from `source`'s record, whose summary was derived from
+/// the same keys prefix when it was minted, so the twin cannot under-report.
+///
+/// Unlike [`shape_descriptor_ensure_with_holes`] this never reads the keys
+/// array: re-deriving the summary goes through `keys_attrs`, and the static
+/// GC call-effects analysis proves that edge can reach a lazy materializer
+/// that re-enters JS. A proof retire runs this path from inside
+/// the owner store funnel, which must remain non-collecting, so the
+/// twin mint must touch only the shape table's own Rust storage.
+#[cfg_attr(feature = "shape-mint-diag", track_caller)]
+pub(crate) fn shape_descriptor_kind_twin(source: u32, object_kind: ShapeObjectKind) -> Option<u32> {
+    let d = shape_descriptor_by_id(source)?;
+    if d.object_kind == object_kind {
+        return Some(source);
+    }
+    shape_descriptor_intern_with_rep(
+        d.keys as usize as *const ArrayHeader,
+        d.logical_key_count,
+        d.live_inline_slot_count,
+        d.semantic_generation,
+        object_kind,
+        d.hole_count,
+        d.proto_id,
+        d.summary,
+        d.rep,
+        // A twin re-kinds an existing record: never a static-id request.
+        None,
+    )
+    .ok()
+}
+
+/// [`shape_descriptor_ensure_with_rep`] for a caller that supplies the
+/// shape's COMPLETE attribute summary: a lifted record's own `summary`
+/// (charter step 5's generalization, which re-interns a live record's facts
+/// with another rep). Nothing here reads the keys' attributes.
+///
+/// `requested` is the static id of these facts, exactly as for
+/// [`shape_descriptor_ensure_with_rep`]; a re-intern of a live record's facts
+/// names none.
+#[allow(clippy::too_many_arguments)]
+#[cfg_attr(feature = "shape-mint-diag", track_caller)]
+pub(crate) fn shape_descriptor_intern_with_rep(
+    keys: *const ArrayHeader,
+    logical_key_count: u32,
+    live_inline_slot_count: u32,
+    semantic_generation: u64,
+    object_kind: ShapeObjectKind,
+    hole_count: u32,
+    proto_id: u64,
+    summary: u8,
+    rep: u64,
+    requested: Option<u32>,
+) -> Result<u32, ShapeDescriptorError> {
+    if !super::field_rep::is_valid(rep) {
+        return Err(ShapeDescriptorError::InvalidFacts);
+    }
+    let keys_id = keys as usize as u64;
+    if keys_id == 0 && logical_key_count != 0 {
+        return Err(ShapeDescriptorError::InvalidFacts);
+    }
     // #10868 attribution, compiled out entirely without `shape-mint-diag`.
     // When it IS compiled in, both halves are gated on one relaxed atomic
     // load, and the key-list hash is resolved BEFORE the table borrow because
@@ -1017,6 +1463,7 @@ pub(crate) fn shape_descriptor_ensure_with_holes(
         hole_count,
         proto_id,
         summary,
+        rep,
     );
     let table = &crate::state::state().shapes;
     let mut inner = table.inner.borrow_mut();
@@ -1039,6 +1486,7 @@ pub(crate) fn shape_descriptor_ensure_with_holes(
                     hole_count,
                     proto_id,
                     summary,
+                    rep,
                 )
             {
                 #[cfg(feature = "shape-mint-diag")]
@@ -1047,12 +1495,29 @@ pub(crate) fn shape_descriptor_ensure_with_holes(
             }
         }
     }
-    let id = if object_kind.is_exotic() {
-        alloc_exotic_shape_id()
-    } else {
-        alloc_shape_id_for_generation(semantic_generation)
+    // A static id is adopted only for facts it can name (ordinary band,
+    // generation 0, a birth rep: no deprecated lane) and only if this agent
+    // has no record under it yet.
+    let adopted = requested.filter(|&id| {
+        is_static_shape_id(id)
+            && !object_kind.is_exotic()
+            && semantic_generation == 0
+            && !super::field_rep::has_deprecated(rep)
+            && table.slab().record_ptr(id).is_none()
+    });
+    if let (Some(requested), None) = (requested, adopted) {
+        drop(inner);
+        static_shape_id_refused_abort(requested, proto_id);
     }
-    .map_err(|_| ShapeDescriptorError::IdExhausted)?;
+    let id = match adopted {
+        Some(id) => id,
+        None => if object_kind.is_exotic() {
+            alloc_exotic_shape_id()
+        } else {
+            alloc_shape_id_for_generation(semantic_generation)
+        }
+        .map_err(|_| ShapeDescriptorError::IdExhausted)?,
+    };
     #[cfg(feature = "shape-mint-diag")]
     if census_on {
         // Every descriptor already indexed under this keys ADDRESS, copied out
@@ -1095,7 +1560,12 @@ pub(crate) fn shape_descriptor_ensure_with_holes(
         hole_count,
     )
     .with_proto_id(proto_id)
-    .with_summary(summary);
+    .with_summary(summary)
+    .with_rep(rep);
+    let mut record = record;
+    if adopted.is_some() {
+        record.set(RECORD_FLAG_EXTERNAL_CARRIER, true);
+    }
     // Publish by-id first, then the reverse accelerators. An ObjectHeader is
     // stamped only after this function returns, so a visible id always has a
     // complete descriptor.
@@ -1110,7 +1580,7 @@ pub(crate) fn shape_descriptor_ensure_with_holes(
     // #10905: every shape of the transition tree below a keyless birth shape
     // is minted exactly once, here, so this is where the birth shape learns
     // how wide its descendants grow (`shapes_birth_width`).
-    if object_kind == ShapeObjectKind::Ordinary && semantic_generation == 0 {
+    if object_kind.is_ordinary_layout() && semantic_generation == 0 {
         shapes_birth_width::note_descendant_width(
             &inner,
             table.slab(),
@@ -1156,7 +1626,7 @@ pub(crate) unsafe fn shape_descriptor_ensure_for_object(
         logical_key_count,
         live_inline_slot_count,
         0,
-        ShapeObjectKind::Ordinary,
+        store_kind::receiver_ordinary_kind(obj),
         object_proto_id(obj),
         receiver_extra_summary(obj),
     )
@@ -1214,25 +1684,6 @@ pub(crate) fn publish_shape_result(result: Result<u32, ShapeDescriptorError>) ->
 #[cfg_attr(feature = "shape-mint-diag", track_caller)]
 pub(crate) fn shape_id_for_keys_ensure(keys: *const ArrayHeader, key_count: u32) -> u32 {
     publish_shape_result(shape_descriptor_ensure(keys, key_count, key_count))
-}
-
-/// [`shape_id_for_keys_ensure`] for an instance of `class_id`: the birth shape
-/// carries the prototype identity that class implies ([`class_proto_id`]).
-#[cfg_attr(feature = "shape-mint-diag", track_caller)]
-pub(crate) fn shape_id_for_class_keys_ensure(
-    keys: *const ArrayHeader,
-    key_count: u32,
-    class_id: u32,
-) -> u32 {
-    publish_shape_result(shape_descriptor_ensure_with_generation(
-        keys,
-        key_count,
-        key_count,
-        0,
-        ShapeObjectKind::Ordinary,
-        class_proto_id(class_id),
-        0,
-    ))
 }
 
 /// One FIELD of a shape's descriptor, without lifting the whole record.
@@ -1318,6 +1769,22 @@ pub(crate) unsafe fn note_old_generation_carrier(record: Option<ShapeRecordRef>)
     }
 }
 
+/// Would [`note_old_generation_carrier`] change nothing for `record` right now?
+///
+/// True when both of its flags are already set — the note then re-sets them
+/// and finds it is not the first this epoch — or when there is no record. The
+/// copying drain asks this BEFORE classifying the receiver's generation, so a
+/// shape whose carrier was already noted this epoch skips that page-map probe
+/// entirely (#11549). Exact: it reads the same two flags the note would.
+#[inline]
+pub(crate) unsafe fn old_generation_carrier_already_noted(record: Option<ShapeRecordRef>) -> bool {
+    let Some(record) = record else {
+        return true;
+    };
+    let record = record.0.as_ptr();
+    (*record).has(RECORD_FLAG_OLD_CARRIER) && (*record).has(RECORD_FLAG_OLD_CARRIER_SEEN)
+}
+
 /// Note that a complete full trace visited a receiver carrying this shape.
 /// Unlike the old-generation gate, this answers receiver liveness regardless
 /// of generation and is consumed by post-trace descriptor retirement.
@@ -1392,6 +1859,9 @@ pub(crate) unsafe fn stamp_object_shape_id_with_carrier_note(
     obj: *mut crate::object::ObjectHeader,
     id: u32,
 ) {
+    // Charter step 3 (R5): a receiver carrying the Array-subclass numeric
+    // proof loses it on every stamp but its own proof shape's.
+    store_kind::retire_proof_before_stamp(obj, id);
     let previous = (*obj).parent_class_id;
     (*obj).parent_class_id = id;
     // A structural change to an object somebody INHERITS from is invisible to
@@ -1412,6 +1882,9 @@ pub(crate) unsafe fn stamp_object_shape_id_with_carrier_note(
             note_shape_carrier_candidate(record.keys());
         }
     }
+    // Charter step 3 (R6): every publication is checked in debug builds and
+    // under `shape-fact-audit`; compiled out otherwise.
+    store_kind::check_store_facts(obj);
 }
 
 /// Clear every `cache_carrier` bit ahead of the post-full-trace recompute.
@@ -1459,15 +1932,25 @@ pub extern "C" fn js_object_shape_id_for_keys(keys: u64, key_count: u32) -> u32 
 }
 
 /// [`js_object_shape_id_for_keys`] for a class's birth shape: codegen passes
-/// the class id, because the shape names the prototype that class implies.
+/// the class id, because the shape names the prototype that class implies,
+/// and the birth `rep` (charter step 5, T1): `F64` for exactly the slots the
+/// class's typed layout declares raw-f64 at allocation. The rep is codegen's
+/// decision, made once from the class source; the runtime never re-derives it.
 #[no_mangle]
 pub extern "C" fn js_object_shape_id_for_class_keys(
     keys: u64,
     key_count: u32,
     class_id: u32,
+    rep: u64,
 ) -> u32 {
-    let id =
-        shape_id_for_class_keys_ensure(keys as usize as *const ArrayHeader, key_count, class_id);
+    let id = publish_shape_result(class_birth_shape_ensure(
+        keys as usize as *const ArrayHeader,
+        key_count,
+        key_count,
+        class_id,
+        rep,
+        None,
+    ));
     // SAFETY: `id` was resolved from this agent's live slab record above.
     unsafe { note_external_shape_carrier(shape_descriptor_by_id(id)) };
     id
@@ -1484,19 +1967,53 @@ pub extern "C" fn js_object_shape_id_for_class_keys_live(
     key_count: u32,
     live: u32,
     class_id: u32,
+    rep: u64,
 ) -> u32 {
-    let id = publish_shape_result(shape_descriptor_ensure_with_generation(
+    let id = publish_shape_result(class_birth_shape_ensure(
         keys as usize as *const ArrayHeader,
         key_count,
-        live.max(key_count),
-        0,
-        ShapeObjectKind::Ordinary,
-        class_proto_id(class_id),
-        0,
+        live,
+        class_id,
+        rep,
+        None,
     ));
     // SAFETY: `id` was resolved from this agent's live slab record above.
     unsafe { note_external_shape_carrier(shape_descriptor_by_id(id)) };
     id
+}
+
+/// A class's birth shape with its codegen-declared rep. An `F64` lane past
+/// the key count (slack) or on a reserved lane is invalid facts. `requested`
+/// is the driver's static id for these facts (design step 4), whose content
+/// includes the rep.
+pub(crate) fn class_birth_shape_ensure(
+    keys: *const ArrayHeader,
+    key_count: u32,
+    live: u32,
+    class_id: u32,
+    rep: u64,
+    requested: Option<u32>,
+) -> Result<u32, ShapeDescriptorError> {
+    let key_lanes = if key_count >= super::field_rep::REP_SLOTS {
+        u64::MAX
+    } else {
+        super::field_rep::lanes_below(key_count)
+    };
+    if rep & !key_lanes != 0 {
+        return Err(ShapeDescriptorError::InvalidFacts);
+    }
+    shape_descriptor_ensure_with_rep(
+        keys,
+        key_count,
+        live.max(key_count),
+        0,
+        ShapeObjectKind::Ordinary,
+        0,
+        class_proto_id(class_id),
+        0,
+        rep,
+        requested,
+    )
 }
 
 /// #10123: the inline slot a PLAIN ordinary shape assigns to `key`, or `-1`.
@@ -1530,7 +2047,7 @@ pub extern "C" fn js_shape_ordinary_inline_slot_for_key(shape_id: u32, key_bits:
     let Some(descriptor) = shape_descriptor_by_id(shape_id) else {
         return -1;
     };
-    if descriptor.object_kind != ShapeObjectKind::Ordinary
+    if !descriptor.object_kind.is_ordinary_layout()
         || descriptor.semantic_generation != 0
         || descriptor.hole_count != 0
         || descriptor.live_inline_slot_count != descriptor.logical_key_count
@@ -1569,6 +2086,43 @@ pub extern "C" fn js_shape_ordinary_inline_slot_for_key(shape_id: u32, key_bits:
         }
     }
     -1
+}
+
+/// Step 4b loop regions: where objects of an ORDINARY, generation-0,
+/// hole-free shape (the caller checked all three) keep `key` — `(false,
+/// slot)` in the inline block, or `(true, position)` in the spill buffer: a
+/// position at or past the live inline bound IS the key's index in the
+/// buffer (`ShapeRecordRef::spill_position_of_key`). Answered in the same
+/// order the megamorphic read asks: the inline range front to back
+/// (`inline_slot_of_key`), then the spill range back to front (#10595: a
+/// shadowed field's most-derived position wins). The list is bounded by the
+/// shape's own key count, never its backing's length (#10969).
+/// Allocation-free; never calls user code.
+fn region_key_location(descriptor: &ShapeDescriptor, key_bits: u64) -> Option<(bool, usize)> {
+    let mut wanted_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let mut stored_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    unsafe {
+        let wanted = crate::string::js_string_key_bytes(
+            crate::JSValue::from_bits(key_bits),
+            &mut wanted_buf,
+        )?;
+        let (slots, len) =
+            super::keys_array_dense_slots_resolved(descriptor.keys as usize as *const ArrayHeader);
+        if slots.is_null() {
+            return None;
+        }
+        let hi = len.min(descriptor.logical_key_count as usize);
+        let lo = hi.min(descriptor.live_inline_slot_count as usize);
+        let mut matches = |i: usize| {
+            let stored = crate::JSValue::from_bits((*slots.add(i)).to_bits());
+            stored.bits() == key_bits
+                || crate::string::js_string_key_bytes(stored, &mut stored_buf) == Some(wanted)
+        };
+        if let Some(i) = (0..lo).find(|&i| matches(i)) {
+            return Some((false, i));
+        }
+        (lo..hi).rev().find(|&i| matches(i)).map(|i| (true, i))
+    }
 }
 
 /// Keepalive anchor — `js_shape_ordinary_inline_slot_for_key` is a
@@ -1687,38 +2241,236 @@ static KEEP_JS_REGION_GUARD_PRIME: unsafe extern "C" fn(
     u64,
 ) -> u64 = js_region_guard_prime;
 
-/// Mint a process-global ShapeId for a codegen-registered typed layout and
-/// install its structural descriptor in the current agent. Unlike
-/// [`shape_id_for_keys_ensure`], this deliberately does not canonicalise by
-/// keys alone: two objects with identical property names but different raw
-/// slot representations must never share a pre-baked GC descriptor.
-pub(crate) fn mint_registered_typed_shape_id(
-    keys: *const ArrayHeader,
-    key_count: u32,
-    proto_id: u64,
-) -> u32 {
-    let id = alloc_shape_id().unwrap_or_else(|_| shape_id_exhausted_abort());
-    if !shapes_slot_list::install_external_shape_id(id, keys, key_count, key_count, proto_id) {
-        invalid_shape_facts_abort();
-    }
-    id
+/// Step 4b loop regions: pack a LOOP region's word, which licenses bare
+/// STORES as well as bare reads, or return [`REGION_GUARD_WORD_EMPTY`].
+///
+/// [`js_region_guard_pack`] proves each key is an ordinary own inline slot of
+/// `shape_id` (ordinary kind, semantic generation 0, no tombstones, every key
+/// inline). A store additionally needs every covered key to be a WRITABLE DATA
+/// property, which is the shape's attribute summary: zero means every key the
+/// shape names carries default attributes (data, writable, enumerable,
+/// configurable). A nonzero summary refuses the whole word; the loop then runs
+/// its generic body, which is today's code. Refusing is always correct.
+///
+/// The per-object store facts that are NOT shape facts yet (receiver kind,
+/// Array-subclass numeric proof: DESIGN §6.5a) are tested by the emitted
+/// guard itself, on the object, not here.
+///
+/// SPILL-located keys (the S5 facts): a key at or past the shape's live
+/// inline bound lives at index `position` of the object's spill buffer
+/// (`ShapeRecordRef::spill_position_of_key`), and every carrier of the shape
+/// has that storage — the same claim
+/// the emitted `pic.spill.hit` rests on, published under the same conditions
+/// (object-owned spill storage, an index it can address). Such a word carries
+/// the ShapeId with `PACKED_SPILL_FLIP` flipped into it — the S5 convention —
+/// so the guard's plain compare admits only all-inline words and a second
+/// compare, on its miss side, selects the region's spill copy. A spill key is
+/// served to READS only: a key in `stored_mask` must be inline (a spill store
+/// owes the buffer's own GC bookkeeping, which the bare store does not do).
+///
+/// A key in `boxed_mask` is one a bare store may write a value the compiler
+/// did not prove a canonical double (charter step 5): the bare store runs no
+/// field-representation check, so its slot must be an `Any` lane of the
+/// shape. A proven canonical double is a valid value of every lane.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn js_region_loop_pack(
+    shape_id: u32,
+    n: u32,
+    k0: u64,
+    k1: u64,
+    k2: u64,
+    k3: u64,
+    k4: u64,
+    stored_mask: u32,
+    boxed_mask: u32,
+) -> u64 {
+    region_loop_pack(shape_id, n, [k0, k1, k2, k3, k4], stored_mask, boxed_mask)
+        .unwrap_or(REGION_GUARD_WORD_EMPTY)
 }
 
-/// Install an already-minted process-global typed ShapeId in this agent (for
-/// another module or worker that reuses the same compiled class identity).
-///
-/// `proto_id` is the prototype identity the id was MINTED with (the typed
-/// registry records it): a class id's prototype identity read later can
-/// differ (a module whose codegen reused the id for an anonymous shape), and
-/// a ShapeId's facts never change.
-pub(crate) fn install_registered_typed_shape_id(
-    id: u32,
-    keys: *const ArrayHeader,
-    key_count: u32,
-    proto_id: u64,
-) -> bool {
-    shapes_slot_list::install_external_shape_id(id, keys, key_count, key_count, proto_id)
+/// Why [`js_region_loop_pack`] refused a shape — the route census's refusal
+/// histogram (DESIGN §9.4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RegionRefusal {
+    /// Not an ordinary-band ShapeId (dictionary / exotic), or a bad key count.
+    Band,
+    /// A key is an accessor or not writable/enumerable/configurable data.
+    Summary,
+    /// Not `Ordinary`, a non-zero semantic generation, or tombstones.
+    Kind,
+    /// A key is not in the shape at all (inherited, or absent).
+    Absent,
+    /// A key the body STORES is spill-located.
+    SpillStored,
+    /// A spill-located key the S5 path could not serve (storage disabled,
+    /// index past `SPILL_MAX_FIELD_INDEX`, or past the word's 6-bit field).
+    SpillUnservable,
+    /// An inline slot past the word's 6-bit field (>= 32).
+    Range,
+    /// A key a bare store may write a non-double into is not an `Any` lane.
+    F64Stored,
 }
+
+fn region_loop_pack(
+    shape_id: u32,
+    n: u32,
+    keys: [u64; 5],
+    stored_mask: u32,
+    boxed_mask: u32,
+) -> Result<u64, RegionRefusal> {
+    use RegionRefusal::*;
+    if !is_site_matchable_shape_id(shape_id) || n == 0 || n > REGION_GUARD_MAX_KEYS {
+        return Err(Band);
+    }
+    match shape_record_by_id(shape_id) {
+        Some(record) if record.summary() == 0 => {}
+        Some(_) => return Err(Summary),
+        None => return Err(Band),
+    }
+    let Some(descriptor) = shape_descriptor_by_id(shape_id) else {
+        return Err(Band);
+    };
+    if descriptor.object_kind != ShapeObjectKind::Ordinary
+        || descriptor.semantic_generation != 0
+        || descriptor.hole_count != 0
+    {
+        return Err(Kind);
+    }
+    // (spilled, inline slot or spill index) per key.
+    let mut at = [(false, 0usize); REGION_GUARD_MAX_KEYS as usize];
+    let mut any_spill = false;
+    for (i, &key) in keys.iter().enumerate().take(n as usize) {
+        let (spilled, position) = region_key_location(&descriptor, key).ok_or(Absent)?;
+        if spilled {
+            if stored_mask & (1 << i) != 0 {
+                return Err(SpillStored);
+            }
+            if !super::object_spill_enabled() || position >= super::SPILL_MAX_FIELD_INDEX {
+                return Err(SpillUnservable);
+            }
+            any_spill = true;
+        }
+        at[i] = (spilled, position);
+    }
+    // Every field is `slot` (< 32) or `32 + spill index` (< 63), in BOTH
+    // kinds of word: a region with two receivers may run its spill copy for
+    // one receiver's spill word while the other's word is all-inline, and
+    // that copy reads each field the same way.
+    let id = if any_spill {
+        shape_id ^ crate::object::field_get_set::PACKED_SPILL_FLIP
+    } else {
+        shape_id
+    };
+    let mut word = u64::from(id);
+    for (i, &(spilled, n_at)) in at.iter().enumerate().take(n as usize) {
+        if !spilled
+            && boxed_mask & (1 << i) != 0
+            && (n_at as u32) < super::field_rep::REP_SLOTS
+            && super::field_rep::slot_rep(descriptor.rep, n_at as u32) != super::field_rep::REP_ANY
+        {
+            return Err(F64Stored);
+        }
+        let field = match spilled {
+            false if n_at < 32 => n_at,
+            true if n_at < 31 => 32 + n_at,
+            false => return Err(Range),
+            true => return Err(SpillUnservable),
+        };
+        word |= (field as u64) << (32 + REGION_GUARD_SLOT_BITS * i as u32);
+    }
+    Ok(word)
+}
+
+/// The word a loop region's site holds once its last bounded prime attempt
+/// was refused: all ones. Its id half is `REGION_GUARD_WORD_EMPTY`'s, which no
+/// object carries, so it can never match; the emitted guard tests for it
+/// FIRST and skips the receiver test (DESIGN §4.3).
+pub const REGION_LOOP_WORD_RETIRED: u64 = u64::MAX;
+
+/// Compute a loop region's word ([`js_region_loop_pack`]) and publish it; the
+/// store-side twin of [`js_region_guard_prime`], with its memory ordering.
+/// `last` is non-zero on the site's final bounded attempt: a refusal then
+/// publishes [`REGION_LOOP_WORD_RETIRED`].
+///
+/// # Safety
+///
+/// `word` must be null or point to a live, 8-byte-aligned `AtomicU64`.
+#[no_mangle]
+pub unsafe extern "C" fn js_region_loop_prime(
+    word: *const core::sync::atomic::AtomicU64,
+    shape_id: u32,
+    n: u32,
+    k0: u64,
+    k1: u64,
+    k2: u64,
+    k3: u64,
+    k4: u64,
+    last: u32,
+    stored_mask: u32,
+    boxed_mask: u32,
+) -> u64 {
+    let verdict = region_loop_pack(shape_id, n, [k0, k1, k2, k3, k4], stored_mask, boxed_mask);
+    region_loop_prime_census(verdict);
+    let packed = verdict.unwrap_or(REGION_GUARD_WORD_EMPTY);
+    if word.is_null() {
+        return REGION_GUARD_WORD_EMPTY;
+    }
+    if packed == REGION_GUARD_WORD_EMPTY {
+        if last != 0 {
+            (*word).store(
+                REGION_LOOP_WORD_RETIRED,
+                core::sync::atomic::Ordering::Relaxed,
+            );
+            crate::hot_diag::recv_route_note_runtime(crate::hot_diag::RT_ROUTE_RLOOP_RETIRE);
+        }
+        return REGION_GUARD_WORD_EMPTY;
+    }
+    (*word).store(packed, core::sync::atomic::Ordering::Relaxed);
+    packed
+}
+
+/// The route census's verdict on one loop-region prime (a relaxed load and a
+/// not-taken branch outside a census build): accepted, or WHY it was refused
+/// ([`RegionRefusal`]).
+fn region_loop_prime_census(verdict: Result<u64, RegionRefusal>) {
+    use crate::hot_diag::{
+        recv_route_note_runtime, RT_ROUTE_RLOOP_PRIME_OK, RT_ROUTE_RLOOP_REFUSE_ABSENT,
+        RT_ROUTE_RLOOP_REFUSE_BAND, RT_ROUTE_RLOOP_REFUSE_F64_STORED, RT_ROUTE_RLOOP_REFUSE_KIND,
+        RT_ROUTE_RLOOP_REFUSE_RANGE, RT_ROUTE_RLOOP_REFUSE_SPILL_STORED,
+        RT_ROUTE_RLOOP_REFUSE_SPILL_UNSERVABLE, RT_ROUTE_RLOOP_REFUSE_SUMMARY,
+    };
+    let route = match verdict {
+        Ok(_) => RT_ROUTE_RLOOP_PRIME_OK,
+        Err(RegionRefusal::Band) => RT_ROUTE_RLOOP_REFUSE_BAND,
+        Err(RegionRefusal::Summary) => RT_ROUTE_RLOOP_REFUSE_SUMMARY,
+        Err(RegionRefusal::Kind) => RT_ROUTE_RLOOP_REFUSE_KIND,
+        Err(RegionRefusal::Absent) => RT_ROUTE_RLOOP_REFUSE_ABSENT,
+        Err(RegionRefusal::SpillStored) => RT_ROUTE_RLOOP_REFUSE_SPILL_STORED,
+        Err(RegionRefusal::SpillUnservable) => RT_ROUTE_RLOOP_REFUSE_SPILL_UNSERVABLE,
+        Err(RegionRefusal::Range) => RT_ROUTE_RLOOP_REFUSE_RANGE,
+        Err(RegionRefusal::F64Stored) => RT_ROUTE_RLOOP_REFUSE_F64_STORED,
+    };
+    recv_route_note_runtime(route);
+}
+
+/// Keepalive anchor — `js_region_loop_prime` is called only from generated
+/// code (a loop region's entry miss).
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_REGION_LOOP_PRIME: unsafe extern "C" fn(
+    *const core::sync::atomic::AtomicU64,
+    u32,
+    u32,
+    u64,
+    u64,
+    u64,
+    u64,
+    u64,
+    u32,
+    u32,
+    u32,
+) -> u64 = js_region_loop_prime;
 
 // ---------------------------------------------------------------------------
 // #8067 — THE SHAPE WORD IS UNIFORM AND AUTHORITATIVE.
@@ -1868,12 +2620,13 @@ unsafe fn install_cached_object_shape_version_impl(
 
     // Match `set_object_keys_array_with_live`: representation feedback must be
     // invalidated while the predecessor stamp is still authoritative.
-    super::mark_object_dynamic_shape_unknown(obj);
     if target_is_cache_carried {
         // `cache_carrier` already roots the target descriptor for the
         // cache's lifetime — strictly stronger than the epoch-scoped
         // old-carrier note, so this stamp deliberately skips the funnel's
-        // descriptor probe (see the function doc above).
+        // descriptor probe (see the function doc above). The proof retire
+        // (R5) is not skipped: it is one header load without a proof.
+        store_kind::retire_proof_before_stamp(obj, target_shape_id);
         (*obj).parent_class_id = target_shape_id;
     } else {
         stamp_object_shape_id_with_carrier_note(obj, target_shape_id);
@@ -1884,6 +2637,9 @@ unsafe fn install_cached_object_shape_version_impl(
         obj,
         crate::object::ObjectKeys::new(_target_keys, _target_key_count),
     );
+    // The successor was minted from a receiver that carried the same
+    // predecessor, so it derived the same F-A (R2); checked, never trusted.
+    store_kind::check_store_facts(obj);
     #[cfg(test)]
     TEST_CACHED_TRANSITION_WATCH.with(|watch| {
         if watch.get() == obj as usize {
@@ -1932,17 +2688,40 @@ pub(crate) unsafe fn stamp_object_shape(
         debug_assert_object_shape_parity(obj);
         return id;
     };
-    let id = publish_shape_result(shape_descriptor_ensure_with_holes(
+    // Charter step 5: a restamp of the SAME keys edge moves no slot, so the
+    // lineage's field representation carries (normalized). Any other edge
+    // publishes all-`Any`, which is always a valid claim.
+    let rep = if lineage.keys == keys as u64 && lineage.logical_key_count == key_count {
+        super::field_rep::normalized(lineage.rep)
+    } else {
+        super::field_rep::REP_ANY
+    };
+    // A same-facts republish (the read side's `lookup_ways`) keeps a
+    // proof-carrying receiver on its proof shape (charter step 3): it changes
+    // nothing the proof depends on, so retiring the proof here would make
+    // every read of the receiver re-prove it.
+    let kind = if lineage.object_kind == ShapeObjectKind::OrdinaryNumericProof
+        && lineage.keys == keys as u64
+        && lineage.logical_key_count == key_count
+        && store_kind::receiver_carries_numeric_proof(obj)
+    {
+        ShapeObjectKind::OrdinaryNumericProof
+    } else {
+        store_kind::mint_kind(lineage.object_kind, obj)
+    };
+    let id = publish_shape_result(shape_descriptor_ensure_with_rep(
         keys,
         key_count,
         lineage.live_inline_slot_count,
         lineage.semantic_generation,
-        lineage.object_kind,
+        kind,
         // Same-array restamp: physical holes persist, so must the count
         // (see the lineage publish below for the churn-growth rationale).
         lineage.hole_count,
         lineage.proto_id,
         receiver_extra_summary(obj),
+        rep,
+        None,
     ));
     if id != (*obj).parent_class_id {
         // Read-side lookup_ways also calls `stamp_object_shape` to populate its
@@ -1974,11 +2753,20 @@ pub(crate) unsafe fn stamp_object_shape(
 /// No `shape_word_is_writable` check beyond the null test: the callers have just
 /// written `class_id` into a header they allocated, so the receiver is a genuine
 /// `ObjectHeader` and never the `RegExpHeader` alias.
+///
+/// `rep` is the newborn's birth rep (charter step 5): its shape is its
+/// structural facts WITH that rep, whichever allocator runs. The supplied id is
+/// taken only when it names that rep too, a worker's install of it carries it,
+/// and the exact fallback is minted with it. So a class or literal born with
+/// `F64` lanes gets the one (keys, proto, rep) id on every path, never an
+/// all-`Any` twin of it. The caller fills the `F64` lanes
+/// (`field_rep_store::birth_fill_f64_lanes`) once the slots are initialized.
 #[inline]
 pub(crate) unsafe fn birth_stamp_object_shape(
     obj: *mut crate::object::ObjectHeader,
     runtime_shape_id: u32,
     live_inline_slot_count: u32,
+    rep: u64,
 ) {
     if obj.is_null() || !shape_word_is_writable(obj) {
         return;
@@ -1990,16 +2778,39 @@ pub(crate) unsafe fn birth_stamp_object_shape(
     let keys = current.keys as usize as *mut ArrayHeader;
     let key_count = current.logical_key_count;
     let supplied_id_is_local =
-        descriptor_matches_object(runtime_shape_id, obj, live_inline_slot_count)
+        (descriptor_matches_object(runtime_shape_id, obj, live_inline_slot_count)
+            && shape_descriptor_field_by_id(runtime_shape_id, |d| {
+                super::field_rep::identity(d.rep) == rep
+            }) == Some(true))
             || shapes_slot_list::install_external_shape_id(
                 runtime_shape_id,
                 keys,
                 key_count,
                 live_inline_slot_count,
                 object_proto_id(obj),
+                store_kind::receiver_ordinary_kind(obj),
+                rep,
             );
     if supplied_id_is_local {
         stamp_object_shape_id_with_carrier_note(obj, runtime_shape_id);
+        debug_assert_object_shape_parity(obj);
+    } else if rep != super::field_rep::REP_ANY {
+        // The exact descriptor below is all-`Any`; the newborn's shape is those
+        // facts with its birth rep. Minted while that descriptor is stamped
+        // (the `publish_object_live_slot_count` discipline).
+        let id = publish_shape_result(shape_descriptor_ensure_with_rep(
+            keys,
+            key_count,
+            live_inline_slot_count,
+            current.semantic_generation,
+            current.object_kind,
+            current.hole_count,
+            current.proto_id,
+            receiver_extra_summary(obj),
+            rep,
+            None,
+        ));
+        stamp_object_shape_id_with_carrier_note(obj, id);
         debug_assert_object_shape_parity(obj);
     } else {
         // `current` was just published from the newborn's explicit keys edge
@@ -2049,9 +2860,14 @@ pub(crate) unsafe fn try_birth_stamp_preinstalled_shape(
         || descriptor.logical_key_count != keys.count()
         || descriptor.live_inline_slot_count != live_inline_slot_count
         || descriptor.semantic_generation != 0
-        || descriptor.object_kind != ShapeObjectKind::Ordinary
+        || descriptor.object_kind != store_kind::receiver_ordinary_kind(obj)
         || descriptor.proto_id != object_proto_id(obj)
     {
+        if descriptor.object_kind.is_ordinary_layout()
+            && descriptor.object_kind != store_kind::receiver_ordinary_kind(obj)
+        {
+            store_kind::audit::note_explicit_decline();
+        }
         return false;
     }
     (*obj).parent_class_id = runtime_shape_id;
@@ -2059,6 +2875,7 @@ pub(crate) unsafe fn try_birth_stamp_preinstalled_shape(
         note_old_generation_carrier(descriptor.record_ref());
     }
     debug_assert_object_shape_parity(obj);
+    store_kind::check_store_facts(obj);
     true
 }
 
@@ -2091,6 +2908,17 @@ pub(crate) unsafe fn publish_object_live_slot_count(
     obj: *mut crate::object::ObjectHeader,
     live_inline_slot_count: u32,
 ) -> u32 {
+    publish_object_live_slot_count_rep(obj, live_inline_slot_count, None)
+}
+
+/// [`publish_object_live_slot_count`] whose successor carries `rep` (charter
+/// step 5, T2: the key-add that grows the bound publishes its value's lane
+/// here). `None` carries the predecessor's lanes below the new bound.
+pub(crate) unsafe fn publish_object_live_slot_count_rep(
+    obj: *mut crate::object::ObjectHeader,
+    live_inline_slot_count: u32,
+    rep: Option<u64>,
+) -> u32 {
     if obj.is_null() || !shape_word_is_writable(obj) {
         return 0;
     }
@@ -2101,7 +2929,21 @@ pub(crate) unsafe fn publish_object_live_slot_count(
             return object_shape_stamp(obj);
         }
     }
-    synchronize_object_shape_descriptor_from(obj, predecessor, live_inline_slot_count)
+    match predecessor {
+        // Charter step 5: a bound change moves no slot, so the predecessor's
+        // lanes below the new bound stay valid claims.
+        Some(current) => publish_object_shape_from_rep(
+            obj,
+            Some(current),
+            current.keys_view(),
+            live_inline_slot_count,
+            rep.unwrap_or_else(|| {
+                super::field_rep::normalized(current.rep)
+                    & super::field_rep::lanes_below(live_inline_slot_count)
+            }),
+        ),
+        None => synchronize_object_shape_descriptor_from(obj, None, live_inline_slot_count),
+    }
 }
 
 /// Install the exact descriptor for the object's current authoritative keys
@@ -2159,6 +3001,27 @@ pub(crate) unsafe fn publish_object_shape_from(
     predecessor: Option<ShapeDescriptor>,
     keys_view: crate::object::ObjectKeys,
     live_inline_slot_count: u32,
+) -> u32 {
+    publish_object_shape_from_rep(
+        obj,
+        predecessor,
+        keys_view,
+        live_inline_slot_count,
+        super::field_rep::REP_ANY,
+    )
+}
+
+/// [`publish_object_shape_from`] with the successor's field representation
+/// (charter step 5). A caller passes a rep only when it knows no slot moved
+/// relative to the predecessor it carries lanes from; `REP_ANY` is always a
+/// valid claim.
+#[cfg_attr(feature = "shape-mint-diag", track_caller)]
+pub(crate) unsafe fn publish_object_shape_from_rep(
+    obj: *mut crate::object::ObjectHeader,
+    predecessor: Option<ShapeDescriptor>,
+    keys_view: crate::object::ObjectKeys,
+    live_inline_slot_count: u32,
+    rep: u64,
 ) -> u32 {
     if obj.is_null() || !shape_word_is_writable(obj) {
         return 0;
@@ -2236,9 +3099,14 @@ pub(crate) unsafe fn publish_object_shape_from(
     let semantic_generation = lineage
         .map(|descriptor| descriptor.semantic_generation)
         .unwrap_or(0);
-    let object_kind = lineage
-        .map(|descriptor| descriptor.object_kind)
-        .unwrap_or(ShapeObjectKind::Ordinary);
+    // Charter step 3 (R2): an ordinary-family kind is the RECEIVER's, never
+    // the lineage's — a lineage cannot carry a stale F-A or a numeric proof.
+    let object_kind = store_kind::mint_kind(
+        lineage
+            .map(|descriptor| descriptor.object_kind)
+            .unwrap_or(ShapeObjectKind::Ordinary),
+        obj,
+    );
     // Tombstones (#9029): an append or grow-realloc keeps every hole slot
     // physically in the array, so the successor must inherit the count — a
     // reset would let delete/re-add churn dodge the squeeze threshold
@@ -2251,7 +3119,7 @@ pub(crate) unsafe fn publish_object_shape_from(
         Some(descriptor) => descriptor.proto_id,
         None => object_proto_id(obj),
     };
-    let id = publish_shape_result(shape_descriptor_ensure_with_holes(
+    let id = publish_shape_result(shape_descriptor_ensure_with_rep(
         keys,
         key_count,
         live_inline_slot_count,
@@ -2260,6 +3128,8 @@ pub(crate) unsafe fn publish_object_shape_from(
         hole_count,
         proto_id,
         receiver_extra_summary(obj),
+        rep,
+        None,
     ));
     stamp_object_shape_id_with_carrier_note(obj, id);
     if retire_owned_history {
@@ -2354,10 +3224,11 @@ pub(crate) unsafe fn transition_object_shape_accessor_replaced(
         current.logical_key_count,
         current.live_inline_slot_count,
         generation,
-        current.object_kind,
+        store_kind::mint_kind(current.object_kind, obj),
         current.hole_count,
         current.proto_id,
         receiver_extra_summary(obj),
+        None,
     ));
     stamp_object_shape_id_with_carrier_note(obj, id);
     debug_assert_object_shape_parity(obj);
@@ -2397,7 +3268,7 @@ pub(crate) unsafe fn transition_object_shape_semantics(
         key_count,
         current.live_inline_slot_count,
         generation,
-        current.object_kind,
+        store_kind::mint_kind(current.object_kind, obj),
         current.proto_id,
         receiver_extra_summary(obj),
     ));
@@ -2448,10 +3319,11 @@ pub(crate) unsafe fn transition_object_shape_prototype(
         current.logical_key_count,
         current.live_inline_slot_count,
         generation,
-        current.object_kind,
+        store_kind::mint_kind(current.object_kind, obj),
         current.hole_count,
         proto_id,
         receiver_extra_summary(obj),
+        None,
     ));
     stamp_object_shape_id_with_carrier_note(obj, id);
     debug_assert_object_shape_parity(obj);
@@ -2467,7 +3339,12 @@ pub(crate) unsafe fn restamp_object_proto_id(obj: *mut crate::object::ObjectHead
     if obj.is_null() || !shape_word_is_writable(obj) || object_shape_stamp(obj) == 0 {
         return 0;
     }
-    transition_object_shape_prototype(obj, object_proto_id(obj))
+    transition_object_shape_prototype(obj, object_proto_id(obj));
+    // A `class_id` rewrite is also an F-A input (charter step 3, R4): a
+    // prototype transition re-derives it, but an unchanged prototype
+    // identity mints nothing, so re-derive explicitly.
+    store_kind::restamp_object_store_kind(obj);
+    object_shape_stamp(obj)
 }
 
 // ---------------------------------------------------------------------------
@@ -2501,7 +3378,7 @@ pub(crate) const PROTO_ID_DEFAULT: u64 = 0;
 /// A null [[Prototype]].
 pub(crate) const PROTO_ID_NULL: u64 = u64::MAX;
 const PROTO_ID_TAG_SHIFT: u32 = 62;
-const PROTO_ID_CLASS: u64 = 1 << PROTO_ID_TAG_SHIFT;
+pub(crate) const PROTO_ID_CLASS: u64 = 1 << PROTO_ID_TAG_SHIFT;
 const PROTO_ID_MIXED: u64 = 2 << PROTO_ID_TAG_SHIFT;
 const PROTO_ID_UNIQUE: u64 = 3 << PROTO_ID_TAG_SHIFT;
 /// The prototype identity of a shape that answers nothing about its receiver
@@ -2583,6 +3460,13 @@ pub(crate) unsafe fn object_proto_id(obj: *const crate::object::ObjectHeader) ->
     let class_id = (*obj).class_id;
     let class = vtable_class(class_id);
     let meta = (*obj).meta;
+    // An exotic read receiver (`process.env`, `arguments`) is answered by no
+    // shape: its identity is its own, so every lineage it mints keeps it and
+    // no shape-keyed memo admits it (`proto_validity::mark_exotic_read_receiver`).
+    if !meta.is_null() && (*meta).flags & crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER != 0
+    {
+        return PROTO_ID_PER_OBJECT;
+    }
     if !meta.is_null() && (*meta).prototype != 0 {
         let bits = (*meta).prototype;
         if bits == crate::value::TAG_NULL {
@@ -2741,6 +3625,9 @@ fn descriptor_matches_object(
             && d.logical_key_count == keys.count()
             && d.live_inline_slot_count == live_inline_slot_count
             && d.proto_id == object_proto_id(obj)
+            // Charter step 3 (R3): a supplied id is the receiver's only if
+            // it names the receiver's store facts too.
+            && d.object_kind == store_kind::receiver_ordinary_kind(obj)
     }
 }
 
@@ -3625,7 +4512,7 @@ pub(crate) fn shape_table_census() -> Vec<crate::gc::census::SideTableRow> {
     ));
     // Ids ever minted by this process: the slab is indexed by id, so the gap
     // between this and `shapes.descriptors` is what chunk release reclaims.
-    let minted = SHAPE_ID_NEXT.load(std::sync::atomic::Ordering::Relaxed) - SHAPE_ID_BASE;
+    let minted = SHAPE_ID_NEXT.load(std::sync::atomic::Ordering::Relaxed) - STATIC_SHAPE_ID_END;
     rows.push(("shapes.ids_minted(process)", minted as usize, 0));
     // How the descriptor population splits by [[Prototype]] identity kind,
     // and how many distinct prototype identities it names: what the

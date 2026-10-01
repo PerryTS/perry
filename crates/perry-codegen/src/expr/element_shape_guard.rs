@@ -72,35 +72,16 @@ const GC_TYPE_ARRAY: &str = "1";
 /// | 0–7 (`0x0000_00FF`) | `obj_type` | `GC_TYPE_OBJECT` (2) |
 /// | 15 (`0x0000_8000`) | `gc_flags & GC_FLAG_FORWARDED` (0x80) | clear |
 /// | 27 (`0x0800_0000`) | `_reserved & OBJ_FLAG_HAS_DESCRIPTORS` (0x800) | clear |
-/// | 28 (`0x1000_0000`) | `_reserved & GC_OBJ_TYPED_LAYOUT_INTACT` (0x1000) | set |
 ///
-/// One load + one `and` + one `icmp` replaces the three loads and six ALU ops
-/// the per-access class-field precheck spends on the same four facts.
-const ELEM_HEADER_MASK: &str = "402686207"; // 0x1800_80FF
+/// Both arms use it. Charter step 5, P4: the class-keyed arm no longer tests a
+/// per-object typed-layout bit. Its raw-f64 reads are emitted only for `F64`
+/// lanes of the compared class id's birth rep (`class_field_site_raw_f64`),
+/// so the ShapeId compare alone proves each such slot holds a Number. The
+/// shape-keyed arm (#10123) tests each loaded word's Number tag instead.
+const ELEM_HEADER_MASK: &str = "134250751"; // 0x0800_80FF
 /// The value [`ELEM_HEADER_MASK`] must produce: `obj_type == GC_TYPE_OBJECT`,
-/// not forwarded, no per-object descriptors, typed layout intact.
-const ELEM_HEADER_EXPECT: &str = "268435458"; // 0x1000_0002
-
-/// #10123: [`ELEM_HEADER_MASK`] without the typed-layout conjunct.
-///
-/// A `JSON.parse`'d record has no typed layout and never will:
-/// `object/json_construction.rs` finishes it with `layout_init_pointer_free`
-/// or `layout_mark_unknown`, and BOTH clear `GC_OBJ_TYPED_LAYOUT_INTACT`
-/// explicitly. Keeping the bit in the mask would side-exit every element of
-/// every parsed record array — the clone would be emitted, entered, and then
-/// leave the loop on its first read.
-///
-/// What the bit bought the class-keyed arm was "the slot holds a raw
-/// `double`". The shape-keyed arm buys that differently and per read: the
-/// loaded word is NaN-boxed, so it is tested with the same Number-tag range
-/// check the preheader applies to the accumulator (`emit_js_value_is_number`),
-/// and a non-Number (a string `id`, a `null`, a boxed INT32) side-exits to the
-/// slow clone. That is not weaker — it is the same claim, established from the
-/// value instead of from a layout declaration.
-const ELEM_HEADER_SHAPE_MASK: &str = "134250751"; // 0x0800_80FF
-/// The value [`ELEM_HEADER_SHAPE_MASK`] must produce: `obj_type ==
-/// GC_TYPE_OBJECT`, not forwarded, no per-object descriptors.
-const ELEM_HEADER_SHAPE_EXPECT: &str = "2"; // 0x0000_0002
+/// not forwarded, no per-object descriptors.
+const ELEM_HEADER_EXPECT: &str = "2"; // 0x0000_0002
 
 /// Where the fast clone's trip count comes from.
 ///
@@ -505,11 +486,7 @@ pub(crate) fn emit_element_shape_loop_preheader_check(
     let expected_shape_id = match kind {
         ElementShapeGuardKind::Class {
             keys_global_name, ..
-        } => {
-            let shape_global =
-                crate::typed_shape::shape_id_global_name_from_keys_global(keys_global_name);
-            blk.load(I32, &format!("@{shape_global}"))
-        }
+        } => crate::typed_shape::class_shape_id_operand_on_block(blk, keys_global_name, false),
         // The query's answer, which dominates this block.
         ElementShapeGuardKind::Shape { .. } => queried_shape_id
             .clone()
@@ -627,13 +604,8 @@ pub(crate) fn emit_element_deref_with_residual(
     // from the runtime array-level invariant).
     let hdr_ptr = blk.gep(I8, &elem_ptr, &[(I64, "-8")]);
     let hdr = blk.load(I32, &hdr_ptr);
-    let (mask, expect) = if fact.shape_keyed {
-        (ELEM_HEADER_SHAPE_MASK, ELEM_HEADER_SHAPE_EXPECT)
-    } else {
-        (ELEM_HEADER_MASK, ELEM_HEADER_EXPECT)
-    };
-    let hdr_masked = blk.and(I32, &hdr, mask);
-    let hdr_ok = blk.icmp_eq(I32, &hdr_masked, expect);
+    let hdr_masked = blk.and(I32, &hdr, ELEM_HEADER_MASK);
+    let hdr_ok = blk.icmp_eq(I32, &hdr_masked, ELEM_HEADER_EXPECT);
 
     // #8113: the ShapeId moved from header offset 8 to 4.
     let sid_ptr = blk.gep(I8, &elem_ptr, &[(I64, "4")]);
@@ -741,72 +713,30 @@ mod tests {
         let obj_type_mask = 0x0000_00FFu32;
         let forwarded = u32::from(0x80u8) << 8; // GC_FLAG_FORWARDED @ -7
         let has_descriptors = 0x0800u32 << 16; // OBJ_FLAG_HAS_DESCRIPTORS @ -6
-        let typed_intact = 0x1000u32 << 16; // GC_OBJ_TYPED_LAYOUT_INTACT @ -6
-        let mask = obj_type_mask | forwarded | has_descriptors | typed_intact;
-        let expect = u32::from(2u8) /* GC_TYPE_OBJECT */ | typed_intact;
-
+        let typed_intact = 0x1000u32 << 16; // the retired per-object bit @ -6
+        let mask = obj_type_mask | forwarded | has_descriptors;
+        let expect = u32::from(2u8) /* GC_TYPE_OBJECT */;
         assert_eq!(ELEM_HEADER_MASK, mask.to_string(), "header mask drifted");
         assert_eq!(
             ELEM_HEADER_EXPECT,
             expect.to_string(),
             "header expectation drifted"
         );
-
-        // #10123's shape-keyed pair is the SAME three header facts with the
-        // typed-layout conjunct removed, derived here rather than restated so
-        // a drift in any shared constant moves both.
-        let shape_mask = obj_type_mask | forwarded | has_descriptors;
-        let shape_expect = u32::from(2u8) /* GC_TYPE_OBJECT */;
-        assert_eq!(
-            ELEM_HEADER_SHAPE_MASK,
-            shape_mask.to_string(),
-            "shape-keyed header mask drifted"
-        );
-        assert_eq!(
-            ELEM_HEADER_SHAPE_EXPECT,
-            shape_expect.to_string(),
-            "shape-keyed header expectation drifted"
-        );
-        // It must still reject the three facts it DOES cover, and must
-        // deliberately NOT depend on the typed-layout bit — a parsed record
-        // never has it, so a mask that kept it would side-exit every element.
-        assert_eq!(shape_expect & shape_mask, shape_expect);
-        assert_eq!(
-            (shape_expect | typed_intact) & shape_mask,
-            shape_expect,
-            "the shape-keyed mask must ignore the typed-layout bit"
-        );
+        // Charter step 5, P4: the guard must not depend on the retired
+        // typed-layout bit, in either direction.
+        assert_eq!((expect | typed_intact) & mask, expect);
+        // Sabotage direction: the mask must actually reject each fact.
         assert_ne!(
-            (shape_expect | forwarded) & shape_mask,
-            shape_expect,
+            (expect | forwarded) & mask,
+            expect,
             "forwarded not rejected"
         );
         assert_ne!(
-            (shape_expect | has_descriptors) & shape_mask,
-            shape_expect,
-            "descriptors not rejected"
-        );
-        assert_ne!(
-            (shape_expect ^ 1) & shape_mask,
-            shape_expect,
-            "wrong obj_type not rejected"
-        );
-
-        // Sabotage direction: the mask must actually reject each fact.
-        let good = expect;
-        assert_eq!(good & mask, expect);
-        assert_ne!((good | forwarded) & mask, expect, "forwarded not rejected");
-        assert_ne!(
-            (good | has_descriptors) & mask,
+            (expect | has_descriptors) & mask,
             expect,
             "descriptors not rejected"
         );
-        assert_ne!(
-            (good & !typed_intact) & mask,
-            expect,
-            "typed-layout downgrade not rejected"
-        );
-        assert_ne!((good ^ 1) & mask, expect, "wrong obj_type not rejected");
+        assert_ne!((expect ^ 1) & mask, expect, "wrong obj_type not rejected");
     }
 
     /// The mask reads three adjacent header bytes as one little-endian i32.

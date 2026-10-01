@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use crate::widgets;
 
 extern "C" {
-    fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+    fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
     fn js_string_from_bytes(ptr: *const u8, len: i64) -> *const u8;
     fn js_nanbox_string(ptr: i64) -> f64;
@@ -257,7 +257,7 @@ pub fn state_set(handle: i64, value: f64) {
             .unwrap_or_default()
     });
     for callback_ptr in onchange_snapshot {
-        unsafe { js_closure_call1(callback_ptr, value) };
+        unsafe { js_closure_call1(callback_ptr, perry_ffi::JsThis::UNDEFINED, value) };
     }
 
     // Update textfield bindings (state → textfield direction)
@@ -319,7 +319,8 @@ fn render_for_each(container: i64, closure: f64, count: f64) {
     let n = count as i64;
     let closure_ptr = unsafe { js_nanbox_get_pointer(closure) } as *const u8;
     for i in 0..n {
-        let child_f64 = unsafe { js_closure_call1(closure_ptr, i as f64) };
+        let child_f64 =
+            unsafe { js_closure_call1(closure_ptr, perry_ffi::JsThis::UNDEFINED, i as f64) };
         let child_handle = unsafe { js_nanbox_get_pointer(child_f64) };
         widgets::add_child(container, child_handle);
     }

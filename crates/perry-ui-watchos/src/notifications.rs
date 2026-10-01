@@ -32,7 +32,7 @@ extern "C" {
     // as `i64` here (32-bit ptr zero-extended on arm64_32). Keeping the same
     // signature avoids a `clashing_extern_declarations` warning.
     fn js_string_from_bytes(data: *const u8, len: i32) -> i64;
-    fn js_closure_call2(closure: *const u8, arg0: f64, arg1: f64) -> f64;
+    fn js_closure_call2(closure: *const u8, this: perry_ffi::JsThis, arg0: f64, arg1: f64) -> f64;
     fn js_is_truthy(value: f64) -> i32;
     fn js_run_stdlib_pump();
     fn js_promise_run_microtasks() -> i32;
@@ -134,7 +134,7 @@ unsafe fn dispatch_tap(response: &AnyObject) {
 
     let ptr = js_nanbox_get_pointer(callback) as *const u8;
     if !ptr.is_null() {
-        js_closure_call2(ptr, id_value, action_value);
+        js_closure_call2(ptr, perry_ffi::JsThis::UNDEFINED, id_value, action_value);
     }
 }
 

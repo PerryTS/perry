@@ -100,14 +100,16 @@ pub use jsvalue::{
     alloc_null_proto_object, alloc_object, alloc_set, build_object_shape, js_array_alloc,
     js_array_get, js_array_length, js_array_push, js_array_set, js_object_alloc_with_shape,
     js_object_get_field, js_object_live_slot_count, js_object_set_field, object_field_by_name,
-    set_add, set_delete, JsValue, SHORT_STRING_MAX_LEN,
+    set_add, set_delete, string_arg_ptr, JsValue, SHORT_STRING_MAX_LEN,
 };
 
 mod closure;
 mod transient_roots;
 pub use closure::{
-    alloc_closure, closure_capture_f64, register_closure_arity, set_closure_capture_f64, JsClosure,
-    RawClosureHeader,
+    alloc_closure, call_value, closure_capture_f64, set_closure_capture_f64, JsBody, JsBody0,
+    JsBody1, JsBody10, JsBody11, JsBody12, JsBody13, JsBody14, JsBody15, JsBody16, JsBody2,
+    JsBody3, JsBody4, JsBody5, JsBody6, JsBody7, JsBody8, JsBody9, JsClosure, JsFunctionInfo,
+    JsThis, RawClosureHeader, FN_ARROW, FN_BUILTIN, FN_NON_CONSTRUCTOR, FN_STRICT,
 };
 pub use transient_roots::{TransientRootScope, TransientRootedAddr, TransientRootedNanbox};
 

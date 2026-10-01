@@ -6,7 +6,7 @@ use jni::{
 };
 extern "C" {
     fn js_nanbox_get_pointer(value: f64) -> i64;
-    fn js_closure_call2(closure: *const u8, row: f64, col: f64) -> f64;
+    fn js_closure_call2(closure: *const u8, this: perry_ffi::JsThis, row: f64, col: f64) -> f64;
     fn js_string_from_bytes(bytes: *const u8, len: i64) -> *const u8;
 }
 fn with_table<R>(handle: i64, default: R, f: impl FnOnce(&mut Env, &JObject) -> R) -> R {
@@ -76,6 +76,7 @@ pub extern "system" fn Java_com_perry_app_PerryBridge_nativeTableRenderCell(
             let value = unsafe {
                 js_closure_call2(
                     js_nanbox_get_pointer(closure) as *const u8,
+                    perry_ffi::JsThis::UNDEFINED,
                     row as f64,
                     col as f64,
                 )

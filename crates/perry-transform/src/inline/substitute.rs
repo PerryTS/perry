@@ -18,6 +18,16 @@ fn substitute_locals_inner(
     next_local_id: &mut LocalId,
 ) {
     match expr {
+        Expr::ScopedTemp { id, value, body } => {
+            substitute_locals_inner(value, param_map, next_local_id);
+            let fresh = *next_local_id;
+            *next_local_id += 1;
+            let mut body_map = param_map.clone();
+            body_map.insert(*id, Expr::LocalGet(fresh));
+            *id = fresh;
+            substitute_locals_inner(body, &body_map, next_local_id);
+            return;
+        }
         Expr::LocalGet(id) => {
             if let Some(replacement) = param_map.get(id) {
                 *expr = replacement.clone();
@@ -423,6 +433,35 @@ fn substitute_locals_in_stmts_inner(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scoped_temp_is_lexical_and_fresh_for_each_inline_expansion() {
+        let original = Expr::ScopedTemp {
+            id: 7,
+            value: Box::new(Expr::LocalGet(8)),
+            body: Box::new(Expr::Binary {
+                op: perry_hir::BinaryOp::Add,
+                left: Box::new(Expr::LocalGet(7)),
+                right: Box::new(Expr::LocalGet(8)),
+            }),
+        };
+        let mapping = HashMap::from([(8, Expr::LocalGet(18)), (7, Expr::LocalGet(99))]);
+        let mut next = 100;
+        for expected in [100, 101] {
+            let mut expr = original.clone();
+            substitute_locals(&mut expr, &mapping, &mut next);
+            let Expr::ScopedTemp { id, value, body } = expr else {
+                panic!("missing lexical binding")
+            };
+            assert_eq!(id, expected);
+            assert!(matches!(*value, Expr::LocalGet(18)));
+            let Expr::Binary { left, right, .. } = *body else {
+                panic!("missing continuation")
+            };
+            assert!(matches!(*left, Expr::LocalGet(local) if local == expected));
+            assert!(matches!(*right, Expr::LocalGet(18)));
+        }
+    }
 
     fn fresh_class(owner: Option<LocalId>) -> Expr {
         Expr::ClassExprFresh {

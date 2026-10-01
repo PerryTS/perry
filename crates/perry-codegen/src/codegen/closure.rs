@@ -10,7 +10,7 @@ use crate::expr::FnCtx;
 use crate::module::LlModule;
 use crate::stmt;
 use crate::strings::StringPool;
-use crate::types::{LlvmType, DOUBLE, I1, I32, I64, I8, PTR};
+use crate::types::{LlvmType, DOUBLE, I1, I32, I64, PTR};
 
 use super::opts::CrossModuleCtx;
 use super::typed_abi::{
@@ -140,12 +140,8 @@ fn emit_public_typed_closure_trampoline(
         TypedFunctionTrampolineKind::StringRef => typed_param_reps_for_params(params)
             .unwrap_or_else(|| vec![TypedParamRep::StringRef; params.len()]),
     };
-    let mut llvm_params: Vec<(LlvmType, String)> = Vec::with_capacity(params.len() + 1);
-    llvm_params.push((I64, "%this_closure".to_string()));
-    for p in params {
-        llvm_params.push((DOUBLE, format!("%arg{}", p.id)));
-    }
     let arg_names: Vec<String> = params.iter().map(|p| format!("%arg{}", p.id)).collect();
+    let llvm_params = crate::expr::body_call::js_body_params(arg_names.iter().cloned());
     let wf = llmod.define_function(&public_name, DOUBLE, llvm_params);
     let _ = wf.create_block("entry");
 
@@ -169,12 +165,15 @@ fn emit_public_typed_closure_trampoline(
             emit_typed_closure_trampoline_fast_value(blk, kind, &typed_name, values, &arg_reps)
         },
         &mut |blk| {
-            let mut call_args: Vec<(LlvmType, &str)> = Vec::with_capacity(arg_names.len() + 1);
-            call_args.push((I64, "%this_closure"));
-            for arg in &arg_names {
-                call_args.push((DOUBLE, arg.as_str()));
-            }
-            blk.call(DOUBLE, generic_body_name, &call_args)
+            // The generic body is this entry's own continuation: it gets the
+            // receiver this entry was given.
+            crate::expr::body_call::emit_js_body_call(
+                blk,
+                crate::expr::body_call::JsBody::Symbol(generic_body_name),
+                crate::expr::body_call::JS_BODY_CALLEE,
+                crate::expr::body_call::JS_BODY_THIS,
+                &arg_names,
+            )
         },
     );
     Ok(())
@@ -407,10 +406,12 @@ pub(super) fn compile_typed_i32_closure(
 
 /// Compile a closure body as a top-level LLVM function.
 ///
-/// Signature: `double perry_closure_<modprefix>__<func_id>(i64 this_closure,
-/// double arg0, double arg1, …)`. The first parameter is the closure
-/// pointer (raw i64); the remaining params are the closure's own
-/// declared parameters.
+/// Signature: the JS body ABI (`expr::body_call::js_body_params`),
+/// `double perry_closure_<modprefix>__<func_id>(i64 this_closure, i64
+/// js_this, double arg0, double arg1, …)`. The first parameter is the
+/// closure pointer (raw i64), the second the receiver bits (still read from
+/// the implicit-`this` cell, stage 1); the remaining params are the
+/// closure's own declared parameters.
 ///
 /// Inside the body, captured variables (`closure.captures`) are mapped
 /// to capture indices and accessed via the runtime
@@ -544,15 +545,13 @@ pub(super) fn compile_closure(
         ordinary_body_name
     };
 
-    // Param list: i64 this_closure, then each param as double. The private
-    // versioned-loop clone reuses its proven-unused first callback parameter
-    // for the caller's stack context, so its ABI and register footprint stay
-    // identical to the ordinary trusted clone.
-    let mut llvm_params: Vec<(LlvmType, String)> = Vec::with_capacity(params.len() + 1);
-    llvm_params.push((I64, "%this_closure".to_string()));
-    for p in params {
-        llvm_params.push((DOUBLE, format!("%arg{}", p.id)));
-    }
+    // Param list: the JS body ABI (`i64 %this_closure, i64 %js_this`), then
+    // each param as double. The private versioned-loop clone reuses its
+    // proven-unused first callback parameter for the caller's stack context,
+    // so its ABI and register footprint stay identical to the ordinary
+    // trusted clone.
+    let llvm_params =
+        crate::expr::body_call::js_body_params(params.iter().map(|p| format!("%arg{}", p.id)));
 
     let ic_base = llmod.ic_counter;
     let buffer_alias_base = llmod.buffer_alias_counter;
@@ -570,23 +569,21 @@ pub(super) fn compile_closure(
     // #10906: a non-arrow closure with its OWN `this` binding (a function
     // expression, or an object-literal method — the closed-shape literal path
     // lowers every method to exactly this) used to call
-    // `js_implicit_this_get{,_sloppy}` at EVERY `this` in its body. Bind the
+    // a thread-local receiver-cell read at EVERY `this` in its body. Bind the
     // receiver once instead, at entry, into a rooted `this` slot that every
     // `Expr::This` loads — what OrdinaryCallBindThis does, and what a class
     // method gets from `%this_arg`. The sloppy conversion (nullish ->
     // globalThis, primitive -> wrapper) then also runs once, so `this === this`
     // holds for a primitive receiver instead of boxing a fresh wrapper per read.
     //
-    // Async and generator bodies are excluded: their statements run across
-    // resumptions, and the entry read has not been audited against re-entry.
-    // Arrows have lexical `this`, which is `captures_this`'s job.
+    // Async and generator bodies bind it the same way: such a body runs ONCE
+    // per call (it returns a promise or a generator object), and the step
+    // closures that do run across resumptions capture the receiver lexically
+    // (the generator transform sets their `captures_this`). Arrows have
+    // lexical `this`, which is `captures_this`'s job.
     let entry_bound_this = !captures_this
         && enclosing_class.is_none()
         && !is_arrow
-        && !is_async
-        && !is_generator
-        && !cross_module.local_generator_funcs.contains(&func_id)
-        && !cross_module.async_step_closures.contains(&func_id)
         && perry_hir::analysis::body_reads_dynamic_this(body);
 
     // gh #6206 / #6081: closures/arrows compiled WITHOUT a shadow frame left
@@ -597,10 +594,13 @@ pub(super) fn compile_closure(
     // Emit the same frame the top-level function path gets (function.rs).
     // #10663: decided before any statement is lowered.
     crate::codegen::helpers::decide_straight_line_store_outline(lf, body);
-    let shadow_slot_map = if super::helpers::precise_root_analysis_enabled() {
+    let mut shadow_slot_map = if super::helpers::precise_root_analysis_enabled() {
         let flat_const_ids: std::collections::HashSet<u32> =
             cross_module.flat_const_arrays.keys().copied().collect();
-        let m = crate::collectors::collect_pointer_typed_locals(params, body, &flat_const_ids);
+        let m = crate::scope_env::compact_root_slots(
+            crate::collectors::collect_pointer_typed_locals(params, body, &flat_const_ids),
+            &cross_module.scope_map,
+        );
         // #7208: reserve one slot per CAPTURED `this` / `new.target`, exactly
         // as `codegen/method.rs:316` and `:1344` do with their `+ 1`.
         //
@@ -621,8 +621,6 @@ pub(super) fn compile_closure(
     } else {
         std::collections::HashMap::new()
     };
-    let shadow_slot_clears_after_stmt =
-        crate::collectors::collect_shadow_slot_clear_points(body, &shadow_slot_map);
 
     let _ = lf.create_block("entry");
 
@@ -661,7 +659,6 @@ pub(super) fn compile_closure(
         }
         map
     };
-    super::arguments::release_boxed_param_slots_at_exit(lf, params, &closure_boxed_vars, &locals);
 
     // Start with the closure's own params as local_types, then
     // merge in the module-wide map so captured-from-outer ids have
@@ -705,12 +702,20 @@ pub(super) fn compile_closure(
         body,
         captures,
         module_globals,
+        &cross_module.scope_map,
     );
-    let closure_captures: HashMap<u32, u32> = auto_captures
+    let mut closure_captures: HashMap<u32, u32> = auto_captures
         .iter()
         .enumerate()
         .map(|(i, id)| (*id, i as u32))
         .collect();
+    // Every member of a captured scope group reads through the group's one
+    // capture slot.
+    for (i, rep) in auto_captures.iter().enumerate() {
+        for member in cross_module.scope_map.members(*rep) {
+            closure_captures.insert(*member, i as u32);
+        }
+    }
 
     // `this` capture. Object-literal methods get `captures_this=true`
     // AND the creation site (lower_object_literal) patches a reserved
@@ -777,15 +782,14 @@ pub(super) fn compile_closure(
             // closure's synthetic this slot with the enclosing ClassRef rather
             // than the old 0.0 sentinel so arrows in static fields retain the
             // class constructor as their SuperProperty receiver.
-            let class_ref = crate::nanbox::double_literal(f64::from_bits(
-                crate::nanbox::INT32_TAG | class_id as u64,
-            ));
+            let class_ref = crate::expr::emit_class_value(blk, class_id);
             blk.store(DOUBLE, &class_ref, &slot);
         } else if entry_bound_this {
-            // A valid non-pointer until the prologue's receiver read below
-            // fills it, so the slot is safe to bind here with the others.
-            let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-            blk.store(DOUBLE, &undef, &slot);
+            // The receiver parameter, stored before the body's first
+            // safepoint so the bind below makes it a rewritten root; a
+            // sloppy body coerces it in place in the prologue.
+            let receiver = blk.bitcast_i64_to_double(crate::expr::body_call::JS_BODY_THIS);
+            blk.store(DOUBLE, &receiver, &slot);
         } else {
             blk.store(DOUBLE, "0.0", &slot);
         }
@@ -861,6 +865,12 @@ pub(super) fn compile_closure(
                 .extend(callback_shapes.clone());
         }
     }
+    super::helpers::drop_number_local_root_slots(
+        &mut shadow_slot_map,
+        native_facts.number_by_construction_locals(),
+    );
+    let shadow_slot_clears_after_stmt =
+        crate::collectors::collect_shadow_slot_clear_points(body, &shadow_slot_map);
 
     // Representation-selection context gates (see codegen/function.rs).
     // Async-step closures (CPS-rewritten `async` closures — the rewrite clears
@@ -943,33 +953,22 @@ pub(super) fn compile_closure(
     // verified the public closure identity and its compiler-installed raw-box
     // capture mask. Capture slots never change. Load each box pointer once,
     // before user code or a safepoint can relocate the closure, and retain the
-    // non-moving box pointer for the invocation. This removes the repeated
+    // rooted box pointer for the invocation. This removes the repeated
     // checked closure-capture helper from hot callback bodies without caching
     // the mutable VALUE stored inside the box.
     let trusted_box_capture_ptrs = if trusted_box_captures {
-        let mut trusted = HashMap::new();
-        let mut boxed_captures: Vec<_> = closure_captures
+        let boxed_captures: Vec<_> = closure_captures
             .iter()
             .filter(|(id, _)| closure_boxed_vars.contains(id))
             .map(|(id, index)| (*id, *index))
             .collect();
-        boxed_captures.sort_unstable_by_key(|(_, index)| *index);
-        if !boxed_captures.is_empty() {
-            let header_size =
-                crate::target_layout::closure_header_size_bytes(&cross_module.target_triple)
-                    .to_string();
-            let blk = lf.block_mut(0).expect("closure body has an entry block");
-            let closure_ptr = blk.inttoptr(I64, "%this_closure");
-            let captures_base = blk.gep(I8, &closure_ptr, &[(I64, &header_size)]);
-            for (id, index) in boxed_captures {
-                let index = index.to_string();
-                let capture_slot = blk.gep(I64, &captures_base, &[(I64, &index)]);
-                let bits = blk.load(I64, &capture_slot);
-                let ptr = blk.inttoptr(I64, &bits);
-                trusted.insert(id, crate::expr::TrustedBoxCapturePtr { bits, ptr });
-            }
-        }
-        trusted
+        super::closure_capture_cells::cache_capture_cells(
+            lf,
+            &boxed_captures,
+            &cross_module.scope_map,
+            &cross_module.target_triple,
+            false,
+        )
     } else if crate::expr::box_capture_entry_cells_enabled()
         && !is_async
         // Match the repsel context gate: generator wrappers and CPS async-step
@@ -980,11 +979,11 @@ pub(super) fn compile_closure(
     {
         // The PUBLIC body's variant of the cache above (#9016 follow-up). The
         // dispatcher has validated nothing here, so each cached pointer is
-        // resolved through `js_box_capture_cell_ptr`, which answers the box's
-        // own (never-moving) cell for a registered pointer and a shared
-        // immutable `undefined` cell otherwise — per-read behaviour is then
-        // identical to `js_box_get_bits` in both cases. Admission is
-        // deliberately narrow:
+        // resolved through `js_box_capture_cell_ptr` / `js_scope_capture_base`,
+        // which answer the cell (or scope object) for a validated pointer and
+        // a shared immutable `undefined` region otherwise — per-read behaviour
+        // is then identical to the unchecked accessors in both cases.
+        // Admission is deliberately narrow:
         //
         // * only bindings this body NEVER writes — the `LocalSet`/`Update`
         //   trusted arms store straight through the cached pointer, which must
@@ -996,16 +995,14 @@ pub(super) fn compile_closure(
         //   suspension.
         //
         // The cell CONTENTS are still loaded per use, so a write through any
-        // other closure sharing the box stays visible; only the pointer — and
-        // the per-read registry probe `is_registered_box_ptr`, 1.45% of the
-        // wolf-ecs entity cycle — is hoisted to entry.
-        let mut cached = HashMap::new();
+        // other closure sharing the cell stays visible; only the pointer — and
+        // the per-read allocation/type probe, formerly 1.45% of the wolf-ecs
+        // entity cycle — is hoisted to entry.
         let mut boxed_captures: Vec<_> = closure_captures
             .iter()
             .filter(|(id, _)| closure_boxed_vars.contains(id))
             .map(|(id, index)| (*id, *index))
             .collect();
-        boxed_captures.sort_unstable_by_key(|(_, index)| *index);
         if !boxed_captures.is_empty() {
             let uses = super::closure_collect::collect_capture_use(
                 body,
@@ -1016,26 +1013,18 @@ pub(super) fn compile_closure(
                     .is_some_and(|u| u.writes == 0 && (u.reads >= 2 || u.loop_reads >= 1))
             });
         }
-        if !boxed_captures.is_empty() {
-            let header_size =
-                crate::target_layout::closure_header_size_bytes(&cross_module.target_triple)
-                    .to_string();
-            let blk = lf.block_mut(0).expect("closure body has an entry block");
-            let closure_ptr = blk.inttoptr(I64, "%this_closure");
-            let captures_base = blk.gep(I8, &closure_ptr, &[(I64, &header_size)]);
-            for (id, index) in boxed_captures {
-                let index = index.to_string();
-                let capture_slot = blk.gep(I64, &captures_base, &[(I64, &index)]);
-                let bits = blk.load(I64, &capture_slot);
-                let cell_bits = blk.call(I64, "js_box_capture_cell_ptr", &[(I64, &bits)]);
-                let ptr = blk.inttoptr(I64, &cell_bits);
-                cached.insert(id, crate::expr::TrustedBoxCapturePtr { bits, ptr });
-            }
-        }
-        cached
+        super::closure_capture_cells::cache_capture_cells(
+            lf,
+            &boxed_captures,
+            &cross_module.scope_map,
+            &cross_module.target_triple,
+            true,
+        )
     } else {
         HashMap::new()
     };
+
+    super::arguments::box_rooted_parameter_slots(lf, params, &closure_boxed_vars, &locals);
 
     let mut ctx = FnCtx {
         func: lf,
@@ -1114,6 +1103,7 @@ pub(super) fn compile_closure(
         class_field_counts: &cross_module.class_field_counts,
         class_init_chains: &cross_module.class_init_chains,
         class_header_image_globals: &cross_module.class_header_images,
+        class_birth_reps: &cross_module.class_birth_reps,
         imported_class_ctors: &cross_module.imported_class_ctors,
         func_signatures,
         func_synthetic_arguments,
@@ -1125,11 +1115,12 @@ pub(super) fn compile_closure(
             .compiler_private_async_i32_control_locals,
         compiler_private_async_i1_control_locals: &cross_module
             .compiler_private_async_i1_control_locals,
+        scope_map: &cross_module.scope_map,
         closure_rest_params,
         local_closure_func_ids: HashMap::new(),
         guard_free_closure_bindings: std::collections::HashSet::new(),
         local_closure_param_counts: HashMap::new(),
-        resolved_arrow_callback_targets: HashMap::new(),
+        resolved_plain_callback_targets: HashMap::new(),
         resolved_versioned_loop_callback_targets: HashMap::new(),
         trusted_box_captures,
         versioned_loop_deopt_context,
@@ -1171,6 +1162,7 @@ pub(super) fn compile_closure(
         // emitted before FnCtx exists here), so clears never get skipped.
         shadow_slots_bound: shadow_slot_map.values().copied().collect(),
         temp_roots: crate::rooting::TempRootPool::default(),
+        scoped_temp_roots: Vec::new(),
         shadow_slot_map,
         persistent_shadow_slots: std::collections::HashSet::new(),
         declared_only_numeric_locals: std::collections::HashSet::new(),
@@ -1182,9 +1174,10 @@ pub(super) fn compile_closure(
         class_header_images: HashMap::new(),
         array_length_snapshots: HashMap::new(),
         string_window_array_facts: Vec::new(),
-        masked_region_scalar_locals: std::collections::HashSet::new(),
         suppressed_cleared_shadow_slots: std::collections::HashSet::new(),
         class_field_loop_facts: Vec::new(),
+        region_loops: Vec::new(),
+        region_loop_facts: Vec::new(),
         element_shape_loop_facts: Vec::new(),
         i32_counter_slots: HashMap::new(),
         numeric_accumulator_f64_slots: HashMap::new(),
@@ -1322,23 +1315,18 @@ pub(super) fn compile_closure(
         super::arguments::ArgumentsCallee::CurrentClosure,
     );
 
-    // #10906: read the dynamic receiver into the entry `this` slot. It runs
+    // #10906: the entry `this` slot holds the receiver parameter (stored
+    // at entry, above). A sloppy body applies OrdinaryCallBindThis to it here,
     // after every parameter, capture and `arguments` root is bound, because
-    // the sloppy read can allocate a primitive wrapper — and ahead of the
-    // first statement, so no user code can have rebound IMPLICIT_THIS yet.
-    if entry_bound_this {
-        let helper = if is_strict {
-            "js_implicit_this_get"
-        } else {
-            "js_implicit_this_get_sloppy"
-        };
+    // the coercion can allocate a primitive wrapper — and ahead of the first
+    // statement. A strict body uses the receiver as passed.
+    if entry_bound_this && !is_strict {
         let slot = ctx
             .this_stack
             .last()
             .cloned()
             .expect("entry-bound `this` has a slot");
-        let receiver = ctx.block().call(DOUBLE, helper, &[]);
-        ctx.block().store(DOUBLE, &receiver, &slot);
+        crate::expr::body_call::emit_sloppy_receiver_coercion(&mut ctx, &slot);
     }
 
     // #9060 follow-up: resolve loop-called immutable callee bindings once at
@@ -1390,6 +1378,8 @@ pub(super) fn compile_closure(
         );
     }
 
+    // #10812: throw a catchable RangeError before the native stack runs out.
+    crate::expr::stack_guard::emit_stack_guard(&mut ctx);
     if is_async {
         stmt::lower_async_rejecting_stmts(&mut ctx, body)
             .with_context(|| format!("lowering async closure body func_id={}", func_id))?;

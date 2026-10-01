@@ -1594,7 +1594,18 @@ pub fn lower_module_full_with_platform_globals(
     crate::dynamic_import::detect_top_level_await(&mut module);
     let is_esm_entry =
         !module.imports.is_empty() || !module.exports.is_empty() || module.has_top_level_await;
-    if ctx.is_entry_module && !is_esm_entry && module.references_global_this {
+    // #11591: a `.ts` entry runs under Node as an ES or CommonJS module, never
+    // as a Script, so its top-level declarations are module-scoped and never
+    // become global-object properties (`function URL(){}` must not shadow
+    // `globalThis.URL`). Script GlobalDeclarationInstantiation applies only
+    // under the explicit global-script opt-in the Test262 runner uses.
+    let is_script_entry =
+        ctx.is_entry_module && !is_esm_entry && super::lower_expr::global_script_this_enabled();
+    if !is_script_entry {
+        module.script_global_functions.clear();
+        module.annexb_global_undefined_names.clear();
+    }
+    if is_script_entry && module.references_global_this {
         // GlobalDeclarationInstantiation creates every Script-level `var`
         // property before user code, with configurable=false. The late
         // reflection pass below mirrors declaration/assignment values with an
@@ -1618,7 +1629,7 @@ pub fn lower_module_full_with_platform_globals(
         module.annexb_global_undefined_names.sort();
         module.annexb_global_undefined_names.dedup();
     }
-    if ctx.is_entry_module && !is_esm_entry && module.references_global_this {
+    if is_script_entry && module.references_global_this {
         let script_vars: HashMap<_, _> = ctx
             .script_var_decl_names
             .iter()

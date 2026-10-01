@@ -33,7 +33,7 @@ extern "C" {
     fn js_run_stdlib_pump();
     fn js_promise_run_microtasks() -> i32;
     fn js_nanbox_get_pointer(value: f64) -> i64;
-    fn js_closure_call2(closure: *const u8, arg0: f64, arg1: f64) -> f64;
+    fn js_closure_call2(closure: *const u8, this: perry_ffi::JsThis, arg0: f64, arg1: f64) -> f64;
     fn js_nanbox_string(ptr: i64) -> f64;
 }
 
@@ -72,7 +72,7 @@ unsafe fn invoke_handler(url: &str, source: &str) {
         if !ptr.is_null() {
             let url_v = nanbox_str(url);
             let src_v = nanbox_str(source);
-            js_closure_call2(ptr, url_v, src_v);
+            js_closure_call2(ptr, perry_ffi::JsThis::UNDEFINED, url_v, src_v);
         }
     }
 }

@@ -509,6 +509,8 @@ unsafe fn restamp_dictionary_shape(obj: *mut ObjectHeader, live_inline_slot_coun
     // Read from the PRIVATE list, not through `is_dictionary`: at the latch
     // the shape still publishes the old keys when this runs.
     let extra_summary = private_list_summary(obj);
+    // Charter step 3 (R2): the receiver's store facts, read before the mint.
+    let kind = shapes::store_kind::mint_kind(shapes::ShapeObjectKind::Ordinary, obj);
     let handle = scope.root_raw_mut_ptr(obj);
     // The mint is the allocating half; the receiver is never nameable across
     // it (#7341), so there is no pre-call address left to stamp.
@@ -518,10 +520,11 @@ unsafe fn restamp_dictionary_shape(obj: *mut ObjectHeader, live_inline_slot_coun
             0,
             live_inline_slot_count,
             next_generation(),
-            shapes::ShapeObjectKind::Ordinary,
+            kind,
             0,
             proto_id,
             extra_summary,
+            None,
         ))
     });
     shapes::stamp_object_shape_id_with_carrier_note(obj, id);
@@ -566,15 +569,6 @@ pub(crate) unsafe fn latch_object_to_dictionary(obj: *mut ObjectHeader) -> bool 
 
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj_handle = scope.root_raw_mut_ptr(obj);
-
-    // 1. The typed-layout descriptor is keyed by the keys edge, and this
-    //    receiver is about to stop having one. Invalidate while the
-    //    predecessor stamp is still authoritative, exactly as
-    //    `set_object_keys_array_with_live` does for a pointer change.
-    // The reload is discarded: step 2 allocates again and reloads through
-    // the same handle, so a name bound here would be stale before it is read.
-    let ((), _) = obj_handle
-        .across_mut::<ObjectHeader, _>(|| crate::object::mark_object_dynamic_shape_unknown(obj));
 
     // 2. A PRIVATE copy of the key list, with slack so the first appends
     //    after the latch do not immediately reallocate. The source may be

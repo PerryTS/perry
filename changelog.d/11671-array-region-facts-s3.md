@@ -1,0 +1,2 @@
+- perf(codegen): array element reads with a static index range are region facts inside #11650 loop regions: one array guard in the preheader, a bare `base + 8*idx` read with an inline hole select, the base refreshed on the poll arm (array slice S3).
+- perf(codegen): a loop region whose nested body region fails its guard leaves the region (G-body) instead of re-checking the array facts every iteration, and comes back when the body guard passes again (array slice S3).

@@ -8,7 +8,7 @@ use gtk4::glib;
 
 extern "C" {
     fn js_nanbox_get_pointer(value: f64) -> i64;
-    fn js_closure_call2(closure: *const u8, arg1: f64, arg2: f64) -> f64;
+    fn js_closure_call2(closure: *const u8, this: perry_ffi::JsThis, arg1: f64, arg2: f64) -> f64;
     fn js_run_stdlib_pump();
     fn js_promise_run_microtasks() -> i32;
 }
@@ -27,10 +27,10 @@ pub fn request_location(callback: f64) {
             let ptr = unsafe { js_nanbox_get_pointer(callback) } as *const u8;
             match result {
                 Some((lat, lon)) => unsafe {
-                    js_closure_call2(ptr, lat, lon);
+                    js_closure_call2(ptr, perry_ffi::JsThis::UNDEFINED, lat, lon);
                 },
                 None => unsafe {
-                    js_closure_call2(ptr, f64::NAN, f64::NAN);
+                    js_closure_call2(ptr, perry_ffi::JsThis::UNDEFINED, f64::NAN, f64::NAN);
                 },
             }
         });

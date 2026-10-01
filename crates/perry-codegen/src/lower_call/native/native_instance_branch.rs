@@ -289,7 +289,8 @@
             ctx.current_block = wb_idx;
             match recv {
                 Expr::LocalGet(id) => {
-                    if let Some(slot) = ctx.locals.get(id).cloned() {
+                    if crate::scope_env::access::write_back_boxed_local(ctx, *id, &new_box)? {
+                    } else if let Some(slot) = ctx.locals.get(id).cloned() {
                         ctx.block().store(DOUBLE, &new_box, &slot);
                     } else if let Some(global_name) = ctx.module_globals.get(id).cloned() {
                         let g_ref = format!("@{}", global_name);
@@ -444,7 +445,8 @@
             ctx.current_block = wb_idx;
             match recv {
                 Expr::LocalGet(id) => {
-                    if let Some(slot) = ctx.locals.get(id).cloned() {
+                    if crate::scope_env::access::write_back_boxed_local(ctx, *id, &new_box)? {
+                    } else if let Some(slot) = ctx.locals.get(id).cloned() {
                         ctx.block().store(DOUBLE, &new_box, &slot);
                     } else if let Some(global_name) = ctx.module_globals.get(id).cloned() {
                         let g_ref = format!("@{}", global_name);

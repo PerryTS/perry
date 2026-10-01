@@ -29,7 +29,7 @@ pub(crate) fn scan_windows_toolbar_gc_roots(visitor: &mut perry_ffi::GcRootVisit
 }
 
 extern "C" {
-    fn js_closure_call0(closure: *const u8) -> f64;
+    fn js_closure_call0(closure: *const u8, this: perry_ffi::JsThis) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
 }
 

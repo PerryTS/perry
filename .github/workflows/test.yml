@@ -455,6 +455,17 @@ jobs:
           python3 scripts/string_payload_access_inventory.py --self-test
           python3 scripts/string_payload_access_inventory.py
 
+      # A short string (<= 5 bytes) lives inline in the NaN-box under
+      # SHORT_STRING_TAG with no StringHeader behind it. Masking its bits into
+      # a `*StringHeader` segfaults; a heap-tag-only check reads it as "not a
+      # string" (#11430, #11519). Existing sites are tracked per crate and may
+      # only decrease; the self-test plants each shape and proves it is caught.
+      - name: SSO string-unboxing inventory
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/sso_unbox_inventory.py --self-test
+          python3 scripts/sso_unbox_inventory.py
+
       # Two reserved class ids sharing a value is silent and destructive: every
       # dispatch tower matches them in a fixed order, so the later arm becomes
       # unreachable and its whole method surface dies (#7576 killed the entire
@@ -597,6 +608,25 @@ jobs:
       # sweep. Scanner under-counts have shipped twice (#8207: 18 symbols
       # including js_throw; 2026-09-22: 56 via macros), both silent, both
       # toward green.
+      - name: GC macro export scanner regression
+        if: ${{ !cancelled() }}
+        run: python3 scripts/gc_macro_exports_test.py
+
+      - name: Native export collision inventory
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/native_export_collisions.py --self-test
+          python3 scripts/native_export_collisions.py
+
+      - name: Native export collision baseline may not rise
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null \
+            || git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          python3 scripts/native_export_collisions.py --no-raise-vs "$BASE_SHA"
+
       - name: Macro-defined export item position (GC root dominance)
         if: ${{ !cancelled() }}
         run: python3 scripts/gc_root_dominance_check.py --audit-macro-item-position
@@ -637,6 +667,16 @@ jobs:
         run: |
           python3 scripts/check_gc_env_knobs.py --self-test
           python3 scripts/check_gc_env_knobs.py
+
+      # `this`-as-a-parameter lane, stage 0: every call of a JS function body
+      # goes through one funnel per side (runtime `closure/body_call.rs`,
+      # codegen `expr/body_call.rs`), so a body-ABI change is made in one place
+      # and the compiler finds every caller.
+      - name: JS body-call funnel
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/check_js_body_call_funnel.py --self-test
+          python3 scripts/check_js_body_call_funnel.py
 
       # #7982. The in-process LLVM reader's unit gate builds three tracked `.ll`
       # corpora and asserts they RAN — which proves the tests ran, not that they

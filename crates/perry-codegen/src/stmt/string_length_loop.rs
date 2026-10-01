@@ -218,8 +218,11 @@ pub(super) fn lower(
         scope_id,
         min_idx: matched.min_idx,
         max_idx_exclusive: matched.max_idx_exclusive,
-        numeric_accumulator: matched.accumulator_id,
     });
+    // #9160: the entry tag check admitted the accumulator and its sole write
+    // adds a proven string length: the clone's 5L scope.
+    ctx.receiver_descriptors
+        .materialize_number_locals(scope_id, &[matched.accumulator_id]);
     let saved_stride = ctx.poll_stride_counter_slot.take();
     ctx.poll_stride_counter_slot = ctx.i32_counter_slots.get(&matched.counter_id).cloned();
     lower_for_after_init_with_i32_bound(
@@ -234,6 +237,7 @@ pub(super) fn lower(
     ctx.poll_stride_counter_slot = saved_stride;
     ctx.string_window_array_facts
         .retain(|fact| fact.scope_id != scope_id);
+    ctx.receiver_descriptors.dematerialize_scope(scope_id);
     if !ctx.block().is_terminated() {
         ctx.block().br(&merge_label);
     }

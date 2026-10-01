@@ -71,8 +71,10 @@ pub(crate) struct ShapeRecord {
     pub(super) live_inline_slot_count: u32,
     pub(super) hole_count: u32,
     /// Low 8 bits: the `RECORD_FLAG_*` set. Bits 8-10: the `ShapeObjectKind`
-    /// discriminant. Bits 11-14: the births a keyless birth shape served while
-    /// tracking its width (#10905). Bit 15: reserved. Bits 16-23: the
+    /// discriminant (codes 0-6; the store facts F-A/F-B are kinds 5 and 6).
+    /// Bits 11-14: the births a keyless birth shape served while tracking its
+    /// width (#10905). Bit 15: reserved (it held the answerable-by-position
+    /// bit, which is now [`Self::position_bound`]'s zero). Bits 16-23: the
     /// attribute SUMMARY byte (`key_attrs::SUMMARY_*`), an identity fact.
     /// Bits 24-31: the inline width a keyless birth shape's descendants grow
     /// to (#10905). The two #10905 fields are learned facts of the record,
@@ -83,10 +85,32 @@ pub(crate) struct ShapeRecord {
     /// 8-aligned (asserted below) and the slab geometry is unchanged — the
     /// kind field is free, it lives in padding that was already paid for.
     flags_and_kind: u32,
+    /// POSBOUND: how many leading key positions ARE inline slots of every
+    /// receiver carrying this shape — `min(logical_key_count,
+    /// live_inline_slot_count)` when the shape answers by position
+    /// ([`Self::positional_by_facts`]), 0 otherwise. A function of the
+    /// record's facts, rewritten by [`Self::refresh_positional`] wherever an
+    /// input changes, read by [`Self::position_bound`].
+    ///
+    /// ONE field so the megamorphic read confirm (`js_object_read_confirm`)
+    /// answers "is the guess a position of this shape" with one compare —
+    /// `guess < position_bound` — instead of a flag test and a `min`.
+    /// Offset 40; `rep` follows at 48 (4 bytes of padding between), so the
+    /// record is 56 bytes.
+    position_bound: u32,
+    /// Charter step 5: the per-slot field representation, two bits per inline
+    /// slot 0..32 (`field_rep`). An identity fact under
+    /// [`field_rep::identity`](crate::object::field_rep::identity), folded into the
+    /// facts key only when nonzero.
+    pub(super) rep: u64,
 }
 
 const RECORD_KIND_SHIFT: u32 = 8;
 const RECORD_KIND_MASK: u32 = 0b111 << RECORD_KIND_SHIFT;
+/// The largest `ShapeObjectKind::code()` (`OrdinaryNumericProof`, 6). Code 7
+/// is the field's last free value. `kind_codes_round_trip` pins every kind.
+const RECORD_KIND_MAX_CODE: u32 = 6;
+const _: () = assert!(RECORD_KIND_MAX_CODE <= RECORD_KIND_MASK >> RECORD_KIND_SHIFT);
 /// Charter step 3: the summary of the attributes the shape's keys carry —
 /// what the chain store check and every per-key reader ask FIRST, so a shape
 /// whose keys are all default answers without touching its keys. Derived
@@ -130,8 +154,10 @@ const _: () = assert!(
     super::shapes_birth_width::TRACKING_BIRTHS <= RECORD_BIRTHS_MASK >> RECORD_BIRTHS_SHIFT
 );
 
-const _: () = assert!(std::mem::size_of::<ShapeRecord>() == 40);
+const _: () = assert!(std::mem::size_of::<ShapeRecord>() == 56);
 const _: () = assert!(std::mem::align_of::<ShapeRecord>() == 8);
+const _: () = assert!(std::mem::offset_of!(ShapeRecord, position_bound) == 40);
+const _: () = assert!(std::mem::offset_of!(ShapeRecord, rep) == 48);
 
 impl ShapeRecord {
     const EMPTY: ShapeRecord = ShapeRecord {
@@ -142,6 +168,8 @@ impl ShapeRecord {
         live_inline_slot_count: 0,
         hole_count: 0,
         flags_and_kind: 0,
+        position_bound: 0,
+        rep: 0,
     };
 
     #[inline]
@@ -187,6 +215,8 @@ impl ShapeRecord {
     pub(super) fn with_summary(mut self, summary: u8) -> ShapeRecord {
         self.flags_and_kind = (self.flags_and_kind & !RECORD_SUMMARY_MASK)
             | (u32::from(summary) << RECORD_SUMMARY_SHIFT);
+        // The summary is an input of the positional bit (an accessor key).
+        self.refresh_positional();
         self
     }
 
@@ -228,6 +258,8 @@ impl ShapeRecord {
             2 => ShapeObjectKind::Dictionary,
             3 => ShapeObjectKind::Function,
             4 => ShapeObjectKind::FunctionDictionary,
+            5 => ShapeObjectKind::OrdinaryUnmarked,
+            6 => ShapeObjectKind::OrdinaryNumericProof,
             _ => ShapeObjectKind::Ordinary,
         }
     }
@@ -247,7 +279,7 @@ impl ShapeRecord {
         // because `facts_match` compares the full enum.
         let kind_bits = (object_kind.code() as u32) << RECORD_KIND_SHIFT;
         debug_assert!(kind_bits & !RECORD_KIND_MASK == 0, "kind does not fit");
-        ShapeRecord {
+        let mut record = ShapeRecord {
             keys,
             semantic_generation,
             proto_id: 0,
@@ -255,7 +287,106 @@ impl ShapeRecord {
             live_inline_slot_count,
             hole_count,
             flags_and_kind: u32::from(flags) | kind_bits,
+            position_bound: 0,
+            rep: 0,
+        };
+        record.refresh_positional();
+        record
+    }
+
+    /// How many leading keys of this shape's list sit AT their own inline
+    /// slot: logical key position `i < bound` IS inline slot `i` of every
+    /// receiver carrying the shape. 0 when the shape cannot answer by position
+    /// at all.
+    ///
+    /// It is a FACT OF THE RECORD, stored in the `position_bound` field
+    /// (POSBOUND) and read here with one load: the megamorphic read confirm
+    /// compares a site's slot guess against it on every latched read.
+    /// [`Self::position_bound_by_facts`] is its definition; every write of one
+    /// of its inputs is followed by [`Self::refresh_positional`]
+    /// (construction, `with_summary`, slab insert, the in-place
+    /// stable-tombstone update), and debug builds assert the stored bound
+    /// against the definition on every read.
+    #[inline]
+    pub(crate) fn position_bound(&self) -> u32 {
+        debug_assert_eq!(
+            self.position_bound,
+            self.position_bound_by_facts(),
+            "the position bound disagrees with the record's facts: {self:?}"
+        );
+        self.position_bound
+    }
+
+    /// The definition of POSBOUND: `min(logical_key_count,
+    /// live_inline_slot_count)` for a shape that answers by position, else 0.
+    /// A key past the key count is another list's (canonical backings are
+    /// shared by a growth chain), and one past the live inline count is
+    /// spilled.
+    #[inline]
+    pub(super) fn position_bound_by_facts(&self) -> u32 {
+        if !self.positional_by_facts() {
+            return 0;
         }
+        self.logical_key_count.min(self.live_inline_slot_count)
+    }
+
+    /// The definition of the positional bit. The conjuncts are
+    /// `js_shape_ordinary_inline_slot_for_key`'s:
+    ///
+    /// * an ordinary LAYOUT (`Ordinary`, and the store facts F-A/F-B that
+    ///   share its layout) — a class shape's slots are its class layout, and a
+    ///   DICTIONARY shape keeps its id across layout changes, so a dictionary
+    ///   receiver must never be matched by position;
+    /// * generation 0 — a descriptor/prototype mutation minted this layout;
+    /// * no tombstones — the answer is only claimed for hole-free lists;
+    /// * no ACCESSOR key in the attribute summary — an accessor key's slot
+    ///   holds its accessor pair, not a value;
+    /// * a keys array at all.
+    ///
+    /// The field representation (`rep`) is deliberately NOT an input: an
+    /// `F64` slot holds a JS Number as raw IEEE bits outside the tag band,
+    /// which is itself a valid NaN-boxed value, so key position `i` is inline
+    /// slot `i` whatever the slot's representation. A shape minted with a
+    /// non-`Any` rep is its own record and gets its own bound from these
+    /// facts at construction and slab insert, like every other shape, and
+    /// deprecating a lane in place (`deprecate_rep_slot`) leaves the bound
+    /// as it is, correctly.
+    #[inline]
+    pub(super) fn positional_by_facts(&self) -> bool {
+        self.object_kind().is_ordinary_layout()
+            && self.semantic_generation == 0
+            && self.hole_count == 0
+            && self.keys != 0
+            && self.summary() & crate::object::key_attrs::SUMMARY_ACCESSOR == 0
+    }
+
+    /// Rewrite POSBOUND from the record's facts.
+    #[inline]
+    pub(super) fn refresh_positional(&mut self) {
+        self.position_bound = self.position_bound_by_facts();
+    }
+
+    /// The stored POSBOUND without the debug agreement assert, for the
+    /// agreement test.
+    #[cfg(test)]
+    pub(super) fn stored_position_bound(&self) -> u32 {
+        self.position_bound
+    }
+
+    /// The stored POSBOUND for the megamorphic read confirm, which must stay
+    /// a GC leaf with no formatting path: the agreement is asserted by
+    /// [`Self::position_bound`] everywhere else and by the census test.
+    #[inline(always)]
+    pub(crate) fn position_bound_raw(&self) -> u32 {
+        self.position_bound
+    }
+
+    /// The same record carrying field representation `rep` (`field_rep`).
+    #[inline]
+    pub(super) fn with_rep(mut self, rep: u64) -> ShapeRecord {
+        debug_assert!(crate::object::field_rep::is_valid(rep), "reserved rep lane");
+        self.rep = rep;
+        self
     }
 
     /// The same record for a receiver whose [[Prototype]] identity is
@@ -280,9 +411,12 @@ impl ShapeRecord {
         hole_count: u32,
         proto_id: u64,
         summary: u8,
+        rep: u64,
     ) -> bool {
         self.proto_id == proto_id
             && self.summary() == summary
+            && crate::object::field_rep::identity(self.rep)
+                == crate::object::field_rep::identity(rep)
             && self.facts_match(
                 keys,
                 logical_key_count,
@@ -330,6 +464,7 @@ impl ShapeRecord {
             self.hole_count,
             self.proto_id,
             self.summary(),
+            self.rep,
         )
     }
 
@@ -350,6 +485,7 @@ impl ShapeRecord {
             object_kind: self.object_kind(),
             hole_count: self.hole_count,
             summary: self.summary(),
+            rep: self.rep,
         }
     }
 }
@@ -380,10 +516,13 @@ pub(super) fn facts_key(
         hole_count,
         0,
         0,
+        0,
     )
 }
 
-/// The seven identity facts, the prototype identity included.
+/// The identity facts, the prototype identity, the attribute summary and the
+/// field representation included.
+#[allow(clippy::too_many_arguments)]
 #[inline]
 pub(super) fn facts_key_proto(
     keys: u64,
@@ -394,6 +533,7 @@ pub(super) fn facts_key_proto(
     hole_count: u32,
     proto_id: u64,
     summary: u8,
+    rep: u64,
 ) -> u64 {
     const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
     const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
@@ -413,6 +553,14 @@ pub(super) fn facts_key_proto(
     // it had before the summary existed.
     if summary != 0 {
         h = fold(h, 0x5_0000 | u64::from(summary));
+    }
+    // The same rule for the field representation: an all-`Any` shape keeps
+    // the key it had before the word existed. The deprecated state is not
+    // identity, so it is masked here as it is in `facts_match_proto`.
+    let rep = crate::object::field_rep::identity(rep);
+    if rep != 0 {
+        h = fold(h, 0x6_0000);
+        h = fold(h, rep);
     }
     // Final avalanche: FNV keeps most of its entropy in the high bits and
     // hashbrown's probe sequence starts from the LOW bits.
@@ -443,27 +591,166 @@ const PAGE_MASK: usize = PAGE_LEN - 1;
 /// the table interior mutability through a shared slab reference: the
 /// collector writes liveness bits and the `keys` word through raw record
 /// pointers while other code holds only copies (`ShapeDescriptor`).
-type Chunk = Box<[UnsafeCell<ShapeRecord>; CHUNK_LEN]>;
+type ChunkCells = [UnsafeCell<ShapeRecord>; CHUNK_LEN];
 
 /// One directory page: `PAGE_LEN` chunk slots.
-type Page = Box<[Option<Chunk>; PAGE_LEN]>;
+type PageSlots = [Slot<ChunkCells>; PAGE_LEN];
 
-fn new_chunk() -> Chunk {
-    let mut v: Vec<UnsafeCell<ShapeRecord>> = Vec::with_capacity(CHUNK_LEN);
-    v.resize_with(CHUNK_LEN, || UnsafeCell::new(ShapeRecord::EMPTY));
-    // Exact length by construction; the conversion moves the allocation.
-    v.into_boxed_slice()
-        .try_into()
-        .unwrap_or_else(|_| unreachable!("chunk vector has CHUNK_LEN cells"))
+/// A directory or page entry: an allocation this slab owns, or the SHARED
+/// all-empty one of its level ([`EMPTY_CHUNK`], [`EMPTY_PAGE`]) — never null.
+/// An absent run therefore reads exactly like a present run of absent
+/// records (`ShapeRecord::EMPTY`: not present, position bound 0), so a
+/// reader walks page → chunk → record with no null test at either level
+/// (the megamorphic read confirm, `ordinary_record_in`). Nothing is ever
+/// written through a shared empty: every writer asks [`Slot::is_shared`]
+/// first and allocates. The slab frees what it owns ([`ShapeSlab::free_dir`]).
+#[repr(transparent)]
+struct Slot<T>(std::ptr::NonNull<T>);
+
+impl<T> Clone for Slot<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+impl<T> Copy for Slot<T> {}
+
+/// A shared all-empty allocation. Never written (see [`Slot`]).
+#[repr(transparent)]
+pub struct SharedEmpty<T>(T);
+// SAFETY: nothing ever writes a shared empty; every reader only loads.
+unsafe impl<T> Sync for SharedEmpty<T> {}
+
+static EMPTY_CHUNK: SharedEmpty<ChunkCells> =
+    SharedEmpty([const { UnsafeCell::new(ShapeRecord::EMPTY) }; CHUNK_LEN]);
+static EMPTY_PAGE: SharedEmpty<PageSlots> = SharedEmpty(
+    // SAFETY: the address of a static is never null.
+    [Slot(unsafe {
+        std::ptr::NonNull::new_unchecked(std::ptr::addr_of!(EMPTY_CHUNK.0) as *mut ChunkCells)
+    }); PAGE_LEN],
+);
+
+trait Level: Sized + 'static {
+    fn shared() -> std::ptr::NonNull<Self>;
+    fn fresh() -> Box<Self>;
 }
 
-fn new_page() -> Page {
-    let mut v: Vec<Option<Chunk>> = Vec::with_capacity(PAGE_LEN);
-    v.resize_with(PAGE_LEN, || None);
-    v.into_boxed_slice()
-        .try_into()
-        .unwrap_or_else(|_| unreachable!("page vector has PAGE_LEN slots"))
+impl Level for ChunkCells {
+    fn shared() -> std::ptr::NonNull<Self> {
+        std::ptr::NonNull::from(&EMPTY_CHUNK.0)
+    }
+    fn fresh() -> Box<Self> {
+        let mut v: Vec<UnsafeCell<ShapeRecord>> = Vec::with_capacity(CHUNK_LEN);
+        v.resize_with(CHUNK_LEN, || UnsafeCell::new(ShapeRecord::EMPTY));
+        // Exact length by construction; the conversion moves the allocation.
+        v.into_boxed_slice()
+            .try_into()
+            .unwrap_or_else(|_| unreachable!("chunk vector has CHUNK_LEN cells"))
+    }
 }
+
+impl Level for PageSlots {
+    fn shared() -> std::ptr::NonNull<Self> {
+        std::ptr::NonNull::from(&EMPTY_PAGE.0)
+    }
+    fn fresh() -> Box<Self> {
+        let mut v: Vec<Slot<ChunkCells>> = Vec::with_capacity(PAGE_LEN);
+        v.resize_with(PAGE_LEN, Slot::empty);
+        v.into_boxed_slice()
+            .try_into()
+            .unwrap_or_else(|_| unreachable!("page vector has PAGE_LEN slots"))
+    }
+}
+
+impl<T: Level> Slot<T> {
+    #[inline]
+    fn empty() -> Self {
+        Slot(T::shared())
+    }
+    #[inline]
+    fn is_shared(self) -> bool {
+        self.0 == T::shared()
+    }
+    /// The owned allocation, or `None` for the shared empty.
+    #[inline]
+    fn owned(&self) -> Option<&T> {
+        // SAFETY: an owned slot points at a live allocation of this slab.
+        (!self.is_shared()).then(|| unsafe { self.0.as_ref() })
+    }
+    #[inline]
+    fn owned_mut(&mut self) -> Option<&mut T> {
+        // SAFETY: as `owned`; `&mut self` is the slab's exclusive borrow.
+        (!self.is_shared()).then(|| unsafe { self.0.as_mut() })
+    }
+    /// The owned allocation, allocating it first if this is the shared empty.
+    #[inline]
+    fn owned_or_alloc(&mut self) -> &mut T {
+        if self.is_shared() {
+            self.0 = std::ptr::NonNull::from(Box::leak(T::fresh()));
+        }
+        // SAFETY: owned now.
+        unsafe { self.0.as_mut() }
+    }
+    /// Free an owned allocation (not its children) and become the shared
+    /// empty.
+    fn release(&mut self) {
+        if !self.is_shared() {
+            // SAFETY: allocated by `owned_or_alloc`, freed once: the slot is
+            // the shared empty afterwards.
+            drop(unsafe { Box::from_raw(self.0.as_ptr()) });
+            self.0 = T::shared();
+        }
+    }
+}
+
+type Page = Slot<PageSlots>;
+
+/// The ordinary directory mirror's type: `(page pointers, page count)`.
+#[repr(C)]
+pub(crate) struct OrdinaryDir {
+    pages: std::cell::Cell<*const Page>,
+    len: std::cell::Cell<usize>,
+}
+
+impl OrdinaryDir {
+    const fn empty() -> Self {
+        OrdinaryDir {
+            pages: std::cell::Cell::new(std::ptr::null()),
+            len: std::cell::Cell::new(0),
+        }
+    }
+    #[inline(always)]
+    fn get(&self) -> (*const Page, usize) {
+        (self.pages.get(), self.len.get())
+    }
+    #[inline]
+    fn set(&self, (pages, len): (*const Page, usize)) {
+        self.pages.set(pages);
+        self.len.set(len);
+    }
+}
+
+/// A directory of no pages, never written: the value of the agent's
+/// shape-directory pointer slot until the agent publishes its own mirror
+/// (`agent_ptrs::PERRY_AGENT_PTRS`), and what a `length` read site passes
+/// (`perry-codegen` `generic_dispatch.rs`). Every id indexes past its length,
+/// so a reader never needs a null test for the directory itself.
+#[no_mangle]
+pub static PERRY_EMPTY_SHAPE_DIR: SharedEmpty<OrdinaryDir> = SharedEmpty(OrdinaryDir::empty());
+
+/// This thread's ordinary page directory as `(page pointers, page count)`:
+/// `ShapeSlab::pages`' element pointer and length, republished after every
+/// change to `pages` (`ShapeSlab::publish_dir`) and cleared before the slab
+/// is dropped. The megamorphic read's slot-guess confirm
+/// ([`ShapeSlab::ordinary_record_in`]) reads it through its ADDRESS, which
+/// emitted code passes from the agent's pointer block, instead of resolving
+/// the runtime state and walking `record_ptr`: the confirm itself then
+/// touches no thread-local (a runtime thread-local access is a
+/// `__tls_get_addr` call on ELF and a TLV thunk call on Darwin, which would
+/// give the stub a frame). `#[thread_local]` (const, no destructor) rather
+/// than `thread_local!`: the address is stable for the thread's life, and a
+/// late read during thread teardown sees the cleared pair.
+#[thread_local]
+static ORDINARY_DIR: OrdinaryDir = OrdinaryDir::empty();
 
 /// The by-id descriptor store. See the module docs.
 /// Two page directories: ordinary ShapeIds index from `SHAPE_ID_BASE`, and the
@@ -473,11 +760,22 @@ fn new_page() -> Page {
 /// that one ~196 KB allocation moved the GC arena's pages relative to the
 /// page-class table window and cost +2.3% instructions (1.65 M vs 0.20 M
 /// registered-page misses in `classify_heap_generation`).
+impl Drop for ShapeSlab {
+    fn drop(&mut self) {
+        if ORDINARY_DIR.get().0 == self.pages.as_ptr() {
+            ORDINARY_DIR.set((std::ptr::null(), 0));
+        }
+        for band in [0u8, 1, 2] {
+            Self::free_dir(self.dir_mut(band));
+        }
+    }
+}
+
 pub(crate) struct ShapeSlab {
-    pages: Vec<Option<Page>>,
-    dict_pages: Vec<Option<Page>>,
+    pages: Vec<Page>,
+    dict_pages: Vec<Page>,
     /// The exotic-receiver band (`shapes::EXOTIC_SHAPE_ID_BASE`).
-    exotic_pages: Vec<Option<Page>>,
+    exotic_pages: Vec<Page>,
     /// Present records.
     len: usize,
 }
@@ -518,7 +816,7 @@ impl ShapeSlab {
     }
 
     #[inline]
-    fn dir(&self, band: u8) -> &Vec<Option<Page>> {
+    fn dir(&self, band: u8) -> &Vec<Page> {
         match band {
             0 => &self.pages,
             1 => &self.dict_pages,
@@ -527,7 +825,7 @@ impl ShapeSlab {
     }
 
     #[inline]
-    fn dir_mut(&mut self, band: u8) -> &mut Vec<Option<Page>> {
+    fn dir_mut(&mut self, band: u8) -> &mut Vec<Page> {
         match band {
             0 => &mut self.pages,
             1 => &mut self.dict_pages,
@@ -558,7 +856,7 @@ impl ShapeSlab {
     pub(super) fn record_ptr(&self, id: u32) -> Option<*mut ShapeRecord> {
         let (dict, index) = Self::index_of(id)?;
         let (page, chunk, slot) = Self::split(index);
-        let chunk = self.dir(dict).get(page)?.as_ref()?[chunk].as_ref()?;
+        let chunk = self.dir(dict).get(page)?.owned()?[chunk].owned()?;
         let cell = chunk[slot].get();
         // SAFETY: the cell belongs to a live chunk owned by this slab; reads
         // and writes are serialized by the single-threaded agent discipline
@@ -587,18 +885,26 @@ impl ShapeSlab {
     /// Install `record` under `id`, allocating the page and chunk on first
     /// touch. Returns the record it replaced, if the id was already present.
     pub(super) fn insert(&mut self, id: u32, mut record: ShapeRecord) -> Option<ShapeRecord> {
-        let (dict, index) =
+        let (band, index) =
             Self::index_of(id).expect("ShapeSlab::insert: id outside the ShapeId range");
         record.set(RECORD_FLAG_PRESENT, true);
         let (page, chunk, slot) = Self::split(index);
-        let dir = self.dir_mut(dict);
+        let dir = self.dir_mut(band);
         if page >= dir.len() {
-            dir.resize_with(page + 1, || None);
+            dir.resize_with(page + 1, Slot::empty);
+            // Only the ordinary band is mirrored (`ORDINARY_DIR`).
+            if band == 0 {
+                self.publish_dir();
+            }
         }
-        let page = dir[page].get_or_insert_with(new_page);
-        let chunk = page[chunk].get_or_insert_with(new_chunk);
+        let dir = self.dir_mut(band);
+        let page = dir[page].owned_or_alloc();
+        let chunk = page[chunk].owned_or_alloc();
         let cell = chunk[slot].get_mut();
         let previous = cell.present().then_some(*cell);
+        // A retire-and-reinsert edits facts on a removed copy: the positional
+        // bit follows them.
+        record.refresh_positional();
         *cell = record;
         if previous.is_none() {
             self.len += 1;
@@ -610,7 +916,7 @@ impl ShapeSlab {
     pub(super) fn remove(&mut self, id: u32) -> Option<ShapeRecord> {
         let (dict, index) = Self::index_of(id)?;
         let (page, chunk, slot) = Self::split(index);
-        let chunk = self.dir_mut(dict).get_mut(page)?.as_mut()?[chunk].as_mut()?;
+        let chunk = self.dir_mut(dict).get_mut(page)?.owned_mut()?[chunk].owned_mut()?;
         let cell = chunk[slot].get_mut();
         if !cell.present() {
             return None;
@@ -626,11 +932,11 @@ impl ShapeSlab {
     pub(super) fn for_each(&self, mut f: impl FnMut(u32, *mut ShapeRecord)) {
         for dict in [0u8, 1, 2] {
             for (page_index, page) in self.dir(dict).iter().enumerate() {
-                let Some(page) = page else {
+                let Some(page) = page.owned() else {
                     continue;
                 };
                 for (chunk_index, chunk) in page.iter().enumerate() {
-                    let Some(chunk) = chunk else {
+                    let Some(chunk) = chunk.owned() else {
                         continue;
                     };
                     let base = ((page_index << PAGE_SHIFT) | chunk_index) << CHUNK_SHIFT;
@@ -662,37 +968,92 @@ impl ShapeSlab {
         for dict in [0u8, 1, 2] {
             let dir = self.dir_mut(dict);
             for page in dir.iter_mut() {
-                let Some(chunks) = page.as_mut() else {
+                let Some(chunks) = page.owned_mut() else {
                     continue;
                 };
                 let mut live_chunks = 0usize;
                 for chunk in chunks.iter_mut() {
                     let empty = chunk
-                        .as_ref()
+                        .owned()
                         .is_some_and(|c| c.iter().all(|cell| !unsafe { (*cell.get()).present() }));
                     if empty {
-                        *chunk = None;
+                        chunk.release();
                     }
-                    if chunk.is_some() {
+                    if !chunk.is_shared() {
                         live_chunks += 1;
                     }
                 }
                 if live_chunks == 0 {
-                    *page = None;
+                    page.release();
                 }
             }
-            while dir.last().is_some_and(Option::is_none) {
+            while dir.last().is_some_and(|p| p.is_shared()) {
                 dir.pop();
             }
             dir.shrink_to_fit();
         }
+        self.publish_dir();
+    }
+
+    /// Publish `pages` for [`Self::ordinary_record_in`] (see [`ORDINARY_DIR`]).
+    fn publish_dir(&self) {
+        ORDINARY_DIR.set((self.pages.as_ptr(), self.pages.len()));
+        // Emitted read sites hand the mirror's address to the miss front
+        // from the agent's pointer block; publish it with the directory.
+        crate::agent_ptrs::publish(
+            crate::agent_ptrs::AGENT_PTR_SHAPE_DIR,
+            Self::ordinary_dir_addr(),
+        );
+    }
+
+    /// The address of THIS thread's [`ORDINARY_DIR`] mirror, as an opaque
+    /// pointer for [`Self::ordinary_record_in`]. Stable for the thread's
+    /// life (a const-initialised `#[thread_local]` with no destructor), so an
+    /// agent publishes it once into its `PERRY_AGENT_PTRS` slot
+    /// (`agent_ptrs::perry_shape_dir_cell`) and emitted code hands it to the
+    /// megamorphic read confirm, which then reads no thread-local at all.
+    #[inline]
+    pub(crate) fn ordinary_dir_addr() -> *const u8 {
+        &ORDINARY_DIR as *const OrdinaryDir as *const u8
+    }
+
+    /// The record of ordinary ShapeId `id` in the slab whose [`ORDINARY_DIR`]
+    /// mirror is at `dir` (an [`Self::ordinary_dir_addr`] of this thread, or
+    /// `PERRY_EMPTY_SHAPE_DIR`), or `None` — the fast twin of [`Self::record_ptr`] for the
+    /// megamorphic read: two dependent directory loads, no `state()`, no
+    /// thread-local access. A dictionary- or exotic-band id indexes past the
+    /// ordinary directory's length. The record may be absent (`EMPTY`): its
+    /// position bound is 0.
+    ///
+    /// # Safety
+    /// `dir` is this thread's [`Self::ordinary_dir_addr`] or
+    /// `PERRY_EMPTY_SHAPE_DIR`; never null.
+    #[inline(always)]
+    pub(super) unsafe fn ordinary_record_in<'a>(
+        dir: *const u8,
+        id: u32,
+    ) -> Option<&'a ShapeRecord> {
+        let (pages, len) = (*(dir as *const OrdinaryDir)).get();
+        let index = id.wrapping_sub(SHAPE_ID_BASE) as usize;
+        let (page, chunk, slot) = Self::split(index);
+        if page >= len {
+            return None;
+        }
+        // SAFETY: `pages` holds `len` entries of this thread's slab, current
+        // as of the last change to it; nothing here can change it. An absent
+        // page or chunk is the shared empty one (`Slot`), never null, so
+        // both levels are plain loads and the record is never null.
+        let page = (*pages.add(page)).0.as_ref();
+        let chunk = page[chunk].0.as_ref();
+        Some(&*chunk[slot].get())
     }
 
     #[cfg(test)]
     pub(super) fn clear(&mut self) {
-        self.pages.clear();
-        self.dict_pages.clear();
-        self.exotic_pages.clear();
+        for band in [0u8, 1, 2] {
+            Self::free_dir(self.dir_mut(band));
+        }
+        self.publish_dir();
         self.len = 0;
     }
 
@@ -706,14 +1067,14 @@ impl ShapeSlab {
             .iter()
             .chain(self.dict_pages.iter())
             .chain(self.exotic_pages.iter())
-            .flatten()
+            .filter_map(Slot::owned)
         {
             pages += 1;
-            chunks += page.iter().filter(|c| c.is_some()).count();
+            chunks += page.iter().filter(|c| !c.is_shared()).count();
         }
         (self.pages.capacity() + self.dict_pages.capacity() + self.exotic_pages.capacity())
-            * std::mem::size_of::<Option<Page>>()
-            + pages * PAGE_LEN * std::mem::size_of::<Option<Chunk>>()
+            * std::mem::size_of::<Page>()
+            + pages * PAGE_LEN * std::mem::size_of::<Slot<ChunkCells>>()
             + chunks * CHUNK_LEN * std::mem::size_of::<ShapeRecord>()
     }
 
@@ -724,9 +1085,22 @@ impl ShapeSlab {
             .iter()
             .chain(self.dict_pages.iter())
             .chain(self.exotic_pages.iter())
-            .flatten()
-            .map(|page| page.iter().filter(|c| c.is_some()).count())
+            .filter_map(Slot::owned)
+            .map(|page| page.iter().filter(|c| !c.is_shared()).count())
             .sum()
+    }
+
+    /// Free every page and chunk a directory owns, and empty it.
+    fn free_dir(dir: &mut Vec<Page>) {
+        for page in dir.iter_mut() {
+            if let Some(chunks) = page.owned_mut() {
+                for chunk in chunks.iter_mut() {
+                    chunk.release();
+                }
+            }
+            page.release();
+        }
+        dir.clear();
     }
 }
 
@@ -1142,6 +1516,35 @@ impl IdList {
 mod tests {
     use super::*;
 
+    /// Every kind survives the record field, and the two store-fact kinds
+    /// (charter step 3) occupy codes 5 and 6 — distinct values, so distinct
+    /// ShapeIds for otherwise identical facts.
+    #[test]
+    fn kind_codes_round_trip() {
+        for kind in [
+            ShapeObjectKind::Ordinary,
+            ShapeObjectKind::Class,
+            ShapeObjectKind::Dictionary,
+            ShapeObjectKind::Function,
+            ShapeObjectKind::FunctionDictionary,
+            ShapeObjectKind::OrdinaryUnmarked,
+            ShapeObjectKind::OrdinaryNumericProof,
+        ] {
+            assert!(kind.code() as u32 <= RECORD_KIND_MAX_CODE);
+            let r = ShapeRecord::new(0x1000, 1, 1, 0, kind, 0);
+            assert_eq!(r.object_kind(), kind);
+            for other in [ShapeObjectKind::Ordinary, ShapeObjectKind::OrdinaryUnmarked] {
+                if other != kind {
+                    assert!(!r.facts_match(0x1000, 1, 1, 0, other, 0));
+                    assert_ne!(
+                        facts_key(0x1000, 1, 1, 0, kind, 0),
+                        facts_key(0x1000, 1, 1, 0, other, 0)
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn slab_records_are_addressed_by_id_and_keep_their_address() {
         let mut slab = ShapeSlab::new();
@@ -1223,9 +1626,14 @@ mod tests {
     ///
     /// 32 -> 40 bytes is deliberate: [[Prototype]] is a shape fact
     /// (`proto_id`), and a 64-bit prototype identity does not fit the padding.
+    /// 40 -> 48 is deliberate too: the per-slot field representation (charter
+    /// step 5, `rep`) is a shape fact with no free bits left to live in.
+    /// 48 -> 56 is deliberate: POSBOUND (`position_bound`, offset 40) is the
+    /// one-compare position fact the megamorphic read confirm needs; `rep`
+    /// moves to offset 48 behind it.
     #[test]
     fn the_record_geometry_is_free_and_facts_key_is_o1() {
-        assert_eq!(std::mem::size_of::<ShapeRecord>(), 40, "record grew");
+        assert_eq!(std::mem::size_of::<ShapeRecord>(), 56, "record grew");
         assert_eq!(std::mem::align_of::<ShapeRecord>(), 8, "record realigned");
 
         // `facts_key` folds the keys ADDRESS; it must never dereference it.
@@ -1286,6 +1694,43 @@ mod tests {
         }
     }
 
+    /// Charter step 5, P1 is inert: an all-`Any` record's facts key is
+    /// EXACTLY the fold it had before the `rep` word existed (recomputed here
+    /// without it), so no existing shape changes bucket.
+    #[test]
+    fn an_all_any_rep_keeps_the_pre_rep_facts_key() {
+        const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+        const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+        let fold = |acc: u64, word: u64| (acc ^ word).wrapping_mul(FNV_PRIME);
+        for kind in [ShapeObjectKind::Ordinary, ShapeObjectKind::Class] {
+            let mut h = fold(FNV_OFFSET_BASIS, 0x1111_2222_3333_4444);
+            for word in [7, 3, 9, 2, kind.code(), 0x77] {
+                h = fold(h, word);
+            }
+            let pre_rep = h ^ (h >> 32);
+            let key = facts_key_proto(0x1111_2222_3333_4444, 7, 3, 9, kind, 2, 0x77, 0, 0);
+            assert_eq!(key, pre_rep, "an all-Any shape must keep its key");
+        }
+    }
+
+    /// `rep` is compared on every bucket hit, not only hashed: a 64-bit fold
+    /// collision must never hand an F64 shape to an all-`Any` request.
+    #[test]
+    fn facts_match_compares_the_rep_identity() {
+        use crate::object::field_rep::{with_slot_rep, REP_F64, REP_F64_DEPRECATED};
+        let f64_at_0 = with_slot_rep(0, 0, REP_F64);
+        let record =
+            ShapeRecord::new(0x40, 1, 1, 0, ShapeObjectKind::Ordinary, 0).with_rep(f64_at_0);
+        let facts =
+            |rep| record.facts_match_proto(0x40, 1, 1, 0, ShapeObjectKind::Ordinary, 0, 0, 0, rep);
+        assert!(facts(f64_at_0));
+        assert!(!facts(0), "same facts, all-Any rep: not this shape");
+        assert!(
+            facts(with_slot_rep(0, 0, REP_F64_DEPRECATED)),
+            "deprecated is not identity"
+        );
+    }
+
     /// Varying any ONE fact must change the key: a fold that dropped a field
     /// would send two different shapes to one bucket for every value of it.
     #[test]
@@ -1330,6 +1775,18 @@ mod tests {
                 "changing `{field}` alone must change the facts key"
             );
         }
+        let rep = facts_key_proto(
+            0x1111_2222_3333_4444,
+            7,
+            3,
+            9,
+            ShapeObjectKind::Ordinary,
+            0,
+            0,
+            0,
+            crate::object::field_rep::REP_F64,
+        );
+        assert_ne!(rep, base, "changing `rep` alone must change the facts key");
         let record = ShapeRecord::new(0x1111_2222_3333_4444, 7, 3, 9, ShapeObjectKind::Ordinary, 0);
         assert_eq!(record.facts_key_with_keys(0x1111_2222_3333_4444), base);
         assert_eq!(

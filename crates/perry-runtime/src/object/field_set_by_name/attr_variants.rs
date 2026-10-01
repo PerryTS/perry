@@ -23,7 +23,7 @@ pub extern "C" fn js_object_set_field_by_name_nonenum(
     // TypedArrays, Temporal cells, etc. are handled by `set_field_by_name`'s own
     // routing and never reach the ordinary enumerable default, so skip them.
     let bits = obj as u64;
-    if (bits >> 48) == 0x7FFE
+    if crate::object::class_value::legacy_class_ptr_word(bits).is_some()
         || crate::value::addr_class::is_handle_band(obj as usize)
         || key.is_null()
     {
@@ -64,7 +64,7 @@ pub extern "C" fn js_object_set_field_by_name_nonconfigurable(
 ) {
     js_object_set_field_by_name(obj, key, value);
     let bits = obj as u64;
-    if (bits >> 48) == 0x7FFE
+    if crate::object::class_value::legacy_class_ptr_word(bits).is_some()
         || crate::value::addr_class::is_handle_band(obj as usize)
         || key.is_null()
     {

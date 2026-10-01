@@ -379,10 +379,17 @@ pub(crate) fn lower_let(
             // reused-slot write below (plain, unchecked) overwrites any TAG_TDZ
             // sentinel with the real value.
             ctx.tdz_boxes.remove(&id);
-            crate::expr::lower_expr(
-                ctx,
-                &perry_hir::Expr::LocalSet(id, Box::new(init_expr.clone())),
-            )?;
+            let set = perry_hir::Expr::LocalSet(id, Box::new(init_expr.clone()));
+            // A region's plan names the original initializer (step 4b).
+            let aliased = match &set {
+                perry_hir::Expr::LocalSet(_, v) => {
+                    crate::stmt::region_loop::alias_clone(ctx, init_expr, v)
+                }
+                _ => Vec::new(),
+            };
+            let lowered = crate::expr::lower_expr(ctx, &set);
+            crate::stmt::region_loop::unalias_clone(ctx, aliased);
+            lowered?;
             // #10488: a hoisted `var`'s real declaration reaches this branch
             // (#1803 predefine-then-declare) and returns before the
             // fresh-declaration path's `insert` runs, desyncing
@@ -403,15 +410,7 @@ pub(crate) fn lower_let(
             // No-init reuse (`let x;`) of a TDZ-seeded box must still end the
             // dead zone by clearing the sentinel to `undefined`; otherwise a
             // later legitimate read of `x` would wrongly throw.
-            if let Some(slot) = ctx.locals.get(&id).cloned() {
-                let blk = ctx.block();
-                let bptr = blk.load(crate::types::I64, &slot);
-                let undef_bits = crate::nanbox::TAG_UNDEFINED_I64.to_string();
-                blk.call_void(
-                    "js_box_set_bits",
-                    &[(crate::types::I64, &bptr), (crate::types::I64, &undef_bits)],
-                );
-            }
+            super::boxed_local_init::end_dead_zone(ctx, id)?;
         }
         return Ok(());
     }
@@ -922,6 +921,7 @@ pub(crate) fn lower_let(
                     let init_val =
                         lower_expr_with_expected_type(ctx, init_expr, Some(&refined_ty))?;
                     let init_bits = ctx.block().bitcast_double_to_i64(&init_val);
+                    let bptr = ctx.block().load(I64, &slot_clone);
                     ctx.block().call_void(
                         "js_box_set_bits",
                         &[(crate::types::I64, &bptr), (I64, &init_bits)],
@@ -933,13 +933,7 @@ pub(crate) fn lower_let(
                 // ends the dead zone by initializing the binding to
                 // `undefined`. Without this the sentinel would survive and a
                 // later legitimate read of `x` would wrongly throw.
-                let slot_clone = ctx.locals[&id].clone();
-                let bptr = ctx.block().load(I64, &slot_clone);
-                let undef_bits = crate::nanbox::TAG_UNDEFINED_I64.to_string();
-                ctx.block().call_void(
-                    "js_box_set_bits",
-                    &[(crate::types::I64, &bptr), (I64, &undef_bits)],
-                );
+                super::boxed_local_init::end_dead_zone(ctx, id)?;
             }
             return Ok(());
         }
@@ -967,7 +961,6 @@ pub(crate) fn lower_let(
             &slot,
             "js_box_alloc_bits",
             &[(I64, crate::nanbox::TAG_UNDEFINED_I64)],
-            super::boxed_frame_release::JS_BOX_SCOPE_RELEASE,
         );
         super::record_boxed_slot_js_value_bits(ctx, id, &box_ptr, "boxed_let.box_ptr_slot");
         // Step 2: register BEFORE lowering init.

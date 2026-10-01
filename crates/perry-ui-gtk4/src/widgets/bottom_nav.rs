@@ -7,7 +7,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 extern "C" {
-    fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+    fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
 }
 
@@ -114,7 +114,7 @@ pub fn add_item(handle: i64, icon_ptr: *const u8, label_ptr: *const u8) {
             if on_select != 0.0 {
                 unsafe {
                     let ptr = js_nanbox_get_pointer(on_select) as *const u8;
-                    js_closure_call1(ptr, item_index as f64);
+                    js_closure_call1(ptr, perry_ffi::JsThis::UNDEFINED, item_index as f64);
                 }
             }
         });

@@ -684,11 +684,8 @@ unsafe fn live_pfx_entries(options: f64) -> Option<Vec<(Vec<u8>, String)>> {
     }
 
     fn string_value(value: perry_ffi::JsValue) -> Option<String> {
-        if !value.is_string() {
-            return None;
-        }
-        perry_ffi::read_string(unsafe { perry_ffi::JsString::from_raw(value.as_string_ptr()) })
-            .map(String::from)
+        // Heap or inline SSO string (#11519): a short passphrase fits inline.
+        value.to_owned_string()
     }
 
     unsafe fn buffer_value(
@@ -930,7 +927,7 @@ pub(crate) unsafe fn check_server_identity_error(
     let cert = scope.root_nanbox(f64::from_bits(perry_ffi::alloc_object().bits()));
     let closure =
         perry_ffi::JsClosure::from_raw(callback.get() as *const perry_ffi::RawClosureHeader);
-    let result = closure.call2(host.get(), cert.get());
+    let result = closure.call2(perry_ffi::JsThis::UNDEFINED, host.get(), cert.get());
     let is_error = perry_ffi::JsValue::from_bits(js_error_is_error(result).to_bits());
     if !is_error.is_bool() || !is_error.to_bool() {
         return None;

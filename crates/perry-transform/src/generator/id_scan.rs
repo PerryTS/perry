@@ -294,7 +294,9 @@ pub fn scan_stmt_for_max_local(stmt: &Stmt, max_id: &mut LocalId) {
 /// function per id) compiled the wrong body for the async-step closure.
 pub fn scan_expr_for_max_local(expr: &Expr, max_id: &mut LocalId) {
     match expr {
-        Expr::LocalGet(id) | Expr::LocalSet(id, _) => *max_id = (*max_id).max(*id),
+        Expr::LocalGet(id) | Expr::LocalSet(id, _) | Expr::ScopedTemp { id, .. } => {
+            *max_id = (*max_id).max(*id)
+        }
         Expr::Update { id, .. } => *max_id = (*max_id).max(*id),
         Expr::ArrayPush { array_id, .. }
         | Expr::ArrayPushSpread { array_id, .. }

@@ -131,7 +131,11 @@ unsafe fn ensure_key_in_keys_array_inner(
             };
             if let Some(handle) = interned.as_ref() {
                 let probe = handle.with_const_ptr::<crate::StringHeader, _>(|interned_key| {
-                    super::super::transition_cache_lookup(prev_shape_id, interned_key)
+                    super::super::transition_cache_lookup_for_value(
+                        prev_shape_id,
+                        interned_key,
+                        None,
+                    )
                 });
                 if let Some((next_keys, slot_idx, target_shape_id)) = probe {
                     let live = crate::object::object_live_slot_count(obj);
@@ -284,7 +288,7 @@ unsafe fn ensure_key_in_keys_array_inner(
     }
     if let (Some(handle), true) = (interned_handle.as_ref(), prev_shape_id != 0) {
         let probe = handle.with_const_ptr::<crate::StringHeader, _>(|interned| {
-            super::super::transition_cache_lookup(prev_shape_id, interned)
+            super::super::transition_cache_lookup_for_value(prev_shape_id, interned, None)
         });
         if let Some((next_keys, slot_idx, target_shape_id)) = probe {
             let live = crate::object::object_live_slot_count(obj);
@@ -697,7 +701,7 @@ pub(crate) unsafe fn install_builtin_getter(proto: *mut ObjectHeader, key: &str,
     // without this the `.name` read returned `""`.
     let getter_ptr = (getter_bits & 0x0000_FFFF_FFFF_FFFF) as usize;
     if getter_ptr >= 0x1000 && crate::closure::is_closure_ptr(getter_ptr) {
-        let func_ptr = (*(getter_ptr as *const crate::closure::ClosureHeader)).func_ptr as usize;
+        let func_ptr = (*(getter_ptr as *const crate::closure::ClosureHeader)).code() as usize;
         crate::builtins::register_function_name_if_absent(func_ptr, &format!("get {key}"));
     }
     set_builtin_accessor_descriptor(

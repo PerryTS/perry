@@ -96,14 +96,18 @@ pub(crate) unsafe fn build_file_io_result(
     f64::from_bits(crate::value::JSValue::pointer(obj as *const u8).bits())
 }
 
-pub(crate) fn make_filehandle_method(fd: i32, func: *const u8) -> f64 {
-    let closure = crate::closure::js_closure_alloc(func, 1);
+pub(crate) fn make_filehandle_method(fd: i32, info: *const crate::closure::JsFunctionInfo) -> f64 {
+    let closure = crate::closure::js_closure_alloc(info, 1);
     crate::closure::js_closure_set_capture_ptr(closure, 0, fd as i64);
     f64::from_bits(crate::value::JSValue::pointer(closure as *const u8).bits())
 }
 
-pub(crate) fn make_filehandle_method_with_handle(fd: i32, handle: f64, func: *const u8) -> f64 {
-    let closure = crate::closure::js_closure_alloc(func, 2);
+pub(crate) fn make_filehandle_method_with_handle(
+    fd: i32,
+    handle: f64,
+    info: *const crate::closure::JsFunctionInfo,
+) -> f64 {
+    let closure = crate::closure::js_closure_alloc(info, 2);
     crate::closure::js_closure_set_capture_ptr(closure, 0, fd as i64);
     crate::closure::js_closure_set_capture_f64(closure, 1, handle);
     f64::from_bits(crate::value::JSValue::pointer(closure as *const u8).bits())
@@ -112,10 +116,10 @@ pub(crate) fn make_filehandle_method_with_handle(fd: i32, handle: f64, func: *co
 fn make_filehandle_method_with_handle_length(
     fd: i32,
     handle: f64,
-    func: *const u8,
+    info: *const crate::closure::JsFunctionInfo,
     length: u32,
 ) -> f64 {
-    let closure = crate::closure::js_closure_alloc(func, 2);
+    let closure = crate::closure::js_closure_alloc(info, 2);
     crate::closure::js_closure_set_capture_ptr(closure, 0, fd as i64);
     crate::closure::js_closure_set_capture_f64(closure, 1, handle);
     crate::object::set_builtin_closure_length(closure as usize, length);
@@ -239,8 +243,8 @@ pub(crate) fn close_filehandle_fd(fd: i32, handle: f64) {
     set_filehandle_field_fd(handle, -1);
 }
 
-fn make_read_lines_method(id: usize, func: *const u8) -> f64 {
-    let closure = crate::closure::js_closure_alloc(func, 1);
+fn make_read_lines_method(id: usize, info: *const crate::closure::JsFunctionInfo) -> f64 {
+    let closure = crate::closure::js_closure_alloc(info, 1);
     crate::closure::js_closure_set_capture_ptr(closure, 0, id as i64);
     f64::from_bits(crate::value::JSValue::pointer(closure as *const u8).bits())
 }
@@ -267,7 +271,11 @@ fn build_read_lines_step(value: f64, done: bool) -> f64 {
     f64::from_bits(crate::value::JSValue::pointer(obj as *const u8).bits())
 }
 
-extern "C" fn read_lines_next_impl(closure: *const ClosureHeader, _arg: f64) -> f64 {
+extern "C" fn read_lines_next_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    _arg: f64,
+) -> f64 {
     let id = read_lines_id(closure);
     let next_line = READ_LINES_REGISTRY.with(|states| {
         let mut states = states.borrow_mut();
@@ -294,7 +302,11 @@ extern "C" fn read_lines_next_impl(closure: *const ClosureHeader, _arg: f64) -> 
     promise_value_fs(build_read_lines_step(value, false))
 }
 
-extern "C" fn read_lines_return_impl(closure: *const ClosureHeader, _arg: f64) -> f64 {
+extern "C" fn read_lines_return_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    _arg: f64,
+) -> f64 {
     READ_LINES_REGISTRY.with(|states| {
         states.borrow_mut().remove(&read_lines_id(closure));
     });
@@ -304,14 +316,20 @@ extern "C" fn read_lines_return_impl(closure: *const ClosureHeader, _arg: f64) -
     ))
 }
 
-extern "C" fn read_lines_close_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn read_lines_close_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     READ_LINES_REGISTRY.with(|states| {
         states.borrow_mut().remove(&read_lines_id(closure));
     });
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
-extern "C" fn read_lines_iterator_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn read_lines_iterator_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     f64::from_bits(crate::closure::js_closure_get_capture_ptr(closure, 0) as u64)
 }
 
@@ -320,7 +338,10 @@ fn install_read_lines_async_iterator(target: f64, iterator: f64) {
     if async_iterator.is_null() {
         return;
     }
-    let closure = crate::closure::js_closure_alloc(read_lines_iterator_impl as *const u8, 1);
+    let closure = crate::closure::js_closure_alloc(
+        crate::fn_info!(read_lines_iterator_impl, 0; with_declared(0)),
+        1,
+    );
     crate::closure::js_closure_set_capture_ptr(closure, 0, iterator.to_bits() as i64);
     let closure_value = f64::from_bits(crate::value::JSValue::pointer(closure as *const u8).bits());
     let symbol_value =
@@ -348,9 +369,9 @@ fn make_filehandle_webstream_callback(
     fd: i32,
     handle: f64,
     auto_close: bool,
-    func: *const u8,
+    info: *const crate::closure::JsFunctionInfo,
 ) -> f64 {
-    let closure = crate::closure::js_closure_alloc(func, 3);
+    let closure = crate::closure::js_closure_alloc(info, 3);
     crate::closure::js_closure_set_capture_ptr(closure, 0, fd as i64);
     crate::closure::js_closure_set_capture_f64(closure, 1, handle);
     crate::closure::js_closure_set_capture_ptr(closure, 2, if auto_close { 1 } else { 0 });
@@ -396,7 +417,10 @@ fn read_filehandle_webstream_chunk(fd: i32) -> Option<Vec<u8>> {
     })
 }
 
-extern "C" fn filehandle_webstream_pull_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn filehandle_webstream_pull_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let handle = webstream_handle(closure);
     let fallback_fd = filehandle_fd(closure);
     let fd = filehandle_field_fd(handle).unwrap_or(fallback_fd);
@@ -412,7 +436,11 @@ extern "C" fn filehandle_webstream_pull_impl(closure: *const ClosureHeader) -> f
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
-extern "C" fn filehandle_webstream_cancel_impl(closure: *const ClosureHeader, _reason: f64) -> f64 {
+extern "C" fn filehandle_webstream_cancel_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    _reason: f64,
+) -> f64 {
     let handle = webstream_handle(closure);
     let fallback_fd = filehandle_fd(closure);
     let fd = filehandle_field_fd(handle).unwrap_or(fallback_fd);
@@ -441,6 +469,7 @@ fn readable_webstream_auto_close(options: f64) -> bool {
 
 pub(crate) extern "C" fn filehandle_readable_web_stream_impl(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     options: f64,
 ) -> f64 {
     let raw = READABLE_WEB_STREAM_FACTORY.load(Ordering::Acquire);
@@ -462,14 +491,15 @@ pub(crate) extern "C" fn filehandle_readable_web_stream_impl(
         fd,
         handle,
         auto_close,
-        filehandle_webstream_pull_impl as *const u8,
+        crate::fn_info!(filehandle_webstream_pull_impl, 0; with_declared(0)),
     );
     let cancel = make_filehandle_webstream_callback(
         fd,
         handle,
         auto_close,
-        filehandle_webstream_cancel_impl as *const u8,
+        crate::fn_info!(filehandle_webstream_cancel_impl, 1; with_declared(1)),
     );
+    // NOT-A-JS-BODY: a native Rust helper registered by another crate.
     let factory: ReadableWebStreamFactory = unsafe { std::mem::transmute(raw) };
     unsafe { factory(pull, cancel) }
 }
@@ -602,8 +632,12 @@ fn next_writer_id() -> usize {
     })
 }
 
-fn stream_iter_method(id: usize, self_value: f64, func: *const u8) -> f64 {
-    let closure = crate::closure::js_closure_alloc(func, 2);
+fn stream_iter_method(
+    id: usize,
+    self_value: f64,
+    info: *const crate::closure::JsFunctionInfo,
+) -> f64 {
+    let closure = crate::closure::js_closure_alloc(info, 2);
     crate::closure::js_closure_set_capture_ptr(closure, 0, id as i64);
     crate::closure::js_closure_set_capture_f64(closure, 1, self_value);
     boxed_ptr(closure as *const u8)
@@ -701,7 +735,10 @@ fn read_stream_iter_action(id: usize) -> StreamIterAction {
     })
 }
 
-extern "C" fn stream_iter_next_async_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn stream_iter_next_async_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     match read_stream_iter_action(stream_iter_id(closure)) {
         StreamIterAction::Batch(bytes) => {
             promise_value_fs(build_read_lines_step(build_chunk_batch(&bytes), false))
@@ -714,7 +751,10 @@ extern "C" fn stream_iter_next_async_impl(closure: *const ClosureHeader) -> f64 
     }
 }
 
-extern "C" fn stream_iter_return_async_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn stream_iter_return_async_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let close = STREAM_ITER_REGISTRY.with(|states| {
         let mut states = states.borrow_mut();
         let Some(mut state) = states.remove(&stream_iter_id(closure)) else {
@@ -727,7 +767,10 @@ extern "C" fn stream_iter_return_async_impl(closure: *const ClosureHeader) -> f6
     promise_value_fs(build_read_lines_step(undefined_value(), true))
 }
 
-extern "C" fn stream_iter_next_sync_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn stream_iter_next_sync_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     match read_stream_iter_action(stream_iter_id(closure)) {
         StreamIterAction::Batch(bytes) => build_read_lines_step(build_chunk_batch(&bytes), false),
         StreamIterAction::Done(close) => {
@@ -738,7 +781,10 @@ extern "C" fn stream_iter_next_sync_impl(closure: *const ClosureHeader) -> f64 {
     }
 }
 
-extern "C" fn stream_iter_return_sync_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn stream_iter_return_sync_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let close = STREAM_ITER_REGISTRY.with(|states| {
         let mut states = states.borrow_mut();
         let Some(mut state) = states.remove(&stream_iter_id(closure)) else {
@@ -751,7 +797,10 @@ extern "C" fn stream_iter_return_sync_impl(closure: *const ClosureHeader) -> f64
     build_read_lines_step(undefined_value(), true)
 }
 
-extern "C" fn stream_iter_self_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn stream_iter_self_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     stream_iter_self(closure)
 }
 
@@ -760,14 +809,14 @@ fn build_filehandle_stream_iter_object(id: usize, is_sync: bool) -> f64 {
     let self_value = boxed_ptr(obj as *const u8);
     let (next_fn, return_fn, symbol_name) = if is_sync {
         (
-            stream_iter_next_sync_impl as *const u8,
-            stream_iter_return_sync_impl as *const u8,
+            crate::fn_info!(stream_iter_next_sync_impl, 0; with_declared(0)),
+            crate::fn_info!(stream_iter_return_sync_impl, 0; with_declared(0)),
             "iterator",
         )
     } else {
         (
-            stream_iter_next_async_impl as *const u8,
-            stream_iter_return_async_impl as *const u8,
+            crate::fn_info!(stream_iter_next_async_impl, 0; with_declared(0)),
+            crate::fn_info!(stream_iter_return_async_impl, 0; with_declared(0)),
             "asyncIterator",
         )
     };
@@ -776,7 +825,11 @@ fn build_filehandle_stream_iter_object(id: usize, is_sync: bool) -> f64 {
     install_symbol_method(
         self_value,
         symbol_name,
-        stream_iter_method(id, self_value, stream_iter_self_impl as *const u8),
+        stream_iter_method(
+            id,
+            self_value,
+            crate::fn_info!(stream_iter_self_impl, 0; with_declared(0)),
+        ),
     );
     self_value
 }
@@ -803,7 +856,11 @@ fn build_stream_iter_state(
     }
 }
 
-pub(crate) extern "C" fn filehandle_pull_impl(closure: *const ClosureHeader, options: f64) -> f64 {
+pub(crate) extern "C" fn filehandle_pull_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    options: f64,
+) -> f64 {
     let state = build_stream_iter_state(closure, options);
     let id = next_stream_iter_id();
     STREAM_ITER_REGISTRY.with(|states| {
@@ -814,6 +871,7 @@ pub(crate) extern "C" fn filehandle_pull_impl(closure: *const ClosureHeader, opt
 
 pub(crate) extern "C" fn filehandle_pull_sync_impl(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     options: f64,
 ) -> f64 {
     let state = build_stream_iter_state(closure, options);
@@ -824,8 +882,8 @@ pub(crate) extern "C" fn filehandle_pull_sync_impl(
     build_filehandle_stream_iter_object(id, true)
 }
 
-fn writer_method(id: usize, func: *const u8) -> f64 {
-    let closure = crate::closure::js_closure_alloc(func, 1);
+fn writer_method(id: usize, info: *const crate::closure::JsFunctionInfo) -> f64 {
+    let closure = crate::closure::js_closure_alloc(info, 1);
     crate::closure::js_closure_set_capture_ptr(closure, 0, id as i64);
     boxed_ptr(closure as *const u8)
 }
@@ -917,60 +975,86 @@ fn writer_end_common(id: usize) -> Result<u64, f64> {
     Ok(total)
 }
 
-extern "C" fn writer_write_impl(closure: *const ClosureHeader, data: f64) -> f64 {
+extern "C" fn writer_write_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    data: f64,
+) -> f64 {
     match writer_write_common(writer_id(closure), data, false, true) {
         Ok(_) => promise_undefined_fs(),
         Err(err) => promise_rejected_fs(err),
     }
 }
 
-extern "C" fn writer_writev_impl(closure: *const ClosureHeader, buffers: f64) -> f64 {
+extern "C" fn writer_writev_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    buffers: f64,
+) -> f64 {
     match writer_write_common(writer_id(closure), buffers, true, true) {
         Ok(_) => promise_undefined_fs(),
         Err(err) => promise_rejected_fs(err),
     }
 }
 
-extern "C" fn writer_write_sync_impl(closure: *const ClosureHeader, data: f64) -> f64 {
+extern "C" fn writer_write_sync_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    data: f64,
+) -> f64 {
     match writer_write_common(writer_id(closure), data, false, false) {
         Ok(wrote) => bool_value(wrote),
         Err(err) => crate::exception::js_throw(err),
     }
 }
 
-extern "C" fn writer_writev_sync_impl(closure: *const ClosureHeader, buffers: f64) -> f64 {
+extern "C" fn writer_writev_sync_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    buffers: f64,
+) -> f64 {
     match writer_write_common(writer_id(closure), buffers, true, false) {
         Ok(wrote) => bool_value(wrote),
         Err(err) => crate::exception::js_throw(err),
     }
 }
 
-extern "C" fn writer_end_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn writer_end_impl(closure: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
     match writer_end_common(writer_id(closure)) {
         Ok(total) => promise_value_fs(total as f64),
         Err(err) => promise_rejected_fs(err),
     }
 }
 
-extern "C" fn writer_end_sync_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn writer_end_sync_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     match writer_end_common(writer_id(closure)) {
         Ok(total) => total as f64,
         Err(err) => crate::exception::js_throw(err),
     }
 }
 
-extern "C" fn writer_fail_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn writer_fail_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let _ = writer_end_common(writer_id(closure));
     undefined_value()
 }
 
-extern "C" fn writer_async_dispose_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn writer_async_dispose_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let _ = writer_end_common(writer_id(closure));
     promise_undefined_fs()
 }
 
 pub(crate) extern "C" fn filehandle_writer_impl(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     options: f64,
 ) -> f64 {
     let handle = filehandle_object(closure).unwrap_or(undefined_value());
@@ -1009,43 +1093,59 @@ pub(crate) extern "C" fn filehandle_writer_impl(
     object_set_field(
         obj,
         "write",
-        writer_method(id, writer_write_impl as *const u8),
+        writer_method(id, crate::fn_info!(writer_write_impl, 1; with_declared(1))),
     );
     object_set_field(
         obj,
         "writev",
-        writer_method(id, writer_writev_impl as *const u8),
+        writer_method(id, crate::fn_info!(writer_writev_impl, 1; with_declared(1))),
     );
     object_set_field(
         obj,
         "writeSync",
-        writer_method(id, writer_write_sync_impl as *const u8),
+        writer_method(
+            id,
+            crate::fn_info!(writer_write_sync_impl, 1; with_declared(1)),
+        ),
     );
     object_set_field(
         obj,
         "writevSync",
-        writer_method(id, writer_writev_sync_impl as *const u8),
+        writer_method(
+            id,
+            crate::fn_info!(writer_writev_sync_impl, 1; with_declared(1)),
+        ),
     );
-    object_set_field(obj, "end", writer_method(id, writer_end_impl as *const u8));
+    object_set_field(
+        obj,
+        "end",
+        writer_method(id, crate::fn_info!(writer_end_impl, 0; with_declared(0))),
+    );
     object_set_field(
         obj,
         "endSync",
-        writer_method(id, writer_end_sync_impl as *const u8),
+        writer_method(
+            id,
+            crate::fn_info!(writer_end_sync_impl, 0; with_declared(0)),
+        ),
     );
     object_set_field(
         obj,
         "fail",
-        writer_method(id, writer_fail_impl as *const u8),
+        writer_method(id, crate::fn_info!(writer_fail_impl, 0; with_declared(0))),
     );
     install_symbol_method(
         self_value,
         "dispose",
-        writer_method(id, writer_fail_impl as *const u8),
+        writer_method(id, crate::fn_info!(writer_fail_impl, 0; with_declared(0))),
     );
     install_symbol_method(
         self_value,
         "asyncDispose",
-        writer_method(id, writer_async_dispose_impl as *const u8),
+        writer_method(
+            id,
+            crate::fn_info!(writer_async_dispose_impl, 0; with_declared(0)),
+        ),
     );
     self_value
 }
@@ -1058,7 +1158,10 @@ fn filehandle_close_promise() -> f64 {
     })
 }
 
-pub(crate) extern "C" fn filehandle_close_impl(closure: *const ClosureHeader) -> f64 {
+pub(crate) extern "C" fn filehandle_close_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let fd = filehandle_fd(closure);
     if let Some(handle) = filehandle_object(closure) {
         close_filehandle_fd(filehandle_field_fd(handle).unwrap_or(fd), handle);
@@ -1068,7 +1171,10 @@ pub(crate) extern "C" fn filehandle_close_impl(closure: *const ClosureHeader) ->
     filehandle_close_promise()
 }
 
-pub(crate) extern "C" fn filehandle_sync_impl(closure: *const ClosureHeader) -> f64 {
+pub(crate) extern "C" fn filehandle_sync_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     // Bypass `js_fs_fsync_sync`'s arg-validation: FileHandle may legitimately
     // hold a `-1` fd sentinel from a failed open, and Node's API surfaces that
     // earlier (at `open`), not here.
@@ -1076,12 +1182,19 @@ pub(crate) extern "C" fn filehandle_sync_impl(closure: *const ClosureHeader) -> 
     promise_undefined_fs()
 }
 
-pub(crate) extern "C" fn filehandle_datasync_impl(closure: *const ClosureHeader) -> f64 {
+pub(crate) extern "C" fn filehandle_datasync_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let _ = crate::fs::fdatasync_sync_inner(filehandle_fd(closure));
     promise_undefined_fs()
 }
 
-pub(crate) extern "C" fn filehandle_stat_impl(closure: *const ClosureHeader, options: f64) -> f64 {
+pub(crate) extern "C" fn filehandle_stat_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    options: f64,
+) -> f64 {
     let fd = match live_filehandle_fd_or_ebadf(closure, "fstat") {
         Ok(fd) => fd,
         Err(rejection) => return rejection,
@@ -1089,7 +1202,11 @@ pub(crate) extern "C" fn filehandle_stat_impl(closure: *const ClosureHeader, opt
     promise_value_fs(js_fs_fstat_sync_options(fd as f64, options))
 }
 
-pub(crate) extern "C" fn filehandle_truncate_impl(closure: *const ClosureHeader, len: f64) -> f64 {
+pub(crate) extern "C" fn filehandle_truncate_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    len: f64,
+) -> f64 {
     let fd = match live_filehandle_fd_or_ebadf(closure, "ftruncate") {
         Ok(fd) => fd,
         Err(rejection) => return rejection,
@@ -1100,6 +1217,7 @@ pub(crate) extern "C" fn filehandle_truncate_impl(closure: *const ClosureHeader,
 
 pub(crate) extern "C" fn filehandle_utimes_impl(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     atime: f64,
     mtime: f64,
 ) -> f64 {
@@ -1111,7 +1229,11 @@ pub(crate) extern "C" fn filehandle_utimes_impl(
     promise_undefined_fs()
 }
 
-pub(crate) extern "C" fn filehandle_chmod_impl(closure: *const ClosureHeader, mode: f64) -> f64 {
+pub(crate) extern "C" fn filehandle_chmod_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    mode: f64,
+) -> f64 {
     let fd = match live_filehandle_fd_or_ebadf(closure, "fchmod") {
         Ok(fd) => fd,
         Err(rejection) => return rejection,
@@ -1122,6 +1244,7 @@ pub(crate) extern "C" fn filehandle_chmod_impl(closure: *const ClosureHeader, mo
 
 pub(crate) extern "C" fn filehandle_chown_impl(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     uid: f64,
     gid: f64,
 ) -> f64 {
@@ -1135,6 +1258,7 @@ pub(crate) extern "C" fn filehandle_chown_impl(
 
 pub(crate) extern "C" fn filehandle_read_file_impl(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     encoding: f64,
 ) -> f64 {
     let fd = filehandle_fd(closure);
@@ -1173,6 +1297,7 @@ pub(crate) extern "C" fn filehandle_read_file_impl(
 
 pub(crate) extern "C" fn filehandle_write_file_impl(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     data: f64,
     options: f64,
 ) -> f64 {
@@ -1190,6 +1315,7 @@ pub(crate) extern "C" fn filehandle_write_file_impl(
 
 pub(crate) extern "C" fn filehandle_append_file_impl(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     data: f64,
     options: f64,
 ) -> f64 {
@@ -1205,6 +1331,7 @@ pub(crate) extern "C" fn filehandle_append_file_impl(
 
 pub(crate) extern "C" fn filehandle_read_impl(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     buffer: f64,
     offset: f64,
     length: f64,
@@ -1257,6 +1384,7 @@ pub(crate) extern "C" fn filehandle_read_impl(
 
 pub(crate) extern "C" fn filehandle_write_impl(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     data: f64,
     offset: f64,
     length: f64,
@@ -1287,6 +1415,7 @@ pub(crate) extern "C" fn filehandle_write_impl(
 
 pub(crate) extern "C" fn filehandle_readv_impl(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     buffers: f64,
     position: f64,
 ) -> f64 {
@@ -1304,6 +1433,7 @@ pub(crate) extern "C" fn filehandle_readv_impl(
 
 pub(crate) extern "C" fn filehandle_writev_impl(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     buffers: f64,
     position: f64,
 ) -> f64 {
@@ -1325,6 +1455,7 @@ pub(crate) fn path_for_fd(fd: i32) -> Option<String> {
 
 pub(crate) extern "C" fn filehandle_create_read_stream_impl(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     options: f64,
 ) -> f64 {
     let fallback_fd = filehandle_fd(closure);
@@ -1351,6 +1482,7 @@ pub(crate) extern "C" fn filehandle_create_read_stream_impl(
 
 pub(crate) extern "C" fn filehandle_create_write_stream_impl(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     options: f64,
 ) -> f64 {
     let fallback_fd = filehandle_fd(closure);
@@ -1377,6 +1509,7 @@ pub(crate) extern "C" fn filehandle_create_write_stream_impl(
 
 pub(crate) extern "C" fn filehandle_read_lines_impl(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     options: f64,
 ) -> f64 {
     let fallback_fd = filehandle_fd(closure);
@@ -1441,11 +1574,17 @@ pub(crate) extern "C" fn filehandle_read_lines_impl(
     };
     set_iterator(
         "next",
-        make_read_lines_method(id, read_lines_next_impl as *const u8),
+        make_read_lines_method(
+            id,
+            crate::fn_info!(read_lines_next_impl, 1; with_declared(1)),
+        ),
     );
     set_iterator(
         "return",
-        make_read_lines_method(id, read_lines_return_impl as *const u8),
+        make_read_lines_method(
+            id,
+            crate::fn_info!(read_lines_return_impl, 1; with_declared(1)),
+        ),
     );
     let iterator = f64::from_bits(crate::value::JSValue::pointer(iterator_obj as *const u8).bits());
     install_read_lines_async_iterator(iterator, iterator);
@@ -1455,7 +1594,10 @@ pub(crate) extern "C" fn filehandle_read_lines_impl(
     crate::object::js_object_set_field_by_name(
         interface_obj,
         close_key,
-        make_read_lines_method(id, read_lines_close_impl as *const u8),
+        make_read_lines_method(
+            id,
+            crate::fn_info!(read_lines_close_impl, 0; with_declared(0)),
+        ),
     );
     let interface =
         f64::from_bits(crate::value::JSValue::pointer(interface_obj as *const u8).bits());
@@ -1481,35 +1623,6 @@ fn build_filehandle_object(fd: i32) -> f64 {
     // is minted here, so the thread codec is live from the first moment a
     // probe could ever match.
     crate::thread::arm_fs_thread_codec(&FS_THREAD_CODEC_IMPL);
-    crate::closure::js_register_closure_arity(filehandle_stat_impl as *const u8, 1);
-    crate::closure::js_register_closure_arity(filehandle_write_file_impl as *const u8, 2);
-    crate::closure::js_register_closure_arity(filehandle_append_file_impl as *const u8, 2);
-    crate::closure::js_register_closure_arity(filehandle_read_impl as *const u8, 5);
-    crate::closure::js_register_closure_arity(filehandle_write_impl as *const u8, 5);
-    crate::closure::js_register_closure_arity(filehandle_read_lines_impl as *const u8, 1);
-    crate::closure::js_register_closure_arity(filehandle_readable_web_stream_impl as *const u8, 1);
-    crate::closure::js_register_closure_arity(filehandle_pull_impl as *const u8, 1);
-    crate::closure::js_register_closure_arity(filehandle_pull_sync_impl as *const u8, 1);
-    crate::closure::js_register_closure_arity(filehandle_writer_impl as *const u8, 1);
-    crate::closure::js_register_closure_arity(filehandle_webstream_pull_impl as *const u8, 0);
-    crate::closure::js_register_closure_arity(filehandle_webstream_cancel_impl as *const u8, 1);
-    crate::closure::js_register_closure_arity(read_lines_next_impl as *const u8, 1);
-    crate::closure::js_register_closure_arity(read_lines_return_impl as *const u8, 1);
-    crate::closure::js_register_closure_arity(read_lines_close_impl as *const u8, 0);
-    crate::closure::js_register_closure_arity(read_lines_iterator_impl as *const u8, 0);
-    crate::closure::js_register_closure_arity(stream_iter_next_async_impl as *const u8, 0);
-    crate::closure::js_register_closure_arity(stream_iter_return_async_impl as *const u8, 0);
-    crate::closure::js_register_closure_arity(stream_iter_next_sync_impl as *const u8, 0);
-    crate::closure::js_register_closure_arity(stream_iter_return_sync_impl as *const u8, 0);
-    crate::closure::js_register_closure_arity(stream_iter_self_impl as *const u8, 0);
-    crate::closure::js_register_closure_arity(writer_write_impl as *const u8, 1);
-    crate::closure::js_register_closure_arity(writer_writev_impl as *const u8, 1);
-    crate::closure::js_register_closure_arity(writer_write_sync_impl as *const u8, 1);
-    crate::closure::js_register_closure_arity(writer_writev_sync_impl as *const u8, 1);
-    crate::closure::js_register_closure_arity(writer_end_impl as *const u8, 0);
-    crate::closure::js_register_closure_arity(writer_end_sync_impl as *const u8, 0);
-    crate::closure::js_register_closure_arity(writer_fail_impl as *const u8, 0);
-    crate::closure::js_register_closure_arity(writer_async_dispose_impl as *const u8, 0);
     let obj = crate::object::js_object_alloc(CLASS_ID_FS_FILEHANDLE, 23);
     let handle = f64::from_bits(crate::value::JSValue::pointer(obj as *const u8).bits());
     let set = |name: &str, v: f64| {
@@ -1518,71 +1631,93 @@ fn build_filehandle_object(fd: i32) -> f64 {
     };
     set("fd", fd as f64);
     let close_method =
-        make_filehandle_method_with_handle(fd, handle, filehandle_close_impl as *const u8);
+        make_filehandle_method_with_handle(fd, handle, crate::fn_info!(filehandle_close_impl, 0));
     set("close", close_method);
     install_filehandle_async_dispose(handle, close_method);
     set(
         "sync",
-        make_filehandle_method(fd, filehandle_sync_impl as *const u8),
+        make_filehandle_method(fd, crate::fn_info!(filehandle_sync_impl, 0)),
     );
     set(
         "datasync",
-        make_filehandle_method(fd, filehandle_datasync_impl as *const u8),
+        make_filehandle_method(fd, crate::fn_info!(filehandle_datasync_impl, 0)),
     );
     set(
         "stat",
-        make_filehandle_method_with_handle(fd, handle, filehandle_stat_impl as *const u8),
+        make_filehandle_method_with_handle(
+            fd,
+            handle,
+            crate::fn_info!(filehandle_stat_impl, 1; with_declared(1)),
+        ),
     );
     set(
         "truncate",
-        make_filehandle_method_with_handle(fd, handle, filehandle_truncate_impl as *const u8),
+        make_filehandle_method_with_handle(
+            fd,
+            handle,
+            crate::fn_info!(filehandle_truncate_impl, 1),
+        ),
     );
     set(
         "utimes",
-        make_filehandle_method_with_handle(fd, handle, filehandle_utimes_impl as *const u8),
+        make_filehandle_method_with_handle(fd, handle, crate::fn_info!(filehandle_utimes_impl, 2)),
     );
     set(
         "chmod",
-        make_filehandle_method_with_handle(fd, handle, filehandle_chmod_impl as *const u8),
+        make_filehandle_method_with_handle(fd, handle, crate::fn_info!(filehandle_chmod_impl, 1)),
     );
     set(
         "chown",
-        make_filehandle_method_with_handle(fd, handle, filehandle_chown_impl as *const u8),
+        make_filehandle_method_with_handle(fd, handle, crate::fn_info!(filehandle_chown_impl, 2)),
     );
     set(
         "readFile",
-        make_filehandle_method(fd, filehandle_read_file_impl as *const u8),
+        make_filehandle_method(fd, crate::fn_info!(filehandle_read_file_impl, 1)),
     );
     set(
         "writeFile",
-        make_filehandle_method_with_handle(fd, handle, filehandle_write_file_impl as *const u8),
+        make_filehandle_method_with_handle(
+            fd,
+            handle,
+            crate::fn_info!(filehandle_write_file_impl, 2; with_declared(2)),
+        ),
     );
     set(
         "appendFile",
-        make_filehandle_method_with_handle(fd, handle, filehandle_append_file_impl as *const u8),
+        make_filehandle_method_with_handle(
+            fd,
+            handle,
+            crate::fn_info!(filehandle_append_file_impl, 2; with_declared(2)),
+        ),
     );
     set(
         "read",
-        make_filehandle_method(fd, filehandle_read_impl as *const u8),
+        make_filehandle_method(
+            fd,
+            crate::fn_info!(filehandle_read_impl, 4; with_declared(5)),
+        ),
     );
     set(
         "write",
-        make_filehandle_method(fd, filehandle_write_impl as *const u8),
+        make_filehandle_method(
+            fd,
+            crate::fn_info!(filehandle_write_impl, 4; with_declared(5)),
+        ),
     );
     set(
         "readv",
-        make_filehandle_method(fd, filehandle_readv_impl as *const u8),
+        make_filehandle_method(fd, crate::fn_info!(filehandle_readv_impl, 2)),
     );
     set(
         "writev",
-        make_filehandle_method(fd, filehandle_writev_impl as *const u8),
+        make_filehandle_method(fd, crate::fn_info!(filehandle_writev_impl, 2)),
     );
     set(
         "createReadStream",
         make_filehandle_method_with_handle(
             fd,
             handle,
-            filehandle_create_read_stream_impl as *const u8,
+            crate::fn_info!(filehandle_create_read_stream_impl, 1),
         ),
     );
     set(
@@ -1590,31 +1725,40 @@ fn build_filehandle_object(fd: i32) -> f64 {
         make_filehandle_method_with_handle(
             fd,
             handle,
-            filehandle_create_write_stream_impl as *const u8,
+            crate::fn_info!(filehandle_create_write_stream_impl, 1),
         ),
     );
     set(
         "readLines",
-        make_filehandle_method_with_handle(fd, handle, filehandle_read_lines_impl as *const u8),
+        make_filehandle_method_with_handle(
+            fd,
+            handle,
+            crate::fn_info!(filehandle_read_lines_impl, 1; with_declared(1)),
+        ),
     );
     set(
         "readableWebStream",
         make_filehandle_method_with_handle(
             fd,
             handle,
-            filehandle_readable_web_stream_impl as *const u8,
+            crate::fn_info!(filehandle_readable_web_stream_impl, 1; with_declared(1)),
         ),
     );
     set(
         "pull",
-        make_filehandle_method_with_handle_length(fd, handle, filehandle_pull_impl as *const u8, 0),
+        make_filehandle_method_with_handle_length(
+            fd,
+            handle,
+            crate::fn_info!(filehandle_pull_impl, 1; with_declared(1)),
+            0,
+        ),
     );
     set(
         "pullSync",
         make_filehandle_method_with_handle_length(
             fd,
             handle,
-            filehandle_pull_sync_impl as *const u8,
+            crate::fn_info!(filehandle_pull_sync_impl, 1; with_declared(1)),
             0,
         ),
     );
@@ -1623,7 +1767,7 @@ fn build_filehandle_object(fd: i32) -> f64 {
         make_filehandle_method_with_handle_length(
             fd,
             handle,
-            filehandle_writer_impl as *const u8,
+            crate::fn_info!(filehandle_writer_impl, 1; with_declared(1)),
             0,
         ),
     );

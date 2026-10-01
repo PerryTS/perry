@@ -6,12 +6,12 @@
 //! then, with no runtime call:
 //!
 //! * **own entry** — loads the receiver's inline slot [`MethodEntry::slot`],
-//!   proves the value is a closure whose code pointer equals
-//!   [`MethodEntry::func`], and calls that code pointer directly with the
+//!   proves the value is a closure whose body info equals
+//!   [`MethodEntry::info`], and calls [`MethodEntry::code`] directly with the
 //!   receiver as `this`;
 //! * **inherited entry** ([`METHOD_SITE_INHERITED`] in `slot`) — compares
 //!   [`MethodEntry::gen`] against `PERRY_PROTO_VALIDITY` and calls
-//!   [`MethodEntry::func`] on the memoized closure [`MethodEntry::closure`].
+//!   [`MethodEntry::code`] on the memoized closure [`MethodEntry::closure`].
 //!
 //! Everything else calls [`js_method_site_miss`], which primes the entry when
 //! the facts below hold and then performs the ordinary dispatch.
@@ -27,7 +27,7 @@
 //!   re-stamps the receiver and the word stops matching.
 //! * An own entry re-loads the slot on every call and compares the value's
 //!   code pointer, so a reassigned method (`o.m = other`, no shape change) is
-//!   seen at once. The code pointer, not the closure, is compared: a factory
+//!   seen at once. The body info, not the closure, is compared: a factory
 //!   that returns fresh closures per object shares one body, and the call
 //!   passes the LOADED closure, so each object's captures are its own.
 //! * An inherited entry holds the method closure itself. The chain it was
@@ -86,6 +86,8 @@
 //! a worker never reads a primary-heap closure through a site.
 
 use crate::object::ObjectHeader;
+
+pub(crate) mod read_holder;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// `word` of a site no prime has touched: no receiver word is all-ones.
@@ -112,20 +114,24 @@ pub struct MethodEntry {
     pub word: u64,
     /// Own entry: the inline slot. Inherited entry: [`METHOD_SITE_INHERITED`].
     pub slot: u64,
-    /// The method body's code pointer.
-    pub func: u64,
+    /// The method body's `JsFunctionInfo` (the identity an own hit compares
+    /// the slot closure's info word with).
+    pub info: u64,
     /// Inherited entry: the method closure's address (a STRONG GC root).
     pub closure: usize,
     /// Inherited entry: `PERRY_PROTO_VALIDITY` when the entry was primed.
     pub gen: u64,
+    /// The method body's code address, the hit's call target.
+    pub code: u64,
 }
 
 const EMPTY_ENTRY: MethodEntry = MethodEntry {
     word: METHOD_SITE_EMPTY,
     slot: 0,
-    func: 0,
+    info: 0,
     closure: 0,
     gen: 0,
+    code: 0,
 };
 
 /// Entries per site, all compared by the emitted code (the census: 97.5% of
@@ -147,8 +153,8 @@ pub struct MethodSite {
 #[cfg(target_pointer_width = "64")]
 const _: () = {
     assert!(
-        std::mem::offset_of!(crate::closure::ClosureHeader, func_ptr)
-            == crate::codegen_abi::CLOSURE_FUNC_PTR_OFFSET
+        std::mem::offset_of!(crate::closure::ClosureHeader, info)
+            == crate::codegen_abi::CLOSURE_INFO_OFFSET
     );
     assert!(
         std::mem::offset_of!(crate::closure::ClosureHeader, props)
@@ -156,7 +162,8 @@ const _: () = {
     );
     assert!(std::mem::offset_of!(MethodEntry, word) == crate::codegen_abi::METHOD_SITE_WORD_OFFSET);
     assert!(std::mem::offset_of!(MethodEntry, slot) == crate::codegen_abi::METHOD_SITE_SLOT_OFFSET);
-    assert!(std::mem::offset_of!(MethodEntry, func) == crate::codegen_abi::METHOD_SITE_FUNC_OFFSET);
+    assert!(std::mem::offset_of!(MethodEntry, info) == crate::codegen_abi::METHOD_SITE_INFO_OFFSET);
+    assert!(std::mem::offset_of!(MethodEntry, code) == crate::codegen_abi::METHOD_SITE_CODE_OFFSET);
     assert!(
         std::mem::offset_of!(MethodEntry, closure)
             == crate::codegen_abi::METHOD_SITE_CLOSURE_OFFSET
@@ -196,6 +203,7 @@ static WORKER_AGENTS_EXIST: std::sync::atomic::AtomicBool =
 pub fn note_worker_agent() {
     if !WORKER_AGENTS_EXIST.swap(true, Ordering::SeqCst) {
         super::proto_validity::bump_proto_validity();
+        read_holder::empty_read_holder_entries();
     }
 }
 
@@ -280,8 +288,9 @@ fn stats_report_enabled() -> bool {
                         refused.push_str(&format!(" refused.{}={n}", REFUSALS[i]));
                     }
                 }
+                let (hd, ha, hr) = read_holder::read_holder_stats();
                 eprintln!(
-                    "[method-site] primes_own={a} primes_inherited={b} primes_function={} misses={c} marked_value_write_bumps={}{refused}",
+                    "[method-site] primes_own={a} primes_inherited={b} primes_function={} misses={c} read_holder_primes={hd} read_absent_primes={ha} read_holder_refused={hr} marked_value_write_bumps={}{refused}",
                     method_site_function_primes(),
                     crate::object::proto_validity::marked_value_write_bumps()
                 );
@@ -449,7 +458,7 @@ unsafe fn publish(slot: *mut MethodSiteSlot, entry: MethodEntry) -> bool {
                 && if inherited {
                     e.slot == METHOD_SITE_INHERITED
                 } else {
-                    e.slot == entry.slot && e.func == entry.func
+                    e.slot == entry.slot && e.info == entry.info
                 }
         })
         .or_else(|| {
@@ -470,9 +479,10 @@ unsafe fn publish(slot: *mut MethodSiteSlot, entry: MethodEntry) -> bool {
     let e = &mut site.entries[idx];
     e.word = METHOD_SITE_EMPTY;
     e.slot = entry.slot;
-    e.func = entry.func;
+    e.info = entry.info;
     e.closure = entry.closure;
     e.gen = entry.gen;
+    e.code = entry.code;
     e.word = entry.word;
     true
 }
@@ -554,7 +564,7 @@ unsafe fn prime(slot: *mut MethodSiteSlot, recv: f64, name: &[u8], argc: usize) 
                 }
             }
         };
-        let Some(func) = direct_callable(value, argc) else {
+        let Some(info) = direct_callable(value, argc) else {
             refuse(5);
             return;
         };
@@ -565,7 +575,8 @@ unsafe fn prime(slot: *mut MethodSiteSlot, recv: f64, name: &[u8], argc: usize) 
         let entry = MethodEntry {
             word,
             slot: slot_word,
-            func: func as u64,
+            info: info as *const crate::closure::JsFunctionInfo as u64,
+            code: info.code as u64,
             closure: 0,
             gen: 0,
         };
@@ -620,7 +631,7 @@ unsafe fn prime_function(slot: *mut MethodSiteSlot, addr: usize, name: &[u8], ar
         return;
     }
     let value = field_bits(bag as usize, s);
-    let Some(func) = direct_callable(value, argc) else {
+    let Some(info) = direct_callable(value, argc) else {
         refuse(5);
         return;
     };
@@ -631,7 +642,8 @@ unsafe fn prime_function(slot: *mut MethodSiteSlot, addr: usize, name: &[u8], ar
     let entry = MethodEntry {
         word: std::ptr::read(addr as *const u64),
         slot: s as u64 | METHOD_SITE_FUNCTION_BAG,
-        func: func as u64,
+        info: info as *const crate::closure::JsFunctionInfo as u64,
+        code: info.code as u64,
         closure: 0,
         gen: 0,
     };
@@ -744,10 +756,13 @@ fn is_user_method(value_bits: u64, name: &[u8]) -> bool {
     }
 }
 
-/// The code pointer a site may call for `value` with `argc` arguments, when
-/// the call `js_native_call_value(value, args)` would reach
-/// `func(closure, args...)` with nothing in between.
-unsafe fn direct_callable(value_bits: u64, argc: usize) -> Option<*const u8> {
+/// The body info whose code a site may call for `value` with `argc`
+/// arguments, when the call `js_native_call_value(value, args)` would reach
+/// `code(closure, this, args...)` with nothing in between.
+unsafe fn direct_callable(
+    value_bits: u64,
+    argc: usize,
+) -> Option<&'static crate::closure::JsFunctionInfo> {
     if value_bits & !crate::value::POINTER_MASK != crate::value::POINTER_TAG {
         refuse(12);
         return None;
@@ -759,7 +774,13 @@ unsafe fn direct_callable(value_bits: u64, argc: usize) -> Option<*const u8> {
     }
     let value = f64::from_bits(value_bits);
     let header = addr as *const crate::closure::ClosureHeader;
-    let func = (*header).func_ptr;
+    // The cell is proven a live function object above; a bodiless one has a
+    // null info.
+    let Some(info) = (*header).info.as_ref() else {
+        refuse(17);
+        return None;
+    };
+    let func = info.code;
     if func.is_null()
         || func == crate::closure::BOUND_METHOD_FUNC_PTR
         || func == crate::closure::BOUND_FUNCTION_FUNC_PTR
@@ -776,7 +797,7 @@ unsafe fn direct_callable(value_bits: u64, argc: usize) -> Option<*const u8> {
         refuse(13);
         return None;
     }
-    if crate::closure::lookup_closure_rest_full(func).is_some() {
+    if crate::closure::info_rest(info).is_some() {
         refuse(14);
         return None;
     }
@@ -790,12 +811,11 @@ unsafe fn direct_callable(value_bits: u64, argc: usize) -> Option<*const u8> {
         refuse(15);
         return None;
     }
-    match crate::closure::resolve_strategy(func).kind() {
-        crate::closure::DispatchKind::Direct => Some(func),
+    match crate::closure::resolve_strategy(info).kind() {
         crate::closure::DispatchKind::Arity(declared)
             if declared as usize <= crate::codegen_abi::method_site_padded_argc(argc) =>
         {
-            Some(func)
+            Some(info)
         }
         crate::closure::DispatchKind::Arity(_) => {
             refuse(16);
@@ -877,9 +897,7 @@ unsafe fn prime_inherited(
             refuse(8);
             return;
         };
-        if shape.object_kind != super::shapes::ShapeObjectKind::Ordinary
-            || super::shapes::object_shape_stamp(next) == 0
-        {
+        if !shape.object_kind.is_ordinary_layout() || super::shapes::object_shape_stamp(next) == 0 {
             refuse(8);
             return;
         }
@@ -909,7 +927,7 @@ unsafe fn prime_inherited(
                     return;
                 }
                 let value = field_bits(next_addr, s);
-                let Some(func) = direct_callable(value, argc) else {
+                let Some(info) = direct_callable(value, argc) else {
                     refuse(10);
                     return;
                 };
@@ -920,7 +938,8 @@ unsafe fn prime_inherited(
                 let entry = MethodEntry {
                     word,
                     slot: METHOD_SITE_INHERITED,
-                    func: func as u64,
+                    info: info as *const crate::closure::JsFunctionInfo as u64,
+                    code: info.code as u64,
                     closure: (value & crate::value::POINTER_MASK) as usize,
                     gen,
                 };

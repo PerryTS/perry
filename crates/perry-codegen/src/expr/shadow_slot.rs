@@ -47,7 +47,7 @@ pub(crate) fn expr_is_known_non_pointer_shadow_value(ctx: &FnCtx<'_>, expr: &Exp
             // annotation and remains valid at every read, including loop
             // counters whose back-edge update makes an initializer-only
             // proof ineligible.
-            if ctx.integer_locals.contains(id) || ctx.number_by_construction_locals.contains(id) {
+            if ctx.integer_locals.contains(id) || crate::type_analysis::local_is_number(ctx, *id) {
                 return true;
             }
             // A reserved shadow slot means the local is pointer-possible even
@@ -293,33 +293,20 @@ pub(crate) fn enable_persistent_shadow_slot_for_array_alias(
 }
 
 pub(crate) fn emit_shadow_slot_bind_for_local(ctx: &mut FnCtx<'_>, local_id: u32) {
+    // A scope group's members share the representative's root.
+    let local_id = crate::scope_env::access::slot(ctx, local_id).map_or(local_id, |s| s.rep);
+    if ctx.boxed_vars.contains(&local_id)
+        && !ctx.module_globals.contains_key(&local_id)
+        && !ctx.shadow_slot_map.contains_key(&local_id)
+    {
+        if let Some(slot) = ctx.func.reserve_shadow_slot() {
+            ctx.shadow_slot_map.insert(local_id, slot);
+        }
+    }
     let Some(slot_idx) = ctx.shadow_slot_map.get(&local_id).copied() else {
         return;
     };
     if ctx.persistent_shadow_slots.contains(&slot_idx) {
-        return;
-    }
-    // #8132: a boxed local's alloca never holds a GC-heap value, so rooting it
-    // protects nothing and (under the RS4GC lowering) costs a relocation of
-    // the box pointer at EVERY statepoint it is live across. Every store site
-    // routes through the same `boxed_vars && !module_globals` test
-    // (`stmt/mod.rs` prealloc, `let_stmt.rs`'s boxed arm,
-    // `codegen/arguments.rs::store_param_slot`, `lower_call/new_ctor_args.rs`),
-    // and each of them stores only a `js_box_alloc_bits`-family result or the
-    // TAG_UNDEFINED sentinel into the slot — the VALUE always goes inside the
-    // box. Boxes are `std::alloc` allocations outside the GC heap: no
-    // collector phase moves them, box.rs never frees them (`BOX_REGISTRY` is
-    // monotonic), and the JSValue inside is traced and rewritten by the
-    // registered `scan_box_roots_mut` scanner. All three premises are pinned
-    // by `scripts/gc_root_dominance_check.py`'s IMMOVABLE_SOURCES "box" entry,
-    // whose probes fail the lint if boxes ever become arena-allocated or grow
-    // a free path — at which point this skip must be reverted with them.
-    //
-    // On the webpack-factory monolith of #8132, ~300 preallocated boxes were
-    // live across ~90% of one function's 5.5k statepoints; unbinding them is
-    // what "not modelling every value as a GC pointer where a proof exists"
-    // means for this shape.
-    if ctx.boxed_vars.contains(&local_id) && !ctx.module_globals.contains_key(&local_id) {
         return;
     }
     let Some(local_slot) = ctx.locals.get(&local_id).cloned() else {
@@ -440,7 +427,10 @@ pub(crate) fn root_inlined_ctor_pointer_locals(
     let pointer_locals =
         crate::collectors::collect_pointer_typed_locals(params, body, &flat_const_ids);
     // Slot indices must not depend on HashMap iteration order.
-    let mut ids: Vec<u32> = pointer_locals.keys().copied().collect();
+    let mut ids: Vec<u32> = crate::scope_env::compact_root_slots(pointer_locals, ctx.scope_map)
+        .keys()
+        .copied()
+        .collect();
     ids.sort_unstable();
     for id in ids {
         if !ctx.shadow_slot_map.contains_key(&id) {
@@ -461,23 +451,17 @@ pub(crate) fn emit_shadow_slot_update_for_expr(
     value_reg: &str,
     rhs: &Expr,
 ) {
-    // #6750 follow-up: inside a masked-window region fast copy, a local
-    // flow-refined to Number had its slot cleared at the refinement point
-    // and every subsequent region write stores a proven number — no
-    // per-statement shadow traffic needed until the refinement is dropped
-    // (see `stmt::masked_window_region`).
-    if ctx.masked_region_scalar_locals.contains(&local_id) {
-        return;
-    }
-    // The element-shape clone's preheader checked this accumulator's current
-    // Number tag, and the matcher admits only numeric-preserving writes in a
-    // call-free clone. Its old shadow value may remain conservatively rooted;
-    // the slow clone resumes ordinary mirroring after the scoped fact is gone.
-    if ctx
-        .element_shape_loop_facts
-        .iter()
-        .any(|fact| fact.numeric_accumulator == local_id)
-    {
+    // A clone-scoped Number local (5L): the clone's entry test checked its
+    // current value is a Number and every in-clone write is Number-preserving,
+    // so the shadow slot already holds a non-pointer and keeps doing so. The
+    // old value may remain conservatively rooted; the slow clone resumes
+    // ordinary mirroring after the scope ends. A masked-window fast copy
+    // (#6750) admits a flow-refined local at its refinement point after
+    // clearing the slot, and withdraws it at the first write it cannot prove
+    // Number (`stmt::masked_window_region`). A function-scope Number local
+    // has no slot at all (`codegen::helpers::drop_number_local_root_slots`);
+    // asking the one query keeps both scopes on one rule.
+    if crate::type_analysis::local_is_number(ctx, local_id) {
         return;
     }
     let Some(slot_idx) = ctx.shadow_slot_map.get(&local_id).copied() else {

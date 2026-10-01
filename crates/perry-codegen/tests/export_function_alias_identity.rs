@@ -79,7 +79,7 @@ fn dollar_export_aliases_resolve_function_identity_not_sanitized_spelling() {
                 .next()
                 .unwrap();
             let mut args = if wrapper {
-                vec!["i64 %this_closure".to_string()]
+                vec!["i64 %this_closure".to_string(), "i64 %js_this".to_string()]
             } else {
                 Vec::new()
             };

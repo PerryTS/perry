@@ -530,6 +530,26 @@ pub(crate) fn decide_straight_line_store_outline(
     }
 }
 
+/// 5L (step5 DESIGN §3.4, §4.4): a Number local never holds a pointer, so it
+/// owns no root slot. Every write to a member of the function's Number-local
+/// set (`local_is_number`'s outermost scope) is Number-producing, and every
+/// leaf of that rule yields a canonical double: a boxed Number is outside the
+/// tag band by definition, and each raw lane (typed-array and DataView floats,
+/// F64 field slots, POD fields) is canonicalised where it is read. The value
+/// is therefore never a NaN-box pointer pattern, so it needs no shadow-slot
+/// bind, no lexical-death clear and no incremental root shading.
+///
+/// Called once per body kind (function, method, static method, closure,
+/// module init) after the fact graph is built and after any slot index that
+/// is derived from the unpruned map's size is taken, since the frame keeps
+/// the unpruned size and the retained indices keep their positions.
+pub(crate) fn drop_number_local_root_slots(
+    shadow_slot_map: &mut HashMap<u32, u32>,
+    number_locals: &std::collections::HashSet<u32>,
+) {
+    shadow_slot_map.retain(|id, _| !number_locals.contains(id));
+}
+
 pub(super) fn enable_module_init_shadow_frame(
     func: &mut crate::function::LlFunction,
     stmts: &[perry_hir::Stmt],
@@ -1368,27 +1388,19 @@ pub(super) fn emit_namespace_populator(
                 NamespaceEntryKind::LocalVar { .. } | NamespaceEntryKind::ForeignVar { .. } => {
                     let wrapper = namespace_live_getter_wrapper_symbol(module_prefix, i);
                     let blk = ctx.block();
-                    let handle = blk.call(
-                        I64,
-                        "js_closure_alloc_singleton",
-                        &[(PTR, &format!("@{}", wrapper))],
-                    );
+                    let info = blk.fn_info_ref(&wrapper);
+                    let handle = blk.call(I64, "js_closure_alloc_singleton", &[(PTR, &info)]);
                     crate::expr::nanbox_pointer_inline(blk, &handle)
                 }
                 NamespaceEntryKind::LocalFunction { wrap_symbol } => {
                     let blk = ctx.block();
-                    let handle = blk.call(
-                        I64,
-                        "js_closure_alloc_singleton",
-                        &[(PTR, &format!("@{}", wrap_symbol))],
-                    );
+                    let info = blk.fn_info_ref(wrap_symbol);
+                    let handle = blk.call(I64, "js_closure_alloc_singleton", &[(PTR, &info)]);
                     crate::expr::nanbox_pointer_inline(blk, &handle)
                 }
                 NamespaceEntryKind::LocalClass { class_id } => {
-                    // INT32-tagged class-id NaN-box: 0x7FFE_0000_0000_0000 |
-                    // (class_id & 0xFFFFFFFF). Matches `Expr::ClassRef`.
-                    let bits = crate::nanbox::INT32_TAG | (*class_id as u64 & 0xFFFF_FFFF);
-                    crate::nanbox::double_literal(f64::from_bits(bits))
+                    // The class's function object, as `Expr::ClassRef` lowers.
+                    crate::expr::emit_class_value_cached(ctx, *class_id)
                 }
                 NamespaceEntryKind::ForeignFunction {
                     source_prefix,
@@ -1410,26 +1422,19 @@ pub(super) fn emit_namespace_populator(
                         sanitize_member(source_local)
                     );
                     let arity = *param_count;
-                    let mut wrapper_params: Vec<crate::types::LlvmType> = vec![I64];
-                    wrapper_params.extend(std::iter::repeat_n(DOUBLE, arity));
+                    let wrapper_params = crate::expr::body_call::js_body_param_types(arity);
                     ctx.pending_declares
                         .push((wrapper_name.clone(), DOUBLE, wrapper_params));
                     let blk = ctx.block();
-                    let handle = blk.call(
-                        I64,
-                        "js_closure_alloc_singleton",
-                        &[(PTR, &format!("@{}", wrapper_name))],
-                    );
+                    let info = blk.fn_info_ref(&wrapper_name);
+                    let handle = blk.call(I64, "js_closure_alloc_singleton", &[(PTR, &info)]);
                     crate::expr::nanbox_pointer_inline(blk, &handle)
                 }
                 NamespaceEntryKind::NestedNamespace { .. } if is_self_namespace => {
                     let wrapper = namespace_live_getter_wrapper_symbol(module_prefix, i);
                     let blk = ctx.block();
-                    let handle = blk.call(
-                        I64,
-                        "js_closure_alloc_singleton",
-                        &[(PTR, &format!("@{}", wrapper))],
-                    );
+                    let info = blk.fn_info_ref(&wrapper);
+                    let handle = blk.call(I64, "js_closure_alloc_singleton", &[(PTR, &info)]);
                     crate::expr::nanbox_pointer_inline(blk, &handle)
                 }
                 NamespaceEntryKind::NestedNamespace { source_prefix } => ctx
@@ -1666,7 +1671,7 @@ pub(super) fn callee_binding_resolution_enabled() -> bool {
     })
 }
 
-/// Populate `resolved_arrow_callback_targets` for loop-called immutable callee
+/// Populate `resolved_plain_callback_targets` for loop-called immutable callee
 /// bindings — the generalization of `codegen/method.rs`'s callback-parameter
 /// resolution to plain function and closure bodies, and to captured bindings
 /// and module globals.
@@ -1715,7 +1720,7 @@ pub(super) fn emit_callee_binding_resolutions(
     );
     for (id, arity) in candidates {
         if ctx
-            .resolved_arrow_callback_targets
+            .resolved_plain_callback_targets
             .contains_key(&(id, arity))
         {
             continue;
@@ -1754,7 +1759,13 @@ pub(super) fn emit_callee_binding_resolutions(
             let slot_addr = blk.add(I64, "%this_closure", &offset.to_string());
             let slot_ptr = blk.inttoptr(I64, &slot_addr);
             let bits = blk.load(I64, &slot_ptr);
-            if ctx.boxed_vars.contains(&id) {
+            if let (true, Some(slot)) = (
+                ctx.boxed_vars.contains(&id),
+                crate::scope_env::access::slot(ctx, id),
+            ) {
+                let cell_bits = crate::scope_env::access::read_bits(ctx, id, slot, &bits);
+                ctx.block().bitcast_i64_to_double(&cell_bits)
+            } else if ctx.boxed_vars.contains(&id) {
                 let blk = ctx.block();
                 let cell_bits = blk.call(I64, "js_box_get_bits", &[(I64, &bits)]);
                 ctx.block().bitcast_i64_to_double(&cell_bits)
@@ -1775,10 +1786,10 @@ pub(super) fn emit_callee_binding_resolutions(
         let handle = crate::expr::unbox_to_i64(ctx.block(), &value_box);
         let fn_ptr = ctx.block().call(
             PTR,
-            "js_closure_resolve_arrow_direct_call",
+            "js_closure_resolve_plain_direct_call",
             &[(I64, &handle), (I32, &arity.to_string())],
         );
-        ctx.resolved_arrow_callback_targets
+        ctx.resolved_plain_callback_targets
             .insert((id, arity), fn_ptr);
     }
 }

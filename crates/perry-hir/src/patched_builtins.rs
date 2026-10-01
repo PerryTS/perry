@@ -182,12 +182,16 @@ struct Scanner<'a> {
     /// NAME and not by scope: a same-named binding elsewhere can only add a
     /// patch that never happens, which costs a lookup and never a wrong call.
     proto_aliases: BTreeMap<String, String>,
+    /// Identifiers bound to a builtin namespace (`const M: any = Math`), by
+    /// name for the same reason: a write through one patches the namespace.
+    ns_aliases: BTreeMap<String, String>,
 }
 
 /// Collects `const AP = Array.prototype`-style aliases ahead of the scan, so a
 /// write through one is seen wherever the declaration sits.
 struct AliasCollector<'a> {
     aliases: &'a mut BTreeMap<String, String>,
+    ns_aliases: &'a mut BTreeMap<String, String>,
 }
 
 impl Visit for AliasCollector<'_> {
@@ -195,6 +199,8 @@ impl Visit for AliasCollector<'_> {
         if let (ast::Pat::Ident(name), Some(init)) = (&d.name, &d.init) {
             if let Some(owner) = prototype_receiver(init, &BTreeMap::new()) {
                 self.aliases.insert(name.id.sym.to_string(), owner);
+            } else if let Some(ns) = namespace_receiver(init) {
+                self.ns_aliases.insert(name.id.sym.to_string(), ns);
             }
         }
         d.visit_children_with(self);
@@ -209,7 +215,10 @@ impl Scanner<'_> {
 
     /// A write of property `member` (None = dynamic key) onto `target`.
     fn record_write(&mut self, target: &ast::Expr, member: Option<String>) {
-        if let Some(ns) = namespace_receiver(target) {
+        if let Some(ns) = namespace_receiver(target).or_else(|| match peel(target) {
+            ast::Expr::Ident(id) => self.ns_aliases.get(id.sym.as_ref()).cloned(),
+            _ => None,
+        }) {
             self.add(ns, member);
         } else if let Some(owner) = prototype_receiver(target, &self.proto_aliases) {
             // An index (`Array.prototype[7]`) is an element, not a method any
@@ -354,10 +363,16 @@ impl Visit for Scanner<'_> {
 /// Collect every built-in member write in `module`.
 pub fn scan_module(module: &ast::Module, out: &mut PatchedBuiltins) {
     let mut proto_aliases = BTreeMap::new();
+    let mut ns_aliases = BTreeMap::new();
     module.visit_with(&mut AliasCollector {
         aliases: &mut proto_aliases,
+        ns_aliases: &mut ns_aliases,
     });
-    module.visit_with(&mut Scanner { out, proto_aliases });
+    module.visit_with(&mut Scanner {
+        out,
+        proto_aliases,
+        ns_aliases,
+    });
 }
 
 thread_local! {

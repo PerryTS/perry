@@ -762,6 +762,27 @@ pub fn array_from_full(c: f64, items: f64, mapfn: f64, this_arg: f64) -> f64 {
     if item_bits == TAG_NULL {
         throw_not_iterable("object null");
     }
+    // An inline SSO string has no header for the iterable / array-like probes
+    // below to read (`js_nanbox_get_pointer` answers 0 and the result came out
+    // empty: `Array.from("ab" + "c", f)`, #11519). Materialize it, as
+    // `js_array_from_value` does, rooting the other operands across that one
+    // allocation.
+    if JSValue::from_bits(item_bits).is_short_string() {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let (c, mapfn, this_arg) = (
+            scope.root_nanbox_f64(c),
+            scope.root_nanbox_f64(mapfn),
+            scope.root_nanbox_f64(this_arg),
+        );
+        let hdr = crate::string::js_string_materialize_to_heap(items);
+        let items = crate::value::js_nanbox_string(hdr as i64);
+        return array_from_full(
+            c.get_nanbox_f64(),
+            items,
+            mapfn.get_nanbox_f64(),
+            this_arg.get_nanbox_f64(),
+        );
+    }
 
     // Proxy GetMethod is observable. Resolve it once, retain it across
     // construction, and root iterator state across callbacks that can collect.

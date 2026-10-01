@@ -41,29 +41,41 @@ pub(in crate::codegen) fn compile_static_method(
 
     let ic_base = llmod.ic_counter;
     let buffer_alias_base = llmod.buffer_alias_counter;
+    // The prologue's cache of this class's function object (see
+    // `js_static_this_resolve_class`); thread-local when workers exist, so
+    // each agent caches its own.
+    let class_value_slot = format!("@{llvm_name}__classval");
+    llmod.add_raw_global(format!(
+        "{class_value_slot} = private {}global double 0.0, align 8",
+        if crate::codegen::program_has_worker() {
+            "thread_local "
+        } else {
+            ""
+        }
+    ));
     let lf = llmod.define_function(&llvm_name, DOUBLE, params);
 
     // gh #6206 / #6081: same shadow-frame emission as compile_method — static
     // method bodies were equally invisible to the exact-roots copying minor.
     // One extra slot roots the resolved receiver: static `this` is usually
-    // the non-pointer INT32 class-ref, but `js_static_this_resolve` returns a
+    // the class's pinned function object, but `js_static_this_resolve_class` returns a
     // REAL heap receiver for `C.m.call(x)` / `.apply(x)` / inherited `D.m()`
     // dynamic dispatch, and that object may be reachable only from this slot.
     // #10663: decided before any statement is lowered.
     crate::codegen::helpers::decide_straight_line_store_outline(lf, &f.body);
-    let shadow_slot_map = if crate::codegen::helpers::precise_root_analysis_enabled() {
+    let mut shadow_slot_map = if crate::codegen::helpers::precise_root_analysis_enabled() {
         let flat_const_ids: std::collections::HashSet<u32> =
             cross_module.flat_const_arrays.keys().copied().collect();
-        let m =
-            crate::collectors::collect_pointer_typed_locals(&f.params, &f.body, &flat_const_ids);
+        let m = crate::scope_env::compact_root_slots(
+            crate::collectors::collect_pointer_typed_locals(&f.params, &f.body, &flat_const_ids),
+            &cross_module.scope_map,
+        );
         lf.enable_shadow_frame(m.len() as u32 + 1);
         m
     } else {
         std::collections::HashMap::new()
     };
     let this_shadow_slot_idx = shadow_slot_map.len() as u32;
-    let shadow_slot_clears_after_stmt =
-        crate::collectors::collect_shadow_slot_clear_points(&f.body, &shadow_slot_map);
 
     let _ = lf.create_block("entry");
 
@@ -79,13 +91,9 @@ pub(in crate::codegen) fn compile_static_method(
     // INT32-tagged class-id value `Expr::ClassRef` lowers to) stored in a
     // `this` slot so `this.x` / `this.#x()` / `this[k]` inside the body
     // resolve against the class object via the normal dynamic-dispatch
-    // path. (Previously `this` fell through to `js_implicit_this_get` and
-    // read back `undefined`.)
+    // path. (Previously `this` fell through to a receiver-less read and came
+    // back `undefined`.)
     let class_ref_cid = class_ids.get(&class.name).copied().unwrap_or(class.id);
-    let class_ref_lit = {
-        let bits = crate::nanbox::INT32_TAG | (class_ref_cid as u64 & 0xFFFF_FFFF);
-        crate::nanbox::double_literal(f64::from_bits(bits))
-    };
     let (this_slot, locals): (String, HashMap<u32, String>) = {
         let blk = lf.block_mut(0).unwrap();
         let this_slot = blk.alloca(DOUBLE);
@@ -97,8 +105,11 @@ pub(in crate::codegen) fn compile_static_method(
         // real receiver (test262 class/elements static-private-*).
         let resolved_this = blk.call(
             DOUBLE,
-            "js_static_this_resolve",
-            &[(DOUBLE, &class_ref_lit)],
+            "js_static_this_resolve_class",
+            &[
+                (I32, &(class_ref_cid as i32).to_string()),
+                (PTR, &class_value_slot),
+            ],
         );
         blk.store(DOUBLE, &resolved_this, &this_slot);
         if crate::codegen::helpers::precise_root_analysis_enabled() {
@@ -122,7 +133,7 @@ pub(in crate::codegen) fn compile_static_method(
         }
         (this_slot, map)
     };
-    crate::codegen::arguments::release_boxed_param_slots_at_exit(
+    crate::codegen::arguments::box_rooted_parameter_slots(
         lf,
         &f.params,
         &static_boxed_vars,
@@ -172,6 +183,12 @@ pub(in crate::codegen) fn compile_static_method(
         // #9363: a method body reads the same module-scope views.
         &cross_module.module_global_proven_types,
     );
+    crate::codegen::helpers::drop_number_local_root_slots(
+        &mut shadow_slot_map,
+        native_facts.number_by_construction_locals(),
+    );
+    let shadow_slot_clears_after_stmt =
+        crate::collectors::collect_shadow_slot_clear_points(&f.body, &shadow_slot_map);
 
     // Representation-selection context gates (see codegen/function.rs).
     let repsel_flags =
@@ -255,6 +272,7 @@ pub(in crate::codegen) fn compile_static_method(
         class_field_counts: &cross_module.class_field_counts,
         class_init_chains: &cross_module.class_init_chains,
         class_header_image_globals: &cross_module.class_header_images,
+        class_birth_reps: &cross_module.class_birth_reps,
         imported_class_ctors: &cross_module.imported_class_ctors,
         func_signatures,
         func_synthetic_arguments,
@@ -266,11 +284,12 @@ pub(in crate::codegen) fn compile_static_method(
             .compiler_private_async_i32_control_locals,
         compiler_private_async_i1_control_locals: &cross_module
             .compiler_private_async_i1_control_locals,
+        scope_map: &cross_module.scope_map,
         closure_rest_params,
         local_closure_func_ids: HashMap::new(),
         guard_free_closure_bindings: std::collections::HashSet::new(),
         local_closure_param_counts: HashMap::new(),
-        resolved_arrow_callback_targets: HashMap::new(),
+        resolved_plain_callback_targets: HashMap::new(),
         resolved_versioned_loop_callback_targets: HashMap::new(),
         trusted_box_captures: false,
         versioned_loop_deopt_context: None,
@@ -312,6 +331,7 @@ pub(in crate::codegen) fn compile_static_method(
         // emitted before FnCtx exists here), so clears never get skipped.
         shadow_slots_bound: shadow_slot_map.values().copied().collect(),
         temp_roots: crate::rooting::TempRootPool::default(),
+        scoped_temp_roots: Vec::new(),
         shadow_slot_map,
         persistent_shadow_slots: std::collections::HashSet::new(),
         declared_only_numeric_locals: std::collections::HashSet::new(),
@@ -323,9 +343,10 @@ pub(in crate::codegen) fn compile_static_method(
         class_header_images: HashMap::new(),
         array_length_snapshots: HashMap::new(),
         string_window_array_facts: Vec::new(),
-        masked_region_scalar_locals: std::collections::HashSet::new(),
         suppressed_cleared_shadow_slots: std::collections::HashSet::new(),
         class_field_loop_facts: Vec::new(),
+        region_loops: Vec::new(),
+        region_loop_facts: Vec::new(),
         element_shape_loop_facts: Vec::new(),
         i32_counter_slots: HashMap::new(),
         numeric_accumulator_f64_slots: HashMap::new(),
@@ -454,6 +475,8 @@ pub(in crate::codegen) fn compile_static_method(
         Some(&f.body),
         crate::codegen::arguments::ArgumentsCallee::Undefined,
     );
+    // #10812: throw a catchable RangeError before the native stack runs out.
+    crate::expr::stack_guard::emit_stack_guard(&mut ctx);
     if f.is_async {
         stmt::lower_async_rejecting_stmts(&mut ctx, &f.body).with_context(|| {
             format!("lowering async body of static '{}::{}'", class.name, f.name)

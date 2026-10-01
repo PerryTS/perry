@@ -201,10 +201,21 @@ impl<T: Copy + Default, const N: usize> std::ops::DerefMut for Slots<'_, T, N> {
 /// fewer: `/^[a-z]+_[0-9]+$/` needs 2. Frames and undo entries start empty and
 /// only grow through `rebuffer`, so they are never inline.
 const INLINE_REGISTERS: usize = 8;
-/// Registers the lent cell holds. This array is allocated once per thread, not
-/// per call, so it is sized for the programs a search may bring rather than
-/// for what is cheap to move.
-const LENT_REGISTERS: usize = 32;
+/// The most registers the lent cell will grow to hold (#11549). The cell's
+/// registers are allocated once per thread and kept, so a program up to this
+/// size searches without building per-call buffers after its first call.
+///
+/// This is the bound on what the cell retains for registers, and the reason
+/// it needs no collector accounting: at most `LENT_REGISTERS * 8` bytes
+/// (8 KiB) per thread, whatever programs run. dotenv's `LINE` needs 42 (the
+/// old fixed 32 sent every one of its searches down the owned path); a
+/// program past the bound (hundreds of capture groups) still takes the owned
+/// path, whose buffers the operation's `MemoryBudget` bounds and the
+/// operation frees.
+///
+/// A register count is a property of the program, so the choice between the
+/// two paths is made before any work, never by a failed attempt.
+const LENT_REGISTERS: usize = 1024;
 /// Capture spans an `exec` result can have and still be read without
 /// allocating.
 const INLINE_CAPTURES: usize = 16;
@@ -253,7 +264,9 @@ impl ScratchOwner for MatchBuffers<'_> {
 /// frames and undo entries are the engine's own opaque scratch, exactly as in
 /// the owned buffers this replaces (see this module's header).
 struct ScratchCell {
-    registers: [usize; LENT_REGISTERS],
+    /// Grown on demand to the largest register count a search on this thread
+    /// has needed, never past `LENT_REGISTERS`.
+    registers: Vec<usize>,
     frames: Vec<Frame>,
     undo: Vec<Undo>,
 }
@@ -270,7 +283,7 @@ crate::perry_thread_local! {
     /// costing a `_tlv_get_addr` call — the opposite of what this change is for.
     static LENT_SCRATCH: std::cell::RefCell<ScratchCell> = const {
         std::cell::RefCell::new(ScratchCell {
-            registers: [0; LENT_REGISTERS],
+            registers: Vec::new(),
             frames: Vec::new(),
             undo: Vec::new(),
         })
@@ -304,6 +317,13 @@ crate::perry_thread_local! {
     /// the stride took the poll path rather than infer it from a timing.
     pub(crate) static PRE_SEARCH_POLLS_RUN: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+crate::perry_thread_local! {
+    /// Test-only: how many searches took the owned path (built per-call
+    /// `MatchBuffers`), so a test can assert which path a program took.
+    pub(crate) static OWNED_SEARCHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Run the pre-search poll on one call in `PRE_SEARCH_POLL_STRIDE`.
@@ -398,6 +418,19 @@ fn find_near_lent<'mem, S: ImmutableSubject<Error = OwnerError>>(
             return Ok(Lent::Fallback);
         };
         let cell = &mut *cell;
+        if cell.registers.len() < registers {
+            // Once per thread per new high-water mark; `find_near` has already
+            // checked `registers <= LENT_REGISTERS`. A search initializes the
+            // registers it reads, so the fill value is never observed.
+            if cell
+                .registers
+                .try_reserve_exact(registers - cell.registers.len())
+                .is_err()
+            {
+                return Ok(Lent::Fallback);
+            }
+            cell.registers.resize(registers, 0);
+        }
         // Charged exactly like the owner it replaces: the operation's limit
         // sees the slots a search may use, whether or not they were allocated
         // for it. The thread keeps the memory; the operation only borrows it.
@@ -422,18 +455,14 @@ fn find_near_lent<'mem, S: ImmutableSubject<Error = OwnerError>>(
         // Both views are acquired once for the quantum that decides nearly
         // every per-call search; a `Search` is built and moved only if this
         // one pauses or asks for more scratch.
-        // On an error that is not a capacity request -- WorkLimit,
-        // InvalidProgram, ChangedResources, Cancelled -- `run` returns Err and
-        // drops the scratch and the remaining budget, where `new` + `advance`
-        // left a Search to read `remaining_work()` from. So `*budget` keeps its
-        // entry value and under-counts what the failed call spent. WORK is
-        // usize::MAX on every path here, so nothing observes it today; if a
-        // finite execution budget is ever reintroduced (see #10164/#10165),
-        // this stops being free and wants the engine's failure arm to report
-        // remaining work.
-        let mut search = match Search::run(resources, start, near, scratch, *budget, quantum)
-            .map_err(search_error)?
-        {
+        // A failed run reports the work it left (perex 0.1.10), so the budget
+        // records what the failed call spent, as a failed search did.
+        let run =
+            Search::run(resources, start, near, scratch, *budget, quantum).map_err(|failed| {
+                *budget = Budget::new(failed.remaining_work);
+                search_error(failed.error)
+            })?;
+        let mut search = match run {
             Run::Finished(mut finished) => {
                 *budget = Budget::new(finished.remaining_work());
                 let position = finished.position();
@@ -552,20 +581,18 @@ pub(crate) fn find_near<'mem, S: ImmutableSubject<Error = OwnerError>>(
         }
     }
 
+    #[cfg(test)]
+    OWNED_SEARCHES.with(|n| n.set(n.get() + 1));
     poll()?;
     let buffers = MatchBuffers::new(memory, size)?;
-    // On an error that is not a capacity request -- WorkLimit,
-    // InvalidProgram, ChangedResources, Cancelled -- `run` returns Err and
-    // drops the scratch and the remaining budget, where `new` + `advance`
-    // left a Search to read `remaining_work()` from. So `*budget` keeps its
-    // entry value and under-counts what the failed call spent. WORK is
-    // usize::MAX on every path here, so nothing observes it today; if a
-    // finite execution budget is ever reintroduced (see #10164/#10165),
-    // this stops being free and wants the engine's failure arm to report
-    // remaining work.
-    let mut search = match Search::run(&resources, start, near, buffers, *budget, quantum)
-        .map_err(search_error)?
-    {
+    // A failed run reports the work it left (perex 0.1.10), so the budget
+    // records what the failed call spent, as a failed search did.
+    let run =
+        Search::run(&resources, start, near, buffers, *budget, quantum).map_err(|failed| {
+            *budget = Budget::new(failed.remaining_work);
+            search_error(failed.error)
+        })?;
+    let mut search = match run {
         Run::Finished(mut finished) => {
             *budget = Budget::new(finished.remaining_work());
             let position = finished.position();

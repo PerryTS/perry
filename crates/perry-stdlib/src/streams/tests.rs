@@ -260,7 +260,6 @@ fn stream_runtime_owned_calls_cannot_bypass_provider_abi() {
     for forbidden in [
         "perry_runtime::array::js_",
         "perry_runtime::closure::js_",
-        "perry_runtime::object::js_implicit_this_set",
         "perry_runtime::promise::js_",
     ] {
         assert!(
@@ -422,4 +421,198 @@ fn buffered_tee_demand_skips_only_the_cold_source_hop() {
     let mut streams = READABLE_STREAMS.lock().unwrap();
     streams.remove(&buffered);
     streams.remove(&empty);
+}
+
+/// Not a NaN-boxed value any call passes: "`next()` never ran".
+const NEXT_NOT_CALLED: f64 = 0.5;
+
+/// Records the receiver it was called with in its own capture slot 0 (a slot
+/// the collector sees), so no static holds a heap value.
+extern "C" fn next_recording_this(
+    closure: *const ClosureHeader,
+    this: perry_runtime::closure::JsThis,
+) -> f64 {
+    perry_runtime::closure::js_closure_set_capture_f64(
+        closure as *mut ClosureHeader,
+        0,
+        this.as_f64(),
+    );
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+/// An async-iterable source's `next()` is a METHOD call: the iterator is its
+/// receiver. The body reads `this` only from its receiver parameter, so this
+/// fails if `call_iterator_next` makes a plain call (the body would see
+/// `undefined`).
+#[test]
+fn iterator_next_is_called_with_the_iterator_as_its_receiver() {
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let next = scope.root_raw_mut_ptr(js_closure_alloc(
+        perry_runtime::fn_info!(next_recording_this, 0; with_declared(0)),
+        1,
+    ));
+    perry_runtime::closure::js_closure_set_capture_f64(
+        next.get_raw_mut_ptr::<ClosureHeader>(),
+        0,
+        NEXT_NOT_CALLED,
+    );
+    let iterator_obj = scope.root_raw_mut_ptr(js_object_alloc(0, 1));
+    let key = js_string_from_bytes(b"next".as_ptr(), 4);
+    let next_value = f64::from_bits(
+        JSValue::pointer(next.get_raw_mut_ptr::<ClosureHeader>() as *const u8).bits(),
+    );
+    perry_runtime::object::js_object_set_field_by_name(
+        iterator_obj.get_raw_mut_ptr::<ObjectHeader>(),
+        key,
+        next_value,
+    );
+    let iterator = scope.root_nanbox_f64(f64::from_bits(
+        JSValue::object_ptr(iterator_obj.get_raw_mut_ptr::<ObjectHeader>() as *mut u8).bits(),
+    ));
+
+    let result = unsafe { call_iterator_next(iterator.get_nanbox_f64()) };
+    assert!(result.is_some());
+    let seen = perry_runtime::closure::js_closure_get_capture_f64(
+        next.get_raw_mut_ptr::<ClosureHeader>(),
+        0,
+    );
+    assert_eq!(
+        seen.to_bits(),
+        iterator.get_nanbox_f64().to_bits(),
+        "next() must see the iterator as `this`"
+    );
+}
+
+extern "C" fn collecting_pair_getter(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
+    // Only a numeric stream handle is held in Rust across the collection.
+    let endpoint = perry_runtime::closure::js_closure_get_capture_f64(closure, 0);
+    perry_runtime::gc::gc_collect_minor();
+    endpoint
+}
+
+#[test]
+fn pipe_through_pair_survives_a_moving_getter() {
+    let _serial = serial_guard();
+    struct RestoreGc(i32);
+    impl Drop for RestoreGc {
+        fn drop(&mut self) {
+            perry_runtime::gc::js_gc_write_barriers_emitted(0);
+            perry_runtime::gc::js_gc_force_evacuation_test_override(self.0);
+        }
+    }
+    let _restore = RestoreGc(perry_runtime::gc::js_gc_force_evacuation_test_override(1));
+    perry_runtime::gc::js_gc_write_barriers_emitted(1);
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    unsafe {
+        let undefined = f64::from_bits(TAG_UNDEFINED);
+        let transform =
+            js_transform_stream_new(undefined, undefined, undefined, undefined, undefined);
+        let readable = js_transform_stream_readable(transform);
+        let writable = js_transform_stream_writable(transform);
+        let pair = scope.root_raw_mut_ptr(js_object_alloc(0, 0));
+        let child = scope.root_raw_mut_ptr(js_object_alloc(0, 0));
+        let getter = scope.root_raw_mut_ptr(js_closure_alloc(
+            perry_runtime::fn_info!(collecting_pair_getter, 0; with_declared(0)),
+            1,
+        ));
+        perry_runtime::closure::js_closure_set_capture_f64(
+            getter.get_raw_mut_ptr::<ClosureHeader>(),
+            0,
+            readable,
+        );
+        let key = js_string_from_bytes(b"readable".as_ptr(), 8);
+        perry_runtime::object::js_object_define_accessor(
+            f64::from_bits(
+                JSValue::pointer(pair.get_raw_mut_ptr::<ObjectHeader>() as *const u8).bits(),
+            ),
+            f64::from_bits(JSValue::string_ptr(key).bits()),
+            f64::from_bits(
+                JSValue::pointer(getter.get_raw_mut_ptr::<ClosureHeader>() as *const u8).bits(),
+            ),
+            undefined,
+        );
+        let writer_getter = scope.root_raw_mut_ptr(js_closure_alloc(
+            perry_runtime::fn_info!(collecting_pair_getter, 0; with_declared(0)),
+            1,
+        ));
+        perry_runtime::closure::js_closure_set_capture_f64(
+            writer_getter.get_raw_mut_ptr::<ClosureHeader>(),
+            0,
+            writable,
+        );
+        let key = js_string_from_bytes(b"writable".as_ptr(), 8);
+        perry_runtime::object::js_object_define_accessor(
+            f64::from_bits(
+                JSValue::pointer(pair.get_raw_mut_ptr::<ObjectHeader>() as *const u8).bits(),
+            ),
+            f64::from_bits(JSValue::string_ptr(key).bits()),
+            f64::from_bits(
+                JSValue::pointer(writer_getter.get_raw_mut_ptr::<ClosureHeader>() as *const u8)
+                    .bits(),
+            ),
+            undefined,
+        );
+        let options = scope.root_raw_mut_ptr(js_object_alloc(0, 0));
+        let child_before = child.get_raw_mut_ptr::<ObjectHeader>();
+        let source = alloc_closed_readable() as f64;
+        let output = js_readable_stream_pipe_through_pair(
+            source,
+            f64::from_bits(
+                JSValue::pointer(pair.get_raw_mut_ptr::<ObjectHeader>() as *const u8).bits(),
+            ),
+            f64::from_bits(
+                JSValue::pointer(options.get_raw_mut_ptr::<ObjectHeader>() as *const u8).bits(),
+            ),
+        );
+        assert_eq!(output, readable);
+        assert_ne!(
+            child.get_raw_mut_ptr::<ObjectHeader>(),
+            child_before,
+            "the getter must have performed a moving collection"
+        );
+    }
+}
+
+#[test]
+fn generic_stream_dispatch_preserves_owner_and_controller_alias() {
+    let _serial = serial_guard();
+    let undefined = f64::from_bits(TAG_UNDEFINED);
+    unsafe {
+        let transform =
+            js_transform_stream_new(undefined, undefined, undefined, undefined, undefined);
+        let readable = js_transform_stream_readable(transform);
+        let writable = js_transform_stream_writable(transform);
+        let reader = js_readable_stream_get_reader_with_options(readable, undefined);
+        let writer = js_writable_stream_get_writer(writable);
+        for (handle, wrong_method) in [
+            (readable, "write"),
+            (readable, "releaseLock"),
+            (writable, "enqueue"),
+            (writable, "read"),
+            (reader, "close"),
+            (reader, "getReader"),
+            (writer, "cancel"),
+            (writer, "enqueue"),
+            (transform, "close"),
+        ] {
+            assert!(dispatch_stream_method(handle, wrong_method, &[]).is_none());
+            assert!(dispatch_stream_method(handle, "unknown", &[]).is_none());
+        }
+        assert!(dispatch_stream_method(readable, "enqueue", &[42.0]).is_some());
+        assert!(dispatch_stream_method(reader, "releaseLock", &[]).is_some());
+        assert!(dispatch_stream_method(writer, "releaseLock", &[]).is_some());
+        assert!(dispatch_stream_method(readable, "close", &[]).is_some());
+        assert!(matches!(
+            READABLE_STREAMS
+                .lock()
+                .unwrap()
+                .get(&(readable as usize))
+                .unwrap()
+                .state,
+            ReadableState::Closed
+        ));
+    }
 }
