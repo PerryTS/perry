@@ -201,6 +201,8 @@ impl ConstructionArray {
         if !next.batched {
             return;
         }
+        // GC_STORE_AUDIT(INIT): unpublished destination under the parser's
+        // GC suppression scope; finish installs layout and remembers its slots.
         std::ptr::copy_nonoverlapping(
             crate::array::array_elements_ptr(self.ptr).cast::<JSValue>(),
             crate::array::array_elements_ptr(next.ptr).cast::<JSValue>(),
