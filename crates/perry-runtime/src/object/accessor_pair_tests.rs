@@ -44,6 +44,9 @@ fn a_pair_round_trips_both_forms() {
 #[test]
 fn raw_instance_getter_probe_preserves_setter_only_and_static_refusal() {
     let _lock = crate::gc::global_side_table_test_lock();
+    // This probe validates pair representation, without invoking user code
+    // or collecting between construction of the cases and their assertions.
+    let _no_gc = crate::gc::GcSuppressScope::new();
     unsafe {
         for (acc, answer) in [
             (
@@ -63,6 +66,14 @@ fn raw_instance_getter_probe_preserves_setter_only_and_static_refusal() {
             (
                 Accessor {
                     static_get: 0x5555_1234_5678,
+                    ..Default::default()
+                },
+                None,
+            ),
+            (
+                Accessor {
+                    get: closure_bits(),
+                    raw_set: 0x5555_8765_4320,
                     ..Default::default()
                 },
                 None,

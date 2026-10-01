@@ -486,7 +486,7 @@ unsafe fn class_accessor_walk(recv: *const ObjectHeader, name: &[u8]) -> Option<
         return None;
     }
     let acc = crate::object::accessor_pair::pair_of_value(slot_bits(holder, slot))?;
-    if acc.raw_get == 0 && acc.raw_set == 0 {
+    if acc.raw_get == 0 && (acc.get != 0 || acc.raw_set == 0) {
         return None;
     }
     Some(ClassAccessor {
@@ -1055,6 +1055,34 @@ mod tests {
                 unsafe { try_cached_class_accessor(receiver, &mut slot) }.map(|v| v.as_number()),
                 Some(8.0)
             );
+            // A getter replacement may retain a compiled setter. Neither a
+            // new prime nor an existing hit may mistake it for setter-only.
+            // Keep the deliberate same-shape slot replacement noncollecting.
+            let _no_gc = crate::gc::GcSuppressScope::new();
+            extern "C" fn closure_getter(
+                _closure: *const crate::closure::ClosureHeader,
+                _this: crate::closure::JsThis,
+            ) -> f64 {
+                9.0
+            }
+            let closure = crate::closure::js_closure_alloc(crate::fn_info!(closure_getter, 0), 0);
+            let pair = unsafe {
+                crate::object::accessor_pair::pair_new(crate::object::accessor_pair::Accessor {
+                    get: crate::value::js_nanbox_pointer(closure as i64).to_bits(),
+                    raw_set: getter_eight as *const () as usize,
+                    ..Default::default()
+                })
+            };
+            p2.with_mut_ptr::<ObjectHeader, _>(|holder| unsafe {
+                crate::object::slot_store::store_object_field_slot(
+                    holder,
+                    second.slot as usize,
+                    crate::value::js_nanbox_pointer(pair as i64).to_bits(),
+                );
+                assert_eq!(object_shape_stamp(holder), second.shape);
+            });
+            assert!(unsafe { try_cached_class_accessor(receiver, &mut slot) }.is_none());
+            assert!(unsafe { class_accessor_walk(receiver, b"path") }.is_none());
         });
     }
 

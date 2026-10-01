@@ -212,6 +212,11 @@ pub(crate) unsafe fn raw_instance_getter_of_value(value: u64) -> Option<usize> {
     let w = crate::array::array_elements_ptr(pair);
     let raw_get = raw_of(*w.add(PAIR_RAW_GET));
     let raw_set = raw_of(*w.add(PAIR_RAW_SET));
+    // A compiled setter does not make a closure getter callable through
+    // the raw getter ABI. Let the generic accessor path invoke that closure.
+    if raw_get == 0 && closure_of(*w.add(PAIR_GET)) != 0 {
+        return None;
+    }
     (raw_get != 0 || raw_set != 0).then_some(raw_get)
 }
 
