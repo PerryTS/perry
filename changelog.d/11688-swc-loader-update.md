@@ -7,3 +7,5 @@ the extension boundary exchanges strings and JavaScript values rather than ASTs.
 Add a two-module TypeScript bundling regression that resolves an imported module,
 erases its types, and verifies the emitted JavaScript contains the dependency
 body and entry export without a remaining import.
+
+Retain the declared Windows Inkwell 0.9 dependencies alongside non-Windows 0.10 after integrating main, keeping the resolved lockfile valid for both targets.
