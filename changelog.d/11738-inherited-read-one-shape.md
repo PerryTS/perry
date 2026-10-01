@@ -5,3 +5,5 @@ Reject class accessor cache entries whose closure getter has no compiled getter,
 Use genuine rooted GC objects as pointer keys in the ordered-delete Map test,
 and reload the Map and key addresses after the allocating phase. Native Rust
 boxes do not carry the GC headers inspected by Map key classification.
+
+Honor relinked declared-class prototype chains for inherited reads and preserve the original getter receiver. Keep the Windows Inkwell 0.9 lock entries alongside non-Windows Inkwell 0.10 so locked builds resolve both target manifests.
