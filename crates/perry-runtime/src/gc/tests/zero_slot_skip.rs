@@ -136,13 +136,11 @@ fn a_forwarded_array_refuses_the_skip() {
     }
 }
 
-/// The kind term, and the reason it is a term at all: `GC_LAYOUT_POINTER_FREE`
-/// is NOT an array-only bit. A closure is allocated pointer-free
-/// (`symbol/properties.rs`, #7154) and a typed object with an empty pointer mask
-/// acquires it. Both carry child edges outside the payload, so admitting them
-/// on the payload bit alone would drop those edges silently.
+/// The no-child fast path is array-only. Ordinary objects leave the header
+/// layout bits clear and may still carry shape keys, meta and overflow edges.
+/// Closures can be pointer-free in their capture payload but own other edges.
 #[test]
-fn a_pointer_free_non_array_is_refused_whatever_its_payload_says() {
+fn a_non_array_is_refused_whatever_its_payload_says() {
     let _guard = GcTestIsolationGuard::new();
     unsafe {
         let (obj, _) = alloc_old_test_object(1);
@@ -150,8 +148,8 @@ fn a_pointer_free_non_array_is_refused_whatever_its_payload_says() {
         let obj_header = header_of(obj as usize);
         assert_eq!(
             (*obj_header)._reserved & GC_LAYOUT_STATE_MASK,
-            GC_LAYOUT_POINTER_FREE,
-            "premise: the object really is marked pointer-free"
+            GC_LAYOUT_UNKNOWN,
+            "object allocation leaves header layout bits clear"
         );
         assert!(
             !gc_object_yields_no_child_slots(obj_header),

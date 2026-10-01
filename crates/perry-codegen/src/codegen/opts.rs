@@ -1203,6 +1203,8 @@ pub(crate) struct CrossModuleCtx {
     /// primitive heap cells while preserving closure-shared lifetime.
     pub compiler_private_async_i32_control_locals: std::collections::HashSet<u32>,
     pub compiler_private_async_i1_control_locals: std::collections::HashSet<u32>,
+    /// Scope context object groups (`crate::scope_env`), module-wide.
+    pub scope_map: crate::scope_env::ScopeMap,
     /// Debug/benchmark switch that forces Buffer/Uint8Array accesses through
     /// the generic helper path.
     pub disable_buffer_fast_path: bool,

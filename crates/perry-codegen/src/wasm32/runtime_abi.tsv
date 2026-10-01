@@ -1467,13 +1467,10 @@ js_function_bind	f64	f64,ptr,usize
 js_function_ctor_from_strings	f64	ptr,usize
 js_function_prototype_value_for_read	f64	f64
 js_gc_collect	void	
-js_gc_declare_typed_shape_layout	void	i64,i32u,ptr,i32u,ptr,i32u
 js_gc_enter_unsafe_zone	void	
 js_gc_exit_unsafe_zone	void	
 js_gc_forget_object_layout	void	i64
 js_gc_init	void	
-js_gc_init_typed_shape_layout	void	i64,i32u,ptr,i32u,ptr,i32u
-js_gc_key_add_layout_unknown	void	i64
 js_gc_loop_safepoint	void	
 js_gc_memory_pressure	i32u	i32u
 js_gc_module_collect	f64	
@@ -1494,7 +1491,6 @@ js_gc_temp_root_get	i64	i32u
 js_gc_temp_root_push	i32u	i64
 js_gc_temp_root_set	void	i32u,i64
 js_gc_temp_root_truncate	void	i32u
-js_gc_typed_shape_id_for_keys	i32u	i32u,i64,i32u,ptr,i32u,ptr,i32u,i32u,i64
 js_gc_write_barriers_emitted	void	i32u
 js_ge	i64	i64,i64
 js_generator_attach_closure_prototype	f64	f64,ptr
@@ -3355,6 +3351,9 @@ js_runtime_init	void
 js_runtime_validate_crypto_key_arg	void	f64,ptr,i32u
 js_runtime_validate_integer_arg	void	f64,ptr,i32u,f64,f64
 js_runtime_validate_string_arg	void	f64,ptr,i32u
+js_scope_alloc	i64	i32s,i64
+js_scope_capture_base	i64	i64
+js_scope_set	void	i64,i32s,i64
 js_sea_get_asset	f64	f64,f64
 js_sea_get_asset_as_blob	f64	f64,f64
 js_sea_get_asset_keys	f64	

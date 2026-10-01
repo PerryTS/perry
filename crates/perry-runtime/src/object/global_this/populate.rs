@@ -928,12 +928,11 @@ pub(crate) fn populate_global_this_builtins(singleton_at_entry: *mut ObjectHeade
     // `0 0` here, because a non-zero count is exactly what disables
     // `PER_OBJECT_LAYOUTS_NONEMPTY` for the rest of the process.
     if let Some(started) = bootstrap_started {
-        let (slot_masks, typed) = crate::gc::per_object_layout_table_sizes();
+        let slot_masks = crate::gc::per_object_layout_table_sizes();
         eprintln!(
-            "[gc-globalthis-bootstrap] elapsed_us={} per_object_slot_masks={} per_object_typed_layouts={}",
+            "[gc-globalthis-bootstrap] elapsed_us={} per_object_slot_masks={}",
             started.elapsed().as_micros(),
-            slot_masks,
-            typed
+            slot_masks
         );
     }
 }

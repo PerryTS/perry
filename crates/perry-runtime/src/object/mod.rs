@@ -58,6 +58,7 @@ pub(crate) use test_root_helpers::*;
 pub(crate) mod alloc;
 mod alloc_basic;
 pub(crate) mod alloc_plain;
+mod assign;
 pub use alloc::{
     js_object_alloc, js_object_alloc_fast, js_object_alloc_fast_with_parent,
     js_object_alloc_null_proto, js_object_alloc_with_parent, js_object_coerce,
@@ -65,6 +66,7 @@ pub use alloc::{
 pub(crate) use alloc_basic::object_alloc_plain;
 #[allow(unused_imports)]
 pub(crate) use alloc_plain::mark_object_plain_ordinary;
+pub use assign::*;
 mod json_construction;
 pub(crate) use json_construction::{
     object_from_inline_json_fields, object_from_json_fields_preinstalled,
@@ -1337,6 +1339,13 @@ fn transition_cache_insert(
     if next_keys == 0 {
         return;
     }
+    // Generated transition hits store without the owner layout note. They
+    // must not learn an edge from a numeric-proof predecessor.
+    if shapes::shape_object_kind_by_id(prev_shape_id)
+        == Some(shapes::ShapeObjectKind::OrdinaryNumericProof)
+    {
+        return;
+    }
     if slot_idx > TRANSITION_SLOT_IDX_MASK {
         return;
     }
@@ -1421,9 +1430,8 @@ pub fn scan_overflow_fields_roots_mut(visitor: &mut crate::gc::RuntimeRootVisito
             if visitor.visit_metadata_usize_slot(&mut new_owner) {
                 moved.push((owner, new_owner));
             }
-            // #6495: same contract as `visit_overflow_field_slots_mut` — the
-            // layout mask under-reports overflow pointer slots on paths that
-            // skip `layout_note_slot`, so scan every slot.
+            // Overflow fields are external to the inline ShapeId rep, so scan
+            // every slot.
             for val_bits in fields.iter_mut() {
                 visitor.visit_nanbox_u64_slot(val_bits);
             }
@@ -1446,16 +1454,8 @@ pub(crate) fn visit_overflow_field_slots_mut(owner: usize, mut visit: impl FnMut
     }
     let slots = {
         let map = crate::state::state().object_hot.overflow_fields.borrow();
-        // #6495: visit EVERY overflow slot — never the layout-mask subset.
-        // The per-object slot mask is maintained by `layout_note_slot` at
-        // store time, but not every overflow write path notes (GC owner
-        // moves merge entries via `merge_overflow_fields` with no notes), so
-        // a usable-looking SIDE_MASK can under-report pointer-bearing
-        // overflow slots; the trace would then skip live children and the
-        // sweep frees them while referenced. The Vec's length is the live
-        // overflow region, and objects with large overflow populations are
-        // in UNKNOWN layout state in practice (dynamic-shape stores degrade
-        // the layout), so the mask bought little here.
+        // Overflow slots live outside the inline shape rep; visit every
+        // populated slot regardless of the inline layout.
         match map.get(&owner) {
             Some(fields) if !fields.is_empty() => {
                 let mut slots = Vec::with_capacity(fields.len());
@@ -1901,23 +1901,6 @@ unsafe fn set_object_keys_with_live_rep(
         return;
     }
     let predecessor = shapes::object_shape_descriptor(obj);
-    let keys_changed = predecessor
-        .map(|descriptor| descriptor.keys != keys_array as u64)
-        .unwrap_or(!keys_array.is_null());
-    if keys_changed {
-        // #6893: the object's typed-shape layout descriptor is keyed by its
-        // keys_array (shared per shape via SHAPE_LAYOUTS). A pointer change
-        // makes that exact typed layout inapplicable. This is gated internally
-        // so plain/growing objects and initial construction pay nothing.
-        //
-        // Invalidate while the predecessor stamp is still authoritative.
-        // `layout_mark_unknown` reports the representation change through
-        // typed feedback, whose defensive shape lookup self-heals an
-        // unstamped object. Clearing first therefore let that re-entrant
-        // lookup publish an Ordinary descriptor for a class object; the
-        // structural synchronization below then inherited the wrong kind.
-        mark_object_dynamic_shape_unknown(obj);
-    }
     // #8067/#8113: every visible ShapeId resolves to the exact rooted
     // ordered-keys/live-slot descriptor. Same-pointer appends are versioned
     // inside the helper.
@@ -1938,32 +1921,6 @@ unsafe fn set_object_keys_with_live_rep(
             canonical_keys::note_latched_away(keys);
         }
     }
-}
-
-#[inline]
-// #854: object field-slot bookkeeping helper retained for shape tracking
-#[allow(dead_code)]
-pub(super) unsafe fn note_object_field_slot(
-    obj: *mut ObjectHeader,
-    field_index: usize,
-    value_bits: u64,
-) {
-    crate::gc::layout_note_slot(obj as usize, field_index, value_bits);
-}
-
-#[inline]
-pub(crate) unsafe fn mark_object_dynamic_shape_unknown(obj: *mut ObjectHeader) {
-    if obj.is_null() || (obj as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
-        return;
-    }
-    let header = (obj as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
-    let state = (*header)._reserved & crate::gc::GC_LAYOUT_STATE_MASK;
-    if state != crate::gc::GC_LAYOUT_SIDE_MASK
-        && !crate::gc::layout_has_typed_descriptor(obj as usize)
-    {
-        return;
-    }
-    crate::gc::layout_mark_unknown(obj as *mut u8);
 }
 
 /// #9180: the receiver `[[Set]]` own-key probe, split out to keep `tests.rs`

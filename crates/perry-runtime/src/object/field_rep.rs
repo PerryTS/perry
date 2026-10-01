@@ -107,6 +107,20 @@ pub(crate) fn normalized(rep: u64) -> u64 {
     rep & LANE_LOW
 }
 
+/// One bit per slot 0..[`REP_SLOTS`] whose lane is not `Any` (`F64` or
+/// deprecated `F64`): the slots the collector skips when it traces an object
+/// by its shape (DESIGN §3.1).
+#[inline]
+pub(crate) fn non_any_slot_bits(rep: u64) -> u32 {
+    let mut x = (rep | (rep >> 1)) & LANE_LOW;
+    x = (x | (x >> 1)) & 0x3333_3333_3333_3333;
+    x = (x | (x >> 2)) & 0x0F0F_0F0F_0F0F_0F0F;
+    x = (x | (x >> 4)) & 0x00FF_00FF_00FF_00FF;
+    x = (x | (x >> 8)) & 0x0000_FFFF_0000_FFFF;
+    x = (x | (x >> 16)) & 0x0000_0000_FFFF_FFFF;
+    x as u32
+}
+
 /// The bits an `F64` slot stores for the JS value `value_bits`, or `None`
 /// when the value is not a JS Number (the store generalizes the slot, T4).
 ///
@@ -168,6 +182,15 @@ mod tests {
         );
         assert_eq!(f64_slot_bits(crate::value::TAG_UNDEFINED), None);
         assert_eq!(f64_slot_bits(crate::value::TAG_NULL), None);
+    }
+
+    #[test]
+    fn non_any_slot_bits_has_one_bit_per_non_any_lane() {
+        assert_eq!(non_any_slot_bits(0), 0);
+        assert_eq!(non_any_slot_bits(LANE_LOW), u32::MAX);
+        assert_eq!(non_any_slot_bits(LANE_HIGH), u32::MAX);
+        let rep = with_slot_rep(with_slot_rep(0, 1, REP_F64), 31, REP_F64_DEPRECATED);
+        assert_eq!(non_any_slot_bits(rep), (1 << 1) | (1 << 31));
     }
 
     #[test]

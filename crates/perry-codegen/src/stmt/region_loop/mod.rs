@@ -74,8 +74,8 @@ pub(crate) use self::arrays::{
 use self::bare::note;
 pub(crate) use self::bare::{try_lower_bare_get, try_lower_bare_put, try_lower_fact_add_tree};
 use self::guard::{
-    decode_slots, emit_body_guard_direct, emit_guard, emit_guard_word, field_i16, field_i32,
-    handle_of, lower_recv, store_admission,
+    decode_slots, emit_body_guard_direct, emit_guard, emit_guard_word, field_i32, handle_of,
+    lower_recv, store_admission,
 };
 use self::plan::{
     accesses, assigned, body_nodes, body_refused, fact_tree_leaves, plan, receiver_eligible, Plan,
@@ -96,8 +96,6 @@ const RETIRED_WORD: &str = "-1";
 /// guard's plain compare admits only all-inline words and a second compare, on
 /// the miss side, recognises a spill word.
 const FLIP_I32: &str = "-1073741824";
-/// `OBJ_FLAG_PACKED_NUMERIC_PROOF` (0x80) — DESIGN §6.5a fact F-B.
-const PROOF_FLAG_I16: &str = "128";
 /// `OBJ_FLAG_PLAIN_ORDINARY | OBJ_FLAG_TYPED_ARRAY_PROTO` and its admitted
 /// value — DESIGN §6.5a fact F-A (class-less receivers).
 const CLASSLESS_ADMIT_MASK_I16: &str = "768";

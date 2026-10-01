@@ -154,7 +154,6 @@ unsafe fn try_fast_install(
     }
 
     // ---- Committed: mirror the generic ordinary-object accessor arm. ----
-    super::super::mark_object_dynamic_shape_unknown(obj);
     // Make the key discoverable (hasOwn / keys / getOwnPropertyNames) — the
     // accessor itself lives in the side table, not in a value slot. The key
     // is claimed WITH the attributes installed below (charter step 3), so an

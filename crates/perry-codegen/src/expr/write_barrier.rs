@@ -9,18 +9,11 @@ use super::{lower_expr, FnCtx};
 use crate::block::LlBlock;
 use crate::nanbox::double_literal;
 use crate::native_value::LoweredValue;
-use crate::types::{DOUBLE, I1, I16, I32, I64, I8};
+use crate::types::{DOUBLE, I1, I32, I64, I8};
 
 #[cfg(test)]
 #[path = "generic_overhead_tests.rs"]
 mod generic_overhead_tests;
-
-/// `GC_LAYOUT_STATE_MASK | GC_OBJ_TYPED_LAYOUT_INTACT` (`0xD000`) as a signed
-/// i16 — the emitted IR is textual, so the constant is written the way LLVM
-/// parses an i16 literal (mirrors `class_field_inline_guard`'s convention).
-const LAYOUT_STATE_AND_INTACT_MASK_I16: &str = "-12288";
-/// `GC_LAYOUT_SIDE_MASK | GC_OBJ_TYPED_LAYOUT_INTACT` (`0x9000`), same encoding.
-const LAYOUT_SIDE_MASK_INTACT_I16: &str = "-28672";
 
 /// Gen-GC Phase C2 helper: emit a write barrier after heap-store sites
 /// by default. Only explicit `PERRY_WRITE_BARRIERS=0`/`off`/`false`
@@ -464,7 +457,7 @@ pub(crate) fn emit_scalar_aware_store_gated_on_pointerness(
         (old_bits, value_bits)
     };
     let write_barrier_emitted = write_barrier_needed && crate::codegen::write_barriers_enabled();
-    if !string_addref_needed && !layout_note_needed && !write_barrier_emitted {
+    if !string_addref_needed && !write_barrier_emitted {
         return value_bits;
     }
     let book_idx = ctx.new_block(&format!("{stem}.gc_bookkeeping"));
@@ -769,103 +762,18 @@ pub(crate) fn emit_layout_pointer_bearing_check(blk: &mut LlBlock, value_bits: &
     blk.select(I1, &tagged, I1, &payload_nonzero, &bare)
 }
 
-/// #7511 — a class-field JSValue slot store whose three GC-bookkeeping calls
-/// are placed behind ONE inline, live test of the stored value.
-///
-/// ## Why a live test rather than a wider static proof
-///
-/// The bookkeeping this guards costs 16.1% of `churn_alloc`'s profile on a
-/// program whose stores are all doubles, and #5334 lever D — which elides it
-/// for a value that is a non-pointer BY CONSTRUCTION — never fires there. The
-/// reason is structural, not a missing arm: since the `[#bloat]`
-/// `force_ctor_call` default (`lower_call/new.rs`), a class with its own
-/// constructor is NOT inlined at the `new` site. Its body is compiled once as
-/// the shared `<class>_constructor(this, p0, …)` symbol, and HIR rewrites every
-/// closed-shape object literal into a `New` of a synthesized anon-shape class
-/// with exactly that shape (`lower/context.rs::mint_anon_shape_class`). So the
-/// expression reaching the field store is `Expr::LocalGet(<ctor param>)` — an
-/// LLVM *function argument* of a function shared by every `new` site in the
-/// module, including ones passing pointers. No by-construction proof about that
-/// value can exist, and a declared `v: number` is not a layout fact (CLAUDE.md,
-/// "No runtime type *validation*"): the field legitimately receives a string
-/// through an `any`.
-///
-/// What CAN be decided there is the same question the three callees each ask
-/// first, at runtime, one at a time, across three cross-crate calls. Asking it
-/// ONCE inline and branching over all three is exactly #7501's shape (a live
-/// test at the store standing in for a static claim that cannot be made).
-///
-/// ## Why each call is dead when the test says "no pointer"
-///
-/// - `js_write_barrier_slot` → `write_barrier_slot_inner` opens with
-///   `barrier_child_prologue`, which returns immediately when
-///   `decode_heap_addr(child) == 0`. Nothing else in the barrier runs — not the
-///   incremental-mark shading (there is no heap object to shade), not the
-///   remembered set (a non-pointer publishes no old→young edge).
-/// - `js_string_addref_if_heap_string` is tag-checked and a no-op for every
-///   non-`STRING_TAG` value, SSO short strings included.
-/// - `js_gc_note_slot_layout` for a non-pointer value can only ever CLEAR mask
-///   state, never set it, so skipping it is never the difference between a slot
-///   being scanned and a live child being stranded. That is the identical
-///   argument `class_field_store_needs_layout_note` already ships for the
-///   static case, including its precondition — the caller only reaches here
-///   with `requires_raw_f64 == false`, so the note's raw-f64-mask arm (the one
-///   that MUST downgrade) is unreachable. Turning a static claim into a live
-///   test does not weaken it.
-///
-/// The store itself stays unconditional and outside the branch — only the
-/// bookkeeping moves.
-///
-/// Callers that already proved the value statically pass all three flags
-/// `false`; then no test and no blocks are emitted at all, and lever D's
-/// existing elision is unchanged.
-///
-/// `stem` names the emitted blocks (`<stem>.gc_bookkeeping`,
-/// `<stem>.layout_note`, `<stem>.barrier`). It is not cosmetic: the IR census
-/// that is the ONLY detector for a deleted barrier (#8185) identifies the arm
-/// by its label, so two call sites sharing a stem would let one site's guard
-/// satisfy the other site's assertion. The class-field callers pass
-/// `"class_field_set"`; the static write PIC (#8184) passes `"put.pic"`.
-///
-/// ## The parent's half of the same question (#7871)
-///
-/// The value test answers "does this store publish a heap pointer at all". It
-/// does not answer "does anyone need to know" — and for the shape this emitter
-/// exists to serve, the answer is almost always no. HIR rewrites every
-/// closed-shape object literal into a `new` of a synthesized anon-shape class
-/// (`lower/context.rs::mint_anon_shape_class`), so `{ kind: "num", num: n }`
-/// reaches the shared `<class>_constructor` and writes its fields into an
-/// instance allocated a few instructions earlier **in the nursery**. A nursery
-/// parent is fully retraced by every minor GC, so the edge it publishes is
-/// rediscovered and the remembered-set record is pure cost.
-///
-/// The pointer-bearing arm is therefore itself gated on
-/// [`emit_parent_may_need_remembering_check`] — the identical predicate
-/// `expr/array_push.rs` has carried since #7511, resting on the identical
-/// argument. `Old ⟹ TENURED`, so `!TENURED` can only skip a subset of what the
-/// runtime already skips; and the predicate's second disjunct is the
-/// incremental-cycle count, because skipping the call also skips
-/// `barrier_child_prologue`'s SATB shading, which is not a generational
-/// question.
-///
-/// It is a LIVE header test, never a static claim (#7501's shape): a parent
-/// promoted between its allocation and this store reads `TENURED` here and
-/// takes the barrier. The failure direction is the safe one — a receiver whose
-/// generation the compiler cannot see is exactly a receiver whose header it
-/// reads.
+/// Class-field JSValue slot store. A live pointer test gates the string alias
+/// demotion and write barrier; object tracing derives its layout from ShapeId.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn emit_jsvalue_slot_store_pointer_tested(
     ctx: &mut FnCtx<'_>,
     slot_ptr: &str,
     value_double: &str,
     layout_parent_bits: &str,
-    slot_index: &str,
     string_addref_needed: bool,
-    layout_note_needed: bool,
     barrier_parent_bits: &str,
     slot_addr: &str,
     write_barrier_needed: bool,
-    layout_note_conforming: bool,
     stem: &str,
 ) -> Option<String> {
     {
@@ -882,7 +790,7 @@ pub(crate) fn emit_jsvalue_slot_store_pointer_tested(
     // cost; leaving dead IR in one arm of the A/B is exactly the kind of thing
     // that makes such a comparison lie.
     let write_barrier_emitted = write_barrier_needed && crate::codegen::write_barriers_enabled();
-    if !string_addref_needed && !layout_note_needed && !write_barrier_emitted {
+    if !string_addref_needed && !write_barrier_emitted {
         return None;
     }
     let value_bits = ctx.block().bitcast_double_to_i64(value_double);
@@ -901,43 +809,6 @@ pub(crate) fn emit_jsvalue_slot_store_pointer_tested(
         if string_addref_needed {
             blk.call_void("js_string_addref_if_heap_string", &[(DOUBLE, value_double)]);
         }
-    }
-    // Phase 4b.2 (#5094): a pointer stored into a slot the class's own pointer
-    // mask declares is a `Conforms` no-op inside `layout_note_slot` for every
-    // receiver that carries an intact side-mask descriptor. Test that header
-    // state inline and skip the cross-crate call — see
-    // `class_field_store_layout_note_is_conforming` for why the two together
-    // are a proof, and why the fallback arm is kept rather than eliding
-    // outright.
-    if layout_note_needed && layout_note_conforming {
-        let note_idx = ctx.new_block(&format!("{stem}.layout_note"));
-        let after_idx = ctx.new_block(&format!("{stem}.layout_note.done"));
-        let note_label = ctx.block_label(note_idx);
-        let after_label = ctx.block_label(after_idx);
-        {
-            let blk = ctx.block();
-            // GcHeader precedes the object by 8 bytes; `_reserved` is the i16 at
-            // -6 (same derivation as `class_field_inline_guard`).
-            let obj_ptr = blk.inttoptr(I64, layout_parent_bits);
-            let res_ptr = blk.gep(I8, &obj_ptr, &[(I64, "-6")]);
-            let reserved = blk.load(I16, &res_ptr);
-            // (GC_LAYOUT_STATE_MASK | GC_OBJ_TYPED_LAYOUT_INTACT) == 0xD000,
-            // and the conforming value (GC_LAYOUT_SIDE_MASK | INTACT) == 0x9000.
-            // Written signed because the emitted IR is textual i16.
-            let masked = blk.and(I16, &reserved, LAYOUT_STATE_AND_INTACT_MASK_I16);
-            let conforming = blk.icmp_eq(I16, &masked, LAYOUT_SIDE_MASK_INTACT_I16);
-            blk.cond_br(&conforming, &after_label, &note_label);
-        }
-        ctx.current_block = note_idx;
-        {
-            let blk = ctx.block();
-            emit_layout_note_slot_on_block(blk, layout_parent_bits, slot_index, &value_bits);
-            blk.br(&after_label);
-        }
-        ctx.current_block = after_idx;
-    } else if layout_note_needed {
-        let blk = ctx.block();
-        emit_layout_note_slot_on_block(blk, layout_parent_bits, slot_index, &value_bits);
     }
     if write_barrier_emitted {
         // #7871: the parent's half. `layout_parent_bits` is the receiver's

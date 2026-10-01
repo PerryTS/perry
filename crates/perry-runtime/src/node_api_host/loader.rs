@@ -6,6 +6,7 @@ use std::cell::RefCell;
 #[cfg(unix)]
 use std::ffi::CStr;
 use std::ffi::{c_char, c_void, CString};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 const MANIFEST_SCHEMA: u32 = 1;
@@ -238,21 +239,48 @@ fn verify_addon_payload(root: &Path, addon: &ManifestAddon) -> Result<PathBuf, S
     let mut entry_verified = false;
     for file in &addon.files {
         let path = safe_payload_path(root, &file.path)?;
-        let bytes = std::fs::read(&path).map_err(|error| {
+        let mut input = std::fs::File::open(&path).map_err(|error| {
             format!(
                 "cannot read Node-API sidecar payload {}: {error}",
                 path.display()
             )
         })?;
-        if bytes.len() as u64 != file.size {
+        let size = input.metadata().map_err(|error| error.to_string())?.len();
+        if size != file.size {
             return Err(format!(
                 "Node-API sidecar payload {} has size {}, expected {}",
                 path.display(),
-                bytes.len(),
+                size,
                 file.size
             ));
         }
-        let actual = perry_hex::encode(Sha256::digest(&bytes));
+        let mut hash = Sha256::new();
+        let mut bytes_read = 0u64;
+        let mut buffer = vec![0u8; size.clamp(1, 256 * 1024) as usize];
+        loop {
+            let count = match input.read(&mut buffer) {
+                Ok(count) => count,
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error) => {
+                    return Err(format!(
+                        "cannot read Node-API sidecar payload {}: {error}",
+                        path.display()
+                    ))
+                }
+            };
+            if count == 0 {
+                break;
+            }
+            bytes_read += count as u64;
+            hash.update(&buffer[..count]);
+        }
+        if bytes_read != file.size {
+            return Err(format!(
+                "Node-API sidecar payload {} changed size during verification",
+                path.display()
+            ));
+        }
+        let actual = perry_hex::encode(hash.finalize());
         if actual != file.sha256 {
             return Err(format!(
                 "Node-API sidecar payload {} failed its SHA-256 check",
@@ -607,6 +635,52 @@ mod request_tests {
         ] {
             assert!(manifest_entry_for(&manifest, request).is_err(), "{request}");
         }
+    }
+
+    #[test]
+    fn streaming_verification_checks_complete_payload_and_size() {
+        let root = std::env::temp_dir().join(format!(
+            "perry-napi-payload-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("addon.node");
+        let bytes = (0..(3 * 256 * 1024 + 17))
+            .map(|index| (index % 251) as u8)
+            .collect::<Vec<_>>();
+        std::fs::write(&path, &bytes).unwrap();
+        let mut addon = ManifestAddon {
+            logical_id: "demo/addon.node".into(),
+            require_aliases: vec![],
+            package: "demo".into(),
+            version: "1".into(),
+            entry: "addon.node".into(),
+            files: vec![ManifestFile {
+                path: "addon.node".into(),
+                sha256: perry_hex::encode(Sha256::digest(&bytes)),
+                size: bytes.len() as u64,
+            }],
+        };
+        assert_eq!(
+            verify_addon_payload(&root, &addon).unwrap(),
+            path.canonicalize().unwrap()
+        );
+        let mut tampered = bytes.clone();
+        let last = tampered.len() - 1;
+        tampered[last] ^= 1;
+        std::fs::write(&path, tampered).unwrap();
+        assert!(verify_addon_payload(&root, &addon)
+            .unwrap_err()
+            .contains("SHA-256"));
+        addon.files[0].size += 1;
+        assert!(verify_addon_payload(&root, &addon)
+            .unwrap_err()
+            .contains("has size"));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

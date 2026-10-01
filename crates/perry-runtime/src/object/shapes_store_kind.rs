@@ -10,10 +10,9 @@
 //!   `OBJ_FLAG_PLAIN_ORDINARY` that is not a typed-array prototype. Not
 //!   admitted: every other class-less receiver (`URL`, `Object.prototype`, a
 //!   typed-array prototype, a runtime-born record) and native-module receivers.
-//! * **F-B, the Array-subclass packed-numeric proof**
-//!   (`OBJ_FLAG_PACKED_NUMERIC_PROOF` + its `ObjectMeta` payload): an owner
-//!   store must retire it first, so a proof-carrying receiver may not take a
-//!   raw store.
+//! * **F-B, the Array-subclass packed-numeric proof**: an owner store
+//!   must retire it first, so a proof-carrying receiver may not take a raw
+//!   store.
 //!
 //! Both are now [`ShapeObjectKind`] values of the ordinary LAYOUT:
 //!
@@ -38,11 +37,10 @@
 //!   [`restore_unproven_twin`]), and any other stamp of a proof-carrying
 //!   receiver retires the proof first ([`retire_proof_before_stamp`]).
 //!
-//! The per-object bits stay, as the record R1 reads and as a cheap echo for
-//! the per-object readers that compare no shape (the class-field guard);
-//! [`store_facts_agree`] is the invariant tying the two, asserted at every
-//! stamp in debug builds and — with the `shape-fact-audit` feature — at every
-//! stamp and over the whole heap at every full collection in release builds.
+//! F-A still has per-object inputs for R1. F-B is only the ShapeId kind;
+//! its `ObjectMeta` payload stores the numeric bound and unproven twin id.
+//! [`store_facts_agree`] checks receiver inputs against the shape at every
+//! stamp in debug builds and with `shape-fact-audit` in release builds.
 
 use super::{object_shape_stamp, shape_descriptor_by_id, shape_record_by_id, ShapeObjectKind};
 use crate::object::ObjectHeader;
@@ -71,13 +69,14 @@ pub(crate) unsafe fn receiver_admits_plain_store(obj: *const ObjectHeader) -> bo
             == crate::gc::OBJ_FLAG_PLAIN_ORDINARY
 }
 
-/// F-B from the per-object record.
+/// F-B from the receiver's authoritative ShapeId.
 ///
 /// # Safety
 /// `obj` is a live `GC_TYPE_OBJECT` `ObjectHeader`.
 #[inline]
 pub(crate) unsafe fn receiver_carries_numeric_proof(obj: *const ObjectHeader) -> bool {
-    (*gc_header(obj))._reserved & crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF != 0
+    super::shape_object_kind_by_id(object_shape_stamp(obj))
+        == Some(ShapeObjectKind::OrdinaryNumericProof)
 }
 
 /// R1: the ordinary-family kind a NEW shape of `obj` must have. Never the
@@ -202,7 +201,7 @@ unsafe fn stamp_twin(obj: *mut ObjectHeader, id: u32) {
 
 /// Mint (or find) the twin of `shape_id` with `kind`. Never reads the keys
 /// array (see [`super::shape_descriptor_kind_twin`]), so it is safe on the
-/// proof-retire path inside `layout_note_slot`.
+/// proof-retire path inside the owner store funnel.
 fn twin_of(shape_id: u32, kind: ShapeObjectKind) -> Option<u32> {
     if super::shape_object_kind_by_id(shape_id)? != kind {
         audit::note_twin_mint();
@@ -271,7 +270,7 @@ pub(crate) unsafe fn premark_plain_ordinary(obj: *mut ObjectHeader) {
 }
 
 /// R5, publish: move a receiver whose proof payload was just written to the
-/// proof twin of its current (`Ordinary`) shape, and set the authority bit.
+/// proof twin of its current (`Ordinary`) shape.
 /// Returns the unproven shape the payload must name, or `None` when the
 /// receiver cannot carry the proof (its shape is not `Ordinary`).
 ///
@@ -283,20 +282,19 @@ pub(crate) unsafe fn stamp_numeric_proof_twin(obj: *mut ObjectHeader) -> Option<
         return None;
     }
     let proven = twin_of(unproven, ShapeObjectKind::OrdinaryNumericProof)?;
-    (*gc_header(obj))._reserved |= crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF;
     stamp_twin(obj, proven);
     audit::note_proof_publish();
     check_store_facts(obj);
     Some(unproven)
 }
 
-/// R5, retire: the authority bit and payload were just cleared; move the
+/// R5, retire: the payload was just cleared; move the
 /// receiver back to its unproven twin. `unproven` is the payload's shape — a
 /// hit is one slab probe; a pruned or mismatched id re-mints the twin.
 ///
 /// # Safety
-/// `obj` is a live shaped `GC_TYPE_OBJECT` `ObjectHeader` whose proof bit is
-/// clear.
+/// `obj` is a live shaped `GC_TYPE_OBJECT` `ObjectHeader` whose proof payload
+/// is clear.
 pub(crate) unsafe fn restore_unproven_twin(obj: *mut ObjectHeader, unproven: u32) {
     let current = object_shape_stamp(obj);
     let Some(cur) = shape_descriptor_by_id(current) else {
@@ -332,14 +330,15 @@ pub(crate) unsafe fn restore_unproven_twin(obj: *mut ObjectHeader, unproven: u32
 
 /// R5: called by every stamp of `new_id` on `obj` before the header store. A
 /// receiver carrying the proof loses it unless `new_id` is its proof shape:
-/// every structural change retires the proof itself. One header load when
-/// the receiver carries no proof.
+/// every structural change retires the proof itself.
 ///
 /// # Safety
 /// `obj` is a live `ObjectHeader`.
 #[inline]
 pub(crate) unsafe fn retire_proof_before_stamp(obj: *mut ObjectHeader, new_id: u32) {
-    if (*gc_header(obj))._reserved & crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF == 0 {
+    if (*gc_header(obj)).obj_type != crate::gc::GC_TYPE_OBJECT
+        || !receiver_carries_numeric_proof(obj)
+    {
         return;
     }
     retire_proof_before_stamp_slow(obj, new_id);

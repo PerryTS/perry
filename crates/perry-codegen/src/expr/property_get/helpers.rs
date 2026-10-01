@@ -467,19 +467,20 @@ pub(crate) fn lower_raw_f64_class_field_get_for_number_context(
         return Ok(None);
     }
 
-    let Some(declared_type) =
-        crate::type_analysis::class_field_declared_type(ctx, &class_name, property)
-    else {
-        return Ok(None);
-    };
-    if !crate::typed_shape::type_is_raw_f64_candidate(&declared_type) {
-        return Ok(None);
-    }
     let Some(field_index) =
         crate::type_analysis::class_field_global_index(ctx, &class_name, property)
     else {
         return Ok(None);
     };
+    // Charter step 5, P4: a raw read exactly for an `F64` lane of the birth rep.
+    if !crate::expr::class_field_inline_guard::class_field_site_raw_f64(
+        ctx,
+        &class_name,
+        property,
+        field_index,
+    ) {
+        return Ok(None);
+    }
     let (Some(&expected_class_id), Some(keys_global_name)) = (
         ctx.class_ids.get(&class_name),
         ctx.class_keys_globals.get(&class_name).cloned(),

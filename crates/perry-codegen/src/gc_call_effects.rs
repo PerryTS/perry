@@ -436,9 +436,6 @@ mod tests {
     const ISSUE_11523: &[&str] = &[
         "js_gc_note_slot_layout",
         "js_gc_note_slot_layout_aware",
-        "js_gc_key_add_layout_unknown",
-        "js_gc_init_typed_shape_layout",
-        "js_gc_declare_typed_shape_layout",
         "js_typed_feedback_record_guard_pass",
         "js_typed_feedback_record_guard_fail",
         "js_typed_feedback_record_fallback_call",
@@ -482,7 +479,11 @@ mod tests {
         "js_object_get_class_id",
         "js_closure_get_capture_bits",
         "js_closure_exact_func_guard",
-        "js_box_alloc_bits",
+        // js_box_alloc_bits is deliberately NOT pinned here: #11179 made box/
+        // scope-cell allocation go through arena_alloc -> arena_cell_alloc,
+        // which can reach gc_try_emergency_reclaim, so the generated tables
+        // now (correctly) classify it AllocOnly, not Leaf. The read/write
+        // helpers below still are.
         "js_box_set_bits",
         "js_i32_box_get",
         "js_box_release",
@@ -618,7 +619,9 @@ mod tests {
             );
             leaf += usize::from(classify_direct_callee(name) == GcCallEffect::CannotCollect);
         }
-        assert!(leaf >= 15, "only {leaf} of the #11523 helpers are Leaf");
+        // P4 retired three object-layout helpers that were Leaf. The surviving
+        // list has 14 Leaf helpers and six helpers that reenter on their own paths.
+        assert_eq!(leaf, ISSUE_11523.len() - 6, "#11523 Leaf census changed");
     }
 
     /// The box/closure family's containment in the root-dominance checker's

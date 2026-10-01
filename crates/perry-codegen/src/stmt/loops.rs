@@ -371,7 +371,8 @@ fn lower_numeric_bulk_fill_loop(ctx: &mut FnCtx<'_>, matched: NumericBulkFillLoo
         (new_arr, bound_i32)
     };
     let new_box = nanbox_pointer_inline(ctx.block(), &new_arr);
-    if let Some(slot) = ctx.locals.get(&matched.array_id).cloned() {
+    if crate::scope_env::access::write_back_boxed_local(ctx, matched.array_id, &new_box)? {
+    } else if let Some(slot) = ctx.locals.get(&matched.array_id).cloned() {
         ctx.block().store(DOUBLE, &new_box, &slot);
     }
     if let Some(counter_slot) = ctx.locals.get(&matched.counter_id).cloned() {
@@ -5747,9 +5748,12 @@ fn match_class_field_versioned_loop(
             return None;
         }
         let field_index = crate::type_analysis::class_field_global_index(ctx, &class_name, &prop)?;
-        let raw_f64 = crate::type_analysis::class_field_declared_type(ctx, &class_name, &prop)
-            .as_ref()
-            .is_some_and(crate::typed_shape::type_is_raw_f64_candidate);
+        let raw_f64 = crate::expr::class_field_inline_guard::class_field_site_raw_f64(
+            ctx,
+            &class_name,
+            &prop,
+            field_index,
+        );
         if !raw_f64 {
             return None;
         }
@@ -5868,9 +5872,6 @@ fn lower_class_field_versioned_for(
             &obj_handle,
             &expected_class_id_str,
             &expected_shape_id,
-            // Every tracked field is a raw-f64 candidate: reads rely on the
-            // intact bit, so require it whether or not the loop stores.
-            true,
             has_store,
             &slow_pre_label,
         );

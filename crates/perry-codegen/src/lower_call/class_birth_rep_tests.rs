@@ -17,40 +17,56 @@ fn mint_rep(ir: &str, callee: &str) -> String {
     args.rsplit_once(", ").unwrap().1.to_string()
 }
 
-/// (a): a class declarable at allocation mints `F64` for exactly its
-/// `number` fields (pointer-free and pointer-bearing mints alike); one whose
-/// `number` field could be read before its constructor store (a field
-/// initializer runs first) mints all-`Any`.
+/// `class Early { a: number = this.b; b: number }`: the initializer of `a`
+/// observes the instance before any field is written, so nothing is `F64`.
+fn early_module() -> perry_hir::Module {
+    let mut m = loop_new_module("Early", Type::Number, Expr::Integer(2));
+    m.classes[0].fields[0].init = Some(Expr::PropertyGet {
+        object: Box::new(Expr::This),
+        property: "b".to_string(),
+        byte_offset: 0,
+    });
+    m
+}
+
+/// (a): the mint carries `F64` for exactly the `number` fields written before
+/// any code can observe the instance (option (a), `birth_lanes`): constructor
+/// prologue stores and literal initializers alike.
 #[test]
-fn the_birth_rep_is_f64_for_exactly_the_raw_f64_fields_declared_at_allocation() {
+fn the_birth_rep_is_f64_for_exactly_the_fields_written_before_any_observation() {
     // `class Pair { a: number; b: number }`, both prologue-assigned.
     let ir = emit(&loop_new_module("Pair", Type::Number, Expr::Integer(2)));
     assert_eq!(mint_rep(&ir, "js_object_shape_id_for_class_keys"), "i64 5");
-    // `class Link { a: number; b: string }`: only slot 0 is raw-f64.
+    // `class Link { a: number; b: string }`: only slot 0 is `number`.
     let ir = emit(&loop_new_module(
         "Link",
         Type::String,
         Expr::String("s".into()),
     ));
-    assert_eq!(mint_rep(&ir, "js_gc_typed_shape_id_for_keys"), "i64 1");
-    // `class Late { a: number; b: number = 3 }`: an initializer runs before
-    // the constructor body, so nothing is declared at allocation.
+    assert_eq!(mint_rep(&ir, "js_object_shape_id_for_class_keys"), "i64 1");
+    // `class Late { a: number; b: number = 3 }`: the literal initializer is
+    // `b`'s first write, before anything can read it.
     let mut m = loop_new_module("Late", Type::Number, Expr::Integer(2));
     m.classes[0].fields[1].init = Some(Expr::Number(3.0));
     let ir = emit(&m);
+    assert_eq!(mint_rep(&ir, "js_object_shape_id_for_class_keys"), "i64 5");
+    // `class Str { a: number; b: number = "s" }`: a non-Number first write.
+    let mut m = loop_new_module("Str", Type::Number, Expr::Integer(2));
+    m.classes[0].fields[1].init = Some(Expr::String("s".into()));
+    let ir = emit(&m);
+    assert_eq!(mint_rep(&ir, "js_object_shape_id_for_class_keys"), "i64 1");
+    let ir = emit(&early_module());
     assert_eq!(mint_rep(&ir, "js_object_shape_id_for_class_keys"), "i64 0");
 }
 
 /// (c) + (d): the inline allocation birth-fills the `F64` lanes the mint
-/// declared with +0.0 (`store i64 0`), and the undeclared twin fills them with
+/// declared with +0.0 (`store i64 0`), and the all-`Any` twin fills them with
 /// `undefined`: one decision drives the mint and the fill.
 #[test]
 fn the_inline_allocation_fills_exactly_the_minted_f64_lanes() {
     let undefined = format!("store i64 {}, ptr", crate::nanbox::TAG_UNDEFINED_I64);
     let declared = emit(&loop_new_module("Pair", Type::Number, Expr::Integer(2)));
-    let mut m = loop_new_module("Late", Type::Number, Expr::Integer(2));
-    m.classes[0].fields[1].init = Some(Expr::Number(3.0));
-    let late = emit(&m);
+    let late = emit(&early_module());
     let fill = |ir: &str| {
         (
             ir.matches("store i64 0, ptr").count(),

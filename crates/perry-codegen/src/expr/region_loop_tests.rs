@@ -213,7 +213,7 @@ fn a_bare_pointer_store_keeps_the_store_ics_gc_bookkeeping() {
 }
 
 #[test]
-fn a_storing_regions_guard_tests_the_two_per_object_store_facts() {
+fn a_storing_region_guards_exact_shape_and_classless_receiver() {
     let ir = loop_ir(
         "region_loop_admission",
         vec![
@@ -237,12 +237,16 @@ fn a_storing_regions_guard_tests_the_two_per_object_store_facts() {
     for l in chk {
         let body = bl[l].0.join("\n");
         assert!(
-            body.contains("and i16") && body.contains(", 128"),
-            "F-B (Array-subclass numeric proof, `_reserved & 0x80`) missing from {l}:\n{body}"
+            body.contains("load i32") && body.contains("icmp eq i32"),
+            "proof-bearing ShapeId guard missing from {l}:\n{body}"
         );
         assert!(
             body.contains(", 768"),
             "F-A (class-less receiver kind, `_reserved & 0x300`) missing from {l}:\n{body}"
+        );
+        assert!(
+            !body.contains(", 128"),
+            "retired numeric-proof header guard reappeared in {l}:\n{body}"
         );
     }
 }
@@ -343,8 +347,10 @@ fn prime_boxed_masks(ir: &str) -> Vec<u32> {
     ir.lines()
         .filter(|l| l.contains("@js_region_loop_prime("))
         .filter_map(|l| {
-            let args = l.rsplit_once("i32 ")?.1;
-            args.trim_end_matches(')').trim().parse().ok()
+            // The call can carry trailing attributes after its closing parenthesis.
+            let call = l.split_once(')')?.0;
+            let last_arg = call.rsplit_once("i32 ")?.1;
+            last_arg.trim().parse().ok()
         })
         .collect()
 }

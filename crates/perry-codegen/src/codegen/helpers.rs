@@ -1923,7 +1923,13 @@ pub(super) fn emit_callee_binding_resolutions(
             let slot_addr = blk.add(I64, "%this_closure", &offset.to_string());
             let slot_ptr = blk.inttoptr(I64, &slot_addr);
             let bits = blk.load(I64, &slot_ptr);
-            if ctx.boxed_vars.contains(&id) {
+            if let (true, Some(slot)) = (
+                ctx.boxed_vars.contains(&id),
+                crate::scope_env::access::slot(ctx, id),
+            ) {
+                let cell_bits = crate::scope_env::access::read_bits(ctx, id, slot, &bits);
+                ctx.block().bitcast_i64_to_double(&cell_bits)
+            } else if ctx.boxed_vars.contains(&id) {
                 let blk = ctx.block();
                 let cell_bits = blk.call(I64, "js_box_get_bits", &[(I64, &bits)]);
                 ctx.block().bitcast_i64_to_double(&cell_bits)

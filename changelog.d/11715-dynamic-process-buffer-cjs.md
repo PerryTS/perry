@@ -1,0 +1,4 @@
+- Dynamic `process.exitCode` reads and writes now share the existing validated process status, so aliased/global/imported `process.exit()` and natural shutdown honor the assigned status (#11622).
+- Native bound exports keep their own dispatch instead of being mistaken for borrowed Array methods, restoring `Buffer.concat` through constructor variables and preserving `Buffer.from`, detached statics, and Array/String borrowing (#11618).
+- Computed CommonJS `require` calls, including local aliases, emit an actionable warning at the original source path, line, and column: explicitly include possible targets with static imports and use explicit file extensions in computed requests (#10438). Static dependency discovery and generated runtime code remain unchanged.
+- Adds Node-oracle regression coverage without new runtime side tables; dynamic exit-code writes avoid the namespace override table.
