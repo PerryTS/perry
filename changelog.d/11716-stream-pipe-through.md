@@ -13,3 +13,6 @@ Avoid repeated numeric range and integer conversion checks for non-object pairs 
 
 Remove an argument staging allocation and copy during native method dispatch;
 register roots directly from the caller's buffer before refreshing owned arguments.
+
+Use static spellings for known methods on native stream handles, avoiding
+method-name allocation while retaining owned conversion for other names.

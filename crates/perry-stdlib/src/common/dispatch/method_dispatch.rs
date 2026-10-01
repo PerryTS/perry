@@ -157,6 +157,34 @@ unsafe fn try_dispatch_external_http_client(
 }
 
 /// Dispatch a method call on a handle-based object.
+#[cfg(feature = "bundled-streams")]
+fn static_stream_method_name(handle: i64, name: &[u8]) -> Option<&'static str> {
+    if handle < crate::streams::STREAM_HANDLE_ID_START as i64
+        || handle >= crate::streams::STREAM_HANDLE_ID_END as i64
+    {
+        return None;
+    }
+    match name {
+        b"read" => Some("read"),
+        b"releaseLock" => Some("releaseLock"),
+        b"cancel" => Some("cancel"),
+        b"write" => Some("write"),
+        b"close" => Some("close"),
+        b"abort" => Some("abort"),
+        b"getReader" => Some("getReader"),
+        b"values" => Some("values"),
+        b"@@asyncIterator" => Some("@@asyncIterator"),
+        b"tee" => Some("tee"),
+        b"pipeTo" => Some("pipeTo"),
+        b"pipeThrough" => Some("pipeThrough"),
+        b"enqueue" => Some("enqueue"),
+        b"terminate" => Some("terminate"),
+        b"error" => Some("error"),
+        b"getWriter" => Some("getWriter"),
+        _ => None,
+    }
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn js_handle_method_dispatch(
     handle: i64,
@@ -182,13 +210,26 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
         args_len,
     );
 
-    let method_name_owned = if method_name_ptr.is_null() || method_name_len == 0 {
-        String::new()
+    let method_name_owned;
+    let method_name = if method_name_ptr.is_null() || method_name_len == 0 {
+        method_name_owned = String::new();
+        method_name_owned.as_str()
     } else {
-        String::from_utf8_lossy(std::slice::from_raw_parts(method_name_ptr, method_name_len))
-            .into_owned()
+        let method_bytes = std::slice::from_raw_parts(method_name_ptr, method_name_len);
+        #[cfg(feature = "bundled-streams")]
+        let static_name = static_stream_method_name(handle, method_bytes);
+        #[cfg(not(feature = "bundled-streams"))]
+        let static_name: Option<&'static str> = None;
+        match static_name {
+            // Static spellings remain valid across moving GC; retain no
+            // reference to the caller's name buffer during dispatch.
+            Some(name) => name,
+            None => {
+                method_name_owned = String::from_utf8_lossy(method_bytes).into_owned();
+                method_name_owned.as_str()
+            }
+        }
     };
-    let method_name = method_name_owned.as_str();
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
     // The receiver's id must stay reachable while its method runs: a
     // GC-reclaimable common handle (#11453) is released at a full trace that
