@@ -589,7 +589,6 @@ pub unsafe extern "C" fn js_ext_net_handle_method_dispatch(
 // Keep this added dispatch code out of their decision tree and hot code pages.
 #[cold]
 #[inline(never)]
-#[cfg_attr(target_os = "macos", link_section = "__TEXT,__perry_cold")]
 unsafe fn socket_endpoint_property(handle: i64, prop: &str) -> Option<f64> {
     if !matches!(
         prop,
