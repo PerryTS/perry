@@ -5,9 +5,15 @@ function pipe(pair: any, options?: any): any {
   const source: any = new ReadableStream({ start(c) { c.close(); } });
   return source.pipeThrough(pair, options);
 }
-for (const value of [NaN, Infinity, -Infinity, 1048576.5]) {
-  try { pipe(value); console.log("number accepted"); }
-  catch (error) { console.log("number", error instanceof TypeError); }
+// Numeric and tagged primitive pairs must reject through the root-free path.
+// Include both inline and heap string/bigint encodings and a symbol payload.
+for (const value of [
+  NaN, Infinity, -Infinity, -1, 0, 1.5, 1048576.5,
+  undefined, null, false, true, "short", "a longer string backed by a heap allocation",
+  1n, 123456789012345678901234567890n, Symbol("invalid pair"),
+]) {
+  try { pipe(value); console.log("primitive accepted"); }
+  catch (error) { console.log("primitive", error instanceof TypeError); }
   collect();
 }
 for (const value of [{}, { readable: 123 }, { writable: 123 }]) {

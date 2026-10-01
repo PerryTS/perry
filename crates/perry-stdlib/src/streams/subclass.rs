@@ -233,14 +233,11 @@ pub(crate) unsafe fn dispatch_stream_method(
             "tee" => return Some(js_readable_stream_tee(handle)),
             "pipeTo" => return Some(box_promise(js_readable_stream_pipe_to(handle, arg0, arg1))),
             "pipeThrough" => {
-                // Preserve the legacy numeric dispatch without entering the
-                // object-pair helper. Endpoint lookup validates membership in
-                // TRANSFORM_STREAMS; the finite integral band guard also keeps
-                // boxed JS values out of the numeric handle conversion.
+                // Non-object pairs with default options need no scoped roots
+                // or getter conversion. Preserve the legacy endpoint sequence;
+                // the registry lookups and validation reject invalid handles.
                 if arg1.to_bits() == TAG_UNDEFINED
-                    && arg0 >= STREAM_HANDLE_ID_START as f64
-                    && arg0 < STREAM_HANDLE_ID_END as f64
-                    && arg0 == (arg0 as usize) as f64
+                    && !JSValue::from_bits(arg0.to_bits()).is_pointer()
                 {
                     let transform = js_stream_unwrap_handle(arg0);
                     let writable = js_transform_stream_writable(transform);
