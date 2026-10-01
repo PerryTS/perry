@@ -1392,3 +1392,6 @@ mod scoped_temp_tests {
         assert!(matches!(*body, Expr::LocalGet(13)));
     }
 }
+
+#[cfg(test)]
+mod uses_this_tests;
