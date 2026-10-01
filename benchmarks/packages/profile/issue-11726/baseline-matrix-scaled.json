@@ -1,0 +1,1620 @@
+{
+ "finished": "2026-10-01T13:48:09+0000",
+ "host": "ideal-mastodon",
+ "load_threshold": 8.0,
+ "machine": "x86_64",
+ "modes": [
+  "instr",
+  "rss"
+ ],
+ "ncpu": 16,
+ "perry_bin_dir": "/root/codex-11726-results/baseline-all-bins",
+ "perry_commit": "437520d02b",
+ "platform": "Linux-6.17.0-23-generic-x86_64-with-glibc2.39",
+ "resumed_from": "2026-10-01T11:56:51+0000",
+ "schema": 1,
+ "servers": {
+  "http": "ok",
+  "mongo": "ok",
+  "mysql": "ok",
+  "pg": "ok",
+  "redis": "ok"
+ },
+ "started": "2026-10-01T13:39:20+0000",
+ "toolchain": {
+  "bun": "/root/.bun/bin/bun",
+  "bun_version": "1.4.2",
+  "node": "/opt/node-v26.5.1-linux-x64/bin/node",
+  "node_version": "26.5.1",
+  "version_problems": []
+ },
+ "workloads": {
+  "axios/get_json": {
+   "arms": {
+    "perry": {
+     "compile_s": 54.57,
+     "correctness_output": "axios/get_json axios@1.20.0 n=50 warm=200\nchecksum 016fb736",
+     "instr": {
+      "n1": [
+       3787011529,
+       3865213341,
+       3776230313
+      ],
+      "n2": [
+       5941990332,
+       6063671158,
+       4977424030
+      ],
+      "per_iter": 14366525.353333334
+     },
+     "load_flagged": true,
+     "load_max": 11.63,
+     "load_mean": 11.61,
+     "peak_rss_kb": 90616,
+     "size_bytes": 54368416,
+     "status": "OK",
+     "timeout_s": 120
+    }
+   },
+   "n1": 50,
+   "n2": 200,
+   "warm": 200
+  },
+  "axios/post_json": {
+   "arms": {
+    "perry": {
+     "compile_s": 35.73,
+     "correctness_output": "axios/post_json axios@1.20.0 n=50 warm=200\nchecksum 355bea4f",
+     "instr": {
+      "n1": [
+       4087677665,
+       4045310970,
+       4051849843
+      ],
+      "n2": [
+       6408082314,
+       6407377640,
+       6281537318
+      ],
+      "per_iter": 15703518.646666666
+     },
+     "load_flagged": true,
+     "load_max": 11.58,
+     "load_mean": 11.58,
+     "peak_rss_kb": 98080,
+     "size_bytes": 54368032,
+     "status": "OK",
+     "timeout_s": 120
+    }
+   },
+   "n1": 50,
+   "n2": 200,
+   "warm": 200
+  },
+  "big.js/arith_chain": {
+   "arms": {
+    "perry": {
+     "compile_s": 5.62,
+     "correctness_output": "big.js/arith_chain big.js@7.0.1 n=500 warm=1000\nchecksum ff63b6d6",
+     "instr": {
+      "n1": [
+       206851596570,
+       206853209436,
+       206851365418
+      ],
+      "n2": [
+       415526104740,
+       415528951751,
+       415522662086
+      ],
+      "per_iter": 139116338.78
+     },
+     "load_flagged": true,
+     "load_max": 17.72,
+     "load_mean": 14.78,
+     "peak_rss_kb": 51108,
+     "size_bytes": 23066576,
+     "status": "OK",
+     "timeout_s": 231.3
+    }
+   },
+   "n1": 500,
+   "n2": 2000,
+   "warm": 1000
+  },
+  "bignumber.js/arith_chain": {
+   "arms": {
+    "perry": {
+     "compile_s": 12.05,
+     "correctness_output": "bignumber.js/arith_chain bignumber.js@11.1.5 n=500 warm=1000\nchecksum 61edfcd9",
+     "instr": {
+      "n1": [
+       6845266729,
+       6846668549,
+       6845290156
+      ],
+      "n2": [
+       13612970184,
+       13613057734,
+       13613054993
+      ],
+      "per_iter": 4511843.224666666
+     },
+     "load_flagged": true,
+     "load_max": 17.14,
+     "load_mean": 17.04,
+     "peak_rss_kb": 51684,
+     "size_bytes": 37083328,
+     "status": "OK",
+     "timeout_s": 120
+    }
+   },
+   "n1": 500,
+   "n2": 2000,
+   "warm": 1000
+  },
+  "commander/parse_argv": {
+   "arms": {
+    "perry": {
+     "compile_s": 16.69,
+     "correctness_output": "commander/parse_argv commander@15.0.0 n=125 warm=200\nchecksum e4cb9a8a",
+     "instr": {
+      "n1": [
+       1463720288,
+       1464562433,
+       1464262532
+      ],
+      "n2": [
+       2989242277,
+       2988717983,
+       2989234199
+      ],
+      "per_iter": 4066591.112
+     },
+     "load_flagged": true,
+     "load_max": 8.52,
+     "load_mean": 8.52,
+     "peak_rss_kb": 57844,
+     "size_bytes": 37989984,
+     "status": "OK",
+     "timeout_s": 120
+    }
+   },
+   "n1": 125,
+   "n2": 500,
+   "warm": 200
+  },
+  "control/bare_loop": {
+   "arms": {
+    "perry": {
+     "compile_s": 1.31,
+     "correctness_output": "control/bare_loop @- n=200000 warm=1000\nchecksum 4b726605",
+     "instr": {
+      "n1": [
+       6594414,
+       6593709,
+       6593787
+      ],
+      "n2": [
+       22193322,
+       22193802,
+       22193552
+      ],
+      "per_iter": 25.999608333333335
+     },
+     "load_flagged": false,
+     "load_max": 6.7,
+     "load_mean": 6.7,
+     "peak_rss_kb": 29388,
+     "size_bytes": 22485256,
+     "status": "OK",
+     "timeout_s": 120
+    }
+   },
+   "n1": 200000,
+   "n2": 800000,
+   "warm": 1000
+  },
+  "control/prop_read": {
+   "arms": {
+    "perry": {
+     "compile_s": 1.34,
+     "correctness_output": "control/prop_read @- n=50000 warm=1000\nchecksum 41c47645",
+     "instr": {
+      "n1": [
+       8033446,
+       8030389,
+       8031222
+      ],
+      "n2": [
+       27531117,
+       27531225,
+       27531624
+      ],
+      "per_iter": 130.00002
+     },
+     "load_flagged": false,
+     "load_max": 6.7,
+     "load_mean": 6.7,
+     "peak_rss_kb": 29332,
+     "size_bytes": 22485752,
+     "status": "OK",
+     "timeout_s": 120
+    }
+   },
+   "n1": 50000,
+   "n2": 200000,
+   "warm": 1000
+  },
+  "cron/next_dates": {
+   "arms": {
+    "perry": {
+     "compile_s": 28.67,
+     "correctness_output": "cron/next_dates cron@4.4.0 n=125 warm=200\nchecksum 1cb5e0c5",
+     "instr": {
+      "n1": [
+       146410774272,
+       145377517473,
+       145258367137
+      ],
+      "n2": [
+       310096417963,
+       314974518977,
+       308659786075
+      ],
+      "per_iter": 439250401.3066667
+     },
+     "load_flagged": true,
+     "load_max": 11.15,
+     "load_mean": 8.08,
+     "peak_rss_kb": 69436,
+     "size_bytes": 33802456,
+     "status": "OK",
+     "timeout_s": 169.0
+    }
+   },
+   "n1": 125,
+   "n2": 500,
+   "warm": 200
+  },
+  "date-fns/diff_interval": {
+   "arms": {
+    "perry": {
+     "compile_s": 2.63,
+     "correctness_output": "date-fns/diff_interval date-fns@4.4.0 n=250 warm=500\nchecksum 1a468210",
+     "instr": {
+      "n1": [
+       613731897,
+       613441406,
+       612483962
+      ],
+      "n2": [
+       1199607603,
+       1200271059,
+       1199596653
+      ],
+      "per_iter": 781554.9293333333
+     },
+     "load_flagged": false,
+     "load_max": 7.66,
+     "load_mean": 7.66,
+     "peak_rss_kb": 52384,
+     "size_bytes": 22734392,
+     "status": "OK",
+     "timeout_s": 120
+    }
+   },
+   "n1": 250,
+   "n2": 1000,
+   "warm": 500
+  },
+  "date-fns/format_add": {
+   "arms": {
+    "perry": {
+     "compile_s": 5.19,
+     "correctness_output": "date-fns/format_add date-fns@4.4.0 n=500 warm=1000\nchecksum d42f59bc",
+     "instr": {
+      "n1": [
+       1629353298,
+       1629222000,
+       1629238238
+      ],
+      "n2": [
+       3142921914,
+       3142700215,
+       3143150886
+      ],
+      "per_iter": 1009122.4506666666
+     },
+     "load_flagged": false,
+     "load_max": 7.66,
+     "load_mean": 7.66,
+     "peak_rss_kb": 53800,
+     "size_bytes": 23560072,
+     "status": "OK",
+     "timeout_s": 120
+    }
+   },
+   "n1": 500,
+   "n2": 2000,
+   "warm": 1000
+  },
+  "dayjs/diff_startof": {
+   "arms": {
+    "perry": {
+     "compile_s": 5.31,
+     "correctness_output": "dayjs/diff_startof dayjs@1.11.23 n=500 warm=1000\nchecksum cb2121da",
+     "instr": {
+      "n1": [
+       8112927721,
+       8101361145,
+       8061266665
+      ],
+      "n2": [
+       15985133627,
+       15979688533,
+       15981440803
+      ],
+      "per_iter": 5253386.438666667
+     },
+     "load_flagged": true,
+     "load_max": 8.23,
+     "load_mean": 8.01,
+     "peak_rss_kb": 86120,
+     "size_bytes": 26451384,
+     "status": "OK",
+     "timeout_s": 120
+    }
+   },
+   "n1": 500,
+   "n2": 2000,
+   "warm": 1000
+  },
+  "dayjs/parse_format": {
+   "arms": {
+    "perry": {
+     "compile_s": 5.55,
+     "correctness_output": "dayjs/parse_format dayjs@1.11.23 n=500 warm=1000\nchecksum 20af7652",
+     "instr": {
+      "n1": [
+       1846395846,
+       1854047344,
+       1847036270
+      ],
+      "n2": [
+       3584577506,
+       3578017696,
+       3585479947
+      ],
+      "per_iter": 1158360.824
+     },
+     "load_flagged": true,
+     "load_max": 8.23,
+     "load_mean": 8.23,
+     "peak_rss_kb": 63492,
+     "size_bytes": 26446744,
+     "status": "OK",
+     "timeout_s": 120
+    }
+   },
+   "n1": 500,
+   "n2": 2000,
+   "warm": 1000
+  },
+  "decimal.js/arith_chain": {
+   "arms": {
+    "perry": {
+     "compile_s": 16.71,
+     "correctness_output": "decimal.js/arith_chain decimal.js@10.6.0 n=500 warm=1000\nchecksum f39bdcc8",
+     "instr": {
+      "n1": [
+       5801059107,
+       5801116690,
+       5801039304
+      ],
+      "n2": [
+       11486163467,
+       11486759113,
+       11486147425
+      ],
+      "per_iter": 3790069.5733333332
+     },
+     "load_flagged": true,
+     "load_max": 16.28,
+     "load_mean": 15.98,
+     "peak_rss_kb": 51600,
+     "size_bytes": 37505256,
+     "status": "OK",
+     "timeout_s": 120
+    }
+   },
+   "n1": 500,
+   "n2": 2000,
+   "warm": 1000
+  },
+  "decimal.js/parse_sum": {
+   "arms": {
+    "perry": {
+     "compile_s": 14.0,
+     "correctness_output": "decimal.js/parse_sum decimal.js@10.6.0 n=50 warm=100\nlast 97703360.84/989155.82/488516.8042",
+     "instr": {
+      "n1": [
+       5910432029,
+       5915269846,
+       5915211771
+      ],
+      "n2": [
+       11704218190,
+       11719530995,
+       11704812796
+      ],
+      "per_iter": 38597340.166666664
+     },
+     "load_flagged": true,
+     "load_max": 15.85,
+     "load_mean": 15.74,
+     "peak_rss_kb": 53136,
+     "size_bytes": 37469192,
+     "status": "OK",
+     "timeout_s": 120
+    }
+   },
+   "n1": 50,
+   "n2": 200,
+   "warm": 100
+  },
+  "dotenv/parse": {
+   "arms": {
+    "perry": {
+     "compile_s": 7.23,
+     "correctness_output": "dotenv/parse dotenv@18.0.1 n=250 warm=500\nchecksum d0a9fc7e",
+     "instr": {
+      "n1": [
+       1577167907,
+       1577205821,
+       1577194914
+      ],
+      "n2": [
+       3052834481,
+       3052833990,
+       3052840475
+      ],
+      "per_iter": 1967519.4226666666
+     },
+     "load_flagged": true,
+     "load_max": 8.52,
+     "load_mean": 8.52,
+     "peak_rss_kb": 51308,
+     "size_bytes": 26471352,
+     "status": "OK",
+     "timeout_s": 120
+    }
+   },
+   "n1": 250,
+   "n2": 1000,
+   "warm": 500
+  },
+  "exponential-backoff/retry": {
+   "arms": {
+    "perry": {
+     "compile_s": 1.59,
+     "correctness_output": "exponential-backoff/retry exponential-backoff@3.1.3 n=50 warm=100\nattempts 200 retries 150 total 2450",
+     "instr": {
+      "n1": [
+       113007300,
+       113020764,
+       113008025
+      ],
+      "n2": [
+       176177690,
+       176140952,
+       176137809
+      ],
+      "per_iter": 420886.18
+     },
+     "load_flagged": true,
+     "load_max": 15.69,
+     "load_mean": 15.69,
+     "peak_rss_kb": 44356,
+     "size_bytes": 22727880,
+     "status": "OK",
+     "timeout_s": 120
+    }
+   },
+   "n1": 50,
+   "n2": 200,
+   "warm": 100
+  },
+  "fastify/inject": {
+   "arms": {
+    "perry": {
+     "compile_s": 358.74,
+     "correctness_output": "fastify/inject fastify@5.12.5 n=125 warm=300\nERROR Cannot read properties of undefined (reading 'once')",
+     "reason": "exit 1: fastify/inject fastify@5.12.5 n=125 warm=300\nERROR Cannot read properties of undefined (reading 'once')",
+     "size_bytes": 89388040,
+     "status": "FAIL",
+     "timeout_s": 120
+    }
+   },
+   "n1": 125,
+   "n2": 500,
+   "warm": 300
+  },
+  "fastify/listen_fetch": {
+   "arms": {
+    "perry": {
+     "compile_s": 149.89,
+     "correctness_output": "fastify/listen_fetch fastify@5.12.5 n=50 warm=200\nchecksum f3734e5f",
+     "instr": {
+      "n1": [
+       763762767,
+       763699526,
+       763993005
+      ],
+      "n2": [
+       1070938665,
+       1070575945,
+       1065552679
+      ],
+      "per_iter": 2045421.1866666668
+     },
+     "load_flagged": true,
+     "load_max": 11.6,
+     "load_mean": 11.59,
+     "peak_rss_kb": 120600,
+     "size_bytes": 89374520,
+     "status": "OK",
+     "timeout_s": 120
+    }
+   },
+   "n1": 50,
+   "n2": 200,
+   "warm": 200
+  },
+  "ioredis/pipeline": {
+   "arms": {
+    "perry": {
+     "compile_s": 45.14,
+     "correctness_output": "ioredis/pipeline ioredis@5.11.1 n=12 warm=50\nchecksum 13d50ec4",
+     "instr": {
+      "n1": [
+       768185413,
+       768995511,
+       769169297
+      ],
+      "n2": [
+       1169990323,
+       1170682882,
+       1170486406
+      ],
+      "per_iter": 10565549.868421054
+     },
+     "load_flagged": true,
+     "load_max": 10.54,
+     "load_mean": 10.51,
+     "peak_rss_kb": 76836,
+     "size_bytes": 51874800,
+     "status": "OK",
+     "timeout_s": 120
+    }
+   },
+   "n1": 12,
+   "n2": 50,
+   "warm": 50
+  },
+  "ioredis/set_get": {
+   "arms": {
+    "perry": {
+     "compile_s": 38.18,
+     "correctness_output": "ioredis/set_get ioredis@5.11.1 n=50 warm=200\nchecksum 5bd96e84 ctr 250",
+     "instr": {
+      "n1": [
+       495458789,
+       495547933,
+       495499638
+      ],
+      "n2": [
+       730518322,
+       730666651,
+       730886344
+      ],
+      "per_iter": 1567780.0866666667
+     },
+     "load_flagged": true,
+     "load_max": 10.5,
+     "load_mean": 10.5,
+     "peak_rss_kb": 74632,
+     "size_bytes": 51865888,
+     "status": "OK",
+     "timeout_s": 120
+    }
+   },
+   "n1": 50,
+   "n2": 200,
+   "warm": 200
+  },
+  "jsonwebtoken/decode": {
+   "arms": {
+    "perry": {
+     "compile_s": 25.17,
+     "correctness_output": "jsonwebtoken/decode jsonwebtoken@9.0.3 n=500 warm=1000\nchecksum 398681fd",
+     "instr": {
+      "n1": [
+       268060981,
+       268045429,
+       268063657
+      ],
+      "n2": [
+       403635416,
+       403610389,
+       403685972
+      ],
+      "per_iter": 90382.95666666667
+     },
+     "load_flagged": false,
+     "load_max": 6.7,
+     "load_mean": 6.7,
+     "peak_rss_kb": 70320,
+     "size_bytes": 47150832,
+     "status": "OK",
+     "timeout_s": 120
+    }
+   },
+   "n1": 500,
+   "n2": 2000,
+   "warm": 1000
+  },
+  "jsonwebtoken/hs256": {
+   "arms": {
+    "perry": {
+     "compile_s": 34.16,
+     "correctness_output": "jsonwebtoken/hs256 jsonwebtoken@9.0.3 n=50 warm=200\nchecksum 43acb780",
+     "instr": {
+      "n1": [
+       344587379,
+       342425963,
+       345027702
+      ],
+      "n2": [
+       522682480,
+       525443400,
+       522671111
+      ],
+      "per_iter": 1187300.6733333333
+     },
+     "load_flagged": false,
+     "load_max": 6.7,
+     "load_mean": 6.7,
+     "peak_rss_kb": 64212,
+     "size_bytes": 47144832,
+     "status": "OK",
+     "timeout_s": 120
+    }
+   },
+   "n1": 50,
+   "n2": 200,
+   "warm": 200
+  },
+  "jsonwebtoken/rs256": {
+   "arms": {
+    "perry": {
+     "compile_s": 29.14,
+     "correctness_output": "jsonwebtoken/rs256 jsonwebtoken@9.0.3 n=5 warm=20\nchecksum 4bd59007",
+     "instr": {
+      "n1": [
+       2068240667,
+       2068245912,
+       2068258910
+      ],
+      "n2": [
+       3248473579,
+       3248464810,
+       3248478252
+      ],
+      "per_iter": 78681844.46666667
+     },
+     "load_flagged": false,
+     "load_max": 6.7,
+     "load_mean": 6.7,
+     "peak_rss_kb": 56308,
+     "size_bytes": 47154760,
+     "status": "OK",
+     "timeout_s": 120
+    }
+   },
+   "n1": 5,
+   "n2": 20,
+   "warm": 20
+  },
+  "lru-cache/churn": {
+   "arms": {
+    "perry": {
+     "compile_s": 7.96,
+     "correctness_output": "lru-cache/churn lru-cache@11.5.3 n=12500 warm=10000\nhits 2602 misses 9898 sum 16135811 size 1000",
+     "instr": {
+      "n1": [
+       2955226788,
+       2955232871,
+       2954878290
+      ],
+      "n2": [
+       7898311712,
+       7897226884,
+       7898299549
+      ],
+      "per_iter": 131815.27362666666
+     },
+     "load_flagged": true,
+     "load_max": 8.52,
+     "load_mean": 8.47,
+     "peak_rss_kb": 51552,
+     "size_bytes": 23807016,
+     "status": "OK",
+     "timeout_s": 120
+    }
+   },
+   "n1": 12500,
+   "n2": 50000,
+   "warm": 10000
+  },
+  "lru-cache/ttl_mixed": {
+   "arms": {
+    "perry": {
+     "compile_s": 7.83,
+     "correctness_output": "lru-cache/ttl_mixed lru-cache@11.5.3 n=7500 warm=10000\nhas 840 peekLen 11106 dels 901 size 1384 calc 17960",
+     "instr": {
+      "n1": [
+       868577786,
+       868667862,
+       868725383
+      ],
+      "n2": [
+       1944864736,
+       1949347558,
+       1944898822
+      ],
+      "per_iter": 47832.48711111111
+     },
+     "load_flagged": true,
+     "load_max": 8.23,
+     "load_mean": 8.23,
+     "peak_rss_kb": 44008,
+     "size_bytes": 23815872,
+     "status": "OK",
+     "timeout_s": 120
+    }
+   },
+   "n1": 7500,
+   "n2": 30000,
+   "warm": 10000
+  },
+  "moment/diff_duration": {
+   "arms": {
+    "perry": {
+     "compile_s": 30.84,
+     "correctness_output": "moment/diff_duration moment@2.31.0 n=250 warm=500\nchecksum 9deab349",
+     "instr": {
+      "n1": [
+       1363430117,
+       1372562402,
+       1374695947
+      ],
+      "n2": [
+       2602984473,
+       2619448616,
+       2590995123
+      ],
+      "per_iter": 1640562.7613333333
+     },
+     "load_flagged": false,
+     "load_max": 7.45,
+     "load_mean": 7.45,
+     "peak_rss_kb": 59092,
+     "size_bytes": 29152248,
+     "status": "OK",
+     "timeout_s": 120
+    }
+   },
+   "n1": 250,
+   "n2": 1000,
+   "warm": 500
+  },
+  "moment/parse_format": {
+   "arms": {
+    "perry": {
+     "compile_s": 18.95,
+     "correctness_output": "moment/parse_format moment@2.31.0 n=250 warm=500\nchecksum ff972599",
+     "instr": {
+      "n1": [
+       1503542385,
+       1503820575,
+       1505442938
+      ],
+      "n2": [
+       2868493609,
+       2865415459,
+       2865093906
+      ],
+      "per_iter": 1815459.8453333334
+     },
+     "load_flagged": false,
+     "load_max": 7.66,
+     "load_mean": 7.66,
+     "peak_rss_kb": 67696,
+     "size_bytes": 28895272,
+     "status": "OK",
+     "timeout_s": 120
+    }
+   },
+   "n1": 250,
+   "n2": 1000,
+   "warm": 500
+  },
+  "mongodb/batch_query": {
+   "arms": {
+    "perry": {
+     "compile_s": 74.44,
+     "correctness_output": "mongodb/batch_query mongodb@7.6.0 n=12 warm=50\nchecksum 1ab03520",
+     "instr": {
+      "n1": [
+       5842432674,
+       5841870874,
+       5842114092
+      ],
+      "n2": [
+       9219442324,
+       9229591582,
+       9239062716
+      ],
+      "per_iter": 89144144.4736842
+     },
+     "load_flagged": true,
+     "load_max": 13.18,
+     "load_mean": 12.19,
+     "peak_rss_kb": 167796,
+     "size_bytes": 75611440,
+     "status": "OK",
+     "timeout_s": 120
+    }
+   },
+   "n1": 12,
+   "n2": 50,
+   "warm": 50
+  },
+  "mongodb/insert_find": {
+   "arms": {
+    "node": {
+     "correctness_output": "mongodb/insert_find mongodb@7.6.0 n=500 warm=200\nchecksum 57050a96",
+     "instr": {
+      "n1": [
+       1940428986,
+       1976317454,
+       1953589244
+      ],
+      "n2": [
+       3234504093,
+       3241991874,
+       3231893814
+      ],
+      "per_iter": 853943.2326666666
+     },
+     "load_flagged": true,
+     "load_max": 18.58,
+     "load_mean": 18.39,
+     "peak_rss_kb": 119016,
+     "status": "OK",
+     "timeout_s": 120
+    },
+    "perry": {
+     "compile_s": 381.42,
+     "correctness_output": "mongodb/insert_find mongodb@7.6.0 n=500 warm=200\nchecksum 57050a96",
+     "instr": {
+      "n1": [
+       48345396420,
+       48525854984,
+       47706213516
+      ],
+      "n2": [
+       359925617172,
+       364271368932,
+       359779232291
+      ],
+      "per_iter": 207720147.168
+     },
+     "load_flagged": true,
+     "load_max": 18.29,
+     "load_mean": 16.74,
+     "peak_rss_kb": 1028816,
+     "size_bytes": 77227024,
+     "status": "OK",
+     "timeout_s": 143.4
+    }
+   },
+   "n1": 500,
+   "n2": 2000,
+   "warm": 200
+  },
+  "mysql2/insert_batch": {
+   "arms": {
+    "perry": {
+     "compile_s": 56.64,
+     "correctness_output": "mysql2/insert_batch mysql2@3.24.4 n=50 warm=200\nchecksum 27d04584",
+     "instr": {
+      "n1": [
+       1136290436,
+       1135509875,
+       1135651461
+      ],
+      "n2": [
+       1619573200,
+       1620996624,
+       1621874619
+      ],
+      "per_iter": 3235634.42
+     },
+     "load_flagged": true,
+     "load_max": 11.64,
+     "load_mean": 11.63,
+     "peak_rss_kb": 104668,
+     "size_bytes": 68845896,
+     "status": "OK",
+     "timeout_s": 120
+    }
+   },
+   "n1": 50,
+   "n2": 200,
+   "warm": 200
+  },
+  "mysql2/select": {
+   "arms": {
+    "perry": {
+     "compile_s": 185.85,
+     "correctness_output": "mysql2/select mysql2@3.24.4 n=50 warm=200\nchecksum 1ba62a82",
+     "instr": {
+      "n1": [
+       1665315693,
+       1665743008,
+       1665537687
+      ],
+      "n2": [
+       2440716267,
+       2439898825,
+       2440476623
+      ],
+      "per_iter": 5166259.573333333
+     },
+     "load_flagged": true,
+     "load_max": 11.64,
+     "load_mean": 11.64,
+     "peak_rss_kb": 110564,
+     "size_bytes": 68832840,
+     "status": "OK",
+     "timeout_s": 120
+    }
+   },
+   "n1": 50,
+   "n2": 200,
+   "warm": 200
+  },
+  "nanoid/generate": {
+   "arms": {
+    "perry": {
+     "compile_s": 1.67,
+     "correctness_output": "nanoid/generate nanoid@6.0.1 n=5000 warm=5000\nok 10000",
+     "instr": {
+      "n1": [
+       378610558,
+       378615425,
+       378620425
+      ],
+      "n2": [
+       846492216,
+       846508565,
+       847488856
+      ],
+      "per_iter": 31192.876
+     },
+     "load_flagged": false,
+     "load_max": 7.2,
+     "load_mean": 7.2,
+     "peak_rss_kb": 45576,
+     "size_bytes": 22567440,
+     "status": "OK",
+     "timeout_s": 120
+    }
+   },
+   "n1": 5000,
+   "n2": 20000,
+   "warm": 5000
+  },
+  "node-cron/match": {
+   "arms": {
+    "perry": {
+     "compile_s": 6.48,
+     "correctness_output": "node-cron/match node-cron@4.6.0 n=1250 warm=2000\nchecksum da0cea61",
+     "instr": {
+      "n1": [
+       10171142271,
+       10171580659,
+       10171187822
+      ],
+      "n2": [
+       21744349496,
+       21744964501,
+       21743773497
+      ],
+      "per_iter": 3086176.4464
+     },
+     "load_flagged": true,
+     "load_max": 16.83,
+     "load_mean": 16.33,
+     "peak_rss_kb": 60508,
+     "size_bytes": 37553040,
+     "status": "OK",
+     "timeout_s": 120
+    }
+   },
+   "n1": 1250,
+   "n2": 5000,
+   "warm": 2000
+  },
+  "node-cron/validate_parse": {
+   "arms": {
+    "perry": {
+     "compile_s": 8.11,
+     "correctness_output": "node-cron/validate_parse node-cron@4.6.0 n=250 warm=500\nchecksum 6128202e",
+     "instr": {
+      "n1": [
+       3276716150,
+       3276689140,
+       3276641140
+      ],
+      "n2": [
+       6434799157,
+       6434481471,
+       6434533496
+      ],
+      "per_iter": 4210459.141333333
+     },
+     "load_flagged": true,
+     "load_max": 16.83,
+     "load_mean": 16.73,
+     "peak_rss_kb": 57660,
+     "size_bytes": 37561488,
+     "status": "OK",
+     "timeout_s": 120
+    }
+   },
+   "n1": 250,
+   "n2": 1000,
+   "warm": 500
+  },
+  "node-forge/aes_cbc": {
+   "arms": {
+    "perry": {
+     "compile_s": 82.68,
+     "correctness_output": "node-forge/aes_cbc node-forge@1.4.0 n=125 warm=200\nchecksum 315222a0",
+     "instr": {
+      "n1": [
+       8105330689,
+       8105848770,
+       8105568930
+      ],
+      "n2": [
+       17224926972,
+       17223963110,
+       17224783539
+      ],
+      "per_iter": 24317905.624
+     },
+     "load_flagged": true,
+     "load_max": 11.44,
+     "load_mean": 11.44,
+     "peak_rss_kb": 71580,
+     "size_bytes": 56842488,
+     "status": "OK",
+     "timeout_s": 120
+    }
+   },
+   "n1": 125,
+   "n2": 500,
+   "warm": 200
+  },
+  "node-forge/hmac": {
+   "arms": {
+    "perry": {
+     "compile_s": 76.1,
+     "correctness_output": "node-forge/hmac node-forge@1.4.0 n=500 warm=1000\nchecksum a30fa7ea",
+     "instr": {
+      "n1": [
+       7707041314,
+       7706156494,
+       7710397142
+      ],
+      "n2": [
+       15222312926,
+       15218399518,
+       15219756908
+      ],
+      "per_iter": 5008477.062666667
+     },
+     "load_flagged": true,
+     "load_max": 15.96,
+     "load_mean": 15.59,
+     "peak_rss_kb": 73700,
+     "size_bytes": 56824824,
+     "status": "OK",
+     "timeout_s": 120
+    }
+   },
+   "n1": 500,
+   "n2": 2000,
+   "warm": 1000
+  },
+  "node-forge/rsa_sign": {
+   "arms": {
+    "perry": {
+     "compile_s": 75.89,
+     "correctness_output": "node-forge/rsa_sign node-forge@1.4.0 n=1 warm=5\nchecksum db34d34a",
+     "instr": {
+      "n1": [
+       70052675890,
+       55018617519,
+       70789935041
+      ],
+      "n2": [
+       117784031305,
+       117778714167,
+       117318460524
+      ],
+      "per_iter": 11931509569.25
+     },
+     "load_flagged": true,
+     "load_max": 14.81,
+     "load_mean": 13.51,
+     "peak_rss_kb": 76000,
+     "size_bytes": 56834392,
+     "status": "OK",
+     "timeout_s": 120
+    }
+   },
+   "n1": 1,
+   "n2": 5,
+   "warm": 5
+  },
+  "node-forge/sha256": {
+   "arms": {
+    "perry": {
+     "compile_s": 84.56,
+     "correctness_output": "node-forge/sha256 node-forge@1.4.0 n=250 warm=500\nchecksum 93ab3894",
+     "instr": {
+      "n1": [
+       4144518150,
+       4144575182,
+       4144623129
+      ],
+      "n2": [
+       8090857149,
+       8090886520,
+       8090917758
+      ],
+      "per_iter": 5261748.450666667
+     },
+     "load_flagged": true,
+     "load_max": 16.57,
+     "load_mean": 16.36,
+     "peak_rss_kb": 52136,
+     "size_bytes": 56824880,
+     "status": "OK",
+     "timeout_s": 120
+    }
+   },
+   "n1": 250,
+   "n2": 1000,
+   "warm": 500
+  },
+  "pg/insert_batch": {
+   "arms": {
+    "perry": {
+     "compile_s": 19.59,
+     "correctness_output": "pg/insert_batch pg@8.23.0 n=50 warm=200\nchecksum 27d04584",
+     "instr": {
+      "n1": [
+       779472091,
+       779799912,
+       779606484
+      ],
+      "n2": [
+       1240183818,
+       1240353345,
+       1240470653
+      ],
+      "per_iter": 3071645.74
+     },
+     "load_flagged": true,
+     "load_max": 11.61,
+     "load_mean": 11.61,
+     "peak_rss_kb": 74404,
+     "size_bytes": 48188224,
+     "status": "OK",
+     "timeout_s": 120
+    }
+   },
+   "n1": 50,
+   "n2": 200,
+   "warm": 200
+  },
+  "pg/select": {
+   "arms": {
+    "perry": {
+     "compile_s": 23.59,
+     "correctness_output": "pg/select pg@8.23.0 n=50 warm=200\nchecksum d5ccb554",
+     "instr": {
+      "n1": [
+       830550334,
+       830567597,
+       830498393
+      ],
+      "n2": [
+       1227286153,
+       1227315652,
+       1227272288
+      ],
+      "per_iter": 2644905.46
+     },
+     "load_flagged": true,
+     "load_max": 11.61,
+     "load_mean": 11.61,
+     "peak_rss_kb": 72188,
+     "size_bytes": 48175080,
+     "status": "OK",
+     "timeout_s": 120
+    }
+   },
+   "n1": 50,
+   "n2": 200,
+   "warm": 200
+  },
+  "qs/parse_nested": {
+   "arms": {
+    "perry": {
+     "compile_s": 27.77,
+     "correctness_output": "qs/parse_nested qs@6.16.0 n=500 warm=1000\nchecksum 8e88db79",
+     "instr": {
+      "n1": [
+       2735264232,
+       2735716559,
+       2735723862
+      ],
+      "n2": [
+       5340161338,
+       5340909736,
+       5342932501
+      ],
+      "per_iter": 1736795.4513333333
+     },
+     "load_flagged": false,
+     "load_max": 7.17,
+     "load_mean": 7.17,
+     "peak_rss_kb": 50972,
+     "size_bytes": 30401864,
+     "status": "OK",
+     "timeout_s": 120
+    }
+   },
+   "n1": 500,
+   "n2": 2000,
+   "warm": 1000
+  },
+  "qs/stringify_nested": {
+   "arms": {
+    "perry": {
+     "compile_s": 22.89,
+     "correctness_output": "qs/stringify_nested qs@6.16.0 n=500 warm=1000\nchecksum 1532f58b",
+     "instr": {
+      "n1": [
+       5770829642,
+       5418591532,
+       5394354570
+      ],
+      "n2": [
+       10616157305,
+       10647526705,
+       10606710798
+      ],
+      "per_iter": 3465043.8486666665
+     },
+     "load_flagged": true,
+     "load_max": 8.04,
+     "load_mean": 7.75,
+     "peak_rss_kb": 71336,
+     "size_bytes": 30419344,
+     "status": "OK",
+     "timeout_s": 120
+    }
+   },
+   "n1": 500,
+   "n2": 2000,
+   "warm": 1000
+  },
+  "rate-limiter-flexible/consume": {
+   "arms": {
+    "perry": {
+     "compile_s": 18.37,
+     "correctness_output": "rate-limiter-flexible/consume rate-limiter-flexible@11.2.1 n=500 warm=1000\nok 500 rejected 0 remaining 23650",
+     "instr": {
+      "n1": [
+       236240524,
+       237368066,
+       236214397
+      ],
+      "n2": [
+       359124393,
+       359056168,
+       359103762
+      ],
+      "per_iter": 81908.82533333333
+     },
+     "load_flagged": true,
+     "load_max": 11.6,
+     "load_mean": 11.6,
+     "peak_rss_kb": 57516,
+     "size_bytes": 44478200,
+     "status": "OK",
+     "timeout_s": 120
+    }
+   },
+   "n1": 500,
+   "n2": 2000,
+   "warm": 1000
+  },
+  "rate-limiter-flexible/get_penalty": {
+   "arms": {
+    "perry": {
+     "compile_s": 17.96,
+     "correctness_output": "rate-limiter-flexible/get_penalty rate-limiter-flexible@11.2.1 n=500 warm=1000\nseen 0 consumed 0 dels 1",
+     "instr": {
+      "n1": [
+       222583715,
+       222574253,
+       222610790
+      ],
+      "n2": [
+       330950076,
+       332159539,
+       330926683
+      ],
+      "per_iter": 72244.24066666666
+     },
+     "load_flagged": true,
+     "load_max": 11.6,
+     "load_mean": 11.6,
+     "peak_rss_kb": 57724,
+     "size_bytes": 44482808,
+     "status": "OK",
+     "timeout_s": 120
+    }
+   },
+   "n1": 500,
+   "n2": 2000,
+   "warm": 1000
+  },
+  "redis/pipeline": {
+   "arms": {
+    "perry": {
+     "compile_s": 241.84,
+     "correctness_output": "redis/pipeline redis@6.2.1 n=12 warm=50\nchecksum 13d50ec4",
+     "instr": {
+      "n1": [
+       2701050076,
+       2701277222,
+       2700394530
+      ],
+      "n2": [
+       3903636897,
+       3903681449,
+       3904990501
+      ],
+      "per_iter": 31648194.02631579
+     },
+     "load_flagged": true,
+     "load_max": 10.5,
+     "load_mean": 10.25,
+     "peak_rss_kb": 149524,
+     "size_bytes": 111372272,
+     "status": "OK",
+     "timeout_s": 120
+    }
+   },
+   "n1": 12,
+   "n2": 50,
+   "warm": 50
+  },
+  "redis/set_get": {
+   "arms": {
+    "perry": {
+     "compile_s": 218.84,
+     "correctness_output": "redis/set_get redis@6.2.1 n=50 warm=200\nchecksum 5bd96e84 ctr 250",
+     "instr": {
+      "n1": [
+       2788901650,
+       2789716469,
+       2788779800
+      ],
+      "n2": [
+       3888315891,
+       3888520871,
+       3888631911
+      ],
+      "per_iter": 7330794.806666667
+     },
+     "load_flagged": true,
+     "load_max": 12.73,
+     "load_mean": 11.89,
+     "peak_rss_kb": 157400,
+     "size_bytes": 111359272,
+     "status": "OK",
+     "timeout_s": 120
+    }
+   },
+   "n1": 50,
+   "n2": 200,
+   "warm": 200
+  },
+  "uuid/v4": {
+   "arms": {
+    "perry": {
+     "compile_s": 3.35,
+     "correctness_output": "uuid/v4 uuid@14.0.2 n=5000 warm=5000\nvalid 5000 totalLen 180000",
+     "instr": {
+      "n1": [
+       384813993,
+       384800150,
+       384823791
+      ],
+      "n2": [
+       883487044,
+       883483660,
+       883491586
+      ],
+      "per_iter": 33244.87006666667
+     },
+     "load_flagged": false,
+     "load_max": 7.2,
+     "load_mean": 7.03,
+     "peak_rss_kb": 42820,
+     "size_bytes": 35965272,
+     "status": "OK",
+     "timeout_s": 120
+    }
+   },
+   "n1": 5000,
+   "n2": 20000,
+   "warm": 5000
+  },
+  "uuid/v5_parse": {
+   "arms": {
+    "perry": {
+     "compile_s": 3.16,
+     "correctness_output": "uuid/v5_parse uuid@14.0.2 n=1250 warm=2000\nchecksum e7432d3d",
+     "instr": {
+      "n1": [
+       588584164,
+       588678711,
+       588753321
+      ],
+      "n2": [
+       1151061578,
+       1151001430,
+       1151353929
+      ],
+      "per_iter": 149968.76453333333
+     },
+     "load_flagged": false,
+     "load_max": 7.2,
+     "load_mean": 7.2,
+     "peak_rss_kb": 58696,
+     "size_bytes": 35942712,
+     "status": "OK",
+     "timeout_s": 120
+    }
+   },
+   "n1": 1250,
+   "n2": 5000,
+   "warm": 2000
+  },
+  "uuid/v7": {
+   "arms": {
+    "perry": {
+     "compile_s": 3.31,
+     "correctness_output": "uuid/v7 uuid@14.0.2 n=5000 warm=5000\nvalid 5000 increasing 5000",
+     "instr": {
+      "n1": [
+       661403371,
+       661078960,
+       661200380
+      ],
+      "n2": [
+       1510380095,
+       1507048221,
+       1507606613
+      ],
+      "per_iter": 56427.0822
+     },
+     "load_flagged": false,
+     "load_max": 7.2,
+     "load_mean": 7.2,
+     "peak_rss_kb": 55944,
+     "size_bytes": 35977816,
+     "status": "OK",
+     "timeout_s": 120
+    }
+   },
+   "n1": 5000,
+   "n2": 20000,
+   "warm": 5000
+  },
+  "validator/batch": {
+   "arms": {
+    "perry": {
+     "compile_s": 54.5,
+     "correctness_output": "validator/batch validator@13.15.35 n=125 warm=200\nchecksum 4e06219e",
+     "instr": {
+      "n1": [
+       6861960683,
+       6798014493,
+       7071292344
+      ],
+      "n2": [
+       14300281222,
+       14621965646,
+       14982208059
+      ],
+      "per_iter": 20693346.568
+     },
+     "load_flagged": false,
+     "load_max": 7.2,
+     "load_mean": 7.2,
+     "peak_rss_kb": 68140,
+     "size_bytes": 39584344,
+     "status": "OK",
+     "timeout_s": 120
+    }
+   },
+   "n1": 125,
+   "n2": 500,
+   "warm": 200
+  },
+  "validator/sanitize": {
+   "arms": {
+    "perry": {
+     "compile_s": 76.14,
+     "correctness_output": "validator/sanitize validator@13.15.35 n=500 warm=1000\nchecksum 70af37c9",
+     "instr": {
+      "n1": [
+       811568232,
+       794603439,
+       787588563
+      ],
+      "n2": [
+       1440236977,
+       1460132678,
+       1442713818
+      ],
+      "per_iter": 432073.586
+     },
+     "load_flagged": false,
+     "load_max": 7.19,
+     "load_mean": 7.19,
+     "peak_rss_kb": 68208,
+     "size_bytes": 39578560,
+     "status": "OK",
+     "timeout_s": 120
+    }
+   },
+   "n1": 500,
+   "n2": 2000,
+   "warm": 1000
+  }
+ }
+}
