@@ -10,3 +10,6 @@ catch handlers and release their temporary GC roots.
 Borrow the caller’s scoped receiver root during pair unwrapping, reuse it when an object-backed transform pair unwraps to itself, and cover self-aliasing and distinct hidden-handle getters under forced moving collection.
 
 Avoid repeated numeric range and integer conversion checks for non-object pairs with default options; preserve endpoint validation and rejection of invalid numeric and tagged primitive arguments.
+
+Remove an argument staging allocation and copy during native method dispatch;
+register roots directly from the caller's buffer before refreshing owned arguments.
