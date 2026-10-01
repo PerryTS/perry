@@ -864,9 +864,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.4.6"
+version = "1.4.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a3eb0f42d6c360dc3f8a821f6bf2fdea7f72bfd36b3076eb0e6d1e9e0752fff4"
+checksum = "54413ede23c2daf518f35156dfde027feb2374004d63bd497f983c8db9c0e313"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -1996,9 +1996,9 @@ dependencies = [
 
 [[package]]
 name = "find-msvc-tools"
-version = "0.1.12"
+version = "0.1.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3e0f1c7c3a72c66fd80abe965175f7523475c0489a87d3ff9d6e8c87d87a9d2d"
+checksum = "ef25905e51abafe4dcea6c15fec58c57b601cdbd0ee53d22ea1d3016c587d39b"
 
 [[package]]
 name = "fixed_decimal"
@@ -2581,9 +2581,9 @@ dependencies = [
 
 [[package]]
 name = "gstreamer"
-version = "0.25.3"
+version = "0.25.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ab4527e1b9bae8d29ce137bde5b8eec8ae8f78f13ad00fc6e70cbe227d6ad027"
+checksum = "f4237e2066a25ecb7e54be6c066409e30615920265b9799b8d560ef8ac9857c6"
 dependencies = [
  "cfg-if",
  "futures-channel",
@@ -2814,7 +2814,7 @@ dependencies = [
  "ipnet",
  "jni",
  "once_cell",
- "rand 0.10.2",
+ "rand 0.10.3",
  "ring",
  "thiserror 2.0.18",
  "tinyvec",
@@ -3909,9 +3909,9 @@ dependencies = [
 
 [[package]]
 name = "memchr"
-version = "2.8.1"
+version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6b947ae49db0d222b1dbc6b113ce7248a3fc3a6ca21b696717bfc000ba4484d8"
+checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
 name = "memoffset"
@@ -4815,7 +4815,7 @@ dependencies = [
  "perry-runtime",
  "perry-transform",
  "perry-updater",
- "rand 0.10.2",
+ "rand 0.10.3",
  "rayon",
  "rustc-demangle",
  "semver",
@@ -4965,7 +4965,7 @@ dependencies = [
  "md-5 0.11.0",
  "perry-hex",
  "proptest",
- "rand 0.10.2",
+ "rand 0.10.3",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -5073,7 +5073,7 @@ name = "perry-ext-ethers"
 version = "0.5.1655"
 dependencies = [
  "perry-ffi",
- "rand 0.10.2",
+ "rand 0.10.3",
 ]
 
 [[package]]
@@ -5340,7 +5340,7 @@ dependencies = [
  "perry-dispatch",
  "perry-hex",
  "perry-parser",
- "rand 0.10.2",
+ "rand 0.10.3",
  "rustc-demangle",
  "ryu",
  "ryu-js",
@@ -5415,7 +5415,7 @@ dependencies = [
  "perry-updater",
  "perry-uuid",
  "proptest",
- "rand 0.10.2",
+ "rand 0.10.3",
  "rand_core 0.6.4",
  "rsa",
  "rusqlite",
@@ -5505,7 +5505,7 @@ dependencies = [
 name = "perry-ui-geisterhand"
 version = "0.5.1655"
 dependencies = [
- "rand 0.10.2",
+ "rand 0.10.3",
  "serde",
  "serde_json",
  "tiny_http",
@@ -6188,9 +6188,9 @@ dependencies = [
 
 [[package]]
 name = "rand"
-version = "0.10.2"
+version = "0.10.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c7f5fa3a058cd35567ef9bfa5e75732bee0f9e4c55fa90477bef2dfcdbc4be80"
+checksum = "65c9fb96cbc91e3478eaae79a69fcd3f1ae4ad052e471fe6732fff548984b4af"
 dependencies = [
  "chacha20 0.10.0",
  "getrandom 0.4.3",
@@ -8068,7 +8068,7 @@ dependencies = [
  "http",
  "httparse",
  "log",
- "rand 0.10.2",
+ "rand 0.10.3",
  "rustls",
  "rustls-pki-types",
  "sha1 0.11.0",
