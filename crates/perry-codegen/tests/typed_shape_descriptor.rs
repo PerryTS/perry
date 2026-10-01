@@ -4,6 +4,8 @@ use perry_hir::{Class, ClassField, Expr, Function, Module, ModuleInitKind, Stmt}
 
 fn empty_opts() -> CompileOptions {
     CompileOptions {
+        static_shape_ids: Vec::new(),
+        program_class_shape_ids: Default::default(),
         target: None,
         is_entry_module: false,
         non_entry_module_prefixes: Vec::new(),
@@ -167,7 +169,7 @@ fn compile_ir(module: &Module) -> String {
 }
 
 #[test]
-fn typed_class_emits_pointer_mask_and_descriptor_install() {
+fn typed_class_emits_pointer_mask_and_no_descriptor_install() {
     let module = module_with_new(class(
         1,
         "TypedBox",
@@ -184,14 +186,11 @@ fn typed_class_emits_pointer_mask_and_descriptor_install() {
     assert!(ir.contains("@perry_typed_shape_raw_f64_mask_"));
     assert!(ir.contains("private unnamed_addr constant [1 x i64] [i64 1]"));
     assert!(ir.contains("private unnamed_addr constant [1 x i64] [i64 6]"));
-    assert!(
-        ir.contains("declare void @js_gc_init_typed_shape_layout(i64, i32, ptr, i32, ptr, i32)")
-    );
-    assert!(ir.contains("call void @js_gc_init_typed_shape_layout"));
+    assert!(!ir.contains("js_gc_init_typed_shape_layout"));
 }
 
 #[test]
-fn synthesized_closed_shape_emits_pointer_mask_and_descriptor_install() {
+fn synthesized_closed_shape_emits_pointer_mask_and_no_descriptor_install() {
     let module = module_with_new(class(
         2,
         "__AnonShape_Test",
@@ -207,5 +206,5 @@ fn synthesized_closed_shape_emits_pointer_mask_and_descriptor_install() {
     assert!(ir.contains("@perry_typed_shape_raw_f64_mask_"));
     assert!(ir.contains("private unnamed_addr constant [1 x i64] [i64 1]"));
     assert!(ir.contains("private unnamed_addr constant [1 x i64] [i64 2]"));
-    assert!(ir.contains("call void @js_gc_init_typed_shape_layout"));
+    assert!(!ir.contains("js_gc_init_typed_shape_layout"));
 }

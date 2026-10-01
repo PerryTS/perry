@@ -357,13 +357,16 @@ pub(super) fn compile_method(
     // nothing else when the caller holds it only in a register temp).
     // #10663: decided before any statement is lowered.
     crate::codegen::helpers::decide_straight_line_store_outline(lf, method_body);
-    let shadow_slot_map = if super::helpers::precise_root_analysis_enabled() {
+    let mut shadow_slot_map = if super::helpers::precise_root_analysis_enabled() {
         let flat_const_ids: std::collections::HashSet<u32> =
             cross_module.flat_const_arrays.keys().copied().collect();
-        let m = crate::collectors::collect_pointer_typed_locals(
-            &method.params,
-            method_body,
-            &flat_const_ids,
+        let m = crate::scope_env::compact_root_slots(
+            crate::collectors::collect_pointer_typed_locals(
+                &method.params,
+                method_body,
+                &flat_const_ids,
+            ),
+            &cross_module.scope_map,
         );
         crate::codegen::helpers::maybe_spill_roots_to_shadow_frame(
             lf,
@@ -377,8 +380,6 @@ pub(super) fn compile_method(
         std::collections::HashMap::new()
     };
     let this_shadow_slot_idx = shadow_slot_map.len() as u32;
-    let shadow_slot_clears_after_stmt =
-        crate::collectors::collect_shadow_slot_clear_points(method_body, &shadow_slot_map);
 
     let _ = lf.create_block("entry");
 
@@ -433,12 +434,7 @@ pub(super) fn compile_method(
         }
         (this_slot, map)
     };
-    super::arguments::release_boxed_param_slots_at_exit(
-        lf,
-        &method.params,
-        &method_boxed_vars,
-        &locals,
-    );
+    super::arguments::box_rooted_parameter_slots(lf, &method.params, &method_boxed_vars, &locals);
 
     let mut local_types: HashMap<u32, perry_hir::types::Type> = module_global_types
         .iter()
@@ -483,6 +479,12 @@ pub(super) fn compile_method(
         // #9363: a method body reads the same module-scope views.
         &cross_module.module_global_proven_types,
     );
+    super::helpers::drop_number_local_root_slots(
+        &mut shadow_slot_map,
+        native_facts.number_by_construction_locals(),
+    );
+    let shadow_slot_clears_after_stmt =
+        crate::collectors::collect_shadow_slot_clear_points(method_body, &shadow_slot_map);
     let mut index_clone_integer_locals = native_facts.integer_locals().clone();
     index_clone_integer_locals.extend(index_param_ids.iter().copied());
     let index_param_proofs: HashMap<u32, perry_hir::types::Type> = index_param_ids
@@ -597,6 +599,7 @@ pub(super) fn compile_method(
         class_field_counts: &cross_module.class_field_counts,
         class_init_chains: &cross_module.class_init_chains,
         class_header_image_globals: &cross_module.class_header_images,
+        class_birth_reps: &cross_module.class_birth_reps,
         imported_class_ctors: &cross_module.imported_class_ctors,
         func_signatures,
         func_synthetic_arguments,
@@ -608,11 +611,12 @@ pub(super) fn compile_method(
             .compiler_private_async_i32_control_locals,
         compiler_private_async_i1_control_locals: &cross_module
             .compiler_private_async_i1_control_locals,
+        scope_map: &cross_module.scope_map,
         closure_rest_params,
         local_closure_func_ids: HashMap::new(),
         guard_free_closure_bindings: std::collections::HashSet::new(),
         local_closure_param_counts: HashMap::new(),
-        resolved_arrow_callback_targets: HashMap::new(),
+        resolved_plain_callback_targets: HashMap::new(),
         resolved_versioned_loop_callback_targets: HashMap::new(),
         trusted_box_captures: false,
         versioned_loop_deopt_context: None,
@@ -665,9 +669,10 @@ pub(super) fn compile_method(
         class_header_images: HashMap::new(),
         array_length_snapshots: HashMap::new(),
         string_window_array_facts: Vec::new(),
-        masked_region_scalar_locals: std::collections::HashSet::new(),
         suppressed_cleared_shadow_slots: std::collections::HashSet::new(),
         class_field_loop_facts: Vec::new(),
+        region_loops: Vec::new(),
+        region_loop_facts: Vec::new(),
         element_shape_loop_facts: Vec::new(),
         i32_counter_slots: index_i32_param_slots,
         numeric_accumulator_f64_slots: HashMap::new(),
@@ -803,7 +808,7 @@ pub(super) fn compile_method(
     };
 
     // Resolve each immutable callback parameter/arity once, before the method
-    // body. The runtime answers null unless the actual value is a plain arrow
+    // body. The runtime answers null unless the actual value is a closure
     // whose declared/rest shape can use this exact call ABI. Exact immutable
     // aliases (`const cb = callback`) reuse the same answer: every successful
     // read has that identity by construction, while a pre-initialisation read
@@ -823,7 +828,7 @@ pub(super) fn compile_method(
         let source_handle = crate::expr::unbox_to_i64(ctx.block(), &source_box);
         let fn_ptr = ctx.block().call(
             PTR,
-            "js_closure_resolve_arrow_direct_call",
+            "js_closure_resolve_plain_direct_call",
             &[(I64, &source_handle), (I32, &arity.to_string())],
         );
         resolved_callback_ptrs.insert((source_param, arity), fn_ptr);
@@ -841,7 +846,7 @@ pub(super) fn compile_method(
         else {
             continue;
         };
-        ctx.resolved_arrow_callback_targets
+        ctx.resolved_plain_callback_targets
             .insert((call.callee_local, call.arity), fn_ptr);
         if let Some(versioned_fn_ptr) = resolved_versioned_callback_ptrs
             .get(&(call.source_param, call.arity))
@@ -1495,6 +1500,8 @@ pub(super) fn compile_method(
     } else {
         None
     };
+    // #10812: throw a catchable RangeError before the native stack runs out.
+    crate::expr::stack_guard::emit_stack_guard(&mut ctx);
     if ctor_no_super_throw {
         ctx.block()
             .call(DOUBLE, "js_throw_reference_error_this_before_super", &[]);
@@ -1618,8 +1625,6 @@ pub(super) fn compile_method(
                     .class_keys_globals
                     .get(&class.name)
                     .expect("method class has a canonical keys global");
-                let expected_shape_global =
-                    crate::typed_shape::shape_id_global_name_from_keys_global(keys_global);
                 let falsy_default = (!is_pshape_clone)
                     .then_some(guarded_falsy_field_default.as_ref())
                     .flatten();
@@ -1630,7 +1635,7 @@ pub(super) fn compile_method(
                     &llvm_name,
                     params,
                     expected_class_id,
-                    &expected_shape_global,
+                    keys_global,
                     falsy_default,
                 );
             } else {

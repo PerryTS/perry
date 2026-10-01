@@ -15,7 +15,7 @@ use std::sync::{LazyLock, Mutex};
 use crate::array::ArrayHeader;
 use crate::closure::{
     js_closure_alloc, js_closure_get_capture_f64, js_closure_set_capture_f64,
-    js_closure_set_capture_ptr, js_register_closure_rest, ClosureHeader,
+    js_closure_set_capture_ptr, ClosureHeader,
 };
 use crate::object::{
     js_object_alloc, js_object_get_field_by_name_f64, js_object_set_field_by_name, ObjectHeader,
@@ -112,145 +112,171 @@ pub(crate) const KEY_REACTOR_ID: &[u8] = b"__perryDgramReactorId";
 pub(crate) const KEY_ASYNC_ID: &[u8] = b"__perryDgramAsyncId";
 pub(crate) const KEY_TRIGGER_ASYNC_ID: &[u8] = b"__perryDgramTriggerAsyncId";
 
-type MethodThunk = extern "C" fn(*const ClosureHeader, f64) -> f64;
+type MethodThunk = crate::closure::body_call::js_body_fn_ty!(a);
 
 struct MethodSpec {
     name: &'static str,
-    thunk: MethodThunk,
+    /// The method body's info: every socket method bundles its arguments
+    /// (`with_rest(0)`).
+    info: &'static crate::closure::JsFunctionInfo,
 }
 
-const SOCKET_METHODS: &[MethodSpec] = &[
+static SOCKET_METHODS: &[MethodSpec] = &[
     MethodSpec {
         name: "send",
-        thunk: dgram_send_thunk,
+        info: &crate::closure::JsFunctionInfo::of(dgram_send_thunk as MethodThunk).with_rest(0),
     },
     MethodSpec {
         name: "sendto",
-        thunk: dgram_sendto_thunk,
+        info: &crate::closure::JsFunctionInfo::of(dgram_sendto_thunk as MethodThunk).with_rest(0),
     },
     MethodSpec {
         name: "bind",
-        thunk: dgram_bind_thunk,
+        info: &crate::closure::JsFunctionInfo::of(dgram_bind_thunk as MethodThunk).with_rest(0),
     },
     MethodSpec {
         name: "close",
-        thunk: dgram_close_thunk,
+        info: &crate::closure::JsFunctionInfo::of(dgram_close_thunk as MethodThunk).with_rest(0),
     },
     MethodSpec {
         name: "address",
-        thunk: dgram_address_thunk,
+        info: &crate::closure::JsFunctionInfo::of(dgram_address_thunk as MethodThunk).with_rest(0),
     },
     MethodSpec {
         name: "remoteAddress",
-        thunk: dgram_remote_address_thunk,
+        info: &crate::closure::JsFunctionInfo::of(dgram_remote_address_thunk as MethodThunk)
+            .with_rest(0),
     },
     MethodSpec {
         name: "connect",
-        thunk: dgram_connect_thunk,
+        info: &crate::closure::JsFunctionInfo::of(dgram_connect_thunk as MethodThunk).with_rest(0),
     },
     MethodSpec {
         name: "disconnect",
-        thunk: dgram_disconnect_thunk,
+        info: &crate::closure::JsFunctionInfo::of(dgram_disconnect_thunk as MethodThunk)
+            .with_rest(0),
     },
     MethodSpec {
         name: "on",
-        thunk: dgram_on_thunk,
+        info: &crate::closure::JsFunctionInfo::of(dgram_on_thunk as MethodThunk).with_rest(0),
     },
     MethodSpec {
         name: "addListener",
-        thunk: dgram_on_thunk,
+        info: &crate::closure::JsFunctionInfo::of(dgram_on_thunk as MethodThunk).with_rest(0),
     },
     MethodSpec {
         name: "once",
-        thunk: dgram_once_thunk,
+        info: &crate::closure::JsFunctionInfo::of(dgram_once_thunk as MethodThunk).with_rest(0),
     },
     MethodSpec {
         name: "off",
-        thunk: dgram_remove_listener_thunk,
+        info: &crate::closure::JsFunctionInfo::of(dgram_remove_listener_thunk as MethodThunk)
+            .with_rest(0),
     },
     MethodSpec {
         name: "removeListener",
-        thunk: dgram_remove_listener_thunk,
+        info: &crate::closure::JsFunctionInfo::of(dgram_remove_listener_thunk as MethodThunk)
+            .with_rest(0),
     },
     MethodSpec {
         name: "emit",
-        thunk: dgram_emit_thunk,
+        info: &crate::closure::JsFunctionInfo::of(dgram_emit_thunk as MethodThunk).with_rest(0),
     },
     MethodSpec {
         name: "listenerCount",
-        thunk: dgram_listener_count_thunk,
+        info: &crate::closure::JsFunctionInfo::of(dgram_listener_count_thunk as MethodThunk)
+            .with_rest(0),
     },
     MethodSpec {
         name: "eventNames",
-        thunk: dgram_event_names_thunk,
+        info: &crate::closure::JsFunctionInfo::of(dgram_event_names_thunk as MethodThunk)
+            .with_rest(0),
     },
     MethodSpec {
         name: "addMembership",
-        thunk: dgram_add_membership_thunk,
+        info: &crate::closure::JsFunctionInfo::of(dgram_add_membership_thunk as MethodThunk)
+            .with_rest(0),
     },
     MethodSpec {
         name: "dropMembership",
-        thunk: dgram_drop_membership_thunk,
+        info: &crate::closure::JsFunctionInfo::of(dgram_drop_membership_thunk as MethodThunk)
+            .with_rest(0),
     },
     MethodSpec {
         name: "addSourceSpecificMembership",
-        thunk: dgram_add_source_membership_thunk,
+        info: &crate::closure::JsFunctionInfo::of(dgram_add_source_membership_thunk as MethodThunk)
+            .with_rest(0),
     },
     MethodSpec {
         name: "dropSourceSpecificMembership",
-        thunk: dgram_drop_source_membership_thunk,
+        info: &crate::closure::JsFunctionInfo::of(
+            dgram_drop_source_membership_thunk as MethodThunk,
+        )
+        .with_rest(0),
     },
     MethodSpec {
         name: "setBroadcast",
-        thunk: dgram_set_broadcast_thunk,
+        info: &crate::closure::JsFunctionInfo::of(dgram_set_broadcast_thunk as MethodThunk)
+            .with_rest(0),
     },
     MethodSpec {
         name: "setMulticastTTL",
-        thunk: dgram_set_multicast_ttl_thunk,
+        info: &crate::closure::JsFunctionInfo::of(dgram_set_multicast_ttl_thunk as MethodThunk)
+            .with_rest(0),
     },
     MethodSpec {
         name: "setMulticastLoopback",
-        thunk: dgram_set_multicast_loopback_thunk,
+        info: &crate::closure::JsFunctionInfo::of(
+            dgram_set_multicast_loopback_thunk as MethodThunk,
+        )
+        .with_rest(0),
     },
     MethodSpec {
         name: "setMulticastInterface",
-        thunk: dgram_set_multicast_interface_thunk,
+        info: &crate::closure::JsFunctionInfo::of(
+            dgram_set_multicast_interface_thunk as MethodThunk,
+        )
+        .with_rest(0),
     },
     MethodSpec {
         name: "setTTL",
-        thunk: dgram_set_ttl_thunk,
+        info: &crate::closure::JsFunctionInfo::of(dgram_set_ttl_thunk as MethodThunk).with_rest(0),
     },
     MethodSpec {
         name: "setRecvBufferSize",
-        thunk: dgram_set_recv_buffer_size_thunk,
+        info: &crate::closure::JsFunctionInfo::of(dgram_set_recv_buffer_size_thunk as MethodThunk)
+            .with_rest(0),
     },
     MethodSpec {
         name: "setSendBufferSize",
-        thunk: dgram_set_send_buffer_size_thunk,
+        info: &crate::closure::JsFunctionInfo::of(dgram_set_send_buffer_size_thunk as MethodThunk)
+            .with_rest(0),
     },
     MethodSpec {
         name: "getRecvBufferSize",
-        thunk: dgram_get_recv_buffer_size_thunk,
+        info: &crate::closure::JsFunctionInfo::of(dgram_get_recv_buffer_size_thunk as MethodThunk)
+            .with_rest(0),
     },
     MethodSpec {
         name: "getSendBufferSize",
-        thunk: dgram_get_send_buffer_size_thunk,
+        info: &crate::closure::JsFunctionInfo::of(dgram_get_send_buffer_size_thunk as MethodThunk)
+            .with_rest(0),
     },
     MethodSpec {
         name: "getSendQueueSize",
-        thunk: dgram_zero_thunk,
+        info: &crate::closure::JsFunctionInfo::of(dgram_zero_thunk as MethodThunk).with_rest(0),
     },
     MethodSpec {
         name: "getSendQueueCount",
-        thunk: dgram_zero_thunk,
+        info: &crate::closure::JsFunctionInfo::of(dgram_zero_thunk as MethodThunk).with_rest(0),
     },
     MethodSpec {
         name: "ref",
-        thunk: dgram_ref_thunk,
+        info: &crate::closure::JsFunctionInfo::of(dgram_ref_thunk as MethodThunk).with_rest(0),
     },
     MethodSpec {
         name: "unref",
-        thunk: dgram_unref_thunk,
+        info: &crate::closure::JsFunctionInfo::of(dgram_unref_thunk as MethodThunk).with_rest(0),
     },
 ];
 
@@ -499,14 +525,16 @@ pub(crate) fn collect_rest_args(rest: f64) -> Vec<f64> {
     collect_args(raw as *const ArrayHeader)
 }
 
-pub(crate) fn this_value(closure: *const ClosureHeader) -> f64 {
+/// The socket a method thunk acts on: the socket the method was bound to
+/// (capture 0), else the call's receiver.
+pub(crate) fn this_value(closure: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
     if !closure.is_null() {
         let bits = crate::closure::js_closure_get_capture_ptr(closure, 0) as u64;
         if bits != 0 {
             return f64::from_bits(bits);
         }
     }
-    crate::object::js_implicit_this_get()
+    this.as_f64()
 }
 
 pub(crate) fn socket_value_from_handle(handle: i64) -> f64 {
@@ -521,11 +549,13 @@ pub(crate) fn socket_value_from_handle(handle: i64) -> f64 {
     }
 }
 
-pub(crate) fn method_value(socket: f64, name: &str, thunk: MethodThunk) -> f64 {
-    let func_ptr = thunk as *const u8;
-    let closure = js_closure_alloc(func_ptr, 1);
+pub(crate) fn method_value(
+    socket: f64,
+    name: &str,
+    info: &'static crate::closure::JsFunctionInfo,
+) -> f64 {
+    let closure = js_closure_alloc(info, 1);
     js_closure_set_capture_ptr(closure, 0, socket.to_bits() as i64);
-    js_register_closure_rest(func_ptr, 0);
     crate::object::set_bound_native_closure_name(closure, name);
     js_nanbox_pointer(closure as i64)
 }
@@ -548,7 +578,7 @@ pub(crate) fn socket_object(socket_type: &str) -> f64 {
         js_object_set_field_by_name(
             obj,
             key(method.name),
-            method_value(socket, method.name, method.thunk),
+            method_value(socket, method.name, method.info),
         );
     }
     let async_dispose = crate::symbol::well_known_symbol("asyncDispose");
@@ -580,15 +610,17 @@ pub(crate) fn socket_async_ids(socket: f64) -> crate::async_hooks::AsyncResource
     }
 }
 
-extern "C" fn dgram_async_dispose(closure: *const ClosureHeader) -> f64 {
-    close_impl(this_value(closure), &[]);
+extern "C" fn dgram_async_dispose(
+    closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    close_impl(this_value(closure, this), &[]);
     let promise = crate::promise::js_promise_resolved(undefined_value());
     boxed_pointer(promise as *const u8)
 }
 
 fn async_dispose_method(socket: f64) -> f64 {
-    crate::closure::js_register_closure_arity(dgram_async_dispose as *const u8, 0);
-    let closure = js_closure_alloc(dgram_async_dispose as *const u8, 1);
+    let closure = js_closure_alloc(crate::fn_info!(dgram_async_dispose, 0; with_declared(0)), 1);
     crate::closure::js_closure_set_capture_ptr(closure, 0, socket.to_bits() as i64);
     boxed_pointer(closure as *const u8)
 }
@@ -818,12 +850,14 @@ pub(crate) fn call_function(callback: f64, this: f64, args: &[f64]) -> f64 {
     if !is_callable_value(callback) {
         return undefined_value();
     }
-    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-    let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(this));
-    let result =
-        unsafe { crate::closure::js_native_call_value(callback, args.as_ptr(), args.len()) };
-    crate::object::js_implicit_this_set(prev.get_nanbox_f64());
-    result
+    unsafe {
+        crate::closure::native_call_value_this(
+            callback,
+            crate::closure::JsThis::from_f64(this),
+            args.as_ptr(),
+            args.len(),
+        )
+    }
 }
 
 #[cfg(test)]

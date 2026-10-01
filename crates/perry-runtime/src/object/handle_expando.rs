@@ -127,7 +127,10 @@ pub fn handle_expando_get(handle: i64, name: &str) -> Option<f64> {
         if closure.is_null() {
             return Some(f64::from_bits(crate::value::TAG_UNDEFINED));
         }
-        return Some(crate::closure::js_closure_call0(closure));
+        return Some(crate::closure::js_closure_call0(
+            closure,
+            crate::closure::plain_call_receiver(),
+        ));
     }
     handle_expando_data_get(handle, name)
 }

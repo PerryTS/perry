@@ -1535,7 +1535,11 @@ pub unsafe extern "C" fn js_zlib_process_pending() -> i32 {
                             for callback in callbacks {
                                 let callback = callback.get_raw_const_ptr::<ClosureHeader>();
                                 if !callback.is_null() {
-                                    js_closure_call1(callback, buffer.get_nanbox_f64());
+                                    js_closure_call1(
+                                        callback,
+                                        perry_runtime::closure::plain_call_receiver(),
+                                        buffer.get_nanbox_f64(),
+                                    );
                                 }
                             }
                         }
@@ -1570,13 +1574,19 @@ pub unsafe extern "C" fn js_zlib_process_pending() -> i32 {
                     for callback in end_callbacks {
                         let callback = callback.get_raw_const_ptr::<ClosureHeader>();
                         if !callback.is_null() {
-                            js_closure_call0(callback);
+                            js_closure_call0(
+                                callback,
+                                perry_runtime::closure::plain_call_receiver(),
+                            );
                         }
                     }
                     for callback in finish_callbacks {
                         let callback = callback.get_raw_const_ptr::<ClosureHeader>();
                         if !callback.is_null() {
-                            js_closure_call0(callback);
+                            js_closure_call0(
+                                callback,
+                                perry_runtime::closure::plain_call_receiver(),
+                            );
                         }
                     }
                     for destination in destinations {
@@ -1585,7 +1595,10 @@ pub unsafe extern "C" fn js_zlib_process_pending() -> i32 {
                     for callback in close_callbacks {
                         let callback = callback.get_raw_const_ptr::<ClosureHeader>();
                         if !callback.is_null() {
-                            js_closure_call0(callback);
+                            js_closure_call0(
+                                callback,
+                                perry_runtime::closure::plain_call_receiver(),
+                            );
                         }
                     }
                 }
@@ -1594,7 +1607,7 @@ pub unsafe extern "C" fn js_zlib_process_pending() -> i32 {
                     let callback = scope.root_raw_const_ptr(cb as *const ClosureHeader);
                     let callback = callback.get_raw_const_ptr::<ClosureHeader>();
                     if !callback.is_null() {
-                        js_closure_call0(callback);
+                        js_closure_call0(callback, perry_runtime::closure::plain_call_receiver());
                     }
                 }
                 ZlibEvent::OneShotCallback(cb, result, ids) => {
@@ -1623,6 +1636,7 @@ pub unsafe extern "C" fn js_zlib_process_pending() -> i32 {
                                         let buffer = scope.root_nanbox_f64(buf_f64);
                                         js_closure_call2(
                                             callback.get_raw_const_ptr::<ClosureHeader>(),
+                                            perry_runtime::closure::plain_call_receiver(),
                                             f64::from_bits(JSValue::null().bits()),
                                             buffer.get_nanbox_f64(),
                                         );
@@ -1632,6 +1646,7 @@ pub unsafe extern "C" fn js_zlib_process_pending() -> i32 {
                                         ));
                                         js_closure_call2(
                                             callback.get_raw_const_ptr::<ClosureHeader>(),
+                                            perry_runtime::closure::plain_call_receiver(),
                                             error.get_nanbox_f64(),
                                             f64::from_bits(JSValue::undefined().bits()),
                                         );
@@ -1641,6 +1656,7 @@ pub unsafe extern "C" fn js_zlib_process_pending() -> i32 {
                                     let error = scope.root_nanbox_f64(build_zlib_error(&msg));
                                     js_closure_call2(
                                         callback.get_raw_const_ptr::<ClosureHeader>(),
+                                        perry_runtime::closure::plain_call_receiver(),
                                         error.get_nanbox_f64(),
                                         f64::from_bits(JSValue::undefined().bits()),
                                     );
@@ -1667,7 +1683,11 @@ pub unsafe extern "C" fn js_zlib_process_pending() -> i32 {
                     for callback in callbacks {
                         let callback = callback.get_raw_const_ptr::<ClosureHeader>();
                         if !callback.is_null() {
-                            js_closure_call1(callback, error.get_nanbox_f64());
+                            js_closure_call1(
+                                callback,
+                                perry_runtime::closure::plain_call_receiver(),
+                                error.get_nanbox_f64(),
+                            );
                         }
                     }
                 }

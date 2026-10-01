@@ -5,15 +5,20 @@ use super::*;
 /// Schedule close only after delivering the error. A close timer armed at spawn
 /// time can already be overdue before the error's setImmediate callback runs.
 /// Keep fork's separate failure contract unchanged by using this for spawn only.
-pub(super) extern "C" fn emit_error_then_close(closure: *const ClosureHeader) -> f64 {
+pub(super) extern "C" fn emit_error_then_close(
+    closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
     let unhandled = {
         let scope = crate::gc::RuntimeHandleScope::new();
-        let cp = scope.root_nanbox_f64(cp_this(closure));
+        let cp = scope.root_nanbox_f64(cp_this(this, closure));
         let unhandled = emit_spawn_error(cp.get_nanbox_f64());
         // An unhandled error ends the process in Node before `close` fires.
         if unhandled.is_none() {
-            let close =
-                crate::closure::js_closure_alloc(reactor::cp_emit_spawn_close as *const u8, 1);
+            let close = crate::closure::js_closure_alloc(
+                crate::fn_info!(reactor::cp_emit_spawn_close, 0),
+                1,
+            );
             crate::closure::js_closure_set_capture_ptr(
                 close,
                 0,
@@ -93,7 +98,6 @@ mod tests {
 
     #[test]
     fn failed_output_retains_end_and_closed_state() {
-        cp_register_arities();
         let scope = crate::gc::RuntimeHandleScope::new();
         let stream = scope.root_nanbox_f64(cp_build_readable());
         for _ in 0..2 {
@@ -111,7 +115,11 @@ mod tests {
         }
     }
 
-    extern "C" fn swallow_error(_closure: *const ClosureHeader, _err: f64) -> f64 {
+    extern "C" fn swallow_error(
+        _closure: *const ClosureHeader,
+        _this: crate::closure::JsThis,
+        _err: f64,
+    ) -> f64 {
         cp_undefined()
     }
 
@@ -144,10 +152,9 @@ mod tests {
 
     #[test]
     fn spawn_error_with_listener_is_handled() {
-        crate::closure::js_register_closure_arity(swallow_error as *const u8, 1);
         let scope = crate::gc::RuntimeHandleScope::new();
         let cp = failed_child(&scope);
-        let listener = crate::closure::js_closure_alloc(swallow_error as *const u8, 0);
+        let listener = crate::closure::js_closure_alloc(crate::fn_info!(swallow_error, 1), 0);
         super::super::emitter::cp_register(
             cp.get_nanbox_f64(),
             cp_box_string("error"),

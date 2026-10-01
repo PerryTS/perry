@@ -109,8 +109,8 @@ static TREE_CONDVAR: Condvar = Condvar::new();
 static TREE_REQUESTED: Mutex<bool> = Mutex::new(false);
 
 extern "C" {
-    fn js_closure_call0(closure: *const u8) -> f64;
-    fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+    fn js_closure_call0(closure: *const u8, this: crate::closure::JsThis) -> f64;
+    fn js_closure_call1(closure: *const u8, this: crate::closure::JsThis, arg: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
 }
 
@@ -446,10 +446,10 @@ pub extern "C" fn perry_geisterhand_pump() {
                 unsafe {
                     match args.len() {
                         0 => {
-                            js_closure_call0(ptr);
+                            js_closure_call0(ptr, crate::closure::plain_call_receiver());
                         }
                         _ => {
-                            js_closure_call1(ptr, args[0]);
+                            js_closure_call1(ptr, crate::closure::plain_call_receiver(), args[0]);
                         }
                     }
                 }
@@ -487,7 +487,7 @@ pub extern "C" fn perry_geisterhand_pump() {
                         let nanboxed = unsafe { js_nanbox_string(str_ptr as i64) };
                         let ptr = unsafe { js_nanbox_get_pointer(closure_f64) } as *const u8;
                         unsafe {
-                            js_closure_call1(ptr, nanboxed);
+                            js_closure_call1(ptr, crate::closure::plain_call_receiver(), nanboxed);
                         }
                     }
                 }

@@ -600,11 +600,14 @@ fn sys_namespace_types_member_reuses_util_types() {
 fn stream_promises_finished_resolves_for_finished_writable_side_stub_stream() {
     let stream = crate::node_stream::js_node_stream_passthrough_new(undefined_value());
     let end = get_object_property(stream, b"end").expect("stream.end should exist");
-    let prev_this = crate::object::js_implicit_this_set(stream);
     unsafe {
-        let _ = crate::closure::js_native_call_value(end, std::ptr::null(), 0);
+        let _ = crate::closure::native_call_value_this(
+            end,
+            crate::closure::JsThis::from_f64(stream),
+            std::ptr::null(),
+            0,
+        );
     }
-    crate::object::js_implicit_this_set(prev_this);
     let _ = crate::promise::js_promise_run_microtasks();
 
     let opts = js_object_alloc(0, 1);
@@ -614,8 +617,12 @@ fn stream_promises_finished_resolves_for_finished_writable_side_stub_stream() {
         f64::from_bits(crate::value::TAG_FALSE),
     );
 
-    let promise_value =
-        thunk_streamP_finished(std::ptr::null(), stream, boxed_ptr(opts as *const u8));
+    let promise_value = thunk_streamP_finished(
+        std::ptr::null(),
+        crate::closure::JsThis::UNDEFINED,
+        stream,
+        boxed_ptr(opts as *const u8),
+    );
     let promise = promise_ptr(promise_value);
 
     assert_eq!(crate::promise::js_promise_state(promise), 1);
@@ -627,15 +634,24 @@ fn stream_promises_finished_resolves_for_finished_writable_side_stub_stream() {
 
 #[test]
 fn stream_promises_finished_rejects_invalid_inputs() {
-    let number_promise = thunk_streamP_finished(std::ptr::null(), 123.0, undefined_value());
+    let number_promise = thunk_streamP_finished(
+        std::ptr::null(),
+        crate::closure::JsThis::UNDEFINED,
+        123.0,
+        undefined_value(),
+    );
     assert_rejected_node_error(
         number_promise,
         "ERR_INVALID_ARG_TYPE",
         "The \"stream\" argument must be an instance of ReadableStream, WritableStream, or Stream. Received type number (123)",
     );
 
-    let string_promise =
-        thunk_streamP_finished(std::ptr::null(), string_value("x"), undefined_value());
+    let string_promise = thunk_streamP_finished(
+        std::ptr::null(),
+        crate::closure::JsThis::UNDEFINED,
+        string_value("x"),
+        undefined_value(),
+    );
     assert_rejected_node_error(
         string_promise,
         "ERR_INVALID_ARG_TYPE",
@@ -645,6 +661,7 @@ fn stream_promises_finished_rejects_invalid_inputs() {
     let object = js_object_alloc(0, 0);
     let object_promise = thunk_streamP_finished(
         std::ptr::null(),
+        crate::closure::JsThis::UNDEFINED,
         boxed_ptr(object as *const u8),
         undefined_value(),
     );
@@ -661,7 +678,12 @@ fn stream_promises_finished_rejects_hidden_stream_error() {
     let err = abort_error_value();
     crate::node_stream::test_set_hidden_error(stream, err);
 
-    let promise_value = thunk_streamP_finished(std::ptr::null(), stream, undefined_value());
+    let promise_value = thunk_streamP_finished(
+        std::ptr::null(),
+        crate::closure::JsThis::UNDEFINED,
+        stream,
+        undefined_value(),
+    );
     let promise = promise_ptr(promise_value);
 
     assert_eq!(crate::promise::js_promise_state(promise), 2);
@@ -675,7 +697,12 @@ fn stream_promises_finished_rejects_hidden_stream_error() {
 fn stream_promises_finished_rejects_later_destroy_error() {
     let stream = crate::node_stream::js_node_stream_readable_new(undefined_value());
     crate::node_stream::test_install_manual_read(stream);
-    let promise_value = thunk_streamP_finished(std::ptr::null(), stream, undefined_value());
+    let promise_value = thunk_streamP_finished(
+        std::ptr::null(),
+        crate::closure::JsThis::UNDEFINED,
+        stream,
+        undefined_value(),
+    );
     let promise = promise_ptr(promise_value);
 
     assert_eq!(crate::promise::js_promise_state(promise), 0);
@@ -744,7 +771,12 @@ fn stream_promises_finished_resolves_for_resumed_readable_from() {
     let handle = object_ptr_from_value(stream).expect("stream object") as i64;
     let _ = crate::node_stream::js_node_stream_method_resume(handle);
 
-    let promise_value = thunk_streamP_finished(std::ptr::null(), stream, undefined_value());
+    let promise_value = thunk_streamP_finished(
+        std::ptr::null(),
+        crate::closure::JsThis::UNDEFINED,
+        stream,
+        undefined_value(),
+    );
     let promise = promise_ptr(promise_value);
     assert_eq!(crate::promise::js_promise_state(promise), 0);
 
@@ -756,7 +788,12 @@ fn stream_promises_finished_resolves_for_resumed_readable_from() {
 #[test]
 fn stream_promises_finished_duplex_default_waits_after_writable_finish_only() {
     let stream = crate::node_stream::js_node_stream_duplex_new(undefined_value());
-    let promise_value = thunk_streamP_finished(std::ptr::null(), stream, undefined_value());
+    let promise_value = thunk_streamP_finished(
+        std::ptr::null(),
+        crate::closure::JsThis::UNDEFINED,
+        stream,
+        undefined_value(),
+    );
     let promise = promise_ptr(promise_value);
 
     assert_eq!(crate::promise::js_promise_state(promise), 0);
@@ -775,7 +812,12 @@ fn stream_promises_finished_duplex_default_waits_after_writable_finish_only() {
 #[test]
 fn stream_promises_finished_duplex_default_waits_after_readable_end_only() {
     let stream = crate::node_stream::js_node_stream_duplex_new(undefined_value());
-    let promise_value = thunk_streamP_finished(std::ptr::null(), stream, undefined_value());
+    let promise_value = thunk_streamP_finished(
+        std::ptr::null(),
+        crate::closure::JsThis::UNDEFINED,
+        stream,
+        undefined_value(),
+    );
     let promise = promise_ptr(promise_value);
 
     assert_eq!(crate::promise::js_promise_state(promise), 0);
@@ -795,7 +837,12 @@ fn stream_promises_finished_duplex_default_waits_after_readable_end_only() {
 fn stream_promises_finished_duplex_readable_false_resolves_after_writable_finish() {
     let stream = crate::node_stream::js_node_stream_duplex_new(undefined_value());
     let options = finished_bool_option(b"readable", false);
-    let promise_value = thunk_streamP_finished(std::ptr::null(), stream, options);
+    let promise_value = thunk_streamP_finished(
+        std::ptr::null(),
+        crate::closure::JsThis::UNDEFINED,
+        stream,
+        options,
+    );
     let promise = promise_ptr(promise_value);
 
     assert_eq!(crate::promise::js_promise_state(promise), 0);
@@ -810,7 +857,12 @@ fn stream_promises_finished_duplex_readable_false_resolves_after_writable_finish
 fn stream_promises_finished_duplex_writable_false_resolves_after_readable_end() {
     let stream = crate::node_stream::js_node_stream_duplex_new(undefined_value());
     let options = finished_bool_option(b"writable", false);
-    let promise_value = thunk_streamP_finished(std::ptr::null(), stream, options);
+    let promise_value = thunk_streamP_finished(
+        std::ptr::null(),
+        crate::closure::JsThis::UNDEFINED,
+        stream,
+        options,
+    );
     let promise = promise_ptr(promise_value);
 
     assert_eq!(crate::promise::js_promise_state(promise), 0);
@@ -825,7 +877,12 @@ thread_local! {
     static PIPELINE_CAPTURED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
 }
 
-extern "C" fn pipeline_write_capture(_closure: *const ClosureHeader, chunk: f64, _enc: f64) -> f64 {
+extern "C" fn pipeline_write_capture(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    chunk: f64,
+    _enc: f64,
+) -> f64 {
     PIPELINE_CAPTURED.with(|captured| {
         captured
             .borrow_mut()
@@ -834,15 +891,17 @@ extern "C" fn pipeline_write_capture(_closure: *const ClosureHeader, chunk: f64,
     f64::from_bits(crate::value::TAG_TRUE)
 }
 
-extern "C" fn pipeline_end_capture(_closure: *const ClosureHeader, _arg: f64) -> f64 {
+extern "C" fn pipeline_end_capture(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    _arg: f64,
+) -> f64 {
     undefined_value()
 }
 
 #[test]
 fn stream_promises_pipeline_transfers_readable_from_chunks() {
     PIPELINE_CAPTURED.with(|captured| captured.borrow_mut().clear());
-    crate::closure::js_register_closure_arity(pipeline_write_capture as *const u8, 2);
-    crate::closure::js_register_closure_arity(pipeline_end_capture as *const u8, 1);
 
     let mut arr = crate::array::js_array_alloc(2);
     arr = crate::array::js_array_push_f64(arr, string_value("await-"));
@@ -850,8 +909,14 @@ fn stream_promises_pipeline_transfers_readable_from_chunks() {
     let source = crate::node_stream::js_node_stream_readable_from(boxed_ptr(arr as *const u8));
 
     let sink = js_object_alloc(0, 2);
-    let write = js_closure_alloc(pipeline_write_capture as *const u8, 0);
-    let end = js_closure_alloc(pipeline_end_capture as *const u8, 0);
+    let write = js_closure_alloc(
+        crate::fn_info!(pipeline_write_capture, 2; with_declared(2)),
+        0,
+    );
+    let end = js_closure_alloc(
+        crate::fn_info!(pipeline_end_capture, 1; with_declared(1)),
+        0,
+    );
     js_object_set_field_by_name(
         sink,
         js_string_from_bytes(b"write".as_ptr(), 5),
@@ -865,6 +930,7 @@ fn stream_promises_pipeline_transfers_readable_from_chunks() {
 
     let promise_value = thunk_streamP_pipeline(
         std::ptr::null(),
+        crate::closure::JsThis::UNDEFINED,
         source,
         boxed_ptr(sink as *const u8),
         undefined_value(),
@@ -881,6 +947,7 @@ fn stream_promises_pipeline_transfers_readable_from_chunks() {
 fn stream_promises_pipeline_rejects_missing_streams() {
     let direct_promise = thunk_streamP_pipeline(
         std::ptr::null(),
+        crate::closure::JsThis::UNDEFINED,
         undefined_value(),
         undefined_value(),
         undefined_value(),
@@ -894,6 +961,7 @@ fn stream_promises_pipeline_rejects_missing_streams() {
     let empty_rest = crate::array::js_array_alloc(0);
     let rest_promise = thunk_streamP_pipeline(
         std::ptr::null(),
+        crate::closure::JsThis::UNDEFINED,
         123.0,
         undefined_value(),
         boxed_ptr(empty_rest as *const u8),
@@ -907,7 +975,13 @@ fn stream_promises_pipeline_rejects_missing_streams() {
 
 #[test]
 fn stream_promises_pipeline_rejects_invalid_source_body() {
-    let direct_promise = thunk_streamP_pipeline(std::ptr::null(), 123.0, 456.0, undefined_value());
+    let direct_promise = thunk_streamP_pipeline(
+        std::ptr::null(),
+        crate::closure::JsThis::UNDEFINED,
+        123.0,
+        456.0,
+        undefined_value(),
+    );
     assert_rejected_node_error(
         direct_promise,
         "ERR_INVALID_ARG_TYPE",
@@ -917,6 +991,7 @@ fn stream_promises_pipeline_rejects_invalid_source_body() {
     let empty_rest = crate::array::js_array_alloc(0);
     let rest_promise = thunk_streamP_pipeline(
         std::ptr::null(),
+        crate::closure::JsThis::UNDEFINED,
         123.0,
         456.0,
         boxed_ptr(empty_rest as *const u8),
@@ -940,8 +1015,12 @@ fn stream_promises_finished_rejects_when_signal_aborts() {
     );
     let stream = crate::node_stream::js_node_stream_passthrough_new(undefined_value());
 
-    let promise_value =
-        thunk_streamP_finished(std::ptr::null(), stream, boxed_ptr(opts as *const u8));
+    let promise_value = thunk_streamP_finished(
+        std::ptr::null(),
+        crate::closure::JsThis::UNDEFINED,
+        stream,
+        boxed_ptr(opts as *const u8),
+    );
     let promise = promise_ptr(promise_value);
     assert_eq!(crate::promise::js_promise_state(promise), 0);
 
@@ -967,15 +1046,22 @@ fn stream_promises_finished_with_signal_resolves_for_finished_writable_side_stub
     );
     let stream = crate::node_stream::js_node_stream_passthrough_new(undefined_value());
     let end = get_object_property(stream, b"end").expect("stream.end should exist");
-    let prev_this = crate::object::js_implicit_this_set(stream);
     unsafe {
-        let _ = crate::closure::js_native_call_value(end, std::ptr::null(), 0);
+        let _ = crate::closure::native_call_value_this(
+            end,
+            crate::closure::JsThis::from_f64(stream),
+            std::ptr::null(),
+            0,
+        );
     }
-    crate::object::js_implicit_this_set(prev_this);
     let _ = crate::promise::js_promise_run_microtasks();
 
-    let promise_value =
-        thunk_streamP_finished(std::ptr::null(), stream, boxed_ptr(opts as *const u8));
+    let promise_value = thunk_streamP_finished(
+        std::ptr::null(),
+        crate::closure::JsThis::UNDEFINED,
+        stream,
+        boxed_ptr(opts as *const u8),
+    );
     let promise = promise_ptr(promise_value);
 
     assert_eq!(crate::promise::js_promise_state(promise), 1);

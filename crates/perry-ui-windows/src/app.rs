@@ -35,7 +35,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 // `docs/src/platforms/windows-7.md`.
 
 extern "C" {
-    fn js_closure_call0(closure: *const u8) -> f64;
+    fn js_closure_call0(closure: *const u8, this: perry_ffi::JsThis) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
     fn js_callback_timer_tick() -> i32;
     fn js_interval_timer_tick() -> i32;
@@ -293,7 +293,7 @@ unsafe fn dispatch_ui_message(msg: &MSG) {
         GLOBAL_HOTKEY_CALLBACKS.with(|cbs| {
             if let Some(cb_ptr) = cbs.borrow().get(&hotkey_id) {
                 unsafe {
-                    js_closure_call0(*cb_ptr);
+                    js_closure_call0(*cb_ptr, perry_ffi::JsThis::UNDEFINED);
                 }
             }
         });
@@ -992,7 +992,7 @@ fn try_handle_shortcut(vk: u16) -> bool {
             let shortcuts = shortcuts.borrow();
             for s in shortcuts.iter() {
                 if s.vk == vk && s.ctrl == ctrl_down && s.shift == shift_down && s.alt == alt_down {
-                    unsafe { js_closure_call0(s.callback_ptr) };
+                    unsafe { js_closure_call0(s.callback_ptr, perry_ffi::JsThis::UNDEFINED) };
                     return true;
                 }
             }
@@ -1384,7 +1384,7 @@ pub fn handle_timer(hwnd: HWND, timer_id: usize) {
         let timers = t.borrow();
         let idx = timer_id - 1;
         if idx < timers.len() {
-            unsafe { js_closure_call0(timers[idx].callback_ptr) };
+            unsafe { js_closure_call0(timers[idx].callback_ptr, perry_ffi::JsThis::UNDEFINED) };
         }
     });
 }
@@ -1395,7 +1395,7 @@ pub fn handle_activate(activating: bool) {
     if activating {
         ON_ACTIVATE_CALLBACK.with(|c| {
             if let Some(ptr) = *c.borrow() {
-                unsafe { js_closure_call0(ptr) };
+                unsafe { js_closure_call0(ptr, perry_ffi::JsThis::UNDEFINED) };
             }
         });
     }
@@ -1406,7 +1406,7 @@ pub fn handle_activate(activating: bool) {
 pub fn handle_terminate() {
     ON_TERMINATE_CALLBACK.with(|c| {
         if let Some(ptr) = *c.borrow() {
-            unsafe { js_closure_call0(ptr) };
+            unsafe { js_closure_call0(ptr, perry_ffi::JsThis::UNDEFINED) };
         }
     });
 }

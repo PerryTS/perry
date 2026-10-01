@@ -3,17 +3,16 @@ use super::*;
 pub(super) fn install_bound_instance_function(
     obj: *mut ObjectHeader,
     name: &str,
-    func_ptr: *const u8,
+    info: *const crate::closure::JsFunctionInfo,
     arity: u32,
 ) -> *mut ClosureHeader {
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj = scope.root_raw_mut_ptr(obj);
-    let closure = crate::closure::js_closure_alloc(func_ptr, 1);
+    let closure = crate::closure::js_closure_alloc(info, 1);
     if closure.is_null() {
         return closure;
     }
     let closure = scope.root_raw_mut_ptr(closure);
-    crate::closure::js_register_closure_arity(func_ptr, arity);
     closure.with_mut_ptr(|closure| {
         obj.with_mut_ptr(|obj: *mut ObjectHeader| {
             crate::closure::js_closure_set_capture_f64(closure, 0, js_nanbox_pointer(obj as i64))
@@ -56,32 +55,25 @@ pub(super) fn install_bound_instance_function(
 pub(super) fn install_bound_instance_function_from_handle(
     obj: &crate::gc::RuntimeHandle<'_>,
     name: &str,
-    func_ptr: *const u8,
+    info: *const crate::closure::JsFunctionInfo,
     arity: u32,
 ) -> *mut ClosureHeader {
-    obj.with_mut_ptr(|obj| install_bound_instance_function(obj, name, func_ptr, arity))
+    obj.with_mut_ptr(|obj| install_bound_instance_function(obj, name, info, arity))
 }
 
 pub(super) fn install_function(
     owner: *mut ObjectHeader,
     name: &str,
-    func_ptr: *const u8,
-    call_arity: u32,
+    info: *const crate::closure::JsFunctionInfo,
     length: u32,
-    has_rest: bool,
 ) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let owner = scope.root_raw_mut_ptr(owner);
-    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    let closure = crate::closure::js_closure_alloc(info, 0);
     if closure.is_null() {
         return undefined();
     }
     let closure = scope.root_raw_mut_ptr(closure);
-    if has_rest {
-        crate::closure::js_register_closure_rest(func_ptr, call_arity);
-    } else {
-        crate::closure::js_register_closure_arity(func_ptr, call_arity);
-    }
     closure.with_mut_ptr(|closure| crate::object::set_bound_native_closure_name(closure, name));
     closure.with_mut_ptr::<ClosureHeader, _>(|closure| {
         crate::object::set_builtin_closure_length(closure as usize, length)
@@ -121,11 +113,8 @@ pub(super) fn install_function(
 pub(super) fn install_function_from_handle(
     owner: &crate::gc::RuntimeHandle<'_>,
     name: &str,
-    func_ptr: *const u8,
-    call_arity: u32,
+    info: *const crate::closure::JsFunctionInfo,
     length: u32,
-    has_rest: bool,
 ) -> f64 {
-    owner
-        .with_mut_ptr(|owner| install_function(owner, name, func_ptr, call_arity, length, has_rest))
+    owner.with_mut_ptr(|owner| install_function(owner, name, info, length))
 }

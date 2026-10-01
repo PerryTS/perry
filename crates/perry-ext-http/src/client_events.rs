@@ -113,7 +113,7 @@ pub(crate) unsafe fn fire_request_event_listeners(request_handle: Handle, event:
     for cb in listeners {
         if cb.get() != 0 {
             let closure = JsClosure::from_raw(cb.get() as *const RawClosureHeader);
-            let _ = closure.call0();
+            let _ = closure.call0(perry_ffi::JsThis::UNDEFINED);
         }
     }
 }
@@ -136,7 +136,7 @@ pub(crate) unsafe fn fire_request_socket_event(request_handle: Handle) {
     for callback in listeners {
         if callback.get() != 0 {
             let closure = JsClosure::from_raw(callback.get() as *const RawClosureHeader);
-            let _ = closure.call1(value);
+            let _ = closure.call1(perry_ffi::JsThis::UNDEFINED, value);
         }
     }
 }
@@ -151,9 +151,9 @@ unsafe fn fire_incoming_event(incoming: Handle, event: &str, arg: Option<f64>) {
         }
         let closure = JsClosure::from_raw(callback as *const RawClosureHeader);
         if let Some(value) = arg {
-            let _ = closure.call1(value);
+            let _ = closure.call1(perry_ffi::JsThis::UNDEFINED, value);
         } else {
-            let _ = closure.call0();
+            let _ = closure.call0(perry_ffi::JsThis::UNDEFINED);
         }
     }
 }
@@ -189,7 +189,7 @@ pub(crate) unsafe fn fire_request_error_listeners(request_handle: Handle, arg: f
     for cb in listeners {
         if cb.get() != 0 {
             let closure = JsClosure::from_raw(cb.get() as *const RawClosureHeader);
-            let _ = closure.call1(arg.get());
+            let _ = closure.call1(perry_ffi::JsThis::UNDEFINED, arg.get());
         }
     }
 }
@@ -314,14 +314,14 @@ pub(crate) unsafe fn handle_response_event(
     let response_listeners = scope.root_addrs(&response_listeners);
     if response_callback.get() != 0 {
         let closure = JsClosure::from_raw(response_callback.get() as *const RawClosureHeader);
-        let _ = closure.call1(arg);
+        let _ = closure.call1(perry_ffi::JsThis::UNDEFINED, arg);
     }
     // #4909 — `.on('response', cb)` listeners fire too (the factory
     // callback is just Node's pre-registered once-listener).
     for cb in response_listeners {
         if cb.get() != 0 {
             let closure = JsClosure::from_raw(cb.get() as *const RawClosureHeader);
-            let _ = closure.call1(arg);
+            let _ = closure.call1(perry_ffi::JsThis::UNDEFINED, arg);
         }
     }
 
@@ -354,7 +354,7 @@ pub(crate) unsafe fn handle_response_event(
             for cb in &data_listeners {
                 if cb.get() != 0 {
                     let closure = JsClosure::from_raw(cb.get() as *const RawClosureHeader);
-                    let _ = closure.call1(arg.get());
+                    let _ = closure.call1(perry_ffi::JsThis::UNDEFINED, arg.get());
                 }
             }
             for dest in &pipes {
@@ -372,7 +372,7 @@ pub(crate) unsafe fn handle_response_event(
     for cb in end_listeners {
         if cb.get() != 0 {
             let closure = JsClosure::from_raw(cb.get() as *const RawClosureHeader);
-            let _ = closure.call0();
+            let _ = closure.call0(perry_ffi::JsThis::UNDEFINED);
         }
     }
 
@@ -478,7 +478,12 @@ pub(crate) unsafe fn handle_upgrade_event(
     for cb in listeners {
         if cb.get() != 0 {
             let closure = JsClosure::from_raw(cb.get() as *const RawClosureHeader);
-            let _ = closure.call3(res_arg.get(), socket_arg.get(), head_arg.get());
+            let _ = closure.call3(
+                perry_ffi::JsThis::UNDEFINED,
+                res_arg.get(),
+                socket_arg.get(),
+                head_arg.get(),
+            );
         }
     }
 
@@ -544,12 +549,12 @@ pub(crate) unsafe fn handle_response_head_event(
     let response_listeners = scope.root_addrs(&response_listeners);
     if response_callback.get() != 0 {
         let closure = JsClosure::from_raw(response_callback.get() as *const RawClosureHeader);
-        let _ = closure.call1(arg);
+        let _ = closure.call1(perry_ffi::JsThis::UNDEFINED, arg);
     }
     for cb in response_listeners {
         if cb.get() != 0 {
             let closure = JsClosure::from_raw(cb.get() as *const RawClosureHeader);
-            let _ = closure.call1(arg);
+            let _ = closure.call1(perry_ffi::JsThis::UNDEFINED, arg);
         }
     }
 }
@@ -608,7 +613,7 @@ pub(crate) unsafe fn handle_response_chunk_event(request_handle: Handle, chunk: 
     for cb in data_listeners {
         if cb.get() != 0 {
             let closure = JsClosure::from_raw(cb.get() as *const RawClosureHeader);
-            let _ = closure.call1(arg.get());
+            let _ = closure.call1(perry_ffi::JsThis::UNDEFINED, arg.get());
         }
     }
     for dest in pipes {
@@ -674,7 +679,7 @@ pub(crate) unsafe fn handle_response_end_event(request_handle: Handle) {
             for cb in data_listeners {
                 if cb.get() != 0 {
                     let closure = JsClosure::from_raw(cb.get() as *const RawClosureHeader);
-                    let _ = closure.call1(arg.get());
+                    let _ = closure.call1(perry_ffi::JsThis::UNDEFINED, arg.get());
                 }
             }
             for dest in pipes {
@@ -697,7 +702,7 @@ pub(crate) unsafe fn handle_response_end_event(request_handle: Handle) {
     for cb in end_listeners {
         if cb.get() != 0 {
             let closure = JsClosure::from_raw(cb.get() as *const RawClosureHeader);
-            let _ = closure.call0();
+            let _ = closure.call0(perry_ffi::JsThis::UNDEFINED);
         }
     }
 
@@ -863,7 +868,7 @@ pub(crate) unsafe fn handle_timeout_event(request_handle: Handle) {
     for cb in timeout_listeners {
         if cb.get() != 0 {
             let closure = JsClosure::from_raw(cb.get() as *const RawClosureHeader);
-            let _ = closure.call0();
+            let _ = closure.call0(perry_ffi::JsThis::UNDEFINED);
         }
     }
     // The transport deadline killed an in-flight exchange; if the handler
@@ -894,12 +899,12 @@ pub(crate) unsafe fn handle_flushed_event(request_handle: Handle) {
     for cb in write_cbs {
         if cb != 0 {
             let closure = JsClosure::from_raw(cb as *const RawClosureHeader);
-            let _ = closure.call0();
+            let _ = closure.call0(perry_ffi::JsThis::UNDEFINED);
         }
     }
     fire_request_event_listeners(request_handle, "finish");
     if end_cb != 0 {
         let closure = JsClosure::from_raw(end_cb as *const RawClosureHeader);
-        let _ = closure.call0();
+        let _ = closure.call0(perry_ffi::JsThis::UNDEFINED);
     }
 }

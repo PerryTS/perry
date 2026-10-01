@@ -72,20 +72,24 @@ const OP_STRING_LITERAL: u8 = 13;
 const OP_RECURSIVE_REF: u8 = 14;
 const OP_MAP: u8 = 15;
 const OP_SET: u8 = 16;
-/// A class parameter proved NOMINALLY: exact class identity plus the
-/// per-object typed-layout-intact bit, with no field-by-name walk.
+/// A class parameter proved NOMINALLY: exact class identity plus the shape,
+/// with no field-by-name walk. Node: `class_id: u32, field_count: u32`.
 ///
 /// Emitted only when every field on the class's inheritance chain is declared
-/// `number`, i.e. every one is a raw-f64 candidate. For those fields the pair
-/// (class chain reaches C, intact bit set) already implies the value fact the
-/// walk would establish — "slot K holds a plain double" — so walking them by
-/// name re-derives what the header already states. Measured at ~326
-/// instructions per field walked, so a 3-field class pays ~1_000 per call for
-/// a fact two loads can settle.
+/// `number`, i.e. every one is a raw-f64 candidate, and the chain has at most
+/// `field_rep::REP_SLOTS` fields. For those fields the pair (class chain
+/// reaches C, the receiver's shape has an `F64` lane on each of slots
+/// `0..field_count`) already implies the value fact the walk would establish —
+/// "slot K holds a plain double": an `F64` lane holds a JS Number for every
+/// object carrying the shape (charter step 5), and any other store generalizes
+/// the lane and restamps the object first. Walking the fields by name would
+/// re-derive what the shape already states. Measured at ~326 instructions per
+/// field walked, so a 3-field class pays ~1_000 per call for a fact two loads
+/// can settle.
 ///
-/// A class with any non-`number` field keeps `OP_OBJECT`: the intact bit says
-/// a string field's slot is in the pointer mask, which is NOT "it holds a
-/// string", and a clone that inlines `s.length` trusts exactly that.
+/// A class with any non-`number` field keeps `OP_OBJECT`: an `Any` lane says
+/// nothing about what the slot holds, and a clone that inlines `s.length`
+/// trusts exactly that.
 const OP_CLASS_NOMINAL: u8 = 17;
 
 fn read_u16(bytes: &[u8], offset: usize) -> Option<u16> {
@@ -303,7 +307,7 @@ impl GuardState<'_> {
         let Some(descriptor) = crate::object::shapes::object_shape_descriptor(object) else {
             return None;
         };
-        if descriptor.object_kind != crate::object::shapes::ShapeObjectKind::Ordinary {
+        if !descriptor.object_kind.is_ordinary_layout() {
             return None;
         }
         let live_slots = descriptor.live_inline_slot_count as usize;
@@ -660,10 +664,16 @@ impl GuardState<'_> {
                 let Some(class_id) = read_u32(node, 1) else {
                     return false;
                 };
-                if node.len() != 5 || class_id == 0 {
+                let Some(field_count) = read_u32(node, 5) else {
+                    return false;
+                };
+                if node.len() != 9
+                    || class_id == 0
+                    || field_count > crate::object::field_rep::REP_SLOTS
+                {
                     return false;
                 }
-                let Some((object, address, _)) = self.plain_object(value) else {
+                let Some((object, _, _)) = self.plain_object(value) else {
                     return false;
                 };
                 if !crate::object::class_chain_reaches((*object).class_id, class_id) {
@@ -671,15 +681,17 @@ impl GuardState<'_> {
                 }
                 // The value half. Without it this node would claim only
                 // identity, and `(p as any).x = "s"` on a real instance keeps
-                // the class id while retiring the raw-f64 layout.
-                //
-                // Read straight off the header rather than through a helper in
-                // `gc/layout.rs`: that file sits one line under the 2000-line
-                // cap, and `plain_object` has already proved this address
-                // carries a readable Gc header. Fails closed if it does not.
-                crate::value::addr_class::try_read_gc_header(address).is_some_and(|header| {
-                    header._reserved & crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT != 0
-                })
+                // the class id while generalizing the slot's lane to `Any`
+                // (and restamping the object) before the store.
+                let rep = crate::object::field_rep_store::shape_rep(
+                    crate::object::shapes::object_shape_stamp(object),
+                );
+                let wanted = if field_count == crate::object::field_rep::REP_SLOTS {
+                    u32::MAX
+                } else {
+                    (1u32 << field_count) - 1
+                };
+                crate::object::field_rep::non_any_slot_bits(rep) & wanted == wanted
             }
             OP_UNION => {
                 let Some(count) = read_u32(node, 1).map(|value| value as usize) else {
@@ -848,8 +860,13 @@ mod tests {
     }
 
     fn class_nominal_node(class_id: u32) -> Vec<u8> {
+        class_nominal_node_with_fields(class_id, 1)
+    }
+
+    fn class_nominal_node_with_fields(class_id: u32, field_count: u32) -> Vec<u8> {
         let mut body = vec![OP_CLASS_NOMINAL];
         body.extend_from_slice(&class_id.to_le_bytes());
+        body.extend_from_slice(&field_count.to_le_bytes());
         body
     }
 
@@ -874,6 +891,66 @@ mod tests {
         assert_eq!(guard(JSValue::bool(true), &one_node(&node)), 0);
     }
 
+    /// The value half is the shape: an instance of the class is accepted only
+    /// while its shape carries an `F64` lane on every one of the node's
+    /// `field_count` slots. An `Any` lane says nothing about the slot.
+    #[test]
+    fn a_nominal_node_accepts_an_instance_only_with_f64_lanes_on_its_fields() {
+        use crate::object::field_rep::{with_slot_rep, REP_ANY, REP_F64};
+        use crate::object::shapes::{
+            object_shape_stamp, publish_shape_result, shape_descriptor_by_id,
+            shape_descriptor_ensure_with_rep, stamp_object_shape_id_with_carrier_note,
+        };
+        let object = crate::object::js_object_alloc(4343, 2);
+        for slot in 0..2u32 {
+            crate::object::js_object_set_field(object, slot, JSValue::number(slot as f64 + 0.5));
+        }
+        let value = JSValue::from_bits(crate::value::js_nanbox_pointer(object as i64).to_bits());
+        let node = class_nominal_node_with_fields(4343, 2);
+        assert_eq!(
+            guard(value, &one_node(&node)),
+            0,
+            "an all-`Any` shape carries no value fact"
+        );
+        unsafe {
+            let d = shape_descriptor_by_id(object_shape_stamp(object)).expect("live shape");
+            let rep = with_slot_rep(with_slot_rep(REP_ANY, 0, REP_F64), 1, REP_F64);
+            let id = publish_shape_result(shape_descriptor_ensure_with_rep(
+                d.keys as usize as *const crate::array::ArrayHeader,
+                d.logical_key_count,
+                d.live_inline_slot_count,
+                d.semantic_generation,
+                d.object_kind,
+                d.hole_count,
+                d.proto_id,
+                d.summary,
+                rep,
+                None,
+            ));
+            stamp_object_shape_id_with_carrier_note(object, id);
+        }
+        assert_eq!(
+            guard(value, &one_node(&node)),
+            1,
+            "F64 lanes on both fields"
+        );
+        assert_eq!(
+            guard(value, &one_node(&class_nominal_node_with_fields(4343, 3))),
+            0,
+            "slot 2 has no lane"
+        );
+        assert_eq!(
+            guard(value, &one_node(&class_nominal_node_with_fields(4343, 33))),
+            0,
+            "more fields than the shape has lanes fails closed"
+        );
+        assert_eq!(
+            guard(value, &one_node(&class_nominal_node_with_fields(4344, 2))),
+            0,
+            "another class"
+        );
+    }
+
     /// Class id 0 means "structural" for `OP_OBJECT`, where it is a legal
     /// wildcard. A nominal node has nothing BUT identity, so a 0 there would
     /// be a node that accepts every object with an intact layout. Fail closed.
@@ -887,11 +964,16 @@ mod tests {
     #[test]
     fn a_malformed_nominal_node_fails_closed() {
         let (_, literal) = plain_object(&[(b"x", JSValue::number(1.0))]);
-        for body in [vec![OP_CLASS_NOMINAL], vec![OP_CLASS_NOMINAL, 1, 0], {
-            let mut long = class_nominal_node(7);
-            long.push(0);
-            long
-        }] {
+        for body in [
+            vec![OP_CLASS_NOMINAL],
+            vec![OP_CLASS_NOMINAL, 1, 0],
+            vec![OP_CLASS_NOMINAL, 7, 0, 0, 0],
+            {
+                let mut long = class_nominal_node(7);
+                long.push(0);
+                long
+            },
+        ] {
             assert_eq!(
                 guard(literal, &one_node(&body)),
                 0,

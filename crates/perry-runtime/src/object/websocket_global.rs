@@ -50,13 +50,13 @@ pub(super) fn install_proto_methods(proto_obj: *mut ObjectHeader) {
     install_proto_method(
         proto_obj,
         "close",
-        global_this_builtin_noop_thunk as *const u8,
+        crate::fn_info!(global_this_builtin_noop_thunk, 1),
         0,
     );
     install_proto_method(
         proto_obj,
         "send",
-        global_this_builtin_noop_thunk as *const u8,
+        crate::fn_info!(global_this_builtin_noop_thunk, 1),
         1,
     );
     super::set_builtin_property_attrs(

@@ -10,8 +10,16 @@
 // away from the top of a module.
 pub(crate) const CLASS_PROTOTYPE_REF_FLAG: u64 = 1u64 << 32;
 
+/// The VALUE of class `class_id`'s constructor: its function object.
 pub(crate) fn class_constructor_ref_value(class_id: u32) -> f64 {
-    f64::from_bits(0x7FFE_0000_0000_0000u64 | (class_id as u64 & 0xFFFF_FFFF))
+    super::class_value::class_value(class_id)
+}
+
+/// A stable, non-moving KEY for class `class_id`'s constructor, for side
+/// tables that key by value bits (the legacy immediate's bits; never a value
+/// handed to user code).
+pub(crate) fn class_constructor_key_bits(class_id: u32) -> u64 {
+    0x7FFE_0000_0000_0000u64 | (class_id as u64 & 0xFFFF_FFFF)
 }
 
 pub(crate) fn class_prototype_ref_value(class_id: u32) -> f64 {
@@ -20,6 +28,7 @@ pub(crate) fn class_prototype_ref_value(class_id: u32) -> f64 {
     )
 }
 
+#[inline]
 pub(crate) fn class_prototype_ref_id(value: f64) -> Option<u32> {
     let bits = value.to_bits();
     if (bits >> 48) == 0x7FFE && (bits & CLASS_PROTOTYPE_REF_FLAG) != 0 {
@@ -31,15 +40,22 @@ pub(crate) fn class_prototype_ref_id(value: f64) -> Option<u32> {
     None
 }
 
+/// A class constructor OR its `C.prototype` reference -> the class id. The
+/// constructor half is [`super::class_value::class_value_id`] (both forms);
+/// callers that mean only the constructor ask that directly.
+#[inline]
 pub(crate) fn class_ref_id(value: f64) -> Option<u32> {
     let bits = value.to_bits();
-    if (bits >> 48) == 0x7FFE {
-        let class_id = (bits & 0xFFFF_FFFF) as u32;
-        if class_id != 0 && is_class_id_registered(class_id) {
-            return Some(class_id);
-        }
+    match bits >> 48 {
+        // The legacy immediates: constructor or `C.prototype` reference.
+        0x7FFE => super::class_value::class_value_id_bits(bits)
+            .or_else(|| class_prototype_ref_id(value)),
+        // A class function object (one pre-filter for any other pointer).
+        0x7FFD => super::class_value::class_closure_id(
+            (bits & crate::value::POINTER_MASK) as usize,
+        ),
+        _ => None,
     }
-    None
 }
 
 pub(crate) unsafe fn metadata_key_to_string(value: f64) -> Option<String> {
@@ -102,7 +118,7 @@ fn class_chain_declares(class_id: u32, name: &str, accessors: bool) -> bool {
         if let Some(vtable) = reg.get(&cid) {
             // Honor `delete C.prototype.m`: a deleted key must report `false`
             // from `'m' in new C()`, matching the descriptor/static lookup paths.
-            if !super::class_registry::class_is_key_deleted(cid, name)
+            if !super::class_registry::class_proto_key_deleted(cid, name)
                 && (vtable.methods.contains_key(name)
                     || (accessors && vtable.accessor_decl(name).is_some()))
             {

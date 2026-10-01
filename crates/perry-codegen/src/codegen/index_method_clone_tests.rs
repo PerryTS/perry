@@ -1111,45 +1111,76 @@ fn guarded_read_can_follow_one_forwarding_edge_but_rechecks_the_live_header() {
         &ir,
         "@perry_method_index_method_clone_ts__Reader__read$idx_u31_12(",
     );
+    // One IR block of the guarded read, by its label prefix.
+    let block = |name: &str| -> &str {
+        clone
+            .split("\narr.")
+            .find(|chunk| chunk.starts_with(&format!("{name}.")))
+            .unwrap_or_else(|| panic!("clone has no arr.{name} block:\n{clone}"))
+    };
+    // The structural guard is ONE header word: type, FORWARDED and
+    // ARRAY_DESCRIPTORS under one mask, compared with GC_TYPE_ARRAY.
+    let deref = block("guard.deref");
     assert!(
-        clone.contains("select i1")
-            && clone.matches("and i8").count() >= 2
-            && clone.contains(", 128")
-            && clone.matches("icmp eq i8").count() >= 3,
-        "the guard must select a one-edge forwarding target and then re-brand/recheck it:\n{clone}"
+        deref.contains("load i32")
+            && deref.contains(", 67141887")
+            && deref.contains("icmp eq i32")
+            && deref.contains("label %arr.guard.range.")
+            && deref.contains("label %arr.guard.follow."),
+        "the hot guard must be one masked header-word compare:\n{deref}"
     );
-    let live_handle = clone
+    // A failed word (a forwarded stub among others) follows one edge off the
+    // hot path, validating the target address before any dereference.
+    let follow = block("guard.follow");
+    let live_handle = follow
         .lines()
         .find(|line| line.contains(" = select i1") && line.contains(", i64 "))
         .and_then(|line| line.trim().split_once(" = ").map(|(name, _)| name))
-        .unwrap_or_else(|| panic!("clone has no selected live array handle:\n{clone}"));
-    let selected_target_guard = clone
-        .split("\narr.guard.deref.")
-        .nth(1)
-        .and_then(|body| body.split("\narr.guard.live.").next())
-        .unwrap_or_else(|| panic!("clone has no selected-target guard block:\n{clone}"));
+        .unwrap_or_else(|| panic!("the follow block selects no live handle:\n{follow}"));
     assert!(
-        selected_target_guard.contains("label %arr.guard.live.")
-            && selected_target_guard.contains("label %arr.fallback.")
-            && !selected_target_guard.contains(&format!("sub i64 {live_handle}, 8")),
-        "the selected target must branch on its address before any live-header load:\n{selected_target_guard}"
+        follow.contains(", 32768")
+            && follow.contains("label %arr.guard.live.")
+            && follow.contains("label %arr.fallback.")
+            && !follow.contains(&format!("sub i64 {live_handle}, 8")),
+        "the selected target must branch on its address before any live-header load:\n{follow}"
     );
-    let live_header_guard = clone
-        .split("\narr.guard.live.")
-        .nth(1)
-        .unwrap_or_else(|| panic!("clone has no live-header guard block:\n{clone}"));
+    let live = block("guard.live");
     assert!(
-        live_header_guard.contains(&format!("sub i64 {live_handle}, 8")),
-        "the live header must be loaded only after the selected address is validated:\n{live_header_guard}"
+        live.contains(&format!("sub i64 {live_handle}, 8"))
+            && live.contains(", 67141887")
+            && live.contains("label %arr.guard.range."),
+        "the live header must be re-checked with the same word:\n{live}"
     );
-    let fast = clone
-        .split("arr.fast")
-        .nth(1)
-        .unwrap_or_else(|| panic!("clone has no fast block:\n{clone}"));
+    let range = block("guard.range");
     assert!(
-        fast.contains(live_handle)
-            && fast.contains("load double")
+        range.contains("phi i64") && range.contains(live_handle),
+        "the revalidated live handle {live_handle} must reach the bounds check:\n{range}"
+    );
+    let fast = block("fast");
+    assert!(
+        fast.contains("load i64")
+            && fast.contains(crate::nanbox::TAG_HOLE_I64)
+            && fast.contains("label %arr.guard.hole.")
             && !fast.contains("js_array_get_index_or_string"),
-        "the revalidated live handle {live_handle} must feed the raw slot load:\n{fast}"
+        "the fast block loads the slot and branches to the hole arm on a hole:\n{fast}"
+    );
+    // The prototype facts are consulted only on the hole / out-of-bounds arm,
+    // and the #6809 plausibility bounds are gone.
+    for (name, body) in [("deref", deref), ("range", range), ("fast", fast)] {
+        assert!(
+            !body.contains("PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED"),
+            "{name} must not read the protector:\n{body}"
+        );
+    }
+    let hole = block("guard.hole");
+    assert!(
+        hole.contains("PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED")
+            && hole.contains("icmp slt i32")
+            && hole.contains("label %arr.fallback."),
+        "the hole arm owns the protector and the negative-index exit:\n{hole}"
+    );
+    assert!(
+        !clone.contains("16000000"),
+        "no plausibility bound is left in the read:\n{clone}"
     );
 }

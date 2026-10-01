@@ -157,6 +157,7 @@ fn no_published_canonical_list_names_a_key_at_its_pre_move_address() {
             3,
             packed.as_ptr(),
             packed.len() as u32,
+            0,
         ));
         // Whole-list canonicalization of a caller-built list of young keys.
         let scratch = crate::array::js_array_alloc_with_length(2);
@@ -279,6 +280,7 @@ fn class_inline_keys_birth_follows_the_move(stamped: bool) {
             2,
             packed.as_ptr(),
             packed.len() as u32,
+            0,
         ));
         let before = addr_of(&keys) as *mut ArrayHeader;
         assert!(
@@ -290,7 +292,7 @@ fn class_inline_keys_birth_follows_the_move(stamped: bool) {
         arm_collection_on_next_block(&trigger);
         let obj = if stamped {
             crate::object::js_object_alloc_class_inline_keys_stamped(
-                class_id, 0, 2, before, shape_id,
+                class_id, 0, 2, before, shape_id, 0,
             )
         } else {
             crate::object::js_object_alloc_class_inline_keys(class_id, 0, 2, before)
@@ -355,6 +357,7 @@ fn dynamic_parent_birth_installs_the_live_merged_keys_when_its_allocation_collec
                 2,
                 parent_packed.as_ptr(),
                 parent_packed.len() as u32,
+                0,
             ));
             crate::object::register_class(child_cid, parent_cid);
             let own_packed = format!("{}\0", names[2]);
@@ -430,6 +433,7 @@ fn class_keys_memo_belongs_to_the_agent_that_built_it() {
         2,
         packed.as_ptr(),
         packed.len() as u32,
+        0,
     ));
     let current = || addr_of(&mine);
     let registered = || {
@@ -452,6 +456,7 @@ fn class_keys_memo_belongs_to_the_agent_that_built_it() {
             2,
             packed.as_ptr(),
             packed.len() as u32,
+            0,
         ) as usize;
         let seen = crate::object::registered_class_keys_array(AGENT_MEMO_CLASS_ID)
             .map(|(a, _)| a.arr() as usize);
@@ -656,4 +661,141 @@ fn a_dead_weak_keys_entry_is_dropped_before_its_storage_is_reused() {
         .borrow_mut()
         .remove(&DEAD_MEMO_CLASS_ID);
     canonical_keys::reset_for_test();
+}
+
+// ------------------------------------------------------- S3b: key atoms
+
+fn atom_hash(text: &[u8]) -> u64 {
+    crate::object::key_bytes_hash(text.as_ptr(), text.len())
+}
+
+fn atom_bits(atom: usize) -> u64 {
+    crate::value::js_nanbox_string(atom as i64).to_bits()
+}
+
+/// S3b: a key text has ONE string object in an agent — its atom — and every
+/// canonical list written after the atom exists holds it. The atom table holds
+/// its strings strongly and REWRITES them on a move (the intern-table root
+/// scanner), so after a moving minor the table, the list and a fresh pool mint
+/// all name the atom at its NEW address, and none names the address it moved
+/// away from. Interning is separate: the intern cache never hands out an atom.
+#[test]
+fn an_atom_and_the_lists_holding_it_follow_a_moving_minor() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    register_object_model_scanners();
+    gc_register_mutable_root_scanner(crate::string::scan_intern_table_roots_mut);
+    canonical_keys::reset_for_test();
+    let scope = RuntimeHandleScope::new();
+    let text = b"atom_mv_kind";
+    let hash = atom_hash(text);
+    unsafe {
+        let atom =
+            crate::string::js_string_pool_atom(text.as_ptr(), text.len() as u32, hash, 0) as usize;
+        assert!(
+            crate::arena::pointer_in_nursery(atom),
+            "premise: the atom is young, so a minor can move it"
+        );
+        // A receiver grows the key through a DIFFERENT string with the text.
+        let copy = nursery_key("atom_mv_kind");
+        assert_ne!(copy as usize, atom, "premise: two string objects, one text");
+        let o = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
+        set(o, nursery_key("atom_mv_a"), 1.0);
+        set(o, copy, 2.0);
+        let list = keys_of(o);
+        assert_eq!(
+            crate::array::js_array_get(list, 1).bits(),
+            atom_bits(atom),
+            "INVARIANT: the written list holds the atom, not the grower's copy"
+        );
+
+        let trace = collect_minor_trace(GcTriggerKind::Direct);
+        assert!(
+            trace.copying_nursery.copied_objects > 0,
+            "premise: the minor copied"
+        );
+        let moved = crate::string::atom_lookup(text, hash).expect("the atom survives") as usize;
+        assert_ne!(moved, atom, "premise: the minor moved the atom");
+        let header = crate::value::addr_class::try_read_tracked_gc_header(moved)
+            .expect("the moved atom is a tracked cell");
+        assert_eq!(
+            (*header.as_ptr()).gc_flags & GC_FLAG_FORWARDED,
+            0,
+            "INVARIANT: the table names the live copy, not a forwarding header"
+        );
+        assert_eq!(
+            crate::array::js_array_get(keys_of(o), 1).bits(),
+            atom_bits(moved),
+            "INVARIANT: the list follows its atom through the move"
+        );
+        // After the move: minting again returns the moved atom — never a third
+        // string. Interning a copy does NOT: an atom is identity, not
+        // eligibility (`string::intern::AtomTable`).
+        assert_ne!(
+            crate::string::js_string_intern(nursery_key("atom_mv_kind"), hash) as usize,
+            moved,
+            "INVARIANT: the intern cache never hands out an atom"
+        );
+        assert_eq!(
+            crate::string::js_string_pool_atom(text.as_ptr(), text.len() as u32, hash, 0) as usize,
+            moved,
+            "a second mint finds the moved atom"
+        );
+        // A list written after the move holds the moved atom.
+        let o2 = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
+        set(o2, nursery_key("atom_mv_b"), 1.0);
+        set(o2, nursery_key("atom_mv_kind"), 2.0);
+        assert_eq!(
+            crate::array::js_array_get(keys_of(o2), 1).bits(),
+            atom_bits(moved),
+            "INVARIANT: a list written after the move holds the moved atom"
+        );
+    }
+}
+
+/// S3b, a collection DURING the write: the canonical backing allocation that
+/// publishes a list holding an atom is itself the collection point, and moves
+/// the atom. The published list must hold the atom's LIVE address.
+#[test]
+fn a_list_written_while_its_atom_moves_holds_the_live_atom() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _pacing = crate::gc::policy::force_alloc_point_minor_pacing();
+    let _scan = NoConservativeScan::new();
+    let trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    register_object_model_scanners();
+    gc_register_mutable_root_scanner(crate::string::scan_intern_table_roots_mut);
+    canonical_keys::reset_for_test();
+    let text = b"atom_during_kind";
+    let hash = atom_hash(text);
+    unsafe {
+        let atom =
+            crate::string::js_string_pool_atom(text.as_ptr(), text.len() as u32, hash, 0) as usize;
+        assert!(
+            crate::arena::pointer_in_nursery(atom),
+            "premise: the atom is young"
+        );
+        let scope = RuntimeHandleScope::new();
+        let copy = scope.root_string_ptr(nursery_key("atom_during_kind"));
+        // The empty list plus this key is a fresh backing: its allocation is
+        // the collection point.
+        arm_collection_on_next_block(&trigger);
+        let list = copy.with_const_ptr(|k: *const crate::StringHeader| {
+            canonical_keys::extend_key(
+                &SharedLayout::shape_cache_entry(),
+                canonical_keys::CanonicalKeys::EMPTY,
+                k,
+            )
+        });
+        let live = crate::string::atom_lookup(text, hash).expect("the atom survives") as usize;
+        assert_ne!(
+            live, atom,
+            "premise: the backing allocation did not move the atom, so this run proved \
+             nothing. Check the trigger arming."
+        );
+        assert_eq!(
+            crate::array::js_array_get(list.as_ptr(), 0).bits(),
+            atom_bits(live),
+            "INVARIANT: the list holds the atom's live address"
+        );
+    }
 }

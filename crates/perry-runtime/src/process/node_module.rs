@@ -57,14 +57,15 @@ pub extern "C" fn js_module_constants() -> f64 {
 
 extern "C" fn module_require_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     specifier: f64,
 ) -> f64 {
-    js_module_instance_require(specifier)
+    js_module_instance_require(this, specifier)
 }
 
-pub(crate) fn js_module_instance_require(specifier: f64) -> f64 {
+pub(crate) fn js_module_instance_require(this: crate::closure::JsThis, specifier: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let receiver = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
+    let receiver = scope.root_nanbox_f64(this.as_f64());
     let specifier = scope.root_nanbox_f64(specifier);
     let Some(_) = module_object_ptr(receiver.get_nanbox_f64()) else {
         module_throw_plain_type_error("Module.prototype.require called on incompatible receiver");
@@ -84,6 +85,7 @@ pub(crate) fn js_module_instance_require(specifier: f64) -> f64 {
     crate::closure::js_closure_call1(
         crate::value::js_nanbox_get_pointer(require.get_nanbox_f64())
             as *const crate::closure::ClosureHeader,
+        crate::closure::plain_call_receiver(),
         specifier.get_nanbox_f64(),
     )
 }
@@ -116,9 +118,11 @@ pub extern "C" fn js_module_module_new(id: f64, parent: f64) -> f64 {
         ),
     ));
     unsafe {
-        (*(crate::value::js_nanbox_get_pointer(obj.get_nanbox_f64())
-            as *mut crate::object::ObjectHeader))
-            .class_id = super::MODULE_CJS_CLASS_ID;
+        let module = crate::value::js_nanbox_get_pointer(obj.get_nanbox_f64())
+            as *mut crate::object::ObjectHeader;
+        (*module).class_id = super::MODULE_CJS_CLASS_ID;
+        // Charter step 3: `class_id` is a store-kind input.
+        crate::object::shapes::store_kind::restamp_object_store_kind(module);
     }
     let exports = scope.root_nanbox_f64(module_object_value(crate::object::js_object_alloc(0, 0)));
     let children = scope.root_nanbox_f64(f64::from_bits(
@@ -166,7 +170,11 @@ pub extern "C" fn js_module_module_new(id: f64, parent: f64) -> f64 {
             module_null().to_bits()
         }),
     );
-    let require = scope.root_nanbox_f64(module_function1("require", module_require_thunk, 1));
+    let require = scope.root_nanbox_f64(module_function1(
+        "require",
+        crate::fn_info!(module_require_thunk, 1; with_declared(1), with_length(1)),
+        1,
+    ));
     crate::object::js_object_set_field(
         obj_ptr(),
         7,
@@ -442,8 +450,8 @@ pub extern "C" fn js_module_load(request: f64, _parent: f64, _is_main: f64) -> f
     module_undefined()
 }
 
-pub extern "C" fn js_module_instance_load(filename: f64) -> f64 {
-    let receiver = crate::object::js_implicit_this_get();
+pub extern "C" fn js_module_instance_load(this: crate::closure::JsThis, filename: f64) -> f64 {
+    let receiver = this.as_f64();
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(receiver);
     let Some(_) = module_object_ptr(receiver.get_nanbox_f64()) else {
@@ -872,7 +880,10 @@ fn module_hook_member(value: f64, name: &str) -> f64 {
     crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
 }
 
-extern "C" fn module_hooks_deregister(closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn module_hooks_deregister(
+    closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = js_closure_get_capture_f64(closure, 0) as u64;
     // 2026-07-09 GC audit wave 2: deregister used to only flip `active`,
     // leaving the resolve/load closures strongly rooted by
@@ -886,9 +897,7 @@ extern "C" fn module_hooks_deregister(closure: *const crate::closure::ClosureHea
 }
 
 fn module_hooks_deregister_function(id: u64) -> f64 {
-    let func_ptr = module_hooks_deregister as *const u8;
-    crate::closure::js_register_closure_arity(func_ptr, 0);
-    crate::closure::js_register_closure_length(func_ptr, 0);
+    let func_ptr = crate::fn_info!(module_hooks_deregister, 0; with_declared(0), with_length(0));
     let closure = crate::closure::js_closure_alloc(func_ptr, 1);
     js_closure_set_capture_f64(closure, 0, id as f64);
     crate::object::set_bound_native_closure_name(closure, "deregister");
@@ -962,6 +971,7 @@ pub extern "C" fn js_module_register_hooks(hooks: f64) -> f64 {
 
 extern "C" fn module_loader_next_resolve(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     specifier: f64,
     _context: f64,
 ) -> f64 {
@@ -973,6 +983,7 @@ extern "C" fn module_loader_next_resolve(
 
 extern "C" fn module_loader_next_load(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _url: f64,
     _context: f64,
 ) -> f64 {
@@ -985,17 +996,14 @@ extern "C" fn module_loader_next_load(
 fn module_loader_callback(
     slot: &'static std::thread::LocalKey<Cell<*const crate::closure::ClosureHeader>>,
     name: &str,
-    func: extern "C" fn(*const crate::closure::ClosureHeader, f64, f64) -> f64,
+    func: *const crate::closure::JsFunctionInfo,
 ) -> f64 {
     let ptr = slot.with(|cell| {
         let existing = cell.get();
         if !existing.is_null() {
             return existing;
         }
-        let func_ptr = func as *const u8;
-        crate::closure::js_register_closure_arity(func_ptr, 2);
-        crate::closure::js_register_closure_length(func_ptr, 2);
-        let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+        let closure = crate::closure::js_closure_alloc(func, 0);
         crate::object::set_bound_native_closure_name(closure, name);
         crate::object::set_builtin_closure_length(closure as usize, 2);
         cell.set(closure);
@@ -1030,22 +1038,28 @@ fn module_loader_result_url(result: f64, fallback: f64) -> f64 {
 
 extern "C" fn module_loader_hook_chain(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
     context: f64,
 ) -> f64 {
     let callback = js_closure_get_capture_f64(closure, 0);
     let next = js_closure_get_capture_f64(closure, 1);
     let args = [value, context, next];
-    unsafe { crate::closure::js_native_call_value(callback, args.as_ptr(), args.len()) }
+    unsafe {
+        crate::closure::js_native_call_value(
+            callback,
+            crate::closure::plain_call_receiver(),
+            args.as_ptr(),
+            args.len(),
+        )
+    }
 }
 
 fn module_loader_hook_chain_function(callback: f64, next: f64, name: &str) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let callback = scope.root_nanbox_f64(callback);
     let next = scope.root_nanbox_f64(next);
-    let func_ptr = module_loader_hook_chain as *const u8;
-    crate::closure::js_register_closure_arity(func_ptr, 2);
-    crate::closure::js_register_closure_length(func_ptr, 2);
+    let func_ptr = crate::fn_info!(module_loader_hook_chain, 2; with_declared(2), with_length(2));
     let closure = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(func_ptr, 2));
     closure.with_mut_ptr(|c: *mut crate::closure::ClosureHeader| {
         js_closure_set_capture_f64(c, 0, callback.get_nanbox_f64());
@@ -1112,7 +1126,7 @@ pub extern "C" fn js_module_dynamic_import_apply_hooks(specifier: f64) -> f64 {
     let resolve_terminal = module_loader_callback(
         &MODULE_LOADER_NEXT_RESOLVE,
         "nextResolve",
-        module_loader_next_resolve,
+        crate::fn_info!(module_loader_next_resolve, 2; with_declared(2), with_length(2)),
     );
     let resolve_chain = scope.root_nanbox_f64(module_loader_build_hook_chain(
         &entries,
@@ -1123,6 +1137,7 @@ pub extern "C" fn js_module_dynamic_import_apply_hooks(specifier: f64) -> f64 {
     let resolved = unsafe {
         crate::closure::js_native_call_value(
             resolve_chain.get_nanbox_f64(),
+            crate::closure::plain_call_receiver(),
             resolve_args.as_ptr(),
             resolve_args.len(),
         )
@@ -1136,7 +1151,7 @@ pub extern "C" fn js_module_dynamic_import_apply_hooks(specifier: f64) -> f64 {
     let load_terminal = module_loader_callback(
         &MODULE_LOADER_NEXT_LOAD,
         "nextLoad",
-        module_loader_next_load,
+        crate::fn_info!(module_loader_next_load, 2; with_declared(2), with_length(2)),
     );
     let load_chain = scope.root_nanbox_f64(module_loader_build_hook_chain(
         &entries,
@@ -1147,6 +1162,7 @@ pub extern "C" fn js_module_dynamic_import_apply_hooks(specifier: f64) -> f64 {
     unsafe {
         crate::closure::js_native_call_value(
             load_chain.get_nanbox_f64(),
+            crate::closure::plain_call_receiver(),
             load_args.as_ptr(),
             load_args.len(),
         );

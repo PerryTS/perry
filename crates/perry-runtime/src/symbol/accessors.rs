@@ -19,6 +19,21 @@ per_test_global! {
 }
 
 pub(super) fn clear_symbol_accessor_property(obj_key: usize, sym_key: usize) {
+    if unsafe { crate::object::shaped_symbols::owner(obj_key).is_some() } {
+        if let Some(entry) = unsafe { crate::object::shaped_symbols::entry(obj_key, sym_key) } {
+            if entry & crate::object::key_attrs::ENTRY_ACCESSOR != 0 {
+                unsafe {
+                    crate::object::shaped_symbols::define(
+                        obj_key,
+                        sym_key,
+                        TAG_UNDEFINED,
+                        entry & !crate::object::key_attrs::ENTRY_ACCESSOR_MASK,
+                    );
+                }
+            }
+        }
+        return;
+    }
     let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_ACCESSOR_PROPERTIES);
     if let Some(map) = guard.as_mut() {
         if map.remove(&(obj_key, sym_key)).is_some() {
@@ -194,6 +209,9 @@ pub(crate) unsafe fn set_symbol_accessor_property(
     crate::symbol::note_symbol_key_installed(sym_key);
     crate::symbol::note_symbol_owner_installed(obj_key);
     note_symbol_accessor_key(sym_key);
+    if crate::object::shaped_symbols::define_accessor(obj_key, sym_key, get_bits, set_bits) {
+        return;
+    }
     {
         // `SYMBOL_PROPERTIES` is the only insertion-ordered record of symbol
         // property CREATION order, which `[[OwnPropertyKeys]]` must report
@@ -250,6 +268,10 @@ pub(super) unsafe fn symbol_accessor_property(
     if obj_key == 0 || sym_key == 0 {
         return None;
     }
+    if unsafe { crate::object::shaped_symbols::owner(obj_key).is_some() } {
+        return unsafe { crate::object::shaped_symbols::accessor(obj_key, sym_key) }
+            .map(|(get, set)| SymbolAccessorDescriptor { get, set });
+    }
     let guard = crate::gc::lock_gc_root_registry(&SYMBOL_ACCESSOR_PROPERTIES);
     guard
         .as_ref()
@@ -260,6 +282,10 @@ pub(super) fn symbol_accessor_property_by_key(
     obj_key: usize,
     sym_key: usize,
 ) -> Option<SymbolAccessorDescriptor> {
+    if unsafe { crate::object::shaped_symbols::owner(obj_key).is_some() } {
+        return unsafe { crate::object::shaped_symbols::accessor(obj_key, sym_key) }
+            .map(|(get, set)| SymbolAccessorDescriptor { get, set });
+    }
     let guard = crate::gc::lock_gc_root_registry(&SYMBOL_ACCESSOR_PROPERTIES);
     guard
         .as_ref()
@@ -281,9 +307,11 @@ pub(super) unsafe fn invoke_symbol_accessor_setter(
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let value_h = scope.root_nanbox_f64(value);
-    let prev = scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
-    crate::closure::js_closure_call1(closure, value_h.get_nanbox_f64());
-    crate::object::js_implicit_this_set(prev.get_nanbox_f64());
+    crate::closure::js_closure_call1(
+        closure,
+        crate::closure::JsThis::from_f64(receiver),
+        value_h.get_nanbox_f64(),
+    );
     value_h.get_nanbox_f64()
 }
 
@@ -295,11 +323,7 @@ pub(super) unsafe fn invoke_symbol_accessor_getter(get_bits: u64, receiver: f64)
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-    let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
-    let result = crate::closure::js_closure_call0(closure);
-    crate::object::js_implicit_this_set(prev.get_nanbox_f64());
-    result
+    crate::closure::js_closure_call0(closure, crate::closure::JsThis::from_f64(receiver))
 }
 
 pub(super) fn scan_symbol_accessor_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
@@ -380,6 +404,9 @@ pub(super) fn scan_symbol_accessor_root_slot(
 }
 
 pub(super) fn has_own_symbol_accessor(obj_key: usize, sym_key: usize) -> bool {
+    if unsafe { crate::object::shaped_symbols::owner(obj_key).is_some() } {
+        return unsafe { crate::object::shaped_symbols::accessor(obj_key, sym_key).is_some() };
+    }
     let guard = crate::gc::lock_gc_root_registry(&SYMBOL_ACCESSOR_PROPERTIES);
     guard
         .as_ref()
@@ -390,6 +417,14 @@ pub(super) fn has_own_symbol_accessor(obj_key: usize, sym_key: usize) -> bool {
 /// installed on `obj_key`. Used by `getOwnPropertySymbols`, which must report
 /// symbol-keyed accessors even though they live outside `SYMBOL_PROPERTIES`.
 pub(super) fn owner_symbol_accessor_keys(obj_key: usize) -> Vec<usize> {
+    if unsafe { crate::object::shaped_symbols::owner(obj_key).is_some() } {
+        return unsafe { crate::object::shaped_symbols::entries(obj_key, false) }
+            .into_iter()
+            .filter_map(|(sym, _)| unsafe {
+                crate::object::shaped_symbols::accessor(obj_key, sym).map(|_| sym)
+            })
+            .collect();
+    }
     let guard = crate::gc::lock_gc_root_registry(&SYMBOL_ACCESSOR_PROPERTIES);
     guard
         .as_ref()

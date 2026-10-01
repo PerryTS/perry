@@ -8,8 +8,8 @@ use objc2_foundation::{MainThreadMarker, NSObject, NSString};
 use std::cell::RefCell;
 
 extern "C" {
-    fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
-    fn js_closure_call2(closure: *const u8, arg1: f64, arg2: f64) -> f64;
+    fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
+    fn js_closure_call2(closure: *const u8, this: perry_ffi::JsThis, arg1: f64, arg2: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
 }
 
@@ -129,7 +129,7 @@ define_class!(
                 return std::ptr::null_mut();
             }
             let render_ptr = unsafe { js_nanbox_get_pointer(render_closure) } as *const u8;
-            let child_f64 = unsafe { js_closure_call2(render_ptr, row as f64, col as f64) };
+            let child_f64 = unsafe { js_closure_call2(render_ptr, perry_ffi::JsThis::UNDEFINED, row as f64, col as f64) };
             // Issue #556: tag-validate before treating the closure
             // return as a widget handle. The closure SHOULD return a
             // Widget (POINTER_TAG = 0x7FFD), but if user code
@@ -198,7 +198,7 @@ define_class!(
                     let ascending: objc2::runtime::Bool = msg_send![first, ascending];
                     let asc_f = if ascending.as_bool() { 1.0 } else { 0.0 };
                     let closure_ptr = js_nanbox_get_pointer(sort_closure) as *const u8;
-                    js_closure_call2(closure_ptr, col_index as f64, asc_f);
+                    js_closure_call2(closure_ptr, perry_ffi::JsThis::UNDEFINED, col_index as f64, asc_f);
                 }
             }));
         }
@@ -225,7 +225,7 @@ define_class!(
                     let closure_ptr =
                         unsafe { js_nanbox_get_pointer(select_closure) } as *const u8;
                     unsafe {
-                        js_closure_call1(closure_ptr, selected_row as f64);
+                        js_closure_call1(closure_ptr, perry_ffi::JsThis::UNDEFINED, selected_row as f64);
                     }
                 }
             }));

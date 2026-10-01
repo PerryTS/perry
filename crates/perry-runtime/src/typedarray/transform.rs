@@ -134,6 +134,7 @@ unsafe fn bigint_lane_compare(
     let b_handle = scope.root_nanbox_f64(box_lane(b_bits));
     let r = site.call(
         comparator,
+        crate::closure::plain_call_receiver(),
         a_handle.get_nanbox_f64(),
         b_handle.get_nanbox_f64(),
     );
@@ -187,10 +188,8 @@ pub extern "C" fn js_typed_array_sort_with_comparator(
     if comparator.is_null() {
         return js_typed_array_sort_default(ta);
     }
-    // #11419: the callback runs with `this` undefined, not the receiver of
-    // whatever method dispatch encloses this call.
-    let this_scope = crate::gc::RuntimeHandleScope::new();
-    let _this = crate::object::ImplicitThisScope::bind_undefined(&this_scope);
+    // #11419: the callback is a plain call, so it runs with `this` undefined,
+    // not the receiver of whatever method dispatch encloses this call.
     let ta_clean = clean_ta_ptr(ta as *const TypedArrayHeader) as *mut TypedArrayHeader;
     if ta_clean.is_null() {
         return ta_clean;
@@ -233,7 +232,9 @@ pub extern "C" fn js_typed_array_sort_with_comparator(
             // `with_const_ptr`: an argument-position read, which `across_*`
             // cannot express. The handle is re-read per comparison, so a
             // relocation during comparison `i` is reflected in `i + 1`.
-            let r = cmp_handle.with_const_ptr::<ClosureHeader, _>(|cmp| cmp_site.call(cmp, *a, *b));
+            let r = cmp_handle.with_const_ptr::<ClosureHeader, _>(|cmp| {
+                cmp_site.call(cmp, crate::closure::plain_call_receiver(), *a, *b)
+            });
             if r < 0.0 {
                 std::cmp::Ordering::Less
             } else if r > 0.0 {
@@ -281,10 +282,8 @@ pub extern "C" fn js_typed_array_to_sorted_with_comparator(
     if comparator.is_null() {
         return js_typed_array_to_sorted_default(ta);
     }
-    // #11419: the callback runs with `this` undefined, not the receiver of
-    // whatever method dispatch encloses this call.
-    let this_scope = crate::gc::RuntimeHandleScope::new();
-    let _this = crate::object::ImplicitThisScope::bind_undefined(&this_scope);
+    // #11419: the callback is a plain call, so it runs with `this` undefined,
+    // not the receiver of whatever method dispatch encloses this call.
     let ta = clean_ta_ptr(ta);
     if ta.is_null() {
         return typed_array_alloc(KIND_FLOAT64, 0);
@@ -322,7 +321,9 @@ pub extern "C" fn js_typed_array_to_sorted_with_comparator(
             // `with_const_ptr`: an argument-position read, which `across_*`
             // cannot express. The handle is re-read per comparison, so a
             // relocation during comparison `i` is reflected in `i + 1`.
-            let r = cmp_handle.with_const_ptr::<ClosureHeader, _>(|cmp| cmp_site.call(cmp, *a, *b));
+            let r = cmp_handle.with_const_ptr::<ClosureHeader, _>(|cmp| {
+                cmp_site.call(cmp, crate::closure::plain_call_receiver(), *a, *b)
+            });
             if r < 0.0 {
                 std::cmp::Ordering::Less
             } else if r > 0.0 {
@@ -397,7 +398,13 @@ pub extern "C" fn js_typed_array_find_last(
         let cb_site = crate::closure::DirectCall3::resolve(callback);
         for i in (0..len).rev() {
             let v = load_at(ta, i);
-            let r = cb_site.call(callback, v, i as f64, recv);
+            let r = cb_site.call(
+                callback,
+                crate::closure::plain_call_receiver(),
+                v,
+                i as f64,
+                recv,
+            );
             if crate::value::js_is_truthy(r) != 0 {
                 return v;
             }
@@ -425,7 +432,13 @@ pub extern "C" fn js_typed_array_find_last_index(
         let cb_site = crate::closure::DirectCall3::resolve(callback);
         for i in (0..len).rev() {
             let v = load_at(ta, i);
-            let r = cb_site.call(callback, v, i as f64, recv);
+            let r = cb_site.call(
+                callback,
+                crate::closure::plain_call_receiver(),
+                v,
+                i as f64,
+                recv,
+            );
             if crate::value::js_is_truthy(r) != 0 {
                 return i as f64;
             }

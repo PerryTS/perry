@@ -14,7 +14,7 @@ unsafe fn function_value_name(value: f64) -> String {
     let Some(closure) = closure_ptr_from_value(value) else {
         return String::new();
     };
-    crate::builtins::function_name_for_ptr((*closure).func_ptr as usize)
+    crate::builtins::function_name_for_ptr((*closure).code() as usize)
         .or_else(|| {
             let name_value = crate::closure::closure_get_dynamic_prop(closure as usize, "name");
             string_of(JSValue::from_bits(name_value.to_bits()))
@@ -48,6 +48,7 @@ unsafe fn finish_timerify_entry(name_value: f64, start_time: f64, histogram: f64
 
 extern "C" fn perf_timerify_settle(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     outcome: f64,
 ) -> f64 {
     unsafe {
@@ -64,6 +65,7 @@ extern "C" fn perf_timerify_settle(
 
 extern "C" fn perf_timerify_wrapper(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     unsafe {
@@ -111,7 +113,12 @@ extern "C" fn perf_timerify_wrapper(
             if crate::object::class_ref_id(target).is_some() {
                 throw_type_error("Class constructor cannot be invoked without 'new'");
             }
-            crate::closure::js_native_call_value(target, call_args.as_ptr(), call_args.len())
+            crate::closure::js_native_call_value(
+                target,
+                crate::closure::plain_call_receiver(),
+                call_args.as_ptr(),
+                call_args.len(),
+            )
         };
         let result_handle = scope.root_nanbox_f64(result);
 
@@ -121,7 +128,10 @@ extern "C" fn perf_timerify_wrapper(
         let normalized = crate::promise::js_assimilate_thenable(result_handle.get_nanbox_f64());
         let normalized_handle = scope.root_nanbox_f64(normalized);
         if crate::promise::js_value_is_promise(normalized_handle.get_nanbox_f64()) != 0 {
-            let listener = crate::closure::js_closure_alloc(perf_timerify_settle as *const u8, 4);
+            let listener = crate::closure::js_closure_alloc(
+                crate::fn_info!(perf_timerify_settle, 1; with_declared(1)),
+                4,
+            );
             crate::closure::js_closure_set_capture_f64(listener, 0, name_handle.get_nanbox_f64());
             crate::closure::js_closure_set_capture_f64(listener, 1, start_time);
             crate::closure::js_closure_set_capture_f64(
@@ -167,12 +177,12 @@ pub extern "C" fn js_perf_timerify(fn_value: f64, options: f64) -> f64 {
                 histogram = candidate;
             }
         }
-        TIMERIFY_WRAPPER_REGISTERED.call_once(|| {
-            crate::closure::js_register_closure_rest(perf_timerify_wrapper as *const u8, 0);
-            crate::closure::js_register_closure_arity(perf_timerify_settle as *const u8, 1);
-        });
+        TIMERIFY_WRAPPER_REGISTERED.call_once(|| {});
         let name = function_value_name(fn_value);
-        let closure = crate::closure::js_closure_alloc(perf_timerify_wrapper as *const u8, 3);
+        let closure = crate::closure::js_closure_alloc(
+            crate::fn_info!(perf_timerify_wrapper, 1; with_rest(0)),
+            3,
+        );
         crate::closure::js_closure_set_capture_f64(closure, 0, fn_value);
         let name_value = str_value(&name);
         crate::closure::js_closure_set_capture_f64(closure, 1, f64::from_bits(name_value.bits()));

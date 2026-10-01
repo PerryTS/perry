@@ -326,6 +326,14 @@ pub(crate) fn helper_decl_attrs(name: &str) -> &'static str {
         // operands are i64 handles) orders it against every GC-capable call.
         // js_string_compare_value is NOT eligible: number coercion allocates.
         "js_string_compare" => " #3",
+        // First-read D3 (`object/field_get_set/ic_miss/read_confirm.rs`): a
+        // generic read site's miss front. Loads, compares and at most one
+        // store (D3b re-aims the site's compact word); no allocation, lock,
+        // throw, call or unbounded loop (the ways and the second-chance scan
+        // are bounded). NOT readonly: it writes the site word. Also a proven
+        // `Leaf` in the generated call-effects table, so the call is
+        // `"gc-leaf-function"`.
+        "js_object_get_field_ic_front" => " #4",
         // NOUNWIND+WILLRETURN only (#4, repsel Phase 4a.0) — each verified
         // (`typed_feedback.rs` / `array/header.rs`): no `js_throw` (longjmp)
         // anywhere in the body, every loop bounded by the 16M length/capacity

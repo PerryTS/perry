@@ -1,12 +1,14 @@
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
 use perry_hir::types::{ObjectType, PropertyInfo, Type};
 use perry_hir::{
-    ArrayElement, BinaryOp, CompareOp, Expr, Function, Interface, InterfaceProperty, Module,
-    ModuleInitKind, Stmt, UpdateOp,
+    ArrayElement, BinaryOp, CompareOp, Expr, Function, Interface, Module, ModuleInitKind, Stmt,
+    UpdateOp,
 };
 
 fn empty_opts() -> CompileOptions {
     CompileOptions {
+        static_shape_ids: Vec::new(),
+        program_class_shape_ids: Default::default(),
         target: None,
         is_entry_module: false,
         non_entry_module_prefixes: Vec::new(),
@@ -301,24 +303,6 @@ fn scalar_object_literal_keeps_initializers_read_by_update() {
     assert!(
         ir.contains("call double @js_string_concat_value_box("),
         "field initializer read by obj.field++ must still be lowered"
-    );
-}
-
-fn assert_typed_feedback_setter_after(ir: &str, start_pos: usize, context: &str) {
-    let after_start = &ir[start_pos..];
-    // #9459 / #9495: the dynamic by-name store is the receiver-aware `[[Set]]`
-    // (`js_put_value_set`) in both modes -- not the own-property
-    // `js_typed_feedback_object_set_field_by_name` wrapper, which had no
-    // `strict` parameter and no prototype walk. Match the CALL: every runtime
-    // entry is `declare`d in every module.
-    // The static-key store IC's miss entry is that same `[[Set]]`.
-    assert!(
-        after_start.contains("call double @js_put_value_set_packed_miss("),
-        "{context} should reach the receiver-aware runtime setter"
-    );
-    assert!(
-        !after_start.contains("call void @js_typed_feedback_object_set_field_by_name"),
-        "{context} must not take the own-property setter wrapper (#9495)"
     );
 }
 
@@ -834,10 +818,19 @@ fn pointer_store_into_numeric_array_keeps_layout_note_and_barrier() {
     // So this follows the EDGE too: the arm must branch into the gate, and the
     // gate must still hold the note. Asserting only that the call exists
     // somewhere would pass even if this arm stopped reaching it.
+    // The arm first settles the element kind (arrayread S2: the F64 bits
+    // are cleared BEFORE a non-Number is written), then continues in
+    // `idxset.inbounds.kind.done`, which is where it branches into the gate.
+    let kind_done_ir = block_between(
+        &ir,
+        "\nidxset.inbounds.kind.done.",
+        "\nidxset.inbounds.gc_bookkeeping.",
+    );
     assert!(
-        inbounds_ir.contains("label %idxset.inbounds.gc_bookkeeping."),
+        inbounds_ir.contains("label %idxset.inbounds.kind.done.")
+            && kind_done_ir.contains("label %idxset.inbounds.gc_bookkeeping."),
         "the in-bounds arm no longer branches into the #9237 pointer gate, so a \
-         pointer store here reaches no layout note at all:\n{inbounds_ir}"
+         pointer store here reaches no layout note at all:\n{inbounds_ir}\n{kind_done_ir}"
     );
     let note_gate_ir = block_between(
         &ir,
@@ -884,140 +877,6 @@ fn pointer_store_into_numeric_array_keeps_layout_note_and_barrier() {
     );
 }
 
-#[test]
-fn typed_object_literal_stable_path_installs_pointer_mask_descriptor() {
-    let child_ty = object_type(&[("leaf", Type::Number)]);
-    let row_iface = Interface {
-        id: 1,
-        name: "Row".to_string(),
-        type_params: Vec::new(),
-        extends: Vec::new(),
-        properties: vec![
-            InterfaceProperty {
-                name: "id".to_string(),
-                ty: Type::Number,
-                optional: false,
-                readonly: false,
-            },
-            InterfaceProperty {
-                name: "active".to_string(),
-                ty: Type::Boolean,
-                optional: false,
-                readonly: false,
-            },
-            InterfaceProperty {
-                name: "child".to_string(),
-                ty: child_ty.clone(),
-                optional: false,
-                readonly: false,
-            },
-        ],
-        methods: Vec::new(),
-        is_exported: false,
-    };
-    let module = base_module(
-        "typed_shape_literal.ts",
-        vec![
-            Stmt::Let {
-                id: 1,
-                name: "child".to_string(),
-                ty: child_ty,
-                mutable: false,
-                init: Some(Expr::Object(vec![("leaf".to_string(), Expr::Number(1.0))])),
-            },
-            Stmt::Let {
-                id: 2,
-                name: "row".to_string(),
-                ty: Type::Named("Row".to_string()),
-                mutable: false,
-                init: Some(Expr::Object(vec![
-                    ("id".to_string(), Expr::Number(7.0)),
-                    ("active".to_string(), Expr::Bool(true)),
-                    ("child".to_string(), Expr::LocalGet(1)),
-                ])),
-            },
-            Stmt::Return(Some(Expr::LocalGet(2))),
-        ],
-        vec![row_iface],
-    );
-
-    let ir = ir_for(module);
-    assert!(
-        ir.contains("call i64 @js_object_alloc_with_shape"),
-        "fixture should use the stable object-literal shape allocator"
-    );
-    assert!(
-        ir.contains("@perry_typed_obj_shape_raw_f64_mask_"),
-        "typed object literal should emit a raw-f64 mask constant"
-    );
-    assert!(
-        ir.contains("@perry_typed_obj_shape_ptr_mask_"),
-        "typed object literal should emit a pointer-mask constant"
-    );
-    assert!(
-        ir.contains("constant [1 x i64] [i64 1]"),
-        "only the id slot (slot 0) should be raw-f64"
-    );
-    assert!(
-        ir.contains("constant [1 x i64] [i64 4]"),
-        "only the child slot (slot 2) should be pointer-bearing"
-    );
-
-    let mask_call_pos = ir
-        .find("ptr @perry_typed_obj_shape_ptr_mask_")
-        .expect("typed descriptor call should reference the object-literal mask");
-    let before_mask_call = &ir[..mask_call_pos];
-    let alloc_pos = before_mask_call
-        .rfind("call i64 @js_object_alloc_with_shape")
-        .expect("descriptor should belong to an object-literal allocation");
-    let set_pos = before_mask_call
-        .rfind("call void @js_object_set_field")
-        .expect("object literal should initialize fields before installing descriptor");
-    assert!(alloc_pos < set_pos);
-}
-
-#[test]
-fn typed_object_literal_pointer_free_descriptor_precedes_dynamic_mutation() {
-    let row_ty = object_type(&[("count", Type::Number)]);
-    let mut module = base_module(
-        "typed_shape_mutation.ts",
-        vec![
-            Stmt::Let {
-                id: 1,
-                name: "row".to_string(),
-                ty: row_ty,
-                mutable: true,
-                init: Some(Expr::Object(vec![("count".to_string(), Expr::Number(1.0))])),
-            },
-            Stmt::Expr(Expr::PropertySet {
-                object: Box::new(Expr::LocalGet(1)),
-                property: "count".to_string(),
-                value: Box::new(Expr::String("now-pointer".to_string())),
-            }),
-            Stmt::Return(Some(Expr::LocalGet(1))),
-        ],
-        Vec::new(),
-    );
-    // #9459 made SLOPPY PropertySet route through `js_put_value_set` (silent
-    // rejection), bypassing the typed-feedback wrapper this test pins. Real TS
-    // modules are ESM and therefore strict — pin the strict path explicitly.
-    module.functions[0].is_strict = true;
-
-    let ir = ir_for(module);
-    let descriptor_pos = ir
-        .find("call void @js_gc_init_typed_shape_layout")
-        .expect("number-only object type should install a pointer-free descriptor");
-    assert!(
-        ir.contains("@perry_typed_obj_shape_raw_f64_mask_"),
-        "number-only object type should install a raw-f64 descriptor mask"
-    );
-    assert_typed_feedback_setter_after(
-        &ir,
-        descriptor_pos,
-        "dynamic property mutation after a pointer-free descriptor",
-    );
-}
-
 // The `PERRY_UNBOXED_OBJECT_FIELDS` prototype was deleted (Phase 4b cleanup):
 // its write path was bit-identical to the default typed-shape path and its
 // read side was never implemented. This test pins the default path the flag
@@ -1046,7 +905,5 @@ fn point_literal_uses_typed_shape_path() {
     let ir = ir_for(module);
     assert!(ir.contains("call i64 @js_object_alloc_with_shape"));
     assert!(ir.contains("call void @js_object_set_field"));
-    assert!(ir.contains("call void @js_gc_init_typed_shape_layout"));
-    assert!(ir.contains("@perry_typed_obj_shape_raw_f64_mask_"));
-    assert!(ir.contains("constant [1 x i64] [i64 3]"));
+    assert!(!ir.contains("js_gc_init_typed_shape_layout"));
 }

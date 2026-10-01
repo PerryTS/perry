@@ -13,6 +13,51 @@ use perry_hir::types::Type as HirType;
 use perry_hir::{BinaryOp, CompareOp, Expr, UnaryOp};
 
 use crate::block::LlBlock;
+
+/// A class constructor as a VALUE (#11414): the class's per-agent function
+/// object. `js_class_value` never collects (`gc_call_effects`) and the object
+/// is pinned for the agent's life, so the result needs no root.
+pub(crate) fn emit_class_value(blk: &mut LlBlock, class_id: u32) -> String {
+    blk.call(
+        DOUBLE,
+        "js_class_value",
+        &[(I32, &(class_id as i32).to_string())],
+    )
+}
+
+/// [`emit_class_value`] behind a per-site cache: a zero-initialised global
+/// (thread-local when the program starts workers, so each agent caches its
+/// own class object) holds the NaN-boxed value after the first use. The object
+/// is pinned for the agent's life, so the cached bits never go stale and the
+/// slot needs no root.
+pub(crate) fn emit_class_value_cached(ctx: &mut FnCtx<'_>, class_id: u32) -> String {
+    let site = ctx.ic_site_counter;
+    ctx.ic_site_counter += 1;
+    let slot = format!("@{}_classval", inline_cache_global_name(ctx, site));
+    let tls = if crate::codegen::program_has_worker() {
+        "thread_local "
+    } else {
+        ""
+    };
+    ctx.typed_parse_rodata
+        .push(format!("{slot} = private {tls}global double 0.0, align 8"));
+    let cached = ctx.block().load(DOUBLE, &slot);
+    let bits = ctx.block().bitcast_double_to_i64(&cached);
+    let empty = ctx.block().icmp_eq(I64, &bits, "0");
+    let from_l = ctx.block_label(ctx.current_block);
+    let miss_idx = ctx.new_block("classval.miss");
+    let join_idx = ctx.new_block("classval.join");
+    let miss_l = ctx.block_label(miss_idx);
+    let join_l = ctx.block_label(join_idx);
+    ctx.block().cond_br(&empty, &miss_l, &join_l);
+    ctx.current_block = miss_idx;
+    let fresh = emit_class_value(ctx.block(), class_id);
+    ctx.block().store(DOUBLE, &fresh, &slot);
+    ctx.block().br(&join_l);
+    ctx.current_block = join_idx;
+    ctx.block()
+        .phi(DOUBLE, &[(&cached, &from_l), (&fresh, &miss_l)])
+}
 use crate::codegen::AppMetadata;
 use crate::collectors::NativeRegionFactGraph;
 use crate::function::LlFunction;
@@ -31,16 +76,22 @@ use crate::types::{DOUBLE, F32, I1, I16, I32, I64, I8, PTR};
 // `lower_expr` and the foundational types (`FnCtx`, `FlatConstInfo`)
 // remain here. `pub(crate) use` keeps the public surface stable so
 // existing `crate::expr::X` paths resolve unchanged.
+// No emitted reader since the implicit-`this` cell (slot 1) was deleted; kept
+// for slot 0, reserved for the megamorphic follow-up's shape-record directory
+// (`perry_abi::AGENT_PTR_SLOTS`).
+#[allow(dead_code)]
 pub(crate) mod agent_ptr;
 pub(crate) mod array_length;
 mod array_literal;
 pub(crate) mod array_proto_guard;
 mod bitset_test;
+pub(crate) mod body_call;
 pub(crate) mod folded_builtin_override;
 pub(crate) mod hot_tls;
 mod literal_descriptor;
 #[cfg(test)]
 mod map_entry_at_tests;
+pub(crate) mod stack_guard;
 pub(crate) use bitset_test::is_u32_bitset_test;
 mod buffer_access;
 mod buffer_views;
@@ -93,8 +144,7 @@ pub(crate) use channel::{
 pub(crate) use collection_receiver::unbox_collection_receiver;
 pub(crate) use helpers::{
     array_or_sso_index_get, array_store_needs_layout_note, array_store_needs_write_barrier,
-    buffer_alias_metadata_suffix, class_field_store_layout_note_is_conforming,
-    class_field_store_needs_layout_note, class_field_store_needs_string_addref,
+    buffer_alias_metadata_suffix, class_field_store_needs_string_addref,
     emit_all_pointer_array_declaration, emit_string_addref_if_heap_string,
     expr_has_numeric_pointer_free_array_layout, expr_produces_fresh_heap_allocation,
     expr_produces_non_pointer_bits_by_construction, is_global_this_builtin_function_name,
@@ -182,6 +232,8 @@ mod index_set_barrier_tests;
 #[cfg(test)]
 mod instanceof_imported_rhs_tests;
 mod record_value;
+#[cfg(test)]
+mod region_loop_tests;
 mod repsel_gates;
 mod scalar_slot_root;
 pub(crate) mod shadow_inline;
@@ -594,6 +646,8 @@ pub(crate) struct FnCtx<'a> {
     /// #8122: per-class inline-`new` header-image globals, see
     /// `CrossModuleCtx::class_header_images`.
     pub class_header_image_globals: &'a std::collections::HashMap<String, (String, u64, u32)>,
+    /// `CrossModuleCtx::class_birth_reps` (keys global -> birth rep, T1).
+    pub class_birth_reps: &'a std::collections::HashMap<String, u64>,
     /// Imported class constructor metadata, keyed by effective imported class name.
     pub imported_class_ctors: &'a std::collections::HashMap<String, crate::codegen::ImportedCtor>,
     /// Per-function param signature: `(declared_param_count,
@@ -652,6 +706,8 @@ pub(crate) struct FnCtx<'a> {
     /// `__gen_done` / `__gen_executing` use boolean cells.
     pub compiler_private_async_i32_control_locals: &'a std::collections::HashSet<u32>,
     pub compiler_private_async_i1_control_locals: &'a std::collections::HashSet<u32>,
+    /// Module-wide scope context object groups (`crate::scope_env`).
+    pub scope_map: &'a crate::scope_env::ScopeMap,
     /// Closure rest param index: closure `FuncId` → index of the rest
     /// parameter. Built once in `compile_module` from the collected
     /// closures. Used by the closure call site in `lower_call` to
@@ -674,7 +730,7 @@ pub(crate) struct FnCtx<'a> {
     /// Nullable code pointers resolved once from immutable method callback
     /// parameters, indexed by callback local (including exact const aliases)
     /// and call arity.
-    pub resolved_arrow_callback_targets: std::collections::HashMap<(u32, usize), String>,
+    pub resolved_plain_callback_targets: std::collections::HashMap<(u32, usize), String>,
     /// Nullable compiler-private callback targets whose guarded cold arms
     /// poison a versioned loop before they can run user code.
     pub resolved_versioned_loop_callback_targets: std::collections::HashMap<(u32, usize), String>,
@@ -1014,21 +1070,17 @@ pub(crate) struct FnCtx<'a> {
     /// in-bounds SSO-or-heap string, so reads may bypass ordinary array
     /// dispatch and string `.length` needs no dynamic miss arm.
     pub string_window_array_facts: Vec<StringWindowArrayFact>,
-    /// #6750 follow-up: locals currently flow-refined to Number inside a
-    /// masked-window region fast copy — their shadow slots were cleared at
-    /// the refinement point and per-statement shadow updates are suppressed
-    /// until the refinement is dropped (`expr::shadow_slot`).
-    pub masked_region_scalar_locals: std::collections::HashSet<u32>,
 
     /// #6794 follow-up (b): shadow slots that a masked-window region fast copy
     /// has already cleared to 0 for a currently-suppressed local. Because
-    /// `emit_shadow_slot_update_for_expr` skips every write to a local in
-    /// `masked_region_scalar_locals`, such a slot provably stays 0 for the rest
+    /// `emit_shadow_slot_update_for_expr` skips every write to a local in the
+    /// copy's Number-local scope (`type_analysis::local_is_number`), such a
+    /// slot provably stays 0 for the rest
     /// of the suppression window — so every later per-statement clear of it (the
     /// `_tlv_get_addr`-heavy `js_shadow_slot_set(slot, 0)` that dominated
     /// bcryptjs `_encipher` profiles) is a redundant no-op. `emit_shadow_slot_clear`
     /// skips slots in this set; entries are added right after the first clear and
-    /// removed the moment the local leaves `masked_region_scalar_locals`.
+    /// removed the moment the local leaves that scope.
     pub suppressed_cleared_shadow_slots: std::collections::HashSet<u32>,
 
     /// #5093: scoped loop-versioning facts for monomorphic class-field loops.
@@ -1044,6 +1096,10 @@ pub(crate) struct FnCtx<'a> {
     /// slow clone's preheader BEFORE committing any side effect of the
     /// current iteration.
     pub class_field_loop_facts: Vec<ClassFieldLoopFact>,
+    /// Step 4b (#10884): loop / body regions whose body is not lowered yet
+    /// (`stmt::region_loop`), and the facts active while an F-body lowers.
+    pub region_loops: Vec<crate::stmt::region_loop::Pending>,
+    pub region_loop_facts: Vec<crate::stmt::region_loop::Active>,
 
     /// repsel #7480 / #5093: scoped loop-versioning facts for element-shape
     /// loops (`for (…) sum += arr[i].field`). Pushed only around the FAST
@@ -1680,10 +1736,14 @@ pub(crate) struct FnCtx<'a> {
 
 #[derive(Clone)]
 pub(crate) struct TrustedBoxCapturePtr {
-    /// Integer form used as the write-barrier parent.
+    /// Integer form used as the write-barrier parent: the box itself, or the
+    /// scope object that holds the binding's slot.
     pub bits: String,
     /// Opaque LLVM pointer used by direct box-cell loads and stores.
     pub ptr: String,
+    /// Integer address of the cell (`bits` for a box, `bits + 8 * index` for
+    /// a scope slot), for the trusted accessor's cold TDZ arm.
+    pub cell_bits: String,
 }
 
 /// (Issue #50) Info about a flat-folded const 2D int array.
@@ -1803,15 +1863,6 @@ pub(crate) struct StablePackedReadCache {
 pub(crate) struct StablePackedLoopFact {
     pub counter_local_id: u32,
     pub array_local_id: u32,
-    /// Plain locals the fast preheader proved to hold a Number (one tag test
-    /// per admitted accumulator) and whose every write inside the loop body is
-    /// numeric-preserving with all leaves provable numeric in-loop, so the
-    /// value stays a Number by induction for the whole fast clone.
-    /// `is_numeric_expr` consults this for `LocalGet`, exactly like the
-    /// element-shape clone's `numeric_accumulator` — it is what lets
-    /// `s += arr[i]` lower to a native `fadd` instead of
-    /// `js_dynamic_string_or_number_add` on every iteration.
-    pub numeric_accumulators: Vec<u32>,
     pub side_exit_label: String,
     pub descriptor: String,
     /// Boxed bound passed to the runtime guard (`-1` requests live length).
@@ -1988,15 +2039,6 @@ pub(crate) struct PackedF64LoopFact {
     /// RHS is numeric bits (side-exiting otherwise) and skip the per-iteration
     /// store guard — the range guard already proved bounds and mutability.
     pub allow_holes: bool,
-    /// Plain locals the packed fast preheader proved to hold a Number (one
-    /// tag test per admitted accumulator) whose every in-body write is
-    /// numeric-preserving — the packed twin of
-    /// `StablePackedLoopFact::numeric_accumulators`. `is_numeric_expr`
-    /// consults this for `LocalGet`, which is what lets `s += arr[i]` inside
-    /// the fast clone lower to a native `fadd` instead of
-    /// `js_dynamic_string_or_number_add` on every iteration. Scope-safe by
-    /// construction: the fact is pushed around the fast-clone lowering only.
-    pub numeric_accumulators: Vec<u32>,
     /// True when a *range* guard (hole-tolerant or dense) validated the whole
     /// constant-offset index window `[start + min_offset, bound + max_offset)`
     /// at loop entry — `arr[i ± c]` loads may use non-zero offsets even
@@ -2080,12 +2122,6 @@ pub(crate) struct MaskedWindowArrayFact {
     /// element type is exactly i32 (Int32Array tier), so loads may
     /// materialize elements as native `i32`.
     pub values_i32: bool,
-    /// Accumulator locals admitted by the entry tag check for THIS clone:
-    /// every in-clone write is numeric-preserving (verified by the
-    /// accumulator walk), so `is_numeric_expr` may treat them as Numbers
-    /// while the fact is live. Mirrors `StringWindowArrayFact`'s
-    /// `numeric_accumulator` (#9160) and `PackedF64LoopFact`'s vec.
-    pub numeric_accumulators: Vec<u32>,
     /// Storage layout the guard proved — selects the inline load shape.
     pub elem: MaskedWindowElem,
     /// True only in a dense fast-loop scope whose matcher admitted masked
@@ -2110,7 +2146,6 @@ pub(crate) struct StringWindowArrayFact {
     pub scope_id: u32,
     pub min_idx: i64,
     pub max_idx_exclusive: i64,
-    pub numeric_accumulator: u32,
 }
 
 /// #5093: one fact per (receiver, versioned loop). See
@@ -2366,10 +2401,6 @@ pub(crate) struct ElementShapeLoopFact {
     /// binds `r` generically. `None` for the single-statement accumulator
     /// form.
     pub element_binding: Option<u32>,
-    /// Mutable accumulator whose current value the preheader proved is a
-    /// Number. The matcher admits only assignments that preserve this fact,
-    /// and the fact exists only while lowering the guarded fast clone.
-    pub numeric_accumulator: u32,
 }
 
 /// Find the innermost active element-shape loop fact covering a
@@ -3053,7 +3084,8 @@ mod unary_bigint_tests;
 mod unary_bitnot_tests;
 pub(crate) use index_get::{
     affine_counter_occurrences, affine_index_fits_i64, emit_affine_index_i64_with,
-    numeric_index_has_integer_array_index_proof, packed_f64_loop_index_parts,
+    emit_array_region_guard, numeric_index_has_integer_array_index_proof,
+    packed_f64_loop_index_parts,
 };
 pub(crate) use masked_window::masked_window_fact_for_index;
 /// Rooting coverage for the computed-store arms the TS corpora cannot reach
@@ -3069,6 +3101,7 @@ mod member_update;
 #[cfg(test)]
 mod packed_loop_shadow_barrier_tests;
 mod typed_array_rmw;
+mod typed_array_update;
 pub(crate) use instance_misc1::builtin_parent_reserved_class_id;
 pub(crate) mod class_field_inline_guard;
 pub(crate) mod element_shape_guard;
@@ -3089,7 +3122,7 @@ pub(crate) mod proxy_reflect;
 pub(crate) mod put_value_store_ic;
 pub(crate) mod receiver_range;
 mod static_field_meta;
-mod static_method;
+pub(crate) mod static_method;
 pub(crate) mod store_census;
 mod string_regex_proc;
 mod super_method;
@@ -3451,6 +3484,10 @@ pub(crate) fn is_compiler_private_async_i1_control_local(ctx: &FnCtx<'_>, id: u3
 }
 
 pub(crate) fn load_boxed_local_pointer(ctx: &mut FnCtx<'_>, id: u32) -> Result<Option<String>> {
+    // A scoped binding's cell is its slot inside the scope object.
+    if let Some((slot, base)) = crate::scope_env::access::load_base(ctx, id)? {
+        return Ok(Some(crate::scope_env::access::cell_addr(ctx, slot, &base)));
+    }
     if let Some(&capture_idx) = ctx.closure_captures.get(&id) {
         let closure_ptr = current_closure_ptr_value(ctx, "boxed local capture")?;
         let cap_bits = ctx.block().call(
@@ -3836,7 +3873,7 @@ fn lower_bitwise_operand_i32(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<
         // ToInt32 conversion; nested bitwise expressions continue through the
         // native structural path above.
         None if matches!(expr, Expr::LocalGet(id)
-                if ctx.number_by_construction_locals.contains(id)) =>
+                if crate::type_analysis::local_is_number(ctx, *id)) =>
         {
             let value = lower_expr(ctx, expr)?;
             return Ok(Some(if is_known_i32_range(ctx, expr) {

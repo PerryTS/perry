@@ -42,6 +42,8 @@ use native_proof_support::{
 
 fn empty_opts() -> CompileOptions {
     CompileOptions {
+        static_shape_ids: Vec::new(),
+        program_class_shape_ids: Default::default(),
         target: None,
         is_entry_module: false,
         non_entry_module_prefixes: Vec::new(),
@@ -7670,7 +7672,28 @@ fn abrupt_captured_local_assignment_does_not_emit_orphan_write_barrier() {
 
 /// Everything lowered after an unresolved Worker's `unreachable` sits in the
 /// `worker.unresolved.after` block, which no branch targets (#11450).
+///
+/// #10812's entry-level stack-guard check creates its `stack_guard.ok` block
+/// *before* the function body (including the throw) is lowered into it, and
+/// creates the paired `stack_guard.overflow` block right after — so that
+/// live, unrelated block can now render, by block-creation order, textually
+/// between the throw's `unreachable` and the dead `worker.unresolved.after`
+/// block below it. That is harmless (it is reached from the guard's
+/// fast-path branch, not from anything after the throw), so the check below
+/// only looks at the throw's *own* block — the text up to the next block
+/// label, whatever that label turns out to be — rather than assuming the
+/// dead block is textually adjacent.
 fn assert_code_after_unresolved_worker_is_dead(after_throw: &str) {
+    let throw_block_tail: String = after_throw
+        .lines()
+        .skip(1) // the `call void @js_throw_error_with_code(...)` line itself
+        .take_while(|l| !(l.ends_with(':') && !l.starts_with(' ')))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        throw_block_tail.trim_end().ends_with("unreachable"),
+        "the throw's own block must terminate in `unreachable`:\n{after_throw}"
+    );
     let dead_label = after_throw
         .lines()
         .find_map(|l| {
@@ -7678,11 +7701,6 @@ fn assert_code_after_unresolved_worker_is_dead(after_throw: &str) {
                 .filter(|l| l.starts_with("worker.unresolved.after"))
         })
         .unwrap_or_else(|| panic!("no dead continuation block after the throw:\n{after_throw}"));
-    let (before_dead, _) = after_throw.split_once(&format!("\n{dead_label}:")).unwrap();
-    assert!(
-        before_dead.trim_end().ends_with("unreachable"),
-        "the throw must be followed directly by its dead continuation:\n{after_throw}"
-    );
     assert!(
         !after_throw.contains(&format!("label %{dead_label}")),
         "the dead continuation block must have no predecessors:\n{after_throw}"
@@ -7917,9 +7935,13 @@ fn tdz_numeric_const_read_is_not_constant_folded() {
     // the thrown ReferenceError can identify it. Both variants perform the same
     // check, so pinning only the older spelling made a strictly better error
     // message look like a lost guard.
+    // A preallocated binding lives in a scope object: the read is an inline
+    // slot load whose TDZ sentinel compare branches to the trusted accessor.
     assert!(
         ir.contains("call i64 @js_box_get_bits(i64 ")
-            || ir.contains("call i64 @js_box_get_bits_named(i64 "),
+            || ir.contains("call i64 @js_box_get_bits_named(i64 ")
+            || ir.contains("call i64 @js_box_get_bits_trusted(i64 ")
+            || ir.contains("call i64 @js_box_get_bits_trusted_named(i64 "),
         "the pre-declaration read must retain the TDZ box check:\n{ir}"
     );
     // And the read must not be folded to the value the later `Let` installs.
@@ -8200,7 +8222,14 @@ fn compiler_private_async_control_cells_use_primitive_heap_boxes() {
         compiler_private_async_control_body(),
     );
 
-    for symbol in ["call i64 @js_i32_box_alloc", "call i64 @js_bool_box_alloc"] {
+    // The control words share the activation's scope object: its slots are
+    // seeded with the INT32 tag and the non-pointer special tag, and the
+    // typed loads/stores below touch only their low bytes.
+    for symbol in [
+        "call i64 @js_scope_alloc(",
+        "store i64 9222809086901354496, ptr",
+        "store i64 9222246136947933184, ptr",
+    ] {
         assert!(
             ir.contains(symbol),
             "expected compiler-private control lowering to emit {symbol}:\n{ir}"
@@ -9546,9 +9575,17 @@ fn typed_f64_receiver_method_positive_module() -> Module {
     let mut point = class(
         211,
         "Point",
+        // Real classes write their number fields at construction; a field
+        // never written there is `undefined` at birth and so not an F64 lane.
         vec![
-            class_field("x", Type::Number),
-            class_field("y", Type::Number),
+            ClassField {
+                init: Some(Expr::Number(0.0)),
+                ..class_field("x", Type::Number)
+            },
+            ClassField {
+                init: Some(Expr::Number(0.0)),
+                ..class_field("y", Type::Number)
+            },
         ],
     );
     point.methods.push(typed_f64_receiver_method_function(
@@ -14469,8 +14506,8 @@ fn scalar_method_boolean_predicate_rejects_unproven_numeric_arguments() {
         "any arg fallback must materialize the scalar receiver with stable class keys before dispatch:\n{ir}"
     );
     assert!(
-        ir.contains("call void @js_gc_init_typed_shape_layout"),
-        "any arg fallback materialization must install typed shape pointer/raw-f64 bitmap evidence:\n{ir}"
+        !ir.contains("js_gc_init_typed_shape_layout"),
+        "charter step 5: the class ShapeId carries the lanes; no per-object layout install:\n{ir}"
     );
     let fallback_block = {
         let start = ir
@@ -16030,8 +16067,9 @@ fn element_to_element_numeric_store_takes_the_inline_guard_tier() {
     );
     // `is_valid_obj_ptr`'s upper bound, which `gc_header_for_user_addr` applies
     // before the out-of-line guard dereferences anything.
+    // The band test measures from 1 MiB, so the ceiling reads 2^47 - 1 MiB.
     assert!(
-        ir.contains("140737488355328"),
+        ir.contains("140737487306752"),
         "the inline tier must bound the receiver address from ABOVE before \
          dereferencing it for a store (#7396):\n{ir}"
     );
@@ -16092,7 +16130,16 @@ fn sloppy_class_field_number_store_takes_the_inline_raw_store() {
     }
 
     fn ir_for(strict: bool) -> String {
-        let counter = class(217, "Counter", vec![class_field("value", Type::Number)]);
+        // `value = 0`: a number field is an F64 birth lane only when the
+        // construction writes it, as real classes do.
+        let counter = class(
+            217,
+            "Counter",
+            vec![ClassField {
+                init: Some(Expr::Number(0.0)),
+                ..class_field("value", Type::Number)
+            }],
+        );
         let module = module_with_classes_and_params(
             "sloppy_class_field_store.ts",
             vec![counter],

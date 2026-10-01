@@ -224,10 +224,9 @@ pub(in crate::rooting) fn temp_root_truncate(ctx: &mut FnCtx<'_>, idx: &str) {
         // above it. Each released slot is zeroed (dropping its retention) and
         // its frame mirror cleared; the pool entry becomes reusable.
         //
-        // A repeated release of an already-released handle (the documented
-        // `implicit_this_restore` → outer-group interleaving) finds no
-        // watermark position and is the same harmless no-op the FFI's
-        // `base < len` guard made it.
+        // A repeated release of an already-released handle (an inner release
+        // interleaved with an outer group's) finds no watermark position and
+        // is the same harmless no-op the FFI's `base < len` guard made it.
         let Some(pos) = ctx.temp_roots.position(idx) else {
             return;
         };
@@ -448,7 +447,7 @@ pub(in crate::rooting) fn local_is_inert_primitive(ctx: &FnCtx<'_>, id: u32) -> 
     !ctx.shadow_slot_map.contains_key(&id)
         && !ctx.module_globals.contains_key(&id)
         && (ctx.integer_locals.contains(&id)
-            || ctx.number_by_construction_locals.contains(&id)
+            || crate::type_analysis::local_is_number(ctx, id)
             || matches!(
                 ctx.stable_local_type_proof(&id),
                 Some(

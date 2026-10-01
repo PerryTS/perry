@@ -91,6 +91,9 @@ pub(crate) fn dynamic_value_class_id(value: f64) -> u32 {
                 _ => 0,
             }
         }
+    } else if let Some(class_id) = crate::object::class_value::class_value_id_bits(bits) {
+        // A class function object names its class.
+        class_id
     } else if tag == POINTER_TAG {
         // Object instance: read class_id from the ObjectHeader.
         let ptr = crate::value::js_nanbox_get_pointer(value) as *const ObjectHeader;
@@ -500,7 +503,6 @@ pub extern "C" fn js_get_dynamic_parent_value(class_id: u32) -> f64 {
 /// the constructor currently running inherits.
 pub(crate) fn template_dynamic_parent_value(class_id: u32) -> f64 {
     const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
-    const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
     if class_id == 0 {
         return f64::from_bits(TAG_UNDEFINED);
     }
@@ -523,8 +525,10 @@ pub(crate) fn template_dynamic_parent_value(class_id: u32) -> f64 {
     // registered-constructor flat dispatch, which fills user args and
     // snapshot caps by the signature split.
     if let Some(parent_cid) = crate::object::get_parent_class_id(class_id) {
-        if parent_cid != 0 {
-            return f64::from_bits(INT32_TAG | parent_cid as u64);
+        // Only a compiled parent class has a class function object; a
+        // builtin parent id (`extends Error`) never gets one.
+        if parent_cid != 0 && crate::object::is_class_id_registered(parent_cid) {
+            return crate::object::class_value::class_value(parent_cid);
         }
     }
     f64::from_bits(TAG_UNDEFINED)
@@ -608,16 +612,57 @@ pub unsafe extern "C" fn js_register_class_static_method(
         Ok(s) => s.to_string(),
         Err(_) => return,
     };
-    let mut guard = CLASS_STATIC_METHODS.write().unwrap();
-    if guard.is_none() {
-        *guard = Some(crate::fast_hash::new_ptr_hash_map());
+    {
+        let mut guard = CLASS_STATIC_METHODS.write().unwrap();
+        if guard.is_none() {
+            *guard = Some(crate::fast_hash::new_ptr_hash_map());
+        }
+        guard
+            .as_mut()
+            .unwrap()
+            .entry(class_id as u32)
+            .or_default()
+            .entry(name.clone())
+            .and_modify(|e| {
+                (e.0, e.1, e.2) = (func_ptr as usize, param_count as u32, has_rest != 0)
+            })
+            .or_insert((func_ptr as usize, param_count as u32, has_rest != 0, 0));
     }
-    guard
-        .as_mut()
-        .unwrap()
-        .entry(class_id as u32)
-        .or_default()
-        .insert(name, (func_ptr as usize, param_count as u32, has_rest != 0));
+    crate::object::class_value::note_intrinsic_registration(class_id as u32, &name);
+}
+
+/// Record the `JsFunctionInfo` of the closure-convention entry
+/// `<static body>__clo(callee, this, args...)` codegen emitted for ClassBody static method `name` of class `class_id`:
+/// the body of the method's own function object (one per class and method).
+/// Its arity, length and strictness are facts of that info; its name and source
+/// were registered on the code.
+/// Emitted at module init after `js_register_class_static_method`.
+#[no_mangle]
+pub unsafe extern "C" fn js_register_class_static_method_entry(
+    class_id: i64,
+    name_ptr: *const u8,
+    name_len: i64,
+    entry: i64,
+) {
+    if class_id == 0 || name_ptr.is_null() || name_len <= 0 || entry == 0 {
+        return;
+    }
+    let Ok(name) = std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len as usize))
+    else {
+        return;
+    };
+    {
+        let mut guard = CLASS_STATIC_METHODS.write().unwrap();
+        let Some(record) = guard
+            .as_mut()
+            .and_then(|all| all.get_mut(&(class_id as u32)))
+            .and_then(|m| m.get_mut(name))
+        else {
+            return;
+        };
+        record.3 = entry as usize;
+    }
+    crate::object::class_value::note_intrinsic_registration(class_id as u32, name);
 }
 
 fn property_key_string(key: f64) -> Option<String> {
@@ -637,7 +682,13 @@ fn property_key_string(key: f64) -> Option<String> {
     }
 }
 
+/// Register a computed-key ClassBody method when the class definition
+/// evaluates its key. A static one with a string key is a ClassBody static
+/// method like any other: `entry` is the `JsFunctionInfo` of its
+/// closure-convention entry (`<body>__clo`), the body of its own function object, whose `name` is the
+/// key.
 #[no_mangle]
+#[allow(clippy::too_many_arguments)]
 pub unsafe extern "C" fn js_register_class_computed_method(
     class_id: i64,
     key: f64,
@@ -646,6 +697,7 @@ pub unsafe extern "C" fn js_register_class_computed_method(
     is_static: i64,
     has_rest: i64,
     definition_order: i64,
+    entry: i64,
 ) {
     if class_id == 0 || func_ptr == 0 {
         return;
@@ -744,16 +796,42 @@ pub unsafe extern "C" fn js_register_class_computed_method(
         throw_object_type_error(b"Classes may not have a static property named 'prototype'");
     }
     if is_static != 0 {
-        let mut guard = CLASS_STATIC_METHODS.write().unwrap();
-        if guard.is_none() {
-            *guard = Some(crate::fast_hash::new_ptr_hash_map());
+        {
+            let mut guard = CLASS_STATIC_METHODS.write().unwrap();
+            if guard.is_none() {
+                *guard = Some(crate::fast_hash::new_ptr_hash_map());
+            }
+            guard
+                .as_mut()
+                .unwrap()
+                .entry(class_id)
+                .or_default()
+                .entry(name.clone())
+                .and_modify(|e| {
+                    (e.0, e.1, e.2, e.3) = (
+                        func_ptr as usize,
+                        param_count as u32,
+                        has_rest != 0,
+                        entry as usize,
+                    )
+                })
+                .or_insert((
+                    func_ptr as usize,
+                    param_count as u32,
+                    has_rest != 0,
+                    entry as usize,
+                ));
         }
-        guard
-            .as_mut()
-            .unwrap()
-            .entry(class_id)
-            .or_default()
-            .insert(name, (func_ptr as usize, param_count as u32, has_rest != 0));
+        if entry != 0 {
+            // SetFunctionName(F, key): the key is known only now.
+            // The name is keyed by the body's code; `entry` is its info.
+            crate::builtins::js_register_function_name(
+                (*(entry as *const crate::closure::JsFunctionInfo)).code,
+                name.as_ptr(),
+                name.len() as u32,
+            );
+        }
+        crate::object::class_value::note_intrinsic_registration(class_id, &name);
     } else {
         let mut registry = CLASS_VTABLE_REGISTRY.write().unwrap();
         if registry.is_none() {
@@ -848,23 +926,26 @@ pub unsafe extern "C" fn js_register_class_computed_accessor(
             drop(registry);
             super::decl_accessors::note_instance_accessor_registered(class_id, &name);
         } else {
-            let mut guard = CLASS_STATIC_ACCESSORS.write().unwrap();
-            if guard.is_none() {
-                *guard = Some(crate::fast_hash::new_ptr_hash_map());
+            {
+                let mut guard = CLASS_STATIC_ACCESSORS.write().unwrap();
+                if guard.is_none() {
+                    *guard = Some(crate::fast_hash::new_ptr_hash_map());
+                }
+                let entry = guard
+                    .as_mut()
+                    .unwrap()
+                    .entry(class_id)
+                    .or_default()
+                    .entry(name.clone())
+                    .or_default();
+                if getter_ptr != 0 {
+                    entry.get = getter_ptr as usize;
+                }
+                if setter_ptr != 0 {
+                    entry.set = setter_ptr as usize;
+                }
             }
-            let entry = guard
-                .as_mut()
-                .unwrap()
-                .entry(class_id)
-                .or_default()
-                .entry(name)
-                .or_insert((0, 0));
-            if getter_ptr != 0 {
-                entry.0 = getter_ptr as usize;
-            }
-            if setter_ptr != 0 {
-                entry.1 = setter_ptr as usize;
-            }
+            crate::object::class_value::note_intrinsic_registration(class_id, &name);
         }
     }
     VTABLE_GEN.fetch_add(1, Ordering::Release);
@@ -886,19 +967,59 @@ pub(crate) fn class_has_own_static_method(class_id: u32, name: &str) -> bool {
         .unwrap_or(false)
 }
 
-pub(crate) fn lookup_static_method_in_chain(
+/// ClassBody static method `name` declared by class `class_id` itself:
+/// `(func_ptr, param_count, has_rest)`.
+pub(crate) fn class_own_static_method_entry(
     class_id: u32,
     name: &str,
 ) -> Option<(usize, u32, bool)> {
     let guard = CLASS_STATIC_METHODS.read().ok()?;
-    let map = guard.as_ref()?;
+    let e = guard.as_ref()?.get(&class_id)?.get(name).copied()?;
+    Some((e.0, e.1, e.2))
+}
+
+/// The closure-convention entry of ClassBody static method `name` declared by
+/// class `class_id` itself: the code of its own function object.
+pub(crate) fn class_own_static_method_code(class_id: u32, name: &str) -> Option<usize> {
+    let guard = CLASS_STATIC_METHODS.read().ok()?;
+    let e = guard.as_ref()?.get(&class_id)?.get(name).copied()?;
+    (e.3 != 0).then_some(e.3)
+}
+
+/// The static method `name` a call on class `class_id` runs: the nearest
+/// declaration whose own property on its class's function object is still
+/// that declaration. A deleted one is skipped (the parent's applies); a
+/// redefined one ends the lookup (the property's value is what runs).
+pub(crate) fn lookup_static_method_in_chain(
+    class_id: u32,
+    name: &str,
+) -> Option<(usize, u32, bool)> {
+    lookup_static_method_owner(class_id, name).map(|(_, e)| e)
+}
+
+/// [`lookup_static_method_in_chain`] plus the class whose declaration runs.
+/// The walk reads the class function objects: a class whose object owns
+/// `name` (declared, assigned, or deleted and reassigned) ends it — its
+/// declaration when the property still is that declaration's function,
+/// otherwise nothing (the property's value is what a call runs).
+pub(crate) fn lookup_static_method_owner(
+    class_id: u32,
+    name: &str,
+) -> Option<(u32, (usize, u32, bool))> {
+    use crate::object::class_value::StaticMethodProperty;
     let mut cid = class_id;
     let mut depth = 0usize;
     while cid != 0 && depth < 32 {
-        if let Some(m) = map.get(&cid) {
-            if let Some(&entry) = m.get(name) {
-                return Some(entry);
+        let entry = {
+            let guard = CLASS_STATIC_METHODS.read().ok()?;
+            guard.as_ref()?.get(&cid).and_then(|m| m.get(name)).copied()
+        };
+        match crate::object::class_value::static_method_property(cid, name, entry.map(|e| e.3)) {
+            StaticMethodProperty::Live => {
+                return entry.map(|e| (cid, (e.0, e.1, e.2)));
             }
+            StaticMethodProperty::Replaced => return None,
+            StaticMethodProperty::Deleted => {}
         }
         match get_parent_class_id(cid) {
             Some(p) if p != 0 && p != cid => {
@@ -1049,17 +1170,13 @@ pub(crate) unsafe fn class_symbol_getter_value(
                     return Some(f64::from_bits(crate::value::TAG_UNDEFINED));
                 }
                 let result = if is_static {
-                    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-                    let prev_this =
-                        this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
                     crate::object::static_private_owner_push(receiver);
-                    let f: extern "C" fn() -> f64 = std::mem::transmute(getter);
+                    let f = crate::closure::body_call::js_bare_body_fn!(getter as *const u8;);
                     let result = f();
                     crate::object::static_private_owner_pop();
-                    crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
                     result
                 } else {
-                    let f: extern "C" fn(f64) -> f64 = std::mem::transmute(getter);
+                    let f = crate::closure::body_call::js_method_body_fn!(getter as *const u8;);
                     f(receiver)
                 };
                 return Some(result);
@@ -1097,16 +1214,14 @@ pub(crate) unsafe fn class_symbol_setter_apply(
             if let Some(&(_, setter)) = map.get(&(cid, sym_key, is_static)) {
                 if setter != 0 {
                     if is_static {
-                        let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-                        let prev_this = this_scope
-                            .root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
                         crate::object::static_private_owner_push(receiver);
-                        let f: extern "C" fn(f64) -> f64 = std::mem::transmute(setter);
+                        let f =
+                            crate::closure::body_call::js_bare_body_fn!(setter as *const u8; a0);
                         let _ = f(value);
                         crate::object::static_private_owner_pop();
-                        crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
                     } else {
-                        let f: extern "C" fn(f64, f64) -> f64 = std::mem::transmute(setter);
+                        let f =
+                            crate::closure::body_call::js_method_body_fn!(setter as *const u8; a0);
                         let _ = f(receiver, value);
                     }
                 }
@@ -1122,117 +1237,6 @@ pub(crate) unsafe fn class_symbol_setter_apply(
         }
         false
     })
-}
-
-pub(crate) unsafe fn class_static_accessor_getter_value(
-    class_id: u32,
-    name: &str,
-    receiver: f64,
-) -> Option<f64> {
-    let guard = CLASS_STATIC_ACCESSORS.read().ok();
-    let map = guard.as_ref().and_then(|guard| guard.as_ref());
-    let mut cid = class_id;
-    let mut depth = 0usize;
-    while cid != 0 && depth < 32 {
-        // A descriptor installed by `defineProperty` replaces an existing
-        // class-body accessor at the same inheritance level.
-        if let Some(result) = class_dynamic_static_accessor_getter_value(cid, name, receiver) {
-            return Some(result);
-        }
-        if let Some(accessors) = map.and_then(|map| map.get(&cid)) {
-            if let Some(&(getter, _)) = accessors.get(name) {
-                if getter == 0 {
-                    return Some(f64::from_bits(crate::value::TAG_UNDEFINED));
-                }
-                // #10911: when this getter was reached by walking the STATIC
-                // prototype chain -- a subclass reading an accessor declared
-                // on its parent class OBJECT -- `receiver` is that parent, the
-                // object the getter lives on. `resolve_proto_chain_field_inner`
-                // stashes the class the read actually started from, exactly as
-                // it does for instance getters (see `class_getter_this`), and
-                // spec OrdinaryGet threads that Receiver through. Bind `this`
-                // to it, or `Sub.accessor` runs with `this === Base`.
-                //
-                // Effect's `static get ast() { return getClassSchema(this).ast }`
-                // is this shape: the schema memoised against the base class, so
-                // decoded errors were built from the base and were not
-                // `instanceof` their own class (#10891).
-                //
-                // `this` and the capture/private OWNER are two different
-                // things here and must not be collapsed: `this` is the class
-                // the read started from, while the owner is the evaluation the
-                // getter was FOUND on -- the object whose `__perry_ctor_caps`
-                // hold its captured variables and whose brand gates `#x`.
-                // `js_class_capture_value_for_receiver` prefers the owner, so
-                // binding it to the subclass would lose every capture.
-                let owner = receiver;
-                let receiver = crate::object::field_get_set::accessor_receiver_override_take()
-                    .unwrap_or(receiver);
-                // Static accessor bodies use the same receiver-resolving
-                // prologue as static methods. In particular, a fresh class
-                // expression must expose its per-evaluation class object as
-                // `this`, not the shared compile-time ClassRef.
-                crate::object::static_this_arm_if_unarmed(receiver);
-                crate::object::static_private_owner_push(owner);
-                let f: extern "C" fn() -> f64 = std::mem::transmute(getter);
-                let result = f();
-                crate::object::static_private_owner_pop();
-                crate::object::static_this_disarm();
-                return Some(result);
-            }
-        }
-        match get_parent_class_id(cid) {
-            Some(p) if p != 0 && p != cid => {
-                cid = p;
-                depth += 1;
-            }
-            _ => break,
-        }
-    }
-    None
-}
-
-pub(crate) unsafe fn class_static_accessor_setter_apply(
-    class_id: u32,
-    name: &str,
-    receiver: f64,
-    value: f64,
-) -> bool {
-    let guard = CLASS_STATIC_ACCESSORS.read().ok();
-    let map = guard.as_ref().and_then(|guard| guard.as_ref());
-    let mut cid = class_id;
-    let mut depth = 0usize;
-    while cid != 0 && depth < 32 {
-        if let Some(applied) =
-            class_dynamic_static_accessor_setter_apply(cid, name, receiver, value)
-        {
-            return applied;
-        }
-        if let Some(accessors) = map.and_then(|map| map.get(&cid)) {
-            if let Some(&(_, setter)) = accessors.get(name) {
-                if setter != 0 {
-                    // Mirror the getter path: the compiled static-accessor
-                    // prologue consumes this override and binds `this` to the
-                    // actual constructor value for this evaluation.
-                    crate::object::static_this_arm_if_unarmed(receiver);
-                    crate::object::static_private_owner_push(receiver);
-                    let f: extern "C" fn(f64) -> f64 = std::mem::transmute(setter);
-                    let _ = f(value);
-                    crate::object::static_private_owner_pop();
-                    crate::object::static_this_disarm();
-                }
-                return true;
-            }
-        }
-        match get_parent_class_id(cid) {
-            Some(p) if p != 0 && p != cid => {
-                cid = p;
-                depth += 1;
-            }
-            _ => break,
-        }
-    }
-    false
 }
 
 /// Apply an instance `set name(v)` accessor from the class vtable chain,
@@ -1401,7 +1405,7 @@ pub(crate) fn class_method_bind_length(class_id: u32, name: &str) -> Option<u32>
 }
 
 /// Call a static method func_ptr with `args` (no `this` prepend — static
-/// methods read `this` from the implicit-this slot, set by the caller).
+/// methods resolve `this` through `js_static_this_resolve`).
 /// Mirrors the arity dispatch of `call_vtable_method` minus the receiver arg.
 pub(crate) unsafe fn call_static_method(
     func_ptr: usize,
@@ -1420,27 +1424,27 @@ pub(crate) unsafe fn call_static_method(
         }
     }
     match param_count {
-        0 => (std::mem::transmute::<usize, extern "C" fn() -> f64>(func_ptr))(),
-        1 => (std::mem::transmute::<usize, extern "C" fn(f64) -> f64>(func_ptr))(a(
+        0 => (crate::closure::body_call::js_bare_body_fn!(func_ptr as *const u8;))(),
+        1 => (crate::closure::body_call::js_bare_body_fn!(func_ptr as *const u8; a0))(a(
             args_ptr, args_len, 0,
         )),
-        2 => (std::mem::transmute::<usize, extern "C" fn(f64, f64) -> f64>(func_ptr))(
+        2 => (crate::closure::body_call::js_bare_body_fn!(func_ptr as *const u8; a0, a1))(
             a(args_ptr, args_len, 0),
             a(args_ptr, args_len, 1),
         ),
-        3 => (std::mem::transmute::<usize, extern "C" fn(f64, f64, f64) -> f64>(func_ptr))(
+        3 => (crate::closure::body_call::js_bare_body_fn!(func_ptr as *const u8; a0, a1, a2))(
             a(args_ptr, args_len, 0),
             a(args_ptr, args_len, 1),
             a(args_ptr, args_len, 2),
         ),
-        4 => (std::mem::transmute::<usize, extern "C" fn(f64, f64, f64, f64) -> f64>(func_ptr))(
+        4 => (crate::closure::body_call::js_bare_body_fn!(func_ptr as *const u8; a0, a1, a2, a3))(
             a(args_ptr, args_len, 0),
             a(args_ptr, args_len, 1),
             a(args_ptr, args_len, 2),
             a(args_ptr, args_len, 3),
         ),
         5 => {
-            (std::mem::transmute::<usize, extern "C" fn(f64, f64, f64, f64, f64) -> f64>(func_ptr))(
+            (crate::closure::body_call::js_bare_body_fn!(func_ptr as *const u8; a0, a1, a2, a3, a4))(
                 a(args_ptr, args_len, 0),
                 a(args_ptr, args_len, 1),
                 a(args_ptr, args_len, 2),
@@ -1448,20 +1452,18 @@ pub(crate) unsafe fn call_static_method(
                 a(args_ptr, args_len, 4),
             )
         }
-        6 => (std::mem::transmute::<usize, extern "C" fn(f64, f64, f64, f64, f64, f64) -> f64>(
-            func_ptr,
-        ))(
-            a(args_ptr, args_len, 0),
-            a(args_ptr, args_len, 1),
-            a(args_ptr, args_len, 2),
-            a(args_ptr, args_len, 3),
-            a(args_ptr, args_len, 4),
-            a(args_ptr, args_len, 5),
-        ),
+        6 => {
+            (crate::closure::body_call::js_bare_body_fn!(func_ptr as *const u8; a0, a1, a2, a3, a4, a5))(
+                a(args_ptr, args_len, 0),
+                a(args_ptr, args_len, 1),
+                a(args_ptr, args_len, 2),
+                a(args_ptr, args_len, 3),
+                a(args_ptr, args_len, 4),
+                a(args_ptr, args_len, 5),
+            )
+        }
         7 => {
-            (std::mem::transmute::<usize, extern "C" fn(f64, f64, f64, f64, f64, f64, f64) -> f64>(
-                func_ptr,
-            ))(
+            (crate::closure::body_call::js_bare_body_fn!(func_ptr as *const u8; a0, a1, a2, a3, a4, a5, a6))(
                 a(args_ptr, args_len, 0),
                 a(args_ptr, args_len, 1),
                 a(args_ptr, args_len, 2),
@@ -1471,19 +1473,18 @@ pub(crate) unsafe fn call_static_method(
                 a(args_ptr, args_len, 6),
             )
         }
-        _ => (std::mem::transmute::<
-            usize,
-            extern "C" fn(f64, f64, f64, f64, f64, f64, f64, f64) -> f64,
-        >(func_ptr))(
-            a(args_ptr, args_len, 0),
-            a(args_ptr, args_len, 1),
-            a(args_ptr, args_len, 2),
-            a(args_ptr, args_len, 3),
-            a(args_ptr, args_len, 4),
-            a(args_ptr, args_len, 5),
-            a(args_ptr, args_len, 6),
-            a(args_ptr, args_len, 7),
-        ),
+        _ => {
+            (crate::closure::body_call::js_bare_body_fn!(func_ptr as *const u8; a0, a1, a2, a3, a4, a5, a6, a7))(
+                a(args_ptr, args_len, 0),
+                a(args_ptr, args_len, 1),
+                a(args_ptr, args_len, 2),
+                a(args_ptr, args_len, 3),
+                a(args_ptr, args_len, 4),
+                a(args_ptr, args_len, 5),
+                a(args_ptr, args_len, 6),
+                a(args_ptr, args_len, 7),
+            )
+        }
     }
 }
 
@@ -1577,8 +1578,8 @@ pub(crate) unsafe fn nm_static_buffer_proto_chain(
 /// #1788: dispatch a static method on a class value (`Sub.greet()` where
 /// `Sub extends make(...)`, or a class-object value) by walking the class_id
 /// parent chain in `CLASS_STATIC_METHODS`. Binds `this` to the receiver (so
-/// `this.<field>` resolves through the subclass's static-field chain), calls
-/// the method, and restores the previous implicit-this. On miss returns the
+/// `this.<field>` resolves through the subclass's static-field chain) and calls
+/// the method. On miss returns the
 /// receiver unchanged — preserving the prior "yield the class ref for a
 /// chained call during module init" behavior for genuinely-absent methods.
 #[no_mangle]
@@ -1611,8 +1612,9 @@ pub unsafe extern "C" fn js_class_static_method_call(
     // class_id stamped on a POINTER class object's ObjectHeader.
     let bits = receiver.to_bits();
     let top16 = bits >> 48;
-    let class_id = if top16 == 0x7FFE {
-        (bits & 0xFFFF_FFFF) as u32
+    let _ = top16;
+    let class_id = if let Some(cid) = crate::object::class_value::legacy_class_value_word(bits) {
+        cid
     } else if is_class_object_value(receiver) {
         let obj = crate::value::JSValue::from_bits(bits).as_pointer::<ObjectHeader>();
         js_object_get_class_id(obj)
@@ -1623,8 +1625,6 @@ pub unsafe extern "C" fn js_class_static_method_call(
         return receiver;
     }
     if let Some((func_ptr, param_count, has_rest)) = lookup_static_method_in_chain(class_id, name) {
-        let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-        let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
         crate::object::static_private_owner_push(receiver);
         // Receiver-sensitive static `this`: arm the one-shot override so the
         // method prologue (`js_static_this_resolve`) sees the DYNAMIC receiver
@@ -1662,7 +1662,6 @@ pub unsafe extern "C" fn js_class_static_method_call(
         };
         crate::object::static_this_disarm();
         crate::object::static_private_owner_pop();
-        crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
         return result;
     }
     // #10893: not a static METHOD — a static ACCESSOR on the class-id chain
@@ -1686,12 +1685,16 @@ pub unsafe extern "C" fn js_class_static_method_call(
         let mut cid = class_id;
         let mut depth = 0u32;
         while cid != 0 && depth < 64 {
-            let field_val = CLASS_DYNAMIC_PROPS
-                .with(|m| m.borrow().get(&cid).and_then(|f| f.get(name).copied()));
+            let field_val = crate::object::class_value::class_static_get(cid, name);
             if let Some(v) = field_val {
                 let fv = crate::value::JSValue::from_bits(v.to_bits());
                 if !fv.is_undefined() && !fv.is_null() {
-                    return crate::closure::js_native_call_value(v, args_ptr, args_len);
+                    return crate::closure::js_native_call_value(
+                        v,
+                        crate::closure::plain_call_receiver(),
+                        args_ptr,
+                        args_len,
+                    );
                 }
             }
             cid = get_parent_class_id(cid).unwrap_or(0);
@@ -1723,11 +1726,12 @@ pub unsafe extern "C" fn js_class_static_method_call(
                 let member = f64::from_bits(member.bits());
                 let mv = crate::value::JSValue::from_bits(member.to_bits());
                 if !mv.is_undefined() && !mv.is_null() {
-                    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-                    let prev_this =
-                        this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
-                    let result = crate::closure::js_native_call_value(member, args_ptr, args_len);
-                    crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
+                    let result = crate::closure::native_call_value_this(
+                        member,
+                        crate::closure::JsThis::from_f64(receiver),
+                        args_ptr,
+                        args_len,
+                    );
                     return result;
                 }
             }
@@ -1741,22 +1745,21 @@ pub unsafe extern "C" fn js_class_static_method_call(
     // `class X extends Promise` — inherited builtin static (`X.all(...)`,
     // `X.resolve(...)`, …). Dispatch the spec static with `this` = the subclass
     // receiver so `NewPromiseCapability(X)` constructs the subclass. Resolves the
-    // reified static value and calls it (its thunk reads `this` from the
-    // implicit-this slot, already bound to `receiver` by the caller above).
+    // reified static value and calls it with `receiver` as its `this`.
     if super::promise_parent_in_chain(class_id)
         && crate::object::promise_static_function_spec(name).is_some()
     {
         let static_val = crate::object::js_promise_static_function_value(name.as_ptr(), name.len());
         if static_val.to_bits() != crate::value::TAG_UNDEFINED {
-            // The reified static thunk reads its `this` constructor from the
-            // implicit-this slot, so bind it to the subclass receiver for the
-            // duration of the call — `NewPromiseCapability(receiver)` then
-            // constructs the subclass.
-            let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-            let prev_this =
-                this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
-            let result = crate::closure::js_native_call_value(static_val, args_ptr, args_len);
-            crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
+            // The reified static thunk reads its `this` constructor from its
+            // `this` argument, so pass the subclass receiver —
+            // `NewPromiseCapability(receiver)` then constructs the subclass.
+            let result = crate::closure::native_call_value_this(
+                static_val,
+                crate::closure::JsThis::from_f64(receiver),
+                args_ptr,
+                args_len,
+            );
             return result;
         }
     }
@@ -1831,11 +1834,12 @@ pub unsafe extern "C" fn js_class_static_method_call(
             // not a real inherited member.
             && member.to_bits() != closure_val.to_bits()
         {
-            let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-            let prev_this =
-                this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
-            let result = crate::closure::js_native_call_value(member, args_ptr, args_len);
-            crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
+            let result = crate::closure::native_call_value_this(
+                member,
+                crate::closure::JsThis::from_f64(receiver),
+                args_ptr,
+                args_len,
+            );
             return result;
         }
     }
@@ -1849,11 +1853,12 @@ pub unsafe extern "C" fn js_class_static_method_call(
     };
     if let Some(member) = fn_proto_member {
         if crate::collection_iter::is_callable(member) {
-            let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-            let prev_this =
-                this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
-            let result = crate::closure::js_native_call_value(member, args_ptr, args_len);
-            crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
+            let result = crate::closure::native_call_value_this(
+                member,
+                crate::closure::JsThis::from_f64(receiver),
+                args_ptr,
+                args_len,
+            );
             return result;
         }
     }
@@ -1888,19 +1893,33 @@ pub(crate) use crate::object::class_meta_registry::get_parent_class_id;
 /// if found, `None` otherwise.
 /// Used by `js_assimilate_thenable` (refs #586) and other runtime callers
 /// that need to probe a class for a method without invoking it.
+///
+/// A declared method removed from its class's materialized prototype object
+/// (`delete C.prototype.m`) is not provided by that class: the prototype
+/// object's own keys are the truth, the vtable entry only names the body.
+/// The walk then continues to the parent, as the JS prototype chain does.
 pub fn lookup_class_method_in_chain(class_id: u32, name: &str) -> Option<(usize, u32, bool, bool)> {
-    let registry = CLASS_VTABLE_REGISTRY.read().unwrap();
-    let reg = registry.as_ref()?;
     let mut cur = class_id;
     for _ in 0..32 {
-        if let Some(vt) = reg.get(&cur) {
-            if let Some(entry) = vt.methods.get(name) {
-                return Some((
-                    entry.func_ptr,
-                    entry.param_count,
-                    entry.has_synthetic_arguments,
-                    entry.has_rest,
-                ));
+        let found = {
+            let registry = CLASS_VTABLE_REGISTRY.read().unwrap();
+            let reg = registry.as_ref()?;
+            reg.get(&cur)
+                .and_then(|vt| vt.methods.get(name))
+                .map(|entry| {
+                    (
+                        entry.func_ptr,
+                        entry.param_count,
+                        entry.has_synthetic_arguments,
+                        entry.has_rest,
+                    )
+                })
+        };
+        if let Some(entry) = found {
+            // Checked with the registry lock released: the deletedness probe
+            // reads the class tables again.
+            if !super::class_proto_key_deleted(cur, name) {
+                return Some(entry);
             }
         }
         match get_parent_class_id(cur) {

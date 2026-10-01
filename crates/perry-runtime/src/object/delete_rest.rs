@@ -69,18 +69,10 @@ pub extern "C" fn js_object_delete_field(
         unsafe {
             if let Some(name) = super::has_own_helpers::str_from_string_header(key) {
                 let class_id = obj as usize as u32;
-                if super::class_registry::class_name_for_id(class_id).is_some() {
-                    if super::class_registry::static_declared_accessor_ptrs(class_id, name)
-                        .is_some()
-                        && !super::class_registry::static_accessor_attrs(class_id, name).1
-                    {
-                        return 0;
-                    }
-                    super::class_registry::class_delete_own_dynamic_prop(class_id, name);
-                    super::class_registry::class_mark_key_deleted(class_id, name);
-                    super::class_registry::invalidate_class_string_member_order(
-                        class_id, name, true,
-                    );
+                if super::class_registry::class_name_for_id(class_id).is_some()
+                    && class_delete_own_key(class_id, name) == 0
+                {
+                    return 0;
                 }
                 // #6363: a native HANDLE's own properties are its user expandos.
                 // `delete` used to unconditionally report success while LEAVING
@@ -204,6 +196,10 @@ pub extern "C" fn js_object_delete_field(
         // user-attached props are dropped from the dynamic-prop table outright.
         if crate::closure::is_closure_ptr(obj as usize) {
             if let Some(name) = super::has_own_helpers::str_from_string_header(key) {
+                // A class constructor: [[Delete]] on its own property.
+                if let Some(class_id) = crate::object::class_value::class_closure_id(obj as usize) {
+                    return class_delete_own_key(class_id, name);
+                }
                 // A plain (non-arrow, non-bound) function's `prototype` is a
                 // non-configurable own property. `get_property_attrs` only knows
                 // about it once #3655 has lazily registered a descriptor (on first
@@ -308,13 +304,15 @@ pub extern "C" fn js_object_delete_field(
                     {
                         return 0;
                     }
-                    if name != "constructor"
-                        && (super::class_registry::class_own_accessor_ptrs(cid, name).is_some()
-                            || super::native_module::class_has_own_method(cid, name)
-                            || super::class_registry::lookup_own_prototype_method(cid, name)
-                                .is_some())
+                    if name == "constructor"
+                        || super::class_registry::class_own_accessor_ptrs(cid, name).is_some()
+                        || super::native_module::class_has_own_method(cid, name)
+                        || super::class_registry::lookup_own_prototype_method(cid, name).is_some()
                     {
-                        super::class_registry::class_mark_key_deleted(cid, name);
+                        // The member's storage is this object's key (removed
+                        // by the scan below) plus, for a runtime prototype
+                        // assignment, its dispatch entry: remove both.
+                        super::class_registry::class_prototype_method_root_remove(cid, name);
                         super::class_registry::invalidate_class_string_member_order(
                             cid, name, false,
                         );
@@ -494,13 +492,11 @@ pub extern "C" fn js_object_delete_field(
                             .is_none());
                 let stable_candidate = stable_identity
                     && stable_not_prototype
-                    && super::shapes::object_shape_descriptor(obj).is_some_and(|shape| {
-                        shape.object_kind == super::shapes::ShapeObjectKind::Ordinary
-                    })
+                    && super::shapes::object_shape_descriptor(obj)
+                        .is_some_and(|shape| shape.object_kind.is_ordinary_layout())
                     && (*obj_gc)._reserved
                         & (crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
-                            | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
-                            | crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT)
+                            | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO)
                         == 0;
                 if stable_candidate {
                     (*obj_gc)._reserved |= crate::gc::OBJ_FLAG_STABLE_TOMBSTONES;
@@ -546,7 +542,7 @@ pub extern "C" fn js_object_delete_field(
                     if i < alloc_limit {
                         let fields_ptr =
                             (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
-                        crate::gc::runtime_store_jsvalue_slot(
+                        crate::gc::runtime_store_object_jsvalue_slot(
                             obj as usize,
                             fields_ptr.add(i) as usize,
                             i,
@@ -725,7 +721,12 @@ pub extern "C" fn js_object_delete_field(
                 let fields_ptr =
                     (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut JSValue;
                 let slot = fields_ptr.add(j);
-                crate::gc::runtime_store_jsvalue_slot(obj as usize, slot as usize, j, next.bits());
+                crate::gc::runtime_store_object_jsvalue_slot(
+                    obj as usize,
+                    slot as usize,
+                    j,
+                    next.bits(),
+                );
             } else {
                 overflow_set(obj as usize, j, next.bits());
             }
@@ -735,7 +736,7 @@ pub extern "C" fn js_object_delete_field(
             let fields_ptr =
                 (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut JSValue;
             let slot = fields_ptr.add(new_count);
-            crate::gc::runtime_store_jsvalue_slot(
+            crate::gc::runtime_store_object_jsvalue_slot(
                 obj as usize,
                 slot as usize,
                 new_count,
@@ -793,29 +794,42 @@ fn delete_receiver_is_pointer(obj_value: f64) -> bool {
     crate::value::JSValue::from_bits(obj_value.to_bits()).is_pointer()
 }
 
-fn delete_class_prototype_key(class_id: u32, name: &str) -> i32 {
-    if let Some(proto) = super::class_registry::decl_prototype_own_accessor(class_id, name) {
-        // S2: the accessor is a real property of the declared prototype
-        // object; delete it there (which also records the class key deleted).
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let proto = scope.root_nanbox_f64(proto);
-        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        return js_object_delete_field(
-            (proto.get_nanbox_f64().to_bits() & crate::value::POINTER_MASK) as *mut ObjectHeader,
-            key,
-        );
+/// `[[Delete]]` of class `class_id`'s own string key `name` (the class
+/// constructor's own property): `0` when it is non-configurable.
+fn class_delete_own_key(class_id: u32, name: &str) -> i32 {
+    if crate::object::class_value::class_static_own_accessor(class_id, name)
+        .is_some_and(|(_, _, configurable)| !configurable)
+    {
+        return 0;
     }
+    super::class_registry::class_delete_own_dynamic_prop(class_id, name);
+    crate::object::class_value::note_static_key_deleted(class_id, name);
+    super::class_registry::invalidate_class_string_member_order(class_id, name, true);
+    1
+}
+
+fn delete_class_prototype_key(class_id: u32, name: &str) -> i32 {
     let has_own = name == "constructor"
+        || super::class_registry::decl_prototype_own_accessor(class_id, name).is_some()
         || super::native_module::class_has_own_method(class_id, name)
         || super::class_registry::lookup_own_prototype_method(class_id, name).is_some();
     if !has_own {
         return 1;
     }
-    super::class_registry::class_mark_key_deleted(class_id, name);
-    super::class_registry::invalidate_class_string_member_order(class_id, name, false);
-    super::class_registry::invalidate_class_prototype_fast_guards_for_method(name);
-    crate::typed_feedback::invalidate_method_change(class_id);
-    1
+    // The members are real properties of the class's prototype object
+    // (materialized first): the delete happens there.
+    let proto = super::class_registry::class_decl_prototype_value(class_id);
+    let js = crate::JSValue::from_bits(proto.to_bits());
+    if !js.is_pointer() {
+        return 1;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let proto = scope.root_nanbox_f64(proto);
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    js_object_delete_field(
+        (proto.get_nanbox_f64().to_bits() & crate::value::POINTER_MASK) as *mut ObjectHeader,
+        key,
+    )
 }
 
 /// `delete prim.field` (static key): once RequireObjectCoercible has rejected
@@ -870,6 +884,15 @@ pub extern "C" fn js_object_delete_dynamic_value(obj_value: f64, key: f64) -> i3
     }
     // Class-ref receiver (`delete C["m"]`): see `js_object_delete_field_value`.
     if let Some(class_id) = super::native_module::class_ref_id(obj_value) {
+        // A symbol key is an own symbol property of the class function object.
+        if unsafe { crate::symbol::js_is_symbol(key) } != 0 {
+            return unsafe {
+                crate::symbol::js_object_delete_symbol_property(
+                    super::class_value::class_value(class_id),
+                    key,
+                )
+            };
+        }
         return js_object_delete_dynamic(class_id as usize as *mut ObjectHeader, key);
     }
     if !delete_receiver_is_pointer(obj_value) {
@@ -896,8 +919,7 @@ unsafe fn try_delete_stable_sso(obj: *mut ObjectHeader, key: JSValue) -> Option<
     const BLOCKING_FLAGS: u16 = crate::gc::OBJ_FLAG_FROZEN
         | crate::gc::OBJ_FLAG_SEALED
         | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
-        | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
-        | crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT;
+        | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
     // The flag is admitted by the complete delete path only for class-less or
     // registered anonymous-shape ordinary objects, so class declaration
     // prototypes cannot enter this lane.
@@ -913,7 +935,7 @@ unsafe fn try_delete_stable_sso(obj: *mut ObjectHeader, key: JSValue) -> Option<
     }
 
     let shape = super::shapes::object_shape_descriptor(obj)?;
-    if shape.object_kind != super::shapes::ShapeObjectKind::Ordinary {
+    if !shape.object_kind.is_ordinary_layout() {
         return None;
     }
     let keys = shape.keys as usize as *mut crate::ArrayHeader;
@@ -972,7 +994,7 @@ unsafe fn try_delete_stable_sso(obj: *mut ObjectHeader, key: JSValue) -> Option<
                 crate::value::TAG_HOLE,
             );
             if slot < alloc_limit {
-                crate::gc::runtime_store_jsvalue_slot(
+                crate::gc::runtime_store_object_jsvalue_slot(
                     obj as usize,
                     fields.add(slot as usize) as usize,
                     slot as usize,
@@ -1005,7 +1027,7 @@ unsafe fn try_delete_stable_sso(obj: *mut ObjectHeader, key: JSValue) -> Option<
             );
             super::rebuild_array_layout_from_slots(keys);
             if slot < alloc_limit {
-                crate::gc::runtime_store_jsvalue_slot(
+                crate::gc::runtime_store_object_jsvalue_slot(
                     obj as usize,
                     fields.add(slot as usize) as usize,
                     slot as usize,
@@ -1046,7 +1068,7 @@ unsafe fn try_delete_stable_sso(obj: *mut ObjectHeader, key: JSValue) -> Option<
     if slot < live_slots {
         let fields =
             (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut crate::JSValue;
-        crate::gc::runtime_store_jsvalue_slot(
+        crate::gc::runtime_store_object_jsvalue_slot(
             obj as usize,
             fields.add(slot as usize) as usize,
             slot as usize,
@@ -1903,7 +1925,7 @@ unsafe fn squeeze_holes_and_delete(
             let v =
                 crate::object::field_get_set::object_field_at_with_live(obj, s as u32, field_count);
             if out < alloc_limit {
-                crate::gc::runtime_store_jsvalue_slot(
+                crate::gc::runtime_store_object_jsvalue_slot(
                     obj as usize,
                     fields_ptr.add(out) as usize,
                     out,

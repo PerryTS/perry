@@ -121,8 +121,8 @@ fn bool_bits(value: bool) -> f64 {
 }
 
 /// The stream a state view belongs to, from the accessor's receiver.
-fn view_owner() -> Option<f64> {
-    let this = crate::object::js_implicit_this_get();
+fn view_owner(this: crate::closure::JsThis) -> Option<f64> {
+    let this = this.as_f64();
     get_hidden_value(this, hidden_key(STREAM_STATE_OWNER_KEY))
 }
 
@@ -232,11 +232,11 @@ fn captured_field(closure: *const ClosureHeader) -> Option<(usize, &'static str)
     field_name(id as usize)
 }
 
-extern "C" fn stream_state_get(closure: *const ClosureHeader) -> f64 {
+extern "C" fn stream_state_get(closure: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
     let Some((kind, field)) = captured_field(closure) else {
         return f64::from_bits(TAG_UNDEFINED);
     };
-    let Some(stream) = view_owner() else {
+    let Some(stream) = view_owner(this) else {
         return f64::from_bits(TAG_UNDEFINED);
     };
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -248,12 +248,16 @@ extern "C" fn stream_state_get(closure: *const ClosureHeader) -> f64 {
     }
 }
 
-extern "C" fn stream_state_set(closure: *const ClosureHeader, value: f64) -> f64 {
+extern "C" fn stream_state_set(
+    closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+    value: f64,
+) -> f64 {
     let Some((_, field)) = captured_field(closure) else {
         return f64::from_bits(TAG_UNDEFINED);
     };
     if field == "dataEmitted" {
-        if let Some(stream) = view_owner() {
+        if let Some(stream) = view_owner(this) {
             let scope = crate::gc::RuntimeHandleScope::new();
             let stream = scope.root_nanbox_f64(stream);
             let emitted = crate::value::js_is_truthy(value) != 0;
@@ -272,8 +276,6 @@ fn state_proto(kind: usize) -> f64 {
         return f64::from_bits(cached);
     }
     ensure_state_proto_scanner();
-    crate::closure::js_register_closure_arity(stream_state_get as *const u8, 0);
-    crate::closure::js_register_closure_arity(stream_state_set as *const u8, 1);
     let fields = if kind == READABLE_KIND {
         READABLE_FIELDS
     } else {
@@ -291,9 +293,15 @@ fn state_proto(kind: usize) -> f64 {
     for (index, name) in fields.iter().enumerate() {
         let scope = crate::gc::RuntimeHandleScope::new();
         let id = (kind * 64 + index) as f64;
-        let getter = scope.root_raw_mut_ptr(js_closure_alloc(stream_state_get as *const u8, 1));
+        let getter = scope.root_raw_mut_ptr(js_closure_alloc(
+            crate::fn_info!(stream_state_get, 0; with_declared(0)),
+            1,
+        ));
         getter.with_mut_ptr(|g| js_closure_set_capture_f64(g, 0, id));
-        let setter = scope.root_raw_mut_ptr(js_closure_alloc(stream_state_set as *const u8, 1));
+        let setter = scope.root_raw_mut_ptr(js_closure_alloc(
+            crate::fn_info!(stream_state_set, 1; with_declared(1)),
+            1,
+        ));
         setter.with_mut_ptr(|s| js_closure_set_capture_f64(s, 0, id));
         let key = scope.root_raw_mut_ptr(crate::string::js_string_from_bytes(
             name.as_ptr(),

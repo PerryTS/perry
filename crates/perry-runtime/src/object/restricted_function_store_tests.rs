@@ -2,18 +2,21 @@
 
 extern "C" fn non_strict_restricted_store_test_body(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     9525.0
 }
 
 extern "C" fn strict_restricted_store_test_body(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     9526.0
 }
 
 extern "C" fn method_restricted_store_test_body(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     9527.0
 }
@@ -34,7 +37,10 @@ fn plain_function_restricted_stores_honor_put_value_throw() {
             1,
         );
     }
-    let plain = crate::closure::js_closure_alloc(plain_func, 0);
+    let plain = crate::closure::js_closure_alloc(
+        crate::fn_info!(non_strict_restricted_store_test_body, 0),
+        0,
+    );
     let plain_value = crate::value::js_nanbox_pointer(plain as i64);
 
     for name in ["caller", "arguments"] {
@@ -81,8 +87,10 @@ fn plain_function_restricted_stores_honor_put_value_throw() {
             0,
         );
     }
-    crate::closure::js_register_closure_strict_function(strict_func);
-    let strict = crate::closure::js_closure_alloc(strict_func, 0);
+    let strict = crate::closure::js_closure_alloc(
+        crate::fn_info!(strict_restricted_store_test_body, 0; with_flags(crate::closure::FN_STRICT)),
+        0,
+    );
     let strict_value = crate::value::js_nanbox_pointer(strict as i64);
     let caller = crate::string::js_string_from_bytes(b"caller".as_ptr(), 6);
     let caller_value = f64::from_bits(crate::value::JSValue::string_ptr(caller).bits());
@@ -108,7 +116,8 @@ fn plain_function_restricted_stores_honor_put_value_throw() {
             0,
         );
     }
-    let method = crate::closure::js_closure_alloc(method_func, 0);
+    let method =
+        crate::closure::js_closure_alloc(crate::fn_info!(method_restricted_store_test_body, 0), 0);
     let method_value = crate::value::js_nanbox_pointer(method as i64);
     assert!(
         crate::exception::catch_js_throw(|| crate::proxy::js_put_value_set(

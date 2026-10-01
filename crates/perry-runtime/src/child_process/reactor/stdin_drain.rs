@@ -65,8 +65,12 @@ pub(super) fn cp_stdin_written(handle: u64, len: usize, broken: bool) {
     for callback in &handles {
         let args: [f64; 0] = [];
         unsafe {
-            let _ =
-                crate::closure::js_native_call_value(callback.get_nanbox_f64(), args.as_ptr(), 0);
+            let _ = crate::closure::js_native_call_value(
+                callback.get_nanbox_f64(),
+                crate::closure::plain_call_receiver(),
+                args.as_ptr(),
+                0,
+            );
         }
     }
 }

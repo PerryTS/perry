@@ -1,70 +1,9 @@
 use super::*;
 
 #[test]
-fn test_implicit_this_root_scanner_marks_and_rewrites() {
-    // Regression for #1813. The implicit-`this` cell holds the NaN-boxed
-    // receiver across a dynamically-dispatched non-arrow method body. Under a
-    // moving GC triggered from inside that body (the @perryts/mysql
-    // Pool.acquire → handshake → nativeScramble path under concurrent load)
-    // the receiver relocates. The scanner must (a) MARK it so it is not swept
-    // when the cell is its only root, and (b) REWRITE the cell to the moved
-    // copy so the body's next `this`-derived dispatch derefs live memory
-    // instead of the stale slot (the reported SIGSEGV in js_native_call_method).
-    // `nursery_user` is live across the `arena_alloc_gc_old` call below (used
-    // afterwards to build `nursery_hdr`); the block-full slow path in that
-    // allocation can reach `gc_check_trigger()`, so suppress automatic
-    // triggers for the setup below.
-    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    clear_marks();
-    clear_mark_seeds();
-    let prev_this = crate::object::js_implicit_this_get();
-
-    let nursery_user = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
-    let valid_ptrs = build_valid_pointer_set();
-    let old_user = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_OBJECT);
-    let nursery_hdr = unsafe { header_from_user_ptr(nursery_user) as *mut GcHeader };
-
-    crate::object::js_implicit_this_set(f64::from_bits(ptr_bits(nursery_user as usize)));
-
-    // Mark phase: the live receiver must be discovered as a root.
-    crate::object::scan_implicit_this_roots_mut(&mut RuntimeRootVisitor::for_mark(&valid_ptrs));
-    unsafe {
-        assert_ne!(
-            (*nursery_hdr).gc_flags & GC_FLAG_MARKED,
-            0,
-            "IMPLICIT_THIS scanner must mark the receiver so GC does not sweep `this`"
-        );
-    }
-
-    // Rewrite phase: the cell must follow the forwarding pointer.
-    unsafe {
-        set_forwarding_address(nursery_hdr, old_user);
-    }
-    crate::object::scan_implicit_this_roots_mut(&mut RuntimeRootVisitor::for_rewrite(&valid_ptrs));
-    assert_eq!(
-        crate::object::js_implicit_this_get().to_bits(),
-        ptr_bits(old_user as usize),
-        "IMPLICIT_THIS must be rewritten to the receiver's relocated copy (#1813)"
-    );
-
-    // Idle / undefined cell must be a no-op (the default state between calls).
-    crate::object::js_implicit_this_set(f64::from_bits(crate::value::TAG_UNDEFINED));
-    crate::object::scan_implicit_this_roots_mut(&mut RuntimeRootVisitor::for_rewrite(&valid_ptrs));
-    assert_eq!(
-        crate::object::js_implicit_this_get().to_bits(),
-        crate::value::TAG_UNDEFINED,
-        "scanning the idle implicit-`this` cell must leave TAG_UNDEFINED untouched"
-    );
-
-    crate::object::js_implicit_this_set(prev_this);
-    clear_marks();
-    clear_mark_seeds();
-}
-
-#[test]
 fn test_class_side_table_scanner_marks_values_but_not_function_keys() {
     let _guard = GcTestIsolationGuard::new();
-    // `dynamic_value`/`prototype_value`/`cached_value`/`prototype_object` are
+    // `prototype_value`/`cached_value`/`prototype_object` are
     // all live across the two `arena_alloc_gc` calls below (`parent_closure`,
     // `function_key`), and `parent_closure` is live across `function_key`'s —
     // any of those allocations can reach the block-full slow path's
@@ -74,7 +13,6 @@ fn test_class_side_table_scanner_marks_values_but_not_function_keys() {
     clear_mark_seeds();
     crate::object::test_clear_class_side_table_roots();
 
-    let dynamic_value = young_leaf();
     let prototype_value = young_leaf();
     let cached_value = young_leaf();
     let prototype_object = crate::object::js_object_alloc(0, 0) as usize;
@@ -93,7 +31,6 @@ fn test_class_side_table_scanner_marks_values_but_not_function_keys() {
         init_test_closure(function_key as *mut u8);
     }
 
-    crate::object::test_seed_class_dynamic_prop_root(0x5201, "dyn", string_bits(dynamic_value));
     crate::object::test_seed_class_prototype_method_root(
         0x5201,
         "proto",
@@ -111,7 +48,6 @@ fn test_class_side_table_scanner_marks_values_but_not_function_keys() {
     let valid_ptrs = build_valid_pointer_set();
     crate::object::scan_class_side_table_roots_mut(&mut RuntimeRootVisitor::for_mark(&valid_ptrs));
 
-    assert_marked_user_ptr(dynamic_value, "dynamic class property value");
     assert_marked_user_ptr(prototype_value, "prototype method value");
     assert_marked_user_ptr(cached_value, "cached bound prototype method value");
     assert_marked_user_ptr(prototype_object, "prototype-object side-table value");
@@ -159,7 +95,6 @@ fn test_registered_class_side_table_scanner_rewrites_values_and_function_keys() 
     let value_old_bits = ptr_bits(value_old as usize);
     let key_bits = ptr_bits(key_user as usize);
     let key_old_bits = ptr_bits(key_old as usize);
-    crate::object::test_seed_class_dynamic_prop_root(0x5202, "dyn", value_bits);
     crate::object::test_seed_class_prototype_method_root(0x5202, "proto", value_bits);
     crate::object::test_seed_class_prototype_method_value_root(0x5202, "bound", value_bits);
     crate::object::test_seed_class_prototype_object_root(0x5202, value_user as usize);
@@ -168,10 +103,6 @@ fn test_registered_class_side_table_scanner_rewrites_values_and_function_keys() 
 
     rewrite_mutable_registered_roots(&valid_ptrs);
 
-    assert_eq!(
-        crate::object::test_class_dynamic_prop_root_bits(0x5202, "dyn"),
-        value_old_bits
-    );
     assert_eq!(
         crate::object::test_class_prototype_method_root_bits(0x5202, "proto"),
         value_old_bits
@@ -215,7 +146,8 @@ fn test_symbol_side_table_scanner_marks_keys_and_values_without_marking_owner() 
     clear_mark_seeds();
     crate::symbol::test_clear_symbol_side_table_roots();
 
-    let owner = crate::object::js_object_alloc(0, 0) as usize;
+    // Ordinary-object symbols are shape slots; arrays still use this scanner.
+    let owner = crate::array::js_array_alloc(0) as usize;
     let sym_key = unsafe { alloc_nursery_test_symbol() };
     let value = young_leaf();
     let static_sym_key = unsafe { alloc_nursery_test_symbol() };
@@ -252,14 +184,15 @@ fn test_symbol_side_table_registered_scanner_rewrites_roots_and_metadata() {
     crate::symbol::test_clear_symbol_side_table_roots();
     gc_register_mutable_root_scanner(crate::symbol::scan_symbol_side_table_roots_mut);
 
-    let owner = crate::object::js_object_alloc(0, 0) as usize;
+    // Ordinary-object symbols are shape slots; arrays still use this scanner.
+    let owner = crate::array::js_array_alloc(0) as usize;
     let sym_key = unsafe { alloc_nursery_test_symbol() };
     let value = young_leaf();
     let static_sym_key = unsafe { alloc_nursery_test_symbol() };
     let static_value = young_leaf();
 
     let valid_ptrs = build_valid_pointer_set();
-    let owner_old = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_OBJECT) as usize;
+    let owner_old = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_ARRAY) as usize;
     let sym_key_old = unsafe { alloc_old_test_symbol() };
     let value_old = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_STRING) as usize;
     let static_sym_key_old = unsafe { alloc_old_test_symbol() };
@@ -334,11 +267,12 @@ fn test_symbol_side_table_budgeted_scanner_heals_entries_after_owner_rekey() {
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     crate::symbol::test_clear_symbol_side_table_roots();
 
-    let owner = crate::object::js_object_alloc(0, 0) as usize;
+    // Ordinary-object symbols are shape slots; arrays still use this scanner.
+    let owner = crate::array::js_array_alloc(0) as usize;
     let sym_key = unsafe { alloc_nursery_test_symbol() };
     let value = young_leaf();
     let valid_ptrs = build_valid_pointer_set();
-    let owner_old = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_OBJECT) as usize;
+    let owner_old = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_ARRAY) as usize;
     let sym_key_old = unsafe { alloc_old_test_symbol() };
     let value_old = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_STRING) as usize;
     unsafe {
@@ -612,6 +546,12 @@ fn test_builtin_closure_metadata_follows_forwarded_owner() {
         GC_TYPE_CLOSURE,
     ) as usize;
 
+    // The arena hands back uninitialized memory. A closure's `info` word is
+    // read as a pointer by `builtin_closure_length`'s bound-function probe,
+    // so a raw owner must carry the null (no-body) info, not stale bytes.
+    for owner in [nursery_owner, relocated_owner] {
+        unsafe { (*(owner as *mut crate::closure::ClosureHeader)).info = std::ptr::null() };
+    }
     crate::object::set_builtin_closure_length(nursery_owner, 3);
     crate::object::set_builtin_closure_non_constructable(nursery_owner);
 

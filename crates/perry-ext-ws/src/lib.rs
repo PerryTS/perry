@@ -1325,7 +1325,11 @@ pub unsafe extern "C" fn js_ws_handle_upgrade(
     // duplicates the usual `wss.emit("connection", ws, req)` idiom.
     if cb.get() != 0 {
         let closure = JsClosure::from_raw(cb.get() as *const RawClosureHeader);
-        let _ = closure.call2(f64::from_bits(client_js_value(ws_id).bits()), req.get());
+        let _ = closure.call2(
+            perry_ffi::JsThis::UNDEFINED,
+            f64::from_bits(client_js_value(ws_id).bits()),
+            req.get(),
+        );
     }
 }
 
@@ -1378,7 +1382,10 @@ pub extern "C" fn js_ws_process_pending() -> i32 {
                         // Use the same handle value as the clients Set and
                         // manual-upgrade callback, including dynamic dispatch.
                         let _ = unsafe {
-                            closure.call1(f64::from_bits(client_js_value(client_id).bits()))
+                            closure.call1(
+                                perry_ffi::JsThis::UNDEFINED,
+                                f64::from_bits(client_js_value(client_id).bits()),
+                            )
                         };
                         fired += 1;
                     }
@@ -1400,7 +1407,9 @@ pub extern "C" fn js_ws_process_pending() -> i32 {
                         if cb != 0 {
                             let closure =
                                 unsafe { JsClosure::from_raw(cb as *const RawClosureHeader) };
-                            let _ = unsafe { closure.call2(msg_f64, binary_f64) };
+                            let _ = unsafe {
+                                closure.call2(perry_ffi::JsThis::UNDEFINED, msg_f64, binary_f64)
+                            };
                             fired += 1;
                         }
                     }
@@ -1415,6 +1424,7 @@ pub extern "C" fn js_ws_process_pending() -> i32 {
                                     unsafe { JsClosure::from_raw(cb as *const RawClosureHeader) };
                                 let _ = unsafe {
                                     closure.call2(
+                                        perry_ffi::JsThis::UNDEFINED,
                                         f64::from_bits(client_js_value(ws_id).bits()),
                                         msg_f64,
                                     )
@@ -1433,7 +1443,7 @@ pub extern "C" fn js_ws_process_pending() -> i32 {
                         if cb != 0 {
                             let closure =
                                 unsafe { JsClosure::from_raw(cb as *const RawClosureHeader) };
-                            let _ = unsafe { closure.call1(value) };
+                            let _ = unsafe { closure.call1(perry_ffi::JsThis::UNDEFINED, value) };
                             fired += 1;
                         }
                     }
@@ -1447,7 +1457,7 @@ pub extern "C" fn js_ws_process_pending() -> i32 {
                         if cb != 0 {
                             let closure =
                                 unsafe { JsClosure::from_raw(cb as *const RawClosureHeader) };
-                            let _ = unsafe { closure.call1(value) };
+                            let _ = unsafe { closure.call1(perry_ffi::JsThis::UNDEFINED, value) };
                             fired += 1;
                         }
                     }
@@ -1472,7 +1482,9 @@ pub extern "C" fn js_ws_process_pending() -> i32 {
                         if cb != 0 {
                             let closure =
                                 unsafe { JsClosure::from_raw(cb as *const RawClosureHeader) };
-                            let _ = unsafe { closure.call2(code_f64, reason_f64) };
+                            let _ = unsafe {
+                                closure.call2(perry_ffi::JsThis::UNDEFINED, code_f64, reason_f64)
+                            };
                             fired += 1;
                         }
                     }
@@ -1485,7 +1497,10 @@ pub extern "C" fn js_ws_process_pending() -> i32 {
                                 let closure =
                                     unsafe { JsClosure::from_raw(cb as *const RawClosureHeader) };
                                 let _ = unsafe {
-                                    closure.call1(f64::from_bits(client_js_value(ws_id).bits()))
+                                    closure.call1(
+                                        perry_ffi::JsThis::UNDEFINED,
+                                        f64::from_bits(client_js_value(ws_id).bits()),
+                                    )
                                 };
                                 fired += 1;
                             }
@@ -1502,8 +1517,10 @@ pub extern "C" fn js_ws_process_pending() -> i32 {
                         let closure = unsafe { JsClosure::from_raw(cb as *const RawClosureHeader) };
                         let s = alloc_string(&err);
                         let _ = unsafe {
-                            closure
-                                .call1(f64::from_bits(JsValue::from_string_ptr(s.as_raw()).bits()))
+                            closure.call1(
+                                perry_ffi::JsThis::UNDEFINED,
+                                f64::from_bits(JsValue::from_string_ptr(s.as_raw()).bits()),
+                            )
                         };
                         fired += 1;
                     }
@@ -1516,8 +1533,10 @@ pub extern "C" fn js_ws_process_pending() -> i32 {
                         let closure = unsafe { JsClosure::from_raw(cb as *const RawClosureHeader) };
                         let s = alloc_string(&err);
                         let _ = unsafe {
-                            closure
-                                .call1(f64::from_bits(JsValue::from_string_ptr(s.as_raw()).bits()))
+                            closure.call1(
+                                perry_ffi::JsThis::UNDEFINED,
+                                f64::from_bits(JsValue::from_string_ptr(s.as_raw()).bits()),
+                            )
                         };
                         fired += 1;
                     }
@@ -1528,7 +1547,7 @@ pub extern "C" fn js_ws_process_pending() -> i32 {
                 for cb in listeners {
                     if cb != 0 {
                         let closure = unsafe { JsClosure::from_raw(cb as *const RawClosureHeader) };
-                        let _ = unsafe { closure.call0() };
+                        let _ = unsafe { closure.call0(perry_ffi::JsThis::UNDEFINED) };
                         fired += 1;
                     }
                 }
@@ -1537,7 +1556,7 @@ pub extern "C" fn js_ws_process_pending() -> i32 {
                 for cb in listeners_on_server(server_handle, "close") {
                     if cb != 0 {
                         let closure = unsafe { JsClosure::from_raw(cb as *const RawClosureHeader) };
-                        let _ = unsafe { closure.call0() };
+                        let _ = unsafe { closure.call0(perry_ffi::JsThis::UNDEFINED) };
                         fired += 1;
                     }
                 }
@@ -1549,7 +1568,7 @@ pub extern "C" fn js_ws_process_pending() -> i32 {
                 for cb in listeners {
                     if cb != 0 {
                         let closure = unsafe { JsClosure::from_raw(cb as *const RawClosureHeader) };
-                        let _ = unsafe { closure.call0() };
+                        let _ = unsafe { closure.call0(perry_ffi::JsThis::UNDEFINED) };
                         fired += 1;
                     }
                 }

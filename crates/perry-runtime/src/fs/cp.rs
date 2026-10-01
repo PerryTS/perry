@@ -150,7 +150,12 @@ pub(crate) fn copy_filter_allows(src: &Path, dst: &Path, opts: FsCopyOptions) ->
     let src_value = crate::value::js_nanbox_string(s as i64);
     let s = js_string_from_bytes(dst_string.as_bytes().as_ptr(), dst_string.len() as u32);
     let dst_value = crate::value::js_nanbox_string(s as i64);
-    let result = crate::closure::js_closure_call2(filter, src_value, dst_value);
+    let result = crate::closure::js_closure_call2(
+        filter,
+        crate::closure::plain_call_receiver(),
+        src_value,
+        dst_value,
+    );
     unsafe {
         if let Some(promise) = promise_ptr_from_value(result) {
             if opts.sync_filter {

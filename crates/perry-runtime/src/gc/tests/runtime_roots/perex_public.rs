@@ -33,10 +33,9 @@ pub(super) fn register_host_roots() {
     gc_register_mutable_root_scanner(
         crate::object::regex_proto_thunks::scan_canonical_test_site_roots_mut,
     );
-    gc_register_mutable_root_scanner(crate::object::scan_implicit_this_roots_mut);
-    // PR #10564 review finding: implicit_this/new_target savepoints in
-    // exception.rs are a second root for whatever these tests displace
-    // IMPLICIT_THIS to across a throw. gc_init registers this in
+    gc_register_mutable_root_scanner(crate::object::scan_dispatch_binding_roots_mut);
+    // PR #10564 review finding: the new_target savepoint in exception.rs is
+    // a second root for whatever a throw displaces. gc_init registers this in
     // production; the isolation guard clears that registry too.
     gc_register_mutable_root_scanner(crate::exception::scan_exception_roots_mut);
     gc_register_mutable_root_scanner(crate::closure::scan_singleton_closure_roots_mut);
@@ -314,7 +313,10 @@ fn perex_public_throwing_lastindex_write_releases_native_scratch_and_roots() {
     );
 }
 
-extern "C" fn throw_on_coercion(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn throw_on_coercion(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     gc_collect_minor();
     crate::exception::js_throw(731.0)
 }
@@ -331,9 +333,11 @@ fn perex_public_nonglobal_test_propagates_lastindex_coercion_throw() {
     let input = text(&scope, b"a");
     let coercer = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 1));
     let key = text(&scope, b"valueOf");
-    let fp = throw_on_coercion as *const u8;
-    crate::closure::js_register_closure_arity(fp, 0);
-    let closure = crate::closure::js_closure_alloc_singleton(fp);
+    let closure = crate::closure::js_closure_alloc_singleton(crate::fn_info!(
+        throw_on_coercion,
+        0;
+        with_declared(0)
+    ));
     coercer.with_mut_ptr::<ObjectHeader, _>(|coercer| {
         key.with_const_ptr::<StringHeader, _>(|key| {
             crate::object::js_object_set_field_by_name(

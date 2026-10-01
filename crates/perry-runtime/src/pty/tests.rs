@@ -13,29 +13,45 @@ thread_local! {
     static REMOVED_CALLS: Cell<usize> = const { Cell::new(0) };
 }
 
-extern "C" fn removed(_closure: *const ClosureHeader, _chunk: f64) -> f64 {
+extern "C" fn removed(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    _chunk: f64,
+) -> f64 {
     REMOVED_CALLS.with(|n| n.set(n.get() + 1));
     cp_undefined()
 }
 
-extern "C" fn data(_closure: *const ClosureHeader, chunk: f64) -> f64 {
+extern "C" fn data(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    chunk: f64,
+) -> f64 {
     OUTPUT.with(|o| o.borrow_mut().push_str(&cp_value_to_string(chunk).unwrap()));
     cp_undefined()
 }
 
-extern "C" fn exited(_closure: *const ClosureHeader, event: f64) -> f64 {
+extern "C" fn exited(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    event: f64,
+) -> f64 {
     EXITS.with(|e| e.borrow_mut().push(cp_get_field(event, b"exitCode")));
     cp_undefined()
 }
 
-fn callback(f: extern "C" fn(*const ClosureHeader, f64) -> f64) -> f64 {
-    crate::closure::js_register_closure_arity(f as *const u8, 1);
-    cp_box_ptr(crate::closure::js_closure_alloc(f as *const u8, 0).cast())
+fn callback(info: *const crate::closure::JsFunctionInfo) -> f64 {
+    cp_box_ptr(crate::closure::js_closure_alloc(info, 0).cast())
 }
 
 fn call(target: f64, name: &[u8], args: &[f64]) -> f64 {
     unsafe {
-        crate::closure::js_native_call_value(cp_get_field(target, name), args.as_ptr(), args.len())
+        crate::closure::js_native_call_value(
+            cp_get_field(target, name),
+            crate::closure::plain_call_receiver(),
+            args.as_ptr(),
+            args.len(),
+        )
     }
 }
 
@@ -87,14 +103,31 @@ fn aliases_share_native_spawn_and_paused_output_precedes_exit() {
             opts.get_nanbox_f64(),
         ];
         let term = scope.root_nanbox_f64(unsafe {
-            crate::closure::js_native_call_value(spawn.get_nanbox_f64(), args.as_ptr(), args.len())
+            crate::closure::js_native_call_value(
+                spawn.get_nanbox_f64(),
+                crate::closure::plain_call_receiver(),
+                args.as_ptr(),
+                args.len(),
+            )
         });
         assert!(cp_get_field(term.get_nanbox_f64(), b"pid") > 0.0);
         let handle = pty_handle_of(term.get_nanbox_f64()).unwrap();
-        let disposable = call(term.get_nanbox_f64(), b"onData", &[callback(removed)]);
+        let disposable = call(
+            term.get_nanbox_f64(),
+            b"onData",
+            &[callback(crate::fn_info!(removed, 1; with_declared(1)))],
+        );
         call(disposable, b"dispose", &[]);
-        call(term.get_nanbox_f64(), b"onData", &[callback(data)]);
-        call(term.get_nanbox_f64(), b"onExit", &[callback(exited)]);
+        call(
+            term.get_nanbox_f64(),
+            b"onData",
+            &[callback(crate::fn_info!(data, 1; with_declared(1)))],
+        );
+        call(
+            term.get_nanbox_f64(),
+            b"onExit",
+            &[callback(crate::fn_info!(exited, 1; with_declared(1)))],
+        );
         call(term.get_nanbox_f64(), b"pause", &[]);
         call(term.get_nanbox_f64(), b"write", &[cp_box_string(script)]);
         let paused = Instant::now() + Duration::from_millis(150);

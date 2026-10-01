@@ -24,5 +24,9 @@ fn is_weak_collection_value(value: f64) -> bool {
 
 #[inline]
 pub(super) fn is_identity_only_deep_equal_value(value: f64) -> bool {
-    crate::promise::js_value_is_promise(value) != 0 || is_weak_collection_value(value)
+    crate::promise::js_value_is_promise(value) != 0
+        || is_weak_collection_value(value)
+        // A class is its function object: two distinct classes render alike
+        // (`[class Twin]`) but are never deep-equal.
+        || crate::object::class_value::class_value_id(value).is_some()
 }

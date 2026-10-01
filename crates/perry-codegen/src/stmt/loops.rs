@@ -371,7 +371,8 @@ fn lower_numeric_bulk_fill_loop(ctx: &mut FnCtx<'_>, matched: NumericBulkFillLoo
         (new_arr, bound_i32)
     };
     let new_box = nanbox_pointer_inline(ctx.block(), &new_arr);
-    if let Some(slot) = ctx.locals.get(&matched.array_id).cloned() {
+    if crate::scope_env::access::write_back_boxed_local(ctx, matched.array_id, &new_box)? {
+    } else if let Some(slot) = ctx.locals.get(&matched.array_id).cloned() {
         ctx.block().store(DOUBLE, &new_box, &slot);
     }
     if let Some(counter_slot) = ctx.locals.get(&matched.counter_id).cloned() {
@@ -822,8 +823,8 @@ fn lower_strided_tagged_fill_loop(
 /// and emit one Number tag test each in the current (fast preheader) block,
 /// branching to the slow preheader when any holds a non-Number — the
 /// induction base case, exactly like the stable-packed clone's admission.
-/// The returned ids ride the scope's `PackedF64LoopFact`, where
-/// `is_numeric_expr` consults them so `s += arr[i]` lowers to a native
+/// The returned ids open the clone's 5L Number scope
+/// (`materialize_number_locals`), which `local_is_number` answers from so `s += arr[i]` lowers to a native
 /// `fadd` instead of `js_dynamic_string_or_number_add` per iteration.
 /// Range-loop wrapper: accumulators are collected against the loop's single
 /// counter-accessed array (the `arr[counter]` leaf of the accumulator walk).
@@ -864,7 +865,7 @@ fn emit_range_loop_accumulator_admission(
 }
 
 /// The live state of a packed clone's accumulator admission: the admitted
-/// ids (they ride the scope's fact so `is_numeric_expr` sees them), the
+/// ids (they open the clone's Number scope, see `local_is_number`), the
 /// unboxed subset (id, F64 alloca, real slot) whose reads/writes redirect
 /// through `ctx.numeric_accumulator_f64_slots`, and the side-exit trampoline
 /// that writes the live values back before entering the slow clone.
@@ -1473,8 +1474,9 @@ fn lower_packed_f64_versioned_for(
             allow_holes: false,
             window_validated: false,
             affine_indices: false,
-            numeric_accumulators: acc_scope.accumulators.clone(),
         });
+    ctx.receiver_descriptors
+        .materialize_number_locals(packed_scope_id, &acc_scope.accumulators);
     // The guard just proved a live, non-forwarded plain array, and the
     // matched body cannot change its length (in-bounds stores only, no
     // calls/closures/awaits) — so hoist the length ONCE as the fast clone's
@@ -3259,6 +3261,10 @@ fn push_packed_f64_range_facts(
     numeric_accumulators: &[u32],
     affine_window_proven: &std::collections::BTreeSet<u32>,
 ) {
+    // The range guard tag-tested every admitted accumulator; the scope ends
+    // with the caller's `dematerialize_scope(scope_id)`.
+    ctx.receiver_descriptors
+        .materialize_number_locals(scope_id, numeric_accumulators);
     for access in &matched.arrays {
         if access.counter.is_some() {
             ctx.receiver_descriptors
@@ -3275,7 +3281,6 @@ fn push_packed_f64_range_facts(
                     allow_holes: !matched.dense,
                     window_validated: true,
                     affine_indices: false,
-                    numeric_accumulators: numeric_accumulators.to_vec(),
                 });
         }
         // #9253: an affine access publishes a receiver-only fact. No window
@@ -3296,7 +3301,6 @@ fn push_packed_f64_range_facts(
                     // the range clamp and the per-read bounds check.
                     window_validated: affine_window_proven.contains(&access.array_id),
                     affine_indices: true,
-                    numeric_accumulators: numeric_accumulators.to_vec(),
                 });
         }
         if let Some((lo, hi)) = access.stat {
@@ -3310,7 +3314,6 @@ fn push_packed_f64_range_facts(
                     values_i32,
                     elem: crate::expr::MaskedWindowElem::PlainF64,
                     allows_stores: allow_masked_stores,
-                    numeric_accumulators: numeric_accumulators.to_vec(),
                 },
             );
         }
@@ -3414,7 +3417,6 @@ fn lower_masked_window_ta_tier(
                 values_i32,
                 elem,
                 allows_stores: false,
-                numeric_accumulators: Vec::new(),
             },
         );
     }
@@ -3887,14 +3889,21 @@ fn lower_packed_f64_range_versioned_for(
     }
 
     ctx.current_block = slow_pre_idx;
-    lower_for_after_init(
-        ctx,
-        init,
-        condition,
-        update,
-        body,
-        "for.packed_f64_range_slow",
-    )?;
+    // The arrays this tier refused (not packed numbers) may still be region
+    // arrays (S3): their element reads are then bare in the split loop.
+    let region = super::region_loop::begin_for_arrays(ctx, condition, body, update)?;
+    let lowered = super::region_loop::lower_loop(ctx, region, &mut |ctx| {
+        lower_for_after_init(
+            ctx,
+            init,
+            condition,
+            update,
+            body,
+            "for.packed_f64_range_slow",
+        )
+    });
+    super::region_loop::end(ctx, region);
+    lowered?;
     if !ctx.block().is_terminated() {
         ctx.block().br(&merge_label);
     }
@@ -5739,9 +5748,12 @@ fn match_class_field_versioned_loop(
             return None;
         }
         let field_index = crate::type_analysis::class_field_global_index(ctx, &class_name, &prop)?;
-        let raw_f64 = crate::type_analysis::class_field_declared_type(ctx, &class_name, &prop)
-            .as_ref()
-            .is_some_and(crate::typed_shape::type_is_raw_f64_candidate);
+        let raw_f64 = crate::expr::class_field_inline_guard::class_field_site_raw_f64(
+            ctx,
+            &class_name,
+            &prop,
+            field_index,
+        );
         if !raw_f64 {
             return None;
         }
@@ -5840,7 +5852,7 @@ fn lower_class_field_versioned_for(
     // emitted IR is call-free, so the pointer the check validates is the
     // pointer the fast clone uses.
     let recv_box = lower_expr(ctx, &perry_hir::Expr::LocalGet(matched.recv_id))?;
-    let expected_shape_id = crate::typed_shape::load_class_shape_id(
+    let expected_shape_id = crate::typed_shape::class_shape_id_operand(
         ctx,
         &matched.class_name,
         &matched.keys_global_name,
@@ -5860,9 +5872,6 @@ fn lower_class_field_versioned_for(
             &obj_handle,
             &expected_class_id_str,
             &expected_shape_id,
-            // Every tracked field is a raw-f64 candidate: reads rely on the
-            // intact bit, so require it whether or not the loop stores.
-            true,
             has_store,
             &slow_pre_label,
         );
@@ -7121,13 +7130,22 @@ fn dynamic_bound_private_counter_is_safe(
 pub(crate) fn emit_js_value_is_number(ctx: &mut FnCtx<'_>, value: &str) -> String {
     let n_bits = ctx.block().bitcast_double_to_i64(value);
     // Every boxed tag occupies the positive suffix [0x7FF9_0000_0000_0000,
-    // 0x7FFF_FFFF_FFFF_FFFF]. A signed comparison rejects that whole suffix
-    // while admitting every negative IEEE value, including negative NaNs.
-    // INT32 boxes remain excluded: their payload still needs unboxing before
-    // floating-point arithmetic. This is exactly JSValue::is_number's range.
-    ctx.block().icmp_slt(
+    // 0x7FFF_FFFF_FFFF_FFFF]. INT32 boxes are excluded too: their payload
+    // still needs unboxing before floating-point arithmetic.
+    //
+    // The test ignores the sign bit, so it also rejects the MIRROR of the tag
+    // band (negative NaNs whose magnitude lies in it). A value that passes
+    // flows into raw-double arithmetic and may become a Number local, which
+    // owns no root slot (step5 DESIGN §3.4): `fneg`/`fabs`/`copysign` flip only
+    // the sign, and an IEEE operation on a NaN keeps its payload, so an
+    // admitted negative `0xFFFD_...` NaN would reach a local as the pointer
+    // tag `0x7FFD_...`. The admitted set, {x : |x| below the band}, is closed
+    // under those operations, and it contains both default NaNs
+    // (`0x7FF8_0000_0000_0000`, x86's `0xFFF8_0000_0000_0000`).
+    let magnitude = ctx.block().and(I64, &n_bits, "9223372036854775807");
+    ctx.block().icmp_ult(
         I64,
-        &n_bits,
+        &magnitude,
         &crate::nanbox::i64_literal(crate::nanbox::SHORT_STRING_TAG),
     )
 }
@@ -7247,10 +7265,19 @@ pub(crate) fn lower_for(
         return Ok(());
     }
 
-    if i32_counter::lower(ctx, init, condition, update, body)? {
-        return Ok(());
-    }
-    lower_for_after_init(ctx, init, condition, update, body, "for")
+    // Step 4b (#10884): every specialised tier above declined; a loop (or
+    // body) region guards its receivers once here, in the preheader, and
+    // splits the body when the tier below lowers it (`stmt::region_loop`).
+    let region = super::region_loop::begin(ctx, condition, body, update)?;
+    let lowered = super::region_loop::lower_loop(ctx, region, &mut |ctx| {
+        if i32_counter::lower(ctx, init, condition, update, body)? {
+            Ok(())
+        } else {
+            lower_for_after_init(ctx, init, condition, update, body, "for")
+        }
+    });
+    super::region_loop::end(ctx, region);
+    lowered
 }
 
 pub(super) fn lower_for_after_init(
@@ -8171,8 +8198,11 @@ fn emit_armed_gc_loop_safepoint(ctx: &mut FnCtx<'_>) {
             let handle = blk.and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
             blk.store(I64, &handle, &recipe.base_handle_slot);
         }
-        blk.br(&done_label);
     }
+    // Loop regions' array bases (S3), from the same GC-updated roots.
+    crate::stmt::region_loop::emit_poll_refresh(ctx)
+        .expect("a region array binding lowers as a plain load");
+    ctx.block().br(&done_label);
     ctx.current_block = done_idx;
 }
 
@@ -9919,6 +9949,15 @@ pub(crate) fn lower_while(
     condition: &perry_hir::Expr,
     body: &[Stmt],
 ) -> Result<()> {
+    let region = super::region_loop::begin(ctx, Some(condition), body, None)?;
+    let lowered = super::region_loop::lower_loop(ctx, region, &mut |ctx| {
+        lower_while_impl(ctx, condition, body)
+    });
+    super::region_loop::end(ctx, region);
+    lowered
+}
+
+fn lower_while_impl(ctx: &mut FnCtx<'_>, condition: &perry_hir::Expr, body: &[Stmt]) -> Result<()> {
     let cond_idx = ctx.new_block("while.cond");
     let body_idx = ctx.new_block("while.body");
     let exit_idx = ctx.new_block("while.exit");
@@ -9988,6 +10027,19 @@ pub(crate) fn lower_while(
 /// `do { body } while (cond)` — body runs at least once. Same blocks as
 /// `while`, but the initial branch goes to body, not cond.
 pub(crate) fn lower_do_while(
+    ctx: &mut FnCtx<'_>,
+    body: &[Stmt],
+    condition: &perry_hir::Expr,
+) -> Result<()> {
+    let region = super::region_loop::begin(ctx, Some(condition), body, None)?;
+    let lowered = super::region_loop::lower_loop(ctx, region, &mut |ctx| {
+        lower_do_while_impl(ctx, body, condition)
+    });
+    super::region_loop::end(ctx, region);
+    lowered
+}
+
+fn lower_do_while_impl(
     ctx: &mut FnCtx<'_>,
     body: &[Stmt],
     condition: &perry_hir::Expr,

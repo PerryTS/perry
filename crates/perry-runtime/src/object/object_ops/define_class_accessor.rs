@@ -3,9 +3,9 @@
 //!
 //! An instance accessor is a real accessor property of the class's decl
 //! prototype, so a define through the prototype ref is the ordinary define on
-//! that object. A static accessor is an own property of the constructor `C`,
-//! which is a ClassRef value, not an object: its get/set live in
-//! `CLASS_STATIC_ACCESSORS` and its attributes in `static_accessor_attrs.rs`.
+//! that object. A static accessor is an accessor property of the class
+//! function object's own-property object (`object::class_value`), attributes
+//! with its key.
 use super::*;
 
 /// ValidateAndApplyPropertyDescriptor for the declared accessor `name` of
@@ -43,32 +43,25 @@ pub(super) unsafe fn define_declared_class_accessor(
         super::js_object_define_property(proto.get_nanbox_f64(), key, desc.get_nanbox_f64());
         return true;
     }
-    let Some((getter, setter)) =
-        super::super::class_registry::static_declared_accessor_ptrs(class_id, name)
+    let Some((acc, enumerable, configurable)) =
+        crate::object::class_value::class_static_own_accessor(class_id, name)
     else {
         return false;
     };
-    let (enumerable, configurable) =
-        super::super::class_registry::static_accessor_attrs(class_id, name);
     // The per-field reads below allocate a field-name string (and may run a
     // user getter on a non-plain descriptor), so the descriptor is re-read from
     // its root at every use.
     let scope = crate::gc::RuntimeHandleScope::new();
     let desc = scope.root_nanbox_f64(descriptor_value);
     if !configurable {
-        // The validator compares accessor halves by closure `func_ptr`, which a
-        // reflected class accessor value carries. Root the getter value across
-        // the setter value's allocation; the validator roots both on entry.
-        let get = scope.root_nanbox_f64(
-            super::super::class_registry::class_accessor_function_value(getter, false, name),
-        );
-        let set = super::super::class_registry::class_accessor_function_value(setter, true, name);
+        // The validator compares accessor halves by closure identity: the
+        // property's own closures.
         validate_nonconfigurable_redefine(
             name,
             PropertyAttrs::new(false, enumerable, false),
             Some(AccessorDescriptor {
-                get: get.get_nanbox_u64(),
-                set: set.to_bits(),
+                get: acc.get,
+                set: acc.set,
             }),
             f64::from_bits(crate::value::TAG_UNDEFINED),
             desc.get_nanbox_f64(),
@@ -102,7 +95,7 @@ pub(super) unsafe fn define_declared_class_accessor(
     };
     let enumerable = flag(DESC_ENUMERABLE, b"enumerable").unwrap_or(enumerable);
     let configurable = flag(DESC_CONFIGURABLE, b"configurable").unwrap_or(configurable);
-    super::super::class_registry::set_static_accessor_attrs(
+    crate::object::class_value::class_static_set_accessor_attrs(
         class_id,
         name,
         enumerable,

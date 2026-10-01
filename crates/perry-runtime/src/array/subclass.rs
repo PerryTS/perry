@@ -24,17 +24,20 @@ pub use packed_index::{ArrayLikePicCache, ArrayLikePicCacheSlot, ARRAYLIKE_PIC_W
 // The loop-guard entry points are exported C symbols; only the unit tests
 // reach them through Rust paths.
 #[cfg(test)]
-pub(super) use loop_guard::{js_packed_arraylike_loop_guard, js_packed_ecs_u32_loop_guard};
+pub(crate) use loop_guard::{js_packed_arraylike_loop_guard, js_packed_ecs_u32_loop_guard};
 
 // #8690: `ObjectMeta::flags` carries the move-stable scalar payload for a
-// numeric packed-prefix proof. The GcHeader authority bit prevents a record
-// surviving address reuse: fresh allocations have it clear, and both words
-// ride an evacuation without a side-table re-key walk.
+// numeric packed-prefix proof. The ShapeId kind is the authority: a fresh
+// allocation cannot inherit a proof sibling from reused `ObjectMeta` storage.
+// The payload rides evacuation with its owner, with no side-table re-key.
 //
 //     bit 0       prototype-semantic divergence
 //     bit 1       payload valid
 //     bit 2       compact nonnegative-int entity proof (mode 2)
 //     bit 3       user-origin prototype signal
+//     bit 4       class-evaluation prototype
+//     bit 5       object is a prototype
+//     bit 6       exotic read receiver
 //     bits 8..31  verified prefix bound (24 bits, max 16,000,000)
 //     bits 32..63 exact semantic ShapeId
 const PACKED_NUMERIC_META_VALID: u64 = 1 << 1;
@@ -255,7 +258,7 @@ unsafe fn build_dense_layout(obj: *const ObjectHeader) -> Option<DenseSubclassLa
         return None;
     }
     let shape = crate::object::shapes::object_shape_descriptor(obj)?;
-    if shape.object_kind != crate::object::shapes::ShapeObjectKind::Ordinary {
+    if !shape.object_kind.is_ordinary_layout() {
         return None;
     }
     let keys = shape.keys as usize as *const crate::array::ArrayHeader;
@@ -490,7 +493,7 @@ pub(crate) unsafe fn array_subclass_named_prefix_token_for_slot(
     let Some(shape) = crate::object::shapes::object_shape_descriptor(obj) else {
         return 0;
     };
-    if shape.object_kind != crate::object::shapes::ShapeObjectKind::Ordinary {
+    if !shape.object_kind.is_ordinary_layout() {
         return 0;
     }
     let Some((declared_keys, declared_count)) =
@@ -667,23 +670,46 @@ pub(crate) unsafe fn array_subclass_named_prefix_token_matches_class(
 /// invalidation it would otherwise pay on every operation (see
 /// `array_subclass_fast_pop_validated`).
 pub(crate) unsafe fn clear_packed_subclass_numeric_proof(obj: *mut ObjectHeader) -> bool {
-    let Some(header) = crate::value::addr_class::try_read_gc_header(obj as usize) else {
+    let Some(unproven) = drop_packed_subclass_numeric_proof_record(obj) else {
         return false;
     };
+    // Charter step 3: the proof is a shape fact, so retiring it is a
+    // transition back to the receiver's unproven twin (allocation-free).
+    crate::object::shapes::store_kind::restore_unproven_twin(obj, unproven);
+    true
+}
+
+/// Clear the proof's per-object payload
+/// WITHOUT moving the shape, and return the unproven ShapeId the payload
+/// named (0 when the payload was already gone), or `None` when the receiver
+/// carried no proof. Only for a caller that stamps a new shape right after
+/// (the stamp funnel, charter step 3 R5); every other retire goes through
+/// [`clear_packed_subclass_numeric_proof`].
+///
+/// # Safety
+/// `obj` is a live `ObjectHeader`.
+pub(crate) unsafe fn drop_packed_subclass_numeric_proof_record(
+    obj: *mut ObjectHeader,
+) -> Option<u32> {
+    let header = crate::value::addr_class::try_read_gc_header(obj as usize)?;
     if header.obj_type != crate::gc::GC_TYPE_OBJECT
-        || header._reserved & crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF == 0
+        || crate::object::shapes::shape_object_kind_by_id(
+            crate::object::shapes::object_shape_stamp(obj),
+        ) != Some(crate::object::shapes::ShapeObjectKind::OrdinaryNumericProof)
     {
-        return false;
+        return None;
     }
-    let header = std::ptr::from_ref(header).cast_mut();
-    // Retire the authority first. A missing/moving meta then merely leaves an
-    // unreachable payload, never a proof a future query can consume.
-    (*header)._reserved &= !crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF;
+    // The caller moves away from the proof sibling before publishing another
+    // shape or returning to a mutator; clear the bound and twin-id payload.
     let meta = (*obj).meta;
+    let mut unproven = 0;
     if !meta.is_null() {
+        if (*meta).flags & PACKED_NUMERIC_META_VALID != 0 {
+            unproven = ((*meta).flags >> 32) as u32;
+        }
         (*meta).flags &= !PACKED_NUMERIC_META_MASK;
     }
-    true
+    Some(unproven)
 }
 
 /// Owner-side invalidation for an object-owned spill write. The common
@@ -706,16 +732,14 @@ unsafe fn subclass_numeric_prefix_is_proven(
     bound: u32,
     require_u32: bool,
 ) -> bool {
-    let Some(header) = crate::value::addr_class::try_read_gc_header(obj as usize) else {
-        return false;
-    };
-    let header = std::ptr::from_ref(header).cast_mut();
-    if (*header)._reserved & crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF == 0 {
+    if crate::object::shapes::shape_object_kind_by_id(shape_id)
+        != Some(crate::object::shapes::ShapeObjectKind::OrdinaryNumericProof)
+    {
         return false;
     }
     let meta = (*obj).meta;
     if meta.is_null() {
-        (*header)._reserved &= !crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF;
+        clear_packed_subclass_numeric_proof(obj as *mut ObjectHeader);
         return false;
     }
     let flags = (*meta).flags;
@@ -723,12 +747,9 @@ unsafe fn subclass_numeric_prefix_is_proven(
     let proven_bound =
         ((flags & PACKED_NUMERIC_META_BOUND_MASK) >> PACKED_NUMERIC_META_BOUND_SHIFT) as u32;
     let exact_u32 = flags & PACKED_NUMERIC_META_U32 != 0;
-    let proven_shape = (flags >> 32) as u32;
-    if payload_valid
-        && proven_shape == shape_id
-        && proven_bound >= bound
-        && require_u32 == exact_u32
-    {
+    // The shape proves the kind; the payload names the unproven twin and
+    // the bound a loop may consume. A missing payload retires this proof.
+    if payload_valid && proven_bound >= bound && require_u32 == exact_u32 {
         return true;
     }
     clear_packed_subclass_numeric_proof(obj as *mut ObjectHeader);
@@ -746,7 +767,12 @@ unsafe fn publish_subclass_numeric_prefix(
     if meta.is_null() || bound > 16_000_000 {
         return false;
     }
+    if crate::value::addr_class::try_read_gc_header(obj as usize).is_none() {
+        return false;
+    }
     let flags = (*meta).flags;
+    // The payload's shape field names the UNPROVEN twin (`shape_id`, the
+    // receiver's current `Ordinary` shape) that a retire stamps back.
     (*meta).flags = (flags & !PACKED_NUMERIC_META_MASK)
         | PACKED_NUMERIC_META_VALID
         | if exact_u32 {
@@ -756,12 +782,21 @@ unsafe fn publish_subclass_numeric_prefix(
         }
         | (u64::from(bound) << PACKED_NUMERIC_META_BOUND_SHIFT)
         | (u64::from(shape_id) << 32);
-    let Some(header) = crate::value::addr_class::try_read_gc_header(obj as usize) else {
-        return false;
-    };
-    let header = std::ptr::from_ref(header).cast_mut();
-    (*header)._reserved |= crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF;
-    true
+    // Charter step 3: publishing the proof is a shape transition to the
+    // proof twin, which is the sole authority.
+    match crate::object::shapes::store_kind::stamp_numeric_proof_twin(obj as *mut ObjectHeader) {
+        Some(unproven) if unproven == shape_id => true,
+        Some(_) => {
+            // Unreachable: the caller read `shape_id` from this receiver
+            // with nothing in between. Fail closed.
+            clear_packed_subclass_numeric_proof(obj as *mut ObjectHeader);
+            false
+        }
+        None => {
+            (*meta).flags &= !PACKED_NUMERIC_META_MASK;
+            false
+        }
+    }
 }
 
 /// Establish-or-confirm the numeric prefix used by the call-free loop clone.
@@ -846,7 +881,11 @@ unsafe fn ensure_subclass_numeric_prefix(
             }
         }
     }
-    publish_subclass_numeric_prefix(obj, shape_id, bound, require_u32)
+    // Re-read: a stale or too-short proof retired above moved the receiver
+    // back to its unproven twin (charter step 3), so `shape_id` may name the
+    // proof shape it no longer carries.
+    let _ = shape_id;
+    publish_subclass_numeric_prefix(obj, (*obj).parent_class_id, bound, require_u32)
 }
 
 #[inline]
@@ -1316,6 +1355,9 @@ fn array_subclass_fast_push_one_validated(
     {
         return None;
     }
+    // A numeric-proof sibling has no learned tail edge. Restore the ordinary
+    // shape before the exact-shape transition lookup, including on a miss.
+    unsafe { clear_packed_subclass_numeric_proof(obj as *mut ObjectHeader) };
     let predecessor_shape_id = unsafe { (*obj).parent_class_id };
     let transition = crate::object::array_tail_transition::lookup_forward_for_owner(
         obj,
@@ -1367,9 +1409,6 @@ fn array_subclass_fast_push_one_validated(
             })
         });
         let (value_stored, length_stored) = if let Some(number) = numeric_entity {
-            // `layout_note_slot` used to retire this proof as a side effect.
-            // Retire it explicitly before bypassing that general hook.
-            clear_packed_subclass_numeric_proof(obj);
             (
                 store_dense_nonpointer_number_slot(
                     obj,
@@ -1445,6 +1484,11 @@ fn array_subclass_fast_pop_validated(receiver: ValidatedObjectReceiver) -> Optio
     {
         return None;
     }
+    // Retire before consulting the exact-shape tail cache: proof siblings do
+    // not carry the ordinary shape's learned reverse edge.
+    if unsafe { clear_packed_subclass_numeric_proof(obj as *mut ObjectHeader) } {
+        crate::object::prop_plan::prop_plan_epoch_bump();
+    }
     let successor_shape_id = unsafe { (*obj).parent_class_id };
     let transition =
         crate::object::array_tail_transition::lookup_reverse_for_owner(obj, successor_shape_id)?;
@@ -1470,20 +1514,6 @@ fn array_subclass_fast_pop_validated(receiver: ValidatedObjectReceiver) -> Optio
         number.is_finite() && *number >= 0.0 && *number <= i32::MAX as f64 && number.fract() == 0.0
     });
     let obj = obj as *mut ObjectHeader;
-    // Only a proof this call actually retired can invalidate a cached verdict.
-    // A pop loop retires one on its FIRST iteration and nothing afterwards,
-    // while the bump it used to pay unconditionally discarded every cached
-    // store plan in the program — per `pop()`.
-    //
-    // The shape-version install below needs no bump of its own: the sibling
-    // push path (`array_subclass_fast_push_one_validated`) performs the same
-    // `install_cache_carried_object_shape_version` and has never bumped. A
-    // per-object shape version is not an input to the store-plan verdict,
-    // which is keyed on (class_id, interned key) and invalidated by vtable
-    // mutation, descriptor/prototype changes and GC — see `object::prop_plan`.
-    if unsafe { clear_packed_subclass_numeric_proof(obj) } {
-        crate::object::prop_plan::prop_plan_epoch_bump();
-    }
     let installed = unsafe {
         crate::object::shapes::install_cache_carried_object_shape_version(
             obj,

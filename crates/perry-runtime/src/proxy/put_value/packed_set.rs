@@ -38,14 +38,12 @@
 //! * **not a class object, not a dictionary** — both are the shape's
 //!   `object_kind` (`object_is_regular`).
 //!
-//! What is NOT a property of the shape is re-tested by the emitted hit on
-//! every store, and refused here: the receiver-kind admission
-//! (`write_fast_path_receiver_kind_ok` — a native-module receiver, and a
-//! class-less receiver that no birth site marked ordinary: `URL`,
-//! `Object.prototype`, the typed-array prototypes) and the Array-subclass
-//! numeric proof (`OBJ_FLAG_PACKED_NUMERIC_PROOF`). The emitted code reads them
-//! from the header; this entry refuses a receiver that fails them so the
-//! word's first carrier is always one the hit path would have admitted.
+//! * **receiver kind and numeric proof** (charter step 3) — the receiver-kind
+//!   admission (a native-module receiver, and a class-less receiver that no
+//!   birth site marked ordinary: `URL`, `Object.prototype`, the typed-array
+//!   prototypes) and the Array-subclass numeric proof are shape kinds
+//!   (`object::shapes::store_kind`): only an `Ordinary` shape is published,
+//!   and `Ordinary` proves both. The emitted hit reads nothing else.
 //!
 //! # Polymorphic sites
 //!
@@ -73,6 +71,15 @@ use super::*;
 /// above every ShapeId and every class id (`u32::MAX` is never allocated
 /// as either), so the compare refuses an unprimed site by itself.
 pub const PACKED_SET_EMPTY: u64 = 0xFFFF_FFFF;
+
+/// Charter step 5 (P2c, DESIGN §3.2): the top bit of a store word whose slot
+/// is not an `Any` lane of its ShapeId. The emitted hit then stores inline
+/// only a value whose exponent is not all ones (a finite double, already
+/// canonical); anything else takes the miss, whose store is the checked
+/// funnel. A lane never becomes `Any` -> `F64` under one id, so the flag is a
+/// function of the id like the rest of the word. **Must equal perry-codegen
+/// `expr/put_value_store_ic.rs` (the word's sign bit).**
+pub const PACKED_SET_F64_SLOT: u64 = 1 << 63;
 
 /// Ways in a site's cache. The first [`PACKED_SET_INLINE_WAYS`] are compared by
 /// the emitted code (**must equal `PACKED_SET_INLINE_WAYS` in
@@ -114,20 +121,6 @@ pub type PackedSetWaysSlot = *mut PackedSetWays;
 /// which no receiver's `+4` word can equal (see `PACKED_SPILL_FLIP`).
 const SPILL_FLIP: u32 = crate::object::field_get_set::PACKED_SPILL_FLIP;
 
-/// Blocking header flags for a receiver this entry may PUBLISH.
-///
-/// Integrity flags would already have moved the receiver to a private lineage
-/// (see the module doc); they are refused here as well because a refused
-/// receiver costs one miss, while a published one is served forever. The
-/// typed-array-prototype flag and the numeric proof are per-object facts the
-/// hit path re-tests; refusing them here keeps the word's first carrier one the
-/// hit path admits.
-// Charter step 3: no integrity bit. An overwrite is refused only by a key that
-// is an accessor or non-writable (a frozen object's keys all are), which the
-// receiver's keys record per key and the prime checks below.
-const PACKED_SET_PRIME_BLOCKING: u16 =
-    crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO | crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF;
-
 /// Miss entry for the generated static-key store. Performs the full
 /// strict-aware `[[Set]]` (or a validated way store) and publishes what it
 /// learned.
@@ -146,6 +139,16 @@ pub extern "C" fn js_put_value_set_packed_miss(
     packed: *const AtomicU64,
 ) -> f64 {
     let site = packed as *const super::packed_add::PackedSetSite;
+    // Charter step 5: migrate a receiver whose shape the lineage generalized
+    // before the key-add memo or a way is keyed by it.
+    let target_bits = target.to_bits();
+    if target_bits & crate::value::TAG_MASK == crate::value::POINTER_TAG {
+        unsafe {
+            crate::object::field_rep_store::migrate_on_miss(
+                (target_bits & crate::value::POINTER_MASK) as usize,
+            )
+        };
+    }
     // The site's key-add memo, for what the emitted add hit refuses per
     // object or never takes (a spill slot). Nothing else has run yet.
     unsafe {
@@ -258,7 +261,7 @@ pub extern "C" fn js_put_value_set_packed_miss(
 
 /// S2 of the deferred-collection RFC: the GC-leaf hit of a full-outline
 /// static-key store. Serves an existing key from an INLINE way — the
-/// receiver test, a ShapeId compare, `packed_hit_receiver_ok` (header reads)
+/// receiver test, a ShapeId compare (charter step 3: nothing per object)
 /// and `store_object_field_slot` (`runtime_store_jsvalue_slot`: addref,
 /// layout note, slot barrier) — and answers `TAG_HOLE` for everything else:
 /// an unprimed site, a spill way (`dyn_ic_try_store` is not audited leaf), a
@@ -331,11 +334,11 @@ unsafe fn packed_ways_store_impl(
     for (way, word) in ways.iter().enumerate() {
         let word = word.load(Ordering::Relaxed);
         let stamp = word as u32;
-        let index = (word >> 32) as u32;
+        let index = ((word & !PACKED_SET_F64_SLOT) >> 32) as u32;
         if stamp == sid && way >= first_way {
-            if !packed_hit_receiver_ok(obj) {
-                return None;
-            }
+            // Charter step 3: the matched id is an `Ordinary` shape (the only
+            // kind `prime_packed_set` publishes), which proves the receiver
+            // kind and the absence of a numeric proof.
             crate::object::store_object_field_slot(obj, index as usize, value.to_bits());
             return Some(value);
         }
@@ -348,29 +351,6 @@ unsafe fn packed_ways_store_impl(
         }
     }
     None
-}
-
-/// The per-object half of the emitted hit, for a receiver whose ShapeId
-/// already matched: no numeric proof, and a class instance or a class-less
-/// receiver marked ordinary that is not a typed-array prototype.
-///
-/// # Safety
-/// `obj` passed the receiver test and matched a published ShapeId.
-unsafe fn packed_hit_receiver_ok(obj: *mut crate::ObjectHeader) -> bool {
-    let Some(header) = crate::value::addr_class::try_read_gc_header(obj as usize) else {
-        return false;
-    };
-    let reserved = header._reserved;
-    if reserved & crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF != 0 {
-        return false;
-    }
-    let class_id = (*obj).class_id;
-    if class_id.wrapping_add(2) > 2 {
-        return true;
-    }
-    class_id == 0
-        && reserved & (crate::gc::OBJ_FLAG_PLAIN_ORDINARY | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO)
-            == crate::gc::OBJ_FLAG_PLAIN_ORDINARY
 }
 
 /// Publish `(ShapeId, slot)` for `key` on `target`, if `target` is a receiver
@@ -396,13 +376,14 @@ unsafe fn prime_packed_set(
     };
     if gc_header.obj_type != crate::gc::GC_TYPE_OBJECT
         || gc_header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
-        || gc_header._reserved & PACKED_SET_PRIME_BLOCKING != 0
     {
         return;
     }
     let obj = obj_addr as *mut crate::ObjectHeader;
     if !crate::object::object_is_regular(obj)
-        || !write_fast_path_receiver_kind_ok(obj, gc_header._reserved)
+        || !crate::object::shapes::store_kind::shape_admits_plain_store(
+            crate::object::shapes::object_shape_stamp(obj),
+        )
         || !crate::object::proto_validity::store_cache_may_learn(obj)
     {
         return;
@@ -489,7 +470,12 @@ unsafe fn prime_packed_set(
     } else {
         (stamp ^ SPILL_FLIP, idx)
     };
-    let entry = (u64::from(index) << 32) | u64::from(key32);
+    let f64_slot = if inline && !crate::object::field_rep_store::shape_slot_is_any(stamp, idx) {
+        PACKED_SET_F64_SLOT
+    } else {
+        0
+    };
+    let entry = (u64::from(index) << 32) | u64::from(key32) | f64_slot;
 
     // The way cache: fill the first empty way, never evict.
     if !cache_slot.is_null() {

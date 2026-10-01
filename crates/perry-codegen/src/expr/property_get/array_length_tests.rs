@@ -329,7 +329,26 @@ fn a_length_read_serves_a_live_plain_array_off_the_shape_compare() {
     // cannot heal in one edge — continues exactly where the compare's false
     // edge used to go.
     let refused = assert_plain_array_arm(&blocks, "pget.array_kind", true);
-    assert_eq!(strip_suffix(&refused), "pic.token.miss");
+    assert_eq!(strip_suffix(&refused), "pic.miss.front");
+
+    // S6: a `length` site's miss front is handed the runtime's EMPTY
+    // directory, so its latched edge is never confirmed from the receiver's
+    // shape. An Array-subclass receiver serves `length` from its elements
+    // store; the `length` its shape may name is not the answer
+    // (`read_confirm::tests::a_length_site_is_never_confirmed_from_the_shape`
+    // is the runtime half).
+    let front = ir
+        .lines()
+        .find(|l| l.contains(" = call double @js_object_get_field_ic_front("))
+        .unwrap_or_else(|| panic!("expected the miss front call:\n{ir}"));
+    assert!(
+        front.contains("@js_object_get_field_ic_front(ptr @PERRY_EMPTY_SHAPE_DIR, "),
+        "a `length` site must pass the empty directory:\n{front}"
+    );
+    assert!(
+        !ir.contains("ptr @PERRY_AGENT_PTRS, i64 0"),
+        "a `length` site reads no directory at all:\n{ir}"
+    );
 
     // The merge takes the arm's value.
     let (load_label, load_body) = block(&blocks, "pget.array_length");

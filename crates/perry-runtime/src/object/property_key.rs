@@ -129,10 +129,14 @@ unsafe fn ordinary_to_primitive_string_key(value: f64) -> Option<f64> {
             continue;
         }
         let bound = crate::closure::clone_closure_rebind_this(method_bits, receiver);
-        let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
-        let result =
-            crate::closure::js_native_call_value(f64::from_bits(bound), std::ptr::null(), 0);
-        crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
+        // Re-read: the key allocation, the method read and the clone can all
+        // move the receiver.
+        let result = crate::closure::native_call_value_this(
+            f64::from_bits(bound),
+            crate::closure::JsThis::from_f64(value_handle.get_nanbox_f64()),
+            std::ptr::null(),
+            0,
+        );
         if js_value_is_not_object(result) {
             return Some(result);
         }
@@ -362,32 +366,29 @@ pub unsafe extern "C" fn js_super_accessor_get(
     // class/super/in-static-{getter,methods,setter}.
     if super::class_ref_id(receiver).is_some() {
         if let Some(key_name) = key_name.as_ref() {
-            // (a) parent static getter, walking the class_id chain.
-            if let Ok(guard) = crate::object::CLASS_STATIC_ACCESSORS.read() {
-                if let Some(reg) = guard.as_ref() {
-                    let mut cid = parent_class_id;
-                    let mut depth = 0usize;
-                    while cid != 0 && depth < 32 {
-                        if let Some(getter_ptr) =
-                            reg.get(&cid).and_then(|m| m.get(key_name)).map(|&(g, _)| g)
+            // (a) the parent's static accessor (an accessor property of its
+            // class function object), walking the class_id chain.
+            {
+                let mut cid = parent_class_id;
+                let mut depth = 0usize;
+                // Only a compiled class has a function object: a builtin parent
+                // (`extends Error`) ends the walk.
+                while cid != 0 && depth < 32 && crate::object::is_class_id_registered(cid) {
+                    if let Some((acc, _, _)) =
+                        crate::object::class_value::class_static_own_accessor(cid, key_name)
+                    {
+                        return crate::object::class_value::class_static_accessor_call_get(
+                            acc, receiver,
+                        );
+                    }
+                    match crate::object::get_parent_class_id(cid) {
+                        Some(p)
+                            if p != 0 && p != cid && crate::object::is_class_id_registered(p) =>
                         {
-                            if getter_ptr != 0 {
-                                let f: extern "C" fn(f64) -> f64 = std::mem::transmute(getter_ptr);
-                                let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-                                let prev = this_scope
-                                    .root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
-                                let r = f(receiver);
-                                crate::object::js_implicit_this_set(prev.get_nanbox_f64());
-                                return r;
-                            }
+                            cid = p;
+                            depth += 1;
                         }
-                        match crate::object::get_parent_class_id(cid) {
-                            Some(p) if p != 0 && p != cid => {
-                                cid = p;
-                                depth += 1;
-                            }
-                            _ => break,
-                        }
+                        _ => break,
                     }
                 }
             }
@@ -413,9 +414,7 @@ pub unsafe extern "C" fn js_super_accessor_get(
             let mut cid = parent_class_id;
             let mut depth = 0usize;
             while cid != 0 && depth < 32 {
-                if let Some(v) = crate::object::CLASS_DYNAMIC_PROPS
-                    .with(|m| m.borrow().get(&cid).and_then(|f| f.get(key_name)).copied())
-                {
+                if let Some(v) = crate::object::class_value::class_static_get(cid, key_name) {
                     return v;
                 }
                 match crate::object::get_parent_class_id(cid) {
@@ -545,21 +544,22 @@ pub unsafe extern "C" fn js_object_super_call(
     let bound = crate::closure::clone_closure_rebind_this(callee_handle.get_nanbox_u64(), receiver);
     let bound_handle = scope.root_nanbox_u64(bound);
     let receiver = f64::from_bits(receiver_handle.get_heap_word_u64());
-    let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
-    let result = crate::closure::js_native_call_value(
+    crate::closure::native_call_value_this(
         f64::from_bits(bound_handle.get_nanbox_u64()),
+        crate::closure::JsThis::from_f64(receiver),
         args_ptr,
         args_len,
-    );
-    crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
-    result
+    )
 }
 
 #[cfg(test)]
 mod property_key_tests {
     use super::*;
 
-    extern "C" fn accessor_getter(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    extern "C" fn accessor_getter(
+        _closure: *const crate::closure::ClosureHeader,
+        _this: crate::closure::JsThis,
+    ) -> f64 {
         123.0
     }
 
@@ -621,7 +621,7 @@ mod property_key_tests {
             let obj = js_object_alloc(0, 0);
             let obj_value = crate::value::js_nanbox_pointer(obj as i64);
             let sym = crate::symbol::js_symbol_new_empty();
-            let getter = crate::closure::js_closure_alloc(accessor_getter as *const u8, 0);
+            let getter = crate::closure::js_closure_alloc(crate::fn_info!(accessor_getter, 0), 0);
             let getter_value = crate::value::js_nanbox_pointer(getter as i64);
 
             js_object_define_accessor(
@@ -658,6 +658,7 @@ mod property_key_tests {
                 0,
                 0,
                 1,
+                0,
             );
             let method = crate::object::class_registry::lookup_class_symbol_method_in_chain(
                 class_id, sym_key, false,

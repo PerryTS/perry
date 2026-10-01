@@ -208,7 +208,10 @@ pub(crate) fn attach_abort_signal(signal: f64, stream: f64) {
     let Some(signal_obj) = object_ptr_from_value(signal) else {
         return;
     };
-    let listener = js_closure_alloc(ns_stream_abort_listener as *const u8, 1);
+    let listener = js_closure_alloc(
+        crate::fn_info!(ns_stream_abort_listener, 0; with_declared(0)),
+        1,
+    );
     js_closure_set_capture_ptr(listener, 0, stream.to_bits() as i64);
     crate::url::js_abort_signal_add_listener(
         signal_obj,

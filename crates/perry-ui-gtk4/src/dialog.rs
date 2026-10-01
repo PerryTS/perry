@@ -2,7 +2,7 @@ use gtk4::prelude::*;
 use gtk4::{FileChooserAction, FileChooserDialog, ResponseType, Window};
 
 extern "C" {
-    fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+    fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
     fn js_string_from_bytes(ptr: *const u8, len: i64) -> *const u8;
     fn js_nanbox_string(ptr: i64) -> f64;
@@ -42,7 +42,7 @@ pub fn save_file_dialog(callback: f64, default_name_ptr: *const u8, _allowed_typ
                         unsafe { js_string_from_bytes(bytes.as_ptr(), bytes.len() as i64) };
                     let nanboxed = unsafe { js_nanbox_string(str_ptr as i64) };
                     unsafe {
-                        js_closure_call1(closure_ptr, nanboxed);
+                        js_closure_call1(closure_ptr, perry_ffi::JsThis::UNDEFINED, nanboxed);
                     }
                     dialog.close();
                     return;
@@ -50,7 +50,11 @@ pub fn save_file_dialog(callback: f64, default_name_ptr: *const u8, _allowed_typ
             }
         }
         unsafe {
-            js_closure_call1(closure_ptr, f64::from_bits(0x7FFC_0000_0000_0001));
+            js_closure_call1(
+                closure_ptr,
+                perry_ffi::JsThis::UNDEFINED,
+                f64::from_bits(0x7FFC_0000_0000_0001),
+            );
         }
         dialog.close();
     });
@@ -109,7 +113,7 @@ pub fn alert(title_ptr: *const u8, message_ptr: *const u8, buttons_ptr: *const u
         };
         let closure_ptr = unsafe { js_nanbox_get_pointer(callback_f64) } as *const u8;
         unsafe {
-            js_closure_call1(closure_ptr, index);
+            js_closure_call1(closure_ptr, perry_ffi::JsThis::UNDEFINED, index);
         }
         dialog.close();
     });

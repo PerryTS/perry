@@ -199,6 +199,7 @@ mod registry_latch_probes;
 pub mod safe_area;
 pub mod set;
 pub mod shared_sab;
+pub mod stack_guard;
 pub(crate) mod state;
 pub mod string;
 pub mod symbol;
@@ -359,7 +360,7 @@ pub mod win_console;
 pub use array::ArrayHeader;
 pub use bigint::BigIntHeader;
 pub use buffer::BufferHeader;
-pub use closure::ClosureHeader;
+pub use closure::{ClosureHeader, JsThis};
 pub use map::MapHeader;
 pub use object::ObjectHeader;
 pub use object::{object_live_slot_count, perry_object_header_abi_revision};
@@ -757,6 +758,7 @@ pub(crate) mod stdlib_pump {
         }
         // SAFETY: `js_register_stdlib_next_wake` only stores callbacks with
         // this exact ABI and signature.
+        // NOT-A-JS-BODY: a native Rust helper registered by another crate.
         let func: extern "C" fn() -> f64 = unsafe { std::mem::transmute(f) };
         func()
     }

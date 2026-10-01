@@ -64,7 +64,11 @@ pub(crate) fn js_proxy_own_keys_for_json(proxy_boxed: f64) -> f64 {
     }
     let trap = handler_trap(handler, "ownKeys");
     if is_callable(trap) {
-        return crate::closure::js_closure_call1(closure_from(trap), target);
+        return crate::closure::js_closure_call1(
+            closure_from(trap),
+            crate::closure::plain_call_receiver(),
+            target,
+        );
     }
     if lookup(target).is_some() {
         return js_proxy_own_keys_for_json(target);

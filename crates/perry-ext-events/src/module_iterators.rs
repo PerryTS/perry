@@ -2,6 +2,7 @@ use super::*;
 
 pub(super) extern "C" fn events_once_event_target_listener(
     closure: *const RawClosureHeader,
+    _this: perry_ffi::JsThis,
     arg0: f64,
 ) -> f64 {
     unsafe {
@@ -21,7 +22,10 @@ pub(super) extern "C" fn events_once_event_target_listener(
     undefined_value()
 }
 
-pub(super) extern "C" fn events_once_abort_listener(closure: *const RawClosureHeader) -> f64 {
+pub(super) extern "C" fn events_once_abort_listener(
+    closure: *const RawClosureHeader,
+    _this: perry_ffi::JsThis,
+) -> f64 {
     unsafe {
         let handle = js_closure_get_capture_ptr(closure, 0) as Handle;
         let promise = js_closure_get_capture_ptr(closure, 1) as *mut Promise;
@@ -40,6 +44,7 @@ pub(super) extern "C" fn events_once_abort_listener(closure: *const RawClosureHe
 
 pub(super) extern "C" fn events_once_stream_resolve_listener(
     closure: *const RawClosureHeader,
+    _this: perry_ffi::JsThis,
     rest: f64,
 ) -> f64 {
     unsafe {
@@ -79,6 +84,7 @@ pub(super) extern "C" fn events_once_stream_resolve_listener(
 
 pub(super) extern "C" fn events_once_stream_reject_listener(
     closure: *const RawClosureHeader,
+    _this: perry_ffi::JsThis,
     rest: f64,
 ) -> f64 {
     unsafe {
@@ -251,6 +257,7 @@ fn events_on_finish_pending(state: *mut ArrayHeader, reason: Option<f64>) {
 /// immediately, otherwise retain the argument tuple in FIFO order.
 pub(super) extern "C" fn events_on_queue_listener(
     closure: *const RawClosureHeader,
+    _this: perry_ffi::JsThis,
     arg0: f64,
 ) -> f64 {
     unsafe {
@@ -289,7 +296,7 @@ pub(super) extern "C" fn events_on_queue_listener(
     f64::from_bits(TAG_UNDEFINED_F64_BITS)
 }
 
-extern "C" fn events_on_next(closure: *const RawClosureHeader) -> f64 {
+extern "C" fn events_on_next(closure: *const RawClosureHeader, _this: perry_ffi::JsThis) -> f64 {
     unsafe {
         let state = js_closure_get_capture_ptr(closure, 0) as *mut ArrayHeader;
         if state.is_null() {
@@ -318,7 +325,7 @@ extern "C" fn events_on_next(closure: *const RawClosureHeader) -> f64 {
     }
 }
 
-extern "C" fn events_on_return(closure: *const RawClosureHeader) -> f64 {
+extern "C" fn events_on_return(closure: *const RawClosureHeader, _this: perry_ffi::JsThis) -> f64 {
     unsafe {
         let state = js_closure_get_capture_ptr(closure, 0) as *mut ArrayHeader;
         if state.is_null() {
@@ -366,11 +373,17 @@ extern "C" fn events_on_return(closure: *const RawClosureHeader) -> f64 {
     }
 }
 
-extern "C" fn events_on_iterator_self(closure: *const RawClosureHeader) -> f64 {
+extern "C" fn events_on_iterator_self(
+    closure: *const RawClosureHeader,
+    _this: perry_ffi::JsThis,
+) -> f64 {
     unsafe { js_closure_get_capture_f64(closure, 0) }
 }
 
-extern "C" fn events_on_async_iterator(closure: *const RawClosureHeader) -> f64 {
+extern "C" fn events_on_async_iterator(
+    closure: *const RawClosureHeader,
+    _this: perry_ffi::JsThis,
+) -> f64 {
     unsafe {
         let state = js_closure_get_capture_ptr(closure, 0) as *mut ArrayHeader;
         let scope = TransientRootScope::enter();
@@ -383,7 +396,7 @@ extern "C" fn events_on_async_iterator(closure: *const RawClosureHeader) -> f64 
             packed.len() as u32,
         );
         let object_root = scope.root_nanbox(nanbox_pointer_bits(object as i64));
-        let next = js_closure_alloc(events_on_next as *const u8, 1);
+        let next = perry_ffi::alloc_closure(&EVENTS_ON_NEXT_INFO, 1);
         js_closure_set_capture_ptr(next, 0, (state_root.get().to_bits() & POINTER_MASK) as i64);
         let next_root = scope.root_addr(next as i64);
         js_object_set_field(
@@ -391,7 +404,7 @@ extern "C" fn events_on_async_iterator(closure: *const RawClosureHeader) -> f64 
             0,
             JsValue::from_object_ptr(next_root.get() as *mut u8),
         );
-        let return_fn = js_closure_alloc(events_on_return as *const u8, 1);
+        let return_fn = perry_ffi::alloc_closure(&EVENTS_ON_RETURN_INFO, 1);
         js_closure_set_capture_ptr(
             return_fn,
             0,
@@ -407,7 +420,7 @@ extern "C" fn events_on_async_iterator(closure: *const RawClosureHeader) -> f64 
         let iterator = object_root.get();
         let iterator_root = scope.root_nanbox(iterator);
         let symbol = js_symbol_well_known_async_iterator();
-        let self_fn = js_closure_alloc(events_on_iterator_self as *const u8, 1);
+        let self_fn = perry_ffi::alloc_closure(&EVENTS_ON_ITERATOR_SELF_INFO, 1);
         js_closure_set_capture_f64(self_fn, 0, iterator_root.get());
         js_object_set_symbol_property(
             iterator_root.get(),
@@ -425,11 +438,7 @@ pub(super) unsafe fn events_on_install_async_iterator(
     let scope = TransientRootScope::enter();
     let queue_root = scope.root_nanbox(nanbox_pointer_bits(queue as i64));
     let state_root = scope.root_nanbox(nanbox_pointer_bits(state as i64));
-    js_register_closure_arity(events_on_next as *const u8, 0);
-    js_register_closure_arity(events_on_return as *const u8, 0);
-    js_register_closure_arity(events_on_iterator_self as *const u8, 0);
-    js_register_closure_arity(events_on_async_iterator as *const u8, 0);
-    let closure = js_closure_alloc(events_on_async_iterator as *const u8, 1);
+    let closure = perry_ffi::alloc_closure(&EVENTS_ON_ASYNC_ITERATOR_INFO, 1);
     js_closure_set_capture_ptr(
         closure,
         0,
@@ -443,7 +452,10 @@ pub(super) unsafe fn events_on_install_async_iterator(
 }
 
 /// A configured close event ends the iterator after already-buffered events.
-pub(super) extern "C" fn events_on_close_listener(closure: *const RawClosureHeader) -> f64 {
+pub(super) extern "C" fn events_on_close_listener(
+    closure: *const RawClosureHeader,
+    _this: perry_ffi::JsThis,
+) -> f64 {
     unsafe {
         let state = js_closure_get_capture_ptr(closure, 0) as *mut ArrayHeader;
         if !state.is_null() {
@@ -454,7 +466,10 @@ pub(super) extern "C" fn events_on_close_listener(closure: *const RawClosureHead
     undefined_value()
 }
 
-pub(super) extern "C" fn events_on_abort_listener(closure: *const RawClosureHeader) -> f64 {
+pub(super) extern "C" fn events_on_abort_listener(
+    closure: *const RawClosureHeader,
+    _this: perry_ffi::JsThis,
+) -> f64 {
     unsafe {
         let handle = js_closure_get_capture_ptr(closure, 0) as Handle;
         let data_listener = js_closure_get_capture_ptr(closure, 1);
@@ -490,3 +505,15 @@ pub(super) extern "C" fn events_on_abort_listener(closure: *const RawClosureHead
     }
     undefined_value()
 }
+
+static EVENTS_ON_NEXT_INFO: perry_ffi::JsFunctionInfo =
+    perry_ffi::JsFunctionInfo::of(events_on_next as perry_ffi::JsBody0).with_declared(0);
+
+static EVENTS_ON_RETURN_INFO: perry_ffi::JsFunctionInfo =
+    perry_ffi::JsFunctionInfo::of(events_on_return as perry_ffi::JsBody0).with_declared(0);
+
+static EVENTS_ON_ITERATOR_SELF_INFO: perry_ffi::JsFunctionInfo =
+    perry_ffi::JsFunctionInfo::of(events_on_iterator_self as perry_ffi::JsBody0).with_declared(0);
+
+static EVENTS_ON_ASYNC_ITERATOR_INFO: perry_ffi::JsFunctionInfo =
+    perry_ffi::JsFunctionInfo::of(events_on_async_iterator as perry_ffi::JsBody0).with_declared(0);

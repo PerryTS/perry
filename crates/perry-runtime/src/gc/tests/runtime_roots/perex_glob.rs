@@ -151,7 +151,11 @@ impl Drop for Directory {
         std::fs::remove_dir_all(&self.0).unwrap();
     }
 }
-extern "C" fn exclude(_: *const crate::closure::ClosureHeader, arg: f64) -> f64 {
+extern "C" fn exclude(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    arg: f64,
+) -> f64 {
     let scope = RuntimeHandleScope::new();
     let arg = scope.root_nanbox_f64(arg);
     gc_collect_minor();
@@ -164,7 +168,11 @@ extern "C" fn exclude(_: *const crate::closure::ClosureHeader, arg: f64) -> f64 
         TAG_FALSE
     })
 }
-extern "C" fn throw_exclude(_: *const crate::closure::ClosureHeader, _: f64) -> f64 {
+extern "C" fn throw_exclude(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    _: f64,
+) -> f64 {
     gc_collect_minor();
     crate::exception::js_throw(991.0)
 }
@@ -184,11 +192,11 @@ fn perex_glob_filesystem_callbacks_reenter_collect_and_throw_without_lost_roots(
         crate::object::js_object_alloc(0, 4) as i64
     ));
     set(&options, b"cwd", cwd.get_nanbox_f64());
-    crate::closure::js_register_closure_arity(exclude as *const u8, 1);
-    let callback = scope
-        .root_nanbox_f64(js_nanbox_pointer(
-            crate::closure::js_closure_alloc(exclude as *const u8, 0) as i64,
-        ));
+
+    let callback = scope.root_nanbox_f64(js_nanbox_pointer(crate::closure::js_closure_alloc(
+        crate::fn_info!(exclude, 1; with_declared(1)),
+        0,
+    ) as i64));
     set(&options, b"exclude", callback.get_nanbox_f64());
     let before = callback.get_nanbox_f64().to_bits();
     let live = external_side_live_bytes();
@@ -205,9 +213,9 @@ fn perex_glob_filesystem_callbacks_reenter_collect_and_throw_without_lost_roots(
     );
     assert_ne!(callback.get_nanbox_f64().to_bits(), before);
     assert_eq!(external_side_live_bytes(), live);
-    crate::closure::js_register_closure_arity(throw_exclude as *const u8, 1);
+
     let callback = scope.root_nanbox_f64(js_nanbox_pointer(crate::closure::js_closure_alloc(
-        throw_exclude as *const u8,
+        crate::fn_info!(throw_exclude, 1; with_declared(1)),
         0,
     ) as i64));
     set(&options, b"exclude", callback.get_nanbox_f64());

@@ -6,7 +6,7 @@ use super::*;
 /// Presence of a Symbol-keyed STATIC member on a class ref, for `sym in Class`
 /// (#6160). Covers the registration schemes the generic symbol resolver
 /// (`js_object_get_symbol_property`, which only reads the data-valued
-/// CLASS_STATIC_SYMBOLS table) skips:
+/// class function object's static symbols) skips:
 ///   * user computed-symbol methods/accessors (`static [S]() {}`,
 ///     `static get [S]()`) → CLASS_SYMBOL_METHODS / CLASS_SYMBOL_ACCESSORS;
 ///   * `static [Symbol.hasInstance]` → the lifted per-class has-instance hook;
@@ -199,7 +199,7 @@ unsafe fn class_ref_has_inherited_static_data(
             Some(parent) if parent != 0 && parent != child => parent,
             _ => break,
         };
-        if !super::super::class_registry::class_is_key_deleted(parent, name)
+        if !super::super::class_registry::class_static_key_deleted(parent, name)
             && super::super::class_registry::class_has_own_dynamic_prop(parent, name)
         {
             return true;
@@ -370,7 +370,7 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
     // #6160: `Symbol in Class` where the member is a Symbol-keyed STATIC member
     // that registers through a scheme the generic symbol resolver below
     // (`js_object_get_symbol_property`) does not consult — it only sees the
-    // data-valued CLASS_STATIC_SYMBOLS table. `class_ref_has_symbol_member`
+    // data-valued class static symbols. `class_ref_has_symbol_member`
     // presence-checks the method/accessor and well-known static registrations,
     // so `sym in Class` matches Node even though those members dispatch through
     // dedicated call paths. Presence-only: `in` is [[HasProperty]], never [[Get]].
@@ -407,14 +407,18 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
     }
 
     // Refs #420 / #618: `Symbol in ClassRef` — drizzle's `entityKind in cls`.
-    // Class refs are INT32-tagged. Check CLASS_STATIC_SYMBOLS for symbol
+    // Class refs are INT32-tagged. Check the class's static symbols for symbol
     // keys and CLASS_DYNAMIC_PROPS for string keys.
     {
         let bits = obj.to_bits();
-        if (bits >> 48) == 0x7FFE {
-            let class_id = (bits & 0xFFFF_FFFF) as u32;
+        if let Some(class_id) = crate::object::class_value::legacy_class_value_word(bits) {
             // Symbol key path.
-            if crate::symbol::class_static_symbol_lookup(class_id, key).is_some() {
+            let found = if crate::object::class_prototype_ref_id(obj).is_some() {
+                crate::symbol::class_static_symbol_lookup(class_id, key)
+            } else {
+                crate::symbol::class_static_symbol_lookup_in_chain(class_id, key)
+            };
+            if found.is_some() {
                 return nanbox_true;
             }
             // #6149: string key on a class ref (`"prototype" in C`,
@@ -442,18 +446,19 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
                             )
                         };
                     let present = matches!(name, "prototype" | "name" | "length" | "constructor")
-                        || (!super::super::class_registry::class_is_key_deleted(class_id, name)
-                            && (super::super::class_registry::class_has_own_dynamic_prop(
-                                class_id, name,
-                            ) || super::super::class_registry::lookup_static_method_in_chain(
+                        || (!super::super::class_registry::class_static_key_deleted(
+                            class_id, name,
+                        ) && (super::super::class_registry::class_has_own_dynamic_prop(
+                            class_id, name,
+                        )
+                            || super::super::class_registry::lookup_static_method_in_chain(
                                 class_id, name,
                             )
                             .is_some()
-                                || super::super::class_registry::class_own_static_accessor_ptrs(
-                                    class_id, name,
-                                )
-                                .is_some()
-                                || inherited_data));
+                            || super::super::class_registry::static_accessor_in_chain(
+                                class_id, name,
+                            )
+                            || inherited_data));
                     if present {
                         return nanbox_true;
                     }
@@ -1388,6 +1393,25 @@ pub(crate) unsafe fn prototype_value_has_property(
 
 /// Get a field by its string key name
 /// Returns the field value or undefined if the key is not found
+/// A class function object read with the caller's own key header (no key
+/// string is built): its class lookup. `None` for any other receiver — one
+/// ShapeId-word pre-filter; the class shape is sticky and implies the class
+/// code pointer.
+#[inline]
+pub(crate) unsafe fn class_closure_read_by_key(
+    obj: usize,
+    key: *const crate::StringHeader,
+) -> Option<f64> {
+    let class_id = crate::object::class_value::class_closure_id(obj)?;
+    let value = super::get_field_by_name::class_value_get_field(
+        obj as *const crate::object::ObjectHeader,
+        key,
+        obj as u64,
+        class_id,
+    );
+    Some(f64::from_bits(value.bits()))
+}
+
 pub(crate) unsafe fn closure_dynamic_prop_by_key(
     obj: usize,
     key: *const crate::StringHeader,
@@ -1396,7 +1420,7 @@ pub(crate) unsafe fn closure_dynamic_prop_by_key(
         return None;
     }
     let name = crate::string::header_str_checked(key)?;
-    let val = crate::closure::closure_get_dynamic_prop(obj, name);
+    let val = crate::closure::closure_get_dynamic_prop_keyed(obj, name, key);
     // Function methods were already resolved, including a getter or own
     // slot returning undefined. Do not repeat that read or synthesize a
     // fallback method over an explicit undefined value (#11175).

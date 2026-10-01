@@ -481,7 +481,10 @@ pub(crate) fn finish_send(socket: f64, args: &[f64], outcome: Result<usize, f64>
     undefined_value()
 }
 
-extern "C" fn deferred_send_callback(closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn deferred_send_callback(
+    closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let callback = crate::closure::js_closure_get_capture_f64(closure, 0);
     let socket = crate::closure::js_closure_get_capture_f64(closure, 1);
     let error = crate::closure::js_closure_get_capture_f64(closure, 2);
@@ -491,8 +494,10 @@ extern "C" fn deferred_send_callback(closure: *const crate::closure::ClosureHead
 }
 
 fn defer_send_callback(callback: f64, socket: f64, error: f64, bytes: f64) {
-    crate::closure::js_register_closure_arity(deferred_send_callback as *const u8, 0);
-    let closure = crate::closure::js_closure_alloc(deferred_send_callback as *const u8, 4);
+    let closure = crate::closure::js_closure_alloc(
+        crate::fn_info!(deferred_send_callback, 0; with_declared(0)),
+        4,
+    );
     crate::closure::js_closure_set_capture_f64(closure, 0, callback);
     crate::closure::js_closure_set_capture_f64(closure, 1, socket);
     crate::closure::js_closure_set_capture_f64(closure, 2, error);

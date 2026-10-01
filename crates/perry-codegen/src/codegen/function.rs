@@ -390,7 +390,6 @@ const PER_SITE_GLOBAL_PREFIXES: &[&str] = &[
     "@perry_typed_feedback_",
     "@perry_literal_",
     "@perry_const_arr_",
-    "@perry_typed_obj_shape_",
     "@perry_typed_parse_keys_",
     "@perry_typed_shape_mask_",
 ];
@@ -663,6 +662,28 @@ pub(super) fn compile_function(
     } else {
         public_llvm_name.clone()
     };
+    // This-as-a-parameter: a body that reads its dynamic `this` binds it at
+    // entry into a rooted `this` slot. The ordinary public body becomes a
+    // receiver-taking body (`perry_fn_*$this`, leading `i64 %js_this`) behind
+    // a public forwarder that passes `undefined` — what every direct call
+    // binds — and the value wrapper passes the receiver it was given. A
+    // specialized entry is only ever called directly, so it binds
+    // `undefined`. (This-reading functions get no typed clone, spec plan or
+    // arena threading, so the other variants never meet this.)
+    let reads_this = cross_module.funcs_reading_dynamic_this.contains(&f.id);
+    let receiver_body = reads_this && spec_entry.is_none();
+    debug_assert!(
+        !receiver_body
+            || (typed_public_trampoline.is_none()
+                && guarded_public_plan.is_none()
+                && !arena_threaded),
+        "a this-reading function has no public variant but the plain body"
+    );
+    let llvm_name = if receiver_body {
+        crate::expr::body_call::receiver_body_name(&public_llvm_name)
+    } else {
+        llvm_name
+    };
 
     // Phase A assumes all user-function params are `double`. Parameter
     // registers are named `%arg{LocalId}` so the body can store them into
@@ -685,6 +706,9 @@ pub(super) fn compile_function(
     if arena_threaded {
         params.push((PTR, "%perry_arena_state".to_string()));
     }
+    if receiver_body {
+        params.insert(0, (I64, crate::expr::body_call::JS_BODY_THIS.to_string()));
+    }
 
     let ic_base = llmod.ic_counter;
     let buffer_alias_base = llmod.buffer_alias_counter;
@@ -698,6 +722,7 @@ pub(super) fn compile_function(
         || guarded_public_plan.is_some()
         || spec_entry.is_some()
         || arena_threaded
+        || receiver_body
     {
         lf.linkage = "internal".to_string();
     }
@@ -715,15 +740,19 @@ pub(super) fn compile_function(
     let mut shadow_slot_map = if precise_root_analysis_enabled() {
         let flat_const_ids: std::collections::HashSet<u32> =
             cross_module.flat_const_arrays.keys().copied().collect();
-        let m =
-            crate::collectors::collect_pointer_typed_locals(&f.params, &f.body, &flat_const_ids);
+        let m = crate::scope_env::compact_root_slots(
+            crate::collectors::collect_pointer_typed_locals(&f.params, &f.body, &flat_const_ids),
+            &cross_module.scope_map,
+        );
+        // Root the entry `this` slot of a this-reading body.
+        let this_root_slots = usize::from(reads_this);
         crate::codegen::helpers::maybe_spill_roots_to_shadow_frame(
             lf,
             &llvm_name,
-            m.len(),
+            m.len() + this_root_slots,
             &f.body,
         );
-        lf.enable_shadow_frame(m.len() as u32);
+        lf.enable_shadow_frame((m.len() + this_root_slots) as u32);
         m
     } else {
         std::collections::HashMap::new()
@@ -865,7 +894,33 @@ pub(super) fn compile_function(
         }
         map
     };
-    super::arguments::release_boxed_param_slots_at_exit(lf, &f.params, &boxed_vars, &locals);
+    // The entry `this` slot: the receiver parameter (or `undefined` for a
+    // directly-called specialized entry), stored before the body's first
+    // safepoint and bound so a moving collection rewrites it. A sloppy body
+    // coerces it in place once the parameters are bound (below).
+    let this_stack: Vec<String> = if reads_this {
+        let this_shadow_slot_idx = shadow_slot_map.len() as u32;
+        let blk = lf.block_mut(0).unwrap();
+        let this_slot = blk.alloca(DOUBLE);
+        let receiver = if receiver_body {
+            blk.bitcast_i64_to_double(crate::expr::body_call::JS_BODY_THIS)
+        } else {
+            crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+        };
+        blk.store(DOUBLE, &receiver, &this_slot);
+        if precise_root_analysis_enabled() {
+            blk.call_void(
+                "js_shadow_slot_bind",
+                &[(I32, &this_shadow_slot_idx.to_string()), (PTR, &this_slot)],
+            );
+        }
+        vec![this_slot]
+    } else {
+        Vec::new()
+    };
+    // A parameter cell allocation can collect. Root the receiver before the
+    // first such allocation so a moving collection rewrites its entry slot.
+    super::arguments::box_rooted_parameter_slots(lf, &f.params, &boxed_vars, &locals);
 
     // Param types feed local_types so type-aware dispatch (e.g. string
     // concat detection on a `: string` parameter) works inside the body.
@@ -1064,7 +1119,9 @@ pub(super) fn compile_function(
     // statement lowering.  `enable_shadow_frame` deliberately retains the
     // original upper-bound size, so the remaining preassigned slot indices
     // stay valid even when filtering leaves holes.
-    shadow_slot_map.retain(|id, _| !native_facts.number_by_construction_locals().contains(id));
+    shadow_slot_map.retain(|id, _| {
+        boxed_vars.contains(id) || !native_facts.number_by_construction_locals().contains(id)
+    });
     let shadow_slot_clears_after_stmt =
         crate::collectors::collect_shadow_slot_clear_points(&f.body, &shadow_slot_map);
 
@@ -1161,7 +1218,7 @@ pub(super) fn compile_function(
         label_targets: HashMap::new(),
         pending_labels: Vec::new(),
         classes,
-        this_stack: Vec::new(),
+        this_stack,
         super_called_stack: Vec::new(),
         shared_super_scope_active: false,
         lexical_this_uses_derived_binding: false,
@@ -1190,6 +1247,7 @@ pub(super) fn compile_function(
         class_field_counts: &cross_module.class_field_counts,
         class_init_chains: &cross_module.class_init_chains,
         class_header_image_globals: &cross_module.class_header_images,
+        class_birth_reps: &cross_module.class_birth_reps,
         imported_class_ctors: &cross_module.imported_class_ctors,
         func_signatures,
         func_synthetic_arguments,
@@ -1201,11 +1259,12 @@ pub(super) fn compile_function(
             .compiler_private_async_i32_control_locals,
         compiler_private_async_i1_control_locals: &cross_module
             .compiler_private_async_i1_control_locals,
+        scope_map: &cross_module.scope_map,
         closure_rest_params,
         local_closure_func_ids: HashMap::new(),
         guard_free_closure_bindings: std::collections::HashSet::new(),
         local_closure_param_counts: HashMap::new(),
-        resolved_arrow_callback_targets: HashMap::new(),
+        resolved_plain_callback_targets: HashMap::new(),
         resolved_versioned_loop_callback_targets: HashMap::new(),
         trusted_box_captures: false,
         versioned_loop_deopt_context: None,
@@ -1256,9 +1315,10 @@ pub(super) fn compile_function(
         class_header_images: HashMap::new(),
         array_length_snapshots: HashMap::new(),
         string_window_array_facts: Vec::new(),
-        masked_region_scalar_locals: std::collections::HashSet::new(),
         suppressed_cleared_shadow_slots: std::collections::HashSet::new(),
         class_field_loop_facts: Vec::new(),
+        region_loops: Vec::new(),
+        region_loop_facts: Vec::new(),
         element_shape_loop_facts: Vec::new(),
         // Specialized entries seed the canonical-i32 registry with their raw
         // i32 params (empty otherwise — identical to the pre-phase behavior).
@@ -1394,6 +1454,10 @@ pub(super) fn compile_function(
         Some(&f.body),
         super::arguments::ArgumentsCallee::FunctionWrapper(&wrapper_name),
     );
+    if reads_this && !f.is_strict {
+        let slot = ctx.this_stack[0].clone();
+        crate::expr::body_call::emit_sloppy_receiver_coercion(&mut ctx, &slot);
+    }
 
     // Issue #92 follow-up: pre-register `buffer_data_slots` entries for
     // `Buffer`-typed function parameters so that the readInt32BE/etc.
@@ -1536,6 +1600,8 @@ pub(super) fn compile_function(
         super::helpers::emit_callee_binding_resolutions(&mut ctx, &f.body, &param_ids, None, false);
     }
 
+    // #10812: throw a catchable RangeError before the native stack runs out.
+    crate::expr::stack_guard::emit_stack_guard(&mut ctx);
     if f.is_async {
         stmt::lower_async_rejecting_top_level_stmts(&mut ctx, &f.body)
             .with_context(|| format!("lowering async body of '{}'", f.name))?;
@@ -1594,6 +1660,33 @@ pub(super) fn compile_function(
         }
     } else if arena_threaded {
         emit_public_arena_threaded_wrapper(llmod, f, &public_llvm_name, &llvm_name);
+    } else if receiver_body {
+        emit_public_receiverless_forwarder(llmod, f, &public_llvm_name, &llvm_name);
     }
     Ok(())
+}
+
+/// The public `perry_fn_*` symbol of a this-reading function: every direct
+/// call binds no receiver, so it forwards to the receiver-taking body with
+/// `undefined`.
+fn emit_public_receiverless_forwarder(
+    llmod: &mut LlModule,
+    f: &Function,
+    public_name: &str,
+    receiver_body_name: &str,
+) {
+    let params: Vec<(LlvmType, String)> = f
+        .params
+        .iter()
+        .map(|p| (DOUBLE, format!("%arg{}", p.id)))
+        .collect();
+    let wf = llmod.define_function(public_name, DOUBLE, params.clone());
+    wf.force_inline = true;
+    let _ = wf.create_block("entry");
+    let mut call_args: Vec<(LlvmType, &str)> =
+        vec![(I64, crate::expr::body_call::JS_THIS_UNDEFINED)];
+    call_args.extend(params.iter().map(|(ty, a)| (*ty, a.as_str())));
+    let blk = wf.block_mut(0).unwrap();
+    let value = blk.call(DOUBLE, receiver_body_name, &call_args);
+    blk.ret(DOUBLE, &value);
 }

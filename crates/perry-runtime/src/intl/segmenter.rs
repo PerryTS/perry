@@ -366,10 +366,8 @@ pub(crate) fn build_segments(granularity: &str, value: f64) -> f64 {
         install_function(
             segments,
             "containing",
-            segmenter_containing_thunk as *const u8,
+            crate::fn_info!(segmenter_containing_thunk, 1; with_declared(1)),
             1,
-            1,
-            false,
         )
     });
     install_segments_iterator(&segments);
@@ -384,13 +382,13 @@ fn install_segments_iterator(segments: &crate::gc::RuntimeHandle<'_>) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let symbol = scope.root_raw_mut_ptr(symbol);
     let closure = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
-        segments_iterator_thunk as *const u8,
+        crate::fn_info!(segments_iterator_thunk, 0; with_declared(0)),
         0,
     ));
     if closure.with_mut_ptr(|closure: *mut ClosureHeader| closure.is_null()) {
         return;
     }
-    crate::closure::js_register_closure_arity(segments_iterator_thunk as *const u8, 0);
+
     closure.with_mut_ptr::<ClosureHeader, _>(|ptr| {
         crate::object::set_bound_native_closure_name(ptr, "[Symbol.iterator]")
     });
@@ -420,16 +418,19 @@ fn install_segments_iterator(segments: &crate::gc::RuntimeHandle<'_>) {
     });
 }
 
-extern "C" fn segments_iterator_thunk(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn segments_iterator_thunk(
+    _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let segments = scope.root_raw_const_ptr(segments_from_this());
+    let segments = scope.root_raw_const_ptr(segments_from_this(this));
     segments.with_const_ptr(|segments: *const crate::ArrayHeader| {
         crate::array::array_values_iter(js_nanbox_pointer(segments as i64))
     })
 }
 
-fn segments_from_this() -> *const crate::ArrayHeader {
-    let this_value = crate::object::js_implicit_this_get();
+fn segments_from_this(this: crate::closure::JsThis) -> *const crate::ArrayHeader {
+    let this_value = this.as_f64();
     let Some(segments) = array_ptr_from_value(this_value) else {
         throw_type_error("Intl.Segments.prototype.containing called on incompatible receiver");
     };
@@ -442,9 +443,10 @@ fn segments_from_this() -> *const crate::ArrayHeader {
 
 pub(crate) extern "C" fn segmenter_containing_thunk(
     _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
     index: f64,
 ) -> f64 {
-    let segments = segments_from_this();
+    let segments = segments_from_this(this);
     let input_len =
         get_number_field(segments as *const ObjectHeader, KEY_SEGMENTS_LENGTH).unwrap_or(0.0);
 
@@ -492,14 +494,16 @@ pub(crate) extern "C" fn segmenter_containing_thunk(
 
 pub(crate) extern "C" fn segmenter_segment_thunk(
     _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
-    let obj = this_intl_object("segment", KIND_SEGMENTER);
+    let obj = this_intl_object(this, "segment", KIND_SEGMENTER);
     segmenter_segment_object(obj, value)
 }
 
 pub(crate) extern "C" fn segmenter_bound_segment_thunk(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     let obj = captured_intl_object(closure, "segment", KIND_SEGMENTER);
@@ -512,13 +516,17 @@ pub(crate) fn segmenter_segment_object(obj: *const ObjectHeader, value: f64) -> 
     build_segments(&granularity, value)
 }
 
-pub(crate) extern "C" fn segmenter_resolved_options_thunk(_closure: *const ClosureHeader) -> f64 {
-    let obj = this_intl_object("resolvedOptions", KIND_SEGMENTER);
+pub(crate) extern "C" fn segmenter_resolved_options_thunk(
+    _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    let obj = this_intl_object(this, "resolvedOptions", KIND_SEGMENTER);
     segmenter_resolved_options_object(obj)
 }
 
 pub(crate) extern "C" fn segmenter_bound_resolved_options_thunk(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     let obj = captured_intl_object(closure, "resolvedOptions", KIND_SEGMENTER);
     segmenter_resolved_options_object(obj)

@@ -7,13 +7,16 @@
 
 use perry_runtime::ClosureHeader;
 
-extern "C" fn probe_thunk(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn probe_thunk(
+    _closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     0.0
 }
 
 /// A closure allocated in the calling thread's arena, as a raw address.
 fn closure_here() -> i64 {
-    perry_runtime::closure::js_closure_alloc(probe_thunk as *const u8, 0) as i64
+    perry_runtime::closure::js_closure_alloc(perry_runtime::fn_info!(probe_thunk, 0), 0) as i64
 }
 
 #[cfg(all(

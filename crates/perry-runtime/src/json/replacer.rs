@@ -57,8 +57,8 @@ fn tombstoned_key_slot(key: f64) -> bool {
 /// keys its already-serialized/dedup Maps by `this`) breaks without it — the
 /// Flight encoder's `referenceMap.get(this)` then never finds the parent path,
 /// so it re-serializes endlessly (Next.js standalone startup runaway). Mirror
-/// the reviver path (`internalize_json_property`), which sets the implicit
-/// `this` to the holder around the user-callback call.
+/// the reviver path (`internalize_json_property`), which passes the holder as
+/// the user callback's `this`.
 #[inline]
 pub(crate) unsafe fn call_replacer(
     replacer: *const crate::ClosureHeader,
@@ -66,10 +66,12 @@ pub(crate) unsafe fn call_replacer(
     value_f64: f64,
     holder_f64: f64,
 ) -> f64 {
-    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-    let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(holder_f64));
-    let result = crate::js_closure_call2(replacer, key_f64, value_f64);
-    crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
+    let result = crate::closure::js_closure_call2(
+        replacer,
+        crate::closure::JsThis::from_f64(holder_f64),
+        key_f64,
+        value_f64,
+    );
     // The user callback may have installed/removed `Object.prototype.toJSON`
     // (#6009 fast-probe cache).
     super::invalidate_object_proto_tojson_state();
@@ -456,7 +458,9 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
         let replacer = replacer_root.get_raw_const_ptr::<crate::ClosureHeader>();
         // #9398: tombstoned slot from an O(1) delete — not a key, not
         // serialized. See `tombstoned_key_slot`.
-        if tombstoned_key_slot(*keys_elements.add(f as usize)) {
+        if tombstoned_key_slot(*keys_elements.add(f as usize))
+            || super::stringify::is_symbol_value((*keys_elements.add(f as usize)).to_bits())
+        {
             continue;
         }
         // #11232: physical class capture/private slots are not JS properties.
@@ -1055,7 +1059,9 @@ pub(crate) unsafe fn stringify_object_pretty(
     for f in 0..actual_fields {
         // #9398: tombstoned slot from an O(1) delete — not a key, not
         // serialized. See `tombstoned_key_slot`.
-        if tombstoned_key_slot(*keys_elements.add(f as usize)) {
+        if tombstoned_key_slot(*keys_elements.add(f as usize))
+            || super::stringify::is_symbol_value((*keys_elements.add(f as usize)).to_bits())
+        {
             continue;
         }
         // #11232: physical class capture/private slots are not JS properties.
@@ -1265,7 +1271,9 @@ pub(crate) unsafe fn stringify_object_with_array_replacer(
     for f in 0..actual_fields {
         // #9398: tombstoned slot from an O(1) delete — not a key, not
         // serialized. See `tombstoned_key_slot`.
-        if tombstoned_key_slot(*keys_elements.add(f as usize)) {
+        if tombstoned_key_slot(*keys_elements.add(f as usize))
+            || super::stringify::is_symbol_value((*keys_elements.add(f as usize)).to_bits())
+        {
             continue;
         }
         // #11232: physical class capture/private slots are not JS properties.

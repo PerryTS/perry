@@ -20,6 +20,8 @@ use perry_hir::{Expr, Module, ModuleInitKind, Stmt};
 
 fn entry_opts() -> CompileOptions {
     CompileOptions {
+        static_shape_ids: Vec::new(),
+        program_class_shape_ids: Default::default(),
         target: None,
         is_entry_module: true,
         non_entry_module_prefixes: Vec::new(),
@@ -172,18 +174,23 @@ fn release_boxes_lowers_each_kind_to_its_entry_point() {
     body.push(Stmt::ReleaseBoxes(vec![STATE, DONE, SENT]));
     body.push(Stmt::Return(Some(Expr::Undefined)));
     let ir = ir_for_fn_body("release_kinds", body);
-    assert!(
-        ir.contains("call void @js_i32_box_release("),
-        "__gen_state (i32 control cell) must release through js_i32_box_release:\n{ir}"
+    // The activation frame is one scope object (control words included), and
+    // the release ends the activation's lifecycle token once for all of it.
+    assert!(ir.contains("call i64 @js_scope_alloc(i32 3,"), "{ir}");
+    assert_eq!(
+        ir.matches("call void @js_box_release(").count(),
+        1,
+        "one release for the whole scope object:\n{ir}"
     );
-    assert!(
-        ir.contains("call void @js_bool_box_release("),
-        "__gen_done (i1 control cell) must release through js_bool_box_release:\n{ir}"
-    );
-    assert!(
-        ir.contains("call void @js_box_release("),
-        "__gen_sent (JSValue cell) must release through js_box_release:\n{ir}"
-    );
+    for per_kind in [
+        "call void @js_i32_box_release(",
+        "call void @js_bool_box_release(",
+    ] {
+        assert!(
+            !ir.contains(per_kind),
+            "no per-cell release ({per_kind}):\n{ir}"
+        );
+    }
 }
 
 /// The real emission site: the release lives in the synthesized step
@@ -215,16 +222,14 @@ fn release_boxes_lowers_through_closure_captures() {
     }));
     body.push(Stmt::Return(Some(Expr::Undefined)));
     let ir = ir_for_fn_body("release_captures", body);
-    for call in [
-        "call void @js_box_release(",
-        "call void @js_i32_box_release(",
-        "call void @js_bool_box_release(",
-    ] {
-        assert!(
-            ir.contains(call),
-            "release must lower inside the step closure (missing `{call}`):\n{ir}"
-        );
-    }
+    let step = ir
+        .split("\ndefine ")
+        .find(|f| f.lines().next().is_some_and(|l| l.contains("__900(")))
+        .expect("step closure is emitted");
+    assert!(
+        step.contains("call void @js_box_release("),
+        "release must lower inside the step closure:\n{ir}"
+    );
     assert!(
         !ir.contains("call void @js_closure_set_box_capture_ptr("),
         "the compiler-private step closure is covered by the activation refcount, \

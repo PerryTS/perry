@@ -6,7 +6,7 @@
 //! picker callback receives an empty array.
 
 extern "C" {
-    fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+    fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
     fn js_string_from_bytes(ptr: *const u8, len: u32) -> *mut u8;
     fn js_nanbox_string(ptr: i64) -> f64;
@@ -30,7 +30,7 @@ pub extern "C" fn perry_system_geolocation_get_current(_on_success: f64, on_erro
         }
         let nb = unsupported_string();
         let cb = js_nanbox_get_pointer(on_error) as *const u8;
-        js_closure_call1(cb, nb);
+        js_closure_call1(cb, perry_ffi::JsThis::UNDEFINED, nb);
     }
 }
 
@@ -47,7 +47,7 @@ pub extern "C" fn perry_system_geolocation_request_permission(callback: f64) {
     unsafe {
         let nb = unsupported_string();
         let cb = js_nanbox_get_pointer(callback) as *const u8;
-        js_closure_call1(cb, nb);
+        js_closure_call1(cb, perry_ffi::JsThis::UNDEFINED, nb);
     }
 }
 
@@ -61,6 +61,6 @@ pub extern "C" fn perry_system_image_picker_pick(
         let arr = js_array_alloc(0);
         let nb = js_nanbox_pointer(arr as i64);
         let cb = js_nanbox_get_pointer(callback) as *const u8;
-        js_closure_call1(cb, nb);
+        js_closure_call1(cb, perry_ffi::JsThis::UNDEFINED, nb);
     }
 }

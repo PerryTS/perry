@@ -18,7 +18,7 @@ pub(crate) fn scan_gtk4_slider_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'
 }
 
 extern "C" {
-    fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+    fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
 }
 
@@ -56,7 +56,11 @@ pub fn create(min: f64, max: f64, initial: f64, on_change: f64) -> i64 {
             let value = scale.value();
             let closure_ptr = unsafe { js_nanbox_get_pointer(closure_f64) };
             unsafe {
-                js_closure_call1(closure_ptr as *const u8, value);
+                js_closure_call1(
+                    closure_ptr as *const u8,
+                    perry_ffi::JsThis::UNDEFINED,
+                    value,
+                );
             }
         }
     });
