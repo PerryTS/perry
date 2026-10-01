@@ -71,6 +71,14 @@ async function main() {
   catch (e: any) { log.push(e.message); }
   console.log('failed next', log.join(','));
   log.length = 0;
+  const badValue = source('value error');
+  badValue.next = async function() {
+    return { done: false, get value() { throw new Error('value error'); } };
+  };
+  try { for await (const value of badValue) { log.push('unexpected'); } }
+  catch (e: any) { log.push(e.message); }
+  console.log('failed value', log.join(','));
+  log.length = 0;
   const noReturn: any = { [Symbol.asyncIterator]() { return this; }, async next() { return { value: 7, done: false }; } };
   for await (const value of noReturn) { log.push('value:' + value); break; }
   console.log('no return', log.join(','));

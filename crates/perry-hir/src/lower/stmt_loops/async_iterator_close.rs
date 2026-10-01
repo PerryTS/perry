@@ -9,10 +9,28 @@ pub(crate) fn emit_driver(
     iter_id: LocalId,
     result_id: LocalId,
     next_call: Expr,
-    body: Vec<Stmt>,
+    mut body: Vec<Stmt>,
 ) {
     let active = boolean_local(ctx, output, "__iterator_close_active");
     let throwing = boolean_local(ctx, output, "__iterator_close_throwing");
+    // IteratorValue failures do not close the iterator. Mark it active only
+    // after reading value, but before the binding (including destructuring)
+    // can throw. ScopedTemp preserves single evaluation without a heap box.
+    let Some(Stmt::Let {
+        init: Some(value), ..
+    }) = body.first_mut()
+    else {
+        unreachable!("async iterator driver requires a value binding")
+    };
+    let value_id = ctx.fresh_local();
+    *value = Expr::ScopedTemp {
+        id: value_id,
+        value: Box::new(std::mem::replace(value, Expr::Undefined)),
+        body: Box::new(Expr::Sequence(vec![
+            Expr::LocalSet(active, Box::new(Expr::Bool(true))),
+            Expr::LocalGet(value_id),
+        ])),
+    };
     let mut driver = iter_driver_while_stmt(result_id, iterator_result_validated(next_call), body);
     let Stmt::While {
         body: loop_body, ..
@@ -23,7 +41,6 @@ pub(crate) fn emit_driver(
     // A failed next()/done read and natural exhaustion must not close. Once
     // a value has arrived, any abrupt exit from its binding/body must close.
     loop_body.insert(0, set_bool(active, false));
-    loop_body.insert(3, set_bool(active, true));
 
     let method = ctx.fresh_local();
     ctx.locals
