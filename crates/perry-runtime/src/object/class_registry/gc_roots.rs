@@ -614,6 +614,9 @@ pub(crate) fn test_clear_class_side_table_roots() {
             *guard = None;
         }
     });
+    // Test-only map reset has the same invalidation contract as production
+    // registry stores: a still-live accessor site must decline its old link.
+    super::class_lookup_surface_gen_bump();
     CLASS_PARENT_CLOSURES.with(|table| {
         if let Ok(mut guard) = table.write() {
             *guard = None;

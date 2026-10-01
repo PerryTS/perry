@@ -82,6 +82,83 @@ fn tail_from_slots(receiver_slot: u32, key_slot: u32) -> JSValue {
     )
 }
 
+/// The no-site by-name API still resolves inherited and absent reads through
+/// the generic walk. It has no read-site holder entry after the side table is
+/// retired; repeated reads must observe value overwrites and newly visible
+/// keys. Ordinary objects must not acquire Set/Symbol registry probes.
+#[test]
+fn by_name_inherited_and_absent_reads_follow_live_prototypes() {
+    let _roots = TestShadowFrame::new(4);
+    root_pointer(0, crate::object::js_object_alloc(0, 0) as usize);
+    root_pointer(1, crate::object::js_object_alloc(0, 0) as usize);
+    root_string(2, key(b"inherited"));
+    root_string(3, key(b"later"));
+    let object_value = |slot: u32| {
+        f64::from_bits(crate::value::js_nanbox_pointer(rooted_pointer(slot) as i64).to_bits())
+    };
+    crate::object::js_object_set_field_by_name(
+        rooted_pointer(0) as *mut ObjectHeader,
+        rooted_pointer(2) as *const crate::StringHeader,
+        2.0,
+    );
+    crate::object::object_ops::js_object_set_prototype_of(object_value(1), object_value(0));
+
+    let set_before = crate::set::test_set_registry_probe_count();
+    let symbol_before = crate::symbol::test_symbol_registry_probe_count();
+    for _ in 0..64 {
+        assert_eq!(
+            f64::from_bits(
+                js_object_get_field_by_name(
+                    rooted_pointer(1) as *const ObjectHeader,
+                    rooted_pointer(2) as *const crate::StringHeader,
+                )
+                .bits()
+            ),
+            2.0,
+        );
+        assert!(js_object_get_field_by_name(
+            rooted_pointer(1) as *const ObjectHeader,
+            rooted_pointer(3) as *const crate::StringHeader,
+        )
+        .is_undefined());
+    }
+    crate::object::js_object_set_field_by_name(
+        rooted_pointer(0) as *mut ObjectHeader,
+        rooted_pointer(2) as *const crate::StringHeader,
+        3.0,
+    );
+    crate::object::js_object_set_field_by_name(
+        rooted_pointer(0) as *mut ObjectHeader,
+        rooted_pointer(3) as *const crate::StringHeader,
+        7.0,
+    );
+    assert_eq!(
+        f64::from_bits(
+            js_object_get_field_by_name(
+                rooted_pointer(1) as *const ObjectHeader,
+                rooted_pointer(2) as *const crate::StringHeader,
+            )
+            .bits()
+        ),
+        3.0,
+    );
+    assert_eq!(
+        f64::from_bits(
+            js_object_get_field_by_name(
+                rooted_pointer(1) as *const ObjectHeader,
+                rooted_pointer(3) as *const crate::StringHeader,
+            )
+            .bits()
+        ),
+        7.0,
+    );
+    assert_eq!(crate::set::test_set_registry_probe_count(), set_before);
+    assert_eq!(
+        crate::symbol::test_symbol_registry_probe_count(),
+        symbol_before
+    );
+}
+
 #[test]
 fn plain_object_miss_skips_set_and_symbol_registries() {
     leaked_symbol("perry-7867-arm-symbol");

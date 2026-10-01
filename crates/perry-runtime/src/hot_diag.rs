@@ -1169,22 +1169,6 @@ impl IcDiag {
                 self.prime_way_encoded_slot
             );
         }
-        // Lane 3's inherited-read cache, on the SAME arming rather than an
-        // env var of its own. A cache that primes and then declines every
-        // lookup returns exactly the values the chain walk would and is
-        // invisible in a program's output; this row is what tells a real
-        // program's run apart from that.
-        let inh_hits = crate::object::inherited_read_cache::inherited_read_cache_hits();
-        let inh_primes = crate::object::inherited_read_cache::inherited_read_cache_primes();
-        let inh_declines = crate::object::inherited_read_cache::inherited_read_cache_declines();
-        let inh_neg = crate::object::inherited_read_cache::inherited_read_cache_neg_served();
-        if (inh_hits | inh_primes | inh_declines | inh_neg) != 0 {
-            let _ = writeln!(
-                out,
-                "  inherited: hits={inh_hits} primes={inh_primes} \
-                 declines={inh_declines} declines_cached={inh_neg}"
-            );
-        }
         let mut rows: Vec<&SiteStat> = self.sites.values().collect();
         crate::cold_sort::sort_by_key(&mut rows, |s| std::cmp::Reverse(s.misses));
         let _ = writeln!(
@@ -1582,13 +1566,14 @@ const RECV_ROUTE_NAMES: [&str; 33] = [
     // supplier matched (`Route::RloopStatic`).
     "rloop_static",
     // Runtime-counted: a class-field read whose inline guard missed, answered
-    // from the receiver's shape (the site's word or the inherited cache)...
+    // from the receiver's shape (the site's word or holder fact)...
     "rt_class_miss_shape",
-    // ...or by the generic read ladder behind it (own miss, inherited cache,
-    // priming), where it used to take the site-less by-name walk.
+    // ...or by the generic read ladder behind it, where it used to take the
+    // site-less by-name walk.
     "rt_class_miss_ladder",
     // Runtime-counted: a by-name overwrite of a live inline slot on an object
-    // holding a typed layout, which keeps it (it used to declare it unknown).
+    // whose ShapeId carries an `F64` lane, which keeps that ShapeId (it used
+    // to declare the object's layout unknown).
     "rt_overwrite_kept_typed",
     // Runtime-counted by `js_region_loop_prime`: refused because a key a bare
     // store may write a non-double into is not an `Any` lane (charter step 5).
@@ -1600,6 +1585,7 @@ pub(crate) const RT_ROUTE_MEGA_SPILL: u32 = 9;
 pub(crate) const RT_ROUTE_SPILL_MISS: u32 = 10;
 pub(crate) const RT_ROUTE_CLASS_MISS_SHAPE: u32 = 29;
 pub(crate) const RT_ROUTE_CLASS_MISS_LADDER: u32 = 30;
+pub(crate) const RT_ROUTE_OVERWRITE_KEPT_TYPED: u32 = 31;
 pub(crate) const RT_ROUTE_RLOOP_PRIME_OK: u32 = 19;
 pub(crate) const RT_ROUTE_RLOOP_REFUSE_BAND: u32 = 20;
 pub(crate) const RT_ROUTE_RLOOP_REFUSE_SUMMARY: u32 = 21;
@@ -1618,6 +1604,13 @@ static RECV_ROUTES_REPORT: std::sync::Once = std::sync::Once::new();
 /// compiled with `PERRY_RECV_ROUTE_COUNT=1`; the runtime-counted routes are a
 /// relaxed load and a not-taken branch everywhere else.
 static RECV_ROUTES_ARMED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Is this a census build (see [`RECV_ROUTES_ARMED`])? For a runtime route
+/// whose classification costs more than the count.
+#[inline]
+pub(crate) fn recv_routes_armed() -> bool {
+    RECV_ROUTES_ARMED.load(Ordering::Relaxed)
+}
 
 /// Count a runtime-side route in a census build (see
 /// [`RECV_ROUTES_ARMED`]); nothing otherwise.

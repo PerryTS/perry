@@ -145,7 +145,6 @@ pub(crate) use global_this::{
     temporal_subclass_super as global_this_temporal_subclass_super,
 };
 pub mod handle_expando;
-pub(crate) mod inherited_read_cache;
 pub(crate) mod prop_plan;
 pub(crate) mod proto_validity;
 pub(crate) use global_this::{

@@ -507,7 +507,7 @@ rustls-pemfile = "2"
 socket2 = "0.6"
 futures-util = "0.3"
 url = "2"
-dirs = "6"
+dirs = "7"
 
 # .env file loading (for publish command)
 
