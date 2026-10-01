@@ -2632,7 +2632,14 @@ unsafe fn pipe_through_rooted_pair(readable_handle: f64, pair: f64, options: f64
     let transform = subclass::unwrap_pair_stream_handle(pair);
     let transform_root = JSValue::from_bits(transform.to_bits())
         .is_pointer()
-        .then(|| scope.root_nanbox_f64(transform));
+        .then(|| {
+            // Unwrapping can move the receiver. Compare with the root only
+            // after it returns, and reuse its slot when the pair is itself
+            // the transform. A distinct object still needs its own root.
+            pair_root
+                .filter(|root| root.get_nanbox_f64().to_bits() == transform.to_bits())
+                .unwrap_or_else(|| scope.root_nanbox_f64(transform))
+        });
     let transform_value = || {
         transform_root
             .as_ref()
