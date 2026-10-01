@@ -821,7 +821,6 @@ impl<'a> DirectParser<'a> {
         // Pre-allocate with the known keys_array + field count. No
         // shape cache lookup — the shape is already in the cache from
         // the one-time build at parse entry.
-        let mut saw_pointer = false;
         // #8098: parsed records are ordinary plain objects — no class, but an
         // authoritative ShapeId and no per-object [[Set]] semantics — so they
         // are born marked eligible for the object-write fast paths, BEFORE
@@ -900,13 +899,11 @@ impl<'a> DirectParser<'a> {
                             if fast_idx < alloc_limit {
                                 let slot_idx = fast_idx;
                                 let value_bits = value.bits();
-                                // GC_STORE_AUDIT(BARRIERED): shaped JSON field write uses the
-                                // layout-deferred slot-store helper (#7630); the layout state
-                                // is settled once at the tail of this function.
-                                saw_pointer |=
-                                    crate::object::store_object_field_slot_layout_deferred(
-                                        js_obj, slot_idx, value_bits,
-                                    );
+                                // GC_STORE_AUDIT(BARRIERED): newborn owner store;
+                                // ShapeId rep determines tracing.
+                                crate::object::store_object_field_slot_layout_deferred(
+                                    js_obj, slot_idx, value_bits,
+                                );
                                 fast_idx += 1;
                                 took_fast = true;
                             }
@@ -927,11 +924,7 @@ impl<'a> DirectParser<'a> {
                 // path as generic parse_object).
                 let key_ptr = cached_parse_key_ptr(key_bytes);
                 js_obj = parse_root_object_ptr(obj_slot);
-                // The by-name path stores through the noting helper and may
-                // build a mask mid-construction; treat it as pointer-bearing so
-                // the tail's finalize (which routes through layout_mark_unknown)
-                // removes whatever it recorded (#7630).
-                saw_pointer = true;
+                // The by-name path updates the object shape as needed.
                 crate::object::js_object_set_field_by_name(
                     js_obj,
                     key_ptr as *mut StringHeader,
@@ -950,10 +943,7 @@ impl<'a> DirectParser<'a> {
         }
         self.expect(b'}');
         js_obj = parse_root_object_ptr(obj_slot);
-        // #7630: the construction loop elided per-slot layout notes; settle the
-        // layout state once, on the LIVE pointer (re-read from the parse root
-        // above, so a mid-parse collection cannot leave this on a stale copy).
-        crate::gc::layout_finish_deferred_boxed_object(js_obj as usize, saw_pointer);
+        // Object fields are traced by the shape stamped during construction.
         parse_root_restore(saved_roots);
         JSValue::object_ptr(js_obj as *mut u8)
     }

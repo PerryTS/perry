@@ -181,6 +181,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
         is_entry_module,
         compile_packages,
         None,
+        false,
     )
 }
 
@@ -193,6 +194,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
     is_entry_module: bool,
     compile_packages: Option<&HashSet<String>>,
     native_addon_paths: Option<&std::collections::BTreeMap<PathBuf, String>>,
+    diagnose_computed_requires: bool,
 ) -> (String, Option<usize>) {
     let mut source_cow = Cow::Borrowed(source);
 
@@ -388,7 +390,8 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
     // the binding as an imported function (`import_function_prefixes`), which a
     // target with no default export never is — so a side-effect-only dependency
     // was deferred and then never evaluated at all.
-    let mut lazy_specs = deferred_require_specs(source);
+    let mut lazy_specs =
+        deferred_require_specs_for_path(source, source_path, diagnose_computed_requires);
     let cyclic_specs = cyclic_require_specs(source, source_path);
     let parent_sensitive_specs = parent_sensitive_require_specs(source, source_path);
     lazy_specs.extend(cyclic_specs.iter().cloned());

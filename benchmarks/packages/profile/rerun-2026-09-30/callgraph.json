@@ -1,0 +1,5369 @@
+{
+ "callgraph": "dwarf",
+ "perry_bin_dir": "/root/claude-matrix-rerun-out/dbg",
+ "perry_commit": "9e29f59d43",
+ "schema": "pkg-bench-callgraph/1",
+ "target_samples": 12000,
+ "workloads": {
+  "cron/next_dates": {
+   "binary": "/root/claude-matrix-rerun-out/dbg/cron__next_dates",
+   "bucket_entry": {
+    "alloc\tjs_object_alloc_class_inline_keys_stamped": 2298601,
+    "closure_box_args\tjs_class_capture_value_for_receiver": 2897809,
+    "closure_box_args\tjs_class_capture_value_or": 2838013,
+    "closure_box_args\tjs_param_or_class_capture_value": 3157702,
+    "dyn_index\tjs_class_capture_value_for_receiver": 4932211,
+    "generated_code\t<inline JS>": 7543237,
+    "prop_lookup\tjs_class_capture_value_for_receiver": 12520776,
+    "prop_lookup\tjs_for_in_keys_stable_value": 3024891,
+    "prop_lookup\tjs_for_of_next": 2295584,
+    "prop_lookup\tjs_iterator_next_result": 5416495,
+    "prop_lookup\tjs_native_call_method_by_id": 2170172,
+    "prop_lookup\tjs_object_assign_one": 7208081,
+    "prop_lookup\tjs_object_get_field_by_name_f64": 22171800,
+    "prop_lookup\tjs_object_get_field_by_property_id_f64": 180258814,
+    "prop_lookup\tjs_object_set_field_by_property_id": 21966595,
+    "prop_lookup\tjs_put_value_set": 2826225,
+    "prop_lookup\tjs_rel_gt": 2639783,
+    "prop_write\tjs_object_set_field_by_property_id": 10637449,
+    "proto_chain_read\tjs_object_get_field_by_name_f64": 7843516,
+    "string\tjs_class_capture_value_for_receiver": 3895458,
+    "string\tjs_object_get_field_by_property_id_f64": 49528499,
+    "write_barrier\tjs_object_set_field_by_property_id": 2823320
+   },
+   "buckets": {
+    "accessor_descriptor": 5892084,
+    "alloc": 3021101,
+    "buffer_typedarray": 866098,
+    "call_overhead": 553566,
+    "closure_box_args": 12420421,
+    "dyn_index": 12447861,
+    "exceptions": 286458,
+    "gc_minor": 1334352,
+    "gc_other": 976042,
+    "generated_code": 7543237,
+    "map_set": 1439131,
+    "method_dispatch": 3105603,
+    "number_string": 94926,
+    "numeric_conv": 511139,
+    "other_runtime": 1883126,
+    "private_fields": 1657653,
+    "promise_async": 1321787,
+    "prop_lookup": 276653637,
+    "prop_write": 14920058,
+    "proto_chain_read": 9645085,
+    "raw_alloc": 48510,
+    "regex": 2310928,
+    "string": 59140329,
+    "symbol": 43515,
+    "unknown": -18,
+    "utf8_transcode": 46309,
+    "value_typeof": 1560619,
+    "write_barrier": 3602980
+   },
+   "chains": [
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_object_get_field_by_property_id_f64",
+     "js_fn": "node_modules_luxon_build_node_luxon_js::DateTime..get_get_isValid",
+     "js_loc": "luxon/build/node/luxon.js:6287 `return this.invalid === null;`",
+     "leaf": "perry_runtime::object::native_get::try_data_get_bytes",
+     "leaf_share": 0.29,
+     "pct": 9.43,
+     "per_iter": 39913614
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_object_get_field_by_property_id_f64",
+     "js_fn": "node_modules_luxon_build_node_luxon_js::Duration..computed_getter_named_130632_130685",
+     "js_loc": "luxon/build/node/luxon.js:3822 `return this.invalid === null;`",
+     "leaf": "perry_runtime::object::native_get::try_data_get_bytes",
+     "leaf_share": 0.3,
+     "pct": 6.28,
+     "per_iter": 26596163
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_object_get_field_by_property_id_f64",
+     "js_fn": "node_modules_luxon_build_node_luxon_js::DateTime..get_get_zone",
+     "js_loc": "luxon/build/node/luxon.js:6338 `return this._zone;`",
+     "leaf": "perry_runtime::object::native_get::try_data_get_bytes",
+     "leaf_share": 0.27,
+     "pct": 4.73,
+     "per_iter": 20007704
+    },
+    {
+     "bucket": "string",
+     "entry": "js_object_get_field_by_property_id_f64",
+     "js_fn": "node_modules_luxon_build_node_luxon_js::DateTime..get_get_isValid",
+     "js_loc": "luxon/build/node/luxon.js:6287 `return this.invalid === null;`",
+     "leaf": "perry_runtime::string::intern::intern_dispatch_bytes",
+     "leaf_share": 0.56,
+     "pct": 2.78,
+     "per_iter": 11769923
+    },
+    {
+     "bucket": "string",
+     "entry": "js_object_get_field_by_property_id_f64",
+     "js_fn": "node_modules_luxon_build_node_luxon_js::Duration..computed_getter_named_130632_130685",
+     "js_loc": "luxon/build/node/luxon.js:3822 `return this.invalid === null;`",
+     "leaf": "perry_runtime::string::intern::intern_dispatch_bytes",
+     "leaf_share": 0.52,
+     "pct": 1.85,
+     "per_iter": 7827303
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_object_get_field_by_property_id_f64",
+     "js_fn": "node_modules_luxon_build_node_luxon_js::DateTime..computed_method_named_257129_257186",
+     "js_loc": "luxon/build/node/luxon.js:7255 `return this.isValid ? this.ts : NaN;`",
+     "leaf": "perry_runtime::object::native_get::try_data_get_bytes",
+     "leaf_share": 0.22,
+     "pct": 1.82,
+     "per_iter": 7712653
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_object_get_field_by_property_id_f64",
+     "js_fn": "node_modules_luxon_build_node_luxon_js::DateTime..computed_method_named_256994_257037",
+     "js_loc": "luxon/build/node/luxon.js:7247 `return this.toMillis();`",
+     "leaf": "perry_runtime::object::native_get::try_data_get_bytes",
+     "leaf_share": 0.33,
+     "pct": 1.44,
+     "per_iter": 6101505
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_object_get_field_by_property_id_f64",
+     "js_fn": "node_modules_luxon_build_node_luxon_js::DateTime..get_get_weekday",
+     "js_loc": "luxon/build/node/luxon.js:6449 `return this.isValid ? possiblyCachedWeekData(this).weekd`",
+     "leaf": "perry_runtime::object::shapes::shape_descriptor_by_id",
+     "leaf_share": 0.37,
+     "pct": 1.41,
+     "per_iter": 5974299
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_object_set_field_by_property_id",
+     "js_fn": "node_modules_luxon_build_node_luxon_js::DateTime_constructor",
+     "js_loc": "luxon/build/node/luxon.js:5739 `const zone = config.zone // Settings.defaultZone;`",
+     "leaf": "perry_runtime::object::shapes::shape_descriptor_by_id",
+     "leaf_share": 0.39,
+     "pct": 1.29,
+     "per_iter": 5447828
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_object_get_field_by_name_f64",
+     "js_fn": "node_modules_luxon_build_node_luxon_js::Locale.c75.create",
+     "js_loc": "luxon/build/node/luxon.js:947 `return new Locale(localeR, numberingSystemR, outputCalen`",
+     "leaf": "perry_runtime::object::shapes::shape_descriptor_by_id",
+     "leaf_share": 0.22,
+     "pct": 1.25,
+     "per_iter": 5291391
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_class_capture_value_for_receiver",
+     "js_fn": "node_modules_luxon_build_node_luxon_js::Duration.c142.normalizeUnit",
+     "js_loc": "luxon/build/node/luxon.js:3275 `}[unit ? unit.toLowerCase() : unit];`",
+     "leaf": "perry_runtime::object::shapes::shape_descriptor_by_id",
+     "leaf_share": 0.57,
+     "pct": 1.22,
+     "per_iter": 5163202
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_object_set_field_by_property_id",
+     "js_fn": "node_modules_luxon_build_node_luxon_js::DateTime_constructor",
+     "js_loc": "luxon/build/node/luxon.js:5769 `this.loc = config.loc // Locale.create();`",
+     "leaf": "perry_runtime::object::shapes::shape_descriptor_by_id",
+     "leaf_share": 0.47,
+     "pct": 1.08,
+     "per_iter": 4582687
+    },
+    {
+     "bucket": "string",
+     "entry": "js_object_get_field_by_property_id_f64",
+     "js_fn": "node_modules_luxon_build_node_luxon_js::DateTime..get_get_zone",
+     "js_loc": "luxon/build/node/luxon.js:6338 `return this._zone;`",
+     "leaf": "perry_runtime::string::intern::intern_dispatch_bytes",
+     "leaf_share": 0.66,
+     "pct": 1.08,
+     "per_iter": 4572050
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_object_get_field_by_name_f64",
+     "js_fn": "node_modules_luxon_build_node_luxon_js::Duration.c142.fromObject",
+     "js_loc": "luxon/build/node/luxon.js:3158 `matrix: opts.matrix`",
+     "leaf": "perry_runtime::object::native_get::try_data_get_bytes",
+     "leaf_share": 0.2,
+     "pct": 1.03,
+     "per_iter": 4381178
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_object_get_field_by_property_id_f64",
+     "js_fn": "node_modules_luxon_build_node_luxon_js::DateTime..get_get_month",
+     "js_loc": "luxon/build/node/luxon.js:6373 `return this.isValid ? this.c.month : NaN;`",
+     "leaf": "perry_runtime::object::native_get::try_data_get_bytes",
+     "leaf_share": 0.37,
+     "pct": 0.99,
+     "per_iter": 4209134
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_object_get_field_by_property_id_f64",
+     "js_fn": "node_modules_luxon_build_node_luxon_js::Duration..computed_getter_named_129575_129650",
+     "js_loc": "luxon/build/node/luxon.js:3765 `return this.isValid ? this.values.months // 0 : NaN;`",
+     "leaf": "perry_runtime::object::native_get::try_data_get_bytes",
+     "leaf_share": 0.26,
+     "pct": 0.94,
+     "per_iter": 3983570
+    },
+    {
+     "bucket": "prop_write",
+     "entry": "js_object_set_field_by_property_id",
+     "js_fn": "node_modules_luxon_build_node_luxon_js::DateTime_constructor",
+     "js_loc": "luxon/build/node/luxon.js:5739 `const zone = config.zone // Settings.defaultZone;`",
+     "leaf": "perry_runtime::object::field_set_by_name::fast_paths::try_existing_own_data_overwrite",
+     "leaf_share": 0.63,
+     "pct": 0.81,
+     "per_iter": 3424002
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_object_get_field_by_property_id_f64",
+     "js_fn": "node_modules_luxon_build_node_luxon_js::DateTime.plus",
+     "js_loc": "luxon/build/node/luxon.js:6883 `if (!this.isValid) return this;`",
+     "leaf": "perry_runtime::object::native_get::try_data_get_bytes",
+     "leaf_share": 0.34,
+     "pct": 0.78,
+     "per_iter": 3283738
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_object_set_field_by_property_id",
+     "js_fn": "node_modules_luxon_build_node_luxon_js::Duration_constructor",
+     "js_loc": "luxon/build/node/luxon.js:3104 `this.invalid = config.invalid // null;`",
+     "leaf": "perry_runtime::object::shapes::shape_descriptor_by_id",
+     "leaf_share": 0.32,
+     "pct": 0.75,
+     "per_iter": 3166192
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_object_get_field_by_property_id_f64",
+     "js_fn": "node_modules_luxon_build_node_luxon_js::Duration..computed_getter_named_129307_129380",
+     "js_loc": "luxon/build/node/luxon.js:3749 `return this.isValid ? this.values.years // 0 : NaN;`",
+     "leaf": "perry_runtime::object::native_get::try_data_get_bytes",
+     "leaf_share": 0.29,
+     "pct": 0.73,
+     "per_iter": 3087023
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_object_set_field_by_property_id",
+     "js_fn": "node_modules_luxon_build_node_luxon_js::Duration_constructor",
+     "js_loc": "luxon/build/node/luxon.js:3083 `const accurate = config.conversionAccuracy === \"longterm`",
+     "leaf": "perry_runtime::object::prop_plan::read_plan_record",
+     "leaf_share": 0.26,
+     "pct": 0.73,
+     "per_iter": 3075299
+    },
+    {
+     "bucket": "string",
+     "entry": "js_object_get_field_by_property_id_f64",
+     "js_fn": "node_modules_luxon_build_node_luxon_js::DateTime..computed_method_named_257129_257186",
+     "js_loc": "luxon/build/node/luxon.js:7255 `return this.isValid ? this.ts : NaN;`",
+     "leaf": "perry_runtime::string::intern::intern_dispatch_bytes",
+     "leaf_share": 0.71,
+     "pct": 0.68,
+     "per_iter": 2891667
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_object_get_field_by_property_id_f64",
+     "js_fn": "node_modules_luxon_build_node_luxon_js::DateTime.set",
+     "js_loc": "luxon/build/node/luxon.js:6821 `if (!this.isValid) return this;`",
+     "leaf": "perry_runtime::object::native_get::try_data_get_bytes",
+     "leaf_share": 0.4,
+     "pct": 0.65,
+     "per_iter": 2740583
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_object_get_field_by_property_id_f64",
+     "js_fn": "node_modules_luxon_build_node_luxon_js::Duration..computed_getter_named_129705_129778",
+     "js_loc": "luxon/build/node/luxon.js:3773 `return this.isValid ? this.values.weeks // 0 : NaN;`",
+     "leaf": "perry_runtime::object::native_get::try_data_get_bytes",
+     "leaf_share": 0.31,
+     "pct": 0.64,
+     "per_iter": 2724876
+    },
+    {
+     "bucket": "prop_write",
+     "entry": "js_object_set_field_by_property_id",
+     "js_fn": "node_modules_luxon_build_node_luxon_js::DateTime_constructor",
+     "js_loc": "luxon/build/node/luxon.js:5769 `this.loc = config.loc // Locale.create();`",
+     "leaf": "perry_runtime::object::field_set_by_name::fast_paths::try_existing_own_data_overwrite",
+     "leaf_share": 0.76,
+     "pct": 0.61,
+     "per_iter": 2586709
+    }
+   ],
+   "correctness": "not checked against node (reused node reference)",
+   "entry_top": [
+    [
+     "js_object_get_field_by_property_id_f64",
+     230739336,
+     54.51
+    ],
+    [
+     "js_object_set_field_by_property_id",
+     37699694,
+     8.91
+    ],
+    [
+     "js_object_get_field_by_name_f64",
+     34600152,
+     8.17
+    ],
+    [
+     "js_class_capture_value_for_receiver",
+     24918166,
+     5.89
+    ],
+    [
+     "js_object_assign_one",
+     14437366,
+     3.41
+    ],
+    [
+     "<inline JS>",
+     7543237,
+     1.78
+    ],
+    [
+     "js_iterator_next_result",
+     6973813,
+     1.65
+    ],
+    [
+     "js_for_in_keys_stable_value",
+     6148322,
+     1.45
+    ],
+    [
+     "js_put_value_set",
+     5206561,
+     1.23
+    ],
+    [
+     "js_native_call_method_by_id",
+     4329131,
+     1.02
+    ],
+    [
+     "js_method_site_miss",
+     4193906,
+     0.99
+    ],
+    [
+     "js_for_of_next",
+     3993660,
+     0.94
+    ],
+    [
+     "perry_runtime::object::field_get_set::ic_miss::get_field_ic_miss_impl",
+     3477548,
+     0.82
+    ],
+    [
+     "js_param_or_class_capture_value",
+     3157702,
+     0.75
+    ],
+    [
+     "js_rel_gt",
+     3109151,
+     0.73
+    ],
+    [
+     "js_closure_call1",
+     2973516,
+     0.7
+    ],
+    [
+     "js_class_capture_value_or",
+     2838013,
+     0.67
+    ],
+    [
+     "js_put_value_set_dyn_ic_miss",
+     2683805,
+     0.63
+    ],
+    [
+     "js_object_alloc_class_inline_keys_stamped",
+     2298601,
+     0.54
+    ],
+    [
+     "js_iterator_close_if_not_done",
+     2078398,
+     0.49
+    ]
+   ],
+   "excess_per_iter": 420362898.2242667,
+   "incl_js_top": [
+    [
+     "cron_next_dates_ts::op",
+     421600617,
+     99.59
+    ],
+    [
+     "node_modules_cron_dist_time_js::CronTime.getNextDateFrom",
+     416443098,
+     98.37
+    ],
+    [
+     "node_modules_luxon_build_node_luxon_js::DateTime.plus",
+     220694856,
+     52.13
+    ],
+    [
+     "node_modules_luxon_build_node_luxon_js::663",
+     162110735,
+     38.29
+    ],
+    [
+     "node_modules_luxon_build_node_luxon_js::Duration.c142.fromObject",
+     73071547,
+     17.26
+    ],
+    [
+     "node_modules_luxon_build_node_luxon_js::DateTime..get_get_isValid",
+     58870731,
+     13.91
+    ],
+    [
+     "node_modules_luxon_build_node_luxon_js::DateTime.set",
+     53418330,
+     12.62
+    ],
+    [
+     "node_modules_luxon_build_node_luxon_js::656",
+     49642007,
+     11.73
+    ],
+    [
+     "node_modules_luxon_build_node_luxon_js::Duration..computed_method_named_124414_124490",
+     39221383,
+     9.27
+    ],
+    [
+     "node_modules_luxon_build_node_luxon_js::Duration..computed_getter_named_130632_130685",
+     36029166,
+     8.51
+    ],
+    [
+     "node_modules_luxon_build_node_luxon_js::DateTime..computed_method_named_256994_257037",
+     35974276,
+     8.5
+    ],
+    [
+     "node_modules_luxon_build_node_luxon_js::Locale.c75.fromObject",
+     34883322,
+     8.24
+    ],
+    [
+     "node_modules_luxon_build_node_luxon_js::Locale.c75.create",
+     33543157,
+     7.92
+    ],
+    [
+     "node_modules_luxon_build_node_luxon_js::Duration.shiftTo",
+     31302433,
+     7.39
+    ],
+    [
+     "node_modules_luxon_build_node_luxon_js::DateTime_constructor",
+     31038411,
+     7.33
+    ],
+    [
+     "node_modules_luxon_build_node_luxon_js::Duration.c142.fromDurationLike",
+     30926387,
+     7.31
+    ],
+    [
+     "node_modules_luxon_build_node_luxon_js::DateTime..get_get_zone",
+     30069640,
+     7.1
+    ],
+    [
+     "node_modules_luxon_build_node_luxon_js::DateTime..computed_method_named_257129_257186",
+     25673579,
+     6.06
+    ],
+    [
+     "node_modules_cron_dist_time_js::CronTime._getWeekDay",
+     25599761,
+     6.05
+    ],
+    [
+     "node_modules_luxon_build_node_luxon_js::DateTime..get_get_weekday",
+     25504030,
+     6.02
+    ]
+   ],
+   "incl_top": [
+    [
+     "perry_runtime::object::class_registry::dispatch::call_vtable_method_value",
+     421647913,
+     99.6
+    ],
+    [
+     "perry_runtime::abi_trampoline::call_all_f64_x86_64",
+     421647913,
+     99.6
+    ],
+    [
+     "js_native_call_method",
+     421571698,
+     99.59
+    ],
+    [
+     "perry_runtime::object::native_call_method::handle_methods::dispatch_handle",
+     419643207,
+     99.13
+    ],
+    [
+     "js_method_site_miss",
+     419331362,
+     99.06
+    ],
+    [
+     "js_object_get_field_by_name_f64",
+     250378794,
+     59.15
+    ],
+    [
+     "js_object_get_field_by_property_id_f64",
+     232685877,
+     54.97
+    ],
+    [
+     "perry_runtime::object::inherited_read_cache::inherited_read_cache_lookup",
+     163508071,
+     38.62
+    ],
+    [
+     "perry_runtime::object::inherited_read_cache::accessor_hit",
+     161666023,
+     38.19
+    ],
+    [
+     "perry_runtime::object::field_get_set::ic_miss::get_field_ic_miss_impl",
+     152787348,
+     36.09
+    ],
+    [
+     "js_object_get_field_by_name",
+     134882319,
+     31.86
+    ],
+    [
+     "perry_runtime::object::field_get_set::get_field_by_name::get_field_by_name_past_data_probe",
+     117057630,
+     27.65
+    ],
+    [
+     "js_native_call_method_by_id",
+     108183172,
+     25.56
+    ],
+    [
+     "perry_runtime::object::native_call_method::primitive_methods::dispatch_primitive",
+     95898424,
+     22.65
+    ],
+    [
+     "js_class_static_method_call",
+     95573410,
+     22.58
+    ],
+    [
+     "perry_runtime::object::field_get_set::get_field_by_name_tail::get_field_by_name_object_tail",
+     78908587,
+     18.64
+    ],
+    [
+     "perry_runtime::object::native_get::try_data_get_bytes",
+     73253152,
+     17.3
+    ],
+    [
+     "perry_runtime::object::class_registry::decl_accessors::class_chain_getter_value::<perry_runtime::object::field_get_set::get_field_by_name_tail::get_field_by_name_object_tail::{closure#3}>",
+     54182907,
+     12.8
+    ],
+    [
+     "perry_runtime::object::shapes::shape_descriptor_by_id",
+     49129180,
+     11.61
+    ],
+    [
+     "js_native_call_value",
+     44285925,
+     10.46
+    ]
+   ],
+   "js_sites": [
+    {
+     "js_fn": "node_modules_luxon_build_node_luxon_js::DateTime..get_get_isValid",
+     "js_loc": "luxon/build/node/luxon.js:6287 `return this.invalid === null;`",
+     "pct": 13.86,
+     "per_iter": 58684734
+    },
+    {
+     "js_fn": "node_modules_luxon_build_node_luxon_js::Duration..computed_getter_named_130632_130685",
+     "js_loc": "luxon/build/node/luxon.js:3822 `return this.invalid === null;`",
+     "pct": 8.44,
+     "per_iter": 35707996
+    },
+    {
+     "js_fn": "node_modules_luxon_build_node_luxon_js::DateTime..get_get_zone",
+     "js_loc": "luxon/build/node/luxon.js:6338 `return this._zone;`",
+     "pct": 7.05,
+     "per_iter": 29840581
+    },
+    {
+     "js_fn": "node_modules_luxon_build_node_luxon_js::DateTime..computed_method_named_257129_257186",
+     "js_loc": "luxon/build/node/luxon.js:7255 `return this.isValid ? this.ts : NaN;`",
+     "pct": 3.22,
+     "per_iter": 13620277
+    },
+    {
+     "js_fn": "node_modules_luxon_build_node_luxon_js::DateTime_constructor",
+     "js_loc": "luxon/build/node/luxon.js:5739 `const zone = config.zone // Settings.defaultZone;`",
+     "pct": 3.02,
+     "per_iter": 12790873
+    },
+    {
+     "js_fn": "node_modules_luxon_build_node_luxon_js::Duration.c142.normalizeUnit",
+     "js_loc": "luxon/build/node/luxon.js:3275 `}[unit ? unit.toLowerCase() : unit];`",
+     "pct": 2.84,
+     "per_iter": 12005010
+    },
+    {
+     "js_fn": "node_modules_luxon_build_node_luxon_js::DateTime..computed_method_named_256994_257037",
+     "js_loc": "luxon/build/node/luxon.js:7247 `return this.toMillis();`",
+     "pct": 2.82,
+     "per_iter": 11957293
+    },
+    {
+     "js_fn": "node_modules_luxon_build_node_luxon_js::DateTime_constructor",
+     "js_loc": "luxon/build/node/luxon.js:5769 `this.loc = config.loc // Locale.create();`",
+     "pct": 2.59,
+     "per_iter": 10975639
+    },
+    {
+     "js_fn": "node_modules_luxon_build_node_luxon_js::DateTime..get_get_weekday",
+     "js_loc": "luxon/build/node/luxon.js:6449 `return this.isValid ? possiblyCachedWeekData(this).weekd`",
+     "pct": 2.34,
+     "per_iter": 9904679
+    },
+    {
+     "js_fn": "node_modules_luxon_build_node_luxon_js::Locale.c75.create",
+     "js_loc": "luxon/build/node/luxon.js:947 `return new Locale(localeR, numberingSystemR, outputCalen`",
+     "pct": 2.15,
+     "per_iter": 9100056
+    },
+    {
+     "js_fn": "node_modules_luxon_build_node_luxon_js::Duration.c142.fromObject",
+     "js_loc": "luxon/build/node/luxon.js:3158 `matrix: opts.matrix`",
+     "pct": 1.49,
+     "per_iter": 6300895
+    },
+    {
+     "js_fn": "node_modules_luxon_build_node_luxon_js::Duration..computed_getter_named_129575_129650",
+     "js_loc": "luxon/build/node/luxon.js:3765 `return this.isValid ? this.values.months // 0 : NaN;`",
+     "pct": 1.47,
+     "per_iter": 6227502
+    },
+    {
+     "js_fn": "node_modules_luxon_build_node_luxon_js::Duration_constructor",
+     "js_loc": "luxon/build/node/luxon.js:3083 `const accurate = config.conversionAccuracy === \"longterm`",
+     "pct": 1.42,
+     "per_iter": 6020350
+    },
+    {
+     "js_fn": "node_modules_luxon_build_node_luxon_js::Duration.shiftTo",
+     "js_loc": "luxon/build/node/luxon.js:3671 `own += this.matrix[ak][k] * accumulated[ak];`",
+     "pct": 1.42,
+     "per_iter": 6019602
+    },
+    {
+     "js_fn": "node_modules_luxon_build_node_luxon_js::DateTime..get_get_month",
+     "js_loc": "luxon/build/node/luxon.js:6373 `return this.isValid ? this.c.month : NaN;`",
+     "pct": 1.36,
+     "per_iter": 5752093
+    },
+    {
+     "js_fn": "node_modules_luxon_build_node_luxon_js::DateTime.plus",
+     "js_loc": "luxon/build/node/luxon.js:6883 `if (!this.isValid) return this;`",
+     "pct": 1.32,
+     "per_iter": 5609036
+    },
+    {
+     "js_fn": "node_modules_luxon_build_node_luxon_js::658",
+     "js_loc": "luxon/build/node/luxon.js:0",
+     "pct": 1.29,
+     "per_iter": 5470007
+    },
+    {
+     "js_fn": "node_modules_luxon_build_node_luxon_js::Duration_constructor",
+     "js_loc": "luxon/build/node/luxon.js:3104 `this.invalid = config.invalid // null;`",
+     "pct": 1.26,
+     "per_iter": 5326040
+    },
+    {
+     "js_fn": "node_modules_luxon_build_node_luxon_js::Locale.c75.create",
+     "js_loc": "luxon/build/node/luxon.js:941 `const specifiedLocale = locale // Settings.defaultLocale`",
+     "pct": 1.17,
+     "per_iter": 4941233
+    },
+    {
+     "js_fn": "node_modules_luxon_build_node_luxon_js::Duration..computed_getter_named_129307_129380",
+     "js_loc": "luxon/build/node/luxon.js:3749 `return this.isValid ? this.values.years // 0 : NaN;`",
+     "pct": 1.08,
+     "per_iter": 4589537
+    }
+   ],
+   "mechanisms": {
+    "accessor_descriptor": 5207303,
+    "alloc": 64522,
+    "buffer_typedarray": 913992,
+    "call_overhead": 597938,
+    "closure_box_args": 8730820,
+    "dyn_index": 12669546,
+    "exceptions": 287519,
+    "gc_minor": 1334352,
+    "gc_other": 1310090,
+    "generated_code": 7543237,
+    "map_set": 1532693,
+    "memops": 6930463,
+    "method_dispatch": 2433268,
+    "number_string": 94926,
+    "numeric_conv": 604417,
+    "other_runtime": 1883126,
+    "private_fields": 910441,
+    "promise_async": 1452943,
+    "prop_lookup": 271921701,
+    "prop_write": 14869176,
+    "raw_alloc": 5537663,
+    "regex": 288530,
+    "side_table_hash": 4675892,
+    "string": 54696190,
+    "symbol": 186313,
+    "unknown": -18,
+    "utf8_transcode": 11007585,
+    "value_typeof": 1798494,
+    "write_barrier": 3843413
+   },
+   "n1": 1250,
+   "n2": 5000,
+   "node_per_iter": 2963637.0765333334,
+   "perry_instr_n1": 634399867754,
+   "perry_instr_n2": 2221874375132,
+   "perry_per_iter": 423326535.3008,
+   "pkg_code_on_stack_min_pct": 98.4,
+   "ratio": 142.84020761272814,
+   "regex_detail": {
+    "execute": 386323,
+    "protocol_property_gets": 1165275,
+    "result_building_other": 759330
+   },
+   "sample_freq": 98,
+   "sample_scale": 0.978,
+   "sampled_per_iter": 432861709.4104,
+   "samples": {
+    "n1": 3409,
+    "n2": 12534
+   },
+   "self_top": [
+    [
+     "perry_runtime::object::native_get::try_data_get_bytes",
+     51198500,
+     12.09
+    ],
+    [
+     "perry_runtime::object::shapes::shape_descriptor_by_id",
+     49129180,
+     11.61
+    ],
+    [
+     "perry_runtime::string::intern::intern_dispatch_bytes",
+     27578869,
+     6.51
+    ],
+    [
+     "perry_runtime::object::shapes::shape_live_inline_slot_count_by_id",
+     21145181,
+     5.0
+    ],
+    [
+     "perry_runtime::object::field_get_set::get_field_by_name::get_field_by_name_past_data_probe",
+     19967866,
+     4.72
+    ],
+    [
+     "perry_runtime::object::prop_plan::read_plan_lookup",
+     15560617,
+     3.68
+    ],
+    [
+     "perry_runtime::object::inherited_read_cache::inherited_read_cache_lookup",
+     12860009,
+     3.04
+    ],
+    [
+     "js_object_get_field_by_property_id_f64",
+     10664419,
+     2.52
+    ],
+    [
+     "core::str::converts::from_utf8",
+     10646790,
+     2.52
+    ],
+    [
+     "js_object_get_field",
+     9091635,
+     2.15
+    ],
+    [
+     "perry_runtime::string::perry_string_ref_from_dispatch_id",
+     8630404,
+     2.04
+    ],
+    [
+     "js_object_get_field_by_name",
+     8220223,
+     1.94
+    ],
+    [
+     "perry_runtime::object::field_set_by_name::fast_paths::try_existing_own_data_overwrite",
+     7709127,
+     1.82
+    ],
+    [
+     "perry_runtime::object::keys_lookup::keys_find_slot_by_bytes",
+     7448049,
+     1.76
+    ],
+    [
+     "perry_runtime::object::object_keys",
+     6174126,
+     1.46
+    ],
+    [
+     "perry_runtime::object::class_registry::class_meta::is_anon_shape_class_id",
+     6163341,
+     1.46
+    ],
+    [
+     "__memcmp_evex_movbe",
+     6125594,
+     1.45
+    ],
+    [
+     "js_array_length",
+     5171388,
+     1.22
+    ],
+    [
+     "perry_runtime::object::field_get_set::get_field_by_name::prime_read_stub",
+     4743076,
+     1.12
+    ],
+    [
+     "perry_runtime::object::inherited_read_cache::by_name_attempt",
+     4645213,
+     1.1
+    ]
+   ],
+   "startup_instr": 105241698627.99994,
+   "status": "OK",
+   "unwind_reached_main": 0.996,
+   "warm": 200
+  },
+  "lru-cache/churn": {
+   "binary": "/root/claude-matrix-rerun-out/dbg/lru-cache__churn",
+   "bucket_entry": {
+    "alloc\tjs_object_alloc_class_inline_keys_stamped": 1903,
+    "generated_code\t<inline JS>": 3796,
+    "map_set\tjs_native_call_method_by_id": 8825,
+    "map_set\tjs_object_get_class_id": 858,
+    "method_dispatch\tjs_native_call_method_by_id": 4761,
+    "private_fields\tjs_object_get_field_by_name_f64": 3125,
+    "private_fields\tjs_object_get_field_by_property_id_f64": 46600,
+    "private_fields\tjs_object_set_field_by_property_id": 1413,
+    "private_fields\tjs_private_guard_site": 3507,
+    "private_fields\tjs_private_method_call": 5244,
+    "private_fields\tjs_put_value_set": 1642,
+    "prop_lookup\tjs_native_call_method_by_id": 798,
+    "prop_lookup\tjs_object_get_field_by_name_f64": 2719,
+    "prop_lookup\tjs_object_get_field_by_property_id_f64": 16727,
+    "prop_lookup\tjs_object_get_own_field_or_undef": 3432,
+    "prop_lookup\tjs_object_set_field_by_property_id": 857,
+    "prop_lookup\tjs_put_value_set": 2283,
+    "prop_write\tjs_put_value_set": 3289,
+    "string\tjs_object_get_field_by_property_id_f64": 5652,
+    "string\tjs_put_value_set": 1789
+   },
+   "buckets": {
+    "accessor_descriptor": -7,
+    "alloc": 1903,
+    "buffer_typedarray": 147,
+    "call_overhead": 238,
+    "closure_box_args": 1286,
+    "dyn_index": 814,
+    "gc_major": 43,
+    "gc_minor": 32,
+    "gc_other": 361,
+    "generated_code": 3796,
+    "map_set": 9771,
+    "method_dispatch": 4761,
+    "numeric_conv": 262,
+    "other_runtime": 30,
+    "private_fields": 62020,
+    "promise_async": 276,
+    "prop_lookup": 27588,
+    "prop_write": 3690,
+    "proto_chain_read": -19,
+    "string": 8111,
+    "value_typeof": 959,
+    "write_barrier": 247
+   },
+   "chains": [
+    {
+     "bucket": "private_fields",
+     "entry": "js_object_get_field_by_property_id_f64",
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.#W",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:2180 `#set(`)",
+     "leaf": "perry_runtime::object::field_get_set::ic_miss::private_evaluation_brand",
+     "leaf_share": 0.3,
+     "pct": 19.91,
+     "per_iter": 25147
+    },
+    {
+     "bucket": "private_fields",
+     "entry": "js_object_get_field_by_property_id_f64",
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.#G",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:2349 `#evict(free: boolean) {`)",
+     "leaf": "perry_runtime::object::field_get_set::ic_miss::private_member_get_by_name",
+     "leaf_share": 0.26,
+     "pct": 11.12,
+     "per_iter": 14049
+    },
+    {
+     "bucket": "map_set",
+     "entry": "js_native_call_method_by_id",
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.#W",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:2180 `#set(`)",
+     "leaf": "<perry_runtime::map::store::StringIndex>::insert",
+     "leaf_share": 0.5,
+     "pct": 6.01,
+     "per_iter": 7591
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_object_get_field_by_property_id_f64",
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.#W",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:2180 `#set(`)",
+     "leaf": "perry_runtime::object::field_get_set::get_field_by_name::get_field_by_name_past_data_probe",
+     "leaf_share": 0.19,
+     "pct": 5.52,
+     "per_iter": 6973
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_object_get_field_by_property_id_f64",
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.#G",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:2349 `#evict(free: boolean) {`)",
+     "leaf": "perry_runtime::object::prop_plan::read_plan_lookup",
+     "leaf_share": 0.26,
+     "pct": 4.0,
+     "per_iter": 5053
+    },
+    {
+     "bucket": "string",
+     "entry": "js_object_get_field_by_property_id_f64",
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.#W",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:2180 `#set(`)",
+     "leaf": "perry_runtime::string::intern::intern_dispatch_bytes",
+     "leaf_share": 0.65,
+     "pct": 3.31,
+     "per_iter": 4178
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_object_get_field_by_property_id_f64",
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.#C",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:3023 `#get(k: K, getOptions: LRUCache.GetOptions<K, V,`)",
+     "leaf": "perry_runtime::object::native_get::try_data_get_bytes",
+     "leaf_share": 0.2,
+     "pct": 2.81,
+     "per_iter": 3545
+    },
+    {
+     "bucket": "private_fields",
+     "entry": "js_object_get_field_by_property_id_f64",
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.#e",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:2640 `#isBackgroundFetch(p: unknown): p is BackgroundF`)",
+     "leaf": "perry_runtime::object::field_get_set::ic_miss::private_evaluation_brand",
+     "leaf_share": 0.26,
+     "pct": 2.05,
+     "per_iter": 2593
+    },
+    {
+     "bucket": "private_fields",
+     "entry": "js_private_guard_site",
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.#W",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:2180 `#set(`)",
+     "leaf": "perry_runtime::object::spill::overflow_get",
+     "leaf_share": 0.58,
+     "pct": 1.89,
+     "per_iter": 2381
+    },
+    {
+     "bucket": "private_fields",
+     "entry": "js_object_get_field_by_property_id_f64",
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.#C",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:3023 `#get(k: K, getOptions: LRUCache.GetOptions<K, V,`)",
+     "leaf": "perry_runtime::object::field_get_set::ic_miss::private_evaluation_brand",
+     "leaf_share": 0.35,
+     "pct": 1.63,
+     "per_iter": 2055
+    },
+    {
+     "bucket": "method_dispatch",
+     "entry": "js_native_call_method_by_id",
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.#W",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:2180 `#set(`)",
+     "leaf": "perry_runtime::object::native_call_method::primitive_methods::dispatch_primitive",
+     "leaf_share": 0.16,
+     "pct": 1.54,
+     "per_iter": 1949
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_object_get_own_field_or_undef",
+     "js_fn": "lru_cache_churn_ts::op$spec_i32",
+     "js_loc": "lru-cache/churn.ts:18 `const v = cache.get(k);`",
+     "leaf": "js_object_get_own_field_or_undef",
+     "leaf_share": 0.94,
+     "pct": 1.53,
+     "per_iter": 1931
+    },
+    {
+     "bucket": "prop_write",
+     "entry": "js_put_value_set",
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.#G",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:2349 `#evict(free: boolean) {`)",
+     "leaf": "perry_runtime::object::field_set_by_name::tail::set_field_by_name_object_tail",
+     "leaf_share": 0.56,
+     "pct": 1.45,
+     "per_iter": 1829
+    },
+    {
+     "bucket": "private_fields",
+     "entry": "js_object_get_field_by_name_f64",
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.#G",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:2349 `#evict(free: boolean) {`)",
+     "leaf": "perry_runtime::object::shapes::shape_descriptor_by_id",
+     "leaf_share": 0.44,
+     "pct": 1.31,
+     "per_iter": 1653
+    },
+    {
+     "bucket": "private_fields",
+     "entry": "js_private_method_call",
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.#W",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:2180 `#set(`)",
+     "leaf": "__memmove_avx512_unaligned_erms",
+     "leaf_share": 0.39,
+     "pct": 1.31,
+     "per_iter": 1653
+    },
+    {
+     "bucket": "private_fields",
+     "entry": "js_object_get_field_by_property_id_f64",
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.#L",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:3077 `#moveToTail(index: Index): void {`)",
+     "leaf": "perry_runtime::object::field_get_set::ic_miss::private_member_get_by_name",
+     "leaf_share": 0.35,
+     "pct": 1.24,
+     "per_iter": 1569
+    },
+    {
+     "bucket": "private_fields",
+     "entry": "js_object_get_field_by_name_f64",
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.#W",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:2180 `#set(`)",
+     "leaf": "perry_runtime::object::field_get_set::ic_miss::private_evaluation_brand",
+     "leaf_share": 0.38,
+     "pct": 1.17,
+     "per_iter": 1472
+    },
+    {
+     "bucket": "prop_write",
+     "entry": "js_put_value_set",
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.#W",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:2180 `#set(`)",
+     "leaf": "perry_runtime::object::field_set_by_name::tail::set_field_by_name_object_tail",
+     "leaf_share": 0.47,
+     "pct": 1.16,
+     "per_iter": 1460
+    },
+    {
+     "bucket": "generated_code",
+     "entry": "<inline JS>",
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.#W",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:2180 `#set(`)",
+     "leaf": "perry_method_node_modules_lru_cache_dist_esm_node_index_min_js__I__u__23_W",
+     "leaf_share": 1.0,
+     "pct": 1.13,
+     "per_iter": 1429
+    },
+    {
+     "bucket": "method_dispatch",
+     "entry": "js_native_call_method_by_id",
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.#C",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:3023 `#get(k: K, getOptions: LRUCache.GetOptions<K, V,`)",
+     "leaf": "js_native_call_method",
+     "leaf_share": 0.37,
+     "pct": 1.13,
+     "per_iter": 1426
+    },
+    {
+     "bucket": "method_dispatch",
+     "entry": "js_native_call_method_by_id",
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.#G",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:2349 `#evict(free: boolean) {`)",
+     "leaf": "js_native_call_method",
+     "leaf_share": 0.33,
+     "pct": 1.1,
+     "per_iter": 1387
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_object_get_field_by_name_f64",
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.#G",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:2349 `#evict(free: boolean) {`)",
+     "leaf": "perry_runtime::object::shapes::shape_descriptor_by_id",
+     "leaf_share": 0.36,
+     "pct": 1.09,
+     "per_iter": 1380
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_object_get_field_by_name_f64",
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.#W",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:2180 `#set(`)",
+     "leaf": "perry_runtime::object::field_get_set::get_field_by_name_tail::get_field_by_name_object_tail",
+     "leaf_share": 0.27,
+     "pct": 1.06,
+     "per_iter": 1339
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_object_get_own_field_or_undef",
+     "js_fn": "lru_cache_churn_ts::op$spec_i32",
+     "js_loc": "lru-cache/churn.ts:19 `if (v === undefined) { misses++; cache.set(k, i); } else`",
+     "leaf": "js_object_get_own_field_or_undef",
+     "leaf_share": 0.93,
+     "pct": 1.01,
+     "per_iter": 1281
+    },
+    {
+     "bucket": "private_fields",
+     "entry": "js_object_get_field_by_property_id_f64",
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I..23.24_",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1",
+     "leaf": "perry_runtime::object::field_get_set::ic_miss::private_evaluation_brand",
+     "leaf_share": 0.34,
+     "pct": 0.94,
+     "per_iter": 1189
+    }
+   ],
+   "correctness": "not checked against node (reused node reference)",
+   "entry_top": [
+    [
+     "js_object_get_field_by_property_id_f64",
+     68980,
+     54.61
+    ],
+    [
+     "js_native_call_method_by_id",
+     15515,
+     12.28
+    ],
+    [
+     "js_put_value_set",
+     10820,
+     8.57
+    ],
+    [
+     "js_object_get_field_by_name_f64",
+     6647,
+     5.26
+    ],
+    [
+     "js_private_method_call",
+     5244,
+     4.15
+    ],
+    [
+     "<inline JS>",
+     3796,
+     3.0
+    ],
+    [
+     "js_private_guard_site",
+     3507,
+     2.78
+    ],
+    [
+     "js_object_get_own_field_or_undef",
+     3432,
+     2.72
+    ],
+    [
+     "js_object_set_field_by_property_id",
+     3013,
+     2.39
+    ],
+    [
+     "js_object_alloc_class_inline_keys_stamped",
+     1903,
+     1.51
+    ],
+    [
+     "js_object_get_class_id",
+     1122,
+     0.89
+    ],
+    [
+     "js_closure_unbox_callee_checked_rebind",
+     538,
+     0.43
+    ],
+    [
+     "js_object_get_field_ic_front",
+     519,
+     0.41
+    ],
+    [
+     "js_private_method_guard",
+     466,
+     0.37
+    ],
+    [
+     "js_object_get_field_ic_slow",
+     204,
+     0.16
+    ],
+    [
+     "js_set_call_location",
+     193,
+     0.15
+    ],
+    [
+     "perry_runtime::gc::barrier::write_barrier_decoded_parent",
+     131,
+     0.1
+    ],
+    [
+     "<no JS frame>",
+     62,
+     0.05
+    ],
+    [
+     "js_write_barrier_slot_validated_parent",
+     58,
+     0.05
+    ],
+    [
+     "js_eq",
+     44,
+     0.03
+    ]
+   ],
+   "excess_per_iter": 125431.514264,
+   "incl_js_top": [
+    [
+     "lru_cache_churn_ts::op$spec_i32",
+     126146,
+     99.87
+    ],
+    [
+     "node_modules_lru_cache_dist_esm_node_index_min_js::I.set",
+     103927,
+     82.28
+    ],
+    [
+     "node_modules_lru_cache_dist_esm_node_index_min_js::I.#W",
+     101738,
+     80.55
+    ],
+    [
+     "node_modules_lru_cache_dist_esm_node_index_min_js::I.#G",
+     35538,
+     28.14
+    ],
+    [
+     "node_modules_lru_cache_dist_esm_node_index_min_js::I.get",
+     18609,
+     14.73
+    ],
+    [
+     "node_modules_lru_cache_dist_esm_node_index_min_js::I.#C",
+     16299,
+     12.9
+    ],
+    [
+     "node_modules_lru_cache_dist_esm_node_index_min_js::I.#L",
+     4749,
+     3.76
+    ],
+    [
+     "node_modules_lru_cache_dist_esm_node_index_min_js::I.#e",
+     3240,
+     2.57
+    ],
+    [
+     "node_modules_lru_cache_dist_esm_node_index_min_js::I..23.24_",
+     1696,
+     1.34
+    ],
+    [
+     "_lib_bench_ts::9",
+     106,
+     0.08
+    ],
+    [
+     "node_modules_lru_cache_dist_esm_node_index_min_js::56",
+     18,
+     0.01
+    ],
+    [
+     "node_modules_lru_cache_dist_esm_node_index_min_js::.AnonShape_3712a1ea4c9fc9b8_constructor",
+     14,
+     0.01
+    ],
+    [
+     "node_modules_lru_cache_dist_esm_node_index_min_js::49",
+     14,
+     0.01
+    ],
+    [
+     "node_modules_lru_cache_dist_esm_node_index_min_js::I_constructor",
+     5,
+     0.0
+    ],
+    [
+     "shape_seed",
+     1,
+     0.0
+    ],
+    [
+     "__perry_init_strings_lru_cache_churn_ts_chunk0",
+     0,
+     0.0
+    ],
+    [
+     "node_modules_lru_cache_dist_esm_node_index_min_js::init_body",
+     0,
+     -0.0
+    ],
+    [
+     "node_modules_lru_cache_dist_esm_node_index_min_js::55",
+     -14,
+     -0.01
+    ]
+   ],
+   "incl_top": [
+    [
+     "js_private_method_call",
+     119901,
+     94.93
+    ],
+    [
+     "perry_runtime::object::class_registry::dispatch::call_vtable_method_value",
+     119567,
+     94.66
+    ],
+    [
+     "perry_runtime::abi_trampoline::call_all_f64_x86_64",
+     118096,
+     93.5
+    ],
+    [
+     "js_object_get_field_by_name_f64",
+     69974,
+     55.4
+    ],
+    [
+     "js_object_get_field_by_property_id_f64",
+     68980,
+     54.61
+    ],
+    [
+     "perry_runtime::object::field_get_set::ic_miss::private_member_get_by_name",
+     49726,
+     39.37
+    ],
+    [
+     "perry_runtime::object::field_get_set::get_field_by_name::get_field_by_name_past_data_probe",
+     36707,
+     29.06
+    ],
+    [
+     "js_native_call_method_by_id",
+     15515,
+     12.28
+    ],
+    [
+     "js_native_call_method",
+     15037,
+     11.91
+    ],
+    [
+     "perry_runtime::object::field_get_set::ic_miss::private_evaluation_brand",
+     14663,
+     11.61
+    ],
+    [
+     "perry_runtime::object::shapes::shape_descriptor_by_id",
+     11479,
+     9.09
+    ],
+    [
+     "js_put_value_set",
+     10820,
+     8.57
+    ],
+    [
+     "perry_runtime::object::native_call_method::collection_methods::dispatch_map_set",
+     8869,
+     7.02
+    ],
+    [
+     "perry_runtime::object::field_get_set::ic_miss::private_value_request",
+     8509,
+     6.74
+    ],
+    [
+     "perry_runtime::map::map_set_resolved",
+     7311,
+     5.79
+    ],
+    [
+     "perry_runtime::map::map_op_returning_receiver::<perry_runtime::map::js_map_set::{closure#0}>",
+     7297,
+     5.78
+    ],
+    [
+     "perry_runtime::proxy::ordinary_set_with_receiver",
+     6996,
+     5.54
+    ],
+    [
+     "perry_runtime::map::ensure_capacity",
+     6829,
+     5.41
+    ],
+    [
+     "perry_runtime::map::compact_map_entries",
+     6800,
+     5.38
+    ],
+    [
+     "perry_runtime::object::field_get_set::ic_miss::private_member_storage_name",
+     6521,
+     5.16
+    ]
+   ],
+   "js_sites": [
+    {
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.#W",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:2180 `#set(`)",
+     "pct": 51.11,
+     "per_iter": 64558
+    },
+    {
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.#G",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:2349 `#evict(free: boolean) {`)",
+     "pct": 27.26,
+     "per_iter": 34430
+    },
+    {
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.#C",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:3023 `#get(k: K, getOptions: LRUCache.GetOptions<K, V,`)",
+     "pct": 8.78,
+     "per_iter": 11085
+    },
+    {
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.#e",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:2640 `#isBackgroundFetch(p: unknown): p is BackgroundF`)",
+     "pct": 2.57,
+     "per_iter": 3240
+    },
+    {
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.#L",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:3077 `#moveToTail(index: Index): void {`)",
+     "pct": 2.42,
+     "per_iter": 3053
+    },
+    {
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.get",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:3007 `get(k: K, getOptions: LRUCache.GetOptions<K, V, `)",
+     "pct": 1.83,
+     "per_iter": 2310
+    },
+    {
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.set",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:2160 `set(`)",
+     "pct": 1.76,
+     "per_iter": 2218
+    },
+    {
+     "js_fn": "lru_cache_churn_ts::op$spec_i32",
+     "js_loc": "lru-cache/churn.ts:18 `const v = cache.get(k);`",
+     "pct": 1.53,
+     "per_iter": 1932
+    },
+    {
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I..23.24_",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1",
+     "pct": 1.34,
+     "per_iter": 1696
+    },
+    {
+     "js_fn": "lru_cache_churn_ts::op$spec_i32",
+     "js_loc": "lru-cache/churn.ts:19 `if (v === undefined) { misses++; cache.set(k, i); } else`",
+     "pct": 1.05,
+     "per_iter": 1325
+    },
+    {
+     "js_fn": "lru_cache_churn_ts::op$spec_i32",
+     "js_loc": "lru-cache/churn.ts:17 `const k = keys[rnd() % 5000];`",
+     "pct": 0.21,
+     "per_iter": 262
+    },
+    {
+     "js_fn": "_lib_bench_ts::9",
+     "js_loc": "_lib/bench.ts:0",
+     "pct": 0.08,
+     "per_iter": 106
+    },
+    {
+     "js_fn": "<no JS frame>",
+     "js_loc": null,
+     "pct": 0.05,
+     "per_iter": 62
+    },
+    {
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::56",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:0",
+     "pct": 0.01,
+     "per_iter": 18
+    },
+    {
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.#C",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:3023 `#get(k: K, getOptions: LRUCache.GetOptions<K, V,`)",
+     "pct": 0.01,
+     "per_iter": 15
+    },
+    {
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::.AnonShape_3712a1ea4c9fc9b8_constructor",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:0",
+     "pct": 0.01,
+     "per_iter": 14
+    },
+    {
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::49",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:0",
+     "pct": 0.01,
+     "per_iter": 14
+    },
+    {
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I_constructor",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1",
+     "pct": 0.0,
+     "per_iter": 5
+    },
+    {
+     "js_fn": "shape_seed",
+     "js_loc": "perry_llvm_673668bb711fd59d.ll:0",
+     "pct": 0.0,
+     "per_iter": 1
+    },
+    {
+     "js_fn": "__perry_init_strings_lru_cache_churn_ts_chunk0",
+     "js_loc": "lru-cache/churn.ts:0",
+     "pct": 0.0,
+     "per_iter": 0
+    }
+   ],
+   "mechanisms": {
+    "accessor_descriptor": -14,
+    "alloc": 60,
+    "buffer_typedarray": 147,
+    "call_overhead": 238,
+    "closure_box_args": 916,
+    "dyn_index": 807,
+    "gc_major": 43,
+    "gc_minor": 32,
+    "gc_other": 450,
+    "generated_code": 3796,
+    "map_set": 9785,
+    "memops": 4079,
+    "method_dispatch": 3621,
+    "numeric_conv": 262,
+    "other_runtime": 30,
+    "private_fields": 48309,
+    "promise_async": 276,
+    "prop_lookup": 39306,
+    "prop_write": 3690,
+    "raw_alloc": 1730,
+    "side_table_hash": -1,
+    "string": 6698,
+    "utf8_transcode": 844,
+    "value_typeof": 959,
+    "write_barrier": 247
+   },
+   "n1": 125000,
+   "n2": 500000,
+   "node_per_iter": 878.8285493333333,
+   "perry_instr_n1": 17063366249,
+   "perry_instr_n2": 64429744804,
+   "perry_per_iter": 126310.34281333334,
+   "pkg_code_on_stack_min_pct": 82.3,
+   "ratio": 143.72580739343363,
+   "regex_detail": {},
+   "sample_freq": 3729,
+   "sample_scale": 1.0001,
+   "sampled_per_iter": 126292.50773866667,
+   "samples": {
+    "n1": 3230,
+    "n2": 11941
+   },
+   "self_top": [
+    [
+     "perry_runtime::object::field_get_set::ic_miss::private_evaluation_brand",
+     13818,
+     10.94
+    ],
+    [
+     "perry_runtime::object::shapes::shape_descriptor_by_id",
+     11479,
+     9.09
+    ],
+    [
+     "perry_runtime::object::field_get_set::ic_miss::private_member_get_by_name",
+     10253,
+     8.12
+    ],
+    [
+     "perry_runtime::object::field_get_set::ic_miss::private_member_storage_name",
+     6521,
+     5.16
+    ],
+    [
+     "perry_runtime::object::field_get_set::ic_miss::private_value_request",
+     5420,
+     4.29
+    ],
+    [
+     "perry_runtime::object::field_get_set::ic_miss::current_private_lexical_brand",
+     4123,
+     3.26
+    ],
+    [
+     "<perry_runtime::map::store::StringIndex>::insert",
+     3785,
+     3.0
+    ],
+    [
+     "perry_runtime::object::field_get_set::get_field_by_name::get_field_by_name_past_data_probe",
+     3521,
+     2.79
+    ],
+    [
+     "perry_runtime::string::intern::intern_dispatch_bytes",
+     3416,
+     2.7
+    ],
+    [
+     "js_object_get_own_field_or_undef",
+     3229,
+     2.56
+    ],
+    [
+     "perry_runtime::map::compact_map_entries",
+     2491,
+     1.97
+    ],
+    [
+     "perry_runtime::object::spill::overflow_get",
+     2452,
+     1.94
+    ],
+    [
+     "perry_runtime::object::shapes::shape_live_inline_slot_count_by_id",
+     2364,
+     1.87
+    ],
+    [
+     "__memmove_avx512_unaligned_erms",
+     2227,
+     1.76
+    ],
+    [
+     "__memcmp_evex_movbe",
+     1855,
+     1.47
+    ],
+    [
+     "perry_runtime::object::prop_plan::read_plan_lookup",
+     1755,
+     1.39
+    ],
+    [
+     "perry_runtime::object::native_get::try_data_get_bytes",
+     1746,
+     1.38
+    ],
+    [
+     "perry_runtime::object::field_set_by_name::tail::set_field_by_name_object_tail",
+     1709,
+     1.35
+    ],
+    [
+     "js_object_get_field_by_name",
+     1672,
+     1.32
+    ],
+    [
+     "<str>::split_once::<char>",
+     1639,
+     1.3
+    ]
+   ],
+   "startup_instr": 1274573397.333332,
+   "status": "OK",
+   "unwind_reached_main": 0.996,
+   "warm": 10000
+  },
+  "lru-cache/ttl_mixed": {
+   "binary": "/root/claude-matrix-rerun-out/dbg/lru-cache__ttl_mixed",
+   "bucket_entry": {
+    "alloc\tjs_object_alloc_class_inline_keys_stamped": 782,
+    "call_overhead\tjs_set_call_location": 242,
+    "dyn_index\tjs_native_call_method_by_id": 305,
+    "generated_code\t<inline JS>": 2474,
+    "map_set\tjs_native_call_method_by_id": 658,
+    "method_dispatch\tjs_native_call_method_by_id": 2258,
+    "private_fields\tjs_object_get_field_by_name_f64": 645,
+    "private_fields\tjs_object_get_field_by_property_id_f64": 17846,
+    "private_fields\tjs_object_set_field_by_property_id": 550,
+    "private_fields\tjs_private_guard_site": 1512,
+    "private_fields\tjs_private_method_call": 2778,
+    "private_fields\tjs_private_method_guard": 282,
+    "prop_lookup\tjs_native_call_method_by_id": 443,
+    "prop_lookup\tjs_object_get_field_by_name_f64": 354,
+    "prop_lookup\tjs_object_get_field_by_property_id_f64": 4661,
+    "prop_lookup\tjs_object_get_own_field_or_undef": 1473,
+    "prop_lookup\tjs_object_set_field_by_property_id": 397,
+    "prop_lookup\tjs_put_value_set": 507,
+    "prop_lookup\tjs_put_value_set_dyn_ic_miss": 951,
+    "prop_write\tjs_put_value_set_dyn_ic_miss": 463,
+    "string\tjs_native_call_method_by_id": 377,
+    "string\tjs_object_get_field_by_property_id_f64": 1866,
+    "string\tjs_object_set_field_by_property_id": 268,
+    "string\tjs_put_value_set": 372,
+    "string\tjs_put_value_set_dyn_ic_miss": 608
+   },
+   "buckets": {
+    "accessor_descriptor": 243,
+    "alloc": 782,
+    "buffer_typedarray": 110,
+    "call_overhead": 327,
+    "closure_box_args": 308,
+    "dyn_index": 431,
+    "gc_minor": 119,
+    "gc_other": 211,
+    "generated_code": 2474,
+    "map_set": 772,
+    "method_dispatch": 2258,
+    "numeric_conv": 179,
+    "other_runtime": 97,
+    "private_fields": 23774,
+    "promise_async": 89,
+    "prop_lookup": 9231,
+    "prop_write": 858,
+    "raw_alloc": 3,
+    "string": 3828,
+    "unknown": 1,
+    "value_typeof": 348,
+    "write_barrier": 45
+   },
+   "chains": [
+    {
+     "bucket": "private_fields",
+     "entry": "js_object_get_field_by_property_id_f64",
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.#W",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:2180 `#set(`)",
+     "leaf": "perry_runtime::object::field_get_set::ic_miss::private_evaluation_brand",
+     "leaf_share": 0.34,
+     "pct": 13.14,
+     "per_iter": 6107
+    },
+    {
+     "bucket": "private_fields",
+     "entry": "js_object_get_field_by_property_id_f64",
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.#E",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:3109 `#delete(k: K, reason: LRUCache.DisposeReason) {`)",
+     "leaf": "perry_runtime::object::field_get_set::ic_miss::private_evaluation_brand",
+     "leaf_share": 0.25,
+     "pct": 10.89,
+     "per_iter": 5064
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_object_get_field_by_property_id_f64",
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.#W",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:2180 `#set(`)",
+     "leaf": "perry_runtime::object::field_get_set::get_field_by_name::get_field_by_name_past_data_probe",
+     "leaf_share": 0.21,
+     "pct": 5.38,
+     "per_iter": 2502
+    },
+    {
+     "bucket": "private_fields",
+     "entry": "js_object_get_field_by_property_id_f64",
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.#e",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:2640 `#isBackgroundFetch(p: unknown): p is BackgroundF`)",
+     "leaf": "perry_runtime::object::field_get_set::ic_miss::private_evaluation_brand",
+     "leaf_share": 0.32,
+     "pct": 3.82,
+     "per_iter": 1775
+    },
+    {
+     "bucket": "private_fields",
+     "entry": "js_object_get_field_by_property_id_f64",
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::52",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1",
+     "leaf": "perry_runtime::object::field_get_set::ic_miss::private_evaluation_brand",
+     "leaf_share": 0.38,
+     "pct": 2.76,
+     "per_iter": 1282
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_object_get_own_field_or_undef",
+     "js_fn": "lru_cache_ttl_mixed_ts::op$spec_i32",
+     "js_loc": "lru-cache/ttl_mixed.ts:20 `default: cache.set(k, \"v\".repeat(1 + (k % 23)) + i % 10)`",
+     "leaf": "js_object_get_own_field_or_undef",
+     "leaf_share": 0.84,
+     "pct": 2.49,
+     "per_iter": 1155
+    },
+    {
+     "bucket": "private_fields",
+     "entry": "js_object_get_field_by_property_id_f64",
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.#L",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:3077 `#moveToTail(index: Index): void {`)",
+     "leaf": "perry_runtime::object::field_get_set::ic_miss::private_member_get_by_name",
+     "leaf_share": 0.34,
+     "pct": 2.09,
+     "per_iter": 972
+    },
+    {
+     "bucket": "method_dispatch",
+     "entry": "js_native_call_method_by_id",
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.#E",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:3109 `#delete(k: K, reason: LRUCache.DisposeReason) {`)",
+     "leaf": "js_native_call_method",
+     "leaf_share": 0.33,
+     "pct": 2.05,
+     "per_iter": 955
+    },
+    {
+     "bucket": "private_fields",
+     "entry": "js_object_get_field_by_property_id_f64",
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.#J",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:2470 `#peek(k: K, peekOptions: LRUCache.PeekOptions<K,`)",
+     "leaf": "perry_runtime::object::field_get_set::ic_miss::private_evaluation_brand",
+     "leaf_share": 0.29,
+     "pct": 1.99,
+     "per_iter": 926
+    },
+    {
+     "bucket": "private_fields",
+     "entry": "js_object_get_field_by_property_id_f64",
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I..23.24_",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1",
+     "leaf": "perry_runtime::object::field_get_set::ic_miss::private_evaluation_brand",
+     "leaf_share": 0.61,
+     "pct": 1.72,
+     "per_iter": 800
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_object_get_field_by_property_id_f64",
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.#E",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:3109 `#delete(k: K, reason: LRUCache.DisposeReason) {`)",
+     "leaf": "js_object_get_field_by_name",
+     "leaf_share": 0.36,
+     "pct": 1.6,
+     "per_iter": 744
+    },
+    {
+     "bucket": "string",
+     "entry": "js_object_get_field_by_property_id_f64",
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.#E",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:3109 `#delete(k: K, reason: LRUCache.DisposeReason) {`)",
+     "leaf": "perry_runtime::string::intern::intern_dispatch_bytes",
+     "leaf_share": 0.44,
+     "pct": 1.52,
+     "per_iter": 705
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_put_value_set_dyn_ic_miss",
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::50",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1",
+     "leaf": "perry_runtime::object::shapes::shape_slot_lookup_verdict",
+     "leaf_share": 0.16,
+     "pct": 1.47,
+     "per_iter": 685
+    },
+    {
+     "bucket": "generated_code",
+     "entry": "<inline JS>",
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.#W",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:2180 `#set(`)",
+     "leaf": "perry_method_node_modules_lru_cache_dist_esm_node_index_min_js__I__u__23_W",
+     "leaf_share": 1.0,
+     "pct": 1.44,
+     "per_iter": 670
+    },
+    {
+     "bucket": "private_fields",
+     "entry": "js_object_get_field_by_property_id_f64",
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.#Y",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:2419 `#has(k: K, hasOptions: LRUCache.HasOptions<K, V,`)",
+     "leaf": "perry_runtime::object::field_get_set::ic_miss::private_evaluation_brand",
+     "leaf_share": 0.44,
+     "pct": 1.42,
+     "per_iter": 659
+    },
+    {
+     "bucket": "method_dispatch",
+     "entry": "js_native_call_method_by_id",
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.#W",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:2180 `#set(`)",
+     "leaf": "js_native_call_method",
+     "leaf_share": 0.17,
+     "pct": 1.33,
+     "per_iter": 619
+    },
+    {
+     "bucket": "private_fields",
+     "entry": "js_private_guard_site",
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.#W",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:2180 `#set(`)",
+     "leaf": "perry_runtime::object::spill::overflow_get",
+     "leaf_share": 0.63,
+     "pct": 1.21,
+     "per_iter": 564
+    },
+    {
+     "bucket": "string",
+     "entry": "js_object_get_field_by_property_id_f64",
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.#W",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:2180 `#set(`)",
+     "leaf": "__memcmp_evex_movbe",
+     "leaf_share": 0.58,
+     "pct": 1.16,
+     "per_iter": 541
+    },
+    {
+     "bucket": "private_fields",
+     "entry": "js_private_method_call",
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.#W",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:2180 `#set(`)",
+     "leaf": "perry_runtime::object::class_registry::dispatch::call_vtable_method_value",
+     "leaf_share": 0.59,
+     "pct": 1.05,
+     "per_iter": 486
+    },
+    {
+     "bucket": "generated_code",
+     "entry": "<inline JS>",
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.#E",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:3109 `#delete(k: K, reason: LRUCache.DisposeReason) {`)",
+     "leaf": "perry_method_node_modules_lru_cache_dist_esm_node_index_min_js__I__u__23_E",
+     "leaf_share": 1.0,
+     "pct": 1.0,
+     "per_iter": 463
+    },
+    {
+     "bucket": "private_fields",
+     "entry": "js_private_method_call",
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.delete",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:3105 `delete(k: K) {`)",
+     "leaf": "__memmove_avx512_unaligned_erms",
+     "leaf_share": 0.38,
+     "pct": 0.99,
+     "per_iter": 462
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_object_get_field_by_property_id_f64",
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.#J",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:2470 `#peek(k: K, peekOptions: LRUCache.PeekOptions<K,`)",
+     "leaf": "perry_runtime::object::shapes::shape_descriptor_by_id",
+     "leaf_share": 0.25,
+     "pct": 0.94,
+     "per_iter": 439
+    },
+    {
+     "bucket": "private_fields",
+     "entry": "js_private_guard_site",
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.#E",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:3109 `#delete(k: K, reason: LRUCache.DisposeReason) {`)",
+     "leaf": "perry_runtime::object::spill::overflow_get",
+     "leaf_share": 0.58,
+     "pct": 0.89,
+     "per_iter": 415
+    },
+    {
+     "bucket": "method_dispatch",
+     "entry": "js_native_call_method_by_id",
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.#Y",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:2419 `#has(k: K, hasOptions: LRUCache.HasOptions<K, V,`)",
+     "leaf": "js_native_call_method",
+     "leaf_share": 0.35,
+     "pct": 0.88,
+     "per_iter": 409
+    },
+    {
+     "bucket": "private_fields",
+     "entry": "js_object_get_field_by_name_f64",
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.#E",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:3109 `#delete(k: K, reason: LRUCache.DisposeReason) {`)",
+     "leaf": "perry_runtime::object::field_get_set::ic_miss::private_evaluation_brand",
+     "leaf_share": 0.28,
+     "pct": 0.86,
+     "per_iter": 400
+    }
+   ],
+   "correctness": "not checked against node (reused node reference)",
+   "entry_top": [
+    [
+     "js_object_get_field_by_property_id_f64",
+     24373,
+     52.43
+    ],
+    [
+     "js_native_call_method_by_id",
+     4457,
+     9.59
+    ],
+    [
+     "js_private_method_call",
+     2778,
+     5.98
+    ],
+    [
+     "js_put_value_set_dyn_ic_miss",
+     2530,
+     5.44
+    ],
+    [
+     "<inline JS>",
+     2474,
+     5.32
+    ],
+    [
+     "js_private_guard_site",
+     1512,
+     3.25
+    ],
+    [
+     "js_object_get_own_field_or_undef",
+     1473,
+     3.17
+    ],
+    [
+     "js_object_set_field_by_property_id",
+     1386,
+     2.98
+    ],
+    [
+     "js_put_value_set",
+     1252,
+     2.69
+    ],
+    [
+     "js_object_get_field_by_name_f64",
+     1065,
+     2.29
+    ],
+    [
+     "js_object_alloc_class_inline_keys_stamped",
+     782,
+     1.68
+    ],
+    [
+     "js_private_method_guard",
+     282,
+     0.61
+    ],
+    [
+     "js_set_call_location",
+     242,
+     0.52
+    ],
+    [
+     "js_string_repeat",
+     218,
+     0.47
+    ],
+    [
+     "js_eq",
+     200,
+     0.43
+    ],
+    [
+     "js_object_get_index_polymorphic",
+     198,
+     0.43
+    ],
+    [
+     "js_object_get_field_ic_front",
+     189,
+     0.41
+    ],
+    [
+     "js_string_concat_value_box",
+     154,
+     0.33
+    ],
+    [
+     "js_closure_unbox_callee_checked_rebind",
+     132,
+     0.28
+    ],
+    [
+     "js_closure_call0",
+     130,
+     0.28
+    ]
+   ],
+   "excess_per_iter": 45326.14078666666,
+   "incl_js_top": [
+    [
+     "lru_cache_ttl_mixed_ts::op$spec_i32",
+     46337,
+     99.68
+    ],
+    [
+     "node_modules_lru_cache_dist_esm_node_index_min_js::I.set",
+     24739,
+     53.22
+    ],
+    [
+     "node_modules_lru_cache_dist_esm_node_index_min_js::I.#W",
+     24112,
+     51.87
+    ],
+    [
+     "node_modules_lru_cache_dist_esm_node_index_min_js::I.delete",
+     13136,
+     28.26
+    ],
+    [
+     "node_modules_lru_cache_dist_esm_node_index_min_js::I.#E",
+     12524,
+     26.94
+    ],
+    [
+     "node_modules_lru_cache_dist_esm_node_index_min_js::52",
+     3509,
+     7.55
+    ],
+    [
+     "node_modules_lru_cache_dist_esm_node_index_min_js::I.#L",
+     3386,
+     7.28
+    ],
+    [
+     "node_modules_lru_cache_dist_esm_node_index_min_js::I.peek",
+     3357,
+     7.22
+    ],
+    [
+     "node_modules_lru_cache_dist_esm_node_index_min_js::I.#J",
+     2806,
+     6.04
+    ],
+    [
+     "node_modules_lru_cache_dist_esm_node_index_min_js::I.has",
+     2625,
+     5.65
+    ],
+    [
+     "node_modules_lru_cache_dist_esm_node_index_min_js::50",
+     2456,
+     5.28
+    ],
+    [
+     "node_modules_lru_cache_dist_esm_node_index_min_js::I.#Y",
+     2078,
+     4.47
+    ],
+    [
+     "node_modules_lru_cache_dist_esm_node_index_min_js::I.#e",
+     1865,
+     4.01
+    ],
+    [
+     "node_modules_lru_cache_dist_esm_node_index_min_js::51",
+     1355,
+     2.91
+    ],
+    [
+     "node_modules_lru_cache_dist_esm_node_index_min_js::I..23.24_",
+     1242,
+     2.67
+    ],
+    [
+     "node_modules_lru_cache_dist_esm_node_index_min_js::4",
+     156,
+     0.33
+    ],
+    [
+     "_lib_bench_ts::9",
+     62,
+     0.13
+    ],
+    [
+     "node_modules_lru_cache_dist_esm_node_index_min_js::I.#G",
+     22,
+     0.05
+    ],
+    [
+     "shape_seed",
+     3,
+     0.01
+    ],
+    [
+     "node_modules_lru_cache_dist_esm_node_index_min_js::init_body",
+     0,
+     -0.0
+    ]
+   ],
+   "incl_top": [
+    [
+     "js_private_method_call",
+     42753,
+     91.97
+    ],
+    [
+     "perry_runtime::object::class_registry::dispatch::call_vtable_method_value",
+     42445,
+     91.31
+    ],
+    [
+     "perry_runtime::abi_trampoline::call_all_f64_x86_64",
+     41498,
+     89.27
+    ],
+    [
+     "js_object_get_field_by_property_id_f64",
+     24373,
+     52.43
+    ],
+    [
+     "js_object_get_field_by_name_f64",
+     23571,
+     50.71
+    ],
+    [
+     "perry_runtime::object::field_get_set::ic_miss::private_member_get_by_name",
+     18490,
+     39.78
+    ],
+    [
+     "perry_runtime::object::field_get_set::get_field_by_name::get_field_by_name_past_data_probe",
+     11688,
+     25.14
+    ],
+    [
+     "perry_runtime::object::field_get_set::ic_miss::private_evaluation_brand",
+     6602,
+     14.2
+    ],
+    [
+     "js_native_call_method_by_id",
+     4457,
+     9.59
+    ],
+    [
+     "js_native_call_method",
+     4137,
+     8.9
+    ],
+    [
+     "perry_runtime::object::field_get_set::ic_miss::private_value_request",
+     3615,
+     7.78
+    ],
+    [
+     "perry_runtime::object::shapes::shape_descriptor_by_id",
+     3424,
+     7.37
+    ],
+    [
+     "js_put_value_set",
+     3410,
+     7.34
+    ],
+    [
+     "perry_runtime::proxy::ordinary_set_with_receiver",
+     2772,
+     5.96
+    ],
+    [
+     "js_put_value_set_dyn_ic_miss",
+     2530,
+     5.44
+    ],
+    [
+     "js_object_get_field_by_name",
+     2030,
+     4.37
+    ],
+    [
+     "perry_runtime::string::intern::intern_dispatch_bytes",
+     1961,
+     4.22
+    ],
+    [
+     "perry_runtime::object::field_get_set::ic_miss::current_private_lexical_brand",
+     1579,
+     3.4
+    ],
+    [
+     "perry_runtime::object::field_get_set::ic_miss::private_member_storage_name",
+     1529,
+     3.29
+    ],
+    [
+     "js_private_guard_site",
+     1512,
+     3.25
+    ]
+   ],
+   "js_sites": [
+    {
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.#W",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:2180 `#set(`)",
+     "pct": 30.01,
+     "per_iter": 13951
+    },
+    {
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.#E",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:3109 `#delete(k: K, reason: LRUCache.DisposeReason) {`)",
+     "pct": 23.55,
+     "per_iter": 10947
+    },
+    {
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::52",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1",
+     "pct": 7.5,
+     "per_iter": 3487
+    },
+    {
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.#J",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:2470 `#peek(k: K, peekOptions: LRUCache.PeekOptions<K,`)",
+     "pct": 5.76,
+     "per_iter": 2680
+    },
+    {
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::50",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1",
+     "pct": 5.28,
+     "per_iter": 2456
+    },
+    {
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.#L",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:3077 `#moveToTail(index: Index): void {`)",
+     "pct": 4.56,
+     "per_iter": 2122
+    },
+    {
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.#Y",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:2419 `#has(k: K, hasOptions: LRUCache.HasOptions<K, V,`)",
+     "pct": 4.05,
+     "per_iter": 1881
+    },
+    {
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.#e",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:2640 `#isBackgroundFetch(p: unknown): p is BackgroundF`)",
+     "pct": 4.01,
+     "per_iter": 1865
+    },
+    {
+     "js_fn": "lru_cache_ttl_mixed_ts::op$spec_i32",
+     "js_loc": "lru-cache/ttl_mixed.ts:20 `default: cache.set(k, \"v\".repeat(1 + (k % 23)) + i % 10)`",
+     "pct": 3.72,
+     "per_iter": 1728
+    },
+    {
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I..23.24_",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1",
+     "pct": 2.67,
+     "per_iter": 1242
+    },
+    {
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::51",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1",
+     "pct": 1.63,
+     "per_iter": 756
+    },
+    {
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.set",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:2160 `set(`)",
+     "pct": 1.35,
+     "per_iter": 627
+    },
+    {
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.delete",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:3105 `delete(k: K) {`)",
+     "pct": 1.32,
+     "per_iter": 612
+    },
+    {
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.peek",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:2456 `peek(k: K, peekOptions: LRUCache.PeekOptions<K, `)",
+     "pct": 1.23,
+     "per_iter": 574
+    },
+    {
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::I.has",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:1 (orig index.ts:2407 `has(k: K, hasOptions: LRUCache.HasOptions<K, V, `)",
+     "pct": 1.18,
+     "per_iter": 546
+    },
+    {
+     "js_fn": "lru_cache_ttl_mixed_ts::op$spec_i32",
+     "js_loc": "lru-cache/ttl_mixed.ts:14 `const r = rnd();`",
+     "pct": 0.79,
+     "per_iter": 368
+    },
+    {
+     "js_fn": "lru_cache_ttl_mixed_ts::op$spec_i32",
+     "js_loc": "lru-cache/ttl_mixed.ts:18 `case 1: { const v = cache.peek(k); if (v !== undefined) `",
+     "pct": 0.46,
+     "per_iter": 213
+    },
+    {
+     "js_fn": "node_modules_lru_cache_dist_esm_node_index_min_js::4",
+     "js_loc": "lru-cache/dist/esm/node/index.min.js:0",
+     "pct": 0.33,
+     "per_iter": 156
+    },
+    {
+     "js_fn": "<no JS frame>",
+     "js_loc": null,
+     "pct": 0.26,
+     "per_iter": 119
+    },
+    {
+     "js_fn": "lru_cache_ttl_mixed_ts::op$spec_i32",
+     "js_loc": "lru-cache/ttl_mixed.ts:0",
+     "pct": 0.24,
+     "per_iter": 110
+    }
+   ],
+   "mechanisms": {
+    "accessor_descriptor": 222,
+    "alloc": 112,
+    "buffer_typedarray": 110,
+    "call_overhead": 327,
+    "closure_box_args": 263,
+    "dyn_index": 431,
+    "gc_minor": 119,
+    "gc_other": 255,
+    "generated_code": 2474,
+    "map_set": 784,
+    "memops": 2145,
+    "method_dispatch": 1729,
+    "numeric_conv": 179,
+    "other_runtime": 97,
+    "private_fields": 18583,
+    "promise_async": 89,
+    "prop_lookup": 13572,
+    "prop_write": 858,
+    "raw_alloc": 591,
+    "side_table_hash": -33,
+    "string": 2809,
+    "unknown": 1,
+    "utf8_transcode": 376,
+    "value_typeof": 348,
+    "write_barrier": 45
+   },
+   "n1": 75000,
+   "n2": 300000,
+   "node_per_iter": 1159.997688888889,
+   "perry_instr_n1": 3985768448,
+   "perry_instr_n2": 14445149605,
+   "perry_per_iter": 46486.138475555555,
+   "pkg_code_on_stack_min_pct": 53.2,
+   "ratio": 40.07433714810466,
+   "regex_detail": {},
+   "sample_freq": 4000,
+   "sample_scale": 1.0026,
+   "sampled_per_iter": 46366.20979111111,
+   "samples": {
+    "n1": 830,
+    "n2": 2948
+   },
+   "self_top": [
+    [
+     "perry_runtime::object::field_get_set::ic_miss::private_evaluation_brand",
+     6262,
+     13.47
+    ],
+    [
+     "perry_runtime::object::field_get_set::ic_miss::private_member_get_by_name",
+     3590,
+     7.72
+    ],
+    [
+     "perry_runtime::object::shapes::shape_descriptor_by_id",
+     3424,
+     7.37
+    ],
+    [
+     "perry_runtime::object::field_get_set::ic_miss::private_value_request",
+     2279,
+     4.9
+    ],
+    [
+     "perry_runtime::object::field_get_set::ic_miss::current_private_lexical_brand",
+     1579,
+     3.4
+    ],
+    [
+     "perry_runtime::object::field_get_set::ic_miss::private_member_storage_name",
+     1529,
+     3.29
+    ],
+    [
+     "perry_runtime::object::spill::overflow_get",
+     1304,
+     2.81
+    ],
+    [
+     "js_object_get_own_field_or_undef",
+     1248,
+     2.68
+    ],
+    [
+     "perry_runtime::string::intern::intern_dispatch_bytes",
+     1182,
+     2.54
+    ],
+    [
+     "__memcmp_evex_movbe",
+     1111,
+     2.39
+    ],
+    [
+     "perry_runtime::object::class_registry::dispatch::call_vtable_method_value",
+     1036,
+     2.23
+    ],
+    [
+     "__memmove_avx512_unaligned_erms",
+     1034,
+     2.22
+    ],
+    [
+     "<str>::split_once::<char>",
+     984,
+     2.12
+    ],
+    [
+     "perry_runtime::object::field_get_set::get_field_by_name::get_field_by_name_past_data_probe",
+     895,
+     1.93
+    ],
+    [
+     "perry_runtime::object::native_get::try_data_get_bytes",
+     834,
+     1.79
+    ],
+    [
+     "perry_runtime::object::field_get_set::ic_miss::take_private_field_owner",
+     703,
+     1.51
+    ],
+    [
+     "perry_method_node_modules_lru_cache_dist_esm_node_index_min_js__I__u__23_W",
+     670,
+     1.44
+    ],
+    [
+     "js_object_get_field_by_name",
+     653,
+     1.4
+    ],
+    [
+     "js_native_call_method",
+     649,
+     1.4
+    ],
+    [
+     "js_private_guard_site",
+     623,
+     1.34
+    ]
+   ],
+   "startup_instr": 499308062.3333335,
+   "status": "OK",
+   "unwind_reached_main": 0.993,
+   "warm": 10000
+  },
+  "mongodb/batch_query": {
+   "binary": "/root/claude-matrix-rerun-out/dbg/mongodb__batch_query",
+   "bucket_entry": {
+    "accessor_descriptor\tjs_class_field_add": 1368080,
+    "alloc\tjs_object_alloc_class_inline_keys_stamped": 3678975,
+    "buffer_typedarray\tjs_native_call_method_by_id": 2559773,
+    "dyn_index\tjs_event_emitter_on": 3248184,
+    "dyn_index\tperry_runtime::node_stream::push_chunk": 836391,
+    "dyn_index\tperry_runtime::promise::microtasks::run_microtasks": 925287,
+    "gc_major\t<no JS frame>": 4183317,
+    "gc_minor\t<no JS frame>": 20220001,
+    "gc_other\tjs_event_emitter_on": 1700067,
+    "generated_code\t<inline JS>": 3233332,
+    "method_dispatch\tjs_native_call_method": 912008,
+    "method_dispatch\tjs_native_call_method_by_id": 5273500,
+    "private_fields\tjs_native_call_method_by_id": 1865599,
+    "prop_lookup\tjs_class_field_add": 4103074,
+    "prop_lookup\tjs_instanceof": 906073,
+    "prop_lookup\tjs_native_call_method": 941437,
+    "prop_lookup\tjs_native_call_method_by_id": 10555236,
+    "prop_lookup\tjs_object_assign_one": 3840740,
+    "prop_lookup\tjs_object_delete_dynamic": 1230214,
+    "prop_lookup\tjs_object_get_field_by_property_id_f64": 13830414,
+    "prop_lookup\tjs_object_get_own_field_or_undef": 2180360,
+    "prop_lookup\tjs_object_set_field_by_property_id": 1547710,
+    "prop_lookup\tperry_runtime::object::field_get_set::ic_miss::get_field_ic_miss_impl": 2334938,
+    "prop_write\tjs_class_field_add": 816674,
+    "prop_write\tjs_object_set_field_by_property_id": 1392512,
+    "proto_chain_read\tjs_async_step_chain": 1275304,
+    "proto_chain_read\tjs_async_step_done": 3132865,
+    "proto_chain_read\tperry_runtime::node_stream::event_emitter::ns_on2": 1210498,
+    "proto_chain_read\tperry_runtime::object::field_get_set::ic_miss::get_field_ic_miss_impl": 2346288,
+    "proto_chain_read\tperry_runtime::promise::combinators::promise_resolve_fn": 903135,
+    "proto_chain_read\tperry_runtime::promise::microtasks::run_microtasks": 945369,
+    "string\tjs_class_field_add": 1471825,
+    "string\tjs_native_call_method_by_id": 2412224,
+    "string\tjs_object_get_field_by_property_id_f64": 2768666,
+    "string\tjs_object_set_field_by_property_id": 798826,
+    "write_barrier\tjs_event_emitter_on": 803478
+   },
+   "buckets": {
+    "accessor_descriptor": 4114562,
+    "alloc": 3988951,
+    "bigint": 283266,
+    "buffer_typedarray": 5972661,
+    "call_overhead": 495260,
+    "closure_box_args": 2452732,
+    "dyn_index": 7141318,
+    "exceptions": -25222,
+    "gc_major": 4351021,
+    "gc_minor": 20292085,
+    "gc_other": 3118916,
+    "generated_code": 3233332,
+    "json": -506,
+    "map_set": 554728,
+    "memops": 40875,
+    "method_dispatch": 6752040,
+    "number_string": 20447,
+    "numeric_conv": 297627,
+    "other_runtime": 783969,
+    "private_fields": 1991040,
+    "promise_async": 867754,
+    "prop_lookup": 52489512,
+    "prop_write": 3924235,
+    "proto_chain_read": 14559482,
+    "raw_alloc": 917202,
+    "regex": 423963,
+    "side_table_hash": 62768,
+    "string": 9974453,
+    "symbol": 956660,
+    "unknown": 18475,
+    "utf8_transcode": -18224,
+    "value_typeof": 746274,
+    "write_barrier": 1714958
+   },
+   "chains": [
+    {
+     "bucket": "gc_minor",
+     "entry": "<no JS frame>",
+     "js_fn": "<no JS frame>",
+     "js_loc": null,
+     "leaf": "<perry_runtime::gc::copying::CopyingNurseryCollector>::mark_classified",
+     "leaf_share": 0.18,
+     "pct": 13.29,
+     "per_iter": 20262111
+    },
+    {
+     "bucket": "gc_major",
+     "entry": "<no JS frame>",
+     "js_fn": "<no JS frame>",
+     "js_loc": null,
+     "leaf": "perry_runtime::gc::layout_slot_visit::visit_gc_layout_slot_descriptors",
+     "leaf_share": 0.13,
+     "pct": 2.74,
+     "per_iter": 4183317
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_native_call_method_by_id",
+     "js_fn": "node_modules_mongodb_src_utils_ts::List.shift",
+     "js_loc": "mongodb/src/utils.ts:753 `return this.remove(this.head.next);`",
+     "leaf": "perry_runtime::object::class_registry::dispatch::call_vtable_method_value",
+     "leaf_share": 0.38,
+     "pct": 2.56,
+     "per_iter": 3911502
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_object_get_field_by_property_id_f64",
+     "js_fn": "node_modules_mongodb_src_utils_ts::List.push",
+     "js_loc": "mongodb/src/utils.ts:709 `next: this.head as HeadNode<T>,`",
+     "leaf": "perry_runtime::object::native_get::try_data_get_bytes",
+     "leaf_share": 0.31,
+     "pct": 2.55,
+     "per_iter": 3887435
+    },
+    {
+     "bucket": "alloc",
+     "entry": "js_object_alloc_class_inline_keys_stamped",
+     "js_fn": "node_modules_mongodb_src_utils_ts::List.push",
+     "js_loc": "mongodb/src/utils.ts:710 `prev: this.head.prev as ListNode<T>,`",
+     "leaf": "perry_runtime::object::alloc::object_alloc_class_inline_keys_impl",
+     "leaf_share": 0.56,
+     "pct": 2.24,
+     "per_iter": 3417414
+    },
+    {
+     "bucket": "dyn_index",
+     "entry": "js_event_emitter_on",
+     "js_fn": "node_modules_mongodb_src_cmap_wire_protocol_on_data_ts::onData$this",
+     "js_loc": "mongodb/src/cmap/wire_protocol/on_data.ts:41 `const unconsumedPromises = new List<PendingPromises>();`",
+     "leaf": "perry_runtime::array::header_gc_slots::store_array_slot_resolved",
+     "leaf_share": 0.36,
+     "pct": 2.14,
+     "per_iter": 3269078
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_native_call_method_by_id",
+     "js_fn": "node_modules_mongodb_src_cmap_wire_protocol_on_data_ts::10",
+     "js_loc": "mongodb/src/cmap/wire_protocol/on_data.ts:113 `else unconsumedEvents.push(value);`",
+     "leaf": "perry_runtime::object::class_registry::dispatch::call_vtable_method_value",
+     "leaf_share": 0.37,
+     "pct": 2.1,
+     "per_iter": 3200106
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_native_call_method_by_id",
+     "js_fn": "node_modules_mongodb_src_cmap_wire_protocol_on_data_ts::10",
+     "js_loc": "mongodb/src/cmap/wire_protocol/on_data.ts:111 `const promise = unconsumedPromises.shift();`",
+     "leaf": "perry_runtime::object::class_registry::dispatch::call_vtable_method_value",
+     "leaf_share": 0.61,
+     "pct": 1.86,
+     "per_iter": 2843536
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_object_get_field_by_property_id_f64",
+     "js_fn": "node_modules_mongodb_src_utils_ts::List.push",
+     "js_loc": "mongodb/src/utils.ts:714 `this.head.prev = newNode;`",
+     "leaf": "perry_runtime::object::native_get::try_data_get_bytes",
+     "leaf_share": 0.34,
+     "pct": 1.65,
+     "per_iter": 2515903
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_object_get_field_by_property_id_f64",
+     "js_fn": "node_modules_mongodb_src_utils_ts::List.push",
+     "js_loc": "mongodb/src/utils.ts:710 `prev: this.head.prev as ListNode<T>,`",
+     "leaf": "perry_runtime::object::native_get::try_data_get_bytes",
+     "leaf_share": 0.32,
+     "pct": 1.59,
+     "per_iter": 2417492
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_object_get_field_by_property_id_f64",
+     "js_fn": "node_modules_mongodb_src_utils_ts::List.push",
+     "js_loc": "mongodb/src/utils.ts:713 `this.head.prev.next = newNode;`",
+     "leaf": "perry_runtime::object::native_get::try_data_get_bytes",
+     "leaf_share": 0.3,
+     "pct": 1.52,
+     "per_iter": 2323459
+    },
+    {
+     "bucket": "method_dispatch",
+     "entry": "js_native_call_method_by_id",
+     "js_fn": "node_modules_mongodb_src_cmap_wire_protocol_on_data_ts::10",
+     "js_loc": "mongodb/src/cmap/wire_protocol/on_data.ts:113 `else unconsumedEvents.push(value);`",
+     "leaf": "js_native_call_method",
+     "leaf_share": 0.39,
+     "pct": 1.21,
+     "per_iter": 1848372
+    },
+    {
+     "bucket": "method_dispatch",
+     "entry": "js_native_call_method_by_id",
+     "js_fn": "node_modules_mongodb_src_cmap_wire_protocol_on_data_ts::10",
+     "js_loc": "mongodb/src/cmap/wire_protocol/on_data.ts:111 `const promise = unconsumedPromises.shift();`",
+     "leaf": "js_native_call_method",
+     "leaf_share": 0.33,
+     "pct": 1.21,
+     "per_iter": 1842018
+    },
+    {
+     "bucket": "gc_other",
+     "entry": "js_event_emitter_on",
+     "js_fn": "node_modules_mongodb_src_cmap_wire_protocol_on_data_ts::onData$this",
+     "js_loc": "mongodb/src/cmap/wire_protocol/on_data.ts:41 `const unconsumedPromises = new List<PendingPromises>();`",
+     "leaf": "perry_runtime::gc::layout::layout_note_slot",
+     "leaf_share": 1.0,
+     "pct": 1.11,
+     "per_iter": 1700067
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_object_set_field_by_property_id",
+     "js_fn": "node_modules_mongodb_src_utils_ts::List.push",
+     "js_loc": "mongodb/src/utils.ts:709 `next: this.head as HeadNode<T>,`",
+     "leaf": "perry_runtime::object::shapes::shape_descriptor_by_id",
+     "leaf_share": 0.52,
+     "pct": 1.0,
+     "per_iter": 1527643
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_class_field_add",
+     "js_fn": "node_modules_bson_src_objectid_ts::ObjectId_constructor",
+     "js_loc": "bson/src/objectid.ts:178 `this.setFromBytes(inputId as Uint8Array, offset);`",
+     "leaf": "perry_runtime::object::shapes::shape_descriptor_by_id",
+     "leaf_share": 0.19,
+     "pct": 0.93,
+     "per_iter": 1416283
+    },
+    {
+     "bucket": "method_dispatch",
+     "entry": "js_native_call_method_by_id",
+     "js_fn": "node_modules_mongodb_src_utils_ts::List.shift",
+     "js_loc": "mongodb/src/utils.ts:753 `return this.remove(this.head.next);`",
+     "leaf": "js_native_call_method",
+     "leaf_share": 0.45,
+     "pct": 0.92,
+     "per_iter": 1399271
+    },
+    {
+     "bucket": "prop_write",
+     "entry": "js_object_set_field_by_property_id",
+     "js_fn": "node_modules_mongodb_src_utils_ts::List.push",
+     "js_loc": "mongodb/src/utils.ts:709 `next: this.head as HeadNode<T>,`",
+     "leaf": "perry_runtime::object::field_set_by_name::fast_paths::try_existing_own_data_overwrite",
+     "leaf_share": 0.67,
+     "pct": 0.89,
+     "per_iter": 1358169
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_class_field_add",
+     "js_fn": "node_modules_mongodb_src_sessions_ts::ClientSession_constructor",
+     "js_loc": "mongodb/src/sessions.ts:164 `this.on('error', noop);`",
+     "leaf": "perry_runtime::object::shapes::shape_descriptor_by_id",
+     "leaf_share": 0.17,
+     "pct": 0.87,
+     "per_iter": 1328840
+    },
+    {
+     "bucket": "string",
+     "entry": "js_native_call_method_by_id",
+     "js_fn": "node_modules_mongodb_src_cmap_wire_protocol_on_data_ts::10",
+     "js_loc": "mongodb/src/cmap/wire_protocol/on_data.ts:113 `else unconsumedEvents.push(value);`",
+     "leaf": "perry_runtime::string::perry_string_ref_from_dispatch_id",
+     "leaf_share": 0.43,
+     "pct": 0.87,
+     "per_iter": 1322129
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_object_get_field_by_property_id_f64",
+     "js_fn": "node_modules_mongodb_src_utils_ts::List.remove",
+     "js_loc": "mongodb/src/utils.ts:737 `if (node === this.head // this.length === 0) {`",
+     "leaf": "perry_runtime::object::native_get::try_data_get_bytes",
+     "leaf_share": 0.31,
+     "pct": 0.84,
+     "per_iter": 1274660
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_object_get_field_by_property_id_f64",
+     "js_fn": "node_modules_mongodb_src_utils_ts::List.shift",
+     "js_loc": "mongodb/src/utils.ts:753 `return this.remove(this.head.next);`",
+     "leaf": "js_object_get_field_by_name",
+     "leaf_share": 0.38,
+     "pct": 0.76,
+     "per_iter": 1153096
+    },
+    {
+     "bucket": "proto_chain_read",
+     "entry": "perry_runtime::object::field_get_set::ic_miss::get_field_ic_miss_impl",
+     "js_fn": "node_modules_bson_src_parser_serializer_ts::serializeInto$spec_b_b_b_b_b_b_b",
+     "js_loc": "bson/src/parser/serializer.ts:599 `currentFrame = frame.prev;`",
+     "leaf": "perry_runtime::buffer::header::is_registered_buffer_slow",
+     "leaf_share": 0.21,
+     "pct": 0.72,
+     "per_iter": 1105409
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_object_assign_one",
+     "js_fn": "node_modules_bson_src_parser_deserializer_ts::6",
+     "js_loc": "bson/src/parser/deserializer.ts:0",
+     "leaf": "perry_runtime::object::shapes::shape_descriptor_by_id",
+     "leaf_share": 0.13,
+     "pct": 0.7,
+     "per_iter": 1072739
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_object_get_own_field_or_undef",
+     "js_fn": "node_modules_mongodb_src_cmap_wire_protocol_on_data_ts::10",
+     "js_loc": "mongodb/src/cmap/wire_protocol/on_data.ts:111 `const promise = unconsumedPromises.shift();`",
+     "leaf": "js_object_get_own_field_or_undef",
+     "leaf_share": 0.49,
+     "pct": 0.68,
+     "per_iter": 1040652
+    }
+   ],
+   "correctness": "not checked against node (reused node reference)",
+   "entry_top": [
+    [
+     "<no JS frame>",
+     24466713,
+     16.04
+    ],
+    [
+     "js_native_call_method_by_id",
+     22892652,
+     15.01
+    ],
+    [
+     "js_object_get_field_by_property_id_f64",
+     16780266,
+     11.0
+    ],
+    [
+     "js_class_field_add",
+     9215689,
+     6.04
+    ],
+    [
+     "js_event_emitter_on",
+     6570629,
+     4.31
+    ],
+    [
+     "js_object_assign_one",
+     6203758,
+     4.07
+    ],
+    [
+     "perry_runtime::object::field_get_set::ic_miss::get_field_ic_miss_impl",
+     5671120,
+     3.72
+    ],
+    [
+     "js_async_step_done",
+     4218550,
+     2.77
+    ],
+    [
+     "js_object_set_field_by_property_id",
+     3912757,
+     2.57
+    ],
+    [
+     "js_object_alloc_class_inline_keys_stamped",
+     3678975,
+     2.41
+    ],
+    [
+     "<inline JS>",
+     3233332,
+     2.12
+    ],
+    [
+     "perry_runtime::node_stream::push_chunk",
+     3214170,
+     2.11
+    ],
+    [
+     "js_native_call_method",
+     3103224,
+     2.03
+    ],
+    [
+     "perry_runtime::promise::microtasks::run_microtasks",
+     2944486,
+     1.93
+    ],
+    [
+     "perry_runtime::node_stream::event_emitter::ns_on2",
+     2268125,
+     1.49
+    ],
+    [
+     "js_object_get_own_field_or_undef",
+     2180360,
+     1.43
+    ],
+    [
+     "js_async_step_chain",
+     1944652,
+     1.28
+    ],
+    [
+     "js_native_call_method_apply_by_id",
+     1845500,
+     1.21
+    ],
+    [
+     "js_instanceof",
+     1671696,
+     1.1
+    ],
+    [
+     "js_method_site_miss",
+     1623340,
+     1.06
+    ]
+   ],
+   "excess_per_iter": 149876703.50666666,
+   "incl_js_top": [
+    [
+     "node_modules_mongodb_src_cmap_connection_ts::SizedMessageTransform._transform",
+     53212532,
+     34.89
+    ],
+    [
+     "node_modules_mongodb_src_cmap_wire_protocol_on_data_ts::10",
+     49175606,
+     32.25
+    ],
+    [
+     "mongodb_batch_query_ts::13",
+     31868940,
+     20.9
+    ],
+    [
+     "node_modules_mongodb_src_utils_ts::List.push",
+     22651495,
+     14.85
+    ],
+    [
+     "mongodb_batch_query_ts::1",
+     17870072,
+     11.72
+    ],
+    [
+     "mongodb_batch_query_ts::15",
+     17866358,
+     11.72
+    ],
+    [
+     "node_modules_mongodb_src_collection_ts::75",
+     17806528,
+     11.68
+    ],
+    [
+     "node_modules_mongodb_src_collection_ts::Collection.insertMany",
+     17764206,
+     11.65
+    ],
+    [
+     "node_modules_mongodb_src_collection_ts::77",
+     17442032,
+     11.44
+    ],
+    [
+     "node_modules_mongodb_src_collection_ts::Collection.bulkWrite",
+     17335206,
+     11.37
+    ],
+    [
+     "node_modules_mongodb_src_cmap_connection_ts::54",
+     14367520,
+     9.42
+    ],
+    [
+     "node_modules_bson_src_bson_ts::serialize",
+     12454299,
+     8.17
+    ],
+    [
+     "node_modules_mongodb_src_bulk_common_ts::BulkOperationBase.raw",
+     12217962,
+     8.01
+    ],
+    [
+     "node_modules_mongodb_src_sdam_server_ts::34",
+     11948831,
+     7.84
+    ],
+    [
+     "node_modules_bson_src_parser_serializer_ts::serializeInto$spec_b_b_b_b_b_b_b",
+     11868401,
+     7.78
+    ],
+    [
+     "node_modules_mongodb_src_utils_ts::List.shift",
+     10334111,
+     6.78
+    ],
+    [
+     "node_modules_mongodb_src_cursor_abstract_cursor_ts::95",
+     10256451,
+     6.73
+    ],
+    [
+     "node_modules_mongodb_src_cursor_abstract_cursor_ts::83",
+     8550415,
+     5.61
+    ],
+    [
+     "node_modules_mongodb_src_cmap_connection_ts::66",
+     8266618,
+     5.42
+    ],
+    [
+     "node_modules_mongodb_src_bulk_ordered_ts::OrderedBulkOperation.addToOperationsList",
+     8236715,
+     5.4
+    ]
+   ],
+   "incl_top": [
+    [
+     "perry_runtime::object::class_registry::dispatch::call_vtable_method_value",
+     101028959,
+     66.25
+    ],
+    [
+     "js_native_call_method",
+     100919316,
+     66.18
+    ],
+    [
+     "perry_runtime::abi_trampoline::call_all_f64_x86_64",
+     100857289,
+     66.14
+    ],
+    [
+     "js_native_call_method_by_id",
+     92569001,
+     60.7
+    ],
+    [
+     "js_native_call_value",
+     77435978,
+     50.78
+    ],
+    [
+     "perry_sjlj_try",
+     74364467,
+     48.76
+    ],
+    [
+     "perry_runtime::promise::microtasks::run_microtasks",
+     74226046,
+     48.67
+    ],
+    [
+     "perry_runtime::promise::microtasks::pump_protected",
+     74222433,
+     48.67
+    ],
+    [
+     "perry_runtime::exception::arm_trap_and_run::invoke::<perry_runtime::promise::microtasks::run_microtasks::{closure#4},",
+     74222433,
+     48.67
+    ],
+    [
+     "perry_runtime::promise::async_step::call_async_step_body",
+     68945195,
+     45.21
+    ],
+    [
+     "perry_runtime::closure::dispatch::bound::dispatch_bound_method",
+     65745888,
+     43.11
+    ],
+    [
+     "perry_runtime::node_stream::event_emitter::emit_stream_event",
+     55791523,
+     36.59
+    ],
+    [
+     "js_run_stdlib_pump",
+     53706155,
+     35.22
+    ],
+    [
+     "js_ext_net_drain_pending",
+     53706155,
+     35.22
+    ],
+    [
+     "perry_ext_net::pipe::pipe_data_forward",
+     53642668,
+     35.18
+    ],
+    [
+     "perry_runtime::node_stream::write_writable_chunk",
+     53580909,
+     35.14
+    ],
+    [
+     "perry_runtime::closure::dispatch::calln::dispatch_call_slice",
+     53321423,
+     34.97
+    ],
+    [
+     "perry_runtime::node_stream::push_chunk",
+     52389776,
+     34.35
+    ],
+    [
+     "perry_runtime::node_stream::append_readable_output_chunk",
+     52263746,
+     34.27
+    ],
+    [
+     "js_object_get_field_by_name_f64",
+     33279565,
+     21.82
+    ]
+   ],
+   "js_sites": [
+    {
+     "js_fn": "<no JS frame>",
+     "js_loc": null,
+     "pct": 16.04,
+     "per_iter": 24466713
+    },
+    {
+     "js_fn": "node_modules_mongodb_src_utils_ts::List.shift",
+     "js_loc": "mongodb/src/utils.ts:753 `return this.remove(this.head.next);`",
+     "pct": 5.76,
+     "per_iter": 8783843
+    },
+    {
+     "js_fn": "node_modules_mongodb_src_utils_ts::List.push",
+     "js_loc": "mongodb/src/utils.ts:709 `next: this.head as HeadNode<T>,`",
+     "pct": 5.72,
+     "per_iter": 8729793
+    },
+    {
+     "js_fn": "node_modules_mongodb_src_cmap_wire_protocol_on_data_ts::10",
+     "js_loc": "mongodb/src/cmap/wire_protocol/on_data.ts:113 `else unconsumedEvents.push(value);`",
+     "pct": 5.72,
+     "per_iter": 8726423
+    },
+    {
+     "js_fn": "node_modules_mongodb_src_cmap_wire_protocol_on_data_ts::10",
+     "js_loc": "mongodb/src/cmap/wire_protocol/on_data.ts:111 `const promise = unconsumedPromises.shift();`",
+     "pct": 5.16,
+     "per_iter": 7870231
+    },
+    {
+     "js_fn": "node_modules_mongodb_src_cmap_wire_protocol_on_data_ts::onData$this",
+     "js_loc": "mongodb/src/cmap/wire_protocol/on_data.ts:41 `const unconsumedPromises = new List<PendingPromises>();`",
+     "pct": 4.36,
+     "per_iter": 6646149
+    },
+    {
+     "js_fn": "node_modules_mongodb_src_utils_ts::List.push",
+     "js_loc": "mongodb/src/utils.ts:710 `prev: this.head.prev as ListNode<T>,`",
+     "pct": 4.35,
+     "per_iter": 6631130
+    },
+    {
+     "js_fn": "node_modules_mongodb_src_sessions_ts::ClientSession_constructor",
+     "js_loc": "mongodb/src/sessions.ts:164 `this.on('error', noop);`",
+     "pct": 2.6,
+     "per_iter": 3964656
+    },
+    {
+     "js_fn": "node_modules_mongodb_src_utils_ts::List.push",
+     "js_loc": "mongodb/src/utils.ts:714 `this.head.prev = newNode;`",
+     "pct": 2.49,
+     "per_iter": 3790596
+    },
+    {
+     "js_fn": "main",
+     "js_loc": "mongodb/batch_query.ts:37 `main().catch((e) => { console.log(\"ERROR \" + (e && e.mes`",
+     "pct": 2.28,
+     "per_iter": 3477524
+    },
+    {
+     "js_fn": "node_modules_mongodb_src_utils_ts::List.push",
+     "js_loc": "mongodb/src/utils.ts:713 `this.head.prev.next = newNode;`",
+     "pct": 2.17,
+     "per_iter": 3306450
+    },
+    {
+     "js_fn": "node_modules_mongodb_src_cmap_connection_ts::SizedMessageTransform._transform",
+     "js_loc": "mongodb/src/cmap/connection.ts:838 `if (!this.push(message)) {`",
+     "pct": 2.13,
+     "per_iter": 3254519
+    },
+    {
+     "js_fn": "node_modules_bson_src_objectid_ts::ObjectId_constructor",
+     "js_loc": "bson/src/objectid.ts:178 `this.setFromBytes(inputId as Uint8Array, offset);`",
+     "pct": 2.05,
+     "per_iter": 3130396
+    },
+    {
+     "js_fn": "node_modules_bson_src_parser_serializer_ts::serializeInto$spec_b_b_b_b_b_b_b",
+     "js_loc": "bson/src/parser/serializer.ts:599 `currentFrame = frame.prev;`",
+     "pct": 1.79,
+     "per_iter": 2732181
+    },
+    {
+     "js_fn": "node_modules_mongodb_src_cursor_abstract_cursor_ts::AbstractCursor_constructor",
+     "js_loc": "mongodb/src/cursor/abstract_cursor.ts:259 `this.on('error', noop);`",
+     "pct": 1.66,
+     "per_iter": 2534004
+    },
+    {
+     "js_fn": "node_modules_bson_src_parser_deserializer_ts::6",
+     "js_loc": "bson/src/parser/deserializer.ts:0",
+     "pct": 1.14,
+     "per_iter": 1744850
+    },
+    {
+     "js_fn": "node_modules_mongodb_src_cmap_wire_protocol_on_demand_document_ts::10",
+     "js_loc": "mongodb/src/cmap/wire_protocol/on_demand/document.ts:346 `index: this.offset,`",
+     "pct": 1.08,
+     "per_iter": 1653774
+    },
+    {
+     "js_fn": "node_modules_mongodb_src_mongo_types_ts::TypedEventEmitter_constructor",
+     "js_loc": "mongodb/src/mongo_types.ts:0",
+     "pct": 1.08,
+     "per_iter": 1652575
+    },
+    {
+     "js_fn": "node_modules_mongodb_src_utils_ts::List.remove",
+     "js_loc": "mongodb/src/utils.ts:737 `if (node === this.head // this.length === 0) {`",
+     "pct": 1.02,
+     "per_iter": 1548100
+    },
+    {
+     "js_fn": "node_modules_mongodb_src_mongo_types_ts::TypedEventEmitter.emitAndLog",
+     "js_loc": "mongodb/src/mongo_types.ts:429 `if (this.component) this.mongoLogger?.debug(this.compone`",
+     "pct": 0.75,
+     "per_iter": 1137688
+    }
+   ],
+   "mechanisms": {
+    "accessor_descriptor": 3632312,
+    "alloc": 439723,
+    "buffer_typedarray": 8145838,
+    "call_overhead": 495956,
+    "closure_box_args": 1380184,
+    "dyn_index": 7148510,
+    "exceptions": -25222,
+    "gc_major": 4351021,
+    "gc_minor": 20292085,
+    "gc_other": 2910295,
+    "generated_code": 3233332,
+    "json": -20233,
+    "map_set": 312424,
+    "memops": 4990155,
+    "method_dispatch": 6243270,
+    "number_string": 20447,
+    "numeric_conv": 343842,
+    "other_runtime": 783969,
+    "private_fields": 1403478,
+    "promise_async": 916231,
+    "prop_lookup": 56968098,
+    "prop_write": 3895152,
+    "raw_alloc": 7320489,
+    "regex": 358231,
+    "side_table_hash": 3015732,
+    "string": 7579229,
+    "symbol": 933626,
+    "unknown": 18475,
+    "utf8_transcode": 3136748,
+    "value_typeof": 799110,
+    "write_barrier": 1474108
+   },
+   "n1": 125,
+   "n2": 500,
+   "node_per_iter": 2619912.616,
+   "perry_instr_n1": 15319365186,
+   "perry_instr_n2": 72505596232,
+   "perry_per_iter": 152496616.12266666,
+   "pkg_code_on_stack_min_pct": 34.9,
+   "ratio": 58.206756664843915,
+   "regex_detail": {
+    "compile": 11760,
+    "execute": 361451,
+    "protocol_property_gets": -10300,
+    "result_building_other": 61052
+   },
+   "sample_freq": 1761,
+   "sample_scale": 1.0013,
+   "sampled_per_iter": 152292100.78133333,
+   "samples": {
+    "n1": 2333,
+    "n2": 9238
+   },
+   "self_top": [
+    [
+     "perry_runtime::object::shapes::shape_descriptor_by_id",
+     8797904,
+     5.77
+    ],
+    [
+     "perry_runtime::object::native_get::try_data_get_bytes",
+     5474460,
+     3.59
+    ],
+    [
+     "perry_runtime::buffer::header::is_registered_buffer_slow",
+     5399946,
+     3.54
+    ],
+    [
+     "perry_runtime::object::class_registry::dispatch::call_vtable_method_value",
+     4692961,
+     3.08
+    ],
+    [
+     "<perry_runtime::gc::copying::CopyingNurseryCollector>::mark_classified",
+     3643584,
+     2.39
+    ],
+    [
+     "core::str::converts::from_utf8",
+     2969407,
+     1.95
+    ],
+    [
+     "js_array_get_f64",
+     2864032,
+     1.88
+    ],
+    [
+     "js_object_get_field_by_name",
+     2785497,
+     1.83
+    ],
+    [
+     "__memcmp_evex_movbe",
+     2770071,
+     1.82
+    ],
+    [
+     "perry_runtime::gc::barrier::remembered_child_needs_tracking",
+     2644479,
+     1.73
+    ],
+    [
+     "js_native_call_method",
+     2612037,
+     1.71
+    ],
+    [
+     "__memmove_avx512_unaligned_erms",
+     2519314,
+     1.65
+    ],
+    [
+     "perry_runtime::gc::layout::layout_note_slot",
+     2096517,
+     1.37
+    ],
+    [
+     "perry_runtime::object::alloc::object_alloc_class_inline_keys_impl",
+     2042379,
+     1.34
+    ],
+    [
+     "perry_runtime::string::perry_string_ref_from_dispatch_id",
+     1979791,
+     1.3
+    ],
+    [
+     "<perry_runtime::gc::copying::CopyingNurseryCollector>::mark_addr",
+     1800074,
+     1.18
+    ],
+    [
+     "perry_runtime::object::field_get_set::get_field_by_name::get_field_by_name_past_data_probe",
+     1775472,
+     1.16
+    ],
+    [
+     "perry_runtime::object::class_meta_registry::class_generic_origin_slow",
+     1732348,
+     1.14
+    ],
+    [
+     "perry_runtime::object::keys_lookup::keys_find_slot_by_bytes",
+     1661358,
+     1.09
+    ],
+    [
+     "perry_runtime::object::class_meta_registry::get_parent_class_id",
+     1503908,
+     0.99
+    ]
+   ],
+   "startup_instr": -3742711829.333332,
+   "status": "OK",
+   "unwind_reached_main": 0.881,
+   "warm": 50
+  },
+  "node-forge/hmac": {
+   "binary": "/root/claude-matrix-rerun-out/dbg/node-forge__hmac",
+   "bucket_entry": {
+    "accessor_descriptor\tjs_method_site_miss": 78051,
+    "buffer_typedarray\tjs_method_site_miss": 24522,
+    "call_overhead\tjs_method_site_miss": 43100,
+    "closure_box_args\tjs_method_site_miss": 100928,
+    "dyn_index\tjs_method_site_miss": 369274,
+    "gc_minor\t<no JS frame>": 27747,
+    "generated_code\t<inline JS>": 463327,
+    "method_dispatch\tjs_method_site_miss": 720318,
+    "other_runtime\tjs_dynamic_string_or_number_add": 79239,
+    "other_runtime\tjs_method_site_miss": 141849,
+    "prop_lookup\tjs_method_site_miss": 1820626,
+    "prop_lookup\tjs_object_get_index_polymorphic": 32901,
+    "string\tjs_dynamic_string_or_number_add": 83842,
+    "string\tjs_method_site_miss": 263746,
+    "string\tjs_string_char_code_at": 79179,
+    "value_typeof\tperry_runtime::value::to_string_radix::number_to_radix_string": 26395
+   },
+   "buckets": {
+    "accessor_descriptor": 86901,
+    "alloc": 6394,
+    "buffer_typedarray": 25145,
+    "call_overhead": 64410,
+    "closure_box_args": 117093,
+    "dyn_index": 420269,
+    "exceptions": 51,
+    "gc_major": 4013,
+    "gc_minor": 27747,
+    "gc_other": 35970,
+    "generated_code": 463327,
+    "map_set": 17833,
+    "memops": 548,
+    "method_dispatch": 720881,
+    "numeric_conv": 27270,
+    "other_runtime": 234556,
+    "promise_async": 21699,
+    "prop_lookup": 1893260,
+    "raw_alloc": 1156,
+    "regex": 12001,
+    "string": 507960,
+    "unknown": 3,
+    "value_typeof": 45339,
+    "write_barrier": 4694
+   },
+   "chains": [
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_method_site_miss",
+     "js_fn": "node_modules_node_forge_lib_util_js::32",
+     "js_loc": "node-forge/lib/util.js:251 `return this.putBytes(String.fromCharCode(b));`",
+     "leaf": "perry_runtime::object::shapes::shape_descriptor_by_id",
+     "leaf_share": 0.13,
+     "pct": 11.34,
+     "per_iter": 537404
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_method_site_miss",
+     "js_fn": "node_modules_node_forge_lib_sha256_js::20",
+     "js_loc": "node-forge/lib/sha256.js:253 `w[i] = bytes.getInt32();`",
+     "leaf": "perry_runtime::object::shapes::shape_descriptor_by_id",
+     "leaf_share": 0.15,
+     "pct": 7.07,
+     "per_iter": 334822
+    },
+    {
+     "bucket": "method_dispatch",
+     "entry": "js_method_site_miss",
+     "js_fn": "node_modules_node_forge_lib_util_js::32",
+     "js_loc": "node-forge/lib/util.js:251 `return this.putBytes(String.fromCharCode(b));`",
+     "leaf": "js_native_call_method",
+     "leaf_share": 0.3,
+     "pct": 4.75,
+     "per_iter": 225002
+    },
+    {
+     "bucket": "generated_code",
+     "entry": "<inline JS>",
+     "js_fn": "node_modules_node_forge_lib_sha256_js::20",
+     "js_loc": "node-forge/lib/sha256.js:280 `h = s.h7;`",
+     "leaf": "perry_closure_node_modules_node_forge_lib_sha256_js__20",
+     "leaf_share": 1.0,
+     "pct": 3.64,
+     "per_iter": 172659
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_method_site_miss",
+     "js_fn": "node_modules_node_forge_lib_hmac_js::14",
+     "js_loc": "node-forge/lib/hmac.js:103 `_opadding.putByte(0x5C);`",
+     "leaf": "perry_runtime::object::shapes::shape_descriptor_by_id",
+     "leaf_share": 0.17,
+     "pct": 3.05,
+     "per_iter": 144611
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_method_site_miss",
+     "js_fn": "node_modules_node_forge_lib_hmac_js::14",
+     "js_loc": "node-forge/lib/hmac.js:102 `_ipadding.putByte(0x36);`",
+     "leaf": "perry_runtime::object::shapes::shape_descriptor_by_id",
+     "leaf_share": 0.2,
+     "pct": 2.99,
+     "per_iter": 141855
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_method_site_miss",
+     "js_fn": "node_modules_node_forge_lib_hmac_js::14",
+     "js_loc": "node-forge/lib/hmac.js:93 `var tmp = key.at(i);`",
+     "leaf": "perry_runtime::object::shapes::shape_descriptor_by_id",
+     "leaf_share": 0.21,
+     "pct": 2.78,
+     "per_iter": 131533
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_method_site_miss",
+     "js_fn": "node_modules_node_forge_lib_hmac_js::14",
+     "js_loc": "node-forge/lib/hmac.js:95 `_opadding.putByte(0x5C ^ tmp);`",
+     "leaf": "perry_runtime::object::shapes::shape_descriptor_by_id",
+     "leaf_share": 0.14,
+     "pct": 2.73,
+     "per_iter": 129365
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_method_site_miss",
+     "js_fn": "node_modules_node_forge_lib_hmac_js::14",
+     "js_loc": "node-forge/lib/hmac.js:94 `_ipadding.putByte(0x36 ^ tmp);`",
+     "leaf": "perry_runtime::object::shapes::shape_descriptor_by_id",
+     "leaf_share": 0.14,
+     "pct": 2.45,
+     "per_iter": 116229
+    },
+    {
+     "bucket": "generated_code",
+     "entry": "<inline JS>",
+     "js_fn": "node_modules_node_forge_lib_sha256_js::20",
+     "js_loc": "node-forge/lib/sha256.js:273 `a = s.h0;`",
+     "leaf": "perry_closure_node_modules_node_forge_lib_sha256_js__20",
+     "leaf_share": 1.0,
+     "pct": 2.42,
+     "per_iter": 114447
+    },
+    {
+     "bucket": "dyn_index",
+     "entry": "js_method_site_miss",
+     "js_fn": "node_modules_node_forge_lib_util_js::32",
+     "js_loc": "node-forge/lib/util.js:251 `return this.putBytes(String.fromCharCode(b));`",
+     "leaf": "js_array_get_f64",
+     "leaf_share": 0.4,
+     "pct": 2.12,
+     "per_iter": 100291
+    },
+    {
+     "bucket": "string",
+     "entry": "js_method_site_miss",
+     "js_fn": "node_modules_node_forge_lib_util_js::32",
+     "js_loc": "node-forge/lib/util.js:251 `return this.putBytes(String.fromCharCode(b));`",
+     "leaf": "perry_runtime::arena::allocators::arena_alloc",
+     "leaf_share": 0.23,
+     "pct": 1.8,
+     "per_iter": 85228
+    },
+    {
+     "bucket": "string",
+     "entry": "js_dynamic_string_or_number_add",
+     "js_fn": "node_modules_node_forge_lib_util_js::34",
+     "js_loc": "node-forge/lib/util.js:288 `this._optimizeConstructedString(bytes.length);`",
+     "leaf": "js_string_concat",
+     "leaf_share": 0.65,
+     "pct": 1.77,
+     "per_iter": 83842
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_method_site_miss",
+     "js_fn": "node_modules_node_forge_lib_util_js::38",
+     "js_loc": "node-forge/lib/util.js:338 `return this.putBytes(`",
+     "leaf": "perry_runtime::object::shapes::shape_descriptor_by_id",
+     "leaf_share": 0.14,
+     "pct": 1.67,
+     "per_iter": 78910
+    },
+    {
+     "bucket": "method_dispatch",
+     "entry": "js_method_site_miss",
+     "js_fn": "node_modules_node_forge_lib_hmac_js::14",
+     "js_loc": "node-forge/lib/hmac.js:94 `_ipadding.putByte(0x36 ^ tmp);`",
+     "leaf": "js_native_call_method",
+     "leaf_share": 0.33,
+     "pct": 1.61,
+     "per_iter": 76130
+    },
+    {
+     "bucket": "method_dispatch",
+     "entry": "js_method_site_miss",
+     "js_fn": "node_modules_node_forge_lib_sha256_js::20",
+     "js_loc": "node-forge/lib/sha256.js:253 `w[i] = bytes.getInt32();`",
+     "leaf": "perry_runtime::object::native_call_method::handle_methods::dispatch_handle",
+     "leaf_share": 0.4,
+     "pct": 1.6,
+     "per_iter": 75832
+    },
+    {
+     "bucket": "method_dispatch",
+     "entry": "js_method_site_miss",
+     "js_fn": "node_modules_node_forge_lib_hmac_js::14",
+     "js_loc": "node-forge/lib/hmac.js:102 `_ipadding.putByte(0x36);`",
+     "leaf": "js_native_call_method",
+     "leaf_share": 0.41,
+     "pct": 1.49,
+     "per_iter": 70415
+    },
+    {
+     "bucket": "dyn_index",
+     "entry": "js_method_site_miss",
+     "js_fn": "node_modules_node_forge_lib_sha256_js::20",
+     "js_loc": "node-forge/lib/sha256.js:253 `w[i] = bytes.getInt32();`",
+     "leaf": "perry_runtime::array::iterator::array_from_spread_value::{closure#0}",
+     "leaf_share": 0.47,
+     "pct": 1.35,
+     "per_iter": 63848
+    },
+    {
+     "bucket": "other_runtime",
+     "entry": "js_dynamic_string_or_number_add",
+     "js_fn": "node_modules_node_forge_lib_util_js::34",
+     "js_loc": "node-forge/lib/util.js:288 `this._optimizeConstructedString(bytes.length);`",
+     "leaf": "js_dynamic_string_or_number_add",
+     "leaf_share": 0.81,
+     "pct": 1.18,
+     "per_iter": 55736
+    },
+    {
+     "bucket": "method_dispatch",
+     "entry": "js_method_site_miss",
+     "js_fn": "node_modules_node_forge_lib_hmac_js::14",
+     "js_loc": "node-forge/lib/hmac.js:103 `_opadding.putByte(0x5C);`",
+     "leaf": "js_native_call_method",
+     "leaf_share": 0.29,
+     "pct": 1.1,
+     "per_iter": 52130
+    },
+    {
+     "bucket": "method_dispatch",
+     "entry": "js_method_site_miss",
+     "js_fn": "node_modules_node_forge_lib_hmac_js::14",
+     "js_loc": "node-forge/lib/hmac.js:93 `var tmp = key.at(i);`",
+     "leaf": "js_native_call_method",
+     "leaf_share": 0.46,
+     "pct": 1.07,
+     "per_iter": 50696
+    },
+    {
+     "bucket": "other_runtime",
+     "entry": "js_method_site_miss",
+     "js_fn": "node_modules_node_forge_lib_util_js::32",
+     "js_loc": "node-forge/lib/util.js:251 `return this.putBytes(String.fromCharCode(b));`",
+     "leaf": "js_method_site_miss",
+     "leaf_share": 0.83,
+     "pct": 1.05,
+     "per_iter": 49673
+    },
+    {
+     "bucket": "string",
+     "entry": "js_method_site_miss",
+     "js_fn": "node_modules_node_forge_lib_sha256_js::20",
+     "js_loc": "node-forge/lib/sha256.js:253 `w[i] = bytes.getInt32();`",
+     "leaf": "perry_runtime::string::intern::intern_dispatch_bytes",
+     "leaf_share": 0.22,
+     "pct": 0.94,
+     "per_iter": 44632
+    },
+    {
+     "bucket": "method_dispatch",
+     "entry": "js_method_site_miss",
+     "js_fn": "node_modules_node_forge_lib_hmac_js::14",
+     "js_loc": "node-forge/lib/hmac.js:95 `_opadding.putByte(0x5C ^ tmp);`",
+     "leaf": "js_native_call_method",
+     "leaf_share": 0.33,
+     "pct": 0.93,
+     "per_iter": 43934
+    },
+    {
+     "bucket": "dyn_index",
+     "entry": "js_method_site_miss",
+     "js_fn": "node_modules_node_forge_lib_hmac_js::14",
+     "js_loc": "node-forge/lib/hmac.js:103 `_opadding.putByte(0x5C);`",
+     "leaf": "perry_runtime::array::iterator::array_from_spread_value::{closure#0}",
+     "leaf_share": 0.55,
+     "pct": 0.81,
+     "per_iter": 38338
+    }
+   ],
+   "correctness": "not checked against node (reused node reference)",
+   "entry_top": [
+    [
+     "js_method_site_miss",
+     3634148,
+     76.69
+    ],
+    [
+     "<inline JS>",
+     463327,
+     9.78
+    ],
+    [
+     "js_dynamic_string_or_number_add",
+     210838,
+     4.45
+    ],
+    [
+     "js_string_char_code_at",
+     79179,
+     1.67
+    ],
+    [
+     "js_new_function_construct",
+     43082,
+     0.91
+    ],
+    [
+     "perry_runtime::value::to_string_radix::number_to_radix_string",
+     39590,
+     0.84
+    ],
+    [
+     "js_object_get_index_polymorphic",
+     38779,
+     0.82
+    ],
+    [
+     "<no JS frame>",
+     29989,
+     0.63
+    ],
+    [
+     "js_dyn_index_set_strict",
+     25251,
+     0.53
+    ],
+    [
+     "js_set_call_location",
+     21865,
+     0.46
+    ],
+    [
+     "js_array_get_f64",
+     20285,
+     0.43
+    ],
+    [
+     "perry_runtime::string::char_ops::string_from_code_unit",
+     18931,
+     0.4
+    ],
+    [
+     "js_string_from_char_code",
+     15751,
+     0.33
+    ],
+    [
+     "js_string_index_to_i32",
+     14964,
+     0.32
+    ],
+    [
+     "js_instanceof_dynamic",
+     14371,
+     0.3
+    ],
+    [
+     "js_string_concat_chain",
+     13187,
+     0.28
+    ],
+    [
+     "perry_runtime::string::format::ascii_char_string",
+     12324,
+     0.26
+    ],
+    [
+     "js_get_string_pointer_unified",
+     5181,
+     0.11
+    ],
+    [
+     "js_require_object_coercible",
+     4543,
+     0.1
+    ],
+    [
+     "js_object_alloc_class_inline_keys_stamped",
+     4098,
+     0.09
+    ]
+   ],
+   "excess_per_iter": 4611554.731666666,
+   "incl_js_top": [
+    [
+     "node_forge_hmac_ts::op",
+     4702700,
+     99.24
+    ],
+    [
+     "node_modules_node_forge_lib_hmac_js::14",
+     3172168,
+     66.94
+    ],
+    [
+     "node_modules_node_forge_lib_hmac_js::16",
+     1427484,
+     30.13
+    ],
+    [
+     "node_modules_node_forge_lib_util_js::32",
+     1318697,
+     27.83
+    ],
+    [
+     "node_modules_node_forge_lib_sha256_js::20",
+     1172462,
+     24.74
+    ],
+    [
+     "node_modules_node_forge_lib_sha256_js::17",
+     1067070,
+     22.52
+    ],
+    [
+     "node_modules_node_forge_lib_sha256_js::16",
+     715033,
+     15.09
+    ],
+    [
+     "node_modules_node_forge_lib_util_js::38",
+     244212,
+     5.15
+    ],
+    [
+     "node_modules_node_forge_lib_util_js::34",
+     215766,
+     4.55
+    ],
+    [
+     "node_modules_node_forge_lib_util_js::48",
+     112699,
+     2.38
+    ],
+    [
+     "node_modules_node_forge_lib_util_js::103",
+     64513,
+     1.36
+    ],
+    [
+     "node_modules_node_forge_lib_sha256_js::14",
+     55990,
+     1.18
+    ],
+    [
+     "node_modules_node_forge_lib_util_js::63",
+     50800,
+     1.07
+    ],
+    [
+     "node_modules_node_forge_lib_sha256_js::12",
+     41556,
+     0.88
+    ],
+    [
+     "node_modules_node_forge_lib_hmac_js::15",
+     33869,
+     0.71
+    ],
+    [
+     "node_modules_node_forge_lib_util_js::28",
+     20227,
+     0.43
+    ],
+    [
+     "node_modules_node_forge_lib_util_js::56",
+     15810,
+     0.33
+    ],
+    [
+     "node_modules_node_forge_lib_util_js::30",
+     6280,
+     0.13
+    ],
+    [
+     "node_modules_node_forge_lib_util_js::29",
+     3818,
+     0.08
+    ],
+    [
+     "node_modules_node_forge_lib_util_js::55",
+     3394,
+     0.07
+    ]
+   ],
+   "incl_top": [
+    [
+     "js_method_site_miss",
+     4131885,
+     87.2
+    ],
+    [
+     "js_native_call_method",
+     3529448,
+     74.48
+    ],
+    [
+     "perry_runtime::object::native_call_method::handle_methods::dispatch_handle",
+     2595793,
+     54.78
+    ],
+    [
+     "js_native_call_value",
+     1855505,
+     39.16
+    ],
+    [
+     "perry_runtime::object::own_override::call_own_user_method::<perry_runtime::object::native_call_method::js_native_call_method::{closure#1}, perry_runtime::object::native_call_method::js_native_call_method::{closure#0}>",
+     591459,
+     12.48
+    ],
+    [
+     "perry_runtime::object::own_override::resolve_own_user_method",
+     561183,
+     11.84
+    ],
+    [
+     "perry_runtime::object::class_registry::prototype_objects::resolve_proto_chain_field_inner",
+     502502,
+     10.6
+    ],
+    [
+     "js_object_has_own",
+     466040,
+     9.84
+    ],
+    [
+     "perry_runtime::object::method_site::prime_inherited",
+     378297,
+     7.98
+    ],
+    [
+     "perry_runtime::object::keys_lookup::keys_find_slot_by_bytes_resolved",
+     367024,
+     7.75
+    ],
+    [
+     "perry_runtime::object::keys_lookup::keys_find_slot_by_bytes",
+     348448,
+     7.35
+    ],
+    [
+     "js_object_get_field_by_name",
+     336382,
+     7.1
+    ],
+    [
+     "perry_runtime::object::native_get::try_data_get_bytes",
+     328655,
+     6.94
+    ],
+    [
+     "perry_runtime::object::shapes::shape_slot_lookup_verdict",
+     290510,
+     6.13
+    ],
+    [
+     "perry_runtime::object::shapes::shape_descriptor_by_id",
+     269784,
+     5.69
+    ],
+    [
+     "perry_runtime::object::class_registry::prototype_objects::class_prototype_object",
+     268745,
+     5.67
+    ],
+    [
+     "perry_runtime::object::method_site::prime",
+     266846,
+     5.63
+    ],
+    [
+     "perry_runtime::object::prototype_chain::class_default_prototype_superseded",
+     246037,
+     5.19
+    ],
+    [
+     "js_dynamic_string_or_number_add",
+     210838,
+     4.45
+    ],
+    [
+     "<std::hash::random::RandomState as core::hash::BuildHasher>::hash_one::<&char>",
+     179665,
+     3.79
+    ]
+   ],
+   "js_sites": [
+    {
+     "js_fn": "node_modules_node_forge_lib_util_js::32",
+     "js_loc": "node-forge/lib/util.js:251 `return this.putBytes(String.fromCharCode(b));`",
+     "pct": 24.08,
+     "per_iter": 1141013
+    },
+    {
+     "js_fn": "node_modules_node_forge_lib_sha256_js::20",
+     "js_loc": "node-forge/lib/sha256.js:253 `w[i] = bytes.getInt32();`",
+     "pct": 12.65,
+     "per_iter": 599415
+    },
+    {
+     "js_fn": "node_modules_node_forge_lib_hmac_js::14",
+     "js_loc": "node-forge/lib/hmac.js:102 `_ipadding.putByte(0x36);`",
+     "pct": 6.16,
+     "per_iter": 291973
+    },
+    {
+     "js_fn": "node_modules_node_forge_lib_hmac_js::14",
+     "js_loc": "node-forge/lib/hmac.js:93 `var tmp = key.at(i);`",
+     "pct": 6.05,
+     "per_iter": 286650
+    },
+    {
+     "js_fn": "node_modules_node_forge_lib_hmac_js::14",
+     "js_loc": "node-forge/lib/hmac.js:103 `_opadding.putByte(0x5C);`",
+     "pct": 5.93,
+     "per_iter": 280910
+    },
+    {
+     "js_fn": "node_modules_node_forge_lib_sha256_js::20",
+     "js_loc": "node-forge/lib/sha256.js:280 `h = s.h7;`",
+     "pct": 5.49,
+     "per_iter": 260374
+    },
+    {
+     "js_fn": "node_modules_node_forge_lib_hmac_js::14",
+     "js_loc": "node-forge/lib/hmac.js:94 `_ipadding.putByte(0x36 ^ tmp);`",
+     "pct": 5.33,
+     "per_iter": 252663
+    },
+    {
+     "js_fn": "node_modules_node_forge_lib_hmac_js::14",
+     "js_loc": "node-forge/lib/hmac.js:95 `_opadding.putByte(0x5C ^ tmp);`",
+     "pct": 5.32,
+     "per_iter": 251930
+    },
+    {
+     "js_fn": "node_modules_node_forge_lib_util_js::38",
+     "js_loc": "node-forge/lib/util.js:338 `return this.putBytes(`",
+     "pct": 4.55,
+     "per_iter": 215410
+    },
+    {
+     "js_fn": "node_modules_node_forge_lib_util_js::34",
+     "js_loc": "node-forge/lib/util.js:288 `this._optimizeConstructedString(bytes.length);`",
+     "pct": 4.46,
+     "per_iter": 211378
+    },
+    {
+     "js_fn": "node_modules_node_forge_lib_sha256_js::20",
+     "js_loc": "node-forge/lib/sha256.js:273 `a = s.h0;`",
+     "pct": 2.92,
+     "per_iter": 138481
+    },
+    {
+     "js_fn": "node_modules_node_forge_lib_sha256_js::16",
+     "js_loc": "node-forge/lib/sha256.js:103 `md.fullMessageLength[i] = md.fullMessageLength[i] >>> 0;`",
+     "pct": 1.01,
+     "per_iter": 48075
+    },
+    {
+     "js_fn": "node_modules_node_forge_lib_sha256_js::20",
+     "js_loc": "node-forge/lib/sha256.js:248 `var len = bytes.length();`",
+     "pct": 0.99,
+     "per_iter": 47005
+    },
+    {
+     "js_fn": "node_modules_node_forge_lib_util_js::103",
+     "js_loc": "node-forge/lib/util.js:1428 `return new util.ByteBuffer(input);`",
+     "pct": 0.93,
+     "per_iter": 44221
+    },
+    {
+     "js_fn": "node_modules_node_forge_lib_util_js::63",
+     "js_loc": "node-forge/lib/util.js:705 `rval += b.toString(16);`",
+     "pct": 0.86,
+     "per_iter": 40777
+    },
+    {
+     "js_fn": "node_modules_node_forge_lib_sha256_js::17",
+     "js_loc": "node-forge/lib/sha256.js:148 `finalBlock.putBytes(_input.bytes());`",
+     "pct": 0.77,
+     "per_iter": 36416
+    },
+    {
+     "js_fn": "node_modules_node_forge_lib_sha256_js::16",
+     "js_loc": "node-forge/lib/sha256.js:114 `if(_input.read > 2048 // _input.length() === 0) {`",
+     "pct": 0.76,
+     "per_iter": 36236
+    },
+    {
+     "js_fn": "node_modules_node_forge_lib_util_js::48",
+     "js_loc": "node-forge/lib/util.js:479 `this.data.charCodeAt(this.read) << 24 ^`",
+     "pct": 0.76,
+     "per_iter": 35926
+    },
+    {
+     "js_fn": "node_modules_node_forge_lib_sha256_js::14",
+     "js_loc": "node-forge/lib/sha256.js:65 `_input = forge.util.createBuffer();`",
+     "pct": 0.71,
+     "per_iter": 33494
+    },
+    {
+     "js_fn": "<no JS frame>",
+     "js_loc": null,
+     "pct": 0.63,
+     "per_iter": 29989
+    }
+   ],
+   "mechanisms": {
+    "accessor_descriptor": 79230,
+    "alloc": 569,
+    "buffer_typedarray": 25145,
+    "call_overhead": 64410,
+    "closure_box_args": 114796,
+    "dyn_index": 421408,
+    "exceptions": 51,
+    "gc_major": 4013,
+    "gc_minor": 27747,
+    "gc_other": 35387,
+    "generated_code": 463327,
+    "map_set": 1731,
+    "memops": 145878,
+    "method_dispatch": 580592,
+    "numeric_conv": 27270,
+    "other_runtime": 234556,
+    "promise_async": 21699,
+    "prop_lookup": 1535449,
+    "raw_alloc": 216633,
+    "regex": 12001,
+    "side_table_hash": 201315,
+    "string": 305961,
+    "unknown": 3,
+    "utf8_transcode": 192690,
+    "value_typeof": 21967,
+    "write_barrier": 4694
+   },
+   "n1": 5000,
+   "n2": 20000,
+   "node_per_iter": 126967.31666666667,
+   "perry_instr_n1": 28590591303,
+   "perry_instr_n2": 99668422028,
+   "perry_per_iter": 4738522.048333333,
+   "pkg_code_on_stack_min_pct": 66.9,
+   "ratio": 37.32080170500571,
+   "regex_detail": {
+    "execute": 12001
+   },
+   "sample_freq": 1956,
+   "sample_scale": 0.9998,
+   "sampled_per_iter": 4739403.6968,
+   "samples": {
+    "n1": 3490,
+    "n2": 11735
+   },
+   "self_top": [
+    [
+     "perry_closure_node_modules_node_forge_lib_sha256_js__20",
+     320056,
+     6.75
+    ],
+    [
+     "perry_runtime::object::shapes::shape_descriptor_by_id",
+     269784,
+     5.69
+    ],
+    [
+     "js_native_call_method",
+     232028,
+     4.9
+    ],
+    [
+     "perry_runtime::object::native_call_method::handle_methods::dispatch_handle",
+     214460,
+     4.53
+    ],
+    [
+     "<std::hash::random::RandomState as core::hash::BuildHasher>::hash_one::<&char>",
+     179634,
+     3.79
+    ],
+    [
+     "perry_runtime::array::iterator::array_from_spread_value::{closure#0}",
+     166240,
+     3.51
+    ],
+    [
+     "perry_runtime::object::shapes::shape_slot_lookup_verdict",
+     165869,
+     3.5
+    ],
+    [
+     "js_array_get_f64",
+     133777,
+     2.82
+    ],
+    [
+     "__memcmp_evex_movbe",
+     131347,
+     2.77
+    ],
+    [
+     "perry_runtime::object::class_registry::state::class_id_for_decl_prototype_object",
+     131262,
+     2.77
+    ],
+    [
+     "js_method_site_miss",
+     122836,
+     2.59
+    ],
+    [
+     "core::str::converts::from_utf8",
+     114209,
+     2.41
+    ],
+    [
+     "perry_runtime::object::method_site::prime_inherited",
+     94272,
+     1.99
+    ],
+    [
+     "perry_runtime::object::class_registry::prototype_objects::class_prototype_object",
+     89080,
+     1.88
+    ],
+    [
+     "perry_runtime::arena::allocators::arena_alloc",
+     84709,
+     1.79
+    ],
+    [
+     "perry_runtime::closure::dynamic_props::is_closure_ptr",
+     81842,
+     1.73
+    ],
+    [
+     "perry_runtime::string::char_ops::utf16_unit_at",
+     79037,
+     1.67
+    ],
+    [
+     "perry_runtime::object::descriptor_state::get_accessor_descriptor",
+     75150,
+     1.59
+    ],
+    [
+     "js_dynamic_string_or_number_add",
+     68839,
+     1.45
+    ],
+    [
+     "perry_runtime::object::class_registry::state::class_decl_prototype_object",
+     68833,
+     1.45
+    ]
+   ],
+   "startup_instr": 4897981061.333336,
+   "status": "OK",
+   "unwind_reached_main": 0.991,
+   "warm": 1000
+  },
+  "redis/pipeline": {
+   "binary": "/root/claude-matrix-rerun-out/dbg/redis__pipeline",
+   "bucket_entry": {
+    "alloc\tjs_object_alloc_class_inline_keys_stamped": 174197,
+    "buffer_typedarray\tjs_method_site_miss": 192332,
+    "buffer_typedarray\tjs_native_call_method_by_id": 171438,
+    "gc_minor\t<no JS frame>": 884679,
+    "generated_code\t<inline JS>": 275262,
+    "map_set\tperry_runtime::object::field_get_set::ic_miss::private_guard_checked": 329013,
+    "method_dispatch\tjs_native_call_method_by_id": 320358,
+    "private_fields\tjs_object_get_field_by_name_f64": 644500,
+    "private_fields\tjs_object_get_field_by_property_id_f64": 2070775,
+    "private_fields\tjs_object_set_field_by_property_id": 300537,
+    "private_fields\tjs_private_field_add": 1546997,
+    "private_fields\tjs_private_guard_site": 201760,
+    "private_fields\tjs_private_method_call": 692332,
+    "private_fields\tjs_put_value_set": 1023683,
+    "private_fields\tjs_put_value_set_packed_miss": 1338774,
+    "private_fields\tperry_runtime::object::field_get_set::ic_miss::get_field_ic_miss_impl": 2040858,
+    "private_fields\tperry_runtime::object::field_get_set::ic_miss::private_guard_checked": 4651453,
+    "prop_lookup\tjs_class_field_get_ic": 1089144,
+    "prop_lookup\tjs_dyn_index_get": 283827,
+    "prop_lookup\tjs_dynamic_object_get_property": 821717,
+    "prop_lookup\tjs_for_of_next": 228694,
+    "prop_lookup\tjs_iterator_next_result": 188475,
+    "prop_lookup\tjs_method_site_miss": 1105439,
+    "prop_lookup\tjs_native_call_method_by_id": 832657,
+    "prop_lookup\tjs_new_function_construct": 180753,
+    "prop_lookup\tjs_put_value_set": 405305,
+    "prop_lookup\tjs_put_value_set_packed_miss": 290881,
+    "prop_lookup\tperry_runtime::object::field_get_set::ic_miss::get_field_ic_miss_impl": 1491454,
+    "prop_lookup\tperry_runtime::object::field_get_set::ic_miss::private_guard_checked": 609913,
+    "prop_lookup\tperry_runtime::object::field_set_by_name::tail::set_field_by_name_object_tail": 276188,
+    "prop_write\tjs_put_value_set_packed_miss": 180542,
+    "proto_chain_read\tjs_dyn_index_get": 269186,
+    "string\tjs_class_field_get_ic": 183593,
+    "string\tperry_runtime::object::field_get_set::ic_miss::get_field_ic_miss_impl": 532902
+   },
+   "buckets": {
+    "accessor_descriptor": 563480,
+    "alloc": 294475,
+    "buffer_typedarray": 844566,
+    "call_overhead": 30414,
+    "closure_box_args": 545421,
+    "dyn_index": 342216,
+    "exceptions": 63541,
+    "gc_major": 1480,
+    "gc_minor": 914724,
+    "gc_other": 253592,
+    "generated_code": 275262,
+    "json": 11463,
+    "map_set": 467871,
+    "memops": 6,
+    "method_dispatch": 577531,
+    "numeric_conv": -4971,
+    "other_runtime": 267509,
+    "private_fields": 14788883,
+    "promise_async": 387608,
+    "prop_lookup": 8934921,
+    "prop_write": 666062,
+    "proto_chain_read": 429633,
+    "raw_alloc": 99561,
+    "regex": -4986,
+    "side_table_hash": -9885,
+    "string": 1870121,
+    "symbol": 127783,
+    "unknown": 9393,
+    "utf8_transcode": 13535,
+    "value_typeof": 234132,
+    "write_barrier": 53955
+   },
+   "chains": [
+    {
+     "bucket": "private_fields",
+     "entry": "js_private_field_add",
+     "js_fn": "node_modules::redis_client_dist_lib_client_parser_js.BasicCommandParser_constructor",
+     "js_loc": "@redis/client/dist/lib/client/parser.js:46 `this.#keyPrefix = keyPrefix === undefined // keyPrefix.l`",
+     "leaf": "perry_runtime::object::field_set_by_name::tail::set_field_by_name_object_tail",
+     "leaf_share": 0.1,
+     "pct": 5.05,
+     "per_iter": 1670623
+    },
+    {
+     "bucket": "gc_minor",
+     "entry": "<no JS frame>",
+     "js_fn": "<no JS frame>",
+     "js_loc": null,
+     "leaf": "<&mut perry_runtime::gc::copying::run_copied_minor_attempt::{closure#0} as core::ops::function::FnMut<(perry_runtime::gc::roots::MutableRootSlot,)>>::call_mut",
+     "leaf_share": 0.29,
+     "pct": 3.04,
+     "per_iter": 1006028
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_dynamic_object_get_property",
+     "js_fn": "node_modules::redis_client_dist_lib_client_linked_list_js.EmptyAwareSinglyLinkedList.shift",
+     "js_loc": "@redis/client/dist/lib/client/linked-list.js:196 `if (old !== this.length && this.length === 0) {`",
+     "leaf": "perry_runtime::object::class_registry::class_meta::is_anon_shape_class_id",
+     "leaf_share": 0.2,
+     "pct": 1.66,
+     "per_iter": 547129
+    },
+    {
+     "bucket": "private_fields",
+     "entry": "js_object_get_field_by_property_id_f64",
+     "js_fn": "node_modules::redis_client_dist_lib_client_linked_list_js.SinglyLinkedList..get_get_length",
+     "js_loc": "@redis/client/dist/lib/client/linked-list.js:0",
+     "leaf": "perry_runtime::object::field_get_set::ic_miss::take_private_field_owner",
+     "leaf_share": 0.46,
+     "pct": 1.54,
+     "per_iter": 509643
+    },
+    {
+     "bucket": "private_fields",
+     "entry": "js_object_get_field_by_property_id_f64",
+     "js_fn": "node_modules::redis_client_dist_lib_client_linked_list_js.SinglyLinkedList.shift",
+     "js_loc": "@redis/client/dist/lib/client/linked-list.js:0",
+     "leaf": "perry_runtime::object::field_get_set::ic_miss::take_private_field_owner",
+     "leaf_share": 0.28,
+     "pct": 1.49,
+     "per_iter": 491075
+    },
+    {
+     "bucket": "private_fields",
+     "entry": "perry_runtime::object::field_get_set::ic_miss::private_guard_checked",
+     "js_fn": "node_modules::redis_client_dist_lib_RESP_decoder_js.Decoder.#decodeNestedType",
+     "js_loc": "@redis/client/dist/lib/RESP/decoder.js:444 `const type = chunk[this.#cursor];`",
+     "leaf": "perry_runtime::object::shapes::shape_descriptor_by_id",
+     "leaf_share": 0.09,
+     "pct": 1.4,
+     "per_iter": 463379
+    },
+    {
+     "bucket": "private_fields",
+     "entry": "js_put_value_set_packed_miss",
+     "js_fn": "node_modules::redis_client_dist_lib_client_commands_queue_js.76",
+     "js_loc": "@redis/client/dist/lib/client/commands-queue.js:431 `this.#chainInExecution = toSend.chainId;`",
+     "leaf": "alloc::fmt::format::format_inner",
+     "leaf_share": 0.11,
+     "pct": 1.11,
+     "per_iter": 367549
+    },
+    {
+     "bucket": "private_fields",
+     "entry": "js_object_get_field_by_property_id_f64",
+     "js_fn": "node_modules::redis_client_dist_lib_client_linked_list_js.DoublyLinkedList.push",
+     "js_loc": "@redis/client/dist/lib/client/linked-list.js:0",
+     "leaf": "perry_runtime::object::field_get_set::ic_miss::take_private_field_owner",
+     "leaf_share": 0.56,
+     "pct": 1.1,
+     "per_iter": 364532
+    },
+    {
+     "bucket": "private_fields",
+     "entry": "js_put_value_set_packed_miss",
+     "js_fn": "node_modules::redis_client_dist_lib_RESP_decoder_js.Decoder.#decodeUnsingedNumber",
+     "js_loc": "@redis/client/dist/lib/RESP/decoder.js:190 `if (byte === ASCII['\\r']) {`",
+     "leaf": "perry_runtime::object::field_set_by_name::tail::set_field_by_name_object_tail",
+     "leaf_share": 0.18,
+     "pct": 1.05,
+     "per_iter": 346687
+    },
+    {
+     "bucket": "private_fields",
+     "entry": "js_object_get_field_by_property_id_f64",
+     "js_fn": "node_modules::redis_client_dist_lib_client_linked_list_js.SinglyLinkedList.push",
+     "js_loc": "@redis/client/dist/lib/client/linked-list.js:0",
+     "leaf": "perry_runtime::object::field_get_set::ic_miss::take_private_field_owner",
+     "leaf_share": 0.32,
+     "pct": 1.0,
+     "per_iter": 329316
+    },
+    {
+     "bucket": "private_fields",
+     "entry": "perry_runtime::object::field_get_set::ic_miss::private_guard_checked",
+     "js_fn": "node_modules::redis_client_dist_lib_RESP_decoder_js.Decoder.write",
+     "js_loc": "@redis/client/dist/lib/RESP/decoder.js:90 `const type = chunk[this.#cursor];`",
+     "leaf": "perry_runtime::map::is_registered_map",
+     "leaf_share": 0.2,
+     "pct": 0.97,
+     "per_iter": 318994
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_dynamic_object_get_property",
+     "js_fn": "node_modules::redis_client_dist_lib_client_linked_list_js.EmptyAwareSinglyLinkedList.shift",
+     "js_loc": "@redis/client/dist/lib/client/linked-list.js:194 `const old = this.length;`",
+     "leaf": "perry_runtime::object::class_registry::class_meta::is_anon_shape_class_id",
+     "leaf_share": 0.2,
+     "pct": 0.96,
+     "per_iter": 316082
+    },
+    {
+     "bucket": "private_fields",
+     "entry": "js_put_value_set",
+     "js_fn": "node_modules::redis_client_dist_lib_RESP_decoder_js.Decoder.#decodeNestedType",
+     "js_loc": "@redis/client/dist/lib/RESP/decoder.js:444 `const type = chunk[this.#cursor];`",
+     "leaf": "perry_runtime::object::shapes::shape_descriptor_by_id",
+     "leaf_share": 0.17,
+     "pct": 0.91,
+     "per_iter": 302217
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_native_call_method_by_id",
+     "js_fn": "node_modules::redis_client_dist_lib_client_multi_command_js.14",
+     "js_loc": "@redis/client/dist/lib/client/multi-command.js:18 `return this.addCommand(redisArgs, transformReply);`",
+     "leaf": "js_object_get_field_by_name",
+     "leaf_share": 0.15,
+     "pct": 0.86,
+     "per_iter": 283169
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_method_site_miss",
+     "js_fn": "redis_pipeline_ts::8",
+     "js_loc": "redis/pipeline.ts:20 `m = m.hGetAll(key + \":h\").lRange(key + \":l\", 0, 3);`",
+     "leaf": "perry_runtime::object::shapes::shape_descriptor_by_id",
+     "leaf_share": 0.36,
+     "pct": 0.81,
+     "per_iter": 268918
+    },
+    {
+     "bucket": "private_fields",
+     "entry": "js_put_value_set_packed_miss",
+     "js_fn": "node_modules::redis_client_dist_lib_RESP_decoder_js.Decoder.#findCRLF",
+     "js_loc": "@redis/client/dist/lib/RESP/decoder.js:297 `this.#cursor = chunk.length;`",
+     "leaf": "alloc::fmt::format::format_inner",
+     "leaf_share": 0.16,
+     "pct": 0.81,
+     "per_iter": 267380
+    },
+    {
+     "bucket": "private_fields",
+     "entry": "js_object_get_field_by_property_id_f64",
+     "js_fn": "node_modules::redis_client_dist_lib_client_linked_list_js.DoublyLinkedList.shift",
+     "js_loc": "@redis/client/dist/lib/client/linked-list.js:0",
+     "leaf": "perry_runtime::object::field_get_set::ic_miss::take_private_field_owner",
+     "leaf_share": 0.83,
+     "pct": 0.78,
+     "per_iter": 257831
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_for_of_next",
+     "js_fn": "node_modules::redis_client_dist_lib_client_socket_js.RedisSocket.write",
+     "js_loc": "@redis/client/dist/lib/client/socket.js:360 `this.#socket.uncork();`",
+     "leaf": "perry_runtime::object::shapes::stamp_object_shape_id_with_carrier_note",
+     "leaf_share": 0.18,
+     "pct": 0.71,
+     "per_iter": 234642
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_native_call_method_by_id",
+     "js_fn": "node_modules::redis_client_dist_lib_client_commands_queue_js.76",
+     "js_loc": "@redis/client/dist/lib/client/commands-queue.js:433 `this.#waitingForReply.push(toSend);`",
+     "leaf": "perry_runtime::object::class_registry::class_meta::is_anon_shape_class_id",
+     "leaf_share": 0.18,
+     "pct": 0.71,
+     "per_iter": 233171
+    },
+    {
+     "bucket": "private_fields",
+     "entry": "js_object_get_field_by_name_f64",
+     "js_fn": "node_modules::redis_client_dist_lib_client_linked_list_js.SinglyLinkedList.push",
+     "js_loc": "@redis/client/dist/lib/client/linked-list.js:0",
+     "leaf": "perry_runtime::object::field_get_set::ic_miss::take_private_field_owner",
+     "leaf_share": 0.18,
+     "pct": 0.7,
+     "per_iter": 232331
+    },
+    {
+     "bucket": "private_fields",
+     "entry": "js_put_value_set_packed_miss",
+     "js_fn": "node_modules::redis_client_dist_lib_client_parser_js.BasicCommandParser_constructor",
+     "js_loc": "@redis/client/dist/lib/client/parser.js:46 `this.#keyPrefix = keyPrefix === undefined // keyPrefix.l`",
+     "leaf": "perry_runtime::object::shapes::shape_descriptor_by_id",
+     "leaf_share": 0.14,
+     "pct": 0.67,
+     "per_iter": 222434
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_iterator_next_result",
+     "js_fn": "node_modules::redis_client_dist_lib_commands_HSET_js.12",
+     "js_loc": "@redis/client/dist/lib/commands/HSET.js:5 `parser.push('HSET');`",
+     "leaf": "<std::hash::random::RandomState as core::hash::BuildHasher>::hash_one::<&(usize, u32)>",
+     "leaf_share": 0.15,
+     "pct": 0.67,
+     "per_iter": 219877
+    },
+    {
+     "bucket": "private_fields",
+     "entry": "perry_runtime::object::field_get_set::ic_miss::private_guard_checked",
+     "js_fn": "node_modules::redis_client_dist_lib_client_parser_js.BasicCommandParser.push",
+     "js_loc": "@redis/client/dist/lib/client/parser.js:80 `this.#redisArgs.push(...arg);`",
+     "leaf": "<alloc::string::String as core::fmt::Write>::write_str",
+     "leaf_share": 0.15,
+     "pct": 0.65,
+     "per_iter": 214034
+    },
+    {
+     "bucket": "prop_lookup",
+     "entry": "js_method_site_miss",
+     "js_fn": "node_modules::redis_client_dist_lib_client_index_js.217",
+     "js_loc": "@redis/client/dist/lib/client/index.js:1309 `promises.push(this._self.#queue.addCommand(args, {`",
+     "leaf": "perry_runtime::object::method_site::prime_inherited",
+     "leaf_share": 0.16,
+     "pct": 0.61,
+     "per_iter": 201454
+    },
+    {
+     "bucket": "private_fields",
+     "entry": "perry_runtime::object::field_get_set::ic_miss::private_guard_checked",
+     "js_fn": "node_modules::redis_client_dist_lib_RESP_decoder_js.Decoder.#decodeSimpleString",
+     "js_loc": "@redis/client/dist/lib/RESP/decoder.js:305 `const start = this.#cursor, crlfIndex = this.#findCRLF(c`",
+     "leaf": "perry_runtime::object::field_get_set::ic_miss::current_private_lexical_brand",
+     "leaf_share": 0.22,
+     "pct": 0.59,
+     "per_iter": 194067
+    }
+   ],
+   "correctness": "not checked against node (reused node reference)",
+   "entry_top": [
+    [
+     "perry_runtime::object::field_get_set::ic_miss::private_guard_checked",
+     5653234,
+     17.11
+    ],
+    [
+     "perry_runtime::object::field_get_set::ic_miss::get_field_ic_miss_impl",
+     4498862,
+     13.61
+    ],
+    [
+     "js_object_get_field_by_property_id_f64",
+     2266412,
+     6.86
+    ],
+    [
+     "js_put_value_set",
+     2049701,
+     6.2
+    ],
+    [
+     "js_put_value_set_packed_miss",
+     2021031,
+     6.12
+    ],
+    [
+     "js_method_site_miss",
+     1972967,
+     5.97
+    ],
+    [
+     "js_native_call_method_by_id",
+     1795330,
+     5.43
+    ],
+    [
+     "js_private_field_add",
+     1546997,
+     4.68
+    ],
+    [
+     "js_class_field_get_ic",
+     1295688,
+     3.92
+    ],
+    [
+     "js_dynamic_object_get_property",
+     1217266,
+     3.68
+    ],
+    [
+     "<no JS frame>",
+     1020477,
+     3.09
+    ],
+    [
+     "js_object_get_field_by_name_f64",
+     857094,
+     2.59
+    ],
+    [
+     "js_dyn_index_get",
+     822612,
+     2.49
+    ],
+    [
+     "js_private_method_call",
+     692332,
+     2.09
+    ],
+    [
+     "perry_runtime::object::field_set_by_name::tail::set_field_by_name_object_tail",
+     437800,
+     1.32
+    ],
+    [
+     "js_object_set_field_by_property_id",
+     418287,
+     1.27
+    ],
+    [
+     "js_for_of_next",
+     353573,
+     1.07
+    ],
+    [
+     "js_new_function_construct",
+     290364,
+     0.88
+    ],
+    [
+     "<inline JS>",
+     275262,
+     0.83
+    ],
+    [
+     "js_native_call_method_apply_by_id",
+     269256,
+     0.81
+    ]
+   ],
+   "excess_per_iter": 32418671.472,
+   "incl_js_top": [
+    [
+     "node_modules::redis_client_dist_lib_RESP_decoder_js.Decoder.write",
+     14230646,
+     43.06
+    ],
+    [
+     "node_modules::redis_client_dist_lib_RESP_decoder_js.Decoder.#decodeTypeValue",
+     13660091,
+     41.33
+    ],
+    [
+     "node_modules::redis_client_dist_lib_client_index_js.101",
+     12774650,
+     38.65
+    ],
+    [
+     "node_modules::redis_client_dist_lib_client_socket_js.53",
+     12330977,
+     37.31
+    ],
+    [
+     "redis_pipeline_ts::10",
+     11624471,
+     35.17
+    ],
+    [
+     "redis_pipeline_ts::8",
+     11609970,
+     35.13
+    ],
+    [
+     "redis_pipeline_ts::4",
+     11609970,
+     35.13
+    ],
+    [
+     "node_modules::redis_client_dist_lib_RESP_decoder_js.Decoder.#decodeArray",
+     7099582,
+     21.48
+    ],
+    [
+     "node_modules::redis_client_dist_lib_RESP_decoder_js.Decoder.#decodeArrayWithLength",
+     7046841,
+     21.32
+    ],
+    [
+     "node_modules::redis_client_dist_lib_RESP_decoder_js.Decoder.#decodeArrayItems",
+     7046696,
+     21.32
+    ],
+    [
+     "node_modules::redis_client_dist_lib_RESP_decoder_js.Decoder.#decodeNestedType",
+     6733378,
+     20.37
+    ],
+    [
+     "node_modules::redis_client_dist_lib_client_multi_command_js.14",
+     6663681,
+     20.16
+    ],
+    [
+     "node_modules::redis_client_dist_lib_RESP_decoder_js.Decoder.#decodeNestedTypeValue",
+     6031806,
+     18.25
+    ],
+    [
+     "node_modules::redis_client_dist_lib_client_index_js.175",
+     5055596,
+     15.3
+    ],
+    [
+     "node_modules::redis_client_dist_lib_client_index_js.RedisClient.#write",
+     5023444,
+     15.2
+    ],
+    [
+     "node_modules::redis_client_dist_lib_client_socket_js.RedisSocket.write",
+     4919221,
+     14.88
+    ],
+    [
+     "node_modules::redis_client_dist_lib_client_multi_command_js.22",
+     4121566,
+     12.47
+    ],
+    [
+     "node_modules::redis_client_dist_lib_client_multi_command_js.RedisClientMultiCommand.exec",
+     4098140,
+     12.4
+    ],
+    [
+     "node_modules::redis_client_dist_lib_client_index_js.RedisClient._executeMulti",
+     3996546,
+     12.09
+    ],
+    [
+     "node_modules::redis_client_dist_lib_RESP_decoder_js.Decoder.#handleDecodedValue",
+     3968662,
+     12.01
+    ]
+   ],
+   "incl_top": [
+    [
+     "js_native_call_method",
+     29687785,
+     89.83
+    ],
+    [
+     "js_method_site_miss",
+     29574306,
+     89.49
+    ],
+    [
+     "js_native_call_value",
+     29513780,
+     89.3
+    ],
+    [
+     "perry_runtime::object::class_registry::dispatch::call_vtable_method_value",
+     28253074,
+     85.49
+    ],
+    [
+     "perry_runtime::abi_trampoline::call_all_f64_x86_64",
+     28188128,
+     85.29
+    ],
+    [
+     "perry_runtime::closure::dispatch::bound::dispatch_bound_method",
+     24783860,
+     74.99
+    ],
+    [
+     "perry_runtime::closure::dispatch::calln::dispatch_call_slice",
+     24260270,
+     73.41
+    ],
+    [
+     "js_private_method_call",
+     19713538,
+     59.65
+    ],
+    [
+     "perry_runtime::closure::registry::dispatch_rest_bundled",
+     19239223,
+     58.21
+    ],
+    [
+     "perry_sjlj_try",
+     16985050,
+     51.39
+    ],
+    [
+     "js_closure_call2",
+     16354188,
+     49.48
+    ],
+    [
+     "perry_runtime::node_stream::event_emitter::emit_stream_event",
+     12631101,
+     38.22
+    ],
+    [
+     "perry_runtime::node_stream::event_emitter::emit_stream_event_from_array",
+     12548885,
+     37.97
+    ],
+    [
+     "js_ext_net_drain_pending",
+     12289396,
+     37.19
+    ],
+    [
+     "perry_runtime::promise::microtasks::run_microtasks",
+     11851541,
+     35.86
+    ],
+    [
+     "perry_runtime::promise::microtasks::pump_protected",
+     11840373,
+     35.83
+    ],
+    [
+     "perry_runtime::exception::arm_trap_and_run::invoke::<perry_runtime::promise::microtasks::run_microtasks::{closure#4},",
+     11840373,
+     35.83
+    ],
+    [
+     "perry_runtime::promise::async_step::call_async_step_body",
+     11660409,
+     35.28
+    ],
+    [
+     "js_run_stdlib_pump",
+     11146046,
+     33.73
+    ],
+    [
+     "js_native_call_method_by_id",
+     7807206,
+     23.62
+    ]
+   ],
+   "js_sites": [
+    {
+     "js_fn": "node_modules::redis_client_dist_lib_client_parser_js.BasicCommandParser_constructor",
+     "js_loc": "@redis/client/dist/lib/client/parser.js:46 `this.#keyPrefix = keyPrefix === undefined // keyPrefix.l`",
+     "pct": 6.86,
+     "per_iter": 2268296
+    },
+    {
+     "js_fn": "node_modules::redis_client_dist_lib_client_linked_list_js.SinglyLinkedList.push",
+     "js_loc": "@redis/client/dist/lib/client/linked-list.js:0",
+     "pct": 3.83,
+     "per_iter": 1265649
+    },
+    {
+     "js_fn": "node_modules::redis_client_dist_lib_client_linked_list_js.SinglyLinkedList.shift",
+     "js_loc": "@redis/client/dist/lib/client/linked-list.js:0",
+     "pct": 3.28,
+     "per_iter": 1082534
+    },
+    {
+     "js_fn": "<no JS frame>",
+     "js_loc": null,
+     "pct": 3.09,
+     "per_iter": 1020477
+    },
+    {
+     "js_fn": "node_modules::redis_client_dist_lib_RESP_decoder_js.Decoder.#decodeNestedType",
+     "js_loc": "@redis/client/dist/lib/RESP/decoder.js:444 `const type = chunk[this.#cursor];`",
+     "pct": 2.93,
+     "per_iter": 969791
+    },
+    {
+     "js_fn": "node_modules::redis_client_dist_lib_client_linked_list_js.DoublyLinkedList.shift",
+     "js_loc": "@redis/client/dist/lib/client/linked-list.js:0",
+     "pct": 2.78,
+     "per_iter": 918228
+    },
+    {
+     "js_fn": "node_modules::redis_client_dist_lib_client_linked_list_js.DoublyLinkedList.push",
+     "js_loc": "@redis/client/dist/lib/client/linked-list.js:0",
+     "pct": 2.74,
+     "per_iter": 904569
+    },
+    {
+     "js_fn": "node_modules::redis_client_dist_lib_RESP_decoder_js.Decoder.write",
+     "js_loc": "@redis/client/dist/lib/RESP/decoder.js:90 `const type = chunk[this.#cursor];`",
+     "pct": 2.27,
+     "per_iter": 751682
+    },
+    {
+     "js_fn": "node_modules::redis_client_dist_lib_client_linked_list_js.EmptyAwareSinglyLinkedList.shift",
+     "js_loc": "@redis/client/dist/lib/client/linked-list.js:196 `if (old !== this.length && this.length === 0) {`",
+     "pct": 2.22,
+     "per_iter": 732252
+    },
+    {
+     "js_fn": "node_modules::redis_client_dist_lib_client_commands_queue_js.76",
+     "js_loc": "@redis/client/dist/lib/client/commands-queue.js:433 `this.#waitingForReply.push(toSend);`",
+     "pct": 2.03,
+     "per_iter": 669767
+    },
+    {
+     "js_fn": "node_modules::redis_client_dist_lib_client_multi_command_js.14",
+     "js_loc": "@redis/client/dist/lib/client/multi-command.js:14 `const parser = new parser_1.BasicCommandParser(this.#key`",
+     "pct": 1.97,
+     "per_iter": 651193
+    },
+    {
+     "js_fn": "node_modules::redis_client_dist_lib_client_commands_queue_js.RedisCommandsQueue.#onReply",
+     "js_loc": "@redis/client/dist/lib/client/commands-queue.js:95 `this.#waitingForReply.shift().resolve(reply);`",
+     "pct": 1.91,
+     "per_iter": 632261
+    },
+    {
+     "js_fn": "node_modules::redis_client_dist_lib_RESP_decoder_js.Decoder.#decodeUnsingedNumber",
+     "js_loc": "@redis/client/dist/lib/RESP/decoder.js:190 `if (byte === ASCII['\\r']) {`",
+     "pct": 1.9,
+     "per_iter": 629084
+    },
+    {
+     "js_fn": "node_modules::redis_client_dist_lib_client_parser_js.BasicCommandParser.push",
+     "js_loc": "@redis/client/dist/lib/client/parser.js:80 `this.#redisArgs.push(...arg);`",
+     "pct": 1.9,
+     "per_iter": 627894
+    },
+    {
+     "js_fn": "node_modules::redis_client_dist_lib_client_index_js.217",
+     "js_loc": "@redis/client/dist/lib/client/index.js:1309 `promises.push(this._self.#queue.addCommand(args, {`",
+     "pct": 1.7,
+     "per_iter": 560972
+    },
+    {
+     "js_fn": "node_modules::redis_client_dist_lib_RESP_decoder_js.Decoder.#decodeStringWithLength",
+     "js_loc": "@redis/client/dist/lib/RESP/decoder.js:357 `const slice = chunk.subarray(this.#cursor, end);`",
+     "pct": 1.67,
+     "per_iter": 552013
+    },
+    {
+     "js_fn": "node_modules::redis_client_dist_lib_client_linked_list_js.SinglyLinkedList..get_get_length",
+     "js_loc": "@redis/client/dist/lib/client/linked-list.js:0",
+     "pct": 1.65,
+     "per_iter": 544670
+    },
+    {
+     "js_fn": "node_modules::redis_client_dist_lib_RESP_decoder_js.Decoder.#decodeUnsingedNumber",
+     "js_loc": "@redis/client/dist/lib/RESP/decoder.js:187 `let cursor = this.#cursor;`",
+     "pct": 1.58,
+     "per_iter": 522977
+    },
+    {
+     "js_fn": "node_modules::redis_client_dist_lib_client_commands_queue_js.43",
+     "js_loc": "@redis/client/dist/lib/client/commands-queue.js:213 `const node = this.#toWrite.add(value, options?.asap);`",
+     "pct": 1.56,
+     "per_iter": 515922
+    },
+    {
+     "js_fn": "node_modules::redis_client_dist_lib_commands_HSET_js.12",
+     "js_loc": "@redis/client/dist/lib/commands/HSET.js:5 `parser.push('HSET');`",
+     "pct": 1.48,
+     "per_iter": 487614
+    }
+   ],
+   "mechanisms": {
+    "accessor_descriptor": 655400,
+    "buffer_typedarray": 888347,
+    "call_overhead": 30414,
+    "closure_box_args": 468196,
+    "dyn_index": 450855,
+    "exceptions": 63541,
+    "gc_major": 1480,
+    "gc_minor": 914724,
+    "gc_other": 259008,
+    "generated_code": 275262,
+    "json": 6929,
+    "map_set": 1013372,
+    "memops": 1360542,
+    "method_dispatch": 381666,
+    "numeric_conv": -4971,
+    "other_runtime": 267509,
+    "private_fields": 4690656,
+    "promise_async": 354261,
+    "prop_lookup": 12091625,
+    "prop_write": 1133542,
+    "raw_alloc": 4774118,
+    "regex": -10530,
+    "side_table_hash": 343493,
+    "string": 1454685,
+    "symbol": 126400,
+    "unknown": 9393,
+    "utf8_transcode": 617753,
+    "value_typeof": 355801,
+    "write_barrier": 75821
+   },
+   "n1": 125,
+   "n2": 500,
+   "node_per_iter": 630622.5066666667,
+   "perry_instr_n1": 6316540185,
+   "perry_instr_n2": 18710025427,
+   "perry_per_iter": 33049293.978666667,
+   "pkg_code_on_stack_min_pct": 43.1,
+   "ratio": 52.40741272200709,
+   "regex_detail": {
+    "execute": -10530,
+    "protocol_property_gets": 5544
+   },
+   "sample_freq": 4000,
+   "sample_scale": 1.0004,
+   "sampled_per_iter": 33037131.72,
+   "samples": {
+    "n1": 1728,
+    "n2": 4866
+   },
+   "self_top": [
+    [
+     "perry_runtime::object::shapes::shape_descriptor_by_id",
+     2494351,
+     7.55
+    ],
+    [
+     "perry_runtime::object::field_get_set::ic_miss::take_private_field_owner",
+     1630875,
+     4.93
+    ],
+    [
+     "<alloc::string::String as core::fmt::Write>::write_str",
+     964169,
+     2.92
+    ],
+    [
+     "perry_runtime::map::is_registered_map",
+     797809,
+     2.41
+    ],
+    [
+     "perry_runtime::buffer::header::is_registered_buffer_slow",
+     784759,
+     2.37
+    ],
+    [
+     "__memcmp_evex_movbe",
+     775645,
+     2.35
+    ],
+    [
+     "alloc::fmt::format::format_inner",
+     607721,
+     1.84
+    ],
+    [
+     "perry_runtime::object::field_get_set::ic_miss::current_private_lexical_brand",
+     604925,
+     1.83
+    ],
+    [
+     "core::str::converts::from_utf8",
+     597568,
+     1.81
+    ],
+    [
+     "__memmove_avx512_unaligned_erms",
+     588788,
+     1.78
+    ],
+    [
+     "perry_runtime::object::field_get_set::ic_miss::get_field_ic_miss_impl",
+     540373,
+     1.64
+    ],
+    [
+     "core::fmt::write",
+     528674,
+     1.6
+    ],
+    [
+     "perry_runtime::arena::allocators::arena_alloc",
+     501964,
+     1.52
+    ],
+    [
+     "js_string_equals",
+     486002,
+     1.47
+    ],
+    [
+     "perry_runtime::object::field_get_set::get_field_by_name::get_field_by_name_past_data_probe",
+     438536,
+     1.33
+    ],
+    [
+     "perry_runtime::object::class_registry::class_meta::is_anon_shape_class_id",
+     418373,
+     1.27
+    ],
+    [
+     "js_object_get_own_field_or_undef",
+     406983,
+     1.23
+    ],
+    [
+     "perry_runtime::object::field_set_by_name::tail::set_field_by_name_object_tail",
+     399150,
+     1.21
+    ],
+    [
+     "perry_runtime::object::class_constructors::pinned_class_object_for_ancestor",
+     394289,
+     1.19
+    ],
+    [
+     "perry_runtime::object::inherited_read_cache::inherited_read_cache_lookup",
+     370081,
+     1.12
+    ]
+   ],
+   "startup_instr": 2185378437.6666665,
+   "status": "OK",
+   "unwind_reached_main": 0.839,
+   "warm": 50
+  }
+ }
+}

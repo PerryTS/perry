@@ -44,10 +44,14 @@ enum GuardNode {
         class_id: Option<u32>,
         fields: Vec<GuardField>,
     },
-    /// A class proved by identity + the per-object typed-layout-intact bit,
-    /// with no field walk. Only for a chain whose every field is declared
+    /// A class proved by identity + its shape, with no field walk: the
+    /// receiver's shape must carry an `F64` lane on each of the chain's
+    /// `field_count` slots. Only for a chain whose every field is declared
     /// `number` — see `OP_CLASS_NOMINAL` in the runtime validator.
-    ClassNominal(u32),
+    ClassNominal {
+        class_id: u32,
+        field_count: u32,
+    },
     Union(Vec<u32>),
     RecursiveRef(u32),
     Map {
@@ -170,11 +174,13 @@ impl<'a> GuardGraphBuilder<'a> {
             })
             .collect::<Option<Vec<_>>>()?;
         // A chain whose every field is a raw-f64 candidate needs no walk: the
-        // intact bit states the same value fact for all of them at once. An
-        // EMPTY chain is deliberately excluded — it has no value fact to carry,
-        // so requiring the intact bit there could only reject receivers the
-        // by-name walk accepts, buying nothing.
+        // shape's `F64` lanes over the chain's slots state the same value fact
+        // for all of them at once. An EMPTY chain is deliberately excluded — it
+        // has no value fact to carry, so requiring lanes there could only
+        // reject receivers the by-name walk accepts, buying nothing. A chain
+        // with more fields than the shape has lanes keeps the walk.
         let nominal = !fields.is_empty()
+            && fields.len() <= crate::typed_shape::BIRTH_REP_SLOTS as usize
             && fields
                 .iter()
                 .all(|(_, ty, _)| crate::typed_shape::type_is_raw_f64_candidate(ty));
@@ -267,10 +273,13 @@ impl<'a> GuardGraphBuilder<'a> {
             let (fields, nominal) = self.class_chain_fields(name)?;
             if nominal {
                 // Every declared field is `number`, so (class chain reaches C,
-                // typed-layout-intact) implies each one holds a plain double —
-                // the whole payload of the walk this replaces. Measured at
-                // ~326 instructions per field walked.
-                GuardNode::ClassNominal(class_id)
+                // the shape has an `F64` lane on each field slot) implies each
+                // one holds a plain double — the whole payload of the walk this
+                // replaces. Measured at ~326 instructions per field walked.
+                GuardNode::ClassNominal {
+                    class_id,
+                    field_count: fields.len() as u32,
+                }
             } else {
                 GuardNode::Object {
                     class_id: Some(class_id),
@@ -587,9 +596,13 @@ fn encode_node(node: &GuardNode) -> Option<Vec<u8>> {
                 put_u32(&mut out, field.ty);
             }
         }
-        GuardNode::ClassNominal(class_id) => {
+        GuardNode::ClassNominal {
+            class_id,
+            field_count,
+        } => {
             out.push(17);
             put_u32(&mut out, *class_id);
+            put_u32(&mut out, *field_count);
         }
         GuardNode::Union(variants) => {
             out.push(12);
@@ -1717,9 +1730,10 @@ mod tests {
     }
 
     /// A chain whose every field is declared `number` needs no walk: the
-    /// per-object typed-layout-intact bit states "this slot holds a plain
-    /// double" for all of them at once, which is exactly what walking them by
-    /// name would establish. Measured at ~326 instructions per field walked.
+    /// shape's `F64` lanes over the chain's slots state "this slot holds a
+    /// plain double" for all of them at once, which is exactly what walking
+    /// them by name would establish. Measured at ~326 instructions per field
+    /// walked.
     #[test]
     fn an_all_number_class_is_proved_nominally_without_a_field_walk() {
         let descriptor = class_descriptor(
@@ -1737,13 +1751,19 @@ mod tests {
         )
         .expect("a plain numeric class is guardable");
         let nominal = descriptor
-            .windows(5)
+            .windows(9)
             .find(|window| window[0] == 17)
             .unwrap_or_else(|| panic!("an OP_CLASS_NOMINAL node: {descriptor:?}"));
         assert_eq!(
             u32::from_le_bytes(nominal[1..5].try_into().unwrap()),
             21,
             "the class id is the identity half of the proof: {descriptor:?}"
+        );
+        assert_eq!(
+            u32::from_le_bytes(nominal[5..9].try_into().unwrap()),
+            3,
+            "the field count is the value half: the runtime checks an `F64` \
+             lane on each of these slots: {descriptor:?}"
         );
         assert!(
             !descriptor.windows(1).any(|window| window[0] == 11),

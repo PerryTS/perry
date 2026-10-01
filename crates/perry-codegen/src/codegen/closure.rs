@@ -10,7 +10,7 @@ use crate::expr::FnCtx;
 use crate::module::LlModule;
 use crate::stmt;
 use crate::strings::StringPool;
-use crate::types::{LlvmType, DOUBLE, I1, I32, I64, I8, PTR};
+use crate::types::{LlvmType, DOUBLE, I1, I32, I64, PTR};
 
 use super::opts::CrossModuleCtx;
 use super::typed_abi::{
@@ -597,7 +597,10 @@ pub(super) fn compile_closure(
     let mut shadow_slot_map = if super::helpers::precise_root_analysis_enabled() {
         let flat_const_ids: std::collections::HashSet<u32> =
             cross_module.flat_const_arrays.keys().copied().collect();
-        let m = crate::collectors::collect_pointer_typed_locals(params, body, &flat_const_ids);
+        let m = crate::scope_env::compact_root_slots(
+            crate::collectors::collect_pointer_typed_locals(params, body, &flat_const_ids),
+            &cross_module.scope_map,
+        );
         // #7208: reserve one slot per CAPTURED `this` / `new.target`, exactly
         // as `codegen/method.rs:316` and `:1344` do with their `+ 1`.
         //
@@ -662,7 +665,6 @@ pub(super) fn compile_closure(
         }
         map
     };
-    super::arguments::release_boxed_param_slots_at_exit(lf, params, &closure_boxed_vars, &locals);
 
     // Start with the closure's own params as local_types, then
     // merge in the module-wide map so captured-from-outer ids have
@@ -706,12 +708,20 @@ pub(super) fn compile_closure(
         body,
         captures,
         module_globals,
+        &cross_module.scope_map,
     );
-    let closure_captures: HashMap<u32, u32> = auto_captures
+    let mut closure_captures: HashMap<u32, u32> = auto_captures
         .iter()
         .enumerate()
         .map(|(i, id)| (*id, i as u32))
         .collect();
+    // Every member of a captured scope group reads through the group's one
+    // capture slot.
+    for (i, rep) in auto_captures.iter().enumerate() {
+        for member in cross_module.scope_map.members(*rep) {
+            closure_captures.insert(*member, i as u32);
+        }
+    }
 
     // `this` capture. Object-literal methods get `captures_this=true`
     // AND the creation site (lower_object_literal) patches a reserved
@@ -949,33 +959,22 @@ pub(super) fn compile_closure(
     // verified the public closure identity and its compiler-installed raw-box
     // capture mask. Capture slots never change. Load each box pointer once,
     // before user code or a safepoint can relocate the closure, and retain the
-    // non-moving box pointer for the invocation. This removes the repeated
+    // rooted box pointer for the invocation. This removes the repeated
     // checked closure-capture helper from hot callback bodies without caching
     // the mutable VALUE stored inside the box.
     let trusted_box_capture_ptrs = if trusted_box_captures {
-        let mut trusted = HashMap::new();
-        let mut boxed_captures: Vec<_> = closure_captures
+        let boxed_captures: Vec<_> = closure_captures
             .iter()
             .filter(|(id, _)| closure_boxed_vars.contains(id))
             .map(|(id, index)| (*id, *index))
             .collect();
-        boxed_captures.sort_unstable_by_key(|(_, index)| *index);
-        if !boxed_captures.is_empty() {
-            let header_size =
-                crate::target_layout::closure_header_size_bytes(&cross_module.target_triple)
-                    .to_string();
-            let blk = lf.block_mut(0).expect("closure body has an entry block");
-            let closure_ptr = blk.inttoptr(I64, "%this_closure");
-            let captures_base = blk.gep(I8, &closure_ptr, &[(I64, &header_size)]);
-            for (id, index) in boxed_captures {
-                let index = index.to_string();
-                let capture_slot = blk.gep(I64, &captures_base, &[(I64, &index)]);
-                let bits = blk.load(I64, &capture_slot);
-                let ptr = blk.inttoptr(I64, &bits);
-                trusted.insert(id, crate::expr::TrustedBoxCapturePtr { bits, ptr });
-            }
-        }
-        trusted
+        super::closure_capture_cells::cache_capture_cells(
+            lf,
+            &boxed_captures,
+            &cross_module.scope_map,
+            &cross_module.target_triple,
+            false,
+        )
     } else if crate::expr::box_capture_entry_cells_enabled()
         && !is_async
         // Match the repsel context gate: generator wrappers and CPS async-step
@@ -986,11 +985,11 @@ pub(super) fn compile_closure(
     {
         // The PUBLIC body's variant of the cache above (#9016 follow-up). The
         // dispatcher has validated nothing here, so each cached pointer is
-        // resolved through `js_box_capture_cell_ptr`, which answers the box's
-        // own (never-moving) cell for a registered pointer and a shared
-        // immutable `undefined` cell otherwise — per-read behaviour is then
-        // identical to `js_box_get_bits` in both cases. Admission is
-        // deliberately narrow:
+        // resolved through `js_box_capture_cell_ptr` / `js_scope_capture_base`,
+        // which answer the cell (or scope object) for a validated pointer and
+        // a shared immutable `undefined` region otherwise — per-read behaviour
+        // is then identical to the unchecked accessors in both cases.
+        // Admission is deliberately narrow:
         //
         // * only bindings this body NEVER writes — the `LocalSet`/`Update`
         //   trusted arms store straight through the cached pointer, which must
@@ -1002,16 +1001,14 @@ pub(super) fn compile_closure(
         //   suspension.
         //
         // The cell CONTENTS are still loaded per use, so a write through any
-        // other closure sharing the box stays visible; only the pointer — and
-        // the per-read registry probe `is_registered_box_ptr`, 1.45% of the
-        // wolf-ecs entity cycle — is hoisted to entry.
-        let mut cached = HashMap::new();
+        // other closure sharing the cell stays visible; only the pointer — and
+        // the per-read allocation/type probe, formerly 1.45% of the wolf-ecs
+        // entity cycle — is hoisted to entry.
         let mut boxed_captures: Vec<_> = closure_captures
             .iter()
             .filter(|(id, _)| closure_boxed_vars.contains(id))
             .map(|(id, index)| (*id, *index))
             .collect();
-        boxed_captures.sort_unstable_by_key(|(_, index)| *index);
         if !boxed_captures.is_empty() {
             let uses = super::closure_collect::collect_capture_use(
                 body,
@@ -1022,26 +1019,18 @@ pub(super) fn compile_closure(
                     .is_some_and(|u| u.writes == 0 && (u.reads >= 2 || u.loop_reads >= 1))
             });
         }
-        if !boxed_captures.is_empty() {
-            let header_size =
-                crate::target_layout::closure_header_size_bytes(&cross_module.target_triple)
-                    .to_string();
-            let blk = lf.block_mut(0).expect("closure body has an entry block");
-            let closure_ptr = blk.inttoptr(I64, "%this_closure");
-            let captures_base = blk.gep(I8, &closure_ptr, &[(I64, &header_size)]);
-            for (id, index) in boxed_captures {
-                let index = index.to_string();
-                let capture_slot = blk.gep(I64, &captures_base, &[(I64, &index)]);
-                let bits = blk.load(I64, &capture_slot);
-                let cell_bits = blk.call(I64, "js_box_capture_cell_ptr", &[(I64, &bits)]);
-                let ptr = blk.inttoptr(I64, &cell_bits);
-                cached.insert(id, crate::expr::TrustedBoxCapturePtr { bits, ptr });
-            }
-        }
-        cached
+        super::closure_capture_cells::cache_capture_cells(
+            lf,
+            &boxed_captures,
+            &cross_module.scope_map,
+            &cross_module.target_triple,
+            true,
+        )
     } else {
         HashMap::new()
     };
+
+    super::arguments::box_rooted_parameter_slots(lf, params, &closure_boxed_vars, &locals);
 
     let mut ctx = FnCtx {
         func: lf,
@@ -1120,6 +1109,7 @@ pub(super) fn compile_closure(
         class_field_counts: &cross_module.class_field_counts,
         class_init_chains: &cross_module.class_init_chains,
         class_header_image_globals: &cross_module.class_header_images,
+        class_birth_reps: &cross_module.class_birth_reps,
         imported_class_ctors: &cross_module.imported_class_ctors,
         func_signatures,
         func_synthetic_arguments,
@@ -1131,6 +1121,7 @@ pub(super) fn compile_closure(
             .compiler_private_async_i32_control_locals,
         compiler_private_async_i1_control_locals: &cross_module
             .compiler_private_async_i1_control_locals,
+        scope_map: &cross_module.scope_map,
         closure_rest_params,
         local_closure_func_ids: HashMap::new(),
         guard_free_closure_bindings: std::collections::HashSet::new(),

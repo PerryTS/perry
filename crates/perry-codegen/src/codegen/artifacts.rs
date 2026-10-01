@@ -1002,6 +1002,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         output_type,
         class_keys_init_data,
         class_header_image_inits,
+        &cross_module.class_birth_reps,
         class_ids,
         class_table,
         &hir.classes,

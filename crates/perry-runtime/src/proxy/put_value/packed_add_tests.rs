@@ -64,11 +64,6 @@ fn packed_add_refuse_bits_match_codegen() {
     // Charter step 3: the numeric proof is a shape kind, not a refused bit.
     let reserved = crate::gc::OBJ_FLAG_HAS_DESCRIPTORS | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES;
     assert_eq!(reserved, 0x0C00);
-    // ADD_LAYOUT_RESERVED: the states `mark_object_dynamic_shape_unknown` acts on.
-    assert_eq!(
-        crate::gc::GC_LAYOUT_SIDE_MASK | crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT,
-        0x9000
-    );
     assert_eq!(crate::gc::GC_FLAG_TENURED, 0x20);
     assert_eq!(std::mem::offset_of!(crate::gc::GcHeader, obj_type), 0);
     assert_eq!(std::mem::offset_of!(crate::gc::GcHeader, gc_flags), 1);
@@ -293,4 +288,31 @@ fn a_far_memo_moves_into_the_inline_ways() {
     promote_way(&ways, h, 3);
     assert_eq!(at(h + 1).0, next_home);
     assert_eq!(at(h + 3).0, hot);
+}
+
+/// Charter step 5 (P2c): a memo whose successor has an `F64` lane at the
+/// slot carries the flag the emitted hit refuses non-doubles with; a memo
+/// learned from a non-Number does not.
+#[test]
+fn a_number_key_add_memo_carries_the_store_check_flag() {
+    let key = interned(b"p2c_added_number");
+    let first = parsed(b"{\"p2c_q\":1}");
+    let site = leaked_site();
+    miss(site, first, key, 5.5);
+    assert!(
+        !crate::object::field_rep_store::shape_slot_is_any(stamp(first), 1),
+        "the successor has an F64 lane"
+    );
+    let guard = site.add_guard.load(Ordering::Relaxed);
+    assert_ne!(guard & ADD_F64_SLOT, 0);
+    assert_eq!(guard & ADD_SLOT_MASK, 1);
+    assert_eq!(guard >> ADD_SLOT_BITS, add_generation());
+
+    let other = interned(b"p2c_added_string");
+    let second = parsed(b"{\"p2c_q\":1}");
+    let text = crate::string::js_string_from_bytes(b"s".as_ptr(), 1);
+    let boxed = f64::from_bits(crate::value::js_nanbox_string(text as i64).to_bits());
+    let site2 = leaked_site();
+    miss(site2, second, other, boxed);
+    assert_eq!(site2.add_guard.load(Ordering::Relaxed) & ADD_F64_SLOT, 0);
 }

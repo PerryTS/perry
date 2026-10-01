@@ -1623,7 +1623,9 @@ fn lower_expr_native_js_value_bits(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<Lowe
         _ => None,
     };
     let bits = if let Some(id) = boxed_local_id {
-        if let Some(slot) = ctx.locals.get(&id).cloned() {
+        if let Some(bits) = crate::scope_env::access::read_scoped(ctx, id)? {
+            bits
+        } else if let Some(slot) = ctx.locals.get(&id).cloned() {
             let box_ptr = ctx.block().load(I64, &slot);
             ctx.block().call(I64, "js_box_get_bits", &[(I64, &box_ptr)])
         } else {

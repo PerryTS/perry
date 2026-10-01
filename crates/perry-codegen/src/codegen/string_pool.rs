@@ -128,6 +128,7 @@ pub(super) fn emit_string_pool(
     output_type: &str,
     class_keys_init_data: &[(String, String, u32, Vec<u64>, Vec<u64>)],
     class_header_image_inits: &std::collections::HashMap<String, (u32, u64, u32)>,
+    class_birth_reps: &HashMap<String, u64>,
     class_ids: &HashMap<String, u32>,
     classes: &HashMap<String, &perry_hir::Class>,
     // The classes this module defines, by identity: the registration loops
@@ -640,7 +641,7 @@ pub(super) fn emit_string_pool(
     // module init; every `new ClassName()` call from then on does a
     // single global load + inline allocator call (no SHAPE_CACHE
     // lookup, no js_build_class_keys_array overhead).
-    for (idx, (global_name, packed, field_count, raw_mask_words, pointer_mask_words)) in
+    for (idx, (global_name, packed, field_count, _raw_mask_words, _pointer_mask_words)) in
         class_keys_init_data.iter().enumerate()
     {
         chunker.roll_if_full();
@@ -654,6 +655,7 @@ pub(super) fn emit_string_pool(
             module_prefix,
             &class_keys_init_data[idx],
             class_header_image_inits,
+            class_birth_reps,
             class_ids,
         );
         let class_id = birth.class_id;
@@ -668,6 +670,17 @@ pub(super) fn emit_string_pool(
             format!("@{}", packed_global_names[idx])
         };
         let len_str = packed.len().to_string();
+        // Charter step 5, T1: the birth rep rides every class mint
+        // (`typed_shape::class_birth_rep_in`, one decision for the mint, the
+        // inline allocation's birth fill and the store precheck), the shape
+        // cache's mint beside the keys included: an outlined birth from that
+        // entry carries it. It is part of the content, so the static id
+        // already names it.
+        let rep_str = class_birth_reps
+            .get(global_name)
+            .copied()
+            .unwrap_or(0)
+            .to_string();
         let arr = blk.call(
             I64,
             "js_build_class_keys_array",
@@ -676,6 +689,7 @@ pub(super) fn emit_string_pool(
                 (I32, &fc_str),
                 (PTR, &packed_ref),
                 (I32, &len_str),
+                (I64, &rep_str),
             ],
         );
         let global_ref = format!("@{}", global_name);
@@ -698,41 +712,10 @@ pub(super) fn emit_string_pool(
         // and writes it into the receiver's shape word at birth. The keys
         // global is registered first, so the shape record and every future
         // instance refer to the rooted/rewriteable canonical array.
-        // #8405: a pointer-bearing layout that is provable at allocation gets
-        // its own typed ShapeId. Installing the immutable mask beside that id
-        // here makes `SIDE_MASK | INTACT` a complete header image; every later
-        // construction can stamp it without calling the per-object installer.
-        // The masks are part of the id's content (design step 4), so a
-        // same-keys object with a different representation can never alias
-        // this descriptor.
-        let shape_id = if birth.typed {
-            let raw_mask_ref = if raw_mask_words.is_empty() {
-                "null".to_string()
-            } else {
-                format!(
-                    "@{}",
-                    crate::typed_shape::raw_f64_mask_global_name_from_keys_global(global_name)
-                )
-            };
-            let pointer_mask_ref = format!(
-                "@{}",
-                crate::typed_shape::mask_global_name_from_keys_global(global_name)
-            );
-            blk.call(
-                I32,
-                "js_gc_typed_shape_id_for_keys",
-                &[
-                    (I32, &cid_str),
-                    (I64, &arr),
-                    (I32, &fc_str),
-                    (PTR, &raw_mask_ref),
-                    (I32, &raw_mask_words.len().to_string()),
-                    (PTR, &pointer_mask_ref),
-                    (I32, &pointer_mask_words.len().to_string()),
-                    (I32, &requested),
-                ],
-            )
-        } else if requested != "0" {
+        // The static birth id names the full (keys, live bound, class/proto,
+        // rep) content. The same rep is passed to a lazy mint when no static
+        // id is available, so every birth route installs the same facts.
+        let shape_id = if requested != "0" {
             // Design step 4: the per-class mint with the driver's static id.
             // Class registration precedes every instance, so this is the first
             // mint of these facts in the agent unless an importing module's
@@ -751,6 +734,7 @@ pub(super) fn emit_string_pool(
                     (I32, &live.to_string()),
                     (I32, &cid_str),
                     (I32, &requested),
+                    (I64, &rep_str),
                 ],
             )
         } else {
@@ -768,12 +752,18 @@ pub(super) fn emit_string_pool(
                         (I32, &fc_str),
                         (I32, &birth_live.to_string()),
                         (I32, &cid_str),
+                        (I64, &rep_str),
                     ],
                 ),
                 _ => blk.call(
                     I32,
                     "js_object_shape_id_for_class_keys",
-                    &[(I64, &arr), (I32, &fc_str), (I32, &cid_str)],
+                    &[
+                        (I64, &arr),
+                        (I32, &fc_str),
+                        (I32, &cid_str),
+                        (I64, &rep_str),
+                    ],
                 ),
             }
         };

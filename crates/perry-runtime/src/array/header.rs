@@ -85,11 +85,9 @@ pub(crate) unsafe fn array_object_flags_resolved(arr: *const ArrayHeader) -> u16
 ///   These carry a genuine `GcHeader` with a correct `obj_type`; they are
 ///   pinned rather than movable, which is a different property from being
 ///   untracked. This is the population #8041 started nulling.
-/// * **external** — `EXTERNAL_BUFFER_REGISTRY` /
-///   `EXTERNAL_UINT8ARRAY_REGISTRY` addresses, plus
-///   `shared_sab::alloc_shared_sab`'s `alloc_zeroed`. For these the eight
-///   bytes below the payload really are allocator bookkeeping and can read
-///   as any value.
+/// * **process-global** — `shared_sab::alloc_shared_sab` owns a real header
+///   outside the current thread's GC heap. Registration alone does not prove
+///   membership in that heap.
 ///
 /// So the tag is authoritative only once the address is known to be
 /// arena-backed. `typedarray::arena_payload_has_gc_type` is the predicate

@@ -253,6 +253,7 @@ pub(crate) fn test_install_external_shape_id(
         live_inline_slot_count,
         crate::object::shapes::PROTO_ID_DEFAULT,
         crate::object::shapes::ShapeObjectKind::Ordinary,
+        crate::object::field_rep::REP_ANY,
     )
 }
 

@@ -30,16 +30,8 @@ use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
 
-static EXTERNAL_BUFFER_REGISTRY: OnceLock<Mutex<HashSet<usize>>> = OnceLock::new();
-/// Latched true by the first external-buffer registration. Lets the hot
-/// `is_registered_buffer` probe — which JSON.stringify runs for every pointer
-/// value it serializes (#6009) — skip the registry mutex entirely in the
-/// (overwhelmingly common) processes that never register an external buffer.
-static EXTERNAL_BUFFERS_NONEMPTY: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
 static EXTERNAL_UINT8ARRAY_REGISTRY: OnceLock<Mutex<HashSet<usize>>> = OnceLock::new();
-/// Latched by the first external Uint8Array registration, exactly as
-/// `EXTERNAL_BUFFERS_NONEMPTY` does for buffers.
+/// Latched by the first external Uint8Array registration.
 ///
 /// Without it `is_uint8array_buffer_slow` took the global mutex on every
 /// thread-local MISS — that is, on every value that is not a Uint8Array —
@@ -50,29 +42,15 @@ static EXTERNAL_UINT8ARRAYS_NONEMPTY: std::sync::atomic::AtomicBool =
 static EXTERNAL_CRYPTO_KEY_META_REGISTRY: OnceLock<Mutex<HashMap<usize, CryptoKeyMeta>>> =
     OnceLock::new();
 
-fn external_buffers() -> &'static Mutex<HashSet<usize>> {
-    crate::once_init::get_or_init(&EXTERNAL_BUFFER_REGISTRY, || Mutex::new(HashSet::new()))
-}
-
-/// Diagnostic-only exact membership check for the legacy external-buffer ABI.
-#[inline]
-pub fn is_external_buffer(addr: usize) -> bool {
-    EXTERNAL_BUFFERS_NONEMPTY.load(std::sync::atomic::Ordering::Acquire)
-        && external_buffers()
-            .lock()
-            .map(|r| r.contains(&addr))
-            .unwrap_or(false)
-}
-
-/// Test probe (#11547): is `addr` in each of the three PROCESS-GLOBAL
-/// external registries (`EXTERNAL_BUFFER_REGISTRY`,
-/// `EXTERNAL_UINT8ARRAY_REGISTRY`, `EXTERNAL_CRYPTO_KEY_META_REGISTRY`)?
+/// Test probe (#11547): is `addr` in each of the two PROCESS-GLOBAL
+/// external registries (`EXTERNAL_UINT8ARRAY_REGISTRY`,
+/// `EXTERNAL_CRYPTO_KEY_META_REGISTRY`)?
 ///
 /// Unlike `is_uint8array_buffer` / `crypto_key_meta`, which consult this
 /// thread's registries first, it touches no thread-local, so a thread-exit
 /// range hook may call it from a TLS destructor. Plain locks, no allocation.
 #[doc(hidden)]
-pub fn external_registries_hold_for_test(addr: usize) -> [bool; 3] {
+pub fn external_registries_hold_for_test(addr: usize) -> [bool; 2] {
     use std::sync::PoisonError;
     let in_set = |set: &OnceLock<Mutex<HashSet<usize>>>| {
         set.get().is_some_and(|s| {
@@ -82,7 +60,6 @@ pub fn external_registries_hold_for_test(addr: usize) -> [bool; 3] {
         })
     };
     [
-        in_set(&EXTERNAL_BUFFER_REGISTRY),
         in_set(&EXTERNAL_UINT8ARRAY_REGISTRY),
         EXTERNAL_CRYPTO_KEY_META_REGISTRY.get().is_some_and(|m| {
             m.lock()
@@ -148,12 +125,6 @@ crate::perry_thread_local! {
     /// already there. Thread-local like the registry it guards, so there is
     /// no ordering to reason about.
     static BUFFER_ADDR_RANGE: Cell<(usize, usize)> = const { Cell::new((usize::MAX, 0)) };
-    /// `BufferHeader` wrappers whose bytes live in memory owned by native
-    /// code. The wrapper itself is an ordinary, non-moving GC object; only
-    /// its data pointer is external. `bun:ffi.toArrayBuffer`/`toBuffer` use
-    /// this to expose native memory without copying it or taking ownership.
-    static FOREIGN_BACKING_REGISTRY: RefCell<PtrHashMap<usize, usize>> =
-        RefCell::new(new_ptr_hash_map());
     /// Buffers that were specifically created via `new Uint8Array(...)` —
     /// formatted as `Uint8Array(N) [ a, b, c ]` instead of `<Buffer aa bb cc>`.
     static UINT8ARRAY_FROM_CTOR: RefCell<PtrHashSet<usize>> = RefCell::new(new_ptr_hash_set());
@@ -259,9 +230,6 @@ static BUFFER_LIKE_EVER_REGISTERED: RegistryLatch = RegistryLatch::new();
 ///
 /// It covers every table `is_registered_buffer_slow` consults:
 ///   * `BUFFER_REGISTRY` — only `register_buffer` inserts, and it admits first;
-///   * `EXTERNAL_BUFFER_REGISTRY` — both writers (`js_buffer_register_external`
-///     and `js_buffer_mark_as_crypto_key_external`) route through
-///     `register_buffer` with the same address first;
 ///   * `shared_sab`'s process-global SAB registry — `alloc_shared_sab` calls
 ///     [`note_buffer_like_registered`] with the backing address before it
 ///     publishes.
@@ -331,11 +299,6 @@ pub(crate) fn test_buffer_registry_probe_count() -> u64 {
 pub(crate) fn test_buffer_addr_window_bounds() -> Option<(usize, usize)> {
     BUFFER_LIKE_ADDR_WINDOW.bounds_for_tests()
 }
-
-/// Avoid a thread-local map probe in `buffer_data{,_mut}` until the first
-/// foreign-backed buffer is created. The latch is deliberately monotone;
-/// these accessors are among the hottest paths in the runtime.
-static FOREIGN_BACKING_EVER_REGISTERED: RegistryLatch = RegistryLatch::new();
 
 /// Arm the `is_registered_buffer` latch from outside this module.
 ///
@@ -592,7 +555,7 @@ pub(crate) fn is_small_buf_slab_addr(_addr: usize) -> bool {
 pub fn is_registered_buffer(addr: usize) -> bool {
     // Nothing buffer-shaped has ever been registered anywhere in this process
     // ⟹ nothing to find, in one atomic load. `register_buffer` (which
-    // `js_buffer_register_external` also routes through) and
+    // foreign allocation also routes through) and
     // `shared_sab::alloc_shared_sab` both arm this latch before they publish.
     if BUFFER_LIKE_EVER_REGISTERED.is_idle() {
         return false;
@@ -622,7 +585,7 @@ pub fn is_registered_buffer(addr: usize) -> bool {
                 !is_registered_buffer_slow(addr),
                 "BUFFER_LIKE_ADDR_WINDOW rejected {addr:#x}, but it IS a \
                  registered buffer. Some registration route reached \
-                 BUFFER_REGISTRY, the external-buffer registry or the \
+                 BUFFER_REGISTRY, the external-Uint8Array registry or the \
                  shared-SAB registry without calling \
                  `BUFFER_LIKE_ADDR_WINDOW.admit()` (via `register_buffer` or \
                  `note_buffer_like_registered`) first."
@@ -663,14 +626,6 @@ fn is_registered_buffer_slow(addr: usize) -> bool {
         (0, usize::MAX)
     };
     if addr >= lo && addr <= hi && BUFFER_REGISTRY.with(|r| r.borrow().contains(&addr)) {
-        return true;
-    }
-    if EXTERNAL_BUFFERS_NONEMPTY.load(std::sync::atomic::Ordering::Acquire)
-        && external_buffers()
-            .lock()
-            .map(|r| r.contains(&addr))
-            .unwrap_or(false)
-    {
         return true;
     }
     // #4913: recognise a process-global SAB backing reached as a module-level
@@ -720,11 +675,6 @@ fn release_external_buffer_registries_in_freed_ranges(
             let _ = slot.compare_exchange(old, 0, Ordering::Relaxed, Ordering::Relaxed);
         }
     }
-    if let Some(set) = EXTERNAL_BUFFER_REGISTRY.get() {
-        set.lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .retain(|&addr| !freed.contains(addr));
-    }
     if let Some(set) = EXTERNAL_UINT8ARRAY_REGISTRY.get() {
         set.lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -749,24 +699,6 @@ fn register_thread_exit_hook() {
 }
 
 #[no_mangle]
-pub extern "C" fn js_buffer_register_external(addr: usize) {
-    register_thread_exit_hook();
-    register_buffer(addr as *const BufferHeader);
-    // Latch BEFORE the insert: a concurrent `is_registered_buffer` that
-    // observed the latch after the insert-but-before-the-store window would
-    // skip the mutex and miss an already-registered buffer.
-    EXTERNAL_BUFFERS_NONEMPTY.store(true, std::sync::atomic::Ordering::Release);
-    if let Ok(mut r) = external_buffers().lock() {
-        r.insert(addr);
-    }
-    if crate::hot_diag::receiver_repr_on() {
-        crate::hot_diag::receiver_repr_note_constructed(
-            crate::hot_diag::ReceiverReprFamily::ExternalBuffer,
-        );
-    }
-}
-
-#[no_mangle]
 pub extern "C" fn js_buffer_mark_as_uint8array_external(addr: usize) {
     mark_as_uint8array(addr);
     register_external_uint8array(addr);
@@ -775,7 +707,7 @@ pub extern "C" fn js_buffer_mark_as_uint8array_external(addr: usize) {
 /// Insert into the process-global external-Uint8Array registry, arming
 /// `EXTERNAL_UINT8ARRAYS_NONEMPTY` first.
 ///
-/// Latch BEFORE the insert, matching `js_buffer_register_external`: a probe
+/// Latch BEFORE the insert: a probe
 /// that observed the latch in the insert-but-before-the-store window would
 /// skip the mutex and miss an already-registered address.
 ///
@@ -861,11 +793,6 @@ pub extern "C" fn js_buffer_mark_as_crypto_key_external(
     register_buffer(addr as *const BufferHeader);
     mark_as_uint8array(addr);
     mark_as_crypto_key_with_flags(addr, algo, hash, kind, extractable != 0, usages, bit_length);
-    // Latch BEFORE the insert — see js_buffer_register_external.
-    EXTERNAL_BUFFERS_NONEMPTY.store(true, std::sync::atomic::Ordering::Release);
-    if let Ok(mut r) = external_buffers().lock() {
-        r.insert(addr);
-    }
     register_external_uint8array(addr);
     if let Ok(mut r) = external_crypto_keys().lock() {
         r.insert(
@@ -968,8 +895,8 @@ pub fn asymmetric_key_meta(addr: usize) -> Option<(u8, u8)> {
 ///    excluded — their allocation is only a header. Runtime reads resolve
 ///    through `buffer_data` to the ultimate backing plus the view offset;
 ///  * foreign-backed wrappers (`buffer_alloc_foreign`, bun:ffi externals) are
-///    excluded at prime time — their header is a lone `BufferHeader` with no
-///    inline payload, so `header + 8` is past the allocation;
+///    excluded at prime time — their payload after `BufferHeader` holds a
+///    native data pointer, not inline bytes;
 ///  * ABA is closed the same way as every other buffer identity table:
 ///    `finalize_collected_dead_buffer` clears the entry when the buffer dies,
 ///    and `register_buffer` clears it again when the address is re-issued
@@ -1236,11 +1163,11 @@ pub fn buffer_alloc(capacity: u32) -> *mut BufferHeader {
 
 /// Allocate a Buffer-shaped GC wrapper over native-owned memory.
 ///
-/// Only the `BufferHeader` is allocated in Perry's old arena. The byte span
-/// remains owned by the native caller and is never freed by the GC. Callers
-/// must keep that span alive for at least as long as the returned JS value.
-/// The external mapping is removed when the wrapper is collected, preventing
-/// recycled GC addresses from inheriting stale backing pointers.
+/// The header and native data pointer live in Perry's old arena. The byte span
+/// is owned by the caller, or released by the supplied Node-API finalizer.
+/// A borrowed span must outlive the returned JS value.
+/// Fresh allocations start with no foreign-data bit, so recycled addresses
+/// cannot inherit a previous owner's native pointer.
 pub(crate) fn buffer_alloc_foreign(data: *mut u8, length: u32) -> *mut BufferHeader {
     // RULE 3: this wrapper is reached from `extern "C"` Node-API entry points
     // where a JS throw has nowhere to land, so the over-range span is clamped
@@ -1255,81 +1182,114 @@ pub(crate) fn buffer_alloc_foreign(data: *mut u8, length: u32) -> *mut BufferHea
         length,
     );
     let ptr = crate::arena::arena_alloc_gc_old(
-        std::mem::size_of::<BufferHeader>(),
+        std::mem::size_of::<ForeignBuffer>(),
         8,
         crate::gc::GC_TYPE_BUFFER,
-    ) as *mut BufferHeader;
+    ) as *mut ForeignBuffer;
     unsafe {
-        let header = (ptr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
-        (*header).gc_flags |= crate::gc::GC_FLAG_TENURED;
-        (*ptr).length = length;
-        (*ptr).capacity = length;
+        let gc = (ptr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+        (*gc).gc_flags |= crate::gc::GC_FLAG_TENURED;
+        (*gc)._reserved |= crate::gc::GC_BUFFER_FOREIGN_DATA;
+        (*ptr).header.length = length;
+        (*ptr).header.capacity = length;
+        (*ptr).data = data;
+        #[cfg(feature = "node-api-host")]
+        {
+            (*ptr).finalizer = None;
+        }
     }
-    register_buffer(ptr);
-    // Arm before publishing the map entry; see `RegistryLatch`'s ordering
-    // contract and the analogous buffer-registration path above.
-    FOREIGN_BACKING_EVER_REGISTERED.arm();
-    FOREIGN_BACKING_REGISTRY.with(|r| {
-        r.borrow_mut().insert(ptr as usize, data as usize);
-    });
-    ptr
+    register_buffer(ptr.cast());
+    if crate::hot_diag::receiver_repr_on() {
+        crate::hot_diag::receiver_repr_note_constructed(
+            crate::hot_diag::ReceiverReprFamily::ExternalBuffer,
+        );
+    }
+    ptr.cast()
 }
 
-/// Re-point a foreign-backed wrapper at a new span, in place.
-///
-/// [`buffer_alloc_foreign`] hands out a wrapper whose bytes live in memory the
-/// caller owns. When that memory MOVES the wrapper has to follow it or every
-/// later read dereferences freed memory: wasmi's linear memory is a `Vec<u8>`
-/// that reallocates when wasm executes `memory.grow`, and the JS-visible
-/// `WebAssembly.Memory.prototype.buffer` is a foreign wrapper over it (#9611).
-///
-/// Only touches a wrapper that really is foreign-backed — a plain buffer's
-/// bytes live inline after its header and cannot be re-pointed. Returns
-/// whether the rebind happened.
-///
-/// Gated with `wasm-host`, whose module is its only caller: the default
-/// runtime build does
-/// not compile the wasm host shims, and an ungated helper would be dead code
-/// there.
+/// Foreign bytes remain owned by the caller. The data pointer is a raw native
+/// address, never a GC edge; Buffer's collector descriptor traces no byte slots.
+#[repr(C)]
+struct ForeignBuffer {
+    header: BufferHeader,
+    data: *mut u8,
+    #[cfg(feature = "node-api-host")]
+    finalizer: Option<crate::node_api_host::FinalizerRecord>,
+}
+
+#[cfg(feature = "node-api-host")]
+pub(crate) fn set_foreign_finalizer(
+    buffer: *mut BufferHeader,
+    finalizer: Option<crate::node_api_host::FinalizerRecord>,
+) {
+    assert!(is_foreign_backed_buffer(buffer as usize));
+    // Native callback/data/module identities are POD, never GC edges.
+    unsafe { (*(buffer as *mut ForeignBuffer)).finalizer = finalizer };
+}
+
+#[cfg(feature = "node-api-host")]
+fn enqueue_foreign_finalizer(addr: usize) {
+    if is_foreign_backed_buffer(addr) {
+        if let Some(finalizer) = unsafe { (*(addr as *mut ForeignBuffer)).finalizer.take() } {
+            crate::node_api_host::enqueue_finalizer(finalizer);
+        }
+    }
+}
+
+/// Node-API shutdown releases live native resources before unloading addons.
+/// The existing allocation inventory enumerates owners; finalizer state itself
+/// lives only in the cell. Taking it also prevents a later sweep running twice.
+#[cfg(feature = "node-api-host")]
+pub(crate) fn enqueue_all_foreign_finalizers() {
+    BUFFER_REGISTRY.with(|buffers| {
+        for &addr in buffers.borrow().iter() {
+            enqueue_foreign_finalizer(addr);
+        }
+    });
+}
+
+/// Rebind a wasm linear-memory wrapper after memory.grow relocates its bytes.
 #[cfg(feature = "wasm-host")]
 pub(crate) fn rebind_foreign_buffer(addr: usize, data: *mut u8, length: u32) -> bool {
-    if FOREIGN_BACKING_EVER_REGISTERED.is_idle() {
+    if !is_foreign_backed_buffer(addr) {
         return false;
     }
-    let rebound = FOREIGN_BACKING_REGISTRY.with(|r| {
-        let mut r = r.borrow_mut();
-        if !r.contains_key(&addr) {
-            return false;
-        }
-        r.insert(addr, data as usize);
-        true
-    });
-    if rebound {
-        // RULE 3: same clamp as `buffer_alloc_foreign` — a rebind may not
-        // publish a `+4` word the emitted read path would read as a ShapeId.
-        let length = crate::object::shape_rule3::clamp_plus_four_word(
-            "BufferHeader::capacity (foreign rebind)",
-            length,
-        );
-        unsafe {
-            let header = addr as *mut BufferHeader;
-            (*header).length = length;
-            (*header).capacity = length;
-        }
+    let length = crate::object::shape_rule3::clamp_plus_four_word(
+        "BufferHeader::capacity (foreign rebind)",
+        length,
+    );
+    unsafe {
+        let buffer = addr as *mut ForeignBuffer;
+        (*buffer).header.length = length;
+        (*buffer).header.capacity = length;
+        (*buffer).data = data;
     }
-    rebound
+    true
 }
 
 #[inline]
 fn foreign_backing(addr: usize) -> Option<usize> {
-    if FOREIGN_BACKING_EVER_REGISTERED.is_idle() {
-        return None;
+    // Only buffer_data calls this, with a live BufferHeader. Every producer,
+    // including process-global SAB, now reserves a real preceding GcHeader.
+    // Keep the byte-access hot path to a header-bit load, without a registry
+    // or ownership lookup for each byte read.
+    unsafe {
+        let gc = (addr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        if (*gc)._reserved & crate::gc::GC_BUFFER_FOREIGN_DATA == 0 {
+            return None;
+        }
+        Some((*(addr as *const ForeignBuffer)).data as usize)
     }
-    FOREIGN_BACKING_REGISTRY.with(|r| r.borrow().get(&addr).copied())
 }
 
 pub(crate) fn is_foreign_backed_buffer(addr: usize) -> bool {
-    foreign_backing(addr).is_some()
+    // This public-address probe must prove ownership before reading the header.
+    // SAB is a buffer too, but cannot have this per-heap foreign-data layout.
+    unsafe { crate::value::addr_class::try_read_tracked_gc_header(addr) }.is_some_and(|header| {
+        let header = unsafe { header.as_ref() };
+        header.obj_type == crate::gc::GC_TYPE_BUFFER
+            && header._reserved & crate::gc::GC_BUFFER_FOREIGN_DATA != 0
+    })
 }
 
 /// Post-trace registry pruning (mirrors the #6010 Map/Set pattern): collect
@@ -1360,27 +1320,10 @@ unsafe fn registered_buffer_is_dead_post_trace(
     addr: usize,
     shared_sabs: Option<&std::collections::HashSet<usize>>,
 ) -> bool {
-    // A process-global `SharedArrayBuffer` backing is NOT a GC allocation:
-    // `shared_sab::alloc_shared_sab` takes it straight from `alloc_zeroed`, it
-    // carries no `GcHeader`, and it is never freed (#4913 — that is what lets
-    // the same bytes alias across `perry/thread` agents). But
-    // `js_shared_array_buffer_new` DOES `register_buffer` it, so it lands in
-    // `BUFFER_REGISTRY` and reaches this scan on every full trace.
-    //
-    // `try_read_gc_header` below would then read the 8 bytes BEFORE the malloc
-    // block — the allocator's own metadata — and interpret them as a `GcHeader`:
-    // one arbitrary byte compared against `GC_TYPE_BUFFER` (10), the next
-    // against the mark/pin/forward bits. A chance match declares a LIVE,
-    // never-freed SAB dead, and `finalize_collected_dead_buffer` then runs on
-    // it — including `view::remove_entries_for_dead_buffer`, which retains on
-    // `info.backing != addr` and so unregisters EVERY live typed-array view
-    // over that SAB. Those views are exactly how cross-agent `Atomics`
-    // wait/notify resolve their absolute slot addresses.
-    //
-    // So: veto first, and never sniff a header the object does not have. The
-    // set is snapshotted once per scan by the caller and is `None` for the
-    // processes that never allocate a SAB — nearly all of them — so the common
-    // path here is a single null check.
+    // Process-global SharedArrayBuffer cells carry real GC_TYPE_BUFFER
+    // headers, but are immortal storage outside this thread's GC heap. They
+    // must never become dead candidates merely because this heap did not
+    // mark them. Snapshot membership once per scan, before inspecting flags.
     if shared_sabs.is_some_and(|sabs| sabs.contains(&addr)) {
         return false;
     }
@@ -1400,15 +1343,14 @@ unsafe fn registered_buffer_is_dead_post_trace(
 /// (`is_registered_buffer`/`is_array_buffer` misclassify the next tenant —
 /// the #6080 ABA class) and the entries leak forever.
 pub(crate) fn finalize_collected_dead_buffer(addr: usize) {
+    #[cfg(feature = "node-api-host")]
+    enqueue_foreign_finalizer(addr);
     BUFFER_REGISTRY.with(|r| {
         r.borrow_mut().remove(&addr);
     });
     if crate::hot_diag::buffer_on() {
         crate::hot_diag::buffer_note_unregistration();
     }
-    FOREIGN_BACKING_REGISTRY.with(|r| {
-        r.borrow_mut().remove(&addr);
-    });
     ARRAY_BUFFER_REGISTRY.with(|r| {
         r.borrow_mut().remove(&addr);
     });
@@ -1475,12 +1417,9 @@ pub(crate) fn finalize_collected_dead_buffer(addr: usize) {
     UINT8ARRAY_FROM_CTOR.with(|r| {
         r.borrow_mut().remove(&addr);
     });
-    // `js_buffer_mark_as_crypto_key_external` writes all three global maps, and
+    // `js_buffer_mark_as_crypto_key_external` writes both global maps, and
     // `is_registered_buffer`/`is_uint8array_buffer` consult them, so a dead
     // external key buffer has to be dropped from every one of them.
-    if let Ok(mut r) = external_buffers().lock() {
-        r.remove(&addr);
-    }
     if let Ok(mut r) = external_uint8arrays().lock() {
         r.remove(&addr);
     }

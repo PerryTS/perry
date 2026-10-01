@@ -83,7 +83,7 @@ unsafe fn emit<const VALIDATE: bool>(
     for j in 0..keys_view.count() as usize {
         let f = order.map_or(j, |indices| indices[j] as usize);
         let key_bits = *key_slots.add(f);
-        if key_bits == crate::value::TAG_HOLE {
+        if key_bits == crate::value::TAG_HOLE || is_symbol_value(key_bits) {
             continue;
         }
         let bits = *fields.add(f);

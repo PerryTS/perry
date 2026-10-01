@@ -1,7 +1,7 @@
 //! Charter step 5 (P2a): the runtime store check and the generalization of a
-//! shape's `F64` lane (`field_rep_store`). Nothing in the runtime produces an
-//! `F64` shape yet, so these tests mint one directly through the one intern
-//! that takes a rep (`shape_descriptor_ensure_with_rep`) and stamp it on a
+//! shape's `F64` lane (`field_rep_store`), and (P2b) the key-add producer.
+//! The store-check tests mint their shapes directly through the one intern
+//! that takes a rep (`shape_descriptor_ensure_with_rep`) and stamp them on a
 //! live object whose lanes hold Numbers.
 
 use super::field_rep::{slot_rep, with_slot_rep, REP_ANY, REP_F64, REP_F64_DEPRECATED};
@@ -22,8 +22,12 @@ unsafe fn abc() -> (*mut ObjectHeader, u32) {
     for (i, name) in ["a", "b", "c"].iter().enumerate() {
         crate::object::js_object_set_field_by_name(obj, key(name), (i + 1) as f64);
     }
-    let id = object_shape_stamp(obj);
-    assert_ne!(id, 0, "the fixture object is shaped");
+    // The key-adds earned `F64` lanes (P2b); restamp to the all-`Any`
+    // sibling (a valid claim for any object), so each test states its lanes.
+    let stamped = object_shape_stamp(obj);
+    assert_ne!(stamped, 0, "the fixture object is shaped");
+    let id = with_rep(stamped, REP_ANY);
+    stamp_object_shape_id_with_carrier_note(obj, id);
     (obj, id)
 }
 
@@ -177,5 +181,263 @@ fn normalization_keeps_live_lanes_and_reaches_a_fixed_point() {
         assert_eq!(object_shape_stamp(other), any);
         assert_eq!(rep_of(any), REP_ANY);
         assert!(object_shape_descriptor(other).is_some());
+    }
+}
+
+// ---- P2b: the key-add producer (T2) -------------------------------------
+
+/// A fresh `{}` with one inline allocation, keyed by names no other test
+/// uses, so the transition cache holds only this test's edges.
+unsafe fn add(obj: *mut ObjectHeader, name: &str, value: f64) -> u32 {
+    crate::object::js_object_set_field_by_name(obj, key(name), value);
+    object_shape_stamp(obj)
+}
+
+#[test]
+fn a_number_key_add_publishes_an_f64_lane_and_a_non_number_an_any_lane() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    unsafe {
+        let s = crate::string::js_string_from_bytes(b"txt".as_ptr(), 3);
+        let text = f64::from_bits(crate::JSValue::string_ptr(s).bits());
+        // Twice: the first object takes the slow path, the second the cached edge.
+        let mut ids = Vec::new();
+        for _ in 0..2 {
+            let obj = crate::object::js_object_alloc(0, 4);
+            add(obj, "p2b_n_a", 1.5);
+            let id = add(obj, "p2b_n_b", text);
+            let rep = rep_of(id);
+            assert_eq!(slot_rep(rep, 0), REP_F64, "a Number key-add earns F64");
+            assert_eq!(slot_rep(rep, 1), REP_ANY, "a string key-add stays Any");
+            ids.push(id);
+        }
+        assert_eq!(
+            ids[0], ids[1],
+            "the cached edge reaches the slow path's shape"
+        );
+    }
+}
+
+#[test]
+fn a_cached_f64_edge_refuses_a_non_number() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    unsafe {
+        let first = crate::object::js_object_alloc(0, 4);
+        let f64_id = add(first, "p2b_r_a", 7.0);
+        assert_eq!(slot_rep(rep_of(f64_id), 0), REP_F64);
+        let s = crate::string::js_string_from_bytes(b"x".as_ptr(), 1);
+        let second = crate::object::js_object_alloc(0, 4);
+        let id = add(
+            second,
+            "p2b_r_a",
+            f64::from_bits(crate::JSValue::string_ptr(s).bits()),
+        );
+        assert_ne!(id, f64_id, "a string must not take the F64 edge");
+        assert_eq!(slot_rep(rep_of(id), 0), REP_ANY);
+    }
+}
+
+#[test]
+fn an_int32_key_add_is_stored_as_its_double_on_both_paths() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    unsafe {
+        let boxed = f64::from_bits(crate::value::INT32_TAG | 5);
+        for _ in 0..2 {
+            let obj = crate::object::js_object_alloc(0, 4);
+            add(obj, "p2b_i_a", 1.0);
+            let id = add(obj, "p2b_i_b", boxed);
+            assert_eq!(slot_rep(rep_of(id), 1), REP_F64);
+            assert_eq!(
+                slot_bits(obj, 1),
+                5.0f64.to_bits(),
+                "canonical double in an F64 lane"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_restamp_and_a_bound_change_keep_the_lanes() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    unsafe {
+        let obj = crate::object::js_object_alloc(0, 4);
+        let id = add(obj, "p2b_k_a", 3.0);
+        assert_eq!(slot_rep(rep_of(id), 0), REP_F64);
+        let d = object_shape_descriptor(obj).expect("shaped");
+        let again = super::shapes::stamp_object_shape(
+            obj,
+            d.keys as usize as *const crate::array::ArrayHeader,
+            d.logical_key_count,
+            d.live_inline_slot_count,
+        );
+        assert_eq!(again, id, "a same-edge restamp is the same shape");
+        let grown =
+            super::shapes::publish_object_live_slot_count(obj, d.live_inline_slot_count + 1);
+        assert_eq!(
+            slot_rep(rep_of(grown), 0),
+            REP_F64,
+            "a bound change moves no slot"
+        );
+    }
+}
+
+#[test]
+fn a_key_add_after_generalization_converges_on_the_normalized_shape() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    unsafe {
+        // A second key, so the add takes the append arm: the first-key arm's
+        // trailing same-edge restamp would normalize on its own.
+        let first = crate::object::js_object_alloc(0, 4);
+        add(first, "p2b_g_0", 0.5);
+        let f64_id = add(first, "p2b_g_a", 1.0);
+        let s = crate::string::js_string_from_bytes(b"y".as_ptr(), 1);
+        let general = add(
+            first,
+            "p2b_g_a",
+            f64::from_bits(crate::JSValue::string_ptr(s).bits()),
+        );
+        assert_ne!(general, f64_id, "the store generalized");
+        assert_eq!(slot_rep(rep_of(general), 1), REP_ANY);
+        // A new object adding the same key with a Number: the cached edge's
+        // target learned a deprecated lane, so it must not serve.
+        let next = crate::object::js_object_alloc(0, 4);
+        add(next, "p2b_g_0", 0.5);
+        assert_eq!(
+            add(next, "p2b_g_a", 2.0),
+            general,
+            "new objects never get S again"
+        );
+    }
+}
+
+/// P2d key-add convergence (DESIGN §1.5 step 4) with BOTH siblings born on
+/// the runtime path, where no site memo re-primes onto one of them: a
+/// Number key-add makes the `F64` successor, a string key-add of the same
+/// key from the same predecessor makes the `Any` one. The second must
+/// deprecate the first's lane, so an object still on it converges on the
+/// `Any` shape at its next miss and a later Number key-add is born there:
+/// one shape for the lineage, not two for good.
+#[test]
+fn a_non_number_key_add_deprecates_its_f64_sibling() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    unsafe {
+        let first = crate::object::js_object_alloc(0, 4);
+        add(first, "p2d_c_0", 0.5);
+        let f64_id = add(first, "p2d_c_a", 1.0);
+        assert_eq!(slot_rep(rep_of(f64_id), 1), REP_F64);
+        let second = crate::object::js_object_alloc(0, 4);
+        add(second, "p2d_c_0", 0.5);
+        let any_id = add(second, "p2d_c_a", boxed("s"));
+        assert_ne!(any_id, f64_id, "the string took the Any sibling");
+        assert_eq!(slot_rep(rep_of(any_id), 1), REP_ANY);
+        assert!(
+            super::field_rep::has_deprecated(rep_of(f64_id)),
+            "the string key-add deprecated the F64 sibling's lane"
+        );
+        assert!(migrate_deprecated_receiver(first));
+        assert_eq!(
+            object_shape_stamp(first),
+            any_id,
+            "one shape for the lineage"
+        );
+        let third = crate::object::js_object_alloc(0, 4);
+        add(third, "p2d_c_0", 0.5);
+        assert_eq!(
+            add(third, "p2d_c_a", 2.0),
+            any_id,
+            "a Number key-add is born into the Any shape"
+        );
+    }
+}
+
+fn boxed(name: &str) -> f64 {
+    f64::from_bits(crate::value::js_nanbox_string(key(name) as i64).to_bits())
+}
+
+/// P2c: the invariant check must be able to fail. A non-Number written
+/// raw under an `F64` lane trips it.
+#[test]
+#[should_panic(expected = "field-rep invariant")]
+fn the_invariant_check_fires_on_a_non_number_under_an_f64_lane() {
+    unsafe {
+        let (obj, id) = abc();
+        let f64_a = with_rep(id, with_slot_rep(REP_ANY, 0, REP_F64));
+        stamp_object_shape_id_with_carrier_note(obj, f64_a);
+        let fields = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
+        super::field_rep_store::assert_f64_lanes_hold_numbers(
+            obj,
+            super::shapes::object_shape_record(obj),
+            3,
+        );
+        // GC_STORE_AUDIT(INIT): the deliberate unchecked store this test
+        // exists to catch; nothing collects before the check below.
+        *fields = boxed("not a number").to_bits();
+        super::field_rep_store::assert_f64_lanes_hold_numbers(
+            obj,
+            super::shapes::object_shape_record(obj),
+            3,
+        );
+    }
+}
+
+/// Delete's raw moves (the hole write, the shift that writes `b`'s string
+/// into slot 0, the squeeze) carry no store check. They need none: every
+/// delete of a receiver whose lanes are live republishes its shape with all
+/// lanes `Any` before it moves a slot. A shared key list is forked or
+/// compacted, and both publish through `set_object_keys` /
+/// `publish_object_shape_from` (`REP_ANY`); an owned list only exists after
+/// such a fork, and its in-place re-adds keep the fork's `Any` record.
+#[test]
+fn delete_publishes_any_lanes_before_its_raw_moves() {
+    unsafe {
+        let obj = crate::object::js_object_alloc(0, 4);
+        crate::object::js_object_set_field_by_name(obj, key("a"), 1.5);
+        let s = boxed("s");
+        crate::object::js_object_set_field_by_name(obj, key("b"), s);
+        crate::object::js_object_set_field_by_name(obj, key("c"), 2.5);
+        let before = super::field_rep_store::shape_rep(object_shape_stamp(obj));
+        assert_eq!(
+            slot_rep(before, 0),
+            REP_F64,
+            "the fixture has an F64 lane at a"
+        );
+        assert_eq!(slot_rep(before, 2), REP_F64, "and at c");
+        assert_eq!(crate::object::js_object_delete_field(obj, key("a")), 1);
+        assert_eq!(
+            super::field_rep_store::shape_rep(object_shape_stamp(obj)),
+            REP_ANY,
+            "the delete successor carries no lane"
+        );
+        super::field_rep_store::assert_f64_lanes_hold_numbers(
+            obj,
+            super::shapes::object_shape_record(obj),
+            3,
+        );
+        let b = crate::object::js_object_get_field_by_name_f64(obj, key("b"));
+        assert_eq!(b.to_bits(), s.to_bits(), "b moved down intact");
+    }
+}
+
+/// T2 grants a class instance's inline key-add the `F64` lane like any
+/// other receiver's. The class-keyed writers stay sound because they compare
+/// the ShapeId against the class's birth shape, whose lanes are `Any`: an
+/// instance carrying a lane is on a different shape and misses them.
+#[test]
+fn a_class_instance_key_add_earns_the_lane_too() {
+    unsafe {
+        let plain = crate::object::js_object_alloc(0, 4);
+        crate::object::js_object_set_field_by_name(plain, key("n"), 1.5);
+        let plain_rep = super::field_rep_store::shape_rep(object_shape_stamp(plain));
+        assert_eq!(
+            slot_rep(plain_rep, 0),
+            REP_F64,
+            "a plain object earns the lane"
+        );
+        let inst = crate::object::js_object_alloc(0, 4);
+        (*inst).class_id = 0x00C0_FFEE;
+        assert!(!crate::object::is_anon_shape_class_id((*inst).class_id));
+        crate::object::js_object_set_field_by_name(inst, key("n"), 1.5);
+        let inst_rep = super::field_rep_store::shape_rep(object_shape_stamp(inst));
+        assert_ne!(object_shape_stamp(inst), 0, "the instance is shaped");
+        assert_eq!(slot_rep(inst_rep, 0), REP_F64);
     }
 }

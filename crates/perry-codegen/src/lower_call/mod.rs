@@ -34,6 +34,9 @@ use crate::expr::{variant_name, FnCtx};
 #[cfg(test)]
 mod alloc_hot_tests;
 mod atomics;
+pub(crate) mod birth_lanes;
+#[cfg(test)]
+mod birth_lanes_tests;
 pub(crate) mod buffer_intrinsic;
 mod builtin;
 mod builtin_table_gate;
@@ -62,7 +65,6 @@ mod ctor_prologue_stores;
 mod ctor_return_publish_tests;
 mod dataview_intrinsic;
 mod early_branches;
-mod event_target;
 mod extern_func;
 mod extern_timers;
 mod field_init;
@@ -98,6 +100,8 @@ mod new_ctor_args;
 mod new_error_init;
 mod new_helpers;
 pub(crate) use new_helpers::emit_ctor_return_override;
+#[cfg(test)]
+mod class_birth_rep_tests;
 mod omitted_native_params;
 mod options;
 mod private_method;

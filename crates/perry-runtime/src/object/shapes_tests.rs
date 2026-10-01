@@ -84,16 +84,21 @@ mod c3c_tests {
         let _lock = crate::gc::global_side_table_test_lock();
         const CID: u32 = 0x0C3C_7902;
         let packed = b"birth_a\0birth_b";
-        let keys =
-            crate::object::js_build_class_keys_array(CID, 2, packed.as_ptr(), packed.len() as u32);
-        let shape_id = js_object_shape_id_for_class_keys(keys as usize as u64, 2, CID);
+        let keys = crate::object::js_build_class_keys_array(
+            CID,
+            2,
+            packed.as_ptr(),
+            packed.len() as u32,
+            0,
+        );
+        let shape_id = js_object_shape_id_for_class_keys(keys as usize as u64, 2, CID, 0);
         assert!(
             is_shape_id(shape_id),
             "module init must mint a real ShapeId"
         );
 
         let obj =
-            crate::object::js_object_alloc_class_inline_keys_stamped(CID, 0, 2, keys, shape_id);
+            crate::object::js_object_alloc_class_inline_keys_stamped(CID, 0, 2, keys, shape_id, 0);
         let birth_word = unsafe { (*obj).parent_class_id };
         assert_eq!(
             birth_word, shape_id,
@@ -115,9 +120,14 @@ mod c3c_tests {
         let _lock = crate::gc::global_side_table_test_lock();
         const CID: u32 = 0x0C3C_7903;
         let packed = b"direct_a\0direct_b";
-        let keys =
-            crate::object::js_build_class_keys_array(CID, 2, packed.as_ptr(), packed.len() as u32);
-        let shape_id = js_object_shape_id_for_class_keys(keys as usize as u64, 2, CID);
+        let keys = crate::object::js_build_class_keys_array(
+            CID,
+            2,
+            packed.as_ptr(),
+            packed.len() as u32,
+            0,
+        );
+        let shape_id = js_object_shape_id_for_class_keys(keys as usize as u64, 2, CID, 0);
         let payload = std::mem::size_of::<crate::object::ObjectHeader>()
             + crate::object::INLINE_SLOT_FLOOR * std::mem::size_of::<crate::value::JSValue>();
         let obj = crate::arena::arena_alloc_gc(payload, 8, crate::gc::GC_TYPE_OBJECT)
@@ -157,12 +167,17 @@ mod c3c_tests {
         let _lock = crate::gc::global_side_table_test_lock();
         const CID: u32 = 0x0C3C_7904;
         let packed = b"wide_a\0wide_b";
-        let keys =
-            crate::object::js_build_class_keys_array(CID, 2, packed.as_ptr(), packed.len() as u32);
+        let keys = crate::object::js_build_class_keys_array(
+            CID,
+            2,
+            packed.as_ptr(),
+            packed.len() as u32,
+            0,
+        );
         let narrow_id = js_object_shape_id_for_keys(keys as usize as u64, 2);
 
         let obj =
-            crate::object::js_object_alloc_class_inline_keys_stamped(CID, 0, 3, keys, narrow_id);
+            crate::object::js_object_alloc_class_inline_keys_stamped(CID, 0, 3, keys, narrow_id, 0);
         let actual_id = unsafe { (*obj).parent_class_id };
         assert_ne!(
             actual_id, narrow_id,
@@ -185,8 +200,13 @@ mod c3c_tests {
         let _lock = crate::gc::global_side_table_test_lock();
         const CID: u32 = 0x0C3C_7926;
         let packed = b"count_mismatch";
-        let keys =
-            crate::object::js_build_class_keys_array(CID, 1, packed.as_ptr(), packed.len() as u32);
+        let keys = crate::object::js_build_class_keys_array(
+            CID,
+            1,
+            packed.as_ptr(),
+            packed.len() as u32,
+            0,
+        );
         let stale_id = js_object_shape_id_for_keys(keys as usize as u64, 1);
 
         unsafe {
@@ -196,7 +216,7 @@ mod c3c_tests {
             (*keys).length = 0;
         }
         let obj =
-            crate::object::js_object_alloc_class_inline_keys_stamped(CID, 0, 1, keys, stale_id);
+            crate::object::js_object_alloc_class_inline_keys_stamped(CID, 0, 1, keys, stale_id, 0);
         let actual_id = unsafe { (*obj).parent_class_id };
         assert_ne!(
             actual_id, stale_id,
@@ -554,6 +574,7 @@ mod descriptor_tests_8067 {
             1,
             PROTO_ID_DEFAULT,
             ShapeObjectKind::Ordinary,
+            crate::object::field_rep::REP_ANY,
         ));
 
         assert_eq!(
@@ -670,6 +691,7 @@ mod descriptor_tests_8067 {
                 2,
                 PROTO_ID_DEFAULT,
                 ShapeObjectKind::Ordinary,
+                crate::object::field_rep::REP_ANY,
             ));
             assert_eq!(
                 shape_descriptor_by_id(module_id).unwrap().keys,
@@ -1322,6 +1344,7 @@ mod region_guard_pack_tests {
             count,
             packed.as_ptr(),
             packed.len() as u32,
+            0,
         );
         js_object_shape_id_for_keys(keys as usize as u64, count)
     }

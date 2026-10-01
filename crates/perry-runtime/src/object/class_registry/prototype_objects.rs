@@ -889,6 +889,17 @@ unsafe fn resolve_proto_chain_field_inner(
             }
         }
     }
+    // A native parent is represented by its actual prototype rather than a
+    // synthetic class-registry entry. Finish the declared prototype's real
+    // chain using own descriptors; recursively entering the generic getter
+    // can revisit this same class walk and mistake that recursion for a miss.
+    if let Some(receiver) = receiver {
+        return evaluated_parent_instance_field(
+            class_decl_prototype_object(class_id),
+            key,
+            receiver,
+        );
+    }
     None
 }
 

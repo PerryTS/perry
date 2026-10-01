@@ -141,7 +141,6 @@ pub(crate) fn is_other_builtin_constructor_name(name: &str) -> bool {
             | "Set"
             | "WeakMap"
             | "WeakSet"
-            | "EventTarget"
             | "Array"
             | "ArrayBuffer"
             | "SharedArrayBuffer"

@@ -52,105 +52,157 @@ fn addr_of(value: f64) -> usize {
     (value.to_bits() & ADDR_MASK) as usize
 }
 
+/// The three own-symbol-property writes the side tables used to receive for
+/// every owner: `o[sym] = v` (value), `Object.defineProperty(o, sym2,
+/// { value: v, writable: false })` (attrs) and `Object.defineProperty(o, sym3,
+/// { get })` (accessor).
+fn define_three_symbol_properties(
+    scope: &RuntimeHandleScope,
+    owner: f64,
+    syms: [f64; 3],
+    value: f64,
+) {
+    use perry_runtime::symbol as s;
+    unsafe { s::js_object_set_symbol_property(owner, syms[0], value) };
+    let desc = scope.root_raw_mut_ptr(perry_runtime::object::js_object_alloc(0, 0));
+    perry_runtime::js_object_set_field_by_name(desc.get_raw_mut_ptr(), key("value"), value);
+    perry_runtime::js_object_set_field_by_name(
+        desc.get_raw_mut_ptr(),
+        key("writable"),
+        f64::from_bits(TAG_FALSE),
+    );
+    perry_runtime::object::js_object_define_property(
+        owner,
+        syms[1],
+        js_nanbox_pointer(desc.get_raw_mut_ptr::<u8>() as i64),
+    );
+    let getter = scope.root_raw_mut_ptr(perry_runtime::closure::js_closure_alloc(
+        perry_runtime::fn_info!(probe_thunk, 0),
+        0,
+    ));
+    let accessor = scope.root_raw_mut_ptr(perry_runtime::object::js_object_alloc(0, 0));
+    perry_runtime::js_object_set_field_by_name(
+        accessor.get_raw_mut_ptr(),
+        key("get"),
+        js_nanbox_pointer(getter.get_raw_mut_ptr::<u8>() as i64),
+    );
+    perry_runtime::object::js_object_define_property(
+        owner,
+        syms[2],
+        js_nanbox_pointer(accessor.get_raw_mut_ptr::<u8>() as i64),
+    );
+}
+
+/// What the address-keyed tables hold for `(owner, syms)`: the value record,
+/// the attrs entry and the accessor entry.
+fn side_tables_hold(owner: usize, syms: [usize; 3]) -> [bool; 3] {
+    use perry_runtime::symbol as s;
+    [
+        s::symbol_property_tables_hold_for_test(owner, syms[0]).0,
+        s::symbol_property_tables_hold_for_test(owner, syms[1]).1,
+        s::symbol_accessor_held_for_test(owner, syms[2]),
+    ]
+}
+
+/// #11471 / #11696. Since #11682 an ordinary object's symbol properties live
+/// on the object itself (its shape's keys and its slots), so they die with
+/// the thread's heap and the address-keyed side tables never see them. Owners
+/// that are not ordinary objects (arrays here, and a class's static symbol
+/// members) still use `SYMBOL_PROPERTIES` / `SYMBOL_PROPERTY_ATTRS` /
+/// `SYMBOL_ACCESSOR_PROPERTIES`, and a dead thread's entries there must be
+/// released at thread exit. The test proves both halves are live: the table
+/// entries exist while the thread lives (and the ordinary object's are on the
+/// object, NOT in the tables), and the table entries are gone after `join`.
 #[test]
 fn thread_exit_releases_the_threads_symbol_side_table_entries() {
     const STATIC_SYMBOL_CLASS: u32 = 0x0B11_4711;
-    let ((owner, class_owner, sym), alive) = std::thread::spawn(|| {
-        use perry_runtime::symbol as s;
-        let scope = RuntimeHandleScope::new();
-        let sym = scope.root_nanbox_f64(unsafe { s::js_symbol_new(string_value("t11471")) });
-        let obj = scope.root_raw_mut_ptr(perry_runtime::object::js_object_alloc(0, 0));
-        let obj_value = || js_nanbox_pointer(obj.get_raw_mut_ptr::<u8>() as i64);
-        let value = scope.root_raw_mut_ptr(perry_runtime::js_array_alloc(0));
-        let value_value = || js_nanbox_pointer(value.get_raw_mut_ptr::<u8>() as i64);
-        // obj[sym] = [] (SYMBOL_PROPERTIES).
-        unsafe {
-            s::js_object_set_symbol_property(obj_value(), sym.get_nanbox_f64(), value_value())
-        };
-        // Object.defineProperty(obj, sym2, { value: [], writable: false })
-        // (SYMBOL_PROPERTY_ATTRS).
-        let sym2 = scope.root_nanbox_f64(unsafe { s::js_symbol_new(string_value("t11471b")) });
-        let desc = scope.root_raw_mut_ptr(perry_runtime::object::js_object_alloc(0, 0));
-        perry_runtime::js_object_set_field_by_name(
-            desc.get_raw_mut_ptr(),
-            key("value"),
-            value_value(),
-        );
-        perry_runtime::js_object_set_field_by_name(
-            desc.get_raw_mut_ptr(),
-            key("writable"),
-            f64::from_bits(TAG_FALSE),
-        );
-        perry_runtime::object::js_object_define_property(
-            obj_value(),
-            sym2.get_nanbox_f64(),
-            js_nanbox_pointer(desc.get_raw_mut_ptr::<u8>() as i64),
-        );
-        // Object.defineProperty(obj, sym3, { get }) (SYMBOL_ACCESSOR_PROPERTIES).
-        let sym3 = scope.root_nanbox_f64(unsafe { s::js_symbol_new(string_value("t11471c")) });
-        let getter = scope.root_raw_mut_ptr(perry_runtime::closure::js_closure_alloc(
-            perry_runtime::fn_info!(probe_thunk, 0),
-            0,
-        ));
-        let accessor = scope.root_raw_mut_ptr(perry_runtime::object::js_object_alloc(0, 0));
-        perry_runtime::js_object_set_field_by_name(
-            accessor.get_raw_mut_ptr(),
-            key("get"),
-            js_nanbox_pointer(getter.get_raw_mut_ptr::<u8>() as i64),
-        );
-        perry_runtime::object::js_object_define_property(
-            obj_value(),
-            sym3.get_nanbox_f64(),
-            js_nanbox_pointer(accessor.get_raw_mut_ptr::<u8>() as i64),
-        );
-        // static [sym] = [] on a class id: an own symbol property of the class's
-        // function object, which this thread's agent mints in its own heap.
-        unsafe {
-            s::js_class_register_static_symbol(
-                STATIC_SYMBOL_CLASS,
-                sym.get_nanbox_f64(),
-                value_value(),
-            )
-        };
+    let ((holder, class_owner, obj, syms), alive, on_object, obj_in_tables) =
+        std::thread::spawn(|| {
+            use perry_runtime::symbol as s;
+            let scope = RuntimeHandleScope::new();
+            let sym = scope.root_nanbox_f64(unsafe { s::js_symbol_new(string_value("t11471")) });
+            let sym2 = scope.root_nanbox_f64(unsafe { s::js_symbol_new(string_value("t11471b")) });
+            let sym3 = scope.root_nanbox_f64(unsafe { s::js_symbol_new(string_value("t11471c")) });
+            let syms = || {
+                [
+                    sym.get_nanbox_f64(),
+                    sym2.get_nanbox_f64(),
+                    sym3.get_nanbox_f64(),
+                ]
+            };
+            let value = scope.root_raw_mut_ptr(perry_runtime::js_array_alloc(0));
+            let value_value = || js_nanbox_pointer(value.get_raw_mut_ptr::<u8>() as i64);
+            // A table-backed owner: an array is not an ordinary object.
+            let holder = scope.root_raw_mut_ptr(perry_runtime::js_array_alloc(0));
+            let holder_value = || js_nanbox_pointer(holder.get_raw_mut_ptr::<u8>() as i64);
+            define_three_symbol_properties(&scope, holder_value(), syms(), value_value());
+            // An ordinary object: the same writes land on the object.
+            let obj = scope.root_raw_mut_ptr(perry_runtime::object::js_object_alloc(0, 0));
+            let obj_value = || js_nanbox_pointer(obj.get_raw_mut_ptr::<u8>() as i64);
+            define_three_symbol_properties(&scope, obj_value(), syms(), value_value());
+            // static [sym] = [] on a class id: an own symbol property of the
+            // class's function object, which this thread's agent mints in its
+            // own heap, still kept in `SYMBOL_PROPERTIES`.
+            unsafe {
+                s::js_class_register_static_symbol(STATIC_SYMBOL_CLASS, syms()[0], value_value())
+            };
+            let read_back = unsafe { s::js_object_get_symbol_property(obj_value(), syms()[0]) };
+            assert_eq!(
+                read_back.to_bits(),
+                value_value().to_bits(),
+                "obj[sym] must read back the stored value"
+            );
 
-        let owner = obj.get_raw_mut_ptr::<u8>() as usize;
-        let class_owner = s::class_static_symbol_owner_for_test(STATIC_SYMBOL_CLASS);
-        let (sym, sym2, sym3) = (
-            addr_of(sym.get_nanbox_f64()),
-            addr_of(sym2.get_nanbox_f64()),
-            addr_of(sym3.get_nanbox_f64()),
-        );
-        let alive = [
-            s::symbol_property_tables_hold_for_test(owner, sym).0,
-            s::symbol_property_tables_hold_for_test(owner, sym2).1,
-            s::symbol_accessor_held_for_test(owner, sym3),
-            s::symbol_property_tables_hold_for_test(class_owner, sym).0,
-        ];
-        ((owner, class_owner, [sym, sym2, sym3]), alive)
-    })
-    .join()
-    .unwrap();
+            let holder = holder.get_raw_mut_ptr::<u8>() as usize;
+            let obj = obj.get_raw_mut_ptr::<u8>() as usize;
+            let class_owner = s::class_static_symbol_owner_for_test(STATIC_SYMBOL_CLASS);
+            let syms = syms().map(addr_of);
+            let held = side_tables_hold(holder, syms);
+            let alive = [
+                held[0],
+                held[1],
+                held[2],
+                s::symbol_property_tables_hold_for_test(class_owner, syms[0]).0,
+            ];
+            let on_object = syms.map(|sym| s::symbol_on_object_for_test(obj, sym));
+            let obj_in_tables = side_tables_hold(obj, syms);
+            (
+                (holder, class_owner, obj, syms),
+                alive,
+                on_object,
+                obj_in_tables,
+            )
+        })
+        .join()
+        .unwrap();
 
     use perry_runtime::symbol as s;
     assert_eq!(
         alive, [true; 4],
-        "every entry must exist while its thread lives"
+        "every table entry must exist while its thread lives"
+    );
+    assert_eq!(
+        on_object,
+        [Some(false), Some(false), Some(true)],
+        "an ordinary object's symbol value, attrs and accessor live on the object"
+    );
+    assert_eq!(
+        obj_in_tables, [false; 3],
+        "an ordinary object's symbol properties must not also be in the side tables"
+    );
+    assert_eq!(
+        side_tables_hold(holder, syms),
+        [false; 3],
+        "a dead thread's holder[sym] record / symbol attrs / symbol accessor outlived its heap"
     );
     assert!(
-        !s::symbol_property_tables_hold_for_test(owner, sym[0]).0,
-        "a dead thread's obj[sym] record outlived its heap"
-    );
-    assert!(
-        !s::symbol_property_tables_hold_for_test(owner, sym[1]).1,
-        "a dead thread's symbol property attrs outlived its heap"
-    );
-    assert!(
-        !s::symbol_accessor_held_for_test(owner, sym[2]),
-        "a dead thread's symbol accessor outlived its heap"
-    );
-    assert!(
-        !s::symbol_property_tables_hold_for_test(class_owner, sym[0]).0,
+        !s::symbol_property_tables_hold_for_test(class_owner, syms[0]).0,
         "a dead thread's class-static symbol member outlived its heap"
+    );
+    assert_eq!(
+        side_tables_hold(obj, syms),
+        [false; 3],
+        "a dead thread's ordinary object gained side-table symbol entries"
     );
 }
 
@@ -278,10 +330,9 @@ fn thread_exit_releases_the_threads_buffer_own_props() {
 /// inline-access cache (a key is not integer-indexed), so the key buffer can
 /// no longer witness the cache's release; an ordinary `Buffer` on the same
 /// thread does.
-fn external_buffer_registrations(key: usize, view: usize) -> [bool; 4] {
-    let [ext, u8a, meta] = perry_runtime::buffer::external_registries_hold_for_test(key);
+fn external_buffer_registrations(key: usize, view: usize) -> [bool; 3] {
+    let [u8a, meta] = perry_runtime::buffer::external_registries_hold_for_test(key);
     [
-        ext,
         u8a,
         meta,
         perry_runtime::buffer::u8_inline_cache_holds_for_test(view),
@@ -304,7 +355,7 @@ fn external_buffer_registrations(key: usize, view: usize) -> [bool; 4] {
 /// Holds `(key, view, seen)`: the CryptoKey buffer, the cache-admitted byte
 /// view, and the verdict.
 #[allow(clippy::type_complexity)]
-static EXTERNAL_BUFFER_EXIT_PROBE: std::sync::Mutex<(usize, usize, Option<[bool; 4]>)> =
+static EXTERNAL_BUFFER_EXIT_PROBE: std::sync::Mutex<(usize, usize, Option<[bool; 3]>)> =
     std::sync::Mutex::new((0, 0, None));
 
 fn record_external_buffer_release(freed: &perry_runtime::arena::thread_exit::FreedRanges) {
@@ -322,9 +373,8 @@ fn record_external_buffer_release(freed: &perry_runtime::arena::thread_exit::Fre
 
 /// Verdict on what [`record_external_buffer_release`] saw: `Err` names the
 /// first table that still held the dead buffer when its thread was released.
-fn external_buffer_release_verdict(seen: Option<[bool; 4]>) -> Result<(), &'static str> {
-    const TABLES: [&str; 4] = [
-        "EXTERNAL_BUFFER_REGISTRY outlived the thread",
+fn external_buffer_release_verdict(seen: Option<[bool; 3]>) -> Result<(), &'static str> {
+    const TABLES: [&str; 3] = [
         "EXTERNAL_UINT8ARRAY_REGISTRY outlived the thread",
         "EXTERNAL_CRYPTO_KEY_META_REGISTRY outlived the thread",
         "PERRY_U8_INLINE_CACHE outlived the thread",
@@ -342,7 +392,7 @@ fn thread_exit_releases_the_threads_external_buffer_registrations() {
         let scope = RuntimeHandleScope::new();
         let buf = scope.root_raw_mut_ptr(perry_runtime::buffer::js_buffer_alloc(16, 0));
         let addr = buf.get_raw_mut_ptr::<u8>() as usize;
-        // webcrypto's CryptoKey registration: all three external registries.
+        // webcrypto's CryptoKey registration: both external registries.
         // This also registers their thread-exit hook, so it runs before the
         // probe registered below.
         unsafe { js_buffer_mark_as_crypto_key_external(addr, 1, 0, 1, 1, 0, 0) };
@@ -373,7 +423,7 @@ fn thread_exit_releases_the_threads_external_buffer_registrations() {
         "key material must never enter the inline element-access cache"
     );
     assert_eq!(
-        alive, [true; 4],
+        alive, [true; 3],
         "every registration must exist while its thread lives"
     );
     if let Err(table) = external_buffer_release_verdict(seen) {
@@ -393,20 +443,20 @@ fn external_buffer_verdict_is_taken_at_release_not_by_address() {
     let addr = buf.get_raw_mut_ptr::<u8>() as usize;
     unsafe { js_buffer_mark_as_crypto_key_external(addr, 1, 0, 1, 1, 0, 0) };
     assert!(
-        perry_runtime::buffer::is_external_buffer(addr),
+        perry_runtime::buffer::external_registries_hold_for_test(addr)[0],
         "the newcomer is registered, so an address-only check would fail"
     );
     assert_eq!(
-        external_buffer_release_verdict(Some([false; 4])),
+        external_buffer_release_verdict(Some([false; 3])),
         Ok(()),
         "a newcomer at a released address was reported as the dead buffer"
     );
     assert_eq!(
-        external_buffer_release_verdict(Some([true, false, false, false])),
-        Err("EXTERNAL_BUFFER_REGISTRY outlived the thread")
+        external_buffer_release_verdict(Some([true, false, false])),
+        Err("EXTERNAL_UINT8ARRAY_REGISTRY outlived the thread")
     );
     assert_eq!(
-        external_buffer_release_verdict(Some([false, false, false, true])),
+        external_buffer_release_verdict(Some([false, false, true])),
         Err("PERRY_U8_INLINE_CACHE outlived the thread")
     );
     assert!(
@@ -422,7 +472,7 @@ fn thread_exit_releases_the_threads_dom_exceptions() {
             perry_runtime::event_target::js_dom_exception_new(undefined(), undefined()) as usize;
         (
             err,
-            perry_runtime::event_target::dom_exception_error_registered_for_test(err),
+            perry_runtime::event_target::dom_exception_has_error_brand_for_test(err),
         )
     })
     .join()
@@ -432,7 +482,7 @@ fn thread_exit_releases_the_threads_dom_exceptions() {
         "new DOMException() must be recorded while its thread lives"
     );
     assert!(
-        !perry_runtime::event_target::dom_exception_error_registered_for_test(err),
+        !perry_runtime::event_target::dom_exception_has_error_brand_for_test(err),
         "a dead thread's DOMException address outlived its heap"
     );
 }

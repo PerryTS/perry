@@ -360,10 +360,13 @@ pub(super) fn compile_method(
     let mut shadow_slot_map = if super::helpers::precise_root_analysis_enabled() {
         let flat_const_ids: std::collections::HashSet<u32> =
             cross_module.flat_const_arrays.keys().copied().collect();
-        let m = crate::collectors::collect_pointer_typed_locals(
-            &method.params,
-            method_body,
-            &flat_const_ids,
+        let m = crate::scope_env::compact_root_slots(
+            crate::collectors::collect_pointer_typed_locals(
+                &method.params,
+                method_body,
+                &flat_const_ids,
+            ),
+            &cross_module.scope_map,
         );
         crate::codegen::helpers::maybe_spill_roots_to_shadow_frame(
             lf,
@@ -431,12 +434,7 @@ pub(super) fn compile_method(
         }
         (this_slot, map)
     };
-    super::arguments::release_boxed_param_slots_at_exit(
-        lf,
-        &method.params,
-        &method_boxed_vars,
-        &locals,
-    );
+    super::arguments::box_rooted_parameter_slots(lf, &method.params, &method_boxed_vars, &locals);
 
     let mut local_types: HashMap<u32, perry_hir::types::Type> = module_global_types
         .iter()
@@ -601,6 +599,7 @@ pub(super) fn compile_method(
         class_field_counts: &cross_module.class_field_counts,
         class_init_chains: &cross_module.class_init_chains,
         class_header_image_globals: &cross_module.class_header_images,
+        class_birth_reps: &cross_module.class_birth_reps,
         imported_class_ctors: &cross_module.imported_class_ctors,
         func_signatures,
         func_synthetic_arguments,
@@ -612,6 +611,7 @@ pub(super) fn compile_method(
             .compiler_private_async_i32_control_locals,
         compiler_private_async_i1_control_locals: &cross_module
             .compiler_private_async_i1_control_locals,
+        scope_map: &cross_module.scope_map,
         closure_rest_params,
         local_closure_func_ids: HashMap::new(),
         guard_free_closure_bindings: std::collections::HashSet::new(),
