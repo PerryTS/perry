@@ -802,6 +802,7 @@ pub fn process_metadata_property(property: &str) -> Option<f64> {
         // native-module runtime dispatcher, which lands here. Serve them from
         // the same runtime constructors the intrinsics call so all three
         // forms observe the same values (env/stdout are live singletons).
+        "exitCode" => js_process_exit_code_get(),
         "env" => js_process_env(),
         "argv" => f64::from_bits(JSValue::array_ptr(crate::os::js_process_argv()).bits()),
         "platform" => f64::from_bits(JSValue::string_ptr(crate::os::js_os_platform()).bits()),

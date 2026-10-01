@@ -245,6 +245,15 @@
       "linux"
     ]
   },
+  "test_issue_11661_textfield_baseline": {
+    "issue": "8271",
+    "added": "2026-09-30",
+    "category": "ci-env",
+    "reason": "Compile fails on the Linux CI host: `perry/ui imported but libperry_ui_gtk4.a not found` — the parity job builds no perry-ui-gtk4 archive (same class as test_issue_10155_textfield_singleline and the rest of the libperry_ui_gtk4.a family, #8271). A macOS smoke fixture for #11661, run by hand.",
+    "platforms": [
+      "linux"
+    ]
+  },
   "test_issue_1193_cheerio_chain": {
     "issue": "8271",
     "added": "2026-08-17",
