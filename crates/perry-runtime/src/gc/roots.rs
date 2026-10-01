@@ -127,14 +127,10 @@ crate::perry_thread_local! {
 /// held records pending work, returns immediately, and the final guard drop
 /// runs the collection only after the scanner can reacquire the mutex.
 ///
-/// A guard from [`lock_gc_root_registry_noncollecting`] never flushes: see
-/// that function for the contract it enforces instead.
+/// A guard from [`lock_gc_root_registry_noncollecting`] is a different type,
+/// [`NonCollectingRootRegistryGuard`], which never flushes.
 pub(crate) struct GcRootRegistryGuard<'a, T> {
     pub(super) guard: Option<MutexGuard<'a, T>>,
-    /// `None` for an ordinary guard. For a non-collecting one: whether a
-    /// deferred request was already pending when it was taken, so its release
-    /// can tell a request raised INSIDE its region from one it inherited.
-    pub(super) noncollecting: Option<bool>,
 }
 
 impl<T> std::ops::Deref for GcRootRegistryGuard<'_, T> {
@@ -158,10 +154,47 @@ impl<T> std::ops::DerefMut for GcRootRegistryGuard<'_, T> {
 impl<T> Drop for GcRootRegistryGuard<'_, T> {
     fn drop(&mut self) {
         drop(self.guard.take());
-        match self.noncollecting {
-            None => exit_gc_root_lock(),
-            Some(pending_at_entry) => exit_gc_root_lock_noncollecting(pending_at_entry),
-        }
+        exit_gc_root_lock();
+    }
+}
+
+/// Guard returned by [`lock_gc_root_registry_noncollecting`] (#11523).
+///
+/// A separate TYPE, not a flag on [`GcRootRegistryGuard`]: its drop glue then
+/// contains no path to `flush_deferred_gc_request` at all, which is what the
+/// generated GC call-effects table (scripts/gc_call_effects) can prove from
+/// the object code. A runtime flag left the flushing arm in every guard's drop
+/// and made every caller statically collecting.
+pub(crate) struct NonCollectingRootRegistryGuard<'a, T> {
+    guard: Option<MutexGuard<'a, T>>,
+    /// Whether a deferred request was already pending when the guard was
+    /// taken, so the release can tell a request raised INSIDE its region from
+    /// one it inherited.
+    pending_at_entry: bool,
+}
+
+impl<T> std::ops::Deref for NonCollectingRootRegistryGuard<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        self.guard
+            .as_deref()
+            .expect("GC root registry guard missing")
+    }
+}
+
+impl<T> std::ops::DerefMut for NonCollectingRootRegistryGuard<'_, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.guard
+            .as_deref_mut()
+            .expect("GC root registry guard missing")
+    }
+}
+
+impl<T> Drop for NonCollectingRootRegistryGuard<'_, T> {
+    fn drop(&mut self) {
+        drop(self.guard.take());
+        exit_gc_root_lock_noncollecting(self.pending_at_entry);
     }
 }
 
@@ -170,10 +203,7 @@ pub(crate) fn lock_gc_root_registry<T>(mutex: &Mutex<T>) -> GcRootRegistryGuard<
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     enter_gc_root_lock();
-    GcRootRegistryGuard {
-        guard: Some(guard),
-        noncollecting: None,
-    }
+    GcRootRegistryGuard { guard: Some(guard) }
 }
 
 /// #11523: [`lock_gc_root_registry`] for a registry reached from helpers that
@@ -194,15 +224,15 @@ pub(crate) fn lock_gc_root_registry<T>(mutex: &Mutex<T>) -> GcRootRegistryGuard<
 /// next allocation's check regardless. Either way this call does not collect.
 pub(crate) fn lock_gc_root_registry_noncollecting<T>(
     mutex: &Mutex<T>,
-) -> GcRootRegistryGuard<'_, T> {
+) -> NonCollectingRootRegistryGuard<'_, T> {
     let guard = mutex
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let pending_at_entry = deferred_gc_request_pending();
     enter_gc_root_lock();
-    GcRootRegistryGuard {
+    NonCollectingRootRegistryGuard {
         guard: Some(guard),
-        noncollecting: Some(pending_at_entry),
+        pending_at_entry,
     }
 }
 
@@ -702,10 +732,9 @@ pub(super) fn try_mark_conservative_word(
 
     unsafe {
         let header = header_from_user_ptr(target as *const u8);
-        if (*header).gc_flags & GC_FLAG_MARKED != 0 {
-            return false;
-        }
-        if (*header).gc_flags & GC_FLAG_PINNED != 0 {
+        if (*header).gc_flags & GC_FLAG_MARKED != 0
+            || super::pin::pinned_counts_as_marked((*header).gc_flags)
+        {
             return false;
         }
         if matches!(
@@ -776,11 +805,10 @@ pub(crate) fn try_mark_value_or_raw(word: u64, valid_ptrs: &ValidPointerSet) -> 
     };
     unsafe {
         let header = header_from_user_ptr(target as *const u8);
-        if (*header).gc_flags & GC_FLAG_MARKED != 0 {
+        if (*header).gc_flags & GC_FLAG_MARKED != 0
+            || super::pin::pinned_counts_as_marked((*header).gc_flags)
+        {
             return false; // Already marked
-        }
-        if (*header).gc_flags & GC_FLAG_PINNED != 0 {
-            return false; // Pinned objects are always live
         }
         (*header).gc_flags |= GC_FLAG_MARKED;
         push_mark_seed(header);
@@ -1753,7 +1781,7 @@ pub(super) fn mark_copy_only_scanner_bits(
     };
     unsafe {
         let flags = (*header).gc_flags;
-        if flags & (GC_FLAG_MARKED | GC_FLAG_PINNED) == 0 {
+        if flags & GC_FLAG_MARKED == 0 && !super::pin::pinned_counts_as_marked(flags) {
             (*header).gc_flags = flags | GC_FLAG_MARKED;
             push_mark_seed(header);
         }

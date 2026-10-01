@@ -129,10 +129,10 @@ fn closure_value(closure: *mut ClosureHeader) -> f64 {
     f64::from_bits(JSValue::pointer(closure as *const u8).bits())
 }
 
-fn closure_with_stream(func: *const u8, node_stream: f64) -> f64 {
+fn closure_with_stream(info: *const crate::closure::JsFunctionInfo, node_stream: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let node_stream = scope.root_nanbox_f64(node_stream);
-    let closure = scope.root_raw_mut_ptr(js_closure_alloc(func, 1));
+    let closure = scope.root_raw_mut_ptr(js_closure_alloc(info, 1));
     closure.with_mut_ptr(|closure| {
         js_closure_set_capture_f64(closure, 0, node_stream.get_nanbox_f64())
     });
@@ -210,11 +210,20 @@ fn call_stream_callback(callback: f64, err: f64) {
         err
     };
     unsafe {
-        let _ = crate::closure::js_native_call_value(callback, [arg].as_ptr(), 1);
+        let _ = crate::closure::js_native_call_value(
+            callback,
+            crate::closure::plain_call_receiver(),
+            [arg].as_ptr(),
+            1,
+        );
     }
 }
 
-extern "C" fn node_to_web_readable_pull(closure: *const ClosureHeader, controller: f64) -> f64 {
+extern "C" fn node_to_web_readable_pull(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    controller: f64,
+) -> f64 {
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
@@ -262,14 +271,22 @@ fn settle_foreign_readable_pull(controller: f64, result: f64) {
     }
 }
 
-extern "C" fn foreign_readable_pull_fulfilled(closure: *const ClosureHeader, result: f64) -> f64 {
+extern "C" fn foreign_readable_pull_fulfilled(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    result: f64,
+) -> f64 {
     if !closure.is_null() {
         settle_foreign_readable_pull(js_closure_get_capture_f64(closure, 0), result);
     }
     f64::from_bits(TAG_UNDEFINED)
 }
 
-extern "C" fn foreign_readable_pull_rejected(closure: *const ClosureHeader, reason: f64) -> f64 {
+extern "C" fn foreign_readable_pull_rejected(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    reason: f64,
+) -> f64 {
     if !closure.is_null() {
         if let Some(error) = web_readable_error() {
             let scope = crate::gc::RuntimeHandleScope::new();
@@ -288,7 +305,11 @@ extern "C" fn foreign_readable_pull_rejected(closure: *const ClosureHeader, reas
 /// other foreign Readables whose bytes live outside node:stream's hidden chunk
 /// array. Returning the chained promise keeps the Web-stream pull in flight
 /// until the foreign source yields, ends, or rejects (#9616).
-extern "C" fn foreign_readable_to_web_pull(closure: *const ClosureHeader, controller: f64) -> f64 {
+extern "C" fn foreign_readable_to_web_pull(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    controller: f64,
+) -> f64 {
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
@@ -302,11 +323,11 @@ extern "C" fn foreign_readable_to_web_pull(closure: *const ClosureHeader, contro
     }
 
     let fulfilled = scope.root_raw_mut_ptr(js_closure_alloc(
-        foreign_readable_pull_fulfilled as *const u8,
+        crate::fn_info!(foreign_readable_pull_fulfilled, 1; with_declared(1)),
         1,
     ));
     let rejected = scope.root_raw_mut_ptr(js_closure_alloc(
-        foreign_readable_pull_rejected as *const u8,
+        crate::fn_info!(foreign_readable_pull_rejected, 1; with_declared(1)),
         1,
     ));
     fulfilled.with_mut_ptr(|fulfilled| {
@@ -328,7 +349,11 @@ extern "C" fn foreign_readable_to_web_pull(closure: *const ClosureHeader, contro
     box_pointer(chained as *const u8)
 }
 
-extern "C" fn foreign_readable_to_web_cancel(closure: *const ClosureHeader, reason: f64) -> f64 {
+extern "C" fn foreign_readable_to_web_cancel(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    reason: f64,
+) -> f64 {
     if closure.is_null() {
         return resolved_promise(f64::from_bits(TAG_UNDEFINED));
     }
@@ -341,7 +366,11 @@ extern "C" fn foreign_readable_to_web_cancel(closure: *const ClosureHeader, reas
     returned.get_nanbox_f64()
 }
 
-extern "C" fn node_to_web_readable_cancel(closure: *const ClosureHeader, reason: f64) -> f64 {
+extern "C" fn node_to_web_readable_cancel(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    reason: f64,
+) -> f64 {
     if !closure.is_null() {
         destroy_stream(js_closure_get_capture_f64(closure, 0), reason);
     }
@@ -353,22 +382,17 @@ fn node_readable_to_web(node_stream: f64) -> Option<f64> {
     let scope = crate::gc::RuntimeHandleScope::new();
     let node_stream = scope.root_nanbox_f64(node_stream);
     if async_iterator::is_foreign_readable(node_stream.get_nanbox_f64()) {
-        crate::closure::js_register_closure_arity(foreign_readable_to_web_pull as *const u8, 1);
-        crate::closure::js_register_closure_arity(foreign_readable_to_web_cancel as *const u8, 1);
-        crate::closure::js_register_closure_arity(foreign_readable_pull_fulfilled as *const u8, 1);
-        crate::closure::js_register_closure_arity(foreign_readable_pull_rejected as *const u8, 1);
-
         let iterator = scope.root_nanbox_f64(async_iterator::build_readable_async_iterator(
             node_stream.get_nanbox_f64(),
             true,
         ));
         let pull = scope.root_raw_mut_ptr(js_closure_alloc(
-            foreign_readable_to_web_pull as *const u8,
+            crate::fn_info!(foreign_readable_to_web_pull, 1; with_declared(1)),
             1,
         ));
         pull.with_mut_ptr(|pull| js_closure_set_capture_f64(pull, 0, iterator.get_nanbox_f64()));
         let cancel = scope.root_raw_mut_ptr(js_closure_alloc(
-            foreign_readable_to_web_cancel as *const u8,
+            crate::fn_info!(foreign_readable_to_web_cancel, 1; with_declared(1)),
             2,
         ));
         cancel.with_mut_ptr(|cancel| {
@@ -386,12 +410,13 @@ fn node_readable_to_web(node_stream: f64) -> Option<f64> {
             })
         }));
     }
-    crate::closure::js_register_closure_arity(node_to_web_readable_pull as *const u8, 1);
-    crate::closure::js_register_closure_arity(node_to_web_readable_cancel as *const u8, 1);
-    let pull = scope.root_raw_mut_ptr(js_closure_alloc(node_to_web_readable_pull as *const u8, 1));
+    let pull = scope.root_raw_mut_ptr(js_closure_alloc(
+        crate::fn_info!(node_to_web_readable_pull, 1; with_declared(1)),
+        1,
+    ));
     pull.with_mut_ptr(|pull| js_closure_set_capture_f64(pull, 0, node_stream.get_nanbox_f64()));
     let cancel = scope.root_raw_mut_ptr(js_closure_alloc(
-        node_to_web_readable_cancel as *const u8,
+        crate::fn_info!(node_to_web_readable_cancel, 1; with_declared(1)),
         1,
     ));
     cancel
@@ -408,7 +433,10 @@ fn node_readable_to_web(node_stream: f64) -> Option<f64> {
     }))
 }
 
-extern "C" fn fallback_web_reader_read(closure: *const ClosureHeader) -> f64 {
+extern "C" fn fallback_web_reader_read(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     if closure.is_null() {
         return resolved_promise(build_web_read_result(f64::from_bits(TAG_UNDEFINED), true));
     }
@@ -424,33 +452,47 @@ extern "C" fn fallback_web_reader_read(closure: *const ClosureHeader) -> f64 {
     resolved_promise(result)
 }
 
-extern "C" fn fallback_web_reader_cancel(closure: *const ClosureHeader, reason: f64) -> f64 {
+extern "C" fn fallback_web_reader_cancel(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    reason: f64,
+) -> f64 {
     if !closure.is_null() {
         destroy_stream(js_closure_get_capture_f64(closure, 0), reason);
     }
     resolved_promise(f64::from_bits(TAG_UNDEFINED))
 }
 
-extern "C" fn fallback_web_readable_get_reader(closure: *const ClosureHeader) -> f64 {
+extern "C" fn fallback_web_readable_get_reader(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
     let node_stream = js_closure_get_capture_f64(closure, 0);
-    crate::closure::js_register_closure_arity(fallback_web_reader_read as *const u8, 0);
-    crate::closure::js_register_closure_arity(fallback_web_reader_cancel as *const u8, 1);
     build_enumerable_object(&[
         (
             b"read",
-            closure_with_stream(fallback_web_reader_read as *const u8, node_stream),
+            closure_with_stream(
+                crate::fn_info!(fallback_web_reader_read, 0; with_declared(0)),
+                node_stream,
+            ),
         ),
         (
             b"cancel",
-            closure_with_stream(fallback_web_reader_cancel as *const u8, node_stream),
+            closure_with_stream(
+                crate::fn_info!(fallback_web_reader_cancel, 1; with_declared(1)),
+                node_stream,
+            ),
         ),
     ])
 }
 
-extern "C" fn fallback_foreign_reader_read(closure: *const ClosureHeader) -> f64 {
+extern "C" fn fallback_foreign_reader_read(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     if closure.is_null() {
         return resolved_promise(build_web_read_result(f64::from_bits(TAG_UNDEFINED), true));
     }
@@ -459,26 +501,31 @@ extern "C" fn fallback_foreign_reader_read(closure: *const ClosureHeader) -> f64
     call_method_no_args(iterator.get_nanbox_f64(), b"next")
 }
 
-extern "C" fn fallback_foreign_reader_cancel(closure: *const ClosureHeader, reason: f64) -> f64 {
-    foreign_readable_to_web_cancel(closure, reason)
+extern "C" fn fallback_foreign_reader_cancel(
+    closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+    reason: f64,
+) -> f64 {
+    foreign_readable_to_web_cancel(closure, this, reason)
 }
 
-extern "C" fn fallback_foreign_get_reader(closure: *const ClosureHeader) -> f64 {
+extern "C" fn fallback_foreign_get_reader(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let iterator = scope.root_nanbox_f64(js_closure_get_capture_f64(closure, 0));
     let stream = scope.root_nanbox_f64(js_closure_get_capture_f64(closure, 1));
-    crate::closure::js_register_closure_arity(fallback_foreign_reader_read as *const u8, 0);
-    crate::closure::js_register_closure_arity(fallback_foreign_reader_cancel as *const u8, 1);
     let read = scope.root_raw_mut_ptr(js_closure_alloc(
-        fallback_foreign_reader_read as *const u8,
+        crate::fn_info!(fallback_foreign_reader_read, 0; with_declared(0)),
         1,
     ));
     read.with_mut_ptr(|read| js_closure_set_capture_f64(read, 0, iterator.get_nanbox_f64()));
     let cancel = scope.root_raw_mut_ptr(js_closure_alloc(
-        fallback_foreign_reader_cancel as *const u8,
+        crate::fn_info!(fallback_foreign_reader_cancel, 1; with_declared(1)),
         2,
     ));
     cancel.with_mut_ptr(|cancel| {
@@ -498,14 +545,12 @@ extern "C" fn fallback_foreign_get_reader(closure: *const ClosureHeader) -> f64 
 fn fallback_foreign_readable_to_web(node_stream: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let node_stream = scope.root_nanbox_f64(node_stream);
-    crate::closure::js_register_closure_arity(fallback_foreign_get_reader as *const u8, 0);
-    crate::closure::js_register_closure_arity(fallback_foreign_reader_cancel as *const u8, 1);
     let iterator = scope.root_nanbox_f64(async_iterator::build_readable_async_iterator(
         node_stream.get_nanbox_f64(),
         true,
     ));
     let get_reader = scope.root_raw_mut_ptr(js_closure_alloc(
-        fallback_foreign_get_reader as *const u8,
+        crate::fn_info!(fallback_foreign_get_reader, 0; with_declared(0)),
         2,
     ));
     get_reader.with_mut_ptr(|get_reader| {
@@ -513,7 +558,7 @@ fn fallback_foreign_readable_to_web(node_stream: f64) -> f64 {
         js_closure_set_capture_f64(get_reader, 1, node_stream.get_nanbox_f64());
     });
     let cancel = scope.root_raw_mut_ptr(js_closure_alloc(
-        fallback_foreign_reader_cancel as *const u8,
+        crate::fn_info!(fallback_foreign_reader_cancel, 1; with_declared(1)),
         2,
     ));
     cancel.with_mut_ptr(|cancel| {
@@ -534,21 +579,29 @@ fn fallback_node_readable_to_web(node_stream: f64) -> f64 {
     if async_iterator::is_foreign_readable(node_stream) {
         return fallback_foreign_readable_to_web(node_stream);
     }
-    crate::closure::js_register_closure_arity(fallback_web_readable_get_reader as *const u8, 0);
-    crate::closure::js_register_closure_arity(fallback_web_reader_cancel as *const u8, 1);
     build_enumerable_object(&[
         (
             b"getReader",
-            closure_with_stream(fallback_web_readable_get_reader as *const u8, node_stream),
+            closure_with_stream(
+                crate::fn_info!(fallback_web_readable_get_reader, 0; with_declared(0)),
+                node_stream,
+            ),
         ),
         (
             b"cancel",
-            closure_with_stream(fallback_web_reader_cancel as *const u8, node_stream),
+            closure_with_stream(
+                crate::fn_info!(fallback_web_reader_cancel, 1; with_declared(1)),
+                node_stream,
+            ),
         ),
     ])
 }
 
-extern "C" fn node_to_web_writable_write(closure: *const ClosureHeader, chunk: f64) -> f64 {
+extern "C" fn node_to_web_writable_write(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    chunk: f64,
+) -> f64 {
     if !closure.is_null() {
         let node_stream = js_closure_get_capture_f64(closure, 0);
         let _ = write_writable_chunk(
@@ -561,7 +614,10 @@ extern "C" fn node_to_web_writable_write(closure: *const ClosureHeader, chunk: f
     f64::from_bits(TAG_UNDEFINED)
 }
 
-extern "C" fn node_to_web_writable_close(closure: *const ClosureHeader) -> f64 {
+extern "C" fn node_to_web_writable_close(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     if !closure.is_null() {
         let node_stream = js_closure_get_capture_f64(closure, 0);
         finish_stream_with_args(
@@ -574,7 +630,11 @@ extern "C" fn node_to_web_writable_close(closure: *const ClosureHeader) -> f64 {
     f64::from_bits(TAG_UNDEFINED)
 }
 
-extern "C" fn node_to_web_writable_abort(closure: *const ClosureHeader, reason: f64) -> f64 {
+extern "C" fn node_to_web_writable_abort(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    reason: f64,
+) -> f64 {
     if !closure.is_null() {
         destroy_stream(js_closure_get_capture_f64(closure, 0), reason);
     }
@@ -583,14 +643,20 @@ extern "C" fn node_to_web_writable_abort(closure: *const ClosureHeader, reason: 
 
 fn node_writable_to_web(node_stream: f64) -> Option<f64> {
     let writable_new = web_writable_new()?;
-    crate::closure::js_register_closure_arity(node_to_web_writable_write as *const u8, 1);
-    crate::closure::js_register_closure_arity(node_to_web_writable_close as *const u8, 0);
-    crate::closure::js_register_closure_arity(node_to_web_writable_abort as *const u8, 1);
-    let write = js_closure_alloc(node_to_web_writable_write as *const u8, 1);
+    let write = js_closure_alloc(
+        crate::fn_info!(node_to_web_writable_write, 1; with_declared(1)),
+        1,
+    );
     js_closure_set_capture_f64(write, 0, node_stream);
-    let close = js_closure_alloc(node_to_web_writable_close as *const u8, 1);
+    let close = js_closure_alloc(
+        crate::fn_info!(node_to_web_writable_close, 0; with_declared(0)),
+        1,
+    );
     js_closure_set_capture_f64(close, 0, node_stream);
-    let abort = js_closure_alloc(node_to_web_writable_abort as *const u8, 1);
+    let abort = js_closure_alloc(
+        crate::fn_info!(node_to_web_writable_abort, 1; with_declared(1)),
+        1,
+    );
     js_closure_set_capture_f64(abort, 0, node_stream);
     Some(unsafe {
         writable_new(
@@ -603,7 +669,11 @@ fn node_writable_to_web(node_stream: f64) -> Option<f64> {
     })
 }
 
-extern "C" fn fallback_web_writer_write(closure: *const ClosureHeader, chunk: f64) -> f64 {
+extern "C" fn fallback_web_writer_write(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    chunk: f64,
+) -> f64 {
     if !closure.is_null() {
         let node_stream = js_closure_get_capture_f64(closure, 0);
         let _ = write_writable_chunk(
@@ -616,7 +686,10 @@ extern "C" fn fallback_web_writer_write(closure: *const ClosureHeader, chunk: f6
     resolved_promise(f64::from_bits(TAG_UNDEFINED))
 }
 
-extern "C" fn fallback_web_writer_close(closure: *const ClosureHeader) -> f64 {
+extern "C" fn fallback_web_writer_close(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     if !closure.is_null() {
         finish_stream_with_args(
             js_closure_get_capture_f64(closure, 0),
@@ -628,48 +701,65 @@ extern "C" fn fallback_web_writer_close(closure: *const ClosureHeader) -> f64 {
     resolved_promise(f64::from_bits(TAG_UNDEFINED))
 }
 
-extern "C" fn fallback_web_writer_abort(closure: *const ClosureHeader, reason: f64) -> f64 {
+extern "C" fn fallback_web_writer_abort(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    reason: f64,
+) -> f64 {
     if !closure.is_null() {
         destroy_stream(js_closure_get_capture_f64(closure, 0), reason);
     }
     resolved_promise(f64::from_bits(TAG_UNDEFINED))
 }
 
-extern "C" fn fallback_web_writable_get_writer(closure: *const ClosureHeader) -> f64 {
+extern "C" fn fallback_web_writable_get_writer(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
     let node_stream = js_closure_get_capture_f64(closure, 0);
-    crate::closure::js_register_closure_arity(fallback_web_writer_write as *const u8, 1);
-    crate::closure::js_register_closure_arity(fallback_web_writer_close as *const u8, 0);
-    crate::closure::js_register_closure_arity(fallback_web_writer_abort as *const u8, 1);
     build_enumerable_object(&[
         (
             b"write",
-            closure_with_stream(fallback_web_writer_write as *const u8, node_stream),
+            closure_with_stream(
+                crate::fn_info!(fallback_web_writer_write, 1; with_declared(1)),
+                node_stream,
+            ),
         ),
         (
             b"close",
-            closure_with_stream(fallback_web_writer_close as *const u8, node_stream),
+            closure_with_stream(
+                crate::fn_info!(fallback_web_writer_close, 0; with_declared(0)),
+                node_stream,
+            ),
         ),
         (
             b"abort",
-            closure_with_stream(fallback_web_writer_abort as *const u8, node_stream),
+            closure_with_stream(
+                crate::fn_info!(fallback_web_writer_abort, 1; with_declared(1)),
+                node_stream,
+            ),
         ),
     ])
 }
 
 fn fallback_node_writable_to_web(node_stream: f64) -> f64 {
-    crate::closure::js_register_closure_arity(fallback_web_writable_get_writer as *const u8, 0);
-    crate::closure::js_register_closure_arity(fallback_web_writer_abort as *const u8, 1);
     build_enumerable_object(&[
         (
             b"getWriter",
-            closure_with_stream(fallback_web_writable_get_writer as *const u8, node_stream),
+            closure_with_stream(
+                crate::fn_info!(fallback_web_writable_get_writer, 0; with_declared(0)),
+                node_stream,
+            ),
         ),
         (
             b"abort",
-            closure_with_stream(fallback_web_writer_abort as *const u8, node_stream),
+            closure_with_stream(
+                crate::fn_info!(fallback_web_writer_abort, 1; with_declared(1)),
+                node_stream,
+            ),
         ),
     ])
 }
@@ -701,8 +791,10 @@ fn install_web_readable_adapter(node_stream: f64, web_stream: f64) -> bool {
     if reader.to_bits() == TAG_UNDEFINED {
         return false;
     }
-    crate::closure::js_register_closure_arity(web_to_node_readable_read as *const u8, 1);
-    let read = js_closure_alloc(web_to_node_readable_read as *const u8, 2);
+    let read = js_closure_alloc(
+        crate::fn_info!(web_to_node_readable_read, 1; with_declared(1)),
+        2,
+    );
     js_closure_set_capture_f64(read, 0, node_stream);
     js_closure_set_capture_f64(read, 1, reader);
     set_hidden_value(node_stream, hidden_read_key(), closure_value(read));
@@ -714,7 +806,11 @@ fn install_web_readable_adapter(node_stream: f64, web_stream: f64) -> bool {
     true
 }
 
-extern "C" fn web_to_node_readable_read(closure: *const ClosureHeader, _size: f64) -> f64 {
+extern "C" fn web_to_node_readable_read(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    _size: f64,
+) -> f64 {
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
@@ -743,18 +839,23 @@ fn pump_web_reader(node_stream: f64, reader: f64) {
     if promise.is_null() {
         return;
     }
-    crate::closure::js_register_closure_arity(web_to_node_readable_read_fulfilled as *const u8, 1);
-    crate::closure::js_register_closure_arity(web_to_node_readable_read_rejected as *const u8, 1);
-    let fulfilled = js_closure_alloc(web_to_node_readable_read_fulfilled as *const u8, 2);
+    let fulfilled = js_closure_alloc(
+        crate::fn_info!(web_to_node_readable_read_fulfilled, 1; with_declared(1)),
+        2,
+    );
     js_closure_set_capture_f64(fulfilled, 0, node_stream);
     js_closure_set_capture_f64(fulfilled, 1, reader);
-    let rejected = js_closure_alloc(web_to_node_readable_read_rejected as *const u8, 1);
+    let rejected = js_closure_alloc(
+        crate::fn_info!(web_to_node_readable_read_rejected, 1; with_declared(1)),
+        1,
+    );
     js_closure_set_capture_f64(rejected, 0, node_stream);
     crate::promise::js_promise_attach_handlers(promise, fulfilled, rejected);
 }
 
 extern "C" fn web_to_node_readable_read_fulfilled(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     result: f64,
 ) -> f64 {
     if closure.is_null() {
@@ -780,6 +881,7 @@ extern "C" fn web_to_node_readable_read_fulfilled(
 
 extern "C" fn web_to_node_readable_read_rejected(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     reason: f64,
 ) -> f64 {
     if !closure.is_null() {
@@ -802,14 +904,20 @@ fn install_web_writable_adapter(node_stream: f64, web_stream: f64) -> bool {
     if writer.to_bits() == TAG_UNDEFINED {
         return false;
     }
-    crate::closure::js_register_closure_arity(web_to_node_writable_write as *const u8, 3);
-    crate::closure::js_register_closure_arity(web_to_node_writable_final as *const u8, 1);
-    crate::closure::js_register_closure_arity(web_to_node_writable_destroy as *const u8, 2);
-    let write = js_closure_alloc(web_to_node_writable_write as *const u8, 1);
+    let write = js_closure_alloc(
+        crate::fn_info!(web_to_node_writable_write, 3; with_declared(3)),
+        1,
+    );
     js_closure_set_capture_f64(write, 0, writer);
-    let final_cb = js_closure_alloc(web_to_node_writable_final as *const u8, 1);
+    let final_cb = js_closure_alloc(
+        crate::fn_info!(web_to_node_writable_final, 1; with_declared(1)),
+        1,
+    );
     js_closure_set_capture_f64(final_cb, 0, writer);
-    let destroy = js_closure_alloc(web_to_node_writable_destroy as *const u8, 1);
+    let destroy = js_closure_alloc(
+        crate::fn_info!(web_to_node_writable_destroy, 2; with_declared(2)),
+        1,
+    );
     js_closure_set_capture_f64(destroy, 0, writer);
     set_hidden_value(node_stream, hidden_write_key(), closure_value(write));
     set_hidden_value(
@@ -837,6 +945,7 @@ fn install_web_writable_adapter(node_stream: f64, web_stream: f64) -> bool {
 
 extern "C" fn web_to_node_writable_write(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     chunk: f64,
     _encoding: f64,
     callback: f64,
@@ -855,7 +964,11 @@ extern "C" fn web_to_node_writable_write(
     f64::from_bits(TAG_UNDEFINED)
 }
 
-extern "C" fn web_to_node_writable_final(closure: *const ClosureHeader, callback: f64) -> f64 {
+extern "C" fn web_to_node_writable_final(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    callback: f64,
+) -> f64 {
     if closure.is_null() {
         call_stream_callback(callback, f64::from_bits(TAG_UNDEFINED));
         return f64::from_bits(TAG_UNDEFINED);
@@ -872,6 +985,7 @@ extern "C" fn web_to_node_writable_final(closure: *const ClosureHeader, callback
 
 extern "C" fn web_to_node_writable_destroy(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     err: f64,
     callback: f64,
 ) -> f64 {
@@ -899,16 +1013,24 @@ fn attach_web_writable_callback(promise: *mut crate::promise::Promise, callback:
         call_stream_callback(callback, f64::from_bits(TAG_UNDEFINED));
         return;
     }
-    crate::closure::js_register_closure_arity(web_to_node_writable_fulfilled as *const u8, 1);
-    crate::closure::js_register_closure_arity(web_to_node_writable_rejected as *const u8, 1);
-    let fulfilled = js_closure_alloc(web_to_node_writable_fulfilled as *const u8, 1);
+    let fulfilled = js_closure_alloc(
+        crate::fn_info!(web_to_node_writable_fulfilled, 1; with_declared(1)),
+        1,
+    );
     js_closure_set_capture_f64(fulfilled, 0, callback);
-    let rejected = js_closure_alloc(web_to_node_writable_rejected as *const u8, 1);
+    let rejected = js_closure_alloc(
+        crate::fn_info!(web_to_node_writable_rejected, 1; with_declared(1)),
+        1,
+    );
     js_closure_set_capture_f64(rejected, 0, callback);
     crate::promise::js_promise_attach_handlers(promise, fulfilled, rejected);
 }
 
-extern "C" fn web_to_node_writable_fulfilled(closure: *const ClosureHeader, _value: f64) -> f64 {
+extern "C" fn web_to_node_writable_fulfilled(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    _value: f64,
+) -> f64 {
     if !closure.is_null() {
         call_stream_callback(
             js_closure_get_capture_f64(closure, 0),
@@ -918,7 +1040,11 @@ extern "C" fn web_to_node_writable_fulfilled(closure: *const ClosureHeader, _val
     f64::from_bits(TAG_UNDEFINED)
 }
 
-extern "C" fn web_to_node_writable_rejected(closure: *const ClosureHeader, reason: f64) -> f64 {
+extern "C" fn web_to_node_writable_rejected(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    reason: f64,
+) -> f64 {
     if !closure.is_null() {
         call_stream_callback(js_closure_get_capture_f64(closure, 0), reason);
     }
@@ -1003,8 +1129,14 @@ pub extern "C" fn js_node_stream_duplex_from_web(pair: f64, opts: f64) -> f64 {
 /// universes — that's the remaining #1540 gap.
 pub(super) fn build_web_stream_stub() -> f64 {
     let methods: [(&str, StubFn); 2] = [
-        ("getReader", cast0(ns_undefined0)),
-        ("getWriter", cast0(ns_undefined0)),
+        (
+            "getReader",
+            crate::fn_info!(ns_undefined0, 0; with_declared(0)),
+        ),
+        (
+            "getWriter",
+            crate::fn_info!(ns_undefined0, 0; with_declared(0)),
+        ),
     ];
     let obj = build_object(&methods, WEB_STREAM_SHAPE_ID + methods.len() as u32);
     f64::from_bits(JSValue::pointer(obj as *const u8).bits())

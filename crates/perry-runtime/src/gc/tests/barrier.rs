@@ -1,6 +1,7 @@
 use super::super::barrier::RememberedSetClearState;
 use super::super::*;
 use super::support::*;
+use crate::closure::js_closure_alloc;
 
 unsafe fn field_index_not_on_last_page(fields: *mut u64, field_count: u32) -> usize {
     assert!(field_count > 1);
@@ -192,10 +193,8 @@ fn test_barriered_slot_store_api_trace_counters() {
     unsafe {
         assert_eq!(*fields, child_bits);
     }
-    assert_eq!(
-        test_layout_pointer_slot_count(old_obj as usize, 2048),
-        Some(1)
-    );
+    // Object tracing now uses the shape's Any lanes; this barrier test cares
+    // about the remembered dirty page, not the retired address-keyed mask.
     assert_eq!(remembered_dirty_page_count(), 1);
     assert!(old_page_dirty_for(dirty_page));
 
@@ -718,23 +717,23 @@ fn test_old_young_edge_verifier_trace_json_shape() {
 }
 
 #[test]
-fn test_dirty_page_scan_skips_pointer_free_old_object_payload_slots() {
+fn test_dirty_page_scan_skips_f64_lane_old_object_payload_slots() {
     let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     clear_marks();
-    let (old_obj, fields) = unsafe { alloc_old_test_object(2048) };
-    let dirty_idx = unsafe { field_index_not_on_last_page(fields, 2048) };
-    let dirty_slot = unsafe { fields.add(dirty_idx) };
+    // Charter step 5: traced by its shape, all lanes `F64`: no slot is read.
+    let slots = crate::object::field_rep::REP_SLOTS;
+    let (old_obj, fields) = unsafe { alloc_old_test_object(slots) };
     unsafe {
-        layout_init_pointer_free(old_obj as *mut u8);
+        for i in 0..slots as usize {
+            *fields.add(i) = (i as f64 + 0.5).to_bits();
+        }
+        restamp_with_rep(old_obj, f64_lanes(0..slots));
+        let dirty_slot = fields.add(slots as usize / 2);
         *dirty_slot = 42.0_f64.to_bits();
         mark_dirty_old_page(crate::arena::generation_page_for_addr(dirty_slot as usize));
     }
 
-    assert_eq!(
-        test_layout_pointer_slot_count(old_obj as usize, 2048),
-        Some(0)
-    );
     assert_eq!(test_heap_child_slot_count(old_obj as *mut u8), 0);
 
     let valid_ptrs = build_valid_pointer_set();
@@ -744,7 +743,8 @@ fn test_dirty_page_scan_skips_pointer_free_old_object_payload_slots() {
     assert_eq!(stats.dirty_objects_scanned, 1);
     assert_eq!(
         stats.dirty_slots_scanned, 0,
-        "pointer-free old objects must not read payload slots during dirty-page scans"
+        "an old object whose shape has only F64 lanes must not read payload \
+         slots during dirty-page scans"
     );
     assert_eq!(stats.dirty_slot_ranges_scanned, 0);
 
@@ -1442,7 +1442,7 @@ fn test_incremental_barrier_marks_closure_capture_store() {
     reset_remembered_set();
     clear_marks();
     let child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
-    let closure = crate::closure::js_closure_alloc(test_captured_singleton_func as *const u8, 1);
+    let closure = js_closure_alloc(crate::fn_info!(test_captured_singleton_func, 0), 1);
     mark_user_ptr(closure as usize);
     let valid_ptrs = build_valid_pointer_set();
     let _barrier = IncrementalMarkBarrierTestGuard::new(&valid_ptrs);
@@ -1464,7 +1464,7 @@ fn test_incremental_barrier_marks_closure_static_prototype_store() {
     reset_remembered_set();
     clear_marks();
     let proto = unsafe { alloc_nursery_test_object(0).0 as usize };
-    let closure = crate::closure::js_closure_alloc(test_no_capture_singleton_func as *const u8, 0);
+    let closure = js_closure_alloc(crate::fn_info!(test_no_capture_singleton_func, 0), 0);
     mark_user_ptr(closure as usize);
     let valid_ptrs = build_valid_pointer_set();
     let _barrier = IncrementalMarkBarrierTestGuard::new(&valid_ptrs);
@@ -1577,7 +1577,7 @@ fn test_promise_pointer_field_stores_dirty_old_page() {
     reset_remembered_set();
     clear_marks();
     let promise = unsafe { alloc_old_test_promise() };
-    let callback = crate::closure::js_closure_alloc(test_captured_singleton_func as *const u8, 0);
+    let callback = js_closure_alloc(crate::fn_info!(test_captured_singleton_func, 0), 0);
     let next = crate::promise::js_promise_then(promise, callback, std::ptr::null());
 
     assert!(
@@ -1606,8 +1606,8 @@ fn test_promise_pointer_field_stores_dirty_old_page() {
     reset_remembered_set();
     clear_marks();
     let promise = unsafe { alloc_old_test_promise() };
-    let fulfill = crate::closure::js_closure_alloc(test_captured_singleton_func as *const u8, 0);
-    let reject = crate::closure::js_closure_alloc(test_captured_singleton_func as *const u8, 0);
+    let fulfill = js_closure_alloc(crate::fn_info!(test_captured_singleton_func, 0), 0);
+    let reject = js_closure_alloc(crate::fn_info!(test_captured_singleton_func, 0), 0);
     crate::promise::js_promise_attach_handlers(promise, fulfill, reject);
 
     assert!(
@@ -1622,7 +1622,7 @@ fn test_promise_pointer_field_stores_dirty_old_page() {
     reset_remembered_set();
     clear_marks();
     let promise = unsafe { alloc_old_test_promise() };
-    let on_finally = crate::closure::js_closure_alloc(test_captured_singleton_func as *const u8, 0);
+    let on_finally = js_closure_alloc(crate::fn_info!(test_captured_singleton_func, 0), 0);
     let _next = crate::promise::js_promise_finally(promise, on_finally);
     let (fulfill_wrap, reject_wrap) = unsafe { ((*promise).on_fulfilled, (*promise).on_rejected) };
 

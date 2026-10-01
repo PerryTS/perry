@@ -380,7 +380,8 @@ pub(super) fn lower_precise_roots_to_native_stack(
 mod tests {
     use super::lower_precise_roots_to_native_stack;
 
-    /// #8132: the audited capture/box accessors must not become statepoints.
+    /// #8132: the audited capture/box accessors must not become statepoints;
+    /// box allocation remains a statepoint.
     /// On the bundled-module-factory shape they were ~45% of one function's
     /// 5.5k statepoints, each relocating every live GC value (~259 mean).
     ///
@@ -397,7 +398,10 @@ mod tests {
         use crate::types::{I32, I64, PTR, VOID};
         module.declare_function("js_shadow_slot_bind", VOID, &[I32, PTR]);
         module.declare_function("js_closure_get_capture_bits", I64, &[I64, I32]);
-        module.declare_function("js_closure_set_capture_bits", VOID, &[I64, I32, I64]);
+        // `js_closure_set_capture_bits` used to be the setter here; the
+        // generated table proves it can flush a deferred collection (#11523),
+        // so the leaf setter probed is the i32 box store.
+        module.declare_function("js_i32_box_set", VOID, &[I64, I32]);
         module.declare_function("js_box_alloc_bits", I64, &[I64]);
         module.declare_function("js_box_set_bits", VOID, &[I64, I64]);
         module.declare_function("js_map_alloc", I64, &[I32]);
@@ -416,7 +420,8 @@ mod tests {
         let entry = function.create_block("entry");
         let dynamic = entry.call(I64, "js_map_alloc", &[(I32, "0")]);
         entry.store(I64, &dynamic, &root);
-        // The audited leaf calls, with the root live across every one.
+        // The box allocation is a statepoint; the following audited accessors
+        // are leaves, with the root live across each call.
         let box_ptr = entry.call(I64, "js_box_alloc_bits", &[(I64, "0")]);
         entry.call_void("js_box_set_bits", &[(I64, &box_ptr), (I64, "1")]);
         let cap = entry.call(
@@ -424,10 +429,7 @@ mod tests {
             "js_closure_get_capture_bits",
             &[(I64, "0"), (I32, "0")],
         );
-        entry.call_void(
-            "js_closure_set_capture_bits",
-            &[(I64, "0"), (I32, "0"), (I64, &cap)],
-        );
+        entry.call_void("js_i32_box_set", &[(I64, &box_ptr), (I32, "0")]);
         // Control: an unaudited callee stays a genuine safepoint.
         let unknown = entry.call(I64, "js_map_alloc", &[(I32, "1")]);
         let live = entry.load(I64, &root);
@@ -439,20 +441,19 @@ mod tests {
         let rewritten =
             crate::inprocess::statepoint_rewritten_ir(&module.to_ir(), &target, "leaf_probe")
                 .expect("leaf probe must survive RS4GC");
-        // Exactly the two js_map_alloc calls become statepoints.
+        // Both js_map_alloc calls and js_box_alloc_bits become statepoints.
         assert_eq!(
             rewritten
                 .matches("@llvm.experimental.gc.statepoint")
                 .count(),
-            // one declare line + two wrapped call sites
-            3,
-            "only the two unaudited js_map_alloc calls may be statepoints:\n{rewritten}"
+            // declaration + two map allocations + one GC box allocation
+            4,
+            "map and box allocations must be statepoints:\n{rewritten}"
         );
         for direct in [
-            "call i64 @js_box_alloc_bits(",
             "call void @js_box_set_bits(",
             "call i64 @js_closure_get_capture_bits(",
-            "call void @js_closure_set_capture_bits(",
+            "call void @js_i32_box_set(",
         ] {
             assert!(
                 rewritten.contains(direct),

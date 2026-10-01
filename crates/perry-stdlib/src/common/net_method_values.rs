@@ -54,6 +54,19 @@ fn unbox_to_i64(v: f64) -> i64 {
     (v.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64
 }
 
+/// A string argument (event name, address, family) for a net native that reads
+/// it as a `*const StringHeader` on entry. An inline SSO value goes through
+/// `js_ffi_arg_ptr`'s scratch header rather than a bare mask (#11519); every
+/// other value unboxes exactly as [`unbox_to_i64`] does.
+#[cfg(all(
+    feature = "external-net-pump",
+    not(target_os = "ios"),
+    not(target_os = "android")
+))]
+fn str_arg(v: f64) -> i64 {
+    perry_runtime::value::js_ffi_arg_ptr(v)
+}
+
 #[cfg(all(
     feature = "external-net-pump",
     not(target_os = "ios"),
@@ -372,25 +385,25 @@ pub(crate) unsafe fn dispatch_external_block_list_method(
 
     let result = match method {
         "addAddress" => {
-            let address = args.first().copied().map(unbox_to_i64).unwrap_or(0);
-            let family = args.get(1).copied().map(unbox_to_i64).unwrap_or(0);
+            let address = args.first().copied().map(str_arg).unwrap_or(0);
+            let family = args.get(1).copied().map(str_arg).unwrap_or(0);
             js_net_block_list_add_address(handle, address, family)
         }
         "addRange" => {
-            let start = args.first().copied().map(unbox_to_i64).unwrap_or(0);
-            let end = args.get(1).copied().map(unbox_to_i64).unwrap_or(0);
-            let family = args.get(2).copied().map(unbox_to_i64).unwrap_or(0);
+            let start = args.first().copied().map(str_arg).unwrap_or(0);
+            let end = args.get(1).copied().map(str_arg).unwrap_or(0);
+            let family = args.get(2).copied().map(str_arg).unwrap_or(0);
             js_net_block_list_add_range(handle, start, end, family)
         }
         "addSubnet" => {
-            let address = args.first().copied().map(unbox_to_i64).unwrap_or(0);
+            let address = args.first().copied().map(str_arg).unwrap_or(0);
             let prefix = args.get(1).copied().unwrap_or_else(undefined);
-            let family = args.get(2).copied().map(unbox_to_i64).unwrap_or(0);
+            let family = args.get(2).copied().map(str_arg).unwrap_or(0);
             js_net_block_list_add_subnet(handle, address, prefix, family)
         }
         "check" => {
-            let address = args.first().copied().map(unbox_to_i64).unwrap_or(0);
-            let family = args.get(1).copied().map(unbox_to_i64).unwrap_or(0);
+            let address = args.first().copied().map(str_arg).unwrap_or(0);
+            let family = args.get(1).copied().map(str_arg).unwrap_or(0);
             js_net_block_list_check(handle, address, family)
         }
         "rules" | "toJSON" => js_net_block_list_to_json(handle),
@@ -457,32 +470,32 @@ pub(crate) unsafe fn dispatch_external_server_method(
         }
         "address" => json_str_to_value(js_net_server_address(handle)),
         "on" | "addListener" if args.len() >= 2 => {
-            js_net_server_on(handle, unbox_to_i64(args[0]), unbox_to_i64(args[1]));
+            js_net_server_on(handle, str_arg(args[0]), unbox_to_i64(args[1]));
             nanbox_handle(handle)
         }
         "once" if args.len() >= 2 => {
-            js_net_server_once(handle, unbox_to_i64(args[0]), unbox_to_i64(args[1]));
+            js_net_server_once(handle, str_arg(args[0]), unbox_to_i64(args[1]));
             nanbox_handle(handle)
         }
         "off" | "removeListener" if args.len() >= 2 => {
-            js_net_server_remove_listener(handle, unbox_to_i64(args[0]), unbox_to_i64(args[1]));
+            js_net_server_remove_listener(handle, str_arg(args[0]), unbox_to_i64(args[1]));
             nanbox_handle(handle)
         }
         "removeAllListeners" => {
-            let event = args.first().copied().map(unbox_to_i64).unwrap_or(0);
+            let event = args.first().copied().map(str_arg).unwrap_or(0);
             js_net_server_remove_all_listeners(handle, event);
             nanbox_handle(handle)
         }
         "listenerCount" if !args.is_empty() => {
-            js_net_server_listener_count(handle, unbox_to_i64(args[0]))
+            js_net_server_listener_count(handle, str_arg(args[0]))
         }
         "eventNames" => json_str_to_value(js_net_server_event_names(handle)),
         "listeners" if !args.is_empty() => {
-            let arr = js_net_server_listeners(handle, unbox_to_i64(args[0]));
+            let arr = js_net_server_listeners(handle, str_arg(args[0]));
             nanbox_handle(arr)
         }
         "rawListeners" if !args.is_empty() => {
-            let arr = js_net_server_raw_listeners(handle, unbox_to_i64(args[0]));
+            let arr = js_net_server_raw_listeners(handle, str_arg(args[0]));
             nanbox_handle(arr)
         }
         "ref" | "unref" => nanbox_handle(handle),
@@ -491,6 +504,7 @@ pub(crate) unsafe fn dispatch_external_server_method(
                 if callback >= 0x1000 {
                     perry_runtime::closure::js_closure_call2(
                         callback as *const perry_runtime::ClosureHeader,
+                        perry_runtime::closure::plain_call_receiver(),
                         null(),
                         js_net_server_get_connections(handle),
                     );

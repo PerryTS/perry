@@ -37,7 +37,10 @@ fn function_method_reads_share_the_prototype_function() {
     }
 }
 
-extern "C" fn detached_function_fixture(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn detached_function_fixture(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     42.0
 }
 
@@ -47,7 +50,7 @@ fn detached_function_has_no_inherited_function_methods() {
     let scope = crate::gc::RuntimeHandleScope::new();
     unsafe {
         let function = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
-            crate::closure::js_closure_alloc(detached_function_fixture as *const () as *const u8, 0)
+            crate::closure::js_closure_alloc(crate::fn_info!(detached_function_fixture, 0), 0)
                 as i64,
         ));
         let ptr = (function.get_nanbox_u64() & crate::value::POINTER_MASK) as usize;

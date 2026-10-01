@@ -35,6 +35,8 @@ mod pointer_lifetime;
 
 fn empty_opts() -> CompileOptions {
     CompileOptions {
+        static_shape_ids: Vec::new(),
+        program_class_shape_ids: Default::default(),
         target: None,
         is_entry_module: false,
         non_entry_module_prefixes: Vec::new(),
@@ -948,6 +950,58 @@ fn proven_buffer_and_typed_array_reads_are_numeric_operands() {
     assert!(
         ir.contains("load i32, ptr") && ir.contains("align 1"),
         "byte-offset Buffer numeric reads must use unaligned-safe loads:\n{ir}"
+    );
+}
+
+/// Spectral-norm's `u[j]` in `A(i, j) * u[j]`, `j < n` with `n` unrelated to
+/// the view's length: the index is exact i32 but not proven in bounds, so the
+/// read takes the proven-view CHECKED load, whose out-of-bounds arm yields the
+/// `undefined` box. As a `*` operand that box must become NaN, and it did —
+/// through a `js_number_coerce` call on EVERY element (12-17% of the program).
+/// The only non-Number the load can yield is `undefined`, so the conversion is
+/// one compare + select.
+#[test]
+fn unproven_bounds_typed_array_read_is_a_numeric_operand_without_a_call() {
+    let body = vec![
+        typed_array_let(
+            1,
+            "u",
+            "Float64Array",
+            perry_hir::TYPED_ARRAY_KIND_FLOAT64,
+            int(8),
+        ),
+        number_let(2, "n", true, int(20)),
+        number_let(3, "t", true, int(0)),
+        for_loop(
+            4,
+            local(2),
+            vec![Stmt::Expr(Expr::LocalSet(
+                3,
+                Box::new(add(
+                    local(3),
+                    Expr::Binary {
+                        op: BinaryOp::Mul,
+                        left: Box::new(number(0.5)),
+                        right: Box::new(index_get(1, local(4))),
+                    },
+                )),
+            ))],
+        ),
+        Stmt::Return(Some(local(3))),
+    ];
+
+    let ir = compile_ir("unproven_bounds_typed_array_operand.ts", body);
+    assert!(
+        ir.contains("pview.get.load"),
+        "the read must take the proven-view checked load (control):\n{ir}"
+    );
+    assert!(
+        !ir.contains("call double @js_number_coerce"),
+        "the checked load's undefined arm needs no per-element coerce call:\n{ir}"
+    );
+    assert!(
+        ir.contains("icmp eq i64") && ir.contains("0x7FF8000000000000"),
+        "undefined must become NaN inline:\n{ir}"
     );
 }
 

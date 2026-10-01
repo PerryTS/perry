@@ -403,7 +403,7 @@ fn read_static_str(ptr: *const u8, len: usize) -> String {
 /// release of this lock must never run a collection. Every critical section
 /// below touches only Rust-heap state (`HashMap`/`Vec`/`String`) and reads GC
 /// headers; none allocates in the Perry heap or checks a trigger.
-fn registry() -> crate::gc::GcRootRegistryGuard<'static, TypedFeedbackRegistry> {
+fn registry() -> crate::gc::NonCollectingRootRegistryGuard<'static, TypedFeedbackRegistry> {
     let guard = crate::gc::lock_gc_root_registry_noncollecting(&REGISTRY);
     #[cfg(test)]
     leaf_lock_test_hooks::run_planted_locked_region_hook();
@@ -2751,7 +2751,7 @@ pub extern "C" fn js_typed_feedback_array_set_string_key(
     // Class-ref receivers (INT32 tag 0x7FFE) are not arrays; skip the array
     // shape observation (which would probe the GC header of a non-pointer) and
     // route straight to the class-ref-aware string-key setter.
-    if (arr as u64) >> 48 == 0x7FFE {
+    if crate::object::class_value::legacy_class_ptr_word(arr as u64).is_some() {
         return crate::array::js_array_set_string_key(arr, key, value);
     }
     observe_array(site_id, arr, u32::MAX);

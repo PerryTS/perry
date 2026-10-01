@@ -71,6 +71,11 @@ pub unsafe extern "C" fn js_object_get_own_property_symbols(obj_f64: f64) -> i64
         .cloned()
         .unwrap_or_default();
     drop(guard);
+    let stored_entries = if crate::object::shaped_symbols::owner(obj_key).is_some() {
+        crate::object::shaped_symbols::entries(obj_key, false)
+    } else {
+        stored_entries
+    };
     for entry in stored_entries {
         if !entries.iter().any(|(sym_key, _)| *sym_key == entry.0) {
             entries.push(entry);
@@ -262,13 +267,14 @@ pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
                     throw_value_not_iterable(val_f64);
                 }
                 let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-                let prev_this =
-                    this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(val_f64));
+                let val_h = this_scope.root_nanbox_f64(val_f64);
                 let rebound = crate::closure::clone_closure_rebind_this(iter_fn.to_bits(), val_f64);
                 let rebound_ptr = crate::value::js_nanbox_get_pointer(f64::from_bits(rebound))
                     as *const crate::closure::ClosureHeader;
-                let iter = crate::closure::js_closure_call0(rebound_ptr);
-                crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
+                let iter = crate::closure::js_closure_call0(
+                    rebound_ptr,
+                    crate::closure::JsThis::from_f64(val_h.get_nanbox_f64()),
+                );
                 if !is_object_value(iter) {
                     throw_iterator_result_not_object();
                 }
@@ -443,6 +449,8 @@ pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
             // and wraps the wrong value if `this` stays the prototype. Rebind
             // `this` to the original value; a no-op for closures that don't
             // capture `this`.
+            let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+            let val_h = this_scope.root_nanbox_f64(val_f64);
             let rebound = crate::closure::clone_closure_rebind_this(iter_fn.to_bits(), val_f64);
             let call_target = f64::from_bits(rebound);
             let fn_ptr = crate::value::js_nanbox_get_pointer(call_target)
@@ -452,14 +460,13 @@ pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
                 // `[Symbol.iterator]()` factory runs with `this === obj`. The
                 // `clone_closure_rebind_this` above covers a closure that
                 // *captures* `this` (effect's prototype method); a plain
-                // `function(){ …this… }` factory reads `this` dynamically off
-                // IMPLICIT_THIS, so set it here too (test262 yield-star-sync-*
-                // asserts the `[Symbol.iterator]` call's thisValue === obj).
-                let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-                let prev_this =
-                    this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(val_f64));
-                let iter = crate::closure::js_closure_call0(fn_ptr);
-                crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
+                // `function(){ …this… }` factory reads its `this` parameter,
+                // so pass `obj` there too (test262 yield-star-sync-* asserts
+                // the `[Symbol.iterator]` call's thisValue === obj).
+                let iter = crate::closure::js_closure_call0(
+                    fn_ptr,
+                    crate::closure::JsThis::from_f64(val_h.get_nanbox_f64()),
+                );
                 // Several Perry host-backed collections expose iterator
                 // helpers as eager arrays for direct `.entries()` parity. When
                 // the same function is reached through `Symbol.iterator`, wrap
@@ -649,19 +656,18 @@ pub unsafe extern "C" fn js_to_primitive(value: f64, hint: i32) -> f64 {
     // Bind `this` to the object for the call. A class-instance
     // `[Symbol.toPrimitive]` lives on the prototype and reads `this.field`
     // (`class Temperature { [Symbol.toPrimitive](h){ return this.celsius } }`),
-    // reading `this` dynamically off IMPLICIT_THIS; without an explicit receiver
+    // reading its `this` parameter; without an explicit receiver
     // `this.celsius` resolved to `undefined`, so `+t` was `NaN` and `` `${t}` ``
     // was `undefined°C` (test_gap_symbols). The proxy arm above already binds
     // `this`; mirror it for the closure method.
-    let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_set(
-        value_handle.get_nanbox_f64(),
-    ));
     // Spec says the return value must be a primitive; if it's still an
     // object pointer, that's a TypeError in JS, but we just return it
     // as-is and let the caller fall back.
-    let result = crate::closure::js_closure_call1(closure_ptr, hint_f64);
-    crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
-    result
+    crate::closure::js_closure_call1(
+        closure_ptr,
+        crate::closure::JsThis::from_f64(value_handle.get_nanbox_f64()),
+        hint_f64,
+    )
 }
 
 #[cfg(test)]

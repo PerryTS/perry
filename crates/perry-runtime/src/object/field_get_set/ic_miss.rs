@@ -18,7 +18,8 @@ pub extern "C" fn js_object_get_field_by_name_f64(
     if (obj as usize) > 0 && (obj as usize) < 0x10000 && !key.is_null() {
         if let Some(name) = unsafe { super::super::has_own_helpers::str_from_string_header(key) } {
             let class_id = obj as usize as u32;
-            if name == "name" && !super::super::class_registry::class_is_key_deleted(class_id, name)
+            if name == "name"
+                && !super::super::class_registry::class_static_key_deleted(class_id, name)
             {
                 if let Some(cname) = super::super::class_registry::class_name_for_id(class_id) {
                     let s = crate::string::js_string_from_bytes(cname.as_ptr(), cname.len() as u32);
@@ -208,7 +209,7 @@ pub(crate) fn set_method_value_name(key: &[u8]) -> Option<&'static [u8]> {
 /// Words in a per-site property-read cache global (`@perry_ic_N`). Codegen
 /// emits `[PIC_CACHE_WORDS x i64] zeroinitializer`; this type is the runtime's
 /// view of the same memory.
-pub const PIC_CACHE_WORDS: usize = 12;
+pub const PIC_CACHE_WORDS: usize = crate::codegen_abi::PIC_CACHE_WORDS;
 
 /// The runtime view of a `@perry_ic_N` property-read cache.
 ///
@@ -221,7 +222,8 @@ pub const PIC_CACHE_WORDS: usize = 12;
 /// | 1 | `slot0` — its resolved field slot |
 /// | 2 | unused — was the Array-subclass named-prefix token, retired by S6 (site state must derive from one shape) |
 /// | 3,4 / 5,6 / 7,8 / 9,10 | `(tok, slot)` ways |
-/// | 11 | round-robin victim index for the ways |
+/// | 3 | way state ([`PIC_WAY_STATE`]) |
+/// | 12..=20 | the holder entry for a key that is not own (`method_site::read_holder`) |
 pub type PicCache = [i64; PIC_CACHE_WORDS];
 
 /// The value a per-site compact MRU word (`@perry_ic_N_packed_get`) holds
@@ -590,6 +592,13 @@ pub(crate) unsafe fn pic_prime_get(cache: *mut PicCache, token: i64, slot: i64) 
             PIC_WAY_BASE + v as usize * 2
         }
     };
+    // First-read Q1: a way never holds a spill or overflow entry, so the miss
+    // front answers a way with a plain inline load and no spill re-test.
+    // `cascade` above is what guarantees it.
+    debug_assert!(
+        (prev_slot as u64) & u64::from(crate::proxy::IC_SLOT_OVERFLOW_BIT) == 0,
+        "an overflow-encoded slot must never enter a way"
+    );
     c[ti] = prev_tok;
     c[ti + 1] = prev_slot;
 }
@@ -778,6 +787,10 @@ pub(super) fn get_field_ic_miss_impl(
     // the lookup returns `Unknown` in about ten instructions without
     // dereferencing anything further. See the rule-3 note in
     // `object::inherited_read_cache`.
+    // Charter step 5: a receiver still carrying a shape whose lane the
+    // lineage generalized moves to the normalized shape before anything is
+    // learned from it, so the site converges instead of going polymorphic.
+    unsafe { crate::object::field_rep_store::migrate_on_miss(obj as usize) };
     let mut inherited_declined = false;
     if crate::value::addr_class::is_above_handle_band(obj as usize) {
         // Lane 3 hook A: an INHERITED read that this site has already resolved
@@ -1074,9 +1087,7 @@ pub(super) fn get_field_ic_miss_impl(
         } else {
             None
         };
-        let is_regular = shape.is_some_and(|shape| {
-            shape.object_kind == crate::object::shapes::ShapeObjectKind::Ordinary
-        });
+        let is_regular = shape.is_some_and(|shape| shape.object_kind.is_ordinary_layout());
         if diag {
             miss_reason = if !is_object {
                 R::NonObjectGcType
@@ -1125,6 +1136,13 @@ pub(super) fn get_field_ic_miss_impl(
                 // +106 instructions per read against the same binary with
                 // `PERRY_INHERITED_IC=0`, i.e. the cache was pure overhead for
                 // this shape.
+                // The site's holder entry: primed here, answered by the
+                // emitted tower from then on (`method_site::read_holder`).
+                if let Some(value) =
+                    crate::object::method_site::read_holder::prime_read_holder(obj, key, cache_slot)
+                {
+                    return f64::from_bits(value.bits());
+                }
                 if !inherited_declined {
                     // Already inside this function's `unsafe` block (line 874),
                     // so a nested one is `unused_unsafe` under -D warnings.
@@ -1278,6 +1296,14 @@ pub(super) fn get_field_ic_miss_impl(
     // paying for a second search. Walk the chain once and record the answer.
     // A decline leaves the generic getter below untouched, which is today's
     // behaviour for every case the cache refuses.
+    if matches!(miss_reason, R::NotOwn) {
+        // The site's holder entry (`method_site::read_holder`).
+        if let Some(value) = unsafe {
+            crate::object::method_site::read_holder::prime_read_holder(obj, key, cache_slot)
+        } {
+            return f64::from_bits(value.bits());
+        }
+    }
     if matches!(miss_reason, R::NotOwn) && !inherited_declined {
         if let Some(value) =
             unsafe { crate::object::inherited_read_cache::inherited_read_cache_prime(obj, key) }
@@ -1382,7 +1408,7 @@ fn outlined_mru_hit_enabled() -> bool {
 /// the caller has established that the tag was `POINTER`. `cache_slot` is the
 /// codegen-emitted per-site slot or null.
 #[inline]
-pub(super) unsafe fn pic_outlined_mru_hit(
+pub(crate) unsafe fn pic_outlined_mru_hit(
     obj_handle: *const ObjectHeader,
     cache_slot: *mut PicCacheSlot,
 ) -> Option<f64> {
@@ -1436,7 +1462,7 @@ pub extern "C" fn js_object_get_field_ic(
 /// The whole full-outline read ladder; `probe_mru` is false only on the cold
 /// arm of the S2 split, whose leaf entry has already asked the MRU word.
 #[inline(always)]
-pub(super) fn get_field_ic_dispatch(
+pub(crate) fn get_field_ic_dispatch(
     obj_bits: i64,
     key: *const crate::StringHeader,
     site_id: u64,
@@ -2421,8 +2447,8 @@ mod poly_pic_tests {
     #[test]
     fn pic_cache_words_match_codegen() {
         assert_eq!(
-            PIC_CACHE_WORDS, 12,
-            "codegen emits `[12 x i64]`; update both sides together"
+            PIC_CACHE_WORDS, 21,
+            "codegen's PIC_CACHE_WORDS is 21; update both sides together"
         );
         assert!(
             PIC_WAY_STATE < PIC_CACHE_WORDS,
@@ -2434,7 +2460,7 @@ mod poly_pic_tests {
         );
         assert_eq!(
             PIC_WAY_BASE + PIC_WAYS * 2,
-            PIC_CACHE_WORDS,
+            crate::codegen_abi::PIC_HOLDER_RECV_WORD,
             "the ways must fill the global exactly"
         );
     }

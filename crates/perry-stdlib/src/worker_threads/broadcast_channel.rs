@@ -8,7 +8,11 @@
 
 use super::*;
 
-extern "C" fn broadcast_post_message(closure: *const ClosureHeader, value: f64) -> f64 {
+extern "C" fn broadcast_post_message(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    value: f64,
+) -> f64 {
     let channel_id = port_id_from_closure(closure);
     let channel_name = BROADCAST_CHANNELS.with(|channels| {
         channels
@@ -34,7 +38,10 @@ extern "C" fn broadcast_post_message(closure: *const ClosureHeader, value: f64) 
     js_undefined()
 }
 
-extern "C" fn broadcast_close(closure: *const ClosureHeader) -> f64 {
+extern "C" fn broadcast_close(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     let channel_id = port_id_from_closure(closure);
     BROADCAST_CHANNELS.with(|channels| {
         if let Some(state) = channels.borrow_mut().get_mut(&channel_id) {
@@ -46,7 +53,10 @@ extern "C" fn broadcast_close(closure: *const ClosureHeader) -> f64 {
     js_undefined()
 }
 
-extern "C" fn broadcast_ref_or_unref(closure: *const ClosureHeader) -> f64 {
+extern "C" fn broadcast_ref_or_unref(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     let channel_id = port_id_from_closure(closure);
     BROADCAST_CHANNELS.with(|channels| match channels.borrow().get(&channel_id) {
         Some(state) => f64::from_bits(state.object_bits),
@@ -56,6 +66,7 @@ extern "C" fn broadcast_ref_or_unref(closure: *const ClosureHeader) -> f64 {
 
 extern "C" fn broadcast_add_event_listener(
     closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
     event: f64,
     callback: f64,
     options: f64,
@@ -86,6 +97,7 @@ extern "C" fn broadcast_add_event_listener(
 
 extern "C" fn broadcast_remove_event_listener(
     closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
     event: f64,
     callback: f64,
 ) -> f64 {
@@ -130,32 +142,50 @@ pub extern "C" fn js_worker_threads_broadcast_channel_new(name: f64) -> f64 {
     set_object_field(
         obj,
         "postMessage",
-        port_bound_closure(broadcast_post_message as *const u8, 1, id),
+        port_bound_closure(
+            perry_runtime::fn_info!(broadcast_post_message, 1; with_declared(1)),
+            id,
+        ),
     );
     set_object_field(
         obj,
         "close",
-        port_bound_closure(broadcast_close as *const u8, 0, id),
+        port_bound_closure(
+            perry_runtime::fn_info!(broadcast_close, 0; with_declared(0)),
+            id,
+        ),
     );
     set_object_field(
         obj,
         "ref",
-        port_bound_closure(broadcast_ref_or_unref as *const u8, 0, id),
+        port_bound_closure(
+            perry_runtime::fn_info!(broadcast_ref_or_unref, 0; with_declared(0)),
+            id,
+        ),
     );
     set_object_field(
         obj,
         "unref",
-        port_bound_closure(broadcast_ref_or_unref as *const u8, 0, id),
+        port_bound_closure(
+            perry_runtime::fn_info!(broadcast_ref_or_unref, 0; with_declared(0)),
+            id,
+        ),
     );
     set_object_field(
         obj,
         "addEventListener",
-        port_bound_closure(broadcast_add_event_listener as *const u8, 3, id),
+        port_bound_closure(
+            perry_runtime::fn_info!(broadcast_add_event_listener, 3; with_declared(3)),
+            id,
+        ),
     );
     set_object_field(
         obj,
         "removeEventListener",
-        port_bound_closure(broadcast_remove_event_listener as *const u8, 2, id),
+        port_bound_closure(
+            perry_runtime::fn_info!(broadcast_remove_event_listener, 2; with_declared(2)),
+            id,
+        ),
     );
     set_object_field(obj, "onmessage", js_null());
     set_object_field(obj, "onmessageerror", js_null());

@@ -526,7 +526,8 @@ pub extern "C" fn js_array_clone(src: *const ArrayHeader) -> *mut ArrayHeader {
                 && crate::closure::is_closure_ptr(fn_raw)
             {
                 let fn_ptr = fn_raw as *const crate::closure::ClosureHeader;
-                let iter = crate::closure::js_closure_call0(fn_ptr);
+                let iter =
+                    crate::closure::js_closure_call0(fn_ptr, crate::closure::plain_call_receiver());
                 if js_array_is_array(iter).to_bits() == crate::value::TAG_TRUE {
                     let ptr = crate::value::js_nanbox_get_pointer(iter) as *mut ArrayHeader;
                     if !ptr.is_null() {

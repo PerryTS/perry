@@ -884,3 +884,48 @@ test_gap_gc_11590_packed_loop_global_cache_rooting
 # %tmpl_coerce.slow ]`; puts the shape in the root-dominance curated corpus and
 # runs it under every moving arm.
 test_gap_gc_template_coerce_join
+
+# --- #11550: object spill store read the uninitialized tail as the old value -
+# The first store past a spill buffer's `length` took the tail's leftover bits
+# as the "old value"; pointer-shaped garbage made it skip the GC slot-mask
+# update, so the collector never visited the slot. Loses values on the shipped
+# default (qs `parse`), faults under the seeded schedule.
+test_gap_gc_11550_null_proto_spill_tail
+
+# #11179: mutable capture cells are movable `GC_TYPE_BOX` / `I32_BOX` /
+# `BOOL_BOX` arena objects now, rooted by their frame slots and traced as
+# closure-capture children instead of by a registry. `gc()` moves nothing
+# unless the arm forces evacuation, so a plain gap run of this file only checks
+# parity; registering it here puts it in front of the force_evac /
+# force_verify / loop_polls arms, whose liveness check refuses a cell that did
+# not relocate.
+test_gap_gc_box_cells
+
+# Scope context objects: captured-and-mutated bindings grouped into one
+# movable `GC_TYPE_SCOPE` cell per scope activation (one frame root and one
+# closure capture per group instead of one per binding). Sibling closures,
+# nested scopes, module-factory hoisting, per-iteration loop bodies, async and
+# generator activations, mapped `arguments`, and the over-retention rule (a
+# surviving closure must not keep an unrelated binding alive). Registered for
+# the force_evac / force_verify / loop_polls arms, where every group relocates.
+test_gap_gc_scope_closures
+test_gap_gc_scope_loops
+test_gap_gc_scope_async
+test_gap_gc_scope_arguments
+test_gap_gc_scope_retention
+test_gap_gc_scope_splice
+test_gap_10520_const_closure_capture
+
+test_gap_gc_template_coerce_join
+
+# --- #11559: spill store past the buffer's high-water mark ------------------
+# A store into the MIN_ARRAY_CAPACITY headroom of an object's spill buffer
+# read the leftover word as the overwritten value and skipped the layout note,
+# so the collector never traced the slot. claude-code `-p` read a tool
+# record's `prompt` method back as a plain object.
+test_gap_gc_11559_spill_headroom_store
+# `F.prototype.x = <call>` held F (a boxed function declaration) in a register
+# across the value's call, so an evacuating minor inside it left the
+# registration reading the retired closure. moment 2.31.0 module init under a
+# seeded schedule (#11635).
+test_gap_gc_11635_func_proto_register_across_call

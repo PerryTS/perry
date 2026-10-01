@@ -193,6 +193,39 @@ pub(crate) fn prune_dead_builtin_closure_metadata_owners(is_dead_owner: &dyn Fn(
     });
 }
 
+/// [`prune_dead_builtin_closure_metadata_owners`] for a MINOR. A minor can
+/// find only a minor-collectible owner dead, and every such owner is in
+/// `BUILTIN_CLOSURE_YOUNG`: its writers note it (rule 1) and the minor's
+/// young-scoped scan re-logs every owner that is still collectible, which a
+/// dead owner (never moved, still in from-space) is. So the log is the
+/// candidate set, and the full `retain` over both maps -- ~275k instructions
+/// per copying minor on dotenv, where the maps hold every built-in closure
+/// the program ever made -- is only needed on a full collection.
+pub(crate) fn prune_dead_builtin_closure_metadata_owners_young(
+    is_dead_owner: &dyn Fn(usize) -> bool,
+) {
+    #[cfg(any(debug_assertions, test))]
+    BUILTIN_CLOSURE_YOUNG.with(|log| {
+        log.borrow()
+            .debug_assert_logged(LOG_NAME, &relevant_owners())
+    });
+    let candidates = BUILTIN_CLOSURE_YOUNG.with(|log| log.borrow_mut().take_sorted());
+    let mut kept = Vec::with_capacity(candidates.len());
+    for owner in candidates {
+        if is_dead_owner(owner) {
+            BUILTIN_CLOSURE_LENGTH.with(|m| {
+                m.borrow_mut().remove(&owner);
+            });
+            BUILTIN_CLOSURE_NON_CONSTRUCTABLE.with(|m| {
+                m.borrow_mut().remove(&owner);
+            });
+        } else if crate::gc::young_log::addr_is_minor_collectible(owner) {
+            kept.push(owner);
+        }
+    }
+    BUILTIN_CLOSURE_YOUNG.with(|log| log.borrow_mut().extend(kept));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -215,6 +248,94 @@ mod tests {
         assert!(
             missed.is_err(),
             "sabotage: suppressing the setter's note must trip completeness"
+        );
+    }
+
+    fn old_closure() -> usize {
+        crate::arena::arena_alloc_gc_old(
+            std::mem::size_of::<crate::closure::ClosureHeader>(),
+            std::mem::align_of::<crate::closure::ClosureHeader>(),
+            crate::gc::GC_TYPE_CLOSURE,
+        ) as usize
+    }
+
+    fn clear_all() {
+        BUILTIN_CLOSURE_LENGTH.with(|m| m.borrow_mut().clear());
+        BUILTIN_CLOSURE_NON_CONSTRUCTABLE.with(|m| m.borrow_mut().clear());
+        BUILTIN_CLOSURE_YOUNG.with(|log| log.borrow_mut().clear());
+    }
+
+    /// The young prune's candidates are the log: a dead YOUNG owner's entries
+    /// go, and an OLD owner is never even asked about — even under a predicate
+    /// that calls everything dead, which only a full collection may apply.
+    #[test]
+    fn young_prune_drops_dead_young_owners_and_never_touches_old_ones() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        clear_all();
+        let young = crate::closure::js_closure_alloc(std::ptr::null(), 0) as usize;
+        let old = old_closure();
+        assert!(crate::gc::young_log::addr_is_minor_collectible(young));
+        assert!(!crate::gc::young_log::addr_is_minor_collectible(old));
+        set_builtin_closure_length(young, 2);
+        set_builtin_closure_non_constructable(young);
+        set_builtin_closure_length(old, 5);
+        set_builtin_closure_non_constructable(old);
+
+        prune_dead_builtin_closure_metadata_owners_young(&|_| true);
+
+        let (young_len, young_nc, old_len, old_nc) = (
+            BUILTIN_CLOSURE_LENGTH.with(|m| m.borrow().get(&young).copied()),
+            BUILTIN_CLOSURE_NON_CONSTRUCTABLE.with(|m| m.borrow().contains(&young)),
+            BUILTIN_CLOSURE_LENGTH.with(|m| m.borrow().get(&old).copied()),
+            BUILTIN_CLOSURE_NON_CONSTRUCTABLE.with(|m| m.borrow().contains(&old)),
+        );
+        clear_all();
+        assert_eq!(
+            (young_len, young_nc),
+            (None, false),
+            "dead young owner kept"
+        );
+        assert_eq!(
+            (old_len, old_nc),
+            (Some(5), true),
+            "old owner pruned by a minor"
+        );
+    }
+
+    /// A live young owner stays in the maps AND in the log, so the next minor
+    /// still considers it.
+    #[test]
+    fn young_prune_keeps_live_young_owners_logged() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        clear_all();
+        let young = crate::closure::js_closure_alloc(std::ptr::null(), 0) as usize;
+        set_builtin_closure_length(young, 1);
+        prune_dead_builtin_closure_metadata_owners_young(&|_| false);
+        let still = BUILTIN_CLOSURE_LENGTH.with(|m| m.borrow().get(&young).copied());
+        let logged = BUILTIN_CLOSURE_YOUNG.with(|log| log.borrow_mut().take_sorted());
+        clear_all();
+        assert_eq!(still, Some(1));
+        assert_eq!(logged, vec![young]);
+    }
+
+    /// SABOTAGE: a writer that publishes a young owner without noting it is
+    /// caught by the young prune's completeness check, before the prune
+    /// could silently keep that owner's entry after it dies.
+    #[test]
+    fn young_prune_rejects_a_suppressed_writer() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        clear_all();
+        let closure = crate::closure::js_closure_alloc(std::ptr::null(), 0) as usize;
+        TEST_SUPPRESS_BUILTIN_CLOSURE_YOUNG_NOTE.with(|flag| flag.set(true));
+        set_builtin_closure_non_constructable(closure);
+        TEST_SUPPRESS_BUILTIN_CLOSURE_YOUNG_NOTE.with(|flag| flag.set(false));
+        let missed = std::panic::catch_unwind(|| {
+            prune_dead_builtin_closure_metadata_owners_young(&|_| false);
+        });
+        clear_all();
+        assert!(
+            missed.is_err(),
+            "the young prune must refuse an incomplete log"
         );
     }
 }

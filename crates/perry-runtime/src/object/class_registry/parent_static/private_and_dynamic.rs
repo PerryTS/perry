@@ -114,6 +114,37 @@ pub(crate) fn register_class_dynamic_static_accessor(
     if owner == 0 {
         return;
     }
+    if !is_class_object_ptr(owner as *const u8) {
+        // The class function object: an accessor property of its own
+        // property object (a data property of that name becomes it). An
+        // omitted half or attribute keeps the current one (a ClassBody half
+        // included); a new property defaults them to absent / false.
+        let existing = crate::object::class_value::class_static_own_accessor(class_id, name);
+        let have = existing.map(|(acc, _, _)| acc).unwrap_or_default();
+        let acc = crate::object::accessor_pair::Accessor {
+            get: get_bits.map(|_| get.get_nanbox_u64()).unwrap_or(have.get),
+            set: set_bits.map(|_| set.get_nanbox_u64()).unwrap_or(have.set),
+            raw_get: if get_bits.is_some() { 0 } else { have.raw_get },
+            raw_set: if set_bits.is_some() { 0 } else { have.raw_set },
+            static_get: if get_bits.is_some() { 0 } else { have.static_get },
+            static_set: if set_bits.is_some() { 0 } else { have.static_set },
+        };
+        let enumerable = enumerable
+            .or(existing.map(|(_, e, _)| e))
+            .unwrap_or(false);
+        let configurable = configurable
+            .or(existing.map(|(_, _, c)| c))
+            .unwrap_or(false);
+        crate::object::class_value::class_static_define_accessor(
+            class_id,
+            name,
+            acc,
+            enumerable,
+            configurable,
+        );
+        crate::object::class_registry::class_static_alias_sync(class_id, name);
+        return;
+    }
     let key = dynamic_static_accessor_storage_key(owner, name);
     let existing = crate::object::get_accessor_descriptor(owner, &key).unwrap_or_default();
     crate::object::set_accessor_descriptor(
@@ -128,28 +159,20 @@ pub(crate) fn register_class_dynamic_static_accessor(
                 .unwrap_or(existing.set),
         },
     );
-    let existing_attrs = if is_class_object_ptr(owner as *const u8) {
-        crate::object::get_property_attrs(owner, &key)
-            .map(|attrs| (attrs.enumerable(), attrs.configurable()))
-    } else {
-        class_static_defined_attrs(class_id, name)
-            .map(|(_, enumerable, configurable)| (enumerable, configurable))
-    };
+    let existing_attrs = crate::object::get_property_attrs(owner, &key)
+        .map(|attrs| (attrs.enumerable(), attrs.configurable()));
     let enumerable = enumerable
         .or_else(|| existing_attrs.map(|attrs| attrs.0))
         .unwrap_or(false);
     let configurable = configurable
         .or_else(|| existing_attrs.map(|attrs| attrs.1))
         .unwrap_or(false);
-    if is_class_object_ptr(owner as *const u8) {
-        crate::object::set_property_attrs(
-            owner,
-            key,
-            crate::object::PropertyAttrs::new(false, enumerable, configurable),
-        );
-    } else {
-        class_static_set_defined_attrs(class_id, name, false, enumerable, configurable);
-    }
+    crate::object::set_property_attrs(
+        owner,
+        key,
+        crate::object::PropertyAttrs::new(false, enumerable, configurable),
+    );
+    crate::object::class_registry::class_static_alias_sync(class_id, name);
 }
 
 pub(crate) fn class_dynamic_static_accessor_descriptor(
@@ -166,16 +189,21 @@ pub(crate) fn class_dynamic_static_accessor_descriptor(
     if owner == 0 {
         return None;
     }
+    if !is_class_object_ptr(owner as *const u8) {
+        let (acc, enumerable, configurable) =
+            crate::object::class_value::class_static_own_accessor(class_id, name)?;
+        return Some((
+            crate::object::AccessorDescriptor {
+                get: acc.get,
+                set: acc.set,
+            },
+            crate::object::PropertyAttrs::new(false, enumerable, configurable),
+        ));
+    }
     let key = dynamic_static_accessor_storage_key(owner, name);
     let descriptor = crate::object::get_accessor_descriptor(owner, &key)?;
-    let attrs = if is_class_object_ptr(owner as *const u8) {
-        crate::object::get_property_attrs(owner, &key)
-    } else {
-        class_static_defined_attrs(class_id, name).map(|(_, enumerable, configurable)| {
-            crate::object::PropertyAttrs::new(false, enumerable, configurable)
-        })
-    }
-    .unwrap_or(crate::object::PropertyAttrs::new(false, false, false));
+    let attrs = crate::object::get_property_attrs(owner, &key)
+        .unwrap_or(crate::object::PropertyAttrs::new(false, false, false));
     Some((descriptor, attrs))
 }
 
@@ -187,7 +215,9 @@ pub(crate) unsafe fn class_dynamic_static_accessor_getter_value(
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(receiver);
     let owner = dynamic_static_accessor_owner(class_id, receiver.get_nanbox_f64());
-    let descriptor = (owner != 0)
+    // The class function object's accessors are its own properties
+    // (`class_static_accessor_getter_value` reads them).
+    let descriptor = (owner != 0 && is_class_object_ptr(owner as *const u8))
         .then(|| {
             crate::object::get_accessor_descriptor(
                 owner,
@@ -216,7 +246,7 @@ pub(crate) unsafe fn class_dynamic_static_accessor_setter_apply(
     let receiver = scope.root_nanbox_f64(receiver);
     let value = scope.root_nanbox_f64(value);
     let owner = dynamic_static_accessor_owner(class_id, receiver.get_nanbox_f64());
-    let descriptor = (owner != 0)
+    let descriptor = (owner != 0 && is_class_object_ptr(owner as *const u8))
         .then(|| {
             crate::object::get_accessor_descriptor(
                 owner,
@@ -260,7 +290,7 @@ pub(crate) unsafe fn class_private_instance_getter_value(
     if getter == 0 {
         return None;
     }
-    let f: extern "C" fn(f64) -> f64 = std::mem::transmute(getter);
+    let f = crate::closure::body_call::js_method_body_fn!(getter as *const u8;);
     Some(f(receiver))
 }
 
@@ -278,7 +308,7 @@ pub(crate) unsafe fn class_private_instance_setter_apply(
     if decl.set == 0 {
         return false;
     }
-    let f: extern "C" fn(f64, f64) -> f64 = std::mem::transmute(decl.set);
+    let f = crate::closure::body_call::js_method_body_fn!(decl.set as *const u8; value);
     let _ = f(receiver, value);
     true
 }
@@ -291,7 +321,7 @@ pub(crate) unsafe fn call_private_static_method_for_owner(
     args_ptr: *const f64,
     args_len: usize,
 ) -> Option<f64> {
-    let (func_ptr, param_count, has_rest) = CLASS_STATIC_METHODS
+    let (func_ptr, param_count, has_rest, _) = CLASS_STATIC_METHODS
         .read()
         .ok()?
         .as_ref()?
@@ -301,9 +331,6 @@ pub(crate) unsafe fn call_private_static_method_for_owner(
     let scope = crate::gc::RuntimeHandleScope::new();
     let this_value = scope.root_nanbox_f64(this_value);
     let private_brand = scope.root_nanbox_f64(private_brand);
-    let previous_this = scope.root_nanbox_f64(crate::object::js_implicit_this_set(
-        this_value.get_nanbox_f64(),
-    ));
     crate::object::static_private_owner_push(private_brand.get_nanbox_f64());
     crate::object::private_lexical_brand_push(private_brand.get_nanbox_f64());
     crate::object::static_this_arm_if_unarmed(this_value.get_nanbox_f64());
@@ -311,6 +338,5 @@ pub(crate) unsafe fn call_private_static_method_for_owner(
     crate::object::static_this_disarm();
     crate::object::private_lexical_brand_pop();
     crate::object::static_private_owner_pop();
-    crate::object::js_implicit_this_set(previous_this.get_nanbox_f64());
     Some(result)
 }

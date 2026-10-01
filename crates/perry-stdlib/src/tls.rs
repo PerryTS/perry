@@ -1165,7 +1165,12 @@ unsafe fn failed_server_socket(server_handle: i64, servername: Option<String>) -
     socket_id
 }
 
-extern "C" fn tls_sni_completion(closure: *const ClosureHeader, error: f64, context: f64) -> f64 {
+extern "C" fn tls_sni_completion(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    error: f64,
+    context: f64,
+) -> f64 {
     unsafe {
         let server_handle = perry_runtime::closure::js_closure_get_capture_ptr(closure, 0) as i64;
         let hostname = value_to_string(perry_runtime::closure::js_closure_get_capture_f64(
@@ -1244,13 +1249,15 @@ pub unsafe extern "C" fn js_tls_client_preflight(
         .unwrap_or_default();
 
     if sni_callback != 0 && !servername.is_empty() {
-        perry_runtime::closure::js_register_closure_arity(tls_sni_completion as *const u8, 2);
-        let completion =
-            perry_runtime::closure::js_closure_alloc(tls_sni_completion as *const u8, 2);
+        let completion = perry_runtime::closure::js_closure_alloc(
+            perry_runtime::fn_info!(tls_sni_completion, 2; with_declared(2)),
+            2,
+        );
         perry_runtime::closure::js_closure_set_capture_ptr(completion, 0, server_handle);
         perry_runtime::closure::js_closure_set_capture_f64(completion, 1, nanbox_str(&servername));
         js_closure_call2(
             sni_callback as *const ClosureHeader,
+            perry_runtime::closure::plain_call_receiver(),
             nanbox_str(&servername),
             js_nanbox_pointer(completion as i64),
         );
@@ -1286,21 +1293,22 @@ pub unsafe extern "C" fn js_tls_client_preflight(
             js_nanbox_pointer(string_array(&protocols) as i64),
         );
         let callback_socket = nanbox_handle(socket_id);
+        // The rebind below can allocate a replacement closure: root the
+        // argument object across it and re-read it.
+        let scope = perry_runtime::gc::RuntimeHandleScope::new();
+        let argument_h = scope.root_nanbox_f64(js_nanbox_pointer(argument as i64));
         // Node invokes an object-literal ALPNCallback with the pending
-        // TLSSocket, not the closure's original options-object receiver.
+        // TLSSocket as `this`, not the closure's original options-object
+        // receiver.
         let rebound_callback = perry_runtime::closure::js_closure_unbox_callee_checked_rebind(
             nanbox_handle(alpn_callback),
             callback_socket,
         );
-        // #10490: root the displaced `this` across the ALPNCallback (user code).
-        let this_scope = perry_runtime::gc::RuntimeHandleScope::new();
-        let previous_this = this_scope
-            .root_nanbox_f64(perry_runtime::object::js_implicit_this_set(callback_socket));
-        let selected = js_closure_call1(
+        let selected = perry_runtime::closure::js_closure_call1(
             rebound_callback as *const ClosureHeader,
-            js_nanbox_pointer(argument as i64),
+            perry_runtime::closure::JsThis::from_f64(callback_socket),
+            argument_h.get_nanbox_f64(),
         );
-        perry_runtime::object::js_implicit_this_set(previous_this.get_nanbox_f64());
         let selected = value_to_string(selected).map(String::into_bytes);
         if let Some(socket) = sockets().lock().unwrap().remove(&socket_id) {
             liveness::step(liveness::socket_keeps_alive(&socket), false);

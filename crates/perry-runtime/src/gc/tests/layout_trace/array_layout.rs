@@ -24,16 +24,13 @@ fn test_layout_mask_overflow_fields_and_array_grow_transfer() {
         crate::object::js_object_set_field_by_name(obj, key, value);
     }
 
-    // #6812 spill: the k8 pointer lives in the object-owned spill buffer
-    // (owner inline slots hold only k0..k3 numerics), so the pointer-slot
-    // count moves from the owner's mask to the buffer's. Legacy mode keeps
-    // the original owner-mask expectation.
+    // #6812 spill: the k8 pointer lives in the object-owned Array buffer,
+    // which still keeps a pointer mask. With no spill, the owner's shape
+    // selects every Any slot and the trace below is the correctness check.
     if crate::object::test_object_spill_enabled() {
         let spill = crate::object::test_spill_buffer_addr(obj as usize);
         assert_ne!(spill, 0, "overflow write must have created a spill buffer");
         assert_eq!(test_layout_pointer_slot_count(spill, 9), Some(1));
-    } else {
-        assert_eq!(test_layout_pointer_slot_count(obj as usize, 9), Some(1));
     }
     let valid_ptrs = build_valid_pointer_set();
     let mut worklist = Vec::new();

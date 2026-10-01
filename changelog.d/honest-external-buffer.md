@@ -1,0 +1,1 @@
+External buffer wrappers carry their native byte pointer and Node-API finalizer in the GC buffer cell. Remove the legacy external-buffer registration API and address tables, retain byte-address identity, release native resources after collection or environment shutdown, and reject native-backed wrappers and views by name at worker transfer.

@@ -37,6 +37,7 @@
 //!     follows up to a small depth (2 levels) to handle one level of env
 //!     switching; deeper indirection is rare and gets the no-op fallback.
 
+mod computed_requires;
 mod deferred_requires;
 pub(crate) mod detect;
 mod extract_exports;
@@ -60,7 +61,7 @@ mod parcel_watcher_tests;
 mod preamble_canary_tests;
 
 // Cross-sibling helpers — siblings reach for these via `use super::*;`.
-use deferred_requires::deferred_require_specs;
+use deferred_requires::deferred_require_specs_for_path;
 use detect::is_js_reserved_word;
 use extract_exports::{
     extract_exports_from_source, extract_named_exports_from_require,

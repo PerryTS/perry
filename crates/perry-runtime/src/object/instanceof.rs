@@ -33,6 +33,7 @@ pub use static_dispatch::js_instanceof;
 /// representation: heap closures (declarations / expressions / arrows /
 /// methods / bound functions / built-in constructors, all carrying
 /// `CLOSURE_MAGIC`) and small native function handles.
+#[inline]
 pub(crate) fn value_is_callable(value: f64) -> bool {
     if crate::value::is_js_handle(value) && crate::value::js_handle_is_function(value) {
         return true;
@@ -44,13 +45,11 @@ pub(crate) fn value_is_callable(value: f64) -> bool {
     // user-crafted NaN payload sharing this tag band (e.g. via
     // `DataView.setFloat64` — a real JS number, not a class ref) is not
     // misclassified as callable.
-    if class_ref_id(value).is_some() {
-        return true;
-    }
     let jv = crate::JSValue::from_bits(value.to_bits());
     if !jv.is_pointer() {
-        return false;
+        return class_ref_id(value).is_some();
     }
+    // A class function object is a closure: one probe answers both.
     crate::closure::is_closure_ptr((jv.bits() & crate::value::POINTER_MASK) as usize)
 }
 
@@ -459,12 +458,13 @@ fn throw_invalid_instanceof_rhs(type_ref: f64) -> ! {
 /// returns `false` when `this` is not callable, so `Function.prototype[Symbol
 /// .hasInstance].call(undefined, {})` is `false` (not a throw). Installed on
 /// `Function.prototype` under the `@@hasInstance` key; the receiver flows in
-/// through `IMPLICIT_THIS` set by the `.call`/member dispatch.
+/// as the `this` argument supplied by the `.call`/member dispatch.
 pub(crate) extern "C" fn function_prototype_has_instance_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
-    let constructor = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    let constructor = f64::from_bits(this.bits());
     let result = ordinary_has_instance(constructor, value);
     f64::from_bits(if result {
         crate::value::TAG_TRUE
@@ -575,7 +575,14 @@ fn dispatch_own_has_instance(cb: f64, value: f64) -> HasInstanceOutcome {
         throw_type_error(b"Symbol(Symbol.hasInstance) is not a function");
     }
     let args = [value];
-    let r = unsafe { crate::closure::js_native_call_value(cb, args.as_ptr(), 1) };
+    let r = unsafe {
+        crate::closure::js_native_call_value(
+            cb,
+            crate::closure::plain_call_receiver(),
+            args.as_ptr(),
+            1,
+        )
+    };
     HasInstanceOutcome::Result(if crate::value::js_is_truthy(r) != 0 {
         f64::from_bits(crate::value::TAG_TRUE)
     } else {

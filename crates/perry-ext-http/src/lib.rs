@@ -540,6 +540,10 @@ unsafe fn read_str(ptr: *const StringHeader) -> Option<String> {
 unsafe fn extract_string_value(val_f64: f64) -> Option<String> {
     let bits = val_f64.to_bits();
     let upper = bits >> 48;
+    if upper == 0x7FF9 {
+        // Inline SSO string (#11519).
+        return JsValue::from_bits(bits).to_owned_string();
+    }
     let ptr: *const StringHeader = if upper == 0x7FFF || upper == 0x7FFD {
         (bits & PTR_MASK) as *const StringHeader
     } else if upper == 0 && bits >= 0x10000 {
@@ -915,15 +919,10 @@ unsafe fn invoke_create_socket(
     }
     let scope = perry_ffi::TransientRootScope::enter();
     let cs = scope.root_addr(cs);
-    // Register the continuation's arity as 2 so a 1-arg `cb(err)` pads the
-    // socket slot with `undefined` (via the runtime's arity dispatch) instead
-    // of reading an uninitialized register for the second parameter.
-    static REGISTER_ARITY: Once = Once::new();
-    REGISTER_ARITY.call_once(|| {
-        perry_ffi::register_closure_arity(http_create_socket_cb as *const u8, 2);
-    });
-
-    let cb = perry_ffi::alloc_closure(http_create_socket_cb as *const u8, 1);
+    // The continuation declares 2 parameters (its info), so a 1-arg
+    // `cb(err)` pads the socket slot with `undefined` instead of reading an
+    // uninitialized register for the second parameter.
+    let cb = perry_ffi::alloc_closure(&HTTP_CREATE_SOCKET_CB_INFO, 1);
     if cb.is_null() {
         return;
     }
@@ -945,7 +944,12 @@ unsafe fn invoke_create_socket(
     ));
 
     let closure = JsClosure::from_raw(cs.get() as *const RawClosureHeader);
-    closure.call3(req_val, options.get(), cb_val.get());
+    closure.call3(
+        perry_ffi::JsThis::UNDEFINED,
+        req_val,
+        options.get(),
+        cb_val.get(),
+    );
 }
 
 /// Continuation for a `createSocket` override's `cb(err, socket)` callback.
@@ -956,6 +960,7 @@ unsafe fn invoke_create_socket(
 /// small handle on some codegen paths).
 unsafe extern "C" fn http_create_socket_cb(
     closure: *const RawClosureHeader,
+    _this: perry_ffi::JsThis,
     err: f64,
     socket: f64,
 ) -> f64 {
@@ -1811,3 +1816,6 @@ fn _force_link() -> Option<*mut ArrayHeader> {
 
 // Retain server exports through release LTO/staticlib emission.
 mod force_link;
+
+static HTTP_CREATE_SOCKET_CB_INFO: perry_ffi::JsFunctionInfo =
+    perry_ffi::JsFunctionInfo::of(http_create_socket_cb as perry_ffi::JsBody2).with_declared(2);

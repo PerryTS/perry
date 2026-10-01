@@ -920,6 +920,23 @@ pub(crate) fn classify_heap_generation(addr: usize) -> HeapGeneration {
     classify_heap_generation_uncached(addr, key)
 }
 
+/// The generation EVERY address of `[base, end)` classifies as, when a single
+/// registered range covers all of it; `None` when none does (or it is split
+/// across registrations). A whole arena block is registered as one range, so
+/// this answers "what generation is this block" without classifying each
+/// object on it.
+pub(crate) fn uniform_heap_generation(base: usize, end: usize) -> Option<HeapGeneration> {
+    if base == 0 || end <= base {
+        return None;
+    }
+    let key = generation_class_key_for_addr(base);
+    let range = hot_page_generations()
+        .borrow()
+        .get(&key)
+        .and_then(|slot| slot.find(base))?;
+    (range.base <= base && range.end >= end).then_some(range.generation)
+}
+
 /// Cache-miss arm of [`classify_heap_generation`]: consult the page map and
 /// re-prime the one-entry cache.
 #[inline(never)]
@@ -988,14 +1005,20 @@ fn classify_heap_space_in_range_uncached(
     Some((range.space, range.base, range.object_starts))
 }
 
-/// Record a newly initialized Map header in its owning block's exact-start
-/// bitmap. Map is the only arena type whose tag can be fabricated by an
-/// 8-aligned interior pointer and whose rewrite descriptor follows an external
-/// payload pointer. Keeping all other allocations off this path avoids a
-/// metadata read-modify-write on every bump allocation.
+/// Record headers whose public pointer validators require an exact allocation
+/// start. Maps follow an external payload; box accessors must reject foreign
+/// and interior pointers without consulting a per-cell registry. Other types
+/// avoid this metadata write on their bump-allocation path.
 #[inline(always)]
 pub(crate) fn record_arena_object_start(header_addr: usize, obj_type: u8) {
-    if obj_type != crate::gc::GC_TYPE_MAP {
+    if !matches!(
+        obj_type,
+        crate::gc::GC_TYPE_MAP
+            | crate::gc::GC_TYPE_BOX
+            | crate::gc::GC_TYPE_I32_BOX
+            | crate::gc::GC_TYPE_BOOL_BOX
+            | crate::gc::GC_TYPE_SCOPE
+    ) {
         return;
     }
     let Some((_space, range_base, bitmap)) = classify_heap_space_in_range(header_addr) else {

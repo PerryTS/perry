@@ -49,6 +49,15 @@ fn root_slot_of_reload<'a>(ir: &'a str, reg: &str) -> &'a str {
     ir[at + needle.len()..].lines().next().unwrap().trim()
 }
 
+/// Does `text` contain `operand` as a whole operand? A bare `contains` would
+/// let `ptr %r8` match inside `ptr %r87`.
+fn names_operand(text: &str, operand: &str) -> bool {
+    text.match_indices(operand).any(|(at, _)| {
+        !text[at + operand.len()..]
+            .starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_' || c == '.')
+    })
+}
+
 /// Is `block`'s terminator an unconditional branch to the block `target`
 /// names (`label %<name>`, without its numeric suffix)?
 fn terminator_targets(block: &str, target: &str) -> bool {
@@ -123,7 +132,7 @@ fn the_accumulator_never_touches_its_root_slot_inside_the_clone() {
          iteration; emitted:\n{fast}"
     );
     assert!(
-        !fast.contains(&format!("ptr {acc_root}")),
+        !names_operand(&fast, &format!("ptr {acc_root}")),
         "the root slot `{acc_root}` must not appear inside the clone; \
          emitted:\n{fast}"
     );

@@ -382,8 +382,7 @@ pub(crate) fn object_sort(recv: f64, cmp_validated: *const ClosureHeader) -> f64
     // Length and indexed getters may collect before comparison begins.
     let scope = crate::gc::RuntimeHandleScope::new();
     let recv_handle = scope.root_nanbox_f64(recv);
-    // #11419: the comparator runs with `this` undefined.
-    let _this = crate::object::ImplicitThisScope::bind_undefined(&scope);
+    // #11419: the comparator runs with `this` undefined (a plain call).
     let cmp_handle = scope.root_raw_const_ptr(cmp_validated);
     let cmp = if cmp_validated.is_null() {
         None

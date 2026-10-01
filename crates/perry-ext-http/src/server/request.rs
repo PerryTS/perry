@@ -828,7 +828,7 @@ pub(crate) fn emit_data_to_listeners(listeners: &[i64], body: &[u8], encoding: O
             let raw = addr as *const RawClosureHeader;
             let closure = JsClosure::from_raw(raw);
             if !closure.is_null() {
-                let _ = closure.call1(chunk.get());
+                let _ = closure.call1(perry_ffi::JsThis::UNDEFINED, chunk.get());
             }
         }
     }
@@ -852,17 +852,23 @@ pub(crate) fn emit_no_arg_to_listeners(listeners: &[i64]) {
             let raw = addr as *const RawClosureHeader;
             let closure = JsClosure::from_raw(raw);
             if !closure.is_null() {
-                let _ = closure.call0();
+                let _ = closure.call0(perry_ffi::JsThis::UNDEFINED);
             }
         }
     }
 }
 
 /// Fire a one-arg event (`server.on('connection', socket)`).
-pub(crate) fn emit_one_arg_to_listeners(listeners: &[i64], arg: f64) {
-    // #8082: the snapshot AND the arg cross every callback — root both.
+/// Call every listener with `this` bound to `this_val` (the emitting object:
+/// Node invokes server, socket and request callbacks that way, so
+/// `server.listen(0, function() { this.address().port })` resolves `this` to
+/// the server, #2132) and one argument.
+pub(crate) fn emit_one_arg_to_listeners(listeners: &[i64], this_val: f64, arg: f64) {
+    // #8082: the snapshot, the receiver AND the arg cross every callback —
+    // root all of them.
     let scope = perry_ffi::TransientRootScope::enter();
     let rooted = scope.root_addrs(listeners);
+    let this_val = scope.root_nanbox(this_val);
     let arg = scope.root_nanbox(arg);
     for cb in &rooted {
         let addr = cb.get();
@@ -873,7 +879,7 @@ pub(crate) fn emit_one_arg_to_listeners(listeners: &[i64], arg: f64) {
             let raw = addr as *const RawClosureHeader;
             let closure = JsClosure::from_raw(raw);
             if !closure.is_null() {
-                let _ = closure.call1(arg.get());
+                let _ = closure.call1(perry_ffi::JsThis::from_f64(this_val.get()), arg.get());
             }
         }
     }
@@ -955,26 +961,6 @@ pub(crate) fn incoming_peer_certificate_json(handle: i64) -> *mut StringHeader {
 /// vtable) Just Works.
 pub(crate) fn handle_to_pointer_f64(handle: i64) -> f64 {
     f64::from_bits(POINTER_TAG | (handle as u64 & PTR_MASK))
-}
-
-extern "C" {
-    /// `perry-runtime`'s implicit-`this` cell setter (resolved at final
-    /// link; declared here because `perry-runtime` is only a
-    /// dev-dependency of this crate). Returns the previous value.
-    fn js_implicit_this_set(value: f64) -> f64;
-}
-
-/// Run `f` with the runtime's implicit-`this` cell bound to `this_val`,
-/// restoring the previous binding afterward. Node invokes server,
-/// socket, and request callbacks with `this` bound to the emitting
-/// object, so the canonical
-/// `server.listen(0, function() { this.address().port })` idiom
-/// resolves `this` to the server (#2132).
-pub(crate) fn with_implicit_this<R>(this_val: f64, f: impl FnOnce() -> R) -> R {
-    let prev = unsafe { js_implicit_this_set(this_val) };
-    let r = f();
-    unsafe { js_implicit_this_set(prev) };
-    r
 }
 
 // ============================================================================
@@ -1123,7 +1109,8 @@ pub unsafe extern "C" fn js_node_http_im_add_header_line(
     let existing_f64 = f64::from_bits(existing.bits());
     match kind {
         HeaderFieldKind::List | HeaderFieldKind::Cookie => {
-            if JsValue::from_bits(existing.bits()).is_string() {
+            let existing_js = JsValue::from_bits(existing.bits());
+            if existing_js.is_string() || existing_js.is_short_string() {
                 let sep = if matches!(kind, HeaderFieldKind::Cookie) {
                     "; "
                 } else {

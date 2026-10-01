@@ -83,6 +83,10 @@ pub(super) struct RememberedReconstructCensus {
     pub(super) recovered_old_pages: u64,
     /// External (malloc-backed) slot-page entries re-derived from the heap.
     pub(super) recovered_external_pages: u64,
+    /// Heap objects the reconstruct walk visited. Wholly-nursery blocks are
+    /// skipped (`rebuild_minor_old_to_young_remembered_set`), so this is the
+    /// retained non-nursery population, not the whole heap.
+    pub(super) objects_walked: u64,
 }
 
 impl RememberedReconstructCensus {
@@ -91,6 +95,7 @@ impl RememberedReconstructCensus {
             reconstructs: 0,
             recovered_old_pages: 0,
             recovered_external_pages: 0,
+            objects_walked: 0,
         }
     }
 }
@@ -122,6 +127,14 @@ thread_local! {
 #[cfg_attr(not(perry_diagnostics), allow(dead_code))]
 pub(super) fn remembered_reconstruct_census() -> RememberedReconstructCensus {
     RECONSTRUCT_CENSUS.with(Cell::get)
+}
+
+pub(super) fn note_reconstruct_objects_walked(objects: usize) {
+    RECONSTRUCT_CENSUS.with(|cell| {
+        let mut census = cell.get();
+        census.objects_walked = census.objects_walked.saturating_add(objects as u64);
+        cell.set(census);
+    });
 }
 
 /// Arm the barrier and rebuild this thread's remembered set from the heap, if

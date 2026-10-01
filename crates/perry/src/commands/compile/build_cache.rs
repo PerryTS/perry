@@ -66,12 +66,16 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     // of one shape compare plus a slot load. Different emitted code, so an
     // object built with regions must not be served to a build without them.
     "PERRY_REGION_READS",
-    // #10777: gates computing numeric-by-construction provenance AFTER the
-    // `Ptr<Shape>` receiver proofs it depends on. On, an accumulator written
-    // `h = h + o.a` is admitted and the `+` routes to INLINE_FADD; off, the
-    // shape inputs are empty and it stays GUARDED. Different emitted code, so
-    // an object built one way must not be served to a build of the other.
-    "PERRY_L14_NBC_ORDER",
+    // #10884 step 4b loop regions (#11650). `PERRY_REGIONS=0|off|false`
+    // disables loop regions altogether (the A/B arm), so the same loop lowers
+    // as versioned-guard code or as plain per-access code.
+    "PERRY_REGIONS",
+    // `PERRY_REGION_NODES_PER_BARE=<n>` moves the size limit `pays` applies to
+    // a region candidate, so it decides which loops are versioned.
+    "PERRY_REGION_NODES_PER_BARE",
+    // `PERRY_REGION_SPILL=0|off|false` tells the region lowering every key is
+    // stored, which drops the spill-reading copies from the emitted loop.
+    "PERRY_REGION_SPILL",
     // #9071: gates resolving a loop-called immutable callee binding once at
     // body entry instead of per call — the two settings emit different call
     // sequences, so a cached object from one must not serve the other.
@@ -789,7 +793,10 @@ impl BuildCacheProbe {
         // modules so changing an embedded file cannot reuse a stale binary.
         source_paths.extend(ctx.embedded_assets.iter().map(|(_, path)| path.clone()));
         for addon in ctx.native_addons.values() {
-            source_paths.extend(super::native_addon_sidecar::addon_payload_files(addon));
+            source_paths.extend(
+                super::native_addon_sidecar::addon_payload_files(ctx, addon)
+                    .map_err(|_| "native-addon-payload".to_string())?,
+            );
         }
         let sources = source_paths
             .iter()

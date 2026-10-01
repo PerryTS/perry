@@ -263,7 +263,7 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
         if matches!(mode, MicrotaskDrainMode::EventLoop) {
             crate::perf_hooks::note_event_loop_start();
         }
-        finish_gc_and_box_boundary();
+        finish_gc_boundary();
         MICROTASK_RUN_DEPTH.with(|depth| depth.set(MicrotaskRunDepths { pump: 0, jobs: 0 }));
         bump(&MT_EMPTY_DRAIN_COUNT);
         return 0;
@@ -363,7 +363,7 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
     crate::exception::js_try_end();
     crate::node_submodules::diagnostics_channel_drain_uncaught();
 
-    finish_gc_and_box_boundary();
+    finish_gc_boundary();
 
     ASYNC_BOX_EXECUTION_REF_BASES.with(|bases| {
         let base = bases
@@ -389,7 +389,7 @@ pub(crate) fn empty_checkpoint_eligible_for_test() -> bool {
     empty::can_skip_callback_phases()
 }
 
-fn finish_gc_and_box_boundary() {
+fn finish_gc_boundary() {
     crate::gc::gc_runtime_safepoint_poll();
 
     // Phase 1 of the moving-GC project (see project_gc_one_great_moving_gc): at
@@ -403,16 +403,6 @@ fn finish_gc_and_box_boundary() {
         && MICROTASK_RUN_DEPTH.with(|depth| depth.get().pump) == 1
     {
         crate::gc::gc_safepoint_moving_minor();
-    }
-
-    // Fallback for release entry points invoked without a tracked plain-async
-    // activation (principally direct runtime tests). Production async frames
-    // publish at their own queued/running AsyncStep refcount reaching zero;
-    // they do not wait for this global pump boundary.
-    if MICROTASK_RUN_DEPTH.with(|depth| depth.get().pump) == 1
-        && TASK_QUEUE.with(|q| q.borrow().is_empty())
-    {
-        crate::r#box::flush_released_boxes();
     }
 }
 
@@ -655,6 +645,7 @@ fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: 
                         // above allocate.
                         let result = crate::closure::js_closure_call1(
                             rooted_closure(&callback_handle),
+                            crate::closure::plain_call_receiver(),
                             value_handle.get_nanbox_f64(),
                         );
                         // Keep the callback result rooted across `after()` (which
@@ -810,8 +801,11 @@ fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: 
                     };
                     crate::v8::promise_hook_before(rooted_promise(&next_handle));
                     let callback = rooted_closure(&callback_handle);
-                    let result =
-                        crate::closure::js_closure_call1(callback, value_handle.get_nanbox_f64());
+                    let result = crate::closure::js_closure_call1(
+                        callback,
+                        crate::closure::plain_call_receiver(),
+                        value_handle.get_nanbox_f64(),
+                    );
                     CURRENT_MICROTASK_VALUE.with(|c| c.set(result));
                     let next_for_after = CURRENT_MICROTASK_NEXT.with(|c| c.get());
                     crate::v8::promise_hook_after(next_for_after);
@@ -875,7 +869,10 @@ fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: 
                     CURRENT_MICROTASK_VALUE.with(|c| c.set(0.0));
                     CURRENT_MICROTASK_NEXT.with(|c| c.set(std::ptr::null_mut()));
                     crate::async_hooks::before(async_id, trigger_async_id);
-                    crate::closure::js_closure_call0(rooted_closure(&callback_handle));
+                    crate::closure::js_closure_call0(
+                        rooted_closure(&callback_handle),
+                        crate::closure::plain_call_receiver(),
+                    );
                     crate::async_hooks::after(async_id);
                     crate::async_hooks::destroy(async_id);
                     CURRENT_MICROTASK_PROMISE
@@ -912,7 +909,7 @@ fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: 
                     // but AFTER those calls preserves an address that is already
                     // stale, which is what the first attempt at this fix did:
                     // the instrument still faulted at `call_async_step_direct`'s
-                    // `(*step_closure).func_ptr`, on a value re-read from a
+                    // `(*step_closure).code()`, on a value re-read from a
                     // handle that had been seeded too late.
                     let trap_scope = crate::gc::RuntimeHandleScope::new();
                     let step_handle = trap_scope.root_nanbox_f64(boxed_closure(step_closure));
@@ -1188,10 +1185,14 @@ fn call_async_step_direct(
     // closure strategy lookup for every await continuation; direct-call
     // the stored function pointer instead.
     unsafe {
-        let func_ptr = (*step_closure).func_ptr;
-        let func: extern "C" fn(*const crate::closure::ClosureHeader, f64, f64) -> f64 =
-            std::mem::transmute(func_ptr);
-        func(step_closure, value, is_error_bits)
+        let func_ptr = (*step_closure).code();
+        crate::closure::body_call::js_body_call!(
+            func_ptr,
+            step_closure,
+            crate::closure::plain_call_receiver(),
+            value,
+            is_error_bits
+        )
     }
 }
 

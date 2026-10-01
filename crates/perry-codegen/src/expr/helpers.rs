@@ -192,96 +192,6 @@ pub(crate) fn array_store_needs_write_barrier(ctx: &FnCtx<'_>, value: &Expr) -> 
     !expr_produces_non_pointer_bits_by_construction(ctx, value)
 }
 
-/// Object twin of [`array_store_needs_layout_note`] — Phase 4b.1.
-///
-/// `layout_note_slot` is a provable no-op for a class-field store whose value is
-/// a **non-pointer by construction**: in that case the note can only ever
-/// *clear* mask state, never set it, so it is never the difference between a
-/// slot being scanned and a live child being stranded. That holds in every
-/// layout state the receiver can be in:
-///
-/// - `GC_LAYOUT_UNKNOWN` — the note returns at its own state check.
-/// - intact typed descriptor — a non-pointer value falls straight through the
-///   `pointer_mask` arm without touching the descriptor. (The `raw_f64_mask`
-///   arm is unreachable from the caller: it only uses this predicate when
-///   `requires_raw_f64` is false, and that is the very same
-///   `type_is_raw_f64_candidate` predicate the mask is built from.)
-/// - `GC_LAYOUT_POINTER_FREE` — the note's `!pointer && POINTER_FREE` early
-///   return.
-/// - `GC_LAYOUT_SIDE_MASK` — the note would only *clear* this slot's bit.
-///   Skipping that leaves a stale set bit over a non-pointer, which costs an
-///   extra visit and nothing else: `mark_field_into_worklist` (`gc/trace.rs`)
-///   re-validates every slot word — f64 bit patterns fall outside the 48-bit
-///   user-address range and are rejected — and the evacuation rewrite path
-///   routes through the same function.
-///
-/// A pointer-valued store into a pointer-masked slot is handled separately, by
-/// [`class_field_store_layout_note_is_conforming`] — see there.
-pub(crate) fn class_field_store_needs_layout_note(ctx: &FnCtx<'_>, value: &Expr) -> bool {
-    !expr_produces_non_pointer_bits_by_construction(ctx, value)
-}
-
-/// Phase 4b.2 (#5094, refs #7510): is this class-field store's layout note a
-/// *provable no-op whenever the receiver carries an intact side-mask
-/// descriptor*?
-///
-/// [`class_field_store_needs_layout_note`] above elides the note for a value
-/// that is a non-pointer by construction. The complementary case — a **pointer
-/// stored into a slot the class's own compile-time pointer mask declares** —
-/// was deliberately left un-elided, because "the receiver has a descriptor" was
-/// not total: `lower_new_impl`'s standalone-ctor-symbol branch could return a
-/// freshly allocated instance with none, sitting at `GC_LAYOUT_POINTER_FREE`,
-/// where the note is the only thing that ever sets the pointer-mask bit the
-/// collector reads. **#6921 closed that exit** (`lower_call/new.rs` now emits
-/// the init there too), so the elision is available — but this returns only
-/// *elidable under a header test*, not *elidable outright*, and the emitter
-/// pairs it with that test. A descriptor-less receiver from any path this
-/// reasoning did not enumerate still takes the full note.
-///
-/// The test the emitter pairs this with is
-/// `_reserved & (STATE_MASK | TYPED_LAYOUT_INTACT) == SIDE_MASK | INTACT`, and
-/// together the two prove `layout_note_slot` would return `Conforms` without
-/// touching anything:
-///
-/// * The `#5093` inline precheck has already proven, on this path, that the
-///   receiver's `keys_array` equals **this class's** keys global and its
-///   `field_count` exceeds the slot index. So the descriptor reachable for it
-///   was installed from this class's mask globals — shared by shape under that
-///   same key (`SHAPE_LAYOUTS`), or per-object if that key was poisoned
-///   ambiguous, and in both cases from these same words.
-/// * `slot` is in that mask's `pointer_mask` and (checked in
-///   [`crate::typed_shape::layout_declares_pointer_slot`]) not in its
-///   `raw_f64_mask`, so neither `layout_note_slot` downgrade arm can fire: the
-///   raw-f64 arm is not this slot's, and the pointer arm's condition is
-///   `!pointer_mask.contains(slot)`.
-/// * `INTACT` set is exactly the runtime's own invariant that *some* descriptor
-///   is reachable; `SIDE_MASK` is the state a non-empty pointer mask installs.
-///   A cleared bit or any other state routes to the real note, which is the
-///   pre-change behaviour.
-///
-/// Deliberately keyed on the DECLARED field type, not on the value: the value
-/// is already known pointer-bearing at this point (the emitter's live
-/// `may_carry_heap_pointer` test gates the whole bookkeeping block), and the
-/// mask is what the collector will read.
-pub(crate) fn class_field_store_layout_note_is_conforming(
-    ctx: &FnCtx<'_>,
-    class_name: &str,
-    field_index: u32,
-) -> bool {
-    // No keys global ⟹ no mask globals are emitted for this class and no
-    // descriptor is ever installed, so the header test could never pass. Skip
-    // the extra IR rather than emit a branch that is always taken.
-    if !ctx.class_keys_globals.contains_key(class_name) {
-        return false;
-    }
-    let layout = ctx
-        .class_init_chains
-        .get(class_name)
-        .map(|chain| crate::typed_shape::class_typed_layout_from_chain(chain))
-        .unwrap_or_else(|| crate::typed_shape::class_typed_layout(ctx.classes, class_name));
-    crate::typed_shape::layout_declares_pointer_slot(&layout, field_index)
-}
-
 /// `js_string_addref_if_heap_string` demotes a uniquely-owned (refcount==1)
 /// heap string to shared when it becomes aliased from a heap slot, and is a
 /// no-op for every non-`STRING_TAG` value (`string/alloc.rs`). So it is dead
@@ -401,7 +311,7 @@ pub(crate) fn lower_expr_with_expected_type(
     expected_ty: Option<&HirType>,
 ) -> Result<String> {
     match expr {
-        Expr::Object(props) => super::lower_object_literal(ctx, props, expected_ty),
+        Expr::Object(props) => super::lower_object_literal(ctx, props),
         Expr::NativePodView {
             owner,
             byte_offset,
@@ -505,6 +415,70 @@ pub(crate) fn unbox_to_i64(blk: &mut LlBlock, boxed: &str) -> String {
 /// Every other value unboxes exactly as `unbox_to_i64` does.
 pub(crate) fn unbox_ffi_str_arg(blk: &mut LlBlock, boxed: &str) -> String {
     blk.call(I64, "js_ffi_arg_ptr", &[(DOUBLE, boxed)])
+}
+
+/// `arr[idx]` through `js_array_get_index_or_string` for a receiver typed as
+/// an array. It can still be an inline SSO string at runtime
+/// (`{ items: String(n) }`), whose masked bits are no header at all, so that
+/// case takes the generic indexer instead (#11519).
+pub(crate) fn array_or_sso_index_get(ctx: &mut FnCtx<'_>, arr_box: &str, idx: &str) -> String {
+    split_on_short_string(
+        ctx,
+        arr_box,
+        |ctx| {
+            ctx.block().call(
+                DOUBLE,
+                "js_dyn_index_get",
+                &[(DOUBLE, arr_box), (DOUBLE, idx)],
+            )
+        },
+        |ctx| {
+            let arr_handle = unbox_to_i64(ctx.block(), arr_box);
+            ctx.block().call(
+                DOUBLE,
+                "js_array_get_index_or_string",
+                &[(I64, &arr_handle), (DOUBLE, idx)],
+            )
+        },
+    )
+}
+
+/// Emit `if (value is an inline SSO string) { sso } else { other }` and merge
+/// the two `double` results (#11519). For a slow path whose runtime entry
+/// unboxes `value` as a heap header: SSO values have none.
+fn split_on_short_string(
+    ctx: &mut FnCtx<'_>,
+    value: &str,
+    sso: impl FnOnce(&mut FnCtx<'_>) -> String,
+    other: impl FnOnce(&mut FnCtx<'_>) -> String,
+) -> String {
+    let blk = ctx.block();
+    let bits = blk.bitcast_double_to_i64(value);
+    let tag = blk.lshr(I64, &bits, "48");
+    let is_sso = blk.icmp_eq(I64, &tag, "32761"); // SHORT_STRING_TAG >> 48 = 0x7FF9
+    let sso_idx = ctx.new_block("sso.split.sso");
+    let other_idx = ctx.new_block("sso.split.other");
+    let done_idx = ctx.new_block("sso.split.done");
+    let sso_label = ctx.block_label(sso_idx);
+    let other_label = ctx.block_label(other_idx);
+    let done_label = ctx.block_label(done_idx);
+    ctx.block().cond_br(&is_sso, &sso_label, &other_label);
+
+    ctx.current_block = sso_idx;
+    let sso_value = sso(ctx);
+    let sso_end = ctx.block().label.clone();
+    ctx.block().br(&done_label);
+
+    ctx.current_block = other_idx;
+    let other_value = other(ctx);
+    let other_end = ctx.block().label.clone();
+    ctx.block().br(&done_label);
+
+    ctx.current_block = done_idx;
+    ctx.block().phi(
+        DOUBLE,
+        &[(&sso_value, &sso_end), (&other_value, &other_end)],
+    )
 }
 
 /// Built-in constructor / namespace names that the runtime pre-populates

@@ -21,6 +21,7 @@ use super::*;
 /// RELOCATED rather than freed.
 extern "C" fn test_thenable_then_force_minor_gc(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     resolve: f64,
     _reject: f64,
 ) -> f64 {
@@ -31,6 +32,7 @@ extern "C" fn test_thenable_then_force_minor_gc(
     unsafe {
         crate::closure::js_native_call_value(
             resolve_handle.get_nanbox_f64(),
+            crate::closure::plain_call_receiver(),
             args.as_ptr(),
             args.len(),
         );
@@ -45,11 +47,12 @@ fn test_assimilated_thenable_wrapper_survives_then_callback_copied_minor_gc() {
     activate_malloc_registry_for_tests();
     register_runtime_handle_root_scanner_for_tests();
     gc_register_mutable_root_scanner(promise_mutable_root_scanner);
-    crate::closure::js_register_closure_arity(test_thenable_then_force_minor_gc as *const u8, 2);
 
     let scope = RuntimeHandleScope::new();
-    let then_closure =
-        crate::closure::js_closure_alloc(test_thenable_then_force_minor_gc as *const u8, 0);
+    let then_closure = crate::closure::js_closure_alloc(
+        crate::fn_info!(test_thenable_then_force_minor_gc, 2; with_declared(2)),
+        0,
+    );
     let then_handle = scope.root_raw_mut_ptr(then_closure);
 
     // `{ then(resolve, reject) { … } }` — an object literal (class_id 0), so

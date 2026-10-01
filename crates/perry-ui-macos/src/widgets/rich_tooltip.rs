@@ -20,6 +20,7 @@
 //! positioned 8pt below the host widget — falls back above when there
 //! isn't room below the screen edge.
 
+use crate::srgb;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Sel};
 use objc2::{define_class, msg_send, AnyThread, DefinedClass};
@@ -249,14 +250,8 @@ fn present_panel(widget_handle: i64) {
         let layer: *mut AnyObject = msg_send![panel_content, layer];
         let _: () = msg_send![layer, setCornerRadius: 8.0_f64 as CGFloat];
         let _: () = msg_send![layer, setMasksToBounds: true];
-        let bg_color: *mut AnyObject = msg_send![
-            AnyClass::get(c"NSColor").unwrap(),
-            colorWithRed: 0.10 as CGFloat,
-            green: 0.10 as CGFloat,
-            blue: 0.10 as CGFloat,
-            alpha: 0.92 as CGFloat
-        ];
-        let cg: *mut AnyObject = msg_send![bg_color, CGColor];
+        let bg_color = srgb::ns_color(0.10, 0.10, 0.10, 0.92);
+        let cg: *mut AnyObject = msg_send![&*bg_color, CGColor];
         let _: () = msg_send![layer, setBackgroundColor: cg];
 
         // Place the user content view inside the panel content with `pad`

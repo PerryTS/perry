@@ -131,7 +131,21 @@ pub fn is_date_cell_addr(addr: usize) -> bool {
         // `undefined`. A registered buffer is never a `DateCell`, so reject it.
         // The lookup runs only in the rare tag-match case, keeping the common
         // (non-Date) property-read path unchanged.
-        !crate::buffer::is_registered_buffer(addr)
+        if crate::buffer::is_registered_buffer(addr) {
+            return false;
+        }
+        // #11558: a `Symbol.for` / well-known symbol is a Box-leaked
+        // `SymbolHeader` with no `GcHeader` either, and under mimalloc the
+        // word before it is the tail of the previous block — for a symbol
+        // allocated right after another symbol, that symbol's `id`. Once the
+        // id counter passes 17 (`GC_TYPE_DATE_CELL`) the next symbol read as
+        // a Date, and since `DateCell.meta` is the first word, its
+        // `SYMBOL_MAGIC` word was then dereferenced as an `ObjectMeta`:
+        // claude-code 2.1.112's `doctor` SIGSEGV'd reading `defaultProps` off
+        // a React element-type symbol. Every symbol carries `SYMBOL_MAGIC` in
+        // its first word, so the screen is one load for a real Date.
+        !(crate::symbol::may_be_symbol_header(addr as *const u8)
+            && crate::symbol::is_registered_symbol(addr))
     }
 }
 
@@ -465,29 +479,19 @@ pub extern "C" fn js_date_new_from_timestamp(timestamp: f64) -> f64 {
 }
 
 /// Create a new Date from a value that could be a number or a NaN-boxed string.
-/// Checks for STRING_TAG (0x7FFF) in the top 16 bits; if found, parses the string
-/// as a date. Otherwise treats the value as a numeric timestamp.
+/// A string — heap `STRING_TAG` (0x7FFF) or inline SSO `SHORT_STRING_TAG`
+/// (0x7FF9) — is parsed as a date. Otherwise treats the value as a numeric timestamp.
 #[no_mangle]
 pub extern "C" fn js_date_new_from_value(value: f64) -> f64 {
     let bits = value.to_bits();
     let tag = (bits >> 48) & 0xFFFF;
-    let result = if tag == 0x7FFF {
-        // NaN-boxed string — extract pointer and parse
-        let ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::StringHeader;
-        if ptr.is_null() || (ptr as usize) < 0x1000 {
-            f64::NAN
-        } else {
-            unsafe {
-                let len = (*ptr).byte_len as usize;
-                let data = (ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-                let bytes = std::slice::from_raw_parts(data, len);
-                if let Ok(s) = std::str::from_utf8(bytes) {
-                    parse_date_string(s)
-                } else {
-                    f64::NAN
-                }
-            }
-        }
+    let result = if tag == 0x7FFF || tag == 0x7FF9 {
+        // NaN-boxed string, heap or inline SSO (#11519) — parse its bytes.
+        crate::string::with_string_value_bytes(value, |bytes| match std::str::from_utf8(bytes) {
+            Ok(s) => parse_date_string(s),
+            Err(_) => f64::NAN,
+        })
+        .unwrap_or(f64::NAN)
     } else if is_date_value(value) {
         // `new Date(anotherDate)` copies the source's time value (and would
         // otherwise read the pointer bits as a bogus timestamp).
@@ -910,28 +914,20 @@ fn jsvalue_to_number(v: f64) -> f64 {
     let bits = v.to_bits();
     let tag = (bits >> 48) & 0xFFFF;
     match tag {
-        0x7FFF => {
-            // NaN-boxed heap string.
-            let ptr = (bits & NANBOX_PTR_MASK) as *const crate::StringHeader;
-            if ptr.is_null() || (ptr as usize) < 0x1000 {
-                return f64::NAN;
-            }
-            unsafe {
-                let len = (*ptr).byte_len as usize;
-                let data = (ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-                let bytes = std::slice::from_raw_parts(data, len);
-                match std::str::from_utf8(bytes) {
-                    Ok(s) => {
-                        let t = s.trim();
-                        if t.is_empty() {
-                            0.0
-                        } else {
-                            t.parse::<f64>().unwrap_or(f64::NAN)
-                        }
+        0x7FFF | 0x7FF9 => {
+            // NaN-boxed string, heap or inline SSO (#11519).
+            crate::string::with_string_value_bytes(v, |bytes| match std::str::from_utf8(bytes) {
+                Ok(s) => {
+                    let t = s.trim();
+                    if t.is_empty() {
+                        0.0
+                    } else {
+                        t.parse::<f64>().unwrap_or(f64::NAN)
                     }
-                    Err(_) => f64::NAN,
                 }
-            }
+                Err(_) => f64::NAN,
+            })
+            .unwrap_or(f64::NAN)
         }
         0x7FFC => {
             // boxed sentinel: undefined / null / false / true

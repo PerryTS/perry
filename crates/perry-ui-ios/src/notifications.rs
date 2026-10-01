@@ -60,8 +60,8 @@ extern "C" {
     fn js_nanbox_get_pointer(value: f64) -> i64;
     fn js_nanbox_string(ptr: i64) -> f64;
     fn js_string_from_bytes(data: *const u8, len: u32) -> *mut perry_runtime::string::StringHeader;
-    fn js_closure_call1(closure: *const u8, arg0: f64) -> f64;
-    fn js_closure_call2(closure: *const u8, arg0: f64, arg1: f64) -> f64;
+    fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg0: f64) -> f64;
+    fn js_closure_call2(closure: *const u8, this: perry_ffi::JsThis, arg0: f64, arg1: f64) -> f64;
     fn js_json_parse(text_ptr: *const perry_runtime::string::StringHeader) -> u64;
     fn js_run_stdlib_pump();
     fn js_promise_run_microtasks() -> i32;
@@ -149,7 +149,7 @@ unsafe fn dispatch_tap(response: &AnyObject) {
 
     let ptr = js_nanbox_get_pointer(callback) as *const u8;
     if !ptr.is_null() {
-        js_closure_call2(ptr, id_value, action_value);
+        js_closure_call2(ptr, perry_ffi::JsThis::UNDEFINED, id_value, action_value);
     }
 }
 
@@ -263,6 +263,7 @@ pub fn on_background_receive(callback: f64) {
 #[no_mangle]
 unsafe extern "C" fn perry_ios_notification_completion_trampoline(
     closure: *const perry_runtime::closure::ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
     _arg: f64,
 ) -> f64 {
     let handle = perry_runtime::closure::js_closure_get_capture_ptr(closure, 0);
@@ -281,12 +282,12 @@ fn invoke_pending_completion(handle: i64, result_code: u64) {
     }
 }
 
-/// Allocate a Perry closure whose func_ptr is the trampoline above and whose
+/// Allocate a Perry closure running the trampoline above, whose
 /// captures are `(handle, result_code)`. The returned pointer is what
 /// `js_promise_then` expects (a `*const ClosureHeader`).
 unsafe fn make_completion_closure(handle: i64, result_code: u64) -> *const u8 {
     let closure = perry_runtime::closure::js_closure_alloc(
-        perry_ios_notification_completion_trampoline as *const u8,
+        perry_runtime::fn_info!(perry_ios_notification_completion_trampoline, 1),
         2,
     );
     perry_runtime::closure::js_closure_set_capture_ptr(closure, 0, handle);
@@ -323,7 +324,7 @@ pub unsafe fn dispatch_device_token(device_token: *mut AnyObject) {
     let boxed = js_nanbox_string(str_ptr as i64);
     let ptr = js_nanbox_get_pointer(callback) as *const u8;
     if !ptr.is_null() {
-        js_closure_call1(ptr, boxed);
+        js_closure_call1(ptr, perry_ffi::JsThis::UNDEFINED, boxed);
     }
 }
 
@@ -405,7 +406,7 @@ pub unsafe fn dispatch_remote_payload_with_completion(
         }
         return;
     }
-    let result = js_closure_call1(cb_ptr, payload_value);
+    let result = js_closure_call1(cb_ptr, perry_ffi::JsThis::UNDEFINED, payload_value);
 
     let Some(block) = completion_block else {
         // Caller passed a null completion (e.g., direct invocation from a
@@ -511,7 +512,7 @@ pub unsafe fn dispatch_remote_payload(user_info: *mut AnyObject) {
 
     let ptr = js_nanbox_get_pointer(callback) as *const u8;
     if !ptr.is_null() {
-        js_closure_call1(ptr, parsed_f64);
+        js_closure_call1(ptr, perry_ffi::JsThis::UNDEFINED, parsed_f64);
     }
 }
 

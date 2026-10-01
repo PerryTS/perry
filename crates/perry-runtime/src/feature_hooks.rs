@@ -100,6 +100,14 @@ pub extern "C" fn js_runtime_register_feature_installer(installer: extern "C" fn
 /// [`js_runtime_install_compiled`] outside tests: `js_gc_init` is live in every
 /// program, so a fallback reference here would pin every feature again. The
 /// crate's own unit tests keep the pre-hook behavior.
+///
+/// The installer is always the one `perry_codegen::stubs::generate_feature_installer_object`
+/// generates, which only calls `js_runtime_install_*` entry points.
+/// `scripts/gc_call_effects/seeds.txt` delegates this indirect call to those
+/// entry points (and forbids any archive code from registering an installer),
+/// which is what keeps `js_gc_init` Leaf in the GC call-effects tables.
+/// `#[inline(never)]` keeps the indirect call in this named symbol.
+#[inline(never)]
 pub(crate) fn run_feature_installer() {
     if let Some(installer) = FEATURE_INSTALLER.get() {
         installer();

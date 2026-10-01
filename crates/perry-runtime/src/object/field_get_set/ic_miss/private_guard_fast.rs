@@ -343,8 +343,8 @@ fn private_marker_slot_learn(
     // ordinary shapes are cached; the kind is part of the ShapeId, so a cache
     // hit can only be an ordinary object too.
     let interned = intern_private_name(name)?;
-    if crate::object::shapes::shape_object_kind_by_id(shape_id)
-        != Some(crate::object::shapes::ShapeObjectKind::Ordinary)
+    if !crate::object::shapes::shape_object_kind_by_id(shape_id)
+        .is_some_and(|kind| kind.is_ordinary_layout())
     {
         return None;
     }
@@ -630,7 +630,7 @@ pub unsafe extern "C-unwind" fn js_private_method_call(
 fn private_receiver_evaluation_brand(receiver: f64) -> Option<f64> {
     if let Some((object, shape_id)) = unsafe { private_plain_receiver_shape(receiver) } {
         if crate::object::shapes::shape_object_kind_by_id(shape_id)
-            == Some(crate::object::shapes::ShapeObjectKind::Ordinary)
+            .is_some_and(|kind| kind.is_ordinary_layout())
         {
             let meta = unsafe { (*object).meta };
             if meta.is_null() {

@@ -588,6 +588,7 @@ pub extern "C" fn js_tls_client_check_identity(handle: i64, certificate: f64) ->
     let host = string_value(metadata.servername.as_deref().unwrap_or_default());
     crate::closure::js_closure_call2(
         metadata.check_server_identity as *const crate::ClosureHeader,
+        crate::closure::plain_call_receiver(),
         host,
         certificate,
     )
@@ -1096,7 +1097,11 @@ pub extern "C" fn js_tls_prepare_connect() {
     let callback =
         (create_context.to_bits() & crate::value::POINTER_MASK) as *const crate::ClosureHeader;
     if !callback.is_null() {
-        crate::closure::js_closure_call1(callback, ptr_value(options));
+        crate::closure::js_closure_call1(
+            callback,
+            crate::closure::plain_call_receiver(),
+            ptr_value(options),
+        );
     }
 }
 

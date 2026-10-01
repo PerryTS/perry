@@ -50,10 +50,6 @@
 //!   proves the receiver young and the note unnecessary;
 //! * no stable tombstones and no descriptor flag (both conservative: the
 //!   shape already covers them);
-//! * the layout state: a `GC_LAYOUT_SIDE_MASK` or typed-layout receiver's
-//!   layout record describes the PRE-shape, so the hit first calls
-//!   [`js_gc_key_add_layout_unknown`] (the transition lane's
-//!   `mark_object_dynamic_shape_unknown`), exactly as the runtime does.
 //!
 //! Everything else takes the miss, which serves the memo in the runtime
 //! ([`packed_add_try`], through the audited stamp funnel and overflow store)
@@ -173,17 +169,23 @@ pub const ADD_WAYS_WORD: usize = 3;
 pub const ADD_WAY_WORDS: usize = 2;
 /// Low bits of the guard word that hold the slot.
 pub const ADD_SLOT_BITS: u32 = 16;
-const ADD_SLOT_MASK: u64 = (1 << ADD_SLOT_BITS) - 1;
+/// Charter step 5 (P2c): the top bit of the guard's slot field marks a memo
+/// whose successor's lane at the slot is not `Any`; the emitted hit then
+/// refuses a value whose exponent is all ones (every non-double, and the
+/// doubles the funnel canonicalizes) before it stamps anything. **Must equal
+/// perry-codegen `expr/put_value_store_ic.rs::ADD_F64_SLOT`.**
+pub const ADD_F64_SLOT: u64 = 1 << (ADD_SLOT_BITS - 1);
+const ADD_SLOT_MASK: u64 = ADD_F64_SLOT - 1;
 
 const SPILL_FLIP: u32 = crate::object::field_get_set::PACKED_SPILL_FLIP;
 
 /// `_reserved` bits that refuse a receiver on the runtime-side hit. The
-/// integrity flags are refused as well although the shape proves them.
+/// integrity flags are refused as well although the shape proves them. The
+/// receiver kind and the numeric proof are not here (charter step 3): a memo
+/// is published only for an `Ordinary` pre-shape, which proves both.
 const ADD_BLOCKING: u16 = crate::gc::OBJ_FLAG_FROZEN
     | crate::gc::OBJ_FLAG_SEALED
     | crate::gc::OBJ_FLAG_NO_EXTEND
-    | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
-    | crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF
     | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES
     | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS;
 
@@ -264,14 +266,15 @@ pub(crate) fn note_packed_add_carriers() {
 
 // ---------------------------------------------------------------------------
 // Store census (`PERRY_STORE_CENSUS`): compile-time instrumentation writes
-// counters 0..16 from emitted code; the runtime classifies its own paths in
-// 16..32. Printed at exit when the variable is set at run time.
+// counters 0..16 and the array-element counters 32..48 from emitted code; the
+// runtime classifies its own paths in 16..32. Printed at exit when the
+// variable is set at run time.
 // ---------------------------------------------------------------------------
 
 /// The census counters. **Indices below [`CENSUS_RUNTIME_BASE`] are owned by
 /// `perry-codegen/src/expr/store_census.rs`.**
 #[no_mangle]
-pub static PERRY_STORE_CENSUS: [AtomicU64; 32] = [const { AtomicU64::new(0) }; 32];
+pub static PERRY_STORE_CENSUS: [AtomicU64; 48] = [const { AtomicU64::new(0) }; 48];
 #[allow(dead_code)]
 pub const CENSUS_RUNTIME_BASE: usize = 16;
 pub(crate) const C_ADD_RT_INLINE: usize = 16;
@@ -283,9 +286,16 @@ pub(crate) const C_PRIME_INTERCEPTED: usize = 21;
 pub(crate) const C_FULL_KEYADD_CLASS: usize = 22;
 pub(crate) const C_FULL_KEYADD_SPILL: usize = 23;
 pub(crate) const C_PRIME_UNVERIFIED: usize = 24;
+/// Charter step 5: a lane's first deprecation, which moves the
+/// prototype-validity word (`field_rep_store::deprecate_lane`).
+pub(crate) const C_REP_VALIDITY_BUMP: usize = 25;
+/// A key-add found its sibling differing only in the new lane.
+pub(crate) const C_REP_CONVERGE: usize = 26;
+/// A receiver on a shape with a deprecated lane moved to the normalized shape.
+pub(crate) const C_REP_MIGRATE: usize = 27;
 
 #[cfg_attr(test, allow(dead_code))]
-const CENSUS_NAMES: [&str; 32] = [
+const CENSUS_NAMES: [&str; 48] = [
     "emit.pic.word_hit",
     "emit.pic.way_hit",
     "emit.add.inline_hit",
@@ -311,13 +321,29 @@ const CENSUS_NAMES: [&str; 32] = [
     "rt.full.key_add.class_instance",
     "rt.full.key_add.spill",
     "rt.prime.unverified",
-    "rt.25",
-    "rt.26",
-    "rt.27",
+    "rt.rep.validity_bump",
+    "rt.rep.converge",
+    "rt.rep.migrate",
     "rt.28",
     "rt.29",
     "rt.30",
     "rt.31",
+    "emit.elem.read.fast",
+    "emit.elem.read.hole_arm",
+    "emit.elem.read.cold_arm",
+    "emit.elem.read.fallback_call",
+    "emit.elem.read.other_tier",
+    "emit.elem.store.inbounds",
+    "emit.elem.store.append_inline",
+    "emit.elem.store.guard_miss",
+    "emit.elem.store.fallback_call",
+    "emit.41",
+    "emit.elem.store.f64_cold",
+    "emit.43",
+    "emit.44",
+    "emit.45",
+    "emit.46",
+    "emit.47",
 ];
 
 #[inline]
@@ -425,7 +451,6 @@ pub(crate) unsafe fn packed_add_try(
     if header.obj_type != crate::gc::GC_TYPE_OBJECT
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || header._reserved & ADD_BLOCKING != 0
-        || !write_fast_path_receiver_kind_ok(obj, header._reserved)
         || !crate::object::object_is_regular(obj)
     {
         return None;
@@ -440,6 +465,14 @@ pub(crate) unsafe fn packed_add_try(
     let post = (shapes >> 32) as u32;
     let post_d = crate::object::shapes::shape_descriptor_by_id(post)?;
     let slot = (guard & ADD_SLOT_MASK) as usize;
+    // Charter step 5 (T2): the post-shape is the class guard of the memo.
+    if !crate::object::field_rep_store::cached_key_add_admits(
+        post,
+        slot as u32,
+        Some(value.to_bits()),
+    ) {
+        return None;
+    }
     // The audited funnel: layout-unknown marking, the stamp, the prototype
     // validity bump for a marked receiver, the old-generation carrier note.
     if !crate::object::shapes::install_cached_object_shape_version(
@@ -509,19 +542,6 @@ fn promote_way(ways: &AddWays, home: usize, distance: usize) {
         ways[from].guard.store(to_guard, Ordering::Relaxed);
         ways[from].shapes.store(to_shapes, Ordering::Relaxed);
     }
-}
-
-/// The key-add hit's layout retirement: a receiver whose layout record
-/// (side mask or typed descriptor) described its PRE-shape. Exactly what the
-/// transition lane runs before its stamp. Edits header bits and layout /
-/// feedback side tables; allocates nothing a collection could see and never
-/// collects (`gc_call_effects.rs` lists it as CannotCollect).
-///
-/// # Safety
-/// `obj` is a live, non-forwarded ordinary object's handle.
-#[no_mangle]
-pub unsafe extern "C" fn js_gc_key_add_layout_unknown(obj: u64) {
-    crate::object::mark_object_dynamic_shape_unknown(obj as usize as *mut crate::ObjectHeader);
 }
 
 /// The transition lane's value fix-up (`fast_paths.rs`): a POINTER-tagged
@@ -609,7 +629,7 @@ pub(crate) unsafe fn packed_add_prime(
         && pre_d.semantic_generation == post_d.semantic_generation
         && pre_d.object_kind == post_d.object_kind
         && post_d.live_inline_slot_count == expected_live
-        && n < (1 << ADD_SLOT_BITS) - 1
+        && u64::from(n) < ADD_SLOT_MASK
         && crate::object::object_is_regular(obj)
         && eligible_key(key)
         && crate::object::keys_find_slot_by_key_ptr(
@@ -624,7 +644,12 @@ pub(crate) unsafe fn packed_add_prime(
     let Some(header) = crate::value::addr_class::try_read_gc_header(obj as usize) else {
         return;
     };
-    if !write_fast_path_receiver_kind_ok(obj, header._reserved) {
+    // Charter step 3: the memo's pre-shape must be one a store is admitted on
+    // by shape alone, so the hit (emitted or runtime) needs no per-object test.
+    let _ = header;
+    if !crate::object::shapes::store_kind::shape_admits_plain_store(pre)
+        || !crate::object::shapes::store_kind::shape_admits_plain_store(post)
+    {
         census(C_PRIME_UNVERIFIED);
         return;
     }
@@ -689,7 +714,12 @@ pub(crate) unsafe fn packed_add_prime(
     }
     let pre_word = if inline { pre } else { pre ^ SPILL_FLIP };
     let shapes = u64::from(pre_word) | (u64::from(post) << 32);
-    let guard = (generation << ADD_SLOT_BITS) | u64::from(n);
+    let f64_slot = if inline && !crate::object::field_rep_store::shape_slot_is_any(post, n) {
+        ADD_F64_SLOT
+    } else {
+        0
+    };
+    let guard = (generation << ADD_SLOT_BITS) | f64_slot | u64::from(n);
     let same_pre = |word: u64| word != PACKED_SET_EMPTY && unflip(word as u32) == pre;
     // A way that holds this pre-shape (a stale guard) is superseded.
     if let Some(ways) = site_ways(site_ptr) {

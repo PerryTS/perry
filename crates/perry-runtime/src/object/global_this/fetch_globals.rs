@@ -86,6 +86,13 @@ pub(crate) fn global_this_is_materialized() -> bool {
     THREAD_GLOBAL_THIS.with(|c| c.get()) != 0
 }
 
+/// Whether `obj` is THIS thread's realm global, as opposed to the global of a
+/// `vm` context or an eval realm that `populate_global_this_builtins` also
+/// fills (each of those gets its own intrinsics).
+pub(crate) fn is_thread_realm_global(obj: *mut ObjectHeader) -> bool {
+    !obj.is_null() && THREAD_GLOBAL_THIS.with(|c| c.get()) == obj as i64
+}
+
 /// Issue #611: lazily allocate `globalThis` for computed global access.
 #[no_mangle]
 pub extern "C" fn js_get_global_this() -> f64 {
@@ -193,6 +200,7 @@ pub unsafe extern "C" fn js_global_or_console_property_by_name(
 #[inline(never)]
 pub(crate) extern "C" fn global_this_builtin_noop_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
     std::hint::black_box(global_this_builtin_noop_thunk as *const u8);
@@ -201,6 +209,7 @@ pub(crate) extern "C" fn global_this_builtin_noop_thunk(
 
 pub(crate) extern "C" fn global_this_date_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
     let string = crate::date::js_date_to_string(crate::date::js_date_new());
@@ -268,6 +277,7 @@ fn global_this_init_headers_handle(init: f64) -> f64 {
 
 pub(crate) extern "C" fn global_this_blob_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     parts: f64,
     options: f64,
 ) -> f64 {
@@ -277,6 +287,7 @@ pub(crate) extern "C" fn global_this_blob_thunk(
 
 pub(crate) extern "C" fn global_this_file_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     parts: f64,
     name: f64,
     options: f64,
@@ -293,6 +304,7 @@ pub(crate) extern "C" fn global_this_file_thunk(
 
 pub(crate) extern "C" fn global_this_headers_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     init: f64,
 ) -> f64 {
     let headers = super::super::global_fetch::call_global_headers_new();
@@ -307,6 +319,7 @@ pub(crate) extern "C" fn global_this_headers_thunk(
 
 pub(crate) extern "C" fn global_this_response_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     body: f64,
     init: f64,
 ) -> f64 {
@@ -341,6 +354,7 @@ pub(crate) extern "C" fn global_this_response_thunk(
 
 pub(crate) extern "C" fn global_this_request_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     input: f64,
     init: f64,
 ) -> f64 {
@@ -406,7 +420,7 @@ unsafe fn attach_temporal_cell_to_this(this_box: f64, cell_box: f64) {
 /// (`js_fetch_or_value_super`, the non-spread `super(a, b)` path) and the
 /// args-array `js_super_construct_apply` (the `super(...spread)` path). When
 /// `parent_val` is a Temporal constructor, run it (Temporal ctors return a
-/// fresh cell and never mutate the implicit `this`) and stash the returned cell
+/// fresh cell and never mutate their `this`) and stash the returned cell
 /// on `this_box` so method / getter / instanceof dispatch can recover the
 /// Temporal brand. Returns `true` when handled. (#5587)
 #[cfg(feature = "temporal")]
@@ -425,16 +439,19 @@ pub(crate) unsafe fn temporal_subclass_super(
     // to the parent ctor for the duration of the call (the cell it returns is
     // re-homed onto the subclass `this`; the exact new.target identity is not
     // observable to these native ctors beyond being defined). Restore after.
-    // #9445: root the displaced receiver and `this_box` (consumed again below)
-    // across the parent constructor call.
+    // #9445: root `this_box` (consumed again below) across the parent
+    // constructor call.
     let this_scope = crate::gc::RuntimeHandleScope::new();
     let this_h = this_scope.root_nanbox_f64(this_box);
-    let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(this_box));
     // #10490: the displaced `new.target` crosses the same call.
     let prev_nt = this_scope.root_nanbox_f64(crate::object::js_new_target_set(parent_val));
-    let cell = crate::closure::js_native_call_value(parent_val, args_ptr, args_len);
+    let cell = crate::closure::native_call_value_this(
+        parent_val,
+        crate::closure::JsThis::from_f64(this_h.get_nanbox_f64()),
+        args_ptr,
+        args_len,
+    );
     crate::object::js_new_target_set(prev_nt.get_nanbox_f64());
-    crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     if crate::temporal::is_temporal_value(cell) {
         attach_temporal_cell_to_this(this_h.get_nanbox_f64(), cell);
     }
@@ -464,9 +481,19 @@ pub(crate) unsafe fn attach_fetch_handle_for_construction(
         undef
     };
     let handle = if kind == 1 {
-        global_this_request_thunk(std::ptr::null(), arg0, arg1)
+        global_this_request_thunk(
+            std::ptr::null(),
+            crate::closure::JsThis::UNDEFINED,
+            arg0,
+            arg1,
+        )
     } else {
-        global_this_response_thunk(std::ptr::null(), arg0, arg1)
+        global_this_response_thunk(
+            std::ptr::null(),
+            crate::closure::JsThis::UNDEFINED,
+            arg0,
+            arg1,
+        )
     };
     let this_box = crate::value::js_nanbox_pointer(inst as i64);
     attach_fetch_handle_to_this(this_box, handle);
@@ -478,7 +505,12 @@ pub(crate) unsafe fn attach_fetch_handle_for_construction(
 /// `undefined` (the super-call value).
 #[no_mangle]
 pub extern "C" fn js_request_subclass_init(this_box: f64, input: f64, init: f64) -> f64 {
-    let handle = global_this_request_thunk(std::ptr::null(), input, init);
+    let handle = global_this_request_thunk(
+        std::ptr::null(),
+        crate::closure::JsThis::UNDEFINED,
+        input,
+        init,
+    );
     unsafe { attach_fetch_handle_to_this(this_box, handle) };
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
@@ -487,7 +519,12 @@ pub extern "C" fn js_request_subclass_init(this_box: f64, input: f64, init: f64)
 /// `js_request_subclass_init` for the Response handle.
 #[no_mangle]
 pub extern "C" fn js_response_subclass_init(this_box: f64, body: f64, init: f64) -> f64 {
-    let handle = global_this_response_thunk(std::ptr::null(), body, init);
+    let handle = global_this_response_thunk(
+        std::ptr::null(),
+        crate::closure::JsThis::UNDEFINED,
+        body,
+        init,
+    );
     unsafe { attach_fetch_handle_to_this(this_box, handle) };
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
@@ -526,7 +563,6 @@ fn is_uncallable_builtin_super_parent(name: &str) -> bool {
             | "Set"
             | "WeakMap"
             | "WeakSet"
-            | "EventTarget"
             | "Array"
             | "ArrayBuffer"
             | "SharedArrayBuffer"
@@ -565,7 +601,6 @@ fn is_uncallable_builtin_super_parent_class_id(class_id: u32) -> bool {
         "Set",
         "WeakMap",
         "WeakSet",
-        "EventTarget",
         "Array",
         "ArrayBuffer",
         "DataView",
@@ -605,8 +640,8 @@ fn is_uncallable_builtin_super_parent_class_id(class_id: u32) -> bool {
 /// instead every runtime-value `super()` dispatches through here. When
 /// `parent_val` resolves to the Request/Response constructor we allocate the
 /// native handle and stash it on `this` (so inherited body methods work);
-/// otherwise we fall back to the ordinary implicit-`this`-bound
-/// `js_native_call_value`, preserving the prior behavior for every other
+/// otherwise we fall back to an ordinary value call with `this` passed,
+/// preserving the prior behavior for every other
 /// runtime-value parent (Effect's `Data.Class`, etc.).
 #[no_mangle]
 pub unsafe extern "C" fn js_fetch_or_value_super(
@@ -772,35 +807,36 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
             } else {
                 undef
             };
-            let handled = match method.as_str() {
-                "Readable" => Some(crate::node_stream::js_node_stream_readable_subclass_init(
-                    this_box, opts,
-                )),
-                "Writable" => Some(crate::node_stream::js_node_stream_writable_subclass_init(
-                    this_box, opts,
-                )),
-                "Duplex" => Some(crate::node_stream::js_node_stream_duplex_subclass_init(
-                    this_box, opts,
-                )),
-                "Transform" => Some(crate::node_stream::js_node_stream_transform_subclass_init(
-                    this_box, opts,
-                )),
-                "PassThrough" => Some(
-                    crate::node_stream::js_node_stream_passthrough_subclass_init(this_box, opts),
-                ),
-                "Stream" => Some(crate::node_stream::js_node_stream_legacy_subclass_init(
-                    this_box,
-                )),
-                _ => None,
-            };
-            if handled.is_some() {
+            if crate::object::native_this_alias::run_node_stream_subclass_init(
+                method.as_str(),
+                this_box,
+                opts,
+            ) {
                 return undef;
             }
         }
     }
+    // #10454: `class X extends http.ServerResponse` — `ServerResponse` is a
+    // handle factory, not an initializer of `this`, so the ordinary dispatch
+    // below built a handle and dropped it. Construct it and alias `this` to
+    // the handle, exactly as `ServerResponse.call(this, req)` does.
+    if let Some((module, method)) = bound_native_parent.as_ref() {
+        let args: &[f64] = if args_ptr.is_null() || args_len == 0 {
+            &[]
+        } else {
+            std::slice::from_raw_parts(args_ptr, args_len)
+        };
+        if crate::object::native_this_alias::construct_aliased_native_class(
+            module, method, this_box, args,
+        )
+        .is_some()
+        {
+            return undef;
+        }
+    }
     // `class X extends Temporal.<Type>` (non-spread `super(a, b)`): a Temporal
-    // constructor returns a fresh NaN-boxed cell and does NOT mutate the
-    // implicit `this`, so the ordinary dispatch below would drop that cell and
+    // constructor returns a fresh NaN-boxed cell and does NOT mutate its
+    // `this`, so the ordinary dispatch below would drop that cell and
     // leave the subclass instance an empty object with no Temporal brand. Stash
     // the cell on `this` instead. The native ctor never calls the subclass
     // constructor, so `called`-counter invariants hold. (#5587)
@@ -947,6 +983,44 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
                 _ => None,
             }
         });
+    // These bases initialize the existing derived receiver's own symbol
+    // properties; replacing it would lose derived fields and prototype identity.
+    match kind {
+        Some("EventTarget") => {
+            return crate::event_target::js_event_target_subclass_init(this_box, 0)
+        }
+        Some("AbortController") => {
+            return crate::event_target::js_event_target_subclass_init(this_box, 1)
+        }
+        Some("AbortSignal") => {
+            return crate::event_target::js_event_target_subclass_init(this_box, 2)
+        }
+        Some("Event") | Some("CustomEvent") => {
+            let arg0 = if args_len > 0 { *args_ptr } else { undef };
+            let arg1 = if args_len > 1 {
+                *args_ptr.add(1)
+            } else {
+                undef
+            };
+            return crate::event_target::js_event_subclass_init(
+                this_box,
+                arg0,
+                arg1,
+                args_len as u32,
+                u32::from(kind == Some("CustomEvent")),
+            );
+        }
+        Some("DOMException") => {
+            let arg0 = if args_len > 0 { *args_ptr } else { undef };
+            let arg1 = if args_len > 1 {
+                *args_ptr.add(1)
+            } else {
+                undef
+            };
+            return crate::event_target::js_dom_exception_subclass_init(this_box, arg0, arg1);
+        }
+        _ => {}
+    }
     // A native builtin base that cannot be called as a function still has to
     // perform its [[Construct]] work for `super()`. Construct it with the
     // current subclass as newTarget so the result carries the builtin's real
@@ -1000,9 +1074,19 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
                 undef
             };
             let handle = if kind == Some("Request") {
-                global_this_request_thunk(std::ptr::null(), arg0, arg1)
+                global_this_request_thunk(
+                    std::ptr::null(),
+                    crate::closure::JsThis::UNDEFINED,
+                    arg0,
+                    arg1,
+                )
             } else {
-                global_this_response_thunk(std::ptr::null(), arg0, arg1)
+                global_this_response_thunk(
+                    std::ptr::null(),
+                    crate::closure::JsThis::UNDEFINED,
+                    arg0,
+                    arg1,
+                )
             };
             attach_fetch_handle_to_this(this_box, handle);
             undef
@@ -1025,7 +1109,6 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
             const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
             const TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
             const PTR_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
-            const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
             // A dynamic parent that resolved to a ClassRef (INT32-tagged) is a
             // real registered Perry class — `class X extends _mod.default`
             // where the default export is a user class (Next.js
@@ -1035,8 +1118,7 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
             // base constructor would never run — parent `this.<field> = …`
             // writes (e.g. `this.nextConfig = opts`) would be lost. Invoke the
             // class constructor directly on `this` instead.
-            if bits & TAG_MASK == INT32_TAG {
-                let parent_cid = bits as u32;
+            if let Some(parent_cid) = crate::object::class_value::class_value_id(parent_val) {
                 if let Some(obj) = subclass_this_object_ptr(this_box) {
                     return super::super::class_constructors::run_class_constructor_on_this_flat(
                         parent_cid, obj as i64, args_ptr, args_len,
@@ -1117,11 +1199,12 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
                     }
                 }
             }
-            let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-            let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(this_box));
-            let r = crate::closure::js_native_call_value(callee, args_ptr, args_len);
-            crate::object::js_implicit_this_set(prev.get_nanbox_f64());
-            r
+            crate::closure::native_call_value_this(
+                callee,
+                crate::closure::JsThis::from_f64(this_box),
+                args_ptr,
+                args_len,
+            )
         }
     }
 }
@@ -1133,12 +1216,14 @@ static KEEP_JS_FETCH_OR_VALUE_SUPER: unsafe extern "C" fn(f64, f64, *const f64, 
 
 pub(crate) extern "C" fn global_this_response_error_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     super::super::global_fetch::call_global_response_static_error()
 }
 
 pub(crate) extern "C" fn global_this_response_json_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
     init: f64,
 ) -> f64 {
@@ -1160,6 +1245,7 @@ pub(crate) extern "C" fn global_this_response_json_thunk(
 
 pub(crate) extern "C" fn global_this_response_redirect_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     url: f64,
     status: f64,
 ) -> f64 {
@@ -1174,6 +1260,7 @@ pub(crate) extern "C" fn global_this_response_redirect_thunk(
 
 pub(crate) extern "C" fn global_this_eval_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     source: f64,
 ) -> f64 {
     // PerformEval step: "If Type(x) is not String, return x." A non-string
@@ -1239,7 +1326,10 @@ pub(crate) fn install_global_eval() {
 mod dynamic_super_new_target_tests {
     use super::*;
 
-    extern "C" fn read_new_target(_closure: *const crate::ClosureHeader) -> f64 {
+    extern "C" fn read_new_target(
+        _closure: *const crate::ClosureHeader,
+        _this: crate::closure::JsThis,
+    ) -> f64 {
         crate::object::js_new_target_get()
     }
 
@@ -1249,7 +1339,7 @@ mod dynamic_super_new_target_tests {
             let scope = crate::gc::RuntimeHandleScope::new();
             let instance = scope.root_raw_mut_ptr(crate::object::js_object_alloc(61_147, 0));
             let parent = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
-                read_new_target as *const u8,
+                crate::fn_info!(read_new_target, 0),
                 0,
             ));
             let previous = scope.root_nanbox_f64(crate::object::js_new_target_set(f64::from_bits(
@@ -1277,7 +1367,7 @@ mod dynamic_super_new_target_tests {
             let scope = crate::gc::RuntimeHandleScope::new();
             let instance = scope.root_raw_mut_ptr(crate::object::js_object_alloc(61_147, 0));
             let parent = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
-                read_new_target as *const u8,
+                crate::fn_info!(read_new_target, 0),
                 0,
             ));
             let explicit = crate::object::class_constructor_ref_value(61_148);

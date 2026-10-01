@@ -92,6 +92,7 @@ fn promise_timer(delay_ms: f64, value: f64, has_ref: bool) -> *mut crate::promis
 /// Refs #1213.
 pub(crate) extern "C" fn timers_promises_set_timeout(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     delay_ms: f64,
     value: f64,
     options: f64,
@@ -126,6 +127,7 @@ pub(crate) extern "C" fn timers_promises_set_timeout(
 /// Refs #1213.
 pub(crate) extern "C" fn timers_promises_set_immediate(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
     options: f64,
 ) -> f64 {
@@ -152,13 +154,23 @@ pub(crate) extern "C" fn timers_promises_set_immediate(
 
 pub(crate) extern "C" fn timers_promises_scheduler_wait(
     _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
     delay_ms: f64,
     options: f64,
 ) -> f64 {
-    timers_promises_set_timeout(_closure, delay_ms, f64::from_bits(TAG_UNDEFINED), options)
+    timers_promises_set_timeout(
+        _closure,
+        this,
+        delay_ms,
+        f64::from_bits(TAG_UNDEFINED),
+        options,
+    )
 }
 
-pub(crate) extern "C" fn timers_promises_scheduler_yield(_closure: *const ClosureHeader) -> f64 {
+pub(crate) extern "C" fn timers_promises_scheduler_yield(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let promise = promise_timer(0.0, f64::from_bits(TAG_UNDEFINED), true);
     crate::value::js_nanbox_pointer(promise as i64)
 }
@@ -191,7 +203,10 @@ fn iter_result(value: f64, done: bool) -> f64 {
     boxed_ptr(obj as *const u8)
 }
 
-extern "C" fn timers_promises_interval_next(closure: *const ClosureHeader) -> f64 {
+extern "C" fn timers_promises_interval_next(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let value = js_closure_get_capture_f64(closure, 0);
     let signal = js_closure_get_capture_f64(closure, 1);
     let delay_ms = js_closure_get_capture_f64(closure, 2);
@@ -228,11 +243,17 @@ extern "C" fn timers_promises_interval_next(closure: *const ClosureHeader) -> f6
     boxed_ptr(promise as *const u8)
 }
 
-extern "C" fn timers_promises_interval_self(closure: *const ClosureHeader) -> f64 {
+extern "C" fn timers_promises_interval_self(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     js_closure_get_capture_f64(closure, 0)
 }
 
-extern "C" fn timers_promises_interval_return(closure: *const ClosureHeader) -> f64 {
+extern "C" fn timers_promises_interval_return(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let next_value = js_closure_get_capture_f64(closure, 0);
     let next = boxed_value_to_ptr::<ClosureHeader>(next_value);
     js_closure_set_capture_f64(next, 3, 1.0);
@@ -247,6 +268,7 @@ extern "C" fn timers_promises_interval_return(closure: *const ClosureHeader) -> 
 /// returned or the optional AbortSignal rejects the pending tick.
 pub(crate) extern "C" fn timers_promises_set_interval(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     delay_ms: f64,
     value: f64,
     options: f64,
@@ -277,7 +299,7 @@ pub(crate) extern "C" fn timers_promises_set_interval(
     let obj = js_object_alloc(0, 4);
     let obj_value = boxed_ptr(obj as *const u8);
 
-    let next = js_closure_alloc(timers_promises_interval_next as *const u8, 6);
+    let next = js_closure_alloc(crate::fn_info!(timers_promises_interval_next, 0), 6);
     js_closure_set_capture_f64(next, 0, value);
     js_closure_set_capture_f64(next, 1, signal);
     js_closure_set_capture_f64(next, 2, delay_ms);
@@ -286,11 +308,11 @@ pub(crate) extern "C" fn timers_promises_set_interval(
     js_closure_set_capture_f64(next, 5, validation_error);
     js_object_set_field_by_name(obj, string_key(b"next"), boxed_ptr(next as *const u8));
 
-    let ret = js_closure_alloc(timers_promises_interval_return as *const u8, 1);
+    let ret = js_closure_alloc(crate::fn_info!(timers_promises_interval_return, 0), 1);
     js_closure_set_capture_f64(ret, 0, boxed_ptr(next as *const u8));
     js_object_set_field_by_name(obj, string_key(b"return"), boxed_ptr(ret as *const u8));
 
-    let ret = js_closure_alloc(timers_promises_interval_self as *const u8, 1);
+    let ret = js_closure_alloc(crate::fn_info!(timers_promises_interval_self, 0), 1);
     js_closure_set_capture_f64(ret, 0, obj_value);
     let sym = crate::symbol::well_known_symbol("asyncIterator");
     if !sym.is_null() {
@@ -334,6 +356,7 @@ fn rest_array_values(rest: f64) -> Vec<f64> {
 
 pub(crate) extern "C" fn timers_ns_set_timeout(
     _c: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     cb: f64,
     ms: f64,
     rest: f64,
@@ -350,6 +373,7 @@ pub(crate) extern "C" fn timers_ns_set_timeout(
 }
 pub(crate) extern "C" fn timers_ns_set_interval(
     _c: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     cb: f64,
     ms: f64,
     rest: f64,
@@ -366,6 +390,7 @@ pub(crate) extern "C" fn timers_ns_set_interval(
 }
 pub(crate) extern "C" fn timers_ns_set_immediate(
     _c: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     cb: f64,
     rest: f64,
 ) -> f64 {
@@ -378,21 +403,34 @@ pub(crate) extern "C" fn timers_ns_set_immediate(
         )
     })
 }
-pub(crate) extern "C" fn timers_ns_clear_timeout(_c: *const ClosureHeader, arg: f64) -> f64 {
+pub(crate) extern "C" fn timers_ns_clear_timeout(
+    _c: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    arg: f64,
+) -> f64 {
     crate::timer::js_clear_timeout_value(arg);
     f64::from_bits(TAG_UNDEFINED)
 }
-pub(crate) extern "C" fn timers_ns_clear_interval(_c: *const ClosureHeader, arg: f64) -> f64 {
+pub(crate) extern "C" fn timers_ns_clear_interval(
+    _c: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    arg: f64,
+) -> f64 {
     crate::timer::js_clear_interval_value(arg);
     f64::from_bits(TAG_UNDEFINED)
 }
-pub(crate) extern "C" fn timers_ns_clear_immediate(_c: *const ClosureHeader, arg: f64) -> f64 {
+pub(crate) extern "C" fn timers_ns_clear_immediate(
+    _c: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    arg: f64,
+) -> f64 {
     crate::timer::js_clear_immediate_value(arg);
     f64::from_bits(TAG_UNDEFINED)
 }
 
 pub(crate) extern "C" fn timers_promises_scheduler(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
     let msg = b"scheduler is not a function";

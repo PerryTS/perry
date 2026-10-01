@@ -16,6 +16,7 @@ use super::*;
 
 pub(crate) extern "C" fn stats_closure_return_captured(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     // Slot 0 holds the pre-computed NaN-boxed boolean.
     crate::closure::js_closure_get_capture_f64(closure, 0)
@@ -25,7 +26,8 @@ pub(crate) unsafe fn make_stats_predicate(value: bool) -> f64 {
     const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
     const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
     let tag = if value { TAG_TRUE } else { TAG_FALSE };
-    let closure = crate::closure::js_closure_alloc(stats_closure_return_captured as *const u8, 1);
+    let closure =
+        crate::closure::js_closure_alloc(crate::fn_info!(stats_closure_return_captured, 0), 1);
     crate::closure::js_closure_set_capture_f64(closure, 0, f64::from_bits(tag));
     // NaN-box the closure pointer with POINTER_TAG so the dynamic
     // dispatch path in `js_native_call_method` can unwrap it.
@@ -135,7 +137,18 @@ extern "C" fn stats_birthtime_setter(this_value: f64, value: f64) -> f64 {
 fn ensure_stats_date_accessors_registered() {
     static REGISTER: std::sync::Once = std::sync::Once::new();
     REGISTER.call_once(|| unsafe {
-        for class_id in [STATS_REGULAR_CLASS_ID, STATS_BIGINT_CLASS_ID] {
+        for (class_id, class_name) in [
+            (STATS_REGULAR_CLASS_ID, "Stats"),
+            (STATS_BIGINT_CLASS_ID, "BigIntStats"),
+        ] {
+            // Class accessors resolve through the class's decl prototype,
+            // which exists only for a class with a registered name. Without
+            // one every Date alias below reads `undefined`.
+            crate::object::js_register_class_name(
+                class_id,
+                class_name.as_ptr(),
+                class_name.len() as u32,
+            );
             for (name, getter, setter) in [
                 (
                     "atime",
@@ -169,6 +182,7 @@ fn ensure_stats_date_accessors_registered() {
                     name.as_ptr(),
                     name.len() as i64,
                     setter as i64,
+                    1,
                 );
             }
         }
@@ -222,11 +236,13 @@ pub(crate) unsafe fn build_stats_object(
     let set = |idx: u32, v: f64| {
         crate::object::js_object_set_field_f64(obj, idx, v);
     };
-    let set_date_aliases = |base: u32| {
-        set(base, crate::date::alloc_date_cell(atime_ms));
-        set(base + 1, crate::date::alloc_date_cell(mtime_ms));
-        set(base + 2, crate::date::alloc_date_cell(ctime_ms));
-        set(base + 3, crate::date::alloc_date_cell(birthtime_ms));
+    // A Date's time value is an integer: Node builds these from the `*Ms`
+    // field (`Math.round` of the fractional ms; the bigint ms is already
+    // whole), so `st.mtime.getTime()` never carries a fraction.
+    let set_date_aliases = |base: u32, times_ms: [f64; 4]| {
+        for (i, ms) in times_ms.into_iter().enumerate() {
+            set(base + i as u32, crate::date::alloc_date_cell(ms));
+        }
     };
     set(0, make_stats_predicate(is_file));
     set(1, make_stats_predicate(is_dir));
@@ -261,7 +277,10 @@ pub(crate) unsafe fn build_stats_object(
         set(22, bigint_u64_value(blksize));
         set(23, bigint_u64_value(ino));
         set(24, bigint_u64_value(blocks));
-        set_date_aliases(BIGINT_DATE_SLOT_BASE);
+        set_date_aliases(
+            BIGINT_DATE_SLOT_BASE,
+            [a_ns, m_ns, c_ns, b_ns].map(|ns| ns_to_ms(ns) as f64),
+        );
     } else {
         set(7, size as f64);
         set(8, atime_ms);
@@ -277,7 +296,10 @@ pub(crate) unsafe fn build_stats_object(
         set(18, blksize as f64);
         set(19, ino as f64);
         set(20, blocks as f64);
-        set_date_aliases(REGULAR_DATE_SLOT_BASE);
+        set_date_aliases(
+            REGULAR_DATE_SLOT_BASE,
+            [atime_ms, mtime_ms, ctime_ms, birthtime_ms].map(crate::object::js_math_round_value),
+        );
     }
     const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
     f64::from_bits(POINTER_TAG | (obj as u64 & 0x0000_FFFF_FFFF_FFFF))

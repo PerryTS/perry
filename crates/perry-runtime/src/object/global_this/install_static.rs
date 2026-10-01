@@ -9,7 +9,7 @@ pub extern "C" fn js_promise_static_function_value(name_ptr: *const u8, name_len
     let Ok(name) = std::str::from_utf8(name_bytes) else {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     };
-    let Some((func_ptr, spec_length, call_arity, has_rest)) = promise_static_function_spec(name)
+    let Some((info, spec_length)) = super::bigint_promise::promise_static_function_info(name)
     else {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     };
@@ -24,14 +24,9 @@ pub extern "C" fn js_promise_static_function_value(name_ptr: *const u8, name_len
         }
     }
 
-    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    let closure = crate::closure::js_closure_alloc(info, 0);
     if closure.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
-    }
-    if has_rest {
-        crate::closure::js_register_closure_rest(func_ptr, call_arity);
-    } else {
-        crate::closure::js_register_closure_arity(func_ptr, call_arity);
     }
     super::super::native_module::set_bound_native_closure_name(closure, name);
     super::super::native_module::set_builtin_closure_length(closure as usize, spec_length);
@@ -49,8 +44,45 @@ pub extern "C" fn js_promise_static_function_value(name_ptr: *const u8, name_len
     value
 }
 
+extern "C" fn abort_signal_abort_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    reason: f64,
+) -> f64 {
+    let signal = crate::url::abort::js_abort_signal_abort(reason);
+    crate::value::js_nanbox_pointer(signal as i64)
+}
+
+extern "C" fn abort_signal_timeout_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    ms: f64,
+) -> f64 {
+    let signal = crate::url::abort::js_abort_signal_timeout(ms);
+    crate::value::js_nanbox_pointer(signal as i64)
+}
+
+extern "C" fn abort_signal_any_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    signals: f64,
+) -> f64 {
+    let is_array = crate::array::js_array_is_array(signals).to_bits() == 0x7FFC_0000_0000_0004;
+    let array = if is_array {
+        crate::value::js_nanbox_get_pointer(signals) as *mut crate::array::ArrayHeader
+    } else {
+        std::ptr::null_mut()
+    };
+    if array.is_null() {
+        crate::validators::throw_invalid_arg_type("signals", "Array", signals);
+    }
+    let signal = crate::url::abort::js_abort_signal_any(array);
+    crate::value::js_nanbox_pointer(signal as i64)
+}
+
 extern "C" fn url_can_parse_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     input: f64,
     base: f64,
 ) -> f64 {
@@ -66,6 +98,7 @@ extern "C" fn url_can_parse_thunk(
 
 extern "C" fn url_parse_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     input: f64,
     base: f64,
 ) -> f64 {
@@ -91,6 +124,7 @@ extern "C" fn url_parse_thunk(
 // compile-time `Uint8Array.fromBase64(str)` call path produces.
 extern "C" fn uint8array_from_base64_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     input: f64,
     opts: f64,
 ) -> f64 {
@@ -100,6 +134,7 @@ extern "C" fn uint8array_from_base64_thunk(
 
 extern "C" fn uint8array_from_hex_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     input: f64,
 ) -> f64 {
     let buf = crate::buffer::js_u8_from_hex(input.to_bits() as i64);
@@ -108,6 +143,7 @@ extern "C" fn uint8array_from_hex_thunk(
 
 extern "C" fn subtle_crypto_supports_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     let args = global_this_rest_array_values(rest);
@@ -158,8 +194,8 @@ fn rejected_type_error_with_code_promise(message: &str, code: &'static str) -> f
     crate::value::js_nanbox_pointer(promise as i64)
 }
 
-fn subtle_crypto_dispatch_rest(method_name: &str, rest: f64) -> f64 {
-    let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+fn subtle_crypto_dispatch_rest(this: crate::closure::JsThis, method_name: &str, rest: f64) -> f64 {
+    let this_value = f64::from_bits(this.bits());
     if !is_subtle_crypto_this(this_value) {
         return rejected_type_error_with_code_promise(
             "Value of \"this\" must be of type SubtleCrypto",
@@ -186,62 +222,50 @@ fn subtle_crypto_dispatch_rest(method_name: &str, rest: f64) -> f64 {
 
 pub(crate) extern "C" fn subtle_crypto_encapsulate_bits_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
-    subtle_crypto_dispatch_rest("encapsulateBits", rest)
+    subtle_crypto_dispatch_rest(this, "encapsulateBits", rest)
 }
 
 pub(crate) extern "C" fn subtle_crypto_decapsulate_bits_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
-    subtle_crypto_dispatch_rest("decapsulateBits", rest)
+    subtle_crypto_dispatch_rest(this, "decapsulateBits", rest)
 }
 
 pub(crate) extern "C" fn subtle_crypto_encapsulate_key_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
-    subtle_crypto_dispatch_rest("encapsulateKey", rest)
+    subtle_crypto_dispatch_rest(this, "encapsulateKey", rest)
 }
 
 pub(crate) extern "C" fn subtle_crypto_decapsulate_key_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
-    subtle_crypto_dispatch_rest("decapsulateKey", rest)
+    subtle_crypto_dispatch_rest(this, "decapsulateKey", rest)
 }
 
 /// Install a single callable static method on a constructor closure as a
 /// `{ writable: true, enumerable: false, configurable: true }` data property
-/// (matching Node's descriptors for built-in statics). `has_rest` registers
-/// the func pointer as a rest-arg closure so trailing args arrive as an array.
+/// (matching Node's descriptors for built-in statics). `info` is the body's
+/// (its call arity or rest parameter included); `spec_length` is the
+/// function's `.length`.
 pub(crate) fn install_constructor_static(
     ctor: *mut crate::closure::ClosureHeader,
     name: &str,
-    func_ptr: *const u8,
-    arity: u32,
-    has_rest: bool,
-) {
-    install_constructor_static_with_call_arity(ctor, name, func_ptr, arity, arity, has_rest);
-}
-
-pub(crate) fn install_constructor_static_with_call_arity(
-    ctor: *mut crate::closure::ClosureHeader,
-    name: &str,
-    func_ptr: *const u8,
+    info: *const crate::closure::JsFunctionInfo,
     spec_length: u32,
-    call_arity: u32,
-    has_rest: bool,
 ) {
-    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    let closure = crate::closure::js_closure_alloc(info, 0);
     if closure.is_null() {
         return;
-    }
-    if has_rest {
-        crate::closure::js_register_closure_rest(func_ptr, call_arity);
-    } else {
-        crate::closure::js_register_closure_arity(func_ptr, call_arity);
     }
     super::super::native_module::set_bound_native_closure_name(closure, name);
     super::super::native_module::set_builtin_closure_length(closure as usize, spec_length);
@@ -300,126 +324,144 @@ pub(crate) fn install_builtin_constructor_statics(
     }
     match name {
         "Object" => {
-            install_constructor_static(ctor, "keys", object_keys_thunk as *const u8, 1, false);
-            install_constructor_static(ctor, "values", object_values_thunk as *const u8, 1, false);
+            install_constructor_static(
+                ctor,
+                "keys",
+                crate::fn_info!(object_keys_thunk, 1; with_declared(1)),
+                1,
+            );
+            install_constructor_static(
+                ctor,
+                "values",
+                crate::fn_info!(object_values_thunk, 1; with_declared(1)),
+                1,
+            );
             install_constructor_static(
                 ctor,
                 "entries",
-                object_entries_thunk as *const u8,
+                crate::fn_info!(object_entries_thunk, 1; with_declared(1)),
                 1,
-                false,
             );
-            install_constructor_static(ctor, "freeze", object_freeze_thunk as *const u8, 1, false);
-            install_constructor_static(ctor, "create", object_create_thunk as *const u8, 2, false);
-            install_constructor_static(ctor, "seal", object_seal_thunk as *const u8, 1, false);
+            install_constructor_static(
+                ctor,
+                "freeze",
+                crate::fn_info!(object_freeze_thunk, 1; with_declared(1)),
+                1,
+            );
+            install_constructor_static(
+                ctor,
+                "create",
+                crate::fn_info!(object_create_thunk, 2; with_declared(2)),
+                2,
+            );
+            install_constructor_static(
+                ctor,
+                "seal",
+                crate::fn_info!(object_seal_thunk, 1; with_declared(1)),
+                1,
+            );
             install_constructor_static(
                 ctor,
                 "isSealed",
-                object_is_sealed_thunk as *const u8,
+                crate::fn_info!(object_is_sealed_thunk, 1; with_declared(1)),
                 1,
-                false,
             );
             install_constructor_static(
                 ctor,
                 "isFrozen",
-                object_is_frozen_thunk as *const u8,
+                crate::fn_info!(object_is_frozen_thunk, 1; with_declared(1)),
                 1,
-                false,
             );
             install_constructor_static(
                 ctor,
                 "isExtensible",
-                object_is_extensible_thunk as *const u8,
+                crate::fn_info!(object_is_extensible_thunk, 1; with_declared(1)),
                 1,
-                false,
             );
             install_constructor_static(
                 ctor,
                 "preventExtensions",
-                object_prevent_extensions_thunk as *const u8,
+                crate::fn_info!(object_prevent_extensions_thunk, 1; with_declared(1)),
                 1,
-                false,
             );
-            install_constructor_static(ctor, "is", object_is_thunk as *const u8, 2, false);
+            install_constructor_static(
+                ctor,
+                "is",
+                crate::fn_info!(object_is_thunk, 2; with_declared(2)),
+                2,
+            );
             install_constructor_static(
                 ctor,
                 "setPrototypeOf",
-                object_set_prototype_of_thunk as *const u8,
+                crate::fn_info!(object_set_prototype_of_thunk, 2; with_declared(2)),
                 2,
-                false,
             );
             install_constructor_static(
                 ctor,
                 "getOwnPropertySymbols",
-                object_get_own_property_symbols_thunk as *const u8,
+                crate::fn_info!(object_get_own_property_symbols_thunk, 1; with_declared(1)),
                 1,
-                false,
             );
             install_constructor_static(
                 ctor,
                 "getOwnPropertyDescriptors",
-                object_get_own_property_descriptors_thunk as *const u8,
+                crate::fn_info!(object_get_own_property_descriptors_thunk, 1; with_declared(1)),
                 1,
-                false,
             );
             install_constructor_static(
                 ctor,
                 "defineProperties",
-                object_define_properties_thunk as *const u8,
+                crate::fn_info!(object_define_properties_thunk, 2; with_declared(2)),
                 2,
-                false,
             );
             install_constructor_static(
                 ctor,
                 "groupBy",
-                object_group_by_thunk as *const u8,
+                crate::fn_info!(object_group_by_thunk, 2; with_declared(2)),
                 2,
-                false,
             );
             install_constructor_static(
                 ctor,
                 "getPrototypeOf",
-                object_get_prototype_of_thunk as *const u8,
+                crate::fn_info!(object_get_prototype_of_thunk, 1; with_declared(1)),
                 1,
-                false,
             );
             install_constructor_static(
                 ctor,
                 "getOwnPropertyNames",
-                object_get_own_property_names_thunk as *const u8,
+                crate::fn_info!(object_get_own_property_names_thunk, 1; with_declared(1)),
                 1,
-                false,
             );
             install_constructor_static(
                 ctor,
                 "getOwnPropertyDescriptor",
-                object_get_own_property_descriptor_thunk as *const u8,
+                crate::fn_info!(object_get_own_property_descriptor_thunk, 2; with_declared(2)),
                 2,
-                false,
             );
             install_constructor_static(
                 ctor,
                 "defineProperty",
-                object_define_property_thunk as *const u8,
+                crate::fn_info!(object_define_property_thunk, 3; with_declared(3)),
                 3,
-                false,
             );
             install_constructor_static(
                 ctor,
                 "fromEntries",
-                object_from_entries_thunk as *const u8,
+                crate::fn_info!(object_from_entries_thunk, 1; with_declared(1)),
                 1,
-                false,
             );
-            install_constructor_static_with_call_arity(
+            install_constructor_static(
                 ctor,
                 "assign",
-                object_assign_thunk as *const u8,
+                crate::fn_info!(object_assign_thunk, 2; with_rest(1)),
                 2,
-                1,
-                true,
             );
-            install_constructor_static(ctor, "hasOwn", object_hasown_thunk as *const u8, 2, false);
+            install_constructor_static(
+                ctor,
+                "hasOwn",
+                crate::fn_info!(object_hasown_thunk, 2; with_declared(2)),
+                2,
+            );
             // `Object` is a function, so reading a non-static member resolves up
             // its prototype chain (Function.prototype → Object.prototype). In
             // particular `Object.hasOwnProperty` IS `Object.prototype.hasOwnProperty`
@@ -432,56 +474,59 @@ pub(crate) fn install_builtin_constructor_statics(
             install_constructor_static(
                 ctor,
                 "hasOwnProperty",
-                object_prototype_has_own_property_thunk as *const u8,
+                crate::fn_info!(object_prototype_has_own_property_thunk, 1; with_declared(1)),
                 1,
-                false,
             );
             install_constructor_static(
                 ctor,
                 "isPrototypeOf",
-                object_prototype_is_prototype_of_thunk as *const u8,
+                crate::fn_info!(object_prototype_is_prototype_of_thunk, 1; with_declared(1)),
                 1,
-                false,
             );
             install_constructor_static(
                 ctor,
                 "propertyIsEnumerable",
-                object_prototype_property_is_enumerable_thunk as *const u8,
+                crate::fn_info!(object_prototype_property_is_enumerable_thunk, 1; with_declared(1)),
                 1,
-                false,
             );
             install_constructor_static(
                 ctor,
                 "toString",
-                object_prototype_to_string_thunk as *const u8,
+                crate::fn_info!(object_prototype_to_string_thunk, 0; with_declared(0)),
                 0,
-                false,
             );
             install_constructor_static(
                 ctor,
                 "toLocaleString",
-                object_prototype_to_locale_string_thunk as *const u8,
+                crate::fn_info!(object_prototype_to_locale_string_thunk, 0; with_declared(0)),
                 0,
-                false,
             );
             install_constructor_static(
                 ctor,
                 "valueOf",
-                object_prototype_value_of_thunk as *const u8,
+                crate::fn_info!(object_prototype_value_of_thunk, 0; with_declared(0)),
                 0,
-                false,
             );
         }
         "Array" => {
             install_constructor_static(
                 ctor,
                 "isArray",
-                array_is_array_thunk as *const u8,
+                crate::fn_info!(array_is_array_thunk, 1; with_declared(1)),
                 1,
-                false,
             );
-            install_constructor_static(ctor, "from", array_from_thunk as *const u8, 1, false);
-            install_constructor_static(ctor, "of", array_of_thunk as *const u8, 0, true);
+            install_constructor_static(
+                ctor,
+                "from",
+                crate::fn_info!(array_from_thunk, 1; with_declared(1)),
+                1,
+            );
+            install_constructor_static(
+                ctor,
+                "of",
+                crate::fn_info!(array_of_thunk, 1; with_rest(0)),
+                0,
+            );
         }
         "Promise" => {
             for static_name in [
@@ -494,17 +539,10 @@ pub(crate) fn install_builtin_constructor_statics(
                 "withResolvers",
                 "try",
             ] {
-                if let Some((func_ptr, spec_length, call_arity, has_rest)) =
-                    promise_static_function_spec(static_name)
+                if let Some((info, spec_length)) =
+                    super::bigint_promise::promise_static_function_info(static_name)
                 {
-                    install_constructor_static_with_call_arity(
-                        ctor,
-                        static_name,
-                        func_ptr,
-                        spec_length,
-                        call_arity,
-                        has_rest,
-                    );
+                    install_constructor_static(ctor, static_name, info, spec_length);
                 }
             }
         }
@@ -515,41 +553,41 @@ pub(crate) fn install_builtin_constructor_statics(
             date_proto_thunks::install_date_constructor_statics(ctor);
         }
         "Number" => {
-            install_constructor_static(ctor, "isNaN", number_is_nan_thunk as *const u8, 1, false);
+            install_constructor_static(
+                ctor,
+                "isNaN",
+                crate::fn_info!(number_is_nan_thunk, 1; with_declared(1)),
+                1,
+            );
             install_constructor_static(
                 ctor,
                 "isFinite",
-                number_is_finite_thunk as *const u8,
+                crate::fn_info!(number_is_finite_thunk, 1; with_declared(1)),
                 1,
-                false,
             );
             install_constructor_static(
                 ctor,
                 "isInteger",
-                number_is_integer_thunk as *const u8,
+                crate::fn_info!(number_is_integer_thunk, 1; with_declared(1)),
                 1,
-                false,
             );
             install_constructor_static(
                 ctor,
                 "isSafeInteger",
-                number_is_safe_integer_thunk as *const u8,
+                crate::fn_info!(number_is_safe_integer_thunk, 1; with_declared(1)),
                 1,
-                false,
             );
             install_constructor_static(
                 ctor,
                 "parseFloat",
-                number_parse_float_thunk as *const u8,
+                crate::fn_info!(number_parse_float_thunk, 1; with_declared(1)),
                 1,
-                false,
             );
             install_constructor_static(
                 ctor,
                 "parseInt",
-                number_parse_int_thunk as *const u8,
+                crate::fn_info!(number_parse_int_thunk, 2; with_declared(2)),
                 2,
-                false,
             );
         }
         "BigInt" => {
@@ -557,21 +595,29 @@ pub(crate) fn install_builtin_constructor_statics(
             install_constructor_static(
                 ctor,
                 "asIntN",
-                bigint_as_int_n_thunk as *const u8,
+                crate::fn_info!(bigint_as_int_n_thunk, 2; with_declared(2)),
                 2,
-                false,
             );
             install_constructor_static(
                 ctor,
                 "asUintN",
-                bigint_as_uint_n_thunk as *const u8,
+                crate::fn_info!(bigint_as_uint_n_thunk, 2; with_declared(2)),
                 2,
-                false,
             );
         }
         "Symbol" => {
-            install_constructor_static(ctor, "for", symbol_for_thunk as *const u8, 1, false);
-            install_constructor_static(ctor, "keyFor", symbol_key_for_thunk as *const u8, 1, false);
+            install_constructor_static(
+                ctor,
+                "for",
+                crate::fn_info!(symbol_for_thunk, 1; with_declared(1)),
+                1,
+            );
+            install_constructor_static(
+                ctor,
+                "keyFor",
+                crate::fn_info!(symbol_key_for_thunk, 1; with_declared(1)),
+                1,
+            );
             for name in ["iterator", "asyncIterator"] {
                 let symbol = crate::symbol::well_known_symbol(name);
                 crate::closure::closure_set_dynamic_prop(
@@ -592,65 +638,76 @@ pub(crate) fn install_builtin_constructor_statics(
             // `.length`, usable via reference / spread). Call-arity 0 (all args
             // collected into `rest`) with spec `.length` 1. `String.raw` (a tag
             // function) is left on its intrinsic path for now.
-            install_constructor_static_with_call_arity(
+            install_constructor_static(
                 ctor,
                 "fromCharCode",
-                string_from_char_code_static as *const u8,
+                crate::fn_info!(string_from_char_code_static, 1; with_rest(0)),
                 1,
-                0,
-                true,
             );
-            install_constructor_static_with_call_arity(
+            install_constructor_static(
                 ctor,
                 "fromCodePoint",
-                string_from_code_point_static as *const u8,
+                crate::fn_info!(string_from_code_point_static, 1; with_rest(0)),
                 1,
-                0,
-                true,
             );
             // #4627: `String.raw` (tag function) — 1 fixed param (template
             // object) + rest substitutions; spec `.length` 1.
-            install_constructor_static_with_call_arity(
+            install_constructor_static(
                 ctor,
                 "raw",
-                string_raw_static as *const u8,
+                crate::fn_info!(string_raw_static, 2; with_rest(1)),
                 1,
-                1,
-                true,
             );
         }
         "ArrayBuffer" => {
             install_constructor_static(
                 ctor,
                 "isView",
-                array_buffer_is_view_thunk as *const u8,
+                crate::fn_info!(array_buffer_is_view_thunk, 1; with_declared(1)),
                 1,
-                false,
+            );
+        }
+        "AbortSignal" => {
+            // The call forms are codegen intrinsics; these are the real own
+            // data properties a value read (`const f = AbortSignal.abort`)
+            // and reflection see.
+            install_constructor_static(
+                ctor,
+                "abort",
+                crate::fn_info!(abort_signal_abort_thunk, 1; with_declared(0)),
+                0,
+            );
+            install_constructor_static(
+                ctor,
+                "timeout",
+                crate::fn_info!(abort_signal_timeout_thunk, 1; with_declared(1)),
+                1,
+            );
+            install_constructor_static(
+                ctor,
+                "any",
+                crate::fn_info!(abort_signal_any_thunk, 1; with_declared(1)),
+                1,
             );
         }
         "Response" => {
             install_constructor_static(
                 ctor,
                 "error",
-                global_this_response_error_thunk as *const u8,
+                crate::fn_info!(global_this_response_error_thunk, 0; with_declared(0)),
                 0,
-                false,
             );
-            install_constructor_static_with_call_arity(
+            install_constructor_static(
                 ctor,
                 "json",
-                global_this_response_json_thunk as *const u8,
+                crate::fn_info!(global_this_response_json_thunk, 2; with_declared(2)),
                 1,
-                2,
-                false,
             );
-            install_constructor_static_with_call_arity(
+            install_constructor_static(
                 ctor,
                 "redirect",
-                global_this_response_redirect_thunk as *const u8,
+                crate::fn_info!(global_this_response_redirect_thunk, 2; with_declared(2)),
                 1,
-                2,
-                false,
             );
         }
         #[cfg(feature = "global-url")]
@@ -658,21 +715,23 @@ pub(crate) fn install_builtin_constructor_statics(
             install_constructor_static(
                 ctor,
                 "canParse",
-                url_can_parse_thunk as *const u8,
+                crate::fn_info!(url_can_parse_thunk, 2; with_declared(1)),
                 1,
-                false,
             );
-            install_constructor_static(ctor, "parse", url_parse_thunk as *const u8, 1, false);
+            install_constructor_static(
+                ctor,
+                "parse",
+                crate::fn_info!(url_parse_thunk, 2; with_declared(1)),
+                1,
+            );
         }
         #[cfg(feature = "global-webcrypto")]
         "SubtleCrypto" => {
-            install_constructor_static_with_call_arity(
+            install_constructor_static(
                 ctor,
                 "supports",
-                subtle_crypto_supports_thunk as *const u8,
+                crate::fn_info!(subtle_crypto_supports_thunk, 1; with_rest(0)),
                 2,
-                0,
-                true,
             );
             super::super::set_builtin_property_attrs(
                 ctor as usize,
@@ -684,9 +743,8 @@ pub(crate) fn install_builtin_constructor_statics(
             install_constructor_static(
                 ctor,
                 "revocable",
-                proxy_revocable_thunk as *const u8,
+                crate::fn_info!(proxy_revocable_thunk, 2; with_declared(2)),
                 2,
-                false,
             );
         }
         // #6674: TC39 `Uint8Array.fromBase64(str, opts)` / `fromHex(str)` static
@@ -700,20 +758,17 @@ pub(crate) fn install_builtin_constructor_statics(
         // path uses, so the produced value is identical. `fromBase64.length` is
         // 1 (the optional opts is the 2nd, undefined-padded, ABI slot).
         "Uint8Array" => {
-            install_constructor_static_with_call_arity(
+            install_constructor_static(
                 ctor,
                 "fromBase64",
-                uint8array_from_base64_thunk as *const u8,
+                crate::fn_info!(uint8array_from_base64_thunk, 2; with_declared(2)),
                 1,
-                2,
-                false,
             );
             install_constructor_static(
                 ctor,
                 "fromHex",
-                uint8array_from_hex_thunk as *const u8,
+                crate::fn_info!(uint8array_from_hex_thunk, 1; with_declared(1)),
                 1,
-                false,
             );
         }
         _ => {}
@@ -721,7 +776,7 @@ pub(crate) fn install_builtin_constructor_statics(
 }
 
 /// Install a method on a prototype object as a callable closure value with
-/// the proper `name` property and registered arity. Used to reify built-in
+/// the proper `name` property and `.length`. Used to reify built-in
 /// prototype methods so `Array.prototype.map`, `Date.prototype.toISOString`,
 /// etc. read back as `typeof === "function"` (issue #2142) — the actual
 /// method *call* path is already covered by codegen's NativeMethodCall and
@@ -730,27 +785,25 @@ pub(crate) fn install_builtin_constructor_statics(
 /// through indirection (`const m = Array.prototype.map; m.call(arr, fn)`),
 /// a rare pattern. The reification is the value-read parity win.
 ///
-/// `func_ptr` defaults to `global_this_builtin_noop_thunk` (returns
+/// The body defaults to `global_this_builtin_noop_thunk` (returns
 /// undefined) for methods we don't have a dedicated thunk for; callers
 /// that want spec-accurate call behavior pass a custom thunk instead
 /// (`array_prototype_slice_thunk`, `object_prototype_to_string_thunk`).
+/// `info` is the body's (a built-in: `FN_BUILTIN`, declared `arity`).
 pub(crate) fn install_proto_method(
     proto_obj: *mut ObjectHeader,
     method_name: &str,
-    func_ptr: *const u8,
+    info: *const crate::closure::JsFunctionInfo,
     arity: u32,
 ) -> f64 {
-    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    let closure = crate::closure::js_closure_alloc(info, 0);
     if closure.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    crate::closure::js_register_closure_arity(func_ptr, arity);
-    crate::closure::register_closure_body_builtin(func_ptr);
     super::super::native_module::set_bound_native_closure_name(closure, method_name);
-    // #3143: record this method's spec `.length` per closure instance — all
-    // noop-backed methods share one func_ptr, so the func-ptr arity registry
-    // can't distinguish `map` (1) from `slice` (2). Read back by the `.length`
-    // value-accessor and `getOwnPropertyDescriptor`.
+    // #3143: record this method's spec `.length` per closure instance — many
+    // methods share the noop body. Read back by the `.length` value-accessor
+    // and `getOwnPropertyDescriptor`.
     super::super::native_module::set_builtin_closure_length(closure as usize, arity);
     super::super::native_module::set_builtin_closure_non_constructable(closure as usize);
     let key = crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
@@ -809,34 +862,30 @@ pub(crate) fn install_proto_method_alias(
     );
 }
 
+/// [`install_proto_method`] for a rest body: `info` carries its rest
+/// parameter (`with_rest(fixed_arity)`) and `FN_BUILTIN`; `.length` is
+/// `fixed_arity`.
 pub(crate) fn install_proto_method_rest(
     proto_obj: *mut ObjectHeader,
     method_name: &str,
-    func_ptr: *const u8,
+    info: *const crate::closure::JsFunctionInfo,
     fixed_arity: u32,
 ) {
-    install_proto_method_rest_with_length(
-        proto_obj,
-        method_name,
-        func_ptr,
-        fixed_arity,
-        fixed_arity,
-    );
+    install_proto_method_rest_with_length(proto_obj, method_name, info, fixed_arity);
 }
 
+/// [`install_proto_method_rest`] with a `.length` other than the fixed
+/// arity.
 pub(crate) fn install_proto_method_rest_with_length(
     proto_obj: *mut ObjectHeader,
     method_name: &str,
-    func_ptr: *const u8,
+    info: *const crate::closure::JsFunctionInfo,
     spec_length: u32,
-    call_fixed_arity: u32,
 ) -> f64 {
-    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    let closure = crate::closure::js_closure_alloc(info, 0);
     if closure.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    crate::closure::js_register_closure_rest(func_ptr, call_fixed_arity);
-    crate::closure::register_closure_body_builtin(func_ptr);
     super::super::native_module::set_bound_native_closure_name(closure, method_name);
     super::super::native_module::set_builtin_closure_length(closure as usize, spec_length);
     super::super::native_module::set_builtin_closure_non_constructable(closure as usize);
@@ -865,14 +914,30 @@ pub(crate) fn install_proto_method_rest_with_length(
 /// #4139/#4437: reify the `JSON` namespace's own methods for reflection parity
 /// and detached value calls. Direct call sites are still codegen intrinsics.
 pub(crate) fn install_json_namespace_members(ns_obj: *mut ObjectHeader) {
-    const METHODS: &[(&str, *const u8, u32)] = &[
-        ("parse", json_parse_thunk as *const u8, 2),
-        ("stringify", json_stringify_thunk as *const u8, 3),
-        ("rawJSON", json_raw_json_thunk as *const u8, 1),
-        ("isRawJSON", json_is_raw_json_thunk as *const u8, 1),
+    const METHODS: &[(&str, *const crate::closure::JsFunctionInfo, u32)] = &[
+        (
+            "parse",
+            crate::fn_info!(json_parse_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+            2,
+        ),
+        (
+            "stringify",
+            crate::fn_info!(json_stringify_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN)),
+            3,
+        ),
+        (
+            "rawJSON",
+            crate::fn_info!(json_raw_json_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            1,
+        ),
+        (
+            "isRawJSON",
+            crate::fn_info!(json_is_raw_json_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            1,
+        ),
     ];
-    for (name, func_ptr, arity) in METHODS.iter().copied() {
-        install_proto_method(ns_obj, name, func_ptr, arity);
+    for (name, info, arity) in METHODS.iter().copied() {
+        install_proto_method(ns_obj, name, info, arity);
     }
 }
 
@@ -888,80 +953,144 @@ pub(crate) fn install_reflect_namespace_members(ns_obj: *mut ObjectHeader) {
     let methods = [
         (
             "defineProperty",
-            reflect_define_property_thunk as *const u8,
+            crate::fn_info!(reflect_define_property_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN)),
             3,
         ),
         (
             "deleteProperty",
-            reflect_delete_property_thunk as *const u8,
+            crate::fn_info!(reflect_delete_property_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
             2,
         ),
-        ("apply", reflect_apply_thunk as *const u8, 3),
-        ("construct", reflect_construct_thunk as *const u8, 2),
-        ("get", reflect_get_thunk as *const u8, 2),
+        (
+            "apply",
+            crate::fn_info!(reflect_apply_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN)),
+            3,
+        ),
+        (
+            "construct",
+            crate::fn_info!(reflect_construct_thunk, 3; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+            2,
+        ),
+        (
+            "get",
+            crate::fn_info!(reflect_get_thunk, 3; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+            2,
+        ),
         (
             "getOwnPropertyDescriptor",
-            reflect_get_own_property_descriptor_thunk as *const u8,
+            crate::fn_info!(reflect_get_own_property_descriptor_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
             2,
         ),
         (
             "getPrototypeOf",
-            reflect_get_prototype_of_thunk as *const u8,
+            crate::fn_info!(reflect_get_prototype_of_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
             1,
         ),
-        ("has", reflect_has_thunk as *const u8, 2),
-        ("isExtensible", reflect_is_extensible_thunk as *const u8, 1),
-        ("ownKeys", reflect_own_keys_thunk as *const u8, 1),
+        (
+            "has",
+            crate::fn_info!(reflect_has_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+            2,
+        ),
+        (
+            "isExtensible",
+            crate::fn_info!(reflect_is_extensible_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            1,
+        ),
+        (
+            "ownKeys",
+            crate::fn_info!(reflect_own_keys_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            1,
+        ),
         (
             "preventExtensions",
-            reflect_prevent_extensions_thunk as *const u8,
+            crate::fn_info!(reflect_prevent_extensions_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
             1,
         ),
-        ("set", reflect_set_thunk as *const u8, 3),
+        (
+            "set",
+            crate::fn_info!(reflect_set_thunk, 4; with_declared(3), with_flags(crate::closure::FN_BUILTIN)),
+            3,
+        ),
         (
             "setPrototypeOf",
-            reflect_set_prototype_of_thunk as *const u8,
+            crate::fn_info!(reflect_set_prototype_of_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
             2,
         ),
     ];
-    for (name, func_ptr, arity) in methods {
-        install_proto_method(ns_obj, name, func_ptr, arity);
+    for (name, info, arity) in methods {
+        install_proto_method(ns_obj, name, info, arity);
     }
 }
 
 pub(crate) fn install_atomics_namespace_members(ns_obj: *mut ObjectHeader) {
-    for (name, func_ptr, arity) in [
-        ("load", crate::atomics::js_atomics_load as *const u8, 2),
+    for (name, info, arity) in [
+        (
+            "load",
+            crate::fn_info!(crate::atomics::js_atomics_load, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+            2,
+        ),
         (
             "isLockFree",
-            crate::atomics::js_atomics_is_lock_free as *const u8,
+            crate::fn_info!(crate::atomics::js_atomics_is_lock_free, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
             1,
         ),
-        ("store", crate::atomics::js_atomics_store as *const u8, 3),
-        ("add", crate::atomics::js_atomics_add as *const u8, 3),
-        ("sub", crate::atomics::js_atomics_sub as *const u8, 3),
-        ("and", crate::atomics::js_atomics_and as *const u8, 3),
-        ("or", crate::atomics::js_atomics_or as *const u8, 3),
-        ("xor", crate::atomics::js_atomics_xor as *const u8, 3),
+        (
+            "store",
+            crate::fn_info!(crate::atomics::js_atomics_store, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN)),
+            3,
+        ),
+        (
+            "add",
+            crate::fn_info!(crate::atomics::js_atomics_add, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN)),
+            3,
+        ),
+        (
+            "sub",
+            crate::fn_info!(crate::atomics::js_atomics_sub, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN)),
+            3,
+        ),
+        (
+            "and",
+            crate::fn_info!(crate::atomics::js_atomics_and, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN)),
+            3,
+        ),
+        (
+            "or",
+            crate::fn_info!(crate::atomics::js_atomics_or, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN)),
+            3,
+        ),
+        (
+            "xor",
+            crate::fn_info!(crate::atomics::js_atomics_xor, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN)),
+            3,
+        ),
         (
             "exchange",
-            crate::atomics::js_atomics_exchange as *const u8,
+            crate::fn_info!(crate::atomics::js_atomics_exchange, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN)),
             3,
         ),
         (
             "compareExchange",
-            crate::atomics::js_atomics_compare_exchange as *const u8,
+            crate::fn_info!(crate::atomics::js_atomics_compare_exchange, 4; with_declared(4), with_flags(crate::closure::FN_BUILTIN)),
             4,
         ),
-        ("notify", crate::atomics::js_atomics_notify as *const u8, 3),
-        ("wait", crate::atomics::js_atomics_wait as *const u8, 4),
+        (
+            "notify",
+            crate::fn_info!(crate::atomics::js_atomics_notify, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN)),
+            3,
+        ),
+        (
+            "wait",
+            crate::fn_info!(crate::atomics::js_atomics_wait, 4; with_declared(4), with_flags(crate::closure::FN_BUILTIN)),
+            4,
+        ),
         (
             "waitAsync",
-            crate::atomics::js_atomics_wait_async as *const u8,
+            crate::fn_info!(crate::atomics::js_atomics_wait_async, 4; with_declared(4), with_flags(crate::closure::FN_BUILTIN)),
             4,
         ),
     ] {
-        install_proto_method(ns_obj, name, func_ptr, arity);
+        install_proto_method(ns_obj, name, info, arity);
     }
 }
 
@@ -970,38 +1099,55 @@ pub(crate) fn install_atomics_namespace_members(ns_obj: *mut ObjectHeader) {
 /// `global_this_builtin_noop_thunk`, but inherited Object methods with
 /// observable receiver-sensitive behavior use their real thunk.
 pub(crate) fn install_noop_proto_methods(proto_obj: *mut ObjectHeader, methods: &[(&str, u32)]) {
+    // One info per body: the per-method `.length` rides on each closure
+    // (`install_proto_method` records it), so the bodies need no declared
+    // arity of their own.
+    use crate::closure::FN_BUILTIN;
+    use crate::fn_info;
     for (name, arity) in methods.iter().copied() {
-        let func_ptr = match name {
-            "isPrototypeOf" => object_prototype_is_prototype_of_thunk as *const u8,
+        let info = match name {
+            "isPrototypeOf" => {
+                fn_info!(object_prototype_is_prototype_of_thunk, 1; with_flags(FN_BUILTIN))
+            }
             // Annex B accessor methods get real thunks (reflective `.call`).
-            "__defineGetter__" => object_prototype_define_getter_thunk as *const u8,
-            "__defineSetter__" => object_prototype_define_setter_thunk as *const u8,
-            "__lookupGetter__" => object_prototype_lookup_getter_thunk as *const u8,
-            "__lookupSetter__" => object_prototype_lookup_setter_thunk as *const u8,
-            _ => global_this_builtin_noop_thunk as *const u8,
+            "__defineGetter__" => {
+                fn_info!(object_prototype_define_getter_thunk, 2; with_flags(FN_BUILTIN))
+            }
+            "__defineSetter__" => {
+                fn_info!(object_prototype_define_setter_thunk, 2; with_flags(FN_BUILTIN))
+            }
+            "__lookupGetter__" => {
+                fn_info!(object_prototype_lookup_getter_thunk, 1; with_flags(FN_BUILTIN))
+            }
+            "__lookupSetter__" => {
+                fn_info!(object_prototype_lookup_setter_thunk, 1; with_flags(FN_BUILTIN))
+            }
+            _ => fn_info!(global_this_builtin_noop_thunk, 1; with_flags(FN_BUILTIN)),
         };
-        install_proto_method(proto_obj, name, func_ptr, arity);
+        install_proto_method(proto_obj, name, info, arity);
     }
 }
 
 pub(crate) extern "C" fn url_pattern_test_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     input: f64,
     rest: f64,
 ) -> f64 {
     let base = rest_first_arg(rest);
-    let this_value = crate::object::js_implicit_this_get();
+    let this_value = this.as_f64();
     let pattern = crate::value::js_nanbox_get_pointer(this_value) as *mut ObjectHeader;
     crate::url::js_url_pattern_test(pattern, input, base)
 }
 
 pub(crate) extern "C" fn url_pattern_exec_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     input: f64,
     rest: f64,
 ) -> f64 {
     let base = rest_first_arg(rest);
-    let this_value = crate::object::js_implicit_this_get();
+    let this_value = this.as_f64();
     let pattern = crate::value::js_nanbox_get_pointer(this_value) as *mut ObjectHeader;
     crate::url::js_url_pattern_exec(pattern, input, base)
 }
@@ -1024,8 +1170,9 @@ fn rest_first_arg(rest: f64) -> f64 {
 /// 27.2.4.8, 22.2.5.2, 23.2.2.4).
 pub(crate) extern "C" fn builtin_species_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    f64::from_bits(IMPLICIT_THIS.with(|c| c.get()))
+    f64::from_bits(this.bits())
 }
 
 /// Install the standard own `get [Symbol.species]` accessor
@@ -1040,9 +1187,10 @@ pub(crate) fn install_builtin_species_accessor(ctor: *mut crate::closure::Closur
     if sym.is_null() {
         return;
     }
-    let f = builtin_species_getter_thunk as *const u8;
-    crate::closure::js_register_closure_arity(f, 0);
-    let getter = crate::closure::js_closure_alloc(f, 0);
+    let getter = crate::closure::js_closure_alloc(
+        crate::fn_info!(builtin_species_getter_thunk, 0; with_declared(0)),
+        0,
+    );
     if getter.is_null() {
         return;
     }

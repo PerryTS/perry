@@ -2,6 +2,7 @@ use super::*;
 
 pub(crate) extern "C" fn global_this_array_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     let rest_value = crate::value::JSValue::from_bits(rest.to_bits());
@@ -29,6 +30,7 @@ pub(crate) extern "C" fn global_this_array_thunk(
 
 pub(crate) extern "C" fn global_this_string_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     let string_ptr = crate::builtins::js_string_coerce(value);
@@ -37,6 +39,7 @@ pub(crate) extern "C" fn global_this_string_thunk(
 
 pub(crate) extern "C" fn global_this_object_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     crate::object::js_object_coerce(value)
@@ -44,6 +47,7 @@ pub(crate) extern "C" fn global_this_object_thunk(
 
 pub(crate) extern "C" fn global_this_structured_clone_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
     _options: f64,
 ) -> f64 {
@@ -52,6 +56,7 @@ pub(crate) extern "C" fn global_this_structured_clone_thunk(
 
 pub(crate) extern "C" fn global_this_atob_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     let decoded = crate::string::js_atob(value);
@@ -60,6 +65,7 @@ pub(crate) extern "C" fn global_this_atob_thunk(
 
 pub(crate) extern "C" fn global_this_btoa_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     let encoded = crate::string::js_btoa(value);
@@ -68,12 +74,16 @@ pub(crate) extern "C" fn global_this_btoa_thunk(
 
 pub(crate) extern "C" fn math_f16round_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     crate::math::js_math_f16round(value)
 }
 
-pub(crate) extern "C" fn math_random_thunk(_closure: *const crate::closure::ClosureHeader) -> f64 {
+pub(crate) extern "C" fn math_random_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     crate::math::js_math_random()
 }
 
@@ -98,6 +108,7 @@ macro_rules! math_unary_thunk {
     ($name:ident, $body:expr) => {
         pub(crate) extern "C" fn $name(
             _closure: *const crate::closure::ClosureHeader,
+            _this: crate::closure::JsThis,
             value: f64,
         ) -> f64 {
             let x = math_number_arg(value);
@@ -134,6 +145,7 @@ math_unary_thunk!(math_trunc_thunk, |x: f64| x.trunc());
 
 pub(crate) extern "C" fn math_round_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     let x = math_number_arg(value);
@@ -164,6 +176,7 @@ pub(crate) fn js_math_round_value(x: f64) -> f64 {
 
 pub(crate) extern "C" fn math_sign_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     crate::math::js_math_sign(value)
@@ -171,6 +184,7 @@ pub(crate) extern "C" fn math_sign_thunk(
 
 pub(crate) extern "C" fn math_clz32_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     math_to_uint32(value).leading_zeros() as f64
@@ -178,6 +192,7 @@ pub(crate) extern "C" fn math_clz32_thunk(
 
 pub(crate) extern "C" fn math_atan2_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     y: f64,
     x: f64,
 ) -> f64 {
@@ -186,6 +201,7 @@ pub(crate) extern "C" fn math_atan2_thunk(
 
 pub(crate) extern "C" fn math_imul_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     a: f64,
     b: f64,
 ) -> f64 {
@@ -194,6 +210,7 @@ pub(crate) extern "C" fn math_imul_thunk(
 
 pub(crate) extern "C" fn math_pow_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     base: f64,
     exp: f64,
 ) -> f64 {
@@ -202,6 +219,7 @@ pub(crate) extern "C" fn math_pow_thunk(
 
 pub(crate) extern "C" fn math_min_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     let values = global_this_rest_array_values(rest);
@@ -227,6 +245,7 @@ pub(crate) extern "C" fn math_min_thunk(
 
 pub(crate) extern "C" fn math_max_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     let values = global_this_rest_array_values(rest);
@@ -252,6 +271,7 @@ pub(crate) extern "C" fn math_max_thunk(
 
 pub(crate) extern "C" fn math_hypot_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     let mut result = 0.0;
@@ -267,6 +287,7 @@ pub(crate) extern "C" fn math_hypot_thunk(
 
 pub(crate) extern "C" fn global_this_parse_int_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
     radix: f64,
 ) -> f64 {
@@ -276,6 +297,7 @@ pub(crate) extern "C" fn global_this_parse_int_thunk(
 
 pub(crate) extern "C" fn global_this_parse_float_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     let s = crate::builtins::js_string_coerce(value);
@@ -284,6 +306,7 @@ pub(crate) extern "C" fn global_this_parse_float_thunk(
 
 pub(crate) extern "C" fn global_this_is_nan_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     crate::builtins::js_is_nan(value)
@@ -297,6 +320,7 @@ pub(crate) extern "C" fn global_this_is_nan_thunk(
 /// but ignored. Returns `undefined`.
 pub(crate) extern "C" fn global_this_gc_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _force: f64,
 ) -> f64 {
     crate::gc::js_gc_collect();
@@ -305,6 +329,7 @@ pub(crate) extern "C" fn global_this_gc_thunk(
 
 pub(crate) extern "C" fn global_this_is_finite_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     crate::builtins::js_is_finite(value)
@@ -312,6 +337,7 @@ pub(crate) extern "C" fn global_this_is_finite_thunk(
 
 pub(crate) extern "C" fn global_this_encode_uri_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     crate::value::js_nanbox_string(crate::builtins::js_encode_uri(value))
@@ -319,6 +345,7 @@ pub(crate) extern "C" fn global_this_encode_uri_thunk(
 
 pub(crate) extern "C" fn global_this_decode_uri_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     crate::value::js_nanbox_string(crate::builtins::js_decode_uri(value))
@@ -326,6 +353,7 @@ pub(crate) extern "C" fn global_this_decode_uri_thunk(
 
 pub(crate) extern "C" fn global_this_encode_uri_component_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     crate::value::js_nanbox_string(crate::builtins::js_encode_uri_component(value))
@@ -333,6 +361,7 @@ pub(crate) extern "C" fn global_this_encode_uri_component_thunk(
 
 pub(crate) extern "C" fn global_this_decode_uri_component_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     crate::value::js_nanbox_string(crate::builtins::js_decode_uri_component(value))
@@ -343,6 +372,7 @@ pub(crate) extern "C" fn global_this_decode_uri_component_thunk(
 // needs them as real callable globalThis function values.
 pub(crate) extern "C" fn global_this_escape_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     crate::value::js_nanbox_string(crate::builtins::js_escape(value))
@@ -350,6 +380,7 @@ pub(crate) extern "C" fn global_this_escape_thunk(
 
 pub(crate) extern "C" fn global_this_unescape_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     crate::value::js_nanbox_string(crate::builtins::js_unescape(value))
@@ -361,6 +392,7 @@ pub(crate) extern "C" fn global_this_unescape_thunk(
 // `const N = Number; N("42")` and `const B = Boolean; B(0)` match Node.
 pub(crate) extern "C" fn global_this_number_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     let jsv = crate::value::JSValue::from_bits(value.to_bits());
@@ -375,6 +407,7 @@ pub(crate) extern "C" fn global_this_number_thunk(
 
 pub(crate) extern "C" fn global_this_boolean_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     let b = crate::value::js_is_truthy(value) != 0;
@@ -383,6 +416,7 @@ pub(crate) extern "C" fn global_this_boolean_thunk(
 
 pub(crate) extern "C" fn global_this_error_capture_stack_trace_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     target: f64,
     constructor_opt: f64,
 ) -> f64 {
@@ -392,6 +426,7 @@ pub(crate) extern "C" fn global_this_error_capture_stack_trace_thunk(
 /// #2904: `Error.isError(value)` thunk — delegates to the runtime duck-check.
 pub(crate) extern "C" fn global_this_error_is_error_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     crate::error::js_error_is_error(value)
@@ -501,8 +536,7 @@ fn js_function_ctor_from_strings_impl(args_ptr: *const f64, args_len: usize) -> 
             && body.contains("log.call(deprecate, message, site)")
             && body.contains("return fn.apply(this, arguments)")
         {
-            let fp = depd_wrapfunction_outer_thunk as *const u8;
-            crate::closure::js_register_closure_arity(fp, 5);
+            let fp = crate::fn_info!(depd_wrapfunction_outer_thunk, 5; with_declared(5));
             let closure = crate::closure::js_closure_alloc_singleton(fp);
             if !closure.is_null() {
                 return crate::value::js_nanbox_pointer(closure as i64);
@@ -541,11 +575,12 @@ fn js_function_ctor_from_strings_impl(args_ptr: *const f64, args_len: usize) -> 
 /// is spec-identical to `new Function(…)`, so this is the same entry the
 /// construct paths reach (`lower_call/new.rs` and `construct.rs`). The value
 /// used to carry the shared no-op thunk, so every such call returned
-/// `undefined`. Registered as a rest closure (`populate.rs`), so `rest` holds
+/// `undefined`. Its info records a rest parameter (`populate.rs`), so `rest` holds
 /// every argument.
 #[cfg(not(panic = "abort"))]
 pub(crate) extern "C-unwind" fn global_this_function_call_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     function_call_thunk_impl(rest)
@@ -554,6 +589,7 @@ pub(crate) extern "C-unwind" fn global_this_function_call_thunk(
 #[cfg(panic = "abort")]
 pub(crate) extern "C" fn global_this_function_call_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     function_call_thunk_impl(rest)
@@ -584,6 +620,7 @@ fn refuse_dynamic_function(args_len: usize, body: &str) -> ! {
 /// real one with identical `this`/arguments.
 extern "C" fn depd_wrapfunction_outer_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     fn_v: f64,
     _log: f64,
     _deprecate: f64,
@@ -620,6 +657,7 @@ const _: extern "C" fn(*const f64, usize) -> f64 = js_function_ctor_from_strings
 /// callers that invoke it get a usable string rather than a crash.
 pub(crate) extern "C" fn global_this_error_prepare_stack_trace_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     error: f64,
     _structured_stack: f64,
 ) -> f64 {
@@ -641,6 +679,7 @@ pub(crate) extern "C" fn global_this_error_prepare_stack_trace_thunk(
 /// existing `js_proxy_revocable` implementation in `crate::proxy`.
 pub(crate) extern "C" fn proxy_revocable_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     target: f64,
     handler: f64,
 ) -> f64 {
@@ -711,12 +750,23 @@ mod tests {
             array_value(&[string_value("a"), string_value("b")]),
             string_value("return a + b"),
         ]);
-        let f = global_this_function_call_thunk(std::ptr::null(), rest);
+        let f = global_this_function_call_thunk(
+            std::ptr::null(),
+            crate::closure::JsThis::UNDEFINED,
+            rest,
+        );
         let args = [
             f64::from_bits(crate::value::JSValue::number(2.0).bits()),
             f64::from_bits(crate::value::JSValue::number(3.0).bits()),
         ];
-        let result = unsafe { crate::closure::js_native_call_value(f, args.as_ptr(), args.len()) };
+        let result = unsafe {
+            crate::closure::js_native_call_value(
+                f,
+                crate::closure::plain_call_receiver(),
+                args.as_ptr(),
+                args.len(),
+            )
+        };
         assert_eq!(crate::builtins::js_number_coerce(result), 5.0);
     }
 }

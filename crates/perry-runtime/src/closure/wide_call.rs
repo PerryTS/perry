@@ -38,6 +38,7 @@ pub(crate) const MAX_DYNAMIC_CALL_WIDTH: usize = 1024;
 pub(crate) unsafe fn dispatch_wide_abi(
     closure: *const ClosureHeader,
     func_ptr: *const u8,
+    this: crate::closure::JsThis,
     args: &[f64],
     width: usize,
 ) -> f64 {
@@ -47,7 +48,7 @@ pub(crate) unsafe fn dispatch_wide_abi(
     // even a valid wasm component). Say so instead.
     #[cfg(target_os = "wasi")]
     {
-        let _ = (closure, func_ptr, args);
+        let _ = (closure, func_ptr, this, args);
         throw_too_wide_for_wasi(width)
     }
     #[cfg(not(target_os = "wasi"))]
@@ -56,22 +57,15 @@ pub(crate) unsafe fn dispatch_wide_abi(
         let provided = args.len().min(width);
 
         // `padded!(slots, [0], 1, + + …)` doubles the index list once per `+`
-        // (six doublings = 64 indices) and emits the transmuted call with one
-        // `f64` parameter per index. The indices are constant expressions into a
+        // (six doublings = 64 indices) and emits the body call with one
+        // `f64` argument per index. The indices are constant expressions into a
         // fixed-size array, so the loads carry no bounds checks.
         macro_rules! padded {
-        (@f64 $i:expr) => { f64 };
         ($slots:ident, [$($i:expr),+], $step:expr, + $($more:tt)*) => {
             padded!($slots, [$($i,)+ $($i + $step),+], $step * 2, $($more)*)
         };
         ($slots:ident, [$($i:expr),+], $step:expr,) => {{
-            #[cfg(panic = "abort")]
-            let f: extern "C" fn(*const ClosureHeader $(, padded!(@f64 $i))+) -> f64 =
-                std::mem::transmute(func_ptr);
-            #[cfg(not(panic = "abort"))]
-            let f: extern "C-unwind" fn(*const ClosureHeader $(, padded!(@f64 $i))+) -> f64 =
-                std::mem::transmute(func_ptr);
-            f(closure $(, $slots[$i])+)
+            crate::closure::body_call::js_body_call_unwind!(func_ptr, closure, this $(, $slots[$i])+)
         }};
     }
         macro_rules! fill {
@@ -133,6 +127,7 @@ mod tests {
 
     extern "C" fn body_40(
         _: *const ClosureHeader,
+        _this: crate::closure::JsThis,
         a0: f64,
         a1: f64,
         a2: f64,
@@ -212,7 +207,15 @@ mod tests {
         let args: Vec<f64> = (0..40).map(|i| i as f64 + 100.0).collect();
         // Exactly the declared width, through each ladder rung.
         for width in [40usize, 64, 65, 256, 257, 1024] {
-            let result = unsafe { dispatch_wide_abi(std::ptr::null(), body, &args, width) };
+            let result = unsafe {
+                dispatch_wide_abi(
+                    std::ptr::null(),
+                    body,
+                    crate::closure::JsThis::UNDEFINED,
+                    &args,
+                    width,
+                )
+            };
             assert_eq!(result, expected(40), "width {width}");
         }
     }
@@ -221,7 +224,15 @@ mod tests {
     fn missing_slots_are_padded_with_undefined() {
         let body = body_40 as *const u8;
         let args: Vec<f64> = (0..23).map(|i| i as f64 + 100.0).collect();
-        let result = unsafe { dispatch_wide_abi(std::ptr::null(), body, &args, 40) };
+        let result = unsafe {
+            dispatch_wide_abi(
+                std::ptr::null(),
+                body,
+                crate::closure::JsThis::UNDEFINED,
+                &args,
+                40,
+            )
+        };
         assert_eq!(result, expected(23));
     }
 
@@ -231,13 +242,21 @@ mod tests {
     fn declared_arity_past_the_exact_arms_reaches_the_body() {
         let body = body_40 as *const u8;
         let args: Vec<f64> = (0..40).map(|i| i as f64 + 100.0).collect();
-        let result =
-            unsafe { crate::closure::dispatch_with_arity(std::ptr::null(), body, &args, 40) };
+        let result = unsafe {
+            crate::closure::dispatch_with_arity(
+                std::ptr::null(),
+                body,
+                crate::closure::JsThis::UNDEFINED,
+                &args,
+                40,
+            )
+        };
         assert_eq!(result, expected(40));
     }
 
     extern "C" fn rest_after_16(
         _: *const ClosureHeader,
+        _this: crate::closure::JsThis,
         a0: f64,
         a1: f64,
         a2: f64,
@@ -275,6 +294,7 @@ mod tests {
             crate::closure::dispatch_rest_bundled(
                 std::ptr::null(),
                 body,
+                crate::closure::JsThis::UNDEFINED,
                 &args,
                 16,
                 crate::closure::registry::RestDispatchKind::UserRest,
@@ -289,7 +309,15 @@ mod tests {
         let body = body_40 as *const u8;
         let args: Vec<f64> = (0..40).map(|i| i as f64 + 100.0).collect();
         // A width of 30 means the body only owns 30 slots; 30..40 read as undefined.
-        let result = unsafe { dispatch_wide_abi(std::ptr::null(), body, &args, 30) };
+        let result = unsafe {
+            dispatch_wide_abi(
+                std::ptr::null(),
+                body,
+                crate::closure::JsThis::UNDEFINED,
+                &args,
+                30,
+            )
+        };
         assert_eq!(result, expected(30));
     }
 }

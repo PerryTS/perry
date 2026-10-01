@@ -318,12 +318,14 @@ fn call_value_at_site(site_key: usize, callee: f64, this_value: Option<f64>) -> 
         0
     };
     let this_value = this_value.map(|value| scope.root_nanbox_f64(value));
-    let this_guard = this_value
-        .as_ref()
-        .map(|value| crate::object::ImplicitThisScope::bind(&scope, value.get_nanbox_f64()));
     let active = ActiveFactoryGuard::push(site_key, expected_identity);
+    let this = this_value
+        .as_ref()
+        .map_or(crate::closure::plain_call_receiver(), |value| {
+            crate::closure::JsThis::from_f64(value.get_nanbox_f64())
+        });
     let result = unsafe {
-        crate::closure::js_native_call_value(callee.get_nanbox_f64(), std::ptr::null(), 0)
+        crate::closure::native_call_value_this(callee.get_nanbox_f64(), this, std::ptr::null(), 0)
     };
     if !active.handled() {
         let reason = if lookup(site_key).is_some() {
@@ -334,7 +336,6 @@ fn call_value_at_site(site_key: usize, callee: f64, this_value: Option<f64>) -> 
         note_declined(reason);
     }
     drop(active);
-    drop(this_guard);
     result
 }
 
@@ -474,9 +475,15 @@ fn site_test_dispatch_impl(receiver: f64, method: f64, argument: f64) -> f64 {
     }
 
     let method = scope.root_nanbox_f64(method);
-    let _this_guard = crate::object::ImplicitThisScope::bind(&scope, receiver.get_nanbox_f64());
     let args = [argument.get_nanbox_f64()];
-    unsafe { crate::closure::js_native_call_value(method.get_nanbox_f64(), args.as_ptr(), 1) }
+    unsafe {
+        crate::closure::native_call_value_this(
+            method.get_nanbox_f64(),
+            crate::closure::JsThis::from_f64(receiver.get_nanbox_f64()),
+            args.as_ptr(),
+            1,
+        )
+    }
 }
 
 /// Strong root for every cached header.  The visitor rewrites entries in
@@ -641,7 +648,10 @@ mod tests {
         );
     }
 
-    extern "C" fn exact_factory(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    extern "C" fn exact_factory(
+        _closure: *const crate::closure::ClosureHeader,
+        _this: crate::closure::JsThis,
+    ) -> f64 {
         let re = js_regexp_new_factory_site(
             string("x"),
             string("g"),
@@ -651,31 +661,32 @@ mod tests {
         crate::value::js_nanbox_pointer(re as i64)
     }
 
-    extern "C" fn replacement_factory(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    extern "C" fn replacement_factory(
+        _closure: *const crate::closure::ClosureHeader,
+        _this: crate::closure::JsThis,
+    ) -> f64 {
         let object = crate::object::js_object_alloc(0, 0);
         crate::object::js_object_set_field_by_name(
             object,
             string("test"),
-            closure_with_arity(patched_test as *const u8, 1),
+            closure(crate::fn_info!(patched_test, 1; with_declared(1))),
         );
         crate::value::js_nanbox_pointer(object as i64)
     }
 
     #[inline(never)]
-    extern "C" fn nested_factory_wrapper(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    extern "C" fn nested_factory_wrapper(
+        _closure: *const crate::closure::ClosureHeader,
+        this: crate::closure::JsThis,
+    ) -> f64 {
         // Keep this observably distinct from `exact_factory` under release
         // function merging while modeling a non-literal wrapper with effects.
         NESTED_WRAPPER_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        exact_factory(std::ptr::null())
+        exact_factory(std::ptr::null(), this)
     }
 
-    fn closure(function: *const u8) -> f64 {
-        closure_with_arity(function, 0)
-    }
-
-    fn closure_with_arity(function: *const u8, arity: usize) -> f64 {
-        crate::closure::js_register_closure_arity(function, arity as u32);
-        crate::value::js_nanbox_pointer(crate::closure::js_closure_alloc(function, 0) as i64)
+    fn closure(info: *const crate::closure::JsFunctionInfo) -> f64 {
+        crate::value::js_nanbox_pointer(crate::closure::js_closure_alloc(info, 0) as i64)
     }
 
     fn dispatch_test(site: i64, receiver: f64, input: &str) -> f64 {
@@ -694,7 +705,7 @@ mod tests {
         test_reset();
         ensure_regexp_builtins();
         let site = key(&FACTORY_CALL);
-        let callee = closure(exact_factory as *const u8);
+        let callee = closure(crate::fn_info!(exact_factory, 0; with_declared(0)));
         let first = js_regexp_site_factory_call_value(site, callee);
         let second = js_regexp_site_factory_call_value(site, callee);
         assert_eq!(
@@ -704,7 +715,7 @@ mod tests {
         );
         assert_eq!(TEST_NO_ALLOC.with(std::cell::Cell::get), 1);
 
-        let replacement = closure(replacement_factory as *const u8);
+        let replacement = closure(crate::fn_info!(replacement_factory, 0; with_declared(0)));
         let receiver = js_regexp_site_factory_call_value(site, replacement);
         let result = dispatch_test(site, receiver, "does not contain the pattern");
         assert_eq!(result.to_bits(), crate::value::TAG_TRUE);
@@ -723,7 +734,7 @@ mod tests {
         ensure_regexp_builtins();
         NESTED_WRAPPER_CALLS.store(0, std::sync::atomic::Ordering::Relaxed);
         let site = key(&NESTED_FACTORY_CALL);
-        let wrapper = closure(nested_factory_wrapper as *const u8);
+        let wrapper = closure(crate::fn_info!(nested_factory_wrapper, 0; with_declared(0)));
         let scope = crate::gc::RuntimeHandleScope::new();
         let first = scope.root_nanbox_f64(js_regexp_site_factory_call_value(site, wrapper));
         let second = js_regexp_site_factory_call_value(site, wrapper);
@@ -770,7 +781,7 @@ mod tests {
         crate::object::js_object_set_field_by_name(
             namespace,
             name,
-            closure(exact_factory as *const u8),
+            closure(crate::fn_info!(exact_factory, 0; with_declared(0))),
         );
         let namespace_object = namespace;
         let namespace = crate::value::js_nanbox_pointer(namespace_object as i64);
@@ -787,7 +798,7 @@ mod tests {
         crate::object::js_object_set_field_by_name(
             namespace_object,
             name,
-            closure(replacement_factory as *const u8),
+            closure(crate::fn_info!(replacement_factory, 0; with_declared(0))),
         );
         let replacement = unsafe { js_regexp_site_factory_call_method(site, namespace, member) };
         assert_eq!(
@@ -802,7 +813,11 @@ mod tests {
         assert_eq!(TEST_DECLINED_CALLEE.with(std::cell::Cell::get), 1);
     }
 
-    extern "C" fn patched_test(_closure: *const crate::closure::ClosureHeader, _arg: f64) -> f64 {
+    extern "C" fn patched_test(
+        _closure: *const crate::closure::ClosureHeader,
+        _this: crate::closure::JsThis,
+        _arg: f64,
+    ) -> f64 {
         f64::from_bits(crate::value::TAG_TRUE)
     }
 
@@ -823,7 +838,7 @@ mod tests {
         crate::object::js_object_set_field_by_name(
             proto,
             test_key,
-            closure_with_arity(patched_test as *const u8, 1),
+            closure(crate::fn_info!(patched_test, 1; with_declared(1))),
         );
 
         let receiver = js_regexp_site_test_new(string("x"), string("g"), site);

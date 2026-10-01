@@ -49,7 +49,6 @@
 //! the value's `bitcast` / the key's `and` instead of before.
 
 use anyhow::Result;
-use perry_hir::types::Type as HirType;
 use perry_hir::Expr;
 
 use super::{lower_expr, nanbox_pointer_inline, FnCtx};
@@ -57,164 +56,6 @@ use crate::nanbox::POINTER_MASK_I64;
 use crate::rooting::{self, Arg, Repr, RootedAcc};
 use crate::type_analysis::compute_auto_captures;
 use crate::types::{DOUBLE, I32, I64, PTR};
-
-fn expected_interface_property_type(
-    ctx: &FnCtx<'_>,
-    iface: &perry_hir::Interface,
-    key: &str,
-    depth: usize,
-) -> Option<HirType> {
-    if let Some(prop) = iface.properties.iter().find(|prop| prop.name == key) {
-        return Some(prop.ty.clone());
-    }
-    if iface.methods.iter().any(|method| method.name == key) {
-        return Some(HirType::Any);
-    }
-    for ext in &iface.extends {
-        if let Some(ty) = expected_object_property_type(ctx, ext, key, depth + 1) {
-            return Some(ty);
-        }
-    }
-    None
-}
-
-fn expected_class_property_type(
-    ctx: &FnCtx<'_>,
-    class_name: &str,
-    key: &str,
-    depth: usize,
-) -> Option<HirType> {
-    if depth > 32 {
-        return None;
-    }
-    let class = ctx.classes.get(class_name).copied()?;
-    if let Some(field) = class
-        .fields
-        .iter()
-        .find(|field| field.key_expr.is_none() && field.name == key)
-    {
-        return Some(field.ty.clone());
-    }
-    class
-        .extends_name
-        .as_deref()
-        .and_then(|parent| expected_class_property_type(ctx, parent, key, depth + 1))
-}
-
-fn expected_object_property_type(
-    ctx: &FnCtx<'_>,
-    ty: &HirType,
-    key: &str,
-    depth: usize,
-) -> Option<HirType> {
-    if depth > 32 {
-        return None;
-    }
-    match ty {
-        HirType::Object(obj) => {
-            if obj.index_signature.is_some() {
-                return None;
-            }
-            obj.properties.get(key).map(|prop| prop.ty.clone())
-        }
-        HirType::Named(name) => {
-            if let Some(alias) = ctx.type_aliases.get(name) {
-                if let Some(ty) = expected_object_property_type(ctx, alias, key, depth + 1) {
-                    return Some(ty);
-                }
-            }
-            if let Some(iface) = ctx.interfaces.get(name) {
-                return expected_interface_property_type(ctx, iface, key, depth + 1);
-            }
-            expected_class_property_type(ctx, name, key, depth + 1)
-        }
-        _ => None,
-    }
-}
-
-fn typed_object_literal_layout(
-    ctx: &FnCtx<'_>,
-    props: &[(String, Expr)],
-    expected_ty: Option<&HirType>,
-) -> Option<crate::typed_shape::TypedShapeLayout> {
-    let expected_ty = expected_ty?;
-    let mut raw_f64_mask_words = Vec::new();
-    let mut pointer_mask_words = Vec::new();
-    for (slot, (key, _)) in props.iter().enumerate() {
-        let prop_ty = expected_object_property_type(ctx, expected_ty, key, 0)?;
-        if crate::typed_shape::type_is_raw_f64_candidate(&prop_ty) {
-            let word = slot / 64;
-            if raw_f64_mask_words.len() <= word {
-                raw_f64_mask_words.resize(word + 1, 0);
-            }
-            raw_f64_mask_words[word] |= 1u64 << (slot % 64);
-        }
-        if crate::typed_shape::type_is_pointer_bearing(&prop_ty) {
-            let word = slot / 64;
-            if pointer_mask_words.len() <= word {
-                pointer_mask_words.resize(word + 1, 0);
-            }
-            pointer_mask_words[word] |= 1u64 << (slot % 64);
-        }
-    }
-    Some(crate::typed_shape::TypedShapeLayout {
-        slot_count: props.len() as u32,
-        raw_f64_mask_words: crate::typed_shape::trim_mask_words(raw_f64_mask_words),
-        pointer_mask_words: crate::typed_shape::trim_mask_words(pointer_mask_words),
-    })
-}
-
-fn emit_object_mask_global(ctx: &mut FnCtx<'_>, kind: &str, mask_words: &[u64]) -> String {
-    if mask_words.is_empty() {
-        return "null".to_string();
-    }
-    let site_id = ctx.ic_site_counter;
-    ctx.ic_site_counter += 1;
-    let prefix = ctx.strings.module_prefix().to_string();
-    let global_name = if prefix.is_empty() {
-        format!("perry_typed_obj_shape_{}_mask_{}", kind, site_id)
-    } else {
-        format!(
-            "perry_typed_obj_shape_{}_mask_{}__{}",
-            kind, prefix, site_id
-        )
-    };
-    let words = mask_words
-        .iter()
-        .map(|word| format!("i64 {}", word))
-        .collect::<Vec<_>>()
-        .join(", ");
-    ctx.typed_parse_rodata.push(format!(
-        "@{} = private unnamed_addr constant [{} x i64] [{}]",
-        global_name,
-        mask_words.len(),
-        words
-    ));
-    format!("@{}", global_name)
-}
-
-fn emit_object_typed_shape_init(
-    ctx: &mut FnCtx<'_>,
-    obj_handle: &str,
-    layout: &crate::typed_shape::TypedShapeLayout,
-) {
-    let slot_count_str = layout.slot_count.to_string();
-    let raw_mask_word_count_str = layout.raw_f64_mask_words.len().to_string();
-    let pointer_mask_word_count_str = layout.pointer_mask_words.len().to_string();
-    let raw_mask_ref = emit_object_mask_global(ctx, "raw_f64", &layout.raw_f64_mask_words);
-    let pointer_mask_ref = emit_object_mask_global(ctx, "ptr", &layout.pointer_mask_words);
-    ctx.block().call_void(
-        "js_gc_init_typed_shape_layout",
-        &[
-            (I64, obj_handle),
-            (I32, &slot_count_str),
-            (PTR, &raw_mask_ref),
-            (I32, &raw_mask_word_count_str),
-            (PTR, &pointer_mask_ref),
-            (I32, &pointer_mask_word_count_str),
-        ],
-    );
-}
 
 /// Materialize an interned key's raw `StringHeader` pointer.
 ///
@@ -370,7 +211,6 @@ fn is_generator_iterator_object_literal(props: &[(String, Expr)]) -> bool {
 pub(crate) fn lower_object_literal(
     ctx: &mut FnCtx<'_>,
     props: &[(String, Expr)],
-    expected_ty: Option<&HirType>,
 ) -> Result<String> {
     // #6951: the object handle is allocated BEFORE the property values are
     // lowered and lives in an SSA register across all of them. `{ a: s, b: f() }`
@@ -381,7 +221,6 @@ pub(crate) fn lower_object_literal(
     let field_count = props.len() as u32;
     let zero_str = "0".to_string();
     let n_str = field_count.to_string();
-    let typed_layout = typed_object_literal_layout(ctx, props, expected_ty);
     let generator_iterator_object = is_generator_iterator_object_literal(props);
 
     // Fast path: no closure-with-`this` props. Use the shape-cache allocator
@@ -548,9 +387,6 @@ pub(crate) fn lower_object_literal(
                         );
                     }
                 }
-                if let Some(layout) = typed_layout.as_ref() {
-                    emit_object_typed_shape_init(ctx, obj_handle, layout);
-                }
                 Ok(nanbox_pointer_inline(ctx.block(), obj_handle))
             },
         );
@@ -607,10 +443,6 @@ pub(crate) fn lower_object_literal(
                         &[(I64, &closure_handle), (I32, &idx_str), (I64, &obj_bits)],
                     );
                 }
-            }
-
-            if let Some(layout) = typed_layout.as_ref() {
-                emit_object_typed_shape_init(ctx, obj_handle, layout);
             }
 
             Ok(nanbox_pointer_inline(ctx.block(), obj_handle))
@@ -756,11 +588,20 @@ mod by_name_method_closure_tests {
     /// The `build` function's body, and only it — the closure bodies are
     /// separate `define`s and contain none of what is asserted below.
     pub(super) fn build_fn(ir: &str) -> String {
+        // `build` reads its dynamic `this` (the analysis counts the methods'
+        // `captures_this`), so it is compiled as a receiver-taking
+        // `__build$this` body behind a forwarding `__build`; the lowering
+        // under test is in the body.
+        let marker = if ir.contains("__build$this(") {
+            "__build$this("
+        } else {
+            "__build("
+        };
         let mut body = Vec::new();
         let mut inside = false;
         for line in ir.lines() {
             if line.starts_with("define ") {
-                inside = line.contains("__build(");
+                inside = line.contains(marker);
                 continue;
             }
             if inside {
@@ -889,9 +730,9 @@ mod by_name_method_closure_tests {
     /// the first place.
     ///
     /// Counting patch calls over the WHOLE function would be vacuous: closure
-    /// construction emits `js_closure_set_capture_bits` too (that is how the
-    /// reserved `this` slot is seeded from `js_implicit_this_get`), so the
-    /// count only means something in the tail.
+    /// construction emits `js_closure_set_capture_bits` too (that is how a
+    /// capturing closure's reserved `this` slot is seeded), so the count only
+    /// means something in the tail.
     #[test]
     fn the_this_patches_run_below_every_property_store() {
         let _pin = pin_routing("0");

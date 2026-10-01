@@ -298,7 +298,12 @@ unsafe fn group_by_collect<'scope>(
         items.push(crate::array::js_array_get_f64(raw, i as u32));
         let cb_ptr = crate::value::js_nanbox_get_pointer(callback_handle.get_nanbox_f64())
             as *const crate::closure::ClosureHeader;
-        let key_val = crate::closure::js_closure_call2(cb_ptr, items.get(i), i as f64);
+        let key_val = crate::closure::js_closure_call2(
+            cb_ptr,
+            crate::closure::plain_call_receiver(),
+            items.get(i),
+            i as f64,
+        );
         keys.push(key_val);
     }
     (keys, items)

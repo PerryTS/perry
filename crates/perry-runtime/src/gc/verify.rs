@@ -11,6 +11,28 @@ fn malloc_headers_for_verification() -> Vec<*mut GcHeader> {
     MALLOC_STATE.with(|state| state.borrow().objects.clone())
 }
 
+/// Calls `f` with the user pointer of every marked or pinned, non-forwarded
+/// `GC_TYPE_OBJECT` in the arena. At the sweep start of a synchronous full
+/// collection marks are final and nothing is swept, so "marked" is exactly
+/// "live". The header walk lives here, with the collector, because it reads
+/// headers by linear block iteration rather than from a NaN-box payload.
+#[cfg(feature = "shape-fact-audit")]
+pub(crate) fn for_each_live_object_at_sweep_start(
+    mut f: impl FnMut(*const crate::object::ObjectHeader),
+) {
+    crate::arena::arena_walk_objects(|header_ptr| unsafe {
+        let header = &*(header_ptr as *const GcHeader);
+        let flags = header.gc_flags;
+        if header.obj_type != GC_TYPE_OBJECT
+            || flags & GC_FLAG_FORWARDED != 0
+            || flags & (GC_FLAG_MARKED | GC_FLAG_PINNED) == 0
+        {
+            return;
+        }
+        f(header_ptr.add(GC_HEADER_SIZE) as *const crate::object::ObjectHeader);
+    });
+}
+
 /// Follow forwarding pointers for a word that may hold a heap reference,
 /// NaN-boxed or bare, preserving the form it was stored in.
 ///
@@ -737,9 +759,69 @@ pub(super) fn rebuild_live_old_to_young_remembered_set() -> StickyRememberedSet 
     rebuild_retained_old_to_young_remembered_set(true)
 }
 
-#[allow(dead_code)]
+/// The arming reconstruct's walk (#7187): every retained old parent's
+/// old→young edges.
+///
+/// It skips every arena block that is wholly NURSERY. The walk keeps a parent
+/// only if `barrier_parent_needs_remembering` says so — an Old-generation
+/// object, or a malloc object — and an object on a nursery block is neither,
+/// so each object there was a classification and a rejection. Skipping the
+/// block is therefore exact, not a heuristic. It matters because the walk runs
+/// at the first minor of every thread, when the young generation is at its
+/// fullest: on binary-trees at n = 3 it visited 131 k young objects to find no
+/// parent, about 20 M instructions.
 pub(super) fn rebuild_minor_old_to_young_remembered_set() -> StickyRememberedSet {
-    rebuild_retained_old_to_young_remembered_set(false)
+    let mut state = OldToYoungRememberedRebuildState::new(false);
+    if let Some(cursor) = state.arena_cursor.as_mut() {
+        cursor.skip_blocks_where(arming_walk_skips_block);
+    }
+    while !state.step(usize::MAX) {}
+    super::barrier_arming::note_reconstruct_objects_walked(state.objects_scanned());
+    state.finish()
+}
+
+/// Can the arming walk skip the block `[data, end)` without looking? Only when
+/// one registered range covers it and that range is the nursery.
+fn arming_walk_skips_block(data: usize, end: usize) -> bool {
+    #[cfg(test)]
+    if arming_walk_sabotage::skipping_every_block() {
+        return true;
+    }
+    matches!(
+        crate::arena::uniform_heap_generation(data, end),
+        Some(crate::arena::HeapGeneration::Nursery)
+    )
+}
+
+/// Test-only sabotage for [`arming_walk_skips_block`]: skip EVERY block, old
+/// ones included, so the witness can prove that the old→young edge it recovers
+/// comes from the walk it is testing.
+#[cfg(test)]
+pub(crate) mod arming_walk_sabotage {
+    use std::cell::Cell;
+
+    thread_local! {
+        static SKIP_ALL: Cell<bool> = const { Cell::new(false) };
+    }
+
+    pub(crate) fn skipping_every_block() -> bool {
+        SKIP_ALL.with(Cell::get)
+    }
+
+    pub(crate) struct Guard(bool);
+
+    impl Guard {
+        pub(crate) fn arm() -> Self {
+            Self(SKIP_ALL.with(|s| s.replace(true)))
+        }
+    }
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            let prior = self.0;
+            SKIP_ALL.with(|s| s.set(prior));
+        }
+    }
 }
 
 #[inline]
@@ -1162,6 +1244,88 @@ unsafe fn array_is_sweep_eligible(header: *mut GcHeader) -> bool {
     let flags = (*header).gc_flags;
     flags & (GC_FLAG_MARKED | GC_FLAG_PINNED) == 0
         && crate::arena::pointer_in_nursery((header as *mut u8).add(GC_HEADER_SIZE) as usize)
+}
+
+/// A slot in an array's `[length, capacity)` that does not hold `TAG_HOLE`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ArrayHoleTailViolation {
+    pub array: usize,
+    pub index: u32,
+    pub length: u32,
+    pub capacity: u32,
+    pub bits: u64,
+}
+
+/// The first array whose `[length, capacity)` is not all `TAG_HOLE`.
+///
+/// The runtime keeps that range hole-filled (`array::array_truncate_length`)
+/// because emitted element reads bound an index by `capacity` and read any
+/// slot past `length` as a hole. A length decrease that leaves the old value
+/// behind makes a read past the new `length` return it. This walk is the
+/// invariant's falsifier: debug builds run it at the start of every
+/// collection and panic on a violation, release builds when
+/// `PERRY_GC_VERIFY_ARRAY_HOLES` is set.
+pub(crate) fn verify_array_hole_tails() -> Option<ArrayHoleTailViolation> {
+    let mut first = None;
+    let mut check = |header: *mut GcHeader| unsafe {
+        if first.is_some()
+            || header.is_null()
+            || (*header).obj_type != GC_TYPE_ARRAY
+            || (*header).gc_flags & GC_FLAG_FORWARDED != 0
+        {
+            return;
+        }
+        let arr = (header as *mut u8).add(GC_HEADER_SIZE) as *mut crate::array::ArrayHeader;
+        let (length, capacity) = ((*arr).length, (*arr).capacity);
+        if length >= capacity {
+            return;
+        }
+        let elements = crate::array::array_elements_ptr(arr);
+        for index in length..capacity {
+            let bits = *elements.add(index as usize);
+            if bits != crate::value::TAG_HOLE {
+                first = Some(ArrayHoleTailViolation {
+                    array: arr as usize,
+                    index,
+                    length,
+                    capacity,
+                    bits,
+                });
+                return;
+            }
+        }
+    };
+    crate::arena::arena_walk_objects(|hp| check(hp as *mut GcHeader));
+    for header in malloc_headers_for_verification() {
+        check(header);
+    }
+    first
+}
+
+fn gc_verify_array_holes_enabled() -> bool {
+    if cfg!(debug_assertions) {
+        return true;
+    }
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *crate::once_init::get_or_init(&ENABLED, || {
+        super::env_flag_enabled("PERRY_GC_VERIFY_ARRAY_HOLES")
+    })
+}
+
+/// [`verify_array_hole_tails`] at a collection entry (every entry that builds
+/// the stack maps: the minor, compacting, evacuating and full collections and
+/// both budgeted cycle starts); panics on a violation.
+pub(super) fn verify_array_hole_tails_at_collection() {
+    if !gc_verify_array_holes_enabled() {
+        return;
+    }
+    if let Some(v) = verify_array_hole_tails() {
+        panic!(
+            "[gc-array-holes] array 0x{:x}: slot {} of [length {}, capacity {}) holds 0x{:x}, \
+             not TAG_HOLE — a length decrease skipped array_truncate_length",
+            v.array, v.index, v.length, v.capacity, v.bits
+        );
+    }
 }
 
 /// [`verify_array_pointer_slots_enumerated_for`] over every live array.

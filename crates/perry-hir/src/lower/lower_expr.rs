@@ -40,6 +40,8 @@ pub(crate) use arm_ident::lower_ident_expr;
 pub(crate) use arm_optchain::lower_opt_chain_expr;
 pub(crate) use arm_unary::lower_unary_expr;
 pub(crate) use assignment::lower_expr_assignment;
+#[cfg(test)]
+pub(crate) use helpers::test_only::ForceGlobalScriptThisForTest;
 pub(crate) use helpers::{
     anonymous_class_has_static_name_member, expr_uses_stack_heavy_chain_lowering,
     global_script_this_enabled, is_fetch_global_value_name, is_known_global_identifier_name,

@@ -21,7 +21,7 @@ pub(crate) fn scan_gtk4_picker_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'
 }
 
 extern "C" {
-    fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+    fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
 }
 
@@ -51,7 +51,11 @@ pub fn create(_label_ptr: *const u8, on_change: f64, _style: i64) -> i64 {
             let selected = dd.selected() as f64;
             let closure_ptr = unsafe { js_nanbox_get_pointer(closure_f64) };
             unsafe {
-                js_closure_call1(closure_ptr as *const u8, selected);
+                js_closure_call1(
+                    closure_ptr as *const u8,
+                    perry_ffi::JsThis::UNDEFINED,
+                    selected,
+                );
             }
         }
     });

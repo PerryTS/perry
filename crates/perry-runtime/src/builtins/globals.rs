@@ -1205,35 +1205,91 @@ pub(crate) fn drain_queued_microtasks_count() -> i32 {
                 let cb_ptr = callback_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>();
                 match a.len() {
                     0 => {
-                        js_closure_call0(cb_ptr);
+                        js_closure_call0(cb_ptr, crate::closure::plain_call_receiver());
                     }
                     1 => {
-                        js_closure_call1(cb_ptr, a[0]);
+                        js_closure_call1(cb_ptr, crate::closure::plain_call_receiver(), a[0]);
                     }
                     2 => {
-                        js_closure_call2(cb_ptr, a[0], a[1]);
+                        js_closure_call2(cb_ptr, crate::closure::plain_call_receiver(), a[0], a[1]);
                     }
                     3 => {
-                        js_closure_call3(cb_ptr, a[0], a[1], a[2]);
+                        js_closure_call3(
+                            cb_ptr,
+                            crate::closure::plain_call_receiver(),
+                            a[0],
+                            a[1],
+                            a[2],
+                        );
                     }
                     4 => {
-                        js_closure_call4(cb_ptr, a[0], a[1], a[2], a[3]);
+                        js_closure_call4(
+                            cb_ptr,
+                            crate::closure::plain_call_receiver(),
+                            a[0],
+                            a[1],
+                            a[2],
+                            a[3],
+                        );
                     }
                     5 => {
-                        js_closure_call5(cb_ptr, a[0], a[1], a[2], a[3], a[4]);
+                        js_closure_call5(
+                            cb_ptr,
+                            crate::closure::plain_call_receiver(),
+                            a[0],
+                            a[1],
+                            a[2],
+                            a[3],
+                            a[4],
+                        );
                     }
                     6 => {
-                        js_closure_call6(cb_ptr, a[0], a[1], a[2], a[3], a[4], a[5]);
+                        js_closure_call6(
+                            cb_ptr,
+                            crate::closure::plain_call_receiver(),
+                            a[0],
+                            a[1],
+                            a[2],
+                            a[3],
+                            a[4],
+                            a[5],
+                        );
                     }
                     7 => {
-                        js_closure_call7(cb_ptr, a[0], a[1], a[2], a[3], a[4], a[5], a[6]);
+                        js_closure_call7(
+                            cb_ptr,
+                            crate::closure::plain_call_receiver(),
+                            a[0],
+                            a[1],
+                            a[2],
+                            a[3],
+                            a[4],
+                            a[5],
+                            a[6],
+                        );
                     }
                     8 => {
-                        js_closure_call8(cb_ptr, a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]);
+                        js_closure_call8(
+                            cb_ptr,
+                            crate::closure::plain_call_receiver(),
+                            a[0],
+                            a[1],
+                            a[2],
+                            a[3],
+                            a[4],
+                            a[5],
+                            a[6],
+                            a[7],
+                        );
                     }
                     // #10420: more than 8 trailing args used to clamp to 9.
                     n => unsafe {
-                        crate::closure::js_closure_call_array(cb_ptr as i64, a.as_ptr(), n as i64);
+                        crate::closure::js_closure_call_array(
+                            cb_ptr as i64,
+                            crate::closure::plain_call_receiver(),
+                            a.as_ptr(),
+                            n as i64,
+                        );
                     },
                 }
                 crate::async_hooks::after(async_id);

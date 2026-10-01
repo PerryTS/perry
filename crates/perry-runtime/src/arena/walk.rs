@@ -296,6 +296,24 @@ impl ArenaObjectCursor {
         self.skip_blocks = skip;
     }
 
+    /// Never enter a snapshotted block for which `skip(data, end)` holds,
+    /// where `[data, end)` is the block's allocated extent. Replaces any
+    /// earlier skip set. Block-index order only; an address-ordered cursor is
+    /// left as it is.
+    pub(crate) fn skip_blocks_where(&mut self, mut skip: impl FnMut(usize, usize) -> bool) {
+        let ArenaObjectCursorBlocks::BlockIndex(blocks) = &self.blocks else {
+            return;
+        };
+        let Some(max_idx) = blocks.iter().map(|block| block.block_idx).max() else {
+            return;
+        };
+        let mut set = vec![false; max_idx + 1];
+        for block in blocks {
+            set[block.block_idx] = skip(block.data, block.data + block.offset);
+        }
+        self.skip_blocks = set;
+    }
+
     /// `(global block index, data, offset)` of the block the last yielded
     /// object came from, as snapshotted when the cursor was built.
     pub(crate) fn current_block_extent(&self) -> Option<(usize, usize, usize)> {
@@ -749,8 +767,6 @@ pub fn old_arena_walk_objects(mut callback: impl FnMut(*mut u8)) {
 /// for the general arena, `general_block_count()..arena_block_count()`
 /// for the longlived arena (issue #179).
 pub fn arena_walk_objects_with_block_index(mut callback: impl FnMut(*mut u8, usize)) {
-    use crate::gc::GcHeader;
-
     sync_inline_arena_state();
 
     let general_n = ARENA.with(|a| unsafe { (*a.get()).blocks.len() });
@@ -759,26 +775,7 @@ pub fn arena_walk_objects_with_block_index(mut callback: impl FnMut(*mut u8, usi
     let mut walk_region = |blocks: &[ArenaBlock], base: usize| {
         for (i, block) in blocks.iter().enumerate() {
             let block_idx = base + i;
-            let mut offset = 0usize;
-            while offset < block.offset {
-                let aligned = (offset + 7) & !7;
-                if aligned >= block.offset {
-                    break;
-                }
-                let header_ptr = unsafe { block.data.add(aligned) };
-                let header = header_ptr as *const GcHeader;
-                unsafe {
-                    let total_size = (*header).size as usize;
-                    if total_size == 0 || total_size > block.size {
-                        break;
-                    }
-                    let obj_type = (*header).obj_type;
-                    if crate::gc::gc_type_is_arena_walkable(obj_type) {
-                        callback(header_ptr, block_idx);
-                    }
-                    offset = aligned + total_size;
-                }
-            }
+            for_each_block_header(block, |header| callback(header.cast(), block_idx));
         }
     };
 
@@ -818,12 +815,39 @@ pub fn arena_walk_objects_with_block_index(mut callback: impl FnMut(*mut u8, usi
 /// it already knows have no live objects (issue #64 follow-up).
 ///
 /// Block indices are global (general arena first, longlived after).
+/// Every arena-walkable object header in `block`'s bump-allocated prefix, in
+/// address order: the linear block iteration the walkers share. A header
+/// address comes from `block.data` plus the sizes of the headers before it,
+/// never from a value, and the walk stops at the first header whose size is 0
+/// or exceeds the block.
+pub(crate) fn for_each_block_header(
+    block: &ArenaBlock,
+    mut callback: impl FnMut(*mut crate::gc::GcHeader),
+) {
+    let mut offset = 0usize;
+    while offset < block.offset {
+        let aligned = (offset + 7) & !7;
+        if aligned >= block.offset {
+            break;
+        }
+        // SAFETY: `aligned < block.offset`, so this is a parseable header
+        // inside the block's bump-allocated prefix.
+        let header = unsafe { block.data.add(aligned) } as *mut crate::gc::GcHeader;
+        let (total_size, obj_type) = unsafe { ((*header).size as usize, (*header).obj_type) };
+        if total_size == 0 || total_size > block.size {
+            break;
+        }
+        if crate::gc::gc_type_is_arena_walkable(obj_type) {
+            callback(header);
+        }
+        offset = aligned + total_size;
+    }
+}
+
 pub fn arena_walk_objects_filtered(
     mut block_filter: impl FnMut(usize) -> bool,
     mut callback: impl FnMut(*mut u8, usize),
 ) {
-    use crate::gc::GcHeader;
-
     sync_inline_arena_state();
 
     let general_n = ARENA.with(|a| unsafe { (*a.get()).blocks.len() });
@@ -838,26 +862,7 @@ pub fn arena_walk_objects_filtered(
             if !block_filter(block_idx) {
                 continue;
             }
-            let mut offset = 0usize;
-            while offset < block.offset {
-                let aligned = (offset + 7) & !7;
-                if aligned >= block.offset {
-                    break;
-                }
-                let header_ptr = unsafe { block.data.add(aligned) };
-                let header = header_ptr as *const GcHeader;
-                unsafe {
-                    let total_size = (*header).size as usize;
-                    if total_size == 0 || total_size > block.size {
-                        break;
-                    }
-                    let obj_type = (*header).obj_type;
-                    if crate::gc::gc_type_is_arena_walkable(obj_type) {
-                        callback(header_ptr, block_idx);
-                    }
-                    offset = aligned + total_size;
-                }
-            }
+            for_each_block_header(block, |header| callback(header.cast(), block_idx));
         }
     };
 

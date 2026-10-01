@@ -587,10 +587,109 @@ fn test_transient_runtime_handle_object_overflow_set_gc() {
     }
 }
 
+/// #11550: the first store into a spill slot past the buffer's `length` must
+/// set that slot's GC mask bit, whatever bits the uninitialized tail held.
+///
+/// `js_array_alloc_with_length` fills only the requested prefix; the rounded-up
+/// physical tail keeps whatever the arena memory last held, and the in-capacity
+/// spill store writes there. `spill_store_slot` read those leftover bits as the
+/// slot's old value. Pointer-shaped leftovers (a dead array's string pointers,
+/// a stale header address) made the store look like a pointer-over-pointer
+/// overwrite, which `layout_note_slot_aware` answers without touching the slot
+/// mask, so the collector never visited the slot. A copying minor then left the
+/// object naming the value's from-space copy (qs `parse`, #11550).
+///
+/// The test reproduces that buffer state exactly — high-water mark below the
+/// physical capacity, pointer bits planted in the first tail slot — stores a
+/// string there through the ordinary by-name setter, and runs one copying
+/// minor. The value is also held in a shadow slot so the minor provably moves
+/// it; the spill slot must then name the SAME post-collection address.
+#[test]
+fn test_spill_store_past_length_ignores_tail_garbage_11550() {
+    let _legacy_pacing = crate::gc::policy::force_legacy_gc_pacing();
+    let _guard = CopyingNurseryTestGuard::new(3);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    register_runtime_handle_root_scanner_for_tests();
+
+    let obj = crate::object::js_object_alloc(0, 0);
+    js_shadow_slot_set(0, ptr_bits(obj as usize));
+    let obj_now = || (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::object::ObjectHeader;
+
+    // Fill the inline region, then one spill key so the buffer exists.
+    for i in 0..=crate::object::INLINE_SLOT_FLOOR {
+        let name = format!("k{i}");
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        crate::object::js_object_set_field_by_name(obj_now(), key, i as f64);
+    }
+    let tail_index = crate::object::INLINE_SLOT_FLOOR + 1;
+    let garbage = crate::string::js_string_from_bytes(b"dead-neighbour".as_ptr(), 14);
+    unsafe {
+        let meta = (*obj_now()).meta;
+        assert!(
+            !meta.is_null(),
+            "the spill key must have created a meta record"
+        );
+        let spill = (*meta).spill as *mut crate::array::ArrayHeader;
+        assert!(
+            !spill.is_null(),
+            "the spill key must have created a spill buffer"
+        );
+        assert!(
+            ((*spill).capacity as usize) > tail_index,
+            "the next key must take the in-capacity spill store"
+        );
+        // The allocator's state: high-water mark just past the last written
+        // key, and leftover pointer bits in the uninitialized tail.
+        (*spill).length = tail_index as u32;
+        let elements = crate::array::array_elements_ptr(spill) as *mut u64;
+        elements
+            .add(tail_index)
+            .write(string_bits(garbage as usize));
+    }
+
+    let value = crate::string::js_string_from_bytes(b"tail-payload".as_ptr(), 12);
+    js_shadow_slot_set(1, string_bits(value as usize));
+    let key = crate::string::js_string_from_bytes(b"tail".as_ptr(), 4);
+    crate::object::js_object_set_field_by_name(
+        obj_now(),
+        key,
+        f64::from_bits(js_shadow_slot_get(1)),
+    );
+    assert_eq!(
+        crate::object::overflow_get(obj_now() as usize, tail_index),
+        Some(js_shadow_slot_get(1)),
+        "the key must have landed in the planted tail slot"
+    );
+
+    let _ = crate::gc::gc_collect_minor();
+
+    let value_after = (js_shadow_slot_get(1) & POINTER_MASK) as *const crate::StringHeader;
+    assert_ne!(
+        value_after as usize, value as usize,
+        "the copying minor did not relocate the value — the window under test never opened"
+    );
+    let stored = crate::object::overflow_get(obj_now() as usize, tail_index)
+        .expect("the spill slot must still hold the stored value");
+    assert_eq!(
+        (stored & POINTER_MASK) as usize,
+        value_after as usize,
+        "the collector must visit and rewrite the spill slot (its mask bit was never set)"
+    );
+    unsafe {
+        assert_string_bytes(
+            (stored & POINTER_MASK) as *const crate::StringHeader,
+            b"tail-payload",
+        );
+    }
+}
+
 #[test]
 fn test_transient_runtime_handle_closure_captures_gc() {
     let _legacy_pacing = crate::gc::policy::force_legacy_gc_pacing();
-    extern "C" fn captured_func(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    extern "C" fn captured_func(
+        _closure: *const crate::closure::ClosureHeader,
+        _this: crate::closure::JsThis,
+    ) -> f64 {
         0.0
     }
 
@@ -605,11 +704,9 @@ fn test_transient_runtime_handle_closure_captures_gc() {
     force_next_general_arena_alloc_slow();
     trigger_guard.make_arena_trigger_due();
     let before = gc_collection_count();
-    let closure = crate::closure::js_closure_alloc_with_captures_singleton(
-        captured_func as *const u8,
-        1,
-        captures.as_ptr(),
-    );
+    let info = crate::fn_info!(captured_func, 0);
+    let closure =
+        crate::closure::js_closure_alloc_with_captures_singleton(info, 1, captures.as_ptr());
 
     let closure_scope = RuntimeHandleScope::new();
     let closure_root = closure_scope.root_raw_mut_ptr(closure);
@@ -625,8 +722,7 @@ fn test_transient_runtime_handle_closure_captures_gc() {
         assert_string_bytes(stored_ptr, b"closure-payload");
     }
 
-    let entries =
-        crate::closure::test_captured_singleton_closure_cache_entries(captured_func as *const u8);
+    let entries = crate::closure::test_captured_singleton_closure_cache_entries(info);
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].0.len(), 1);
     assert_eq!(entries[0].0[0] & TAG_MASK, STRING_TAG);

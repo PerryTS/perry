@@ -34,6 +34,7 @@ pub(crate) fn process_features_value() -> f64 {
 
 extern "C" fn process_report_function_get_report(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     err: f64,
 ) -> f64 {
     validate_report_error_arg(err);
@@ -42,6 +43,7 @@ extern "C" fn process_report_function_get_report(
 
 extern "C" fn process_report_function_write_report(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     file: f64,
     err: f64,
 ) -> f64 {
@@ -146,7 +148,11 @@ fn process_report_controller_object() -> f64 {
     module_set_field(
         obj,
         "getReport",
-        module_function1("getReport", process_report_function_get_report, 1),
+        module_function1(
+            "getReport",
+            crate::fn_info!(process_report_function_get_report, 1; with_declared(1), with_length(1)),
+            1,
+        ),
     );
     module_set_field(obj, "reportOnFatalError", bool_value(false));
     module_set_field(obj, "reportOnSignal", bool_value(false));
@@ -155,7 +161,11 @@ fn process_report_controller_object() -> f64 {
     module_set_field(
         obj,
         "writeReport",
-        module_function2("writeReport", process_report_function_write_report, 2),
+        module_function2(
+            "writeReport",
+            crate::fn_info!(process_report_function_write_report, 2; with_declared(2), with_length(2)),
+            2,
+        ),
     );
     module_object_value(obj)
 }

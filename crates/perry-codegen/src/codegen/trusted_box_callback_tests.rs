@@ -180,6 +180,7 @@ fn select(closures: Vec<(u32, Expr)>, direct: impl IntoIterator<Item = u32>) -> 
         &HashSet::from([COUNT]),
         &HashMap::new(),
         &HashSet::new(),
+        &crate::scope_env::ScopeMap::default(),
     )
     .into_keys()
     .collect()
@@ -277,7 +278,13 @@ fn named_tdz_reads_reach_public_and_trusted_callbacks() {
         &ir,
         "perry_closure_trusted_box_callback_ts__99$trusted_boxes",
     );
-    assert!(public.contains("@js_box_get_bits_named("), "{public}");
+    // The TDZ-seeded binding lives in a scope object: the public body reads
+    // the slot inline and raises the named error from a cold arm.
+    let public_cold = named_block_body(&public, "scope_slot.tdz");
+    assert!(
+        public_cold.contains("@js_box_get_bits_trusted_named("),
+        "{public}"
+    );
     let cold = named_block_body(&trusted, "trusted_box.tdz");
     assert!(cold.contains("@js_box_get_bits_trusted_named("), "{cold}");
     assert!(
@@ -334,9 +341,23 @@ fn direct_arrow_gets_a_private_body_but_keeps_the_public_validation_path() {
     assert!(!trusted.contains("@js_box_set_bits("));
     assert!(trusted.contains("@js_write_barrier("));
 
-    assert!(ir.contains(
-        "@js_register_closure_trusted_direct(ptr @perry_closure_trusted_box_callback_ts__99, ptr @perry_closure_trusted_box_callback_ts__99$trusted_boxes, i32 1, i64 1)"
-    ));
+    // The body's `JsFunctionInfo` names the trusted clone and its exact
+    // one-box capture layout (`crate::fn_info`).
+    let info = info_line(&ir, "perry_closure_trusted_box_callback_ts__99");
+    assert!(
+        info.contains(
+            "i32 1, ptr @perry_closure_trusted_box_callback_ts__99$trusted_boxes, i64 1, ptr null"
+        ),
+        "{info}"
+    );
+}
+
+/// The `@<body>$info = ...` definition line of `body`.
+fn info_line<'a>(ir: &'a str, body: &str) -> &'a str {
+    let prefix = format!("@{body}$info = ");
+    ir.lines()
+        .find(|line| line.starts_with(&prefix))
+        .unwrap_or_else(|| panic!("no info for {body} in IR:\n{ir}"))
 }
 
 #[test]
@@ -361,9 +382,13 @@ fn additive_property_callback_gets_a_cold_deopting_private_body() {
             && special.contains("versioned_callback.deopt.mark"),
         "both observable cold arms must poison the loop before fallback:\n{special}"
     );
-    assert!(ir.contains(
-        "@js_register_closure_versioned_loop_direct(ptr @perry_closure_versioned_loop_callback_ts__100, ptr @perry_closure_versioned_loop_callback_ts__100$trusted_boxes$versioned_loop, i32 1, i64 1)"
-    ));
+    let info = info_line(&ir, "perry_closure_versioned_loop_callback_ts__100");
+    assert!(
+        info.contains(
+            "ptr @perry_closure_versioned_loop_callback_ts__100$trusted_boxes$versioned_loop, i32 1, i16"
+        ) && info.ends_with("i64 1 }"),
+        "{info}"
+    );
 }
 
 #[test]
@@ -397,12 +422,22 @@ fn versioned_callback_selector_rejects_calls_and_heap_writes() {
     let direct = HashSet::from([VERSIONED_FUNC]);
     let boxed = HashSet::from([COUNT]);
     let globals = HashMap::new();
-    let trusted =
-        select_trusted_box_closures(&closures, &direct, &boxed, &globals, &HashSet::new());
-    assert!(
-        select_versioned_loop_callbacks(&closures, &trusted, &boxed, &globals)
-            .contains(&VERSIONED_FUNC)
+    let trusted = select_trusted_box_closures(
+        &closures,
+        &direct,
+        &boxed,
+        &globals,
+        &HashSet::new(),
+        &crate::scope_env::ScopeMap::default(),
     );
+    assert!(select_versioned_loop_callbacks(
+        &closures,
+        &trusted,
+        &boxed,
+        &globals,
+        &crate::scope_env::ScopeMap::default()
+    )
+    .contains(&VERSIONED_FUNC));
 
     for (op, prefix) in [
         (UpdateOp::Increment, false),
@@ -412,11 +447,23 @@ fn versioned_callback_selector_rejects_calls_and_heap_writes() {
     ] {
         let update = versioned_update_callback(VERSIONED_FUNC, op, prefix);
         let closures = vec![(VERSIONED_FUNC, update)];
-        let trusted =
-            select_trusted_box_closures(&closures, &direct, &boxed, &globals, &HashSet::new());
+        let trusted = select_trusted_box_closures(
+            &closures,
+            &direct,
+            &boxed,
+            &globals,
+            &HashSet::new(),
+            &crate::scope_env::ScopeMap::default(),
+        );
         assert!(
-            select_versioned_loop_callbacks(&closures, &trusted, &boxed, &globals)
-                .contains(&VERSIONED_FUNC),
+            select_versioned_loop_callbacks(
+                &closures,
+                &trusted,
+                &boxed,
+                &globals,
+                &crate::scope_env::ScopeMap::default()
+            )
+            .contains(&VERSIONED_FUNC),
             "unused-result {op:?} prefix={prefix} must be eligible"
         );
     }
@@ -440,7 +487,14 @@ fn versioned_callback_selector_rejects_calls_and_heap_writes() {
             rejected_body,
         );
         let closures = vec![(VERSIONED_FUNC, rejected)];
-        assert!(select_versioned_loop_callbacks(&closures, &trusted, &boxed, &globals).is_empty());
+        assert!(select_versioned_loop_callbacks(
+            &closures,
+            &trusted,
+            &boxed,
+            &globals,
+            &crate::scope_env::ScopeMap::default()
+        )
+        .is_empty());
     }
 
     let used_first_param = callback_with(
@@ -456,16 +510,32 @@ fn versioned_callback_selector_rejects_calls_and_heap_writes() {
         ))],
     );
     let closures = vec![(VERSIONED_FUNC, used_first_param)];
-    let trusted =
-        select_trusted_box_closures(&closures, &direct, &boxed, &globals, &HashSet::new());
-    assert!(select_versioned_loop_callbacks(&closures, &trusted, &boxed, &globals).is_empty());
+    let trusted = select_trusted_box_closures(
+        &closures,
+        &direct,
+        &boxed,
+        &globals,
+        &HashSet::new(),
+        &crate::scope_env::ScopeMap::default(),
+    );
+    assert!(select_versioned_loop_callbacks(
+        &closures,
+        &trusted,
+        &boxed,
+        &globals,
+        &crate::scope_env::ScopeMap::default()
+    )
+    .is_empty());
 }
 
 #[test]
 fn closure_first_stored_as_a_value_does_not_get_a_trusted_body() {
     let ir = emit(false);
     assert!(!ir.contains("$trusted_boxes"));
-    assert!(!ir.contains("call void @js_register_closure_trusted_direct("));
+    assert!(
+        !ir.contains("$trusted_boxes"),
+        "no info may name a trusted clone"
+    );
 }
 
 #[test]

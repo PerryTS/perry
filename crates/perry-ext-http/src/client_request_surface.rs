@@ -17,12 +17,14 @@ extern "C" {
         method_name_ptr: *const u8,
         method_name_len: usize,
     ) -> f64;
-    fn js_register_closure_rest(func_ptr: *const u8, fixed_arity: u32);
-    fn js_closure_call_array(closure: i64, args: *const f64, args_len: i64) -> f64;
+    fn js_closure_call_array(
+        closure: i64,
+        this: perry_ffi::JsThis,
+        args: *const f64,
+        args_len: i64,
+    ) -> f64;
     fn js_object_set_field_by_name(object: *mut ObjectHeader, key: *const StringHeader, value: f64);
 }
-
-static CLIENT_ONCE_WRAPPER_REGISTERED: Once = Once::new();
 
 pub(crate) fn create_client_once_wrapper(
     handle: Handle,
@@ -33,15 +35,12 @@ pub(crate) fn create_client_once_wrapper(
     if callback == 0 {
         return 0;
     }
-    CLIENT_ONCE_WRAPPER_REGISTERED.call_once(|| unsafe {
-        js_register_closure_rest(client_once_wrapper as *const u8, 0);
-    });
     let scope = perry_ffi::TransientRootScope::enter();
     let callback = scope.root_addr(callback);
     let event = scope.root_nanbox(f64::from_bits(
         JsValue::from_string_ptr(alloc_string(event).as_raw()).bits(),
     ));
-    let wrapper = perry_ffi::alloc_closure(client_once_wrapper as *const u8, 5);
+    let wrapper = perry_ffi::alloc_closure(&CLIENT_ONCE_WRAPPER_INFO, 5);
     let wrapper = scope.root_addr(wrapper as i64);
     let wrapper_ptr = wrapper.get() as *mut RawClosureHeader;
     unsafe {
@@ -72,7 +71,11 @@ pub(crate) fn create_client_once_wrapper(
     wrapper.get()
 }
 
-extern "C" fn client_once_wrapper(closure: *const RawClosureHeader, rest: f64) -> f64 {
+extern "C" fn client_once_wrapper(
+    closure: *const RawClosureHeader,
+    this: perry_ffi::JsThis,
+    rest: f64,
+) -> f64 {
     unsafe {
         let handle = perry_ffi::closure_capture_f64(closure, 0) as Handle;
         let event_value = perry_ffi::closure_capture_f64(closure, 1);
@@ -84,8 +87,10 @@ extern "C" fn client_once_wrapper(closure: *const RawClosureHeader, rest: f64) -
                     .to_bool();
         let callback = (callback_value.to_bits() & PTR_MASK) as i64;
         let wrapper = (wrapper_value.to_bits() & PTR_MASK) as i64;
-        let event_ptr = (event_value.to_bits() & PTR_MASK) as *const StringHeader;
-        let event = read_str(event_ptr).unwrap_or_default();
+        // Heap or inline SSO event name (#11519).
+        let event = JsValue::from_bits(event_value.to_bits())
+            .to_owned_string()
+            .unwrap_or_default();
         let removed = with_handle_mut::<ClientRequestHandle, _, _>(handle, |request| {
             if factory_callback {
                 if request.response_raw_wrapper == wrapper {
@@ -137,16 +142,16 @@ extern "C" fn client_once_wrapper(closure: *const RawClosureHeader, rest: f64) -
         }
         let value = JsValue::from_bits(rest.to_bits());
         if !value.is_pointer() {
-            return js_closure_call_array(callback, std::ptr::null(), 0);
+            return js_closure_call_array(callback, this, std::ptr::null(), 0);
         }
         let array = value.as_pointer::<ArrayHeader>();
         if array.is_null() {
-            return js_closure_call_array(callback, std::ptr::null(), 0);
+            return js_closure_call_array(callback, this, std::ptr::null(), 0);
         }
         // The rest ABI creates this fresh, unshifted argument array for this
         // invocation; no JS callback has run since it was packed.
         let args = (array as *const u8).add(8) as *const f64;
-        js_closure_call_array(callback, args, (*array).length as i64)
+        js_closure_call_array(callback, this, args, (*array).length as i64)
     }
 }
 
@@ -868,3 +873,6 @@ pub unsafe extern "C" fn js_ext_http_client_request_dispatch_method(
     };
     dispatch_method(handle, &method, args).unwrap_or_else(undefined_value)
 }
+
+static CLIENT_ONCE_WRAPPER_INFO: perry_ffi::JsFunctionInfo =
+    perry_ffi::JsFunctionInfo::of(client_once_wrapper as perry_ffi::JsBody1).with_rest(0);

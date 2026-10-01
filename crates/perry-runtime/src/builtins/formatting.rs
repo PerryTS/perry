@@ -265,6 +265,9 @@ fn format_function_for_console(closure_ptr: *const crate::closure::ClosureHeader
     if closure_ptr.is_null() {
         return "[Function (anonymous)]".to_string();
     }
+    if let Some(class_id) = crate::object::class_value::class_closure_id(closure_ptr as usize) {
+        return format_class_for_console(class_id, closure_ptr);
+    }
 
     // Snapshot user-attached own properties and filter out the built-in
     // function slots that Node hides from `util.inspect`. Node prints
@@ -283,7 +286,7 @@ fn format_function_for_console(closure_ptr: *const crate::closure::ClosureHeader
     // `[Function: ChildProcess]` instead of `[Function (anonymous)]`,
     // matching Node. #1856.
     let registry_name: Option<String> = unsafe {
-        let func_ptr = (*closure_ptr).func_ptr;
+        let func_ptr = (*closure_ptr).code();
         if func_ptr.is_null() {
             None
         } else {
@@ -307,7 +310,7 @@ fn format_function_for_console(closure_ptr: *const crate::closure::ClosureHeader
             // Synthesize (and cache) it the same way any other reader of
             // `.name` would.
             unsafe {
-                ((*closure_ptr).func_ptr == crate::closure::BOUND_FUNCTION_FUNC_PTR).then(|| {
+                ((*closure_ptr).code() == crate::closure::BOUND_FUNCTION_FUNC_PTR).then(|| {
                     jsvalue_string_content(crate::closure::bound_function_lazy_name(
                         closure_ptr as usize,
                     ))
@@ -337,6 +340,52 @@ fn format_function_for_console(closure_ptr: *const crate::closure::ClosureHeader
         // hooks — exactly what #1203 needs (Node MUST NOT call the
         // user's `toString` while inspecting).
         parts.push(format!("{}: {}", k, format_jsvalue(v, 1)));
+    }
+    format!("{} {{ {} }}", label, parts.join(", "))
+}
+
+/// Node's `util.inspect` of a class constructor: `[class A extends B]`, then
+/// its enumerable own properties (static fields, runtime-added keys) as
+/// `{ k: v }` — the same decoration a plain function gets. Values are read as
+/// data (`Object.keys` lists no accessor: class accessors are non-enumerable).
+fn format_class_for_console(
+    class_id: u32,
+    closure_ptr: *const crate::closure::ClosureHeader,
+) -> String {
+    let label = value_repr::class_label_for_id(class_id);
+    // The class function object is pinned: `closure_ptr` stays valid across
+    // the allocations below.
+    let value = f64::from_bits(crate::value::POINTER_TAG | closure_ptr as u64);
+    let keys = crate::object::js_object_keys_value(value);
+    let mut names: Vec<String> = Vec::new();
+    if !keys.is_null() {
+        for i in 0..crate::array::js_array_length(keys) {
+            if let Some(name) = jsvalue_string_content(crate::array::js_array_get_f64(keys, i)) {
+                names.push(name);
+            }
+        }
+    }
+    if names.is_empty() {
+        return label;
+    }
+    let mut parts: Vec<String> = Vec::with_capacity(names.len());
+    for name in names {
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        let v = crate::object::js_object_get_field_by_name_f64(
+            closure_ptr as *const crate::object::ObjectHeader,
+            key,
+        );
+        let rendered = format_jsvalue(v, 1);
+        let rendered = if crate::value::JSValue::from_bits(v.to_bits()).is_any_string() {
+            format!("'{rendered}'")
+        } else {
+            rendered
+        };
+        parts.push(format!(
+            "{}: {}",
+            format_inspect_property_key(&name),
+            rendered
+        ));
     }
     format!("{} {{ {} }}", label, parts.join(", "))
 }
@@ -988,6 +1037,7 @@ unsafe fn format_object_as_json(
                 let undef_arg = f64::from_bits(crate::value::TAG_UNDEFINED);
                 let ret = crate::closure::js_closure_call3(
                     closure_ptr,
+                    crate::closure::plain_call_receiver(),
                     remaining,
                     options_arg,
                     undef_arg,
@@ -1309,7 +1359,8 @@ fn format_accessor_property(acc: crate::object::AccessorDescriptor, depth: usize
         let closure =
             (acc.get & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
         if !closure.is_null() {
-            let value = crate::closure::js_closure_call0(closure);
+            let value =
+                crate::closure::js_closure_call0(closure, crate::closure::plain_call_receiver());
             return format!("[{}: {}]", label, format_jsvalue_for_json(value, depth + 1));
         }
     }

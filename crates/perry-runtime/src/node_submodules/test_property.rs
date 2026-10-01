@@ -46,7 +46,7 @@ fn property_context_object(id: i64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let context = scope.root_nanbox_f64(boxed_ptr(js_object_alloc(0, 6)));
     let access_count = scope.root_nanbox_f64(closure_value_with_id(
-        mock_property_access_count as *const u8,
+        crate::fn_info!(mock_property_access_count, 0),
         0,
         id,
     ));
@@ -56,7 +56,7 @@ fn property_context_object(id: i64) -> f64 {
         access_count.get_nanbox_f64(),
     );
     let reset_accesses = scope.root_nanbox_f64(closure_value_with_id(
-        mock_property_reset_accesses as *const u8,
+        crate::fn_info!(mock_property_reset_accesses, 0),
         0,
         id,
     ));
@@ -66,7 +66,7 @@ fn property_context_object(id: i64) -> f64 {
         reset_accesses.get_nanbox_f64(),
     );
     let mock_implementation = scope.root_nanbox_f64(closure_value_with_id(
-        mock_property_implementation as *const u8,
+        crate::fn_info!(mock_property_implementation, 1),
         1,
         id,
     ));
@@ -76,7 +76,7 @@ fn property_context_object(id: i64) -> f64 {
         mock_implementation.get_nanbox_f64(),
     );
     let mock_implementation_once = scope.root_nanbox_f64(rest_closure_value_with_id(
-        mock_property_implementation_once as *const u8,
+        crate::fn_info!(mock_property_implementation_once, 2; with_rest(1)),
         1,
         id,
     ));
@@ -86,7 +86,7 @@ fn property_context_object(id: i64) -> f64 {
         mock_implementation_once.get_nanbox_f64(),
     );
     let restore = scope.root_nanbox_f64(closure_value_with_id(
-        mock_property_restore as *const u8,
+        crate::fn_info!(mock_property_restore, 0),
         0,
         id,
     ));
@@ -97,7 +97,7 @@ fn property_context_object(id: i64) -> f64 {
     );
 
     let accesses_getter = scope.root_nanbox_f64(closure_value_with_id(
-        mock_property_accesses as *const u8,
+        crate::fn_info!(mock_property_accesses, 0),
         0,
         id,
     ));
@@ -286,7 +286,10 @@ fn record_property_access(id: i64, access_type: &str, fallback: f64) -> f64 {
     value.get_nanbox_f64()
 }
 
-extern "C" fn mock_property_get(closure: *const ClosureHeader) -> f64 {
+extern "C" fn mock_property_get(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = closure_id(closure);
     let value = PROPERTY_STATES.with(|states| {
         states
@@ -299,7 +302,11 @@ extern "C" fn mock_property_get(closure: *const ClosureHeader) -> f64 {
     record_property_access(id, "get", value)
 }
 
-extern "C" fn mock_property_set(closure: *const ClosureHeader, value: f64) -> f64 {
+extern "C" fn mock_property_set(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    value: f64,
+) -> f64 {
     let id = closure_id(closure);
     let (writable, property) = PROPERTY_STATES.with(|states| {
         states
@@ -322,7 +329,10 @@ extern "C" fn mock_property_set(closure: *const ClosureHeader, value: f64) -> f6
     undefined_value()
 }
 
-extern "C" fn mock_property_access_count(closure: *const ClosureHeader) -> f64 {
+extern "C" fn mock_property_access_count(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = closure_id(closure);
     PROPERTY_STATES.with(|states| {
         states
@@ -334,7 +344,10 @@ extern "C" fn mock_property_access_count(closure: *const ClosureHeader) -> f64 {
     })
 }
 
-extern "C" fn mock_property_accesses(closure: *const ClosureHeader) -> f64 {
+extern "C" fn mock_property_accesses(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = closure_id(closure);
     let accesses = PROPERTY_STATES.with(|states| {
         states
@@ -354,7 +367,10 @@ extern "C" fn mock_property_accesses(closure: *const ClosureHeader) -> f64 {
     boxed_ptr(crate::array::js_array_slice(ptr, 0, len as i32))
 }
 
-extern "C" fn mock_property_reset_accesses(closure: *const ClosureHeader) -> f64 {
+extern "C" fn mock_property_reset_accesses(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = closure_id(closure);
     let accesses = boxed_ptr(crate::array::js_array_alloc(0));
     PROPERTY_STATES.with(|states| {
@@ -366,12 +382,17 @@ extern "C" fn mock_property_reset_accesses(closure: *const ClosureHeader) -> f64
     undefined_value()
 }
 
-extern "C" fn mock_property_implementation(closure: *const ClosureHeader, value: f64) -> f64 {
-    mock_property_set(closure, value)
+extern "C" fn mock_property_implementation(
+    closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+    value: f64,
+) -> f64 {
+    mock_property_set(closure, this, value)
 }
 
 extern "C" fn mock_property_implementation_once(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
     rest: f64,
 ) -> f64 {
@@ -407,13 +428,17 @@ extern "C" fn mock_property_implementation_once(
     undefined_value()
 }
 
-extern "C" fn mock_property_restore(closure: *const ClosureHeader) -> f64 {
+extern "C" fn mock_property_restore(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     restore_property_state(closure_id(closure));
     undefined_value()
 }
 
 extern "C" fn mock_property_proxy_get(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     target: f64,
     key: f64,
     receiver: f64,
@@ -434,6 +459,7 @@ extern "C" fn mock_property_proxy_get(
 
 extern "C" fn tracker_property_thunk(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     target: f64,
     property: f64,
     rest: f64,
@@ -445,7 +471,11 @@ extern "C" fn tracker_property_thunk(
 }
 
 pub(super) fn tracker_property_value() -> f64 {
-    let value = rest_closure_value_with_id(tracker_property_thunk as *const u8, 2, 0);
+    let value = rest_closure_value_with_id(
+        crate::fn_info!(tracker_property_thunk, 3; with_rest(2)),
+        2,
+        0,
+    );
     let raw = raw_ptr_from_value(value);
     crate::object::set_builtin_closure_length(raw, 3);
     value
@@ -489,10 +519,16 @@ pub(super) fn create(target: f64, property: f64, value_present: bool, value: f64
     let id = next_mock_id();
     let accesses = scope.root_nanbox_f64(boxed_ptr(crate::array::js_array_alloc(0)));
     let context = scope.root_nanbox_f64(property_context_object(id));
-    let getter =
-        scope.root_nanbox_f64(closure_value_with_id(mock_property_get as *const u8, 0, id));
-    let setter =
-        scope.root_nanbox_f64(closure_value_with_id(mock_property_set as *const u8, 1, id));
+    let getter = scope.root_nanbox_f64(closure_value_with_id(
+        crate::fn_info!(mock_property_get, 0),
+        0,
+        id,
+    ));
+    let setter = scope.root_nanbox_f64(closure_value_with_id(
+        crate::fn_info!(mock_property_set, 1),
+        1,
+        id,
+    ));
 
     PROPERTY_STATES.with(|states| {
         states.borrow_mut().push(MockPropertyState {
@@ -520,7 +556,7 @@ pub(super) fn create(target: f64, property: f64, value_present: bool, value: f64
 
     let handler = scope.root_nanbox_f64(boxed_ptr(js_object_alloc(0, 1)));
     let get_trap = scope.root_nanbox_f64(closure_value_with_id(
-        mock_property_proxy_get as *const u8,
+        crate::fn_info!(mock_property_proxy_get, 3),
         3,
         id,
     ));
@@ -587,7 +623,10 @@ mod tests {
         let context = proxy_context(proxy);
         let count = object_property(context, b"accessCount").expect("accessCount");
         assert_eq!(
-            js_closure_call0(raw_ptr_from_value(count) as *const ClosureHeader),
+            js_closure_call0(
+                raw_ptr_from_value(count) as *const ClosureHeader,
+                crate::closure::plain_call_receiver()
+            ),
             1.0
         );
         restore_all();
@@ -609,12 +648,14 @@ mod tests {
             object_property(context, b"mockImplementation").expect("mockImplementation");
         js_closure_call1(
             raw_ptr_from_value(implementation) as *const ClosureHeader,
+            crate::closure::plain_call_receiver(),
             9.0,
         );
         let once =
             object_property(context, b"mockImplementationOnce").expect("mockImplementationOnce");
         crate::closure::js_closure_call2(
             raw_ptr_from_value(once) as *const ClosureHeader,
+            crate::closure::plain_call_receiver(),
             4.0,
             1.0,
         );
@@ -623,7 +664,10 @@ mod tests {
         assert_eq!(get_property_value(target, "value"), 9.0);
         let count = object_property(context, b"accessCount").expect("accessCount");
         assert_eq!(
-            js_closure_call0(raw_ptr_from_value(count) as *const ClosureHeader),
+            js_closure_call0(
+                raw_ptr_from_value(count) as *const ClosureHeader,
+                crate::closure::plain_call_receiver()
+            ),
             3.0
         );
         let accesses = object_property(context, b"accesses").expect("accesses");

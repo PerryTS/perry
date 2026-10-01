@@ -10,6 +10,7 @@
 //! On iOS the equivalent widget uses UITabBar / UITabBarItem natively
 //! (see crates/perry-ui-ios/src/widgets/bottom_nav.rs).
 
+use crate::srgb;
 use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Sel};
@@ -20,7 +21,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 extern "C" {
-    fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+    fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
 }
 
@@ -87,7 +88,7 @@ define_class!(
             if on_select != 0.0 {
                 unsafe {
                     let closure_ptr = js_nanbox_get_pointer(on_select) as *const u8;
-                    js_closure_call1(closure_ptr, item_index as f64);
+                    js_closure_call1(closure_ptr, perry_ffi::JsThis::UNDEFINED, item_index as f64);
                 }
             }
         }
@@ -306,15 +307,8 @@ pub fn set_badge(bar_handle: i64, index: i64, badge_ptr: *const u8) {
             let _: () = msg_send![&*badge, setBordered: false];
             let _: () = msg_send![&*badge, setDrawsBackground: true];
 
-            let color_cls = AnyClass::get(c"NSColor").unwrap();
-            let red: Retained<AnyObject> = msg_send![
-                color_cls,
-                colorWithRed: 0.85f64,
-                green: 0.20f64,
-                blue: 0.20f64,
-                alpha: 1.0f64
-            ];
-            let white: Retained<AnyObject> = msg_send![color_cls, whiteColor];
+            let red = srgb::ns_color(0.85, 0.20, 0.20, 1.0);
+            let white = objc2_app_kit::NSColor::whiteColor();
             let _: () = msg_send![&*badge, setBackgroundColor: &*red];
             let _: () = msg_send![&*badge, setTextColor: &*white];
             let font_cls = AnyClass::get(c"NSFont").unwrap();
@@ -374,36 +368,15 @@ fn apply_styling(bar_handle: i64) {
             return;
         };
         unsafe {
-            let color_cls = AnyClass::get(c"NSColor").unwrap();
-            let selected: Retained<AnyObject> = match state.selected_tint {
-                Some((r, g, b, a)) => msg_send![
-                    color_cls,
-                    colorWithRed: r,
-                    green: g,
-                    blue: b,
-                    alpha: a
-                ],
-                None => msg_send![
-                    color_cls,
-                    colorWithRed: 0.000f64,
-                    green: 0.478f64,
-                    blue: 1.000f64,
-                    alpha: 1.0f64
-                ],
-            };
-            let muted: Retained<AnyObject> = match state.unselected_tint {
-                Some((r, g, b, a)) => msg_send![
-                    color_cls,
-                    colorWithRed: r,
-                    green: g,
-                    blue: b,
-                    alpha: a
-                ],
-                None => msg_send![color_cls, secondaryLabelColor],
+            let (r, g, b, a) = state.selected_tint.unwrap_or((0.000, 0.478, 1.000, 1.0));
+            let selected = srgb::ns_color(r, g, b, a);
+            let muted = match state.unselected_tint {
+                Some((r, g, b, a)) => srgb::ns_color(r, g, b, a),
+                None => objc2_app_kit::NSColor::secondaryLabelColor(),
             };
             for (i, item) in state.items.iter().enumerate() {
                 let is_selected = i as i64 == state.selected_index;
-                let color: &AnyObject = if is_selected { &*selected } else { &*muted };
+                let color: &objc2_app_kit::NSColor = if is_selected { &selected } else { &muted };
                 // Tint the icon symbol.
                 let _: () = msg_send![&*item.icon_view, setContentTintColor: color];
                 // Tint the label.

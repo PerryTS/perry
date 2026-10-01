@@ -463,3 +463,32 @@ fn select_whole_blocks(
     }
     selection
 }
+
+/// Module class keys arrays are built in the Longlived arena
+/// (`object/alloc.rs::build_longlived_keys_array`) and worker agents copy
+/// their addresses at spawn (`object/shapes_worker_seed.rs`). That is sound
+/// only while nothing relocates a Longlived object: a copying minor never
+/// does (`gc/pin.rs`), and old-gen defrag selects only `Old`-generation
+/// pages, which a Longlived block never is.
+#[cfg(test)]
+mod longlived_never_selected_tests {
+    #[test]
+    fn a_longlived_page_is_never_a_defrag_candidate() {
+        let obj = crate::arena::arena_alloc_gc_longlived(64, 8, crate::gc::GC_TYPE_ARRAY) as usize;
+        let page = crate::arena::generation_page_for_addr(obj);
+        let snapshot = crate::arena::old_page_meta_snapshot();
+        assert!(
+            snapshot
+                .iter()
+                .all(|meta| crate::arena::generation_page_for_addr(meta.page_base) != page),
+            "a Longlived page is registered as an old-gen defrag page"
+        );
+        let ranges = crate::arena::old_arena_block_ranges();
+        assert!(
+            crate::arena::old_arena_block_range_index(&ranges, obj).is_none(),
+            "a Longlived block is inside an old-gen block range"
+        );
+        let selection = super::select_old_page_defrag_pages_from_snapshot(&snapshot, true);
+        assert!(!selection.pages.contains(&page));
+    }
+}
