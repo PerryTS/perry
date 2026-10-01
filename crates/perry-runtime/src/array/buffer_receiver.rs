@@ -63,18 +63,9 @@ pub(crate) fn buffer_receiver_dispatch(
     // arena-backed `GC_TYPE_ARRAY` cannot be a registered Buffer, so an
     // ordinary `[1,2,3].map(…)` reaches NEITHER registry.
     //
-    // `arena_payload_has_gc_type` rather than a bare header-byte read (or an
-    // open-coded address floor): a Buffer comes in BOTH backings, and an
-    // EXTERNAL one — `EXTERNAL_BUFFER_REGISTRY`, `shared_sab::alloc_shared_sab`
-    // — has no `GcHeader` at all. The eight bytes below its payload are
-    // allocator bookkeeping and can read as any `obj_type`, `GC_TYPE_ARRAY`
-    // included. A bare tag read would therefore skip the probe for exactly the
-    // receiver this function exists to catch, silently and only sometimes.
-    // The predicate range-checks, rejects `HeapSpace::Unknown` for the HEADER
-    // address, and validates through `gc_type_info` before trusting the byte;
-    // it answers `false` for an external buffer, which falls through to the
-    // registry — the authoritative answer. See `array/header.rs`'s
-    // `array_receiver_gc_tag` doc (#8142).
+    // Prove ownership before trusting the tag. Process-global SABs have a
+    // real header but live outside this thread's arena; they still need the
+    // buffer classification below rather than an arena-only rejection.
     if unsafe { crate::typedarray::arena_payload_has_gc_type(addr, crate::gc::GC_TYPE_ARRAY) } {
         return None;
     }

@@ -438,7 +438,13 @@ fn test_copying_minor_rewrites_exact_object_pointer_slot_only() {
     crate::object::js_object_set_field(obj, 0, crate::value::JSValue::number(11.0));
     crate::object::js_object_set_field(obj, 1, crate::value::JSValue::from_bits(ptr_bits(child)));
     crate::object::js_object_set_field(obj, 2, crate::value::JSValue::number(33.0));
-    assert_eq!(test_layout_pointer_slot_count(obj as usize, 8), Some(1));
+    // Charter step 5: the collector traces by the shape. Every lane but the
+    // pointer slot's is `F64`, so the shape selects exactly slot 1.
+    for slot in 3..8 {
+        crate::object::js_object_set_field(obj, slot, crate::value::JSValue::number(0.0));
+    }
+    unsafe { restamp_with_rep(obj, f64_lanes((0..8).filter(|&slot| slot != 1))) };
+    assert_eq!(test_heap_child_slot_count(obj as *mut u8), 1);
     js_shadow_slot_set(0, ptr_bits(obj as usize));
 
     let trace = collect_minor_trace(GcTriggerKind::Direct);

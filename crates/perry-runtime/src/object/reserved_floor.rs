@@ -103,7 +103,6 @@ pub(crate) unsafe fn ensure_reserved_floor_keys(obj: *mut ObjectHeader) -> bool 
     // The keys edge is changing: retire any typed layout trained on the old
     // (keys-less) representation before the successor is published, exactly
     // like `set_object_keys_array_with_live`.
-    super::mark_object_dynamic_shape_unknown(obj);
     stamp_reserved_floor_shape(obj, keys, floor) != 0
 }
 

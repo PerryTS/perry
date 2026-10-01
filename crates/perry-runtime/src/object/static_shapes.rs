@@ -25,7 +25,7 @@
 //! replayed into another agent is minted there BY FACTS on first sight; the
 //! tests in `static_shapes_tests.rs` pin both orders.
 
-use super::shapes::{self, ShapeObjectKind};
+use super::shapes;
 use crate::array::ArrayHeader;
 
 /// Seed (or find) the birth shape of a class's instances under the static id
@@ -33,7 +33,8 @@ use crate::array::ArrayHeader;
 /// class born wide, else `key_count`). `requested == 0` means the driver
 /// assigned no static id. Returns the id instances are stamped with:
 /// `requested` whenever this is the first mint of these facts in this agent,
-/// which class registration guarantees.
+/// which class registration guarantees. `rep` is the class's birth rep
+/// (charter step 5, T1), part of the facts the static id names.
 #[no_mangle]
 pub extern "C" fn js_object_shape_id_for_class_keys_static(
     keys: u64,
@@ -41,16 +42,14 @@ pub extern "C" fn js_object_shape_id_for_class_keys_static(
     live: u32,
     class_id: u32,
     requested: u32,
+    rep: u64,
 ) -> u32 {
-    let id = shapes::publish_shape_result(shapes::shape_descriptor_ensure_with_holes(
+    let id = shapes::publish_shape_result(shapes::class_birth_shape_ensure(
         keys as usize as *const ArrayHeader,
         key_count,
-        live.max(key_count),
-        0,
-        ShapeObjectKind::Ordinary,
-        0,
-        shapes::class_proto_id(class_id),
-        0,
+        live,
+        class_id,
+        rep,
         Some(requested).filter(|&id| id != 0),
     ));
     // SAFETY: `id` was resolved from this agent's live slab record above.
@@ -62,8 +61,16 @@ pub extern "C" fn js_object_shape_id_for_class_keys_static(
 /// Seed a literal (plain, `proto_id = 0`) shape under the static id
 /// `requested`, from `count` NUL-separated key names in `packed`, with the
 /// birth live bound `live` (`>= count` for a literal born wide, else
-/// `count`). Returns the id a birth of this key list now resolves to in this
-/// agent.
+/// `count`) and the birth rep `rep` (charter step 5, T1: the literal's `F64`
+/// lanes, part of the facts the static id names). Returns the id a birth of
+/// this key list now resolves to in this agent.
+///
+/// The seed IS the literal's own birth mint run early: the same
+/// [`shapes::class_birth_shape_ensure`] its module init runs through
+/// [`js_object_shape_id_for_class_keys_static`] (an anonymous literal class
+/// has no vtable class, so class id 0 names the same plain prototype), with
+/// the same rep. A seed and a lazy mint of equal (keys, live, rep) are
+/// therefore one lookup by facts and one ShapeId.
 #[no_mangle]
 pub extern "C" fn js_shape_seed_plain(
     requested: u32,
@@ -71,6 +78,7 @@ pub extern "C" fn js_shape_seed_plain(
     packed_len: u32,
     count: u32,
     live: u32,
+    rep: u64,
 ) -> u32 {
     if count == 0 || packed.is_null() || packed_len == 0 {
         return 0;
@@ -82,15 +90,12 @@ pub extern "C" fn js_shape_seed_plain(
         return 0;
     }
     let keys = unsafe { canonical_keys_for_names(&names) };
-    let id = shapes::publish_shape_result(shapes::shape_descriptor_ensure_with_holes(
+    let id = shapes::publish_shape_result(shapes::class_birth_shape_ensure(
         keys.arr(),
         keys.count(),
-        live.max(keys.count()),
+        live,
         0,
-        ShapeObjectKind::Ordinary,
-        0,
-        shapes::PROTO_ID_DEFAULT,
-        0,
+        rep,
         Some(requested),
     ));
     // SAFETY: as above.
@@ -173,11 +178,12 @@ static KEEP_JS_OBJECT_SHAPE_ID_FOR_CLASS_KEYS_STATIC: extern "C" fn(
     u32,
     u32,
     u32,
+    u64,
 ) -> u32 = js_object_shape_id_for_class_keys_static;
 
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
-static KEEP_JS_SHAPE_SEED_PLAIN: extern "C" fn(u32, *const u8, u32, u32, u32) -> u32 =
+static KEEP_JS_SHAPE_SEED_PLAIN: extern "C" fn(u32, *const u8, u32, u32, u32, u64) -> u32 =
     js_shape_seed_plain;
 
 #[cfg(feature = "keepalive-anchors")]

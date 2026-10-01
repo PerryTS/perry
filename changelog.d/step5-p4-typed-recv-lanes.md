@@ -1,0 +1,1 @@
+- codegen: a method whose typed-receiver clone reads fields as bare doubles is called through that clone only when every field it reads is an F64 birth lane of the receiver class; an Any lane can hold any value under the same ShapeId (fixes test_gap_10937 on the shape-only guard, charter step 5 P4).

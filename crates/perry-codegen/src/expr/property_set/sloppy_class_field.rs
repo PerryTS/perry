@@ -44,10 +44,12 @@ pub(crate) fn try_lower_sloppy_class_field_store(
     ) else {
         return Ok(None);
     };
-    let requires_raw_f64 =
-        crate::type_analysis::class_field_declared_type(ctx, &class_name, property)
-            .as_ref()
-            .is_some_and(crate::typed_shape::type_is_raw_f64_candidate);
+    let requires_raw_f64 = crate::expr::class_field_inline_guard::class_field_site_raw_f64(
+        ctx,
+        &class_name,
+        property,
+        field_index,
+    );
     if !requires_raw_f64 {
         return try_lower_sloppy_class_field_boxed_store(
             ctx,
@@ -192,6 +194,7 @@ pub(crate) fn try_lower_sloppy_class_field_store(
             &fast_label,
             &subclass_arms,
             &keys_global_name,
+            field_index,
         );
 
         // Miss: the strict-aware runtime with `strict = 0`, so a rejected write
@@ -287,7 +290,6 @@ fn try_lower_sloppy_class_field_boxed_store(
     with_class_store_operands(ctx, object, value, |ctx, recv_box, val_double| {
         // Computed before the block builder is borrowed below.
         let barrier_needed = !expr_produces_non_pointer_bits_by_construction(ctx, value);
-        let layout_note_needed = class_field_store_needs_layout_note(ctx, value);
         let string_addref_needed = class_field_store_needs_string_addref(ctx, value);
 
         let key_idx = ctx.strings.intern(property);
@@ -328,6 +330,7 @@ fn try_lower_sloppy_class_field_boxed_store(
             &fast_label,
             &subclass_arms,
             &keys_global_name,
+            field_index,
         );
 
         {
@@ -366,13 +369,10 @@ fn try_lower_sloppy_class_field_boxed_store(
                 &field_ptr,
                 &val_double,
                 &obj_handle,
-                &field_idx_str,
                 string_addref_needed,
-                layout_note_needed,
                 &obj_bits,
                 &field_addr,
                 barrier_needed,
-                class_field_store_layout_note_is_conforming(ctx, class_name, field_index),
                 "class_field_set",
             );
             ctx.block().br(&merge_label);

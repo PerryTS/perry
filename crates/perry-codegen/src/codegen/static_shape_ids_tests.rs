@@ -7,6 +7,7 @@ fn class(keys: &str, count: u32, cid: u32) -> BirthShape {
         live: count,
         proto: BirthProto::Class(cid),
         typed: None,
+        rep: 0,
     }
 }
 
@@ -225,6 +226,101 @@ fn a_structural_stub_of_the_definers_facts_resolves_to_the_definers_typed_id() {
     assert_eq!(program.resolved_id("k_imp__C", 21, &typed_stub, 9), 9);
 }
 
+/// Charter step 5, T1 (b): the birth rep is content. A definer born with an
+/// `F64` lane and an importer's all-`Any` stub of the same keys are two
+/// contents with two ids, and the stub never resolves to the definer's id:
+/// its inline allocation fills `undefined` and cannot know the definer's
+/// constructor proof, so it keeps its own structural id.
+#[test]
+fn an_f64_birth_rep_is_content_and_a_stub_never_adopts_it() {
+    let rep = 0b01 << 2; // F64 lane at slot 1
+    let stub = class("next\0value\0", 2, 22);
+    let def = BirthShape {
+        rep,
+        ..typed("next\0value\0", 2, 22, 0b10, 0b01)
+    };
+    let def_any = typed("next\0value\0", 2, 22, 0b10, 0b01);
+    assert_ne!(def.content_hash(), def_any.content_hash());
+    assert_ne!(def.structure(), stub.structure());
+    let births = [
+        birth("k_def__D", 22, true, &def),
+        birth("k_imp__D", 22, false, &stub),
+    ];
+    let ids = assign_static_shape_ids(births.iter().map(|b| &b.shape));
+    assert_ne!(ids[&def], ids[&stub]);
+    let program = ProgramClassShapeIds::from_births(&births, &ids);
+    assert_eq!(
+        program.resolved_id("k_imp__D", 22, &stub, ids[&stub]),
+        ids[&stub],
+        "the stub keeps its own id"
+    );
+    // A structural (untyped) definer with an F64 lane: same rule.
+    let def_plain = BirthShape {
+        rep,
+        ..class("next\0value\0", 2, 23)
+    };
+    let stub23 = class("next\0value\0", 2, 23);
+    let births = [
+        birth("k_def__E", 23, true, &def_plain),
+        birth("k_imp__E", 23, false, &stub23),
+    ];
+    let ids = assign_static_shape_ids(births.iter().map(|b| &b.shape));
+    let program = ProgramClassShapeIds::from_births(&births, &ids);
+    assert_eq!(program.resolved_id("k_imp__E", 23, &stub23, 11), 11);
+    // A literal with an F64 lane is seeded like an all-`Any` one: the seed
+    // carries its rep, so it mints the literal's own facts.
+    let lit = BirthShape {
+        proto: BirthProto::Literal,
+        rep,
+        ..class("a\0b\0", 2, 0)
+    };
+    assert!(lit.is_seedable());
+}
+
+/// The seed sidecar carries the birth rep: a warm link replays exactly the
+/// facts a cold one seeded. A line without the rep (another format) is
+/// malformed, never an all-`Any` seed of the same keys.
+#[test]
+fn a_seed_line_round_trips_the_birth_rep() {
+    for rep in [0u64, 0b0101, 0b01 << 20] {
+        let lit = BirthShape {
+            proto: BirthProto::Literal,
+            rep,
+            ..class("lt_u\0lt_v\0", 2, 0)
+        };
+        let line = encode_static_seed(0x1000_0077, &lit);
+        assert_eq!(
+            decode_static_seed(&line),
+            Some((0x1000_0077, lit)),
+            "{line}"
+        );
+    }
+    assert_eq!(decode_static_seed("268435575 2 2 6c745f7500"), None);
+    assert_eq!(decode_static_seed("268435575 2 2 6c745f7500 5"), None);
+    assert_eq!(decode_static_seed("268435575 2 2 6c745f7500 0x5 x"), None);
+}
+
+#[test]
+fn class_birth_reads_the_birth_rep_of_its_keys_global() {
+    let prefix = "m";
+    let class_ids: HashMap<String, u32> = [("Pair".to_string(), 57)].into_iter().collect();
+    let images = HashMap::new();
+    let pair: ClassKeysInit = (
+        "perry_class_keys_m__Pair".into(),
+        "a\0b\0".into(),
+        2,
+        vec![],
+        vec![],
+    );
+    let reps: HashMap<String, u64> = [("perry_class_keys_m__Pair".to_string(), 0b0101u64)]
+        .into_iter()
+        .collect();
+    let b = class_birth(prefix, &pair, &images, &reps, &class_ids);
+    assert_eq!(b.shape.unwrap().rep, 0b0101);
+    let b = class_birth(prefix, &pair, &images, &HashMap::new(), &class_ids);
+    assert_eq!(b.shape.unwrap().rep, 0);
+}
+
 #[test]
 fn a_class_id_defined_twice_has_no_program_entry() {
     let a = class("a\0", 1, 31);
@@ -264,11 +360,11 @@ fn class_birth_names_anon_shapes_as_literals_and_skips_class_zero() {
         vec![],
         vec![],
     );
-    let a = class_birth(prefix, &anon, &images, &class_ids);
+    let a = class_birth(prefix, &anon, &images, &HashMap::new(), &class_ids);
     assert_eq!(a.shape.unwrap().proto, BirthProto::Literal);
-    let p = class_birth(prefix, &point, &images, &class_ids);
+    let p = class_birth(prefix, &point, &images, &HashMap::new(), &class_ids);
     assert_eq!(p.shape.unwrap().proto, BirthProto::Class(56));
-    let o = class_birth(prefix, &orphan, &images, &class_ids);
+    let o = class_birth(prefix, &orphan, &images, &HashMap::new(), &class_ids);
     assert_eq!(o.class_id, 0);
     assert!(o.shape.is_none());
 }

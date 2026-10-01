@@ -1032,6 +1032,20 @@ pub fn class_static_symbol_owner_for_test(class_id: u32) -> usize {
     crate::object::class_value::class_value_ptr(class_id) as usize
 }
 
+/// Test probe (#11696): is `sym` an own key of the ordinary object `owner`'s
+/// shape (#11682 stores those on the object, not in `SYMBOL_PROPERTIES`)?
+/// `Some(is_accessor)` when it is, `None` when `owner` is not an ordinary
+/// object or has no such key.
+#[doc(hidden)]
+pub fn symbol_on_object_for_test(owner: usize, sym: usize) -> Option<bool> {
+    // SAFETY: `owner` validates the address as a tracked GC object first.
+    unsafe {
+        crate::object::shaped_symbols::owner(owner)?;
+        crate::object::shaped_symbols::entry(owner, sym)
+            .map(|entry| entry & crate::object::key_attrs::ENTRY_ACCESSOR != 0)
+    }
+}
+
 // Monotonic id counter for fresh symbols. Not thread-safe per-thread but
 // Symbol semantics are compatible with coarse locking.
 static NEXT_SYMBOL_ID: Mutex<u64> = Mutex::new(1);
@@ -1242,6 +1256,14 @@ pub(crate) fn store_object_symbol_property_root(
 ) -> bool {
     note_symbol_key_installed(sym_key);
     note_symbol_owner_installed(obj_key);
+    if unsafe { crate::object::shaped_symbols::owner(obj_key).is_some() } {
+        let existed = unsafe { crate::object::shaped_symbols::entry(obj_key, sym_key) };
+        let entry = existed.unwrap_or(0) & !crate::object::key_attrs::ENTRY_ACCESSOR_MASK;
+        unsafe {
+            crate::object::shaped_symbols::define(obj_key, sym_key, value_bits, entry);
+        }
+        return existed.is_none();
+    }
     crate::closure::shape::note_function_own_state_changed(obj_key);
     {
         let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);

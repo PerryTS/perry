@@ -1124,3 +1124,6 @@ watcher.writeSnapshot(root, snapshot, {{ backend: "brute-force" }}).then(() => {
 
 #[path = "fixtures/node_api_host/computed_require.rs"]
 mod computed_require;
+
+#[path = "fixtures/node_api_host/payload.rs"]
+mod payload;

@@ -49,6 +49,17 @@ pub(crate) fn with_slot_rep(rep: u64, slot: u32, value: u64) -> u64 {
     (rep & !(0b11 << shift)) | (value << shift)
 }
 
+/// The lanes of every slot below `slot` (the whole word past it): the part
+/// of a predecessor's rep a key-add at `slot` carries.
+#[inline]
+pub(crate) fn lanes_below(slot: u32) -> u64 {
+    if slot >= REP_SLOTS {
+        u64::MAX
+    } else {
+        (1u64 << (2 * slot)) - 1
+    }
+}
+
 /// Does no lane carry the reserved `11`?
 #[inline]
 pub(crate) fn is_valid(rep: u64) -> bool {
@@ -66,6 +77,21 @@ pub(crate) fn identity(rep: u64) -> u64 {
     (rep & !deprecated) | (deprecated >> 1)
 }
 
+/// The slots whose lane is exactly `F64` (`01`), one bit per slot: the
+/// lanes a class birth shape declares (T1) and the allocator birth-fills.
+#[inline]
+pub(crate) fn f64_lane_slots(rep: u64) -> u32 {
+    let lanes = rep & LANE_LOW & !(rep >> 1);
+    let mut slots = 0u32;
+    let mut rest = lanes;
+    while rest != 0 {
+        let bit = rest.trailing_zeros();
+        slots |= 1 << (bit / 2);
+        rest &= rest - 1;
+    }
+    slots
+}
+
 /// Does any lane carry the deprecated `10`?
 #[inline]
 pub(crate) fn has_deprecated(rep: u64) -> bool {
@@ -79,6 +105,20 @@ pub(crate) fn has_deprecated(rep: u64) -> bool {
 pub(crate) fn normalized(rep: u64) -> u64 {
     debug_assert!(is_valid(rep), "reserved rep lane in {rep:#x}");
     rep & LANE_LOW
+}
+
+/// One bit per slot 0..[`REP_SLOTS`] whose lane is not `Any` (`F64` or
+/// deprecated `F64`): the slots the collector skips when it traces an object
+/// by its shape (DESIGN §3.1).
+#[inline]
+pub(crate) fn non_any_slot_bits(rep: u64) -> u32 {
+    let mut x = (rep | (rep >> 1)) & LANE_LOW;
+    x = (x | (x >> 1)) & 0x3333_3333_3333_3333;
+    x = (x | (x >> 2)) & 0x0F0F_0F0F_0F0F_0F0F;
+    x = (x | (x >> 4)) & 0x00FF_00FF_00FF_00FF;
+    x = (x | (x >> 8)) & 0x0000_FFFF_0000_FFFF;
+    x = (x | (x >> 16)) & 0x0000_0000_FFFF_FFFF;
+    x as u32
 }
 
 /// The bits an `F64` slot stores for the JS value `value_bits`, or `None`
@@ -142,6 +182,15 @@ mod tests {
         );
         assert_eq!(f64_slot_bits(crate::value::TAG_UNDEFINED), None);
         assert_eq!(f64_slot_bits(crate::value::TAG_NULL), None);
+    }
+
+    #[test]
+    fn non_any_slot_bits_has_one_bit_per_non_any_lane() {
+        assert_eq!(non_any_slot_bits(0), 0);
+        assert_eq!(non_any_slot_bits(LANE_LOW), u32::MAX);
+        assert_eq!(non_any_slot_bits(LANE_HIGH), u32::MAX);
+        let rep = with_slot_rep(with_slot_rep(0, 1, REP_F64), 31, REP_F64_DEPRECATED);
+        assert_eq!(non_any_slot_bits(rep), (1 << 1) | (1 << 31));
     }
 
     #[test]

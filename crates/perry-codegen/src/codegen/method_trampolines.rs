@@ -319,7 +319,7 @@ pub(super) fn emit_guarded_nonnegative_index(
             let obj_ptr = blk.inttoptr(I64, &recv_handle);
             let gc_header_ptr = blk.gep(crate::types::I8, &obj_ptr, &[(I64, "-8")]);
             let gc_header = blk.load(I32, &gc_header_ptr);
-            let guarded_gc = blk.and(I32, &gc_header, "142639359");
+            let guarded_gc = blk.and(I32, &gc_header, "134250751");
             let gc_ok = blk.icmp_eq(I32, &guarded_gc, "2");
             let class_shape = blk.load(I64, &obj_ptr);
             let expected_shape = crate::typed_shape::class_shape_id_operand_on_block(

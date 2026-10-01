@@ -144,7 +144,10 @@ pub unsafe extern "C" fn napi_create_external_buffer(
         Err(status) => return status,
     };
     let buffer = crate::buffer::buffer_alloc_foreign(data.cast(), length);
-    super::metadata::attach_owner_finalizer(buffer as usize, data, finalize_cb, finalize_hint);
+    crate::buffer::set_foreign_finalizer(
+        buffer,
+        super::metadata::finalizer(finalize_cb, data, finalize_hint),
+    );
     write_pointer_handle(env, buffer.cast(), result)
 }
 
@@ -235,11 +238,9 @@ pub unsafe extern "C" fn napi_create_external_arraybuffer(
     };
     let buffer = crate::buffer::buffer_alloc_foreign(external_data.cast(), byte_length);
     crate::buffer::mark_as_array_buffer(buffer as usize);
-    super::metadata::attach_owner_finalizer(
-        buffer as usize,
-        external_data,
-        finalize_cb,
-        finalize_hint,
+    crate::buffer::set_foreign_finalizer(
+        buffer,
+        super::metadata::finalizer(finalize_cb, external_data, finalize_hint),
     );
     write_pointer_handle(env, buffer.cast(), result)
 }

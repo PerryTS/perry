@@ -1129,8 +1129,12 @@ pub(super) fn install_external_shape_id(
     live_inline_slot_count: u32,
     proto_id: u64,
     object_kind: super::ShapeObjectKind,
+    rep: u64,
 ) -> bool {
-    if !super::is_shape_id(id) || (keys.is_null() && logical_key_count != 0) {
+    if !super::is_shape_id(id)
+        || (keys.is_null() && logical_key_count != 0)
+        || !crate::object::field_rep::is_valid(rep)
+    {
         return false;
     }
     // SAFETY: a live keys array or null; derived exactly as every mint does.
@@ -1146,7 +1150,8 @@ pub(super) fn install_external_shape_id(
         0,
     )
     .with_proto_id(proto_id)
-    .with_summary(summary);
+    .with_summary(summary)
+    .with_rep(rep);
     record.set(super::shapes_store::RECORD_FLAG_EXTERNAL_CARRIER, true);
     let table = &crate::state::state().shapes;
     let mut inner = table.inner.borrow_mut();
@@ -1161,7 +1166,7 @@ pub(super) fn install_external_shape_id(
             0,
             proto_id,
             summary,
-            crate::object::field_rep::REP_ANY,
+            rep,
         );
         if matches {
             // SAFETY: same record and agent discipline as above.

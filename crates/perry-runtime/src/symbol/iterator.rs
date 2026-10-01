@@ -71,6 +71,11 @@ pub unsafe extern "C" fn js_object_get_own_property_symbols(obj_f64: f64) -> i64
         .cloned()
         .unwrap_or_default();
     drop(guard);
+    let stored_entries = if crate::object::shaped_symbols::owner(obj_key).is_some() {
+        crate::object::shaped_symbols::entries(obj_key, false)
+    } else {
+        stored_entries
+    };
     for entry in stored_entries {
         if !entries.iter().any(|(sym_key, _)| *sym_key == entry.0) {
             entries.push(entry);

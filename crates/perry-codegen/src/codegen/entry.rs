@@ -709,6 +709,7 @@ pub(super) fn compile_module_entry(
             class_field_counts: &cross_module.class_field_counts,
             class_init_chains: &cross_module.class_init_chains,
             class_header_image_globals: &cross_module.class_header_images,
+            class_birth_reps: &cross_module.class_birth_reps,
             imported_class_ctors: &cross_module.imported_class_ctors,
             func_signatures,
             func_synthetic_arguments,
@@ -720,6 +721,7 @@ pub(super) fn compile_module_entry(
                 .compiler_private_async_i32_control_locals,
             compiler_private_async_i1_control_locals: &cross_module
                 .compiler_private_async_i1_control_locals,
+            scope_map: &cross_module.scope_map,
             closure_rest_params,
             local_closure_func_ids: HashMap::new(),
             guard_free_closure_bindings: std::collections::HashSet::new(),
@@ -1571,6 +1573,7 @@ pub(super) fn compile_module_entry(
             class_field_counts: &cross_module.class_field_counts,
             class_init_chains: &cross_module.class_init_chains,
             class_header_image_globals: &cross_module.class_header_images,
+            class_birth_reps: &cross_module.class_birth_reps,
             imported_class_ctors: &cross_module.imported_class_ctors,
             func_signatures,
             func_synthetic_arguments,
@@ -1582,6 +1585,7 @@ pub(super) fn compile_module_entry(
                 .compiler_private_async_i32_control_locals,
             compiler_private_async_i1_control_locals: &cross_module
                 .compiler_private_async_i1_control_locals,
+            scope_map: &cross_module.scope_map,
             closure_rest_params,
             local_closure_func_ids: HashMap::new(),
             guard_free_closure_bindings: std::collections::HashSet::new(),

@@ -959,7 +959,7 @@ pub(crate) fn compute_auto_captures(
     body: &[perry_hir::Stmt],
     explicit: &[u32],
 ) -> Vec<u32> {
-    compute_auto_captures_with_globals(params, body, explicit, ctx.module_globals)
+    compute_auto_captures_with_globals(params, body, explicit, ctx.module_globals, ctx.scope_map)
 }
 
 /// Context-free half of [`compute_auto_captures`]. Closure body emission and
@@ -970,6 +970,7 @@ pub(crate) fn compute_auto_captures_with_globals(
     body: &[perry_hir::Stmt],
     explicit: &[u32],
     module_globals: &std::collections::HashMap<u32, String>,
+    scope_map: &crate::scope_env::ScopeMap,
 ) -> Vec<u32> {
     // Exclude module globals from the explicit captures list. perry-hir
     // sometimes lists block-scoped top-level lets (those whose
@@ -1006,5 +1007,6 @@ pub(crate) fn compute_auto_captures_with_globals(
             out.push(id);
         }
     }
-    out
+    // A scope group is one capture slot, keyed by its representative.
+    scope_map.collapse_captures(out)
 }

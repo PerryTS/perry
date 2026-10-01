@@ -236,6 +236,8 @@ pub(crate) use self::push_pop::throw_non_extensible_array_push;
 pub(crate) use self::sort::object_prototype_has_index_prop;
 pub(crate) use self::sort::object_prototype_index_get as sort_object_prototype_index_get;
 pub(crate) use self::sort::object_prototype_index_get_with_receiver as sort_object_prototype_index_get_with_receiver;
+#[cfg(test)]
+pub(crate) use self::subclass::js_packed_arraylike_loop_guard;
 pub use self::subclass::{
     array_subclass_dense_snapshot, array_subclass_has_iterator_override,
     is_array_subclass_instance, ArrayLikePicCache, ArrayLikePicCacheSlot, ARRAYLIKE_PIC_WORDS,

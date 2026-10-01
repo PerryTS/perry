@@ -7935,9 +7935,13 @@ fn tdz_numeric_const_read_is_not_constant_folded() {
     // the thrown ReferenceError can identify it. Both variants perform the same
     // check, so pinning only the older spelling made a strictly better error
     // message look like a lost guard.
+    // A preallocated binding lives in a scope object: the read is an inline
+    // slot load whose TDZ sentinel compare branches to the trusted accessor.
     assert!(
         ir.contains("call i64 @js_box_get_bits(i64 ")
-            || ir.contains("call i64 @js_box_get_bits_named(i64 "),
+            || ir.contains("call i64 @js_box_get_bits_named(i64 ")
+            || ir.contains("call i64 @js_box_get_bits_trusted(i64 ")
+            || ir.contains("call i64 @js_box_get_bits_trusted_named(i64 "),
         "the pre-declaration read must retain the TDZ box check:\n{ir}"
     );
     // And the read must not be folded to the value the later `Let` installs.
@@ -8218,7 +8222,14 @@ fn compiler_private_async_control_cells_use_primitive_heap_boxes() {
         compiler_private_async_control_body(),
     );
 
-    for symbol in ["call i64 @js_i32_box_alloc", "call i64 @js_bool_box_alloc"] {
+    // The control words share the activation's scope object: its slots are
+    // seeded with the INT32 tag and the non-pointer special tag, and the
+    // typed loads/stores below touch only their low bytes.
+    for symbol in [
+        "call i64 @js_scope_alloc(",
+        "store i64 9222809086901354496, ptr",
+        "store i64 9222246136947933184, ptr",
+    ] {
         assert!(
             ir.contains(symbol),
             "expected compiler-private control lowering to emit {symbol}:\n{ir}"
@@ -9564,9 +9575,17 @@ fn typed_f64_receiver_method_positive_module() -> Module {
     let mut point = class(
         211,
         "Point",
+        // Real classes write their number fields at construction; a field
+        // never written there is `undefined` at birth and so not an F64 lane.
         vec![
-            class_field("x", Type::Number),
-            class_field("y", Type::Number),
+            ClassField {
+                init: Some(Expr::Number(0.0)),
+                ..class_field("x", Type::Number)
+            },
+            ClassField {
+                init: Some(Expr::Number(0.0)),
+                ..class_field("y", Type::Number)
+            },
         ],
     );
     point.methods.push(typed_f64_receiver_method_function(
@@ -14487,8 +14506,8 @@ fn scalar_method_boolean_predicate_rejects_unproven_numeric_arguments() {
         "any arg fallback must materialize the scalar receiver with stable class keys before dispatch:\n{ir}"
     );
     assert!(
-        ir.contains("call void @js_gc_init_typed_shape_layout"),
-        "any arg fallback materialization must install typed shape pointer/raw-f64 bitmap evidence:\n{ir}"
+        !ir.contains("js_gc_init_typed_shape_layout"),
+        "charter step 5: the class ShapeId carries the lanes; no per-object layout install:\n{ir}"
     );
     let fallback_block = {
         let start = ir
@@ -16111,7 +16130,16 @@ fn sloppy_class_field_number_store_takes_the_inline_raw_store() {
     }
 
     fn ir_for(strict: bool) -> String {
-        let counter = class(217, "Counter", vec![class_field("value", Type::Number)]);
+        // `value = 0`: a number field is an F64 birth lane only when the
+        // construction writes it, as real classes do.
+        let counter = class(
+            217,
+            "Counter",
+            vec![ClassField {
+                init: Some(Expr::Number(0.0)),
+                ..class_field("value", Type::Number)
+            }],
+        );
         let module = module_with_classes_and_params(
             "sloppy_class_field_store.ts",
             vec![counter],

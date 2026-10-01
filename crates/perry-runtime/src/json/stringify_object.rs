@@ -531,7 +531,7 @@ unsafe fn stringify_object_walk(
         }
         let mut key_bits = (*key_slots.add(f as usize)).to_bits();
         // Tombstoned slot from an O(1) delete: not a key, not serialized.
-        if key_bits == crate::value::TAG_HOLE {
+        if key_bits == crate::value::TAG_HOLE || is_symbol_value(key_bits) {
             continue;
         }
         // Private elements (`#x`) live in a class instance's keys_array but are
