@@ -1555,6 +1555,19 @@ fn classify_own_slot(v: f64, method: &str) -> OwnSlot {
         return OwnSlot::Absent;
     }
     if fp == crate::closure::BOUND_METHOD_FUNC_PTR {
+        // Native exports share the bound-method sentinel with borrowed
+        // Array methods. Their captured namespace owns the implementation:
+        // Buffer.concat must never become Array.prototype.concat (#11618).
+        if unsafe { crate::closure::real_capture_count((*c).capture_count) } >= 3 {
+            let receiver = crate::closure::js_closure_get_capture_f64(c, 0);
+            let receiver = JSValue::from_bits(receiver.to_bits());
+            if receiver.is_pointer()
+                && crate::object::js_object_get_class_id(receiver.as_pointer())
+                    == crate::object::native_module::NATIVE_MODULE_CLASS_ID
+            {
+                return OwnSlot::UserMethod;
+            }
+        }
         return OwnSlot::BorrowedBuiltin;
     }
     // A raw built-in prototype-method closure (`{ splice:

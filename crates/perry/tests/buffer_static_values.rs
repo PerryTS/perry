@@ -30,6 +30,16 @@ if (typeof from === 'function' && typeof alloc === 'function' && typeof concat =
   console.log('detached', from('ab').length, alloc(3).length, concat([from('a'), from('bc')]).length);
   console.log('metadata', from.name, alloc.name, concat.name);
 }
+const alias = (globalThis as { Buffer?: typeof Buffer }).Buffer!;
+const conditional = typeof Buffer === 'undefined' ? undefined : Buffer;
+const bytes = new Uint8Array(10752).fill(7);
+const joined = alias.concat([bytes], 10752);
+console.log('alias', alias.from('ab').length, joined.length, joined[10751], Buffer.isBuffer(joined));
+console.log('conditional', conditional!.concat([bytes], 10752).length, conditional!.from(bytes).length);
+const borrowed = { 0: 'a', length: 1, concat: Array.prototype.concat };
+console.log('borrowed', borrowed.concat(['b']).length);
+const foreign = { toString: () => 'one', concat: String.prototype.concat };
+console.log('foreign', foreign.concat('two'));
 const { from: destructured } = Buffer;
 console.log('destructured', typeof destructured, destructured('abc').length);
 console.log('direct', Buffer.from('ab').length, Buffer.alloc(2).length, Buffer.concat([Buffer.from('ab')]).length);
@@ -54,6 +64,10 @@ delete real.extra;
 identity true true true
 detached 2 3 3
 metadata from alloc concat
+alias 2 10752 7 true
+conditional 10752 10752
+borrowed 2
+foreign onetwo
 destructured function 3
 direct 2 2 2
 array function 2
