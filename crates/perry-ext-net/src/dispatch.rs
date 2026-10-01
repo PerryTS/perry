@@ -744,8 +744,16 @@ pub unsafe extern "C" fn js_ext_net_handle_property_dispatch(
             "maxConnections" => crate::js_net_server_get_max_connections(handle),
             _ => crate::js_net_server_get_drop_max_connection(handle),
         })
-    } else {
+    } else if (9..=13).contains(&prop.len())
+        && matches!(
+            (prop.as_bytes()[0], prop.as_bytes()[1]),
+            (b'l', b'o') | (b'r', b'e')
+        )
+    {
+        // Unrelated capsule/handle queries must not touch the endpoint helper.
         return socket_endpoint_property(handle, prop, out);
+    } else {
+        None
     };
 
     if let Some(value) = value {
