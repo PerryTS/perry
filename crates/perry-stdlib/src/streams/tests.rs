@@ -575,3 +575,44 @@ fn pipe_through_pair_survives_a_moving_getter() {
         );
     }
 }
+
+#[test]
+fn generic_stream_dispatch_preserves_owner_and_controller_alias() {
+    let _serial = serial_guard();
+    let undefined = f64::from_bits(TAG_UNDEFINED);
+    unsafe {
+        let transform =
+            js_transform_stream_new(undefined, undefined, undefined, undefined, undefined);
+        let readable = js_transform_stream_readable(transform);
+        let writable = js_transform_stream_writable(transform);
+        let reader = js_readable_stream_get_reader_with_options(readable, undefined);
+        let writer = js_writable_stream_get_writer(writable);
+        for (handle, wrong_method) in [
+            (readable, "write"),
+            (readable, "releaseLock"),
+            (writable, "enqueue"),
+            (writable, "read"),
+            (reader, "close"),
+            (reader, "getReader"),
+            (writer, "cancel"),
+            (writer, "enqueue"),
+            (transform, "close"),
+        ] {
+            assert!(dispatch_stream_method(handle, wrong_method, &[]).is_none());
+            assert!(dispatch_stream_method(handle, "unknown", &[]).is_none());
+        }
+        assert!(dispatch_stream_method(readable, "enqueue", &[42.0]).is_some());
+        assert!(dispatch_stream_method(reader, "releaseLock", &[]).is_some());
+        assert!(dispatch_stream_method(writer, "releaseLock", &[]).is_some());
+        assert!(dispatch_stream_method(readable, "close", &[]).is_some());
+        assert!(matches!(
+            READABLE_STREAMS
+                .lock()
+                .unwrap()
+                .get(&(readable as usize))
+                .unwrap()
+                .state,
+            ReadableState::Closed
+        ));
+    }
+}

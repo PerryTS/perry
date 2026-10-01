@@ -196,9 +196,11 @@ pub(crate) unsafe fn dispatch_stream_method(
         .copied()
         .unwrap_or(f64::from_bits(TAG_UNDEFINED));
 
-    // Probe each registry for membership first (dropping the guard before we
-    // call the FFI, which re-locks the same registry).
-    let is_reader = READERS.lock().unwrap().contains_key(&id);
+    // IDs have one registry owner; eviction clears every registry before reuse.
+    // Skip registries that cannot handle this method, dropping each guard
+    // before the FFI call re-locks it. Controllers alias only readable IDs.
+    let is_reader = matches!(method, "read" | "releaseLock" | "cancel")
+        && READERS.lock().unwrap().contains_key(&id);
     if is_reader {
         match method {
             // BYOB readers fill the caller-supplied view (#4915); default
@@ -214,7 +216,8 @@ pub(crate) unsafe fn dispatch_stream_method(
             _ => return None,
         }
     }
-    let is_writer = WRITERS.lock().unwrap().contains_key(&id);
+    let is_writer = matches!(method, "write" | "close" | "abort" | "releaseLock")
+        && WRITERS.lock().unwrap().contains_key(&id);
     if is_writer {
         match method {
             "write" => return Some(box_promise(js_writer_write(handle, arg0))),
@@ -224,7 +227,20 @@ pub(crate) unsafe fn dispatch_stream_method(
             _ => return None,
         }
     }
-    let is_readable = READABLE_STREAMS.lock().unwrap().contains_key(&id);
+    let is_readable = matches!(
+        method,
+        "getReader"
+            | "values"
+            | "@@asyncIterator"
+            | "cancel"
+            | "tee"
+            | "pipeTo"
+            | "pipeThrough"
+            | "enqueue"
+            | "close"
+            | "terminate"
+            | "error"
+    ) && READABLE_STREAMS.lock().unwrap().contains_key(&id);
     if is_readable {
         match method {
             "getReader" => return Some(js_readable_stream_get_reader_with_options(handle, arg0)),
@@ -270,7 +286,8 @@ pub(crate) unsafe fn dispatch_stream_method(
             _ => return None,
         }
     }
-    let is_writable = WRITABLE_STREAMS.lock().unwrap().contains_key(&id);
+    let is_writable = matches!(method, "getWriter" | "abort" | "close")
+        && WRITABLE_STREAMS.lock().unwrap().contains_key(&id);
     if is_writable {
         match method {
             "getWriter" => return Some(js_writable_stream_get_writer(handle)),
