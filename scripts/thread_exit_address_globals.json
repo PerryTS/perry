@@ -500,22 +500,6 @@
    "why": "Code address of the stdlib reader.read callback registered by js_register_stream_consumer_callbacks (consumers.rs:125); function pointer."
   },
   {
-   "file": "crates/perry-runtime/src/object/prop_plan.rs",
-   "names": [
-    "HITS"
-   ],
-   "verdict": "no_heap_address",
-   "why": "PLAN-DIAG counter of load-plan cache hits (prop_plan.rs:205), only under plan_diag_enabled."
-  },
-  {
-   "file": "crates/perry-runtime/src/object/prop_plan.rs",
-   "names": [
-    "RECORDS"
-   ],
-   "verdict": "no_heap_address",
-   "why": "PLAN-DIAG counter of store-plan records (prop_plan.rs:238); key_ptr is only printed, not stored here."
-  },
-  {
    "file": "crates/perry-stdlib/src/framework/server.rs",
    "names": [
     "QUEUES"
@@ -555,14 +539,6 @@
    ],
    "verdict": "no_heap_address",
    "why": "Queue of Arc<AsyncWorkInner> (Rust-heap) whose env_address is the Rust Box of the owning thread's NODE_API_ENV and data/execute/complete are native addon pointers; drained only when work.owner == current ThreadId and env serial matches via with_env (async_work.rs:270-288, mod.rs:421-433), so no GC arena address and a dead owner's entries can never be dereferenced (ThreadIds are never reused)."
-  },
-  {
-   "file": "crates/perry-runtime/src/object/field_get_set/for_in_stable.rs",
-   "names": [
-    "HITS"
-   ],
-   "verdict": "no_heap_address",
-   "why": "FOR-IN-DIAG counter of stable single-shape for-in hits (for_in_stable.rs:223)."
   },
   {
    "file": "crates/perry-runtime/src/perf_hooks.rs",
@@ -1073,22 +1049,6 @@
    "verdict": "thread_exit_invalidated",
    "why": "Running-aggregate state boxes; a freed state becomes undefined and the box is unregistered at thread exit, xFinal frees it as before.",
    "hook": "release_node_sqlite_callbacks_in_freed_ranges"
-  },
-  {
-   "file": "crates/perry-runtime/src/net.rs",
-   "names": [
-    "TCP_SERVERS"
-   ],
-   "verdict": "no_heap_address",
-   "why": "HashMap<u64, TcpListenerWrapper> keyed by the process-global NEXT_HANDLE counter, holding std TcpListener + SocketAddr (net.rs:17-25); OS resources, no heap addresses."
-  },
-  {
-   "file": "crates/perry-runtime/src/net.rs",
-   "names": [
-    "TCP_SOCKETS"
-   ],
-   "verdict": "no_heap_address",
-   "why": "HashMap<u64, TcpStreamWrapper> keyed by the process-global NEXT_HANDLE counter, holding std TcpStream + Option<SocketAddr> (net.rs:19-30); OS resources."
   },
   {
    "file": "crates/perry-runtime/src/object/nm_namespace_hooks.rs",
@@ -1625,16 +1585,16 @@
    "why": "Pointer to the `static FS_THREAD_CODEC_IMPL` (fs/filehandle.rs:1470) holding two fn pointers, armed by arm_fs_thread_codec; address of a static."
   },
   {
-   "file": "crates/perry-runtime/src/thread.rs",
+   "file": "crates/perry-runtime/src/thread/pending_results.rs",
    "names": [
     "PENDING_THREAD_RESULTS"
    ],
    "verdict": "thread_exit_invalidated",
-   "why": "Queue of spawn results: owner AgentId, raw promise address in the owner's heap, and a SerializedValue; drained only by the owning agent, and agent::retire_agent (agent.rs:164) calls thread::purge_agent_thread_results (thread.rs:1926) to drop every entry owned by an exiting worker agent.",
+   "why": "Queue of spawn results: owner AgentId, raw promise address in the owner's heap, and a SerializedValue; drained only by the owning agent, and agent::retire_agent (agent.rs:164) calls thread::purge_agent_thread_results (thread/pending_results.rs:217) to drop every entry owned by an exiting worker agent.",
    "hook": "purge_agent_thread_results"
   },
   {
-   "file": "crates/perry-runtime/src/thread.rs",
+   "file": "crates/perry-runtime/src/thread/pending_results.rs",
    "names": [
     "PENDING_THREAD_RESULTS_LEN"
    ],
@@ -2022,15 +1982,6 @@
   {
    "file": "crates/perry-runtime/src/buffer/header.rs",
    "names": [
-    "EXTERNAL_BUFFER_REGISTRY"
-   ],
-   "verdict": "thread_exit_invalidated",
-   "why": "Addresses of externally-registered buffers, removed only by the dead-buffer finalizer or re-registration; freed addresses are dropped at thread exit.",
-   "hook": "release_external_buffer_registries_in_freed_ranges"
-  },
-  {
-   "file": "crates/perry-runtime/src/buffer/header.rs",
-   "names": [
     "EXTERNAL_UINT8ARRAY_REGISTRY"
    ],
    "verdict": "thread_exit_invalidated",
@@ -2060,7 +2011,7 @@
     "BUFFER_LIKE_ADDR_WINDOW"
    ],
    "verdict": "conservative_filter",
-   "why": "Monotone lo/hi address window over every buffer-like registration; a stale bound only admits more addresses to the slow path. Authoritative: BUFFER_REGISTRY (thread-local), EXTERNAL_BUFFER_REGISTRY, shared_sab's registry via is_registered_buffer_slow."
+   "why": "Monotone lo/hi address window over every buffer-like registration; a stale bound only admits more addresses to the slow path. Authoritative: BUFFER_REGISTRY (thread-local), shared_sab's registry via is_registered_buffer_slow."
   },
   {
    "file": "crates/perry-runtime/src/buffer/header.rs",
@@ -2287,14 +2238,6 @@
    ],
    "verdict": "no_heap_address",
    "why": "Stores the RenderStreamFn fn pointer registered by perry-stdlib via js_register_jsx_render_stream (hono_jsx.rs:81); code address."
-  },
-  {
-   "file": "crates/perry-runtime/src/object/inherited_read_cache.rs",
-   "names": [
-    "HITS"
-   ],
-   "verdict": "no_heap_address",
-   "why": "Hit counter for the inherited-read inline cache; fetch_add / reset only."
   },
   {
    "file": "crates/perry-runtime/src/process.rs",
@@ -2774,7 +2717,7 @@
     "N"
    ],
    "verdict": "no_heap_address",
-   "why": "(layout_tables.rs:964, layout_mask_min_slots) cached PERRY_LAYOUT_MASK_MIN_SLOTS env value (default 4); config. | (second declaration) (layout_tables.rs:1018, layout_object_mask_min_slots) cached PERRY_LAYOUT_OBJECT_MASK_MIN_SLOTS env value (default 8); config."
+   "why": "(layout_tables.rs:964, layout_mask_min_slots) cached PERRY_LAYOUT_MASK_MIN_SLOTS env value (default 4); config."
   },
   {
    "file": "crates/perry-runtime/src/bun_ffi/dlopen.rs",
@@ -3945,15 +3888,6 @@
    "verdict": "thread_exit_invalidated",
    "why": "Buffer expando records keyed by buffer address; records whose buffer or any stored value is freed are dropped at thread exit.",
    "hook": "release_buffer_own_props_in_freed_ranges"
-  },
-  {
-   "file": "crates/perry-runtime/src/event_target.rs",
-   "names": [
-    "DOM_EXCEPTION_ERRORS"
-   ],
-   "verdict": "thread_exit_invalidated",
-   "why": "Addresses of DOMException error objects, removed only by the error finalizer; freed addresses are dropped at thread exit.",
-   "hook": "release_dom_exception_errors_in_freed_ranges"
   },
   {
    "file": "crates/perry-runtime/src/ios_game_loop.rs",

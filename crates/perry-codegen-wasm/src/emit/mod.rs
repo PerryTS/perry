@@ -34,6 +34,7 @@ mod memcall;
 mod method_call;
 mod module_emitter;
 mod runtime_imports;
+mod scoped_js;
 mod stmt;
 mod string_collection;
 mod ui_method_map;
@@ -58,8 +59,8 @@ use constants::{
 };
 use func_emit_ctx::FuncEmitCtx;
 use locals::{
-    collect_exported_names, collect_locals, collect_module_let_ids, resolve_export_to_func,
-    resolve_export_to_let, resolve_source_module_idx,
+    collect_exported_names, collect_expr_locals, collect_locals, collect_module_let_ids,
+    collect_param_locals, resolve_export_to_func, resolve_export_to_let, resolve_source_module_idx,
 };
 use module_emitter::WasmModuleEmitter;
 use runtime_imports::RuntimeImports;

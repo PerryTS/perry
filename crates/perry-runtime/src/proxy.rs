@@ -38,6 +38,7 @@ pub(crate) use put_value::{
 };
 pub use put_value::{js_put_value_set_packed_miss, PackedSetSite, PACKED_SET_EMPTY};
 pub(crate) use put_value::{packed_set_cache_resolve, PackedSetWaysSlot, PACKED_SET_CHAIN_WORD};
+pub(crate) use put_value::{store_census, C_REP_CONVERGE, C_REP_MIGRATE, C_REP_VALIDITY_BUMP};
 pub use put_value::{write_pic_way_entry, WritePicCache, WritePicCacheSlot, WRITE_PIC_WORDS};
 mod json;
 mod metadata;
@@ -3057,6 +3058,7 @@ mod tests {
             4,
             packed.as_ptr(),
             packed.len() as u32,
+            0,
         );
         let first = crate::object::js_object_alloc_class_inline_keys(0x6809_01, 0, 4, keys);
         let second = crate::object::js_object_alloc_class_inline_keys(0x6809_01, 0, 4, keys);
@@ -3140,26 +3142,9 @@ mod tests {
                     "{reason} must use ordinary [[Set]]"
                 );
             }
-
-            (*header)._reserved = original | crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT;
-            assert_eq!(
-                object_array_numeric_write_guard(array_box, &[a, b, c, d], 2),
-                0,
-                "an intact typed-layout bit without its descriptor must reject"
-            );
             (*header)._reserved = original;
         }
 
-        for object in [first, second] {
-            crate::gc::js_gc_init_typed_shape_layout(
-                object as u64,
-                4,
-                std::ptr::null(),
-                0,
-                std::ptr::null(),
-                0,
-            );
-        }
         assert_eq!(
             object_array_numeric_write_guard(array_box, &[a, b, c, d], 2),
             (4u64 << 48) | (3u64 << 32) | (2u64 << 16) | 1,
@@ -3190,6 +3175,7 @@ mod tests {
             4,
             other_packed.as_ptr(),
             other_packed.len() as u32,
+            0,
         );
         assert_ne!(
             keys, other_keys,
@@ -3287,6 +3273,7 @@ mod tests {
             5,
             wide_packed.as_ptr(),
             wide_packed.len() as u32,
+            0,
         );
         let narrow = crate::object::js_object_alloc_class_inline_keys(0x6812_03, 0, 4, wide_keys);
         let narrow_values = [boxed_object(narrow)];
@@ -3314,13 +3301,12 @@ mod tests {
             "perry-codegen emits 0x200 for this bit"
         );
         // It ADMITS a receiver, so it must not appear in the mask that REJECTS
-        // one (`WRITE_PIC_BLOCKING_FLAGS = 0x1180`) — a collision would make
+        // one (`WRITE_PIC_BLOCKING_FLAGS = 0x1100`) — a collision would make
         // every marked object permanently ineligible.
-        assert_eq!(crate::gc::OBJ_FLAG_PLAIN_ORDINARY & 0x1180, 0);
-        assert_ne!(crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF & 0x1180, 0);
+        assert_eq!(crate::gc::OBJ_FLAG_PLAIN_ORDINARY & 0x1100, 0);
         // Bit 9 is shared with the array-only arguments-object flag, disjoint
         // by `obj_type`; and it must not collide with any object-meaningful
-        // flag or with the survival-age / layout-state fields the GC owns.
+        // flag or with the survival-age field the GC owns.
         for other in [
             crate::gc::OBJ_FLAG_FROZEN,
             crate::gc::OBJ_FLAG_SEALED,
@@ -3328,9 +3314,7 @@ mod tests {
             crate::gc::OBJ_FLAG_NULL_PROTO,
             crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO,
             crate::gc::OBJ_FLAG_HAS_DESCRIPTORS,
-            crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT,
             0x0038, // GC_COPY_SURVIVAL_AGE_MASK
-            0xC000, // GC_LAYOUT_STATE_MASK
         ] {
             assert_eq!(
                 crate::gc::OBJ_FLAG_PLAIN_ORDINARY & other,

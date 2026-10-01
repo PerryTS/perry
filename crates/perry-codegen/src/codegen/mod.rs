@@ -181,12 +181,13 @@ mod artifact_context;
 mod artifact_display_names;
 mod artifact_source_text;
 mod artifacts;
-mod boxed_locals;
+pub(crate) mod boxed_locals;
 mod cjs_exports;
 mod class_artifacts;
 #[cfg(test)]
 mod clone_suffix_tests;
 mod closure;
+mod closure_capture_cells;
 mod closure_collect;
 mod constructor_contracts;
 #[cfg(test)]
@@ -251,6 +252,7 @@ mod static_shape_ids;
 pub use static_shape_ids::{
     assign_static_shape_ids, decode_static_seed, encode_static_seed, take_module_static_seeds,
     BirthProto, BirthShape, DefinedClassShape, ModuleBirth, ProgramClassShapeIds, TypedMasks,
+    STATIC_SEED_FORMAT,
 };
 pub(crate) use static_shape_ids::{
     static_region_slots, static_shape_id_for_foreign_global, static_shape_id_for_keys_global,
@@ -2403,26 +2405,7 @@ fn compile_module_impl(
             let Some(&class_id) = class_ids.get(class_name) else {
                 continue;
             };
-            // An imported stub has no defining constructor body, so this
-            // module cannot prove that its layout is declarable before that
-            // constructor runs. More importantly, minting a typed ShapeId
-            // here while the producer minted an ordinary one gives the same
-            // runtime class two exact identities across modules. Keep the
-            // consumer on the canonical structural identity and validate the
-            // typed layout after the producer's constructor returns.
-            let typed_layout = if imported_stub_names.contains(class_name.as_str()) || slack > 0 {
-                crate::target_layout::InlineTypedLayout::None
-            } else {
-                crate::lower_call::typed_shape_init::layout_at_allocation_in(
-                    &class_table,
-                    &class_keys_globals_map,
-                    &class_init_chains_map,
-                    class_name,
-                    field_count,
-                )
-            };
-            let gc_packed =
-                crate::target_layout::inline_alloc_gc_packed(&triple, field_count, typed_layout);
+            let gc_packed = crate::target_layout::inline_alloc_gc_packed(&triple, field_count);
             match inits.get(keys_global) {
                 // Two names (an alias) sharing one keys global must agree on
                 // the word module init writes; if they do not, neither may use
@@ -2443,12 +2426,34 @@ fn compile_module_impl(
         inits.retain(|_, (class_id, _, _)| *class_id != u32::MAX);
         inits
     };
+    // Charter step 5, T1: each class's birth rep (`typed_shape::class_birth_rep_in`),
+    // keyed like the header-image inits by keys global. Two names sharing a
+    // keys global that disagree get `Any` (0): every consumer reads this map,
+    // so they still agree with each other.
+    let class_birth_reps_map: std::collections::HashMap<String, u64> = {
+        let mut reps: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+        for (class_name, keys_global) in &class_keys_globals_map {
+            let rep = crate::typed_shape::class_birth_rep_in(
+                &class_table,
+                &class_keys_globals_map,
+                &class_init_chains_map,
+                imported_stub_names.contains(class_name.as_str()),
+                class_name,
+            );
+            let entry = reps.entry(keys_global.clone()).or_insert(rep);
+            if *entry != rep {
+                *entry = 0;
+            }
+        }
+        reps
+    };
     if let Some(births) = births {
         *births = static_shape_ids::module_births(
             &module_prefix,
             &class_keys_init_data,
             defined_class_keys_len,
             &class_header_image_inits,
+            &class_birth_reps_map,
             &class_ids,
         );
         return Ok(Vec::new());
@@ -2457,6 +2462,7 @@ fn compile_module_impl(
         &module_prefix,
         &class_keys_init_data,
         &class_header_image_inits,
+        &class_birth_reps_map,
         &class_ids,
         &opts.static_shape_ids,
         &opts.program_class_shape_ids,
@@ -2568,6 +2574,7 @@ fn compile_module_impl(
         class_field_counts: class_field_counts_map,
         class_init_chains: class_init_chains_map,
         class_header_images: class_header_images_map,
+        class_birth_reps: class_birth_reps_map,
         imported_class_ctors: opts
             .imported_classes
             .iter()
@@ -2691,6 +2698,7 @@ fn compile_module_impl(
         typed_i1_closure_param_reps: std::collections::HashMap::new(),
         compiler_private_async_i32_control_locals,
         compiler_private_async_i1_control_locals,
+        scope_map: Default::default(),
         disable_buffer_fast_path,
         program_shadows_buffer_read_method:
             crate::lower_call::buffer_intrinsic::module_shadows_buffer_read_method(hir),
@@ -2893,6 +2901,11 @@ fn compile_module_impl(
 
     // Module-wide boxed-var union + LocalId→Type map. See `boxed_locals`.
     let module_boxed_vars = boxed_locals::collect_module_boxed_vars(hir);
+    // Scope context objects: the groups `scope_env::group_scope_boxes` formed
+    // (as preallocation statements), validated against this module's
+    // globals. Every capture layout below is computed through this map.
+    cross_module.scope_map =
+        crate::scope_env::ScopeMap::build(hir, &module_boxed_vars, &module_globals);
     // #6369: the *receiver-type oracle* for closure bodies — every module-wide
     // `Stmt::Let` type, with NO representation-driven filtering. `FnCtx.
     // local_types` is what `static_type_of` / `is_array_expr` /
@@ -3166,12 +3179,14 @@ fn compile_module_impl(
         &module_boxed_vars,
         &module_globals,
         &trusted_box_exclusions,
+        &cross_module.scope_map,
     );
     let versioned_loop_callbacks = closure_collect::select_versioned_loop_callbacks(
         &closures,
         &trusted_box_closures,
         &module_boxed_vars,
         &module_globals,
+        &cross_module.scope_map,
     );
 
     // ---- Representation-selection Phase 2: specialized-ABI plan selection.

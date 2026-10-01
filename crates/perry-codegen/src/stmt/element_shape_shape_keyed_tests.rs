@@ -374,8 +374,8 @@ fn a_class_typed_array_still_takes_the_class_arm() {
     );
     let fast = fast_clone_slice(&ir);
     assert!(
-        fast.contains("402686207") && !fast.contains("134250751"),
-        "the class arm keeps the typed-layout conjunct in its residual mask"
+        fast.contains("134250751") && !fast.contains("402686207"),
+        "the class arm's residual is the shape-only header mask: no intact conjunct"
     );
 }
 

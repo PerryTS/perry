@@ -319,6 +319,7 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
         "crates/perry-runtime/src/object/live_slots.rs",
         "crates/perry-codegen/src/lower_call/new_alloc.rs",
         "crates/perry-runtime/src/gc/layout_slot_visit.rs",
+        "crates/perry-runtime/src/gc/copying_object_scan.rs",
         "crates/perry-runtime/src/object/field_set_by_name/tail.rs",
         "crates/perry-runtime/src/typed_feedback/guards.rs",
         "crates/perry-runtime/src/object/native_call_method.rs",
@@ -360,6 +361,7 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     live_slots = clean["crates/perry-runtime/src/object/live_slots.rs"]
     codegen_alloc = clean["crates/perry-codegen/src/lower_call/new_alloc.rs"]
     layout_visit = clean["crates/perry-runtime/src/gc/layout_slot_visit.rs"]
+    copying_object_scan = clean["crates/perry-runtime/src/gc/copying_object_scan.rs"]
     transition_tail = clean[
         "crates/perry-runtime/src/object/field_set_by_name/tail.rs"
     ]
@@ -485,19 +487,32 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
             + ", ".join(sorted(scanner_slot_apis))
         )
 
-    layout_body = function_body(layout_visit, "visit_gc_layout_slot_descriptors")
-    require_code(
-        layout_body,
-        r"gc_shape_keys_edge_slot\s*\(",
-        "descriptor keys edge enumerated as a child slot",
-    )
-    # Nothing in the visit reads the deleted mirror. The descriptor record is
-    # both the strong edge and the stable rewritable location.
-    if re.search(r"keys_array", layout_body):
-        raise CensusError(
-            "the GC slot visitor reads ObjectHeader::keys_array again; the "
-            "descriptor is the authoritative edge since #8112"
+    # #11549: the walk's ONE body is the generic `_inline` form (the `dyn`
+    # wrapper only forwards to it), and the copying drain's plain-object scan
+    # is a second enumeration of the same object slots. Both must emit the
+    # descriptor's keys edge and neither may read the deleted mirror.
+    for body_name, body in (
+        (
+            "visit_gc_layout_slot_descriptors_inline",
+            function_body(layout_visit, "visit_gc_layout_slot_descriptors_inline"),
+        ),
+        (
+            "plain_object_plan",
+            function_body(copying_object_scan, "plain_object_plan"),
+        ),
+    ):
+        require_code(
+            body,
+            r"gc_shape_keys_edge_slot\s*\(",
+            f"descriptor keys edge enumerated as a child slot ({body_name})",
         )
+        # Nothing in the visit reads the deleted mirror. The descriptor record
+        # is both the strong edge and the stable rewritable location.
+        if re.search(r"keys_array", body):
+            raise CensusError(
+                f"the GC slot visitor ({body_name}) reads ObjectHeader::keys_array "
+                "again; the descriptor is the authoritative edge since #8112"
+            )
 
     # The insert/reverse-index body lives in the `_with_holes` variant since
     # the tombstone-delete work; `_with_generation` is a thin forwarding
@@ -526,7 +541,9 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
         ensure_append,
         "by-id descriptor before reverse accelerator",
     )
-    sync = function_body(shapes, "publish_object_shape_from")
+    # The structural publish body (charter step 5: `publish_object_shape_from`
+    # delegates to it with an all-Any rep).
+    sync = function_body(shapes, "publish_object_shape_from_rep")
     # #9317 routed every post-birth ShapeId publication through
     # `stamp_object_shape_id_with_carrier_note`, which performs the header
     # write and then arms `old_carrier` for a promoted receiver. The header
@@ -545,14 +562,19 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     # test-only.
     for name in (
         "publish_object_shape_from",
+        "publish_object_shape_from_rep",
         "publish_object_live_slot_count",
+        "publish_object_live_slot_count_rep",
         "birth_publish_object_shape",
         "stamp_object_shape",
         "birth_stamp_object_shape",
     ):
         if "clear_object_shape_stamp" in function_body(shapes, name):
             raise CensusError(f"{name} clears the shape stamp: the live-slot bound has no mirror")
-    if "clear_object_shape_stamp" in function_body(object_mod, "set_object_keys_with_live"):
+    if any(
+        "clear_object_shape_stamp" in function_body(object_mod, name)
+        for name in ("set_object_keys_with_live", "set_object_keys_with_live_rep")
+    ):
         raise CensusError(
             "set_object_keys_with_live clears the shape stamp: "
             "the live-slot bound has no mirror"
@@ -625,7 +647,8 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     assert_before(
         cache_arm,
         "set_object_live_slot_count",
-        "runtime_store_jsvalue_slot",
+        # The checked store funnel (charter step 5 P2b; was the raw slot store).
+        "store_object_field_slot",
         "transition-cache count before value",
     )
 
@@ -1176,16 +1199,29 @@ def run_sabotage_selftests(sources: dict[str, str], baseline: dict[str, object])
         lambda: assert_authority_surfaces(header_fact_read),
     )
 
+    plan_fact_read = dict(sources)
+    path = "crates/perry-runtime/src/gc/copying_object_scan.rs"
+    plan_fact_read[path] = plan_fact_read[path].replace(
+        "let keys_edge = crate::object::gc_shape_keys_edge_slot(shape);",
+        "let _mirror = (*obj).keys_array;\n    let keys_edge = crate::object::gc_shape_keys_edge_slot(shape);",
+        1,
+    )
+    expect_rejected(
+        "copying plain-object scan reads the header mirror for a fact",
+        lambda: assert_authority_surfaces(plan_fact_read),
+    )
+
     inverted_publication = dict(sources)
     path = "crates/perry-runtime/src/object/shapes.rs"
     publication_body = function_body(
-        inverted_publication[path], "publish_object_shape_from"
+        inverted_publication[path], "publish_object_shape_from_rep"
     )
     inverted_body = swap_once(
         publication_body,
         # #9029 tombstones: the lineage publish carries hole_count, so the
-        # mint call in publish_object_shape_from is the _with_holes form.
-        "shape_descriptor_ensure_with_holes(",
+        # mint call in the structural publish is the form taking a rep
+        # (charter step 5).
+        "shape_descriptor_ensure_with_rep(",
         "stamp_object_shape_id_with_carrier_note",
     )
     inverted_publication[path] = inverted_publication[path].replace(
@@ -1218,7 +1254,7 @@ def run_sabotage_selftests(sources: dict[str, str], baseline: dict[str, object])
     )
 
     early_retirement = dict(sources)
-    publish_body = function_body(early_retirement[path], "publish_object_shape_from")
+    publish_body = function_body(early_retirement[path], "publish_object_shape_from_rep")
     early_body = swap_once(
         publish_body,
         "stamp_object_shape_id_with_carrier_note",
@@ -1353,7 +1389,7 @@ def run_sabotage_selftests(sources: dict[str, str], baseline: dict[str, object])
     # #8113: a re-introduced clear-then-remint window.
     cleared_publication = dict(sources)
     path = "crates/perry-runtime/src/object/shapes.rs"
-    cleared_body = function_body(cleared_publication[path], "publish_object_live_slot_count")
+    cleared_body = function_body(cleared_publication[path], "publish_object_live_slot_count_rep")
     cleared_publication[path] = cleared_publication[path].replace(
         cleared_body,
         cleared_body.replace(

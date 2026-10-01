@@ -53,19 +53,3 @@ pub(in crate::gc) fn test_reset_trace_slot_reads() {
 pub(in crate::gc) fn test_trace_slot_reads() -> usize {
     TRACE_SLOT_READS.with(|c| c.get())
 }
-
-pub(in crate::gc) fn test_reset_typed_slot_descriptor_probes() {
-    TYPED_SLOT_DESCRIPTOR_PROBES.with(|c| c.set(0));
-}
-
-pub(in crate::gc) fn test_typed_slot_descriptor_probes() -> usize {
-    TYPED_SLOT_DESCRIPTOR_PROBES.with(Cell::get)
-}
-
-pub(crate) fn test_reset_typed_raw_f64_descriptor_queries() {
-    TYPED_RAW_F64_DESCRIPTOR_QUERIES.with(|c| c.set(0));
-}
-
-pub(crate) fn test_typed_raw_f64_descriptor_queries() -> usize {
-    TYPED_RAW_F64_DESCRIPTOR_QUERIES.with(Cell::get)
-}

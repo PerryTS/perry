@@ -496,8 +496,7 @@ pub extern "C" fn js_object_delete_field(
                         .is_some_and(|shape| shape.object_kind.is_ordinary_layout())
                     && (*obj_gc)._reserved
                         & (crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
-                            | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
-                            | crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT)
+                            | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO)
                         == 0;
                 if stable_candidate {
                     (*obj_gc)._reserved |= crate::gc::OBJ_FLAG_STABLE_TOMBSTONES;
@@ -543,7 +542,7 @@ pub extern "C" fn js_object_delete_field(
                     if i < alloc_limit {
                         let fields_ptr =
                             (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
-                        crate::gc::runtime_store_jsvalue_slot(
+                        crate::gc::runtime_store_object_jsvalue_slot(
                             obj as usize,
                             fields_ptr.add(i) as usize,
                             i,
@@ -722,7 +721,12 @@ pub extern "C" fn js_object_delete_field(
                 let fields_ptr =
                     (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut JSValue;
                 let slot = fields_ptr.add(j);
-                crate::gc::runtime_store_jsvalue_slot(obj as usize, slot as usize, j, next.bits());
+                crate::gc::runtime_store_object_jsvalue_slot(
+                    obj as usize,
+                    slot as usize,
+                    j,
+                    next.bits(),
+                );
             } else {
                 overflow_set(obj as usize, j, next.bits());
             }
@@ -732,7 +736,7 @@ pub extern "C" fn js_object_delete_field(
             let fields_ptr =
                 (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut JSValue;
             let slot = fields_ptr.add(new_count);
-            crate::gc::runtime_store_jsvalue_slot(
+            crate::gc::runtime_store_object_jsvalue_slot(
                 obj as usize,
                 slot as usize,
                 new_count,
@@ -915,8 +919,7 @@ unsafe fn try_delete_stable_sso(obj: *mut ObjectHeader, key: JSValue) -> Option<
     const BLOCKING_FLAGS: u16 = crate::gc::OBJ_FLAG_FROZEN
         | crate::gc::OBJ_FLAG_SEALED
         | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
-        | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
-        | crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT;
+        | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
     // The flag is admitted by the complete delete path only for class-less or
     // registered anonymous-shape ordinary objects, so class declaration
     // prototypes cannot enter this lane.
@@ -991,7 +994,7 @@ unsafe fn try_delete_stable_sso(obj: *mut ObjectHeader, key: JSValue) -> Option<
                 crate::value::TAG_HOLE,
             );
             if slot < alloc_limit {
-                crate::gc::runtime_store_jsvalue_slot(
+                crate::gc::runtime_store_object_jsvalue_slot(
                     obj as usize,
                     fields.add(slot as usize) as usize,
                     slot as usize,
@@ -1024,7 +1027,7 @@ unsafe fn try_delete_stable_sso(obj: *mut ObjectHeader, key: JSValue) -> Option<
             );
             super::rebuild_array_layout_from_slots(keys);
             if slot < alloc_limit {
-                crate::gc::runtime_store_jsvalue_slot(
+                crate::gc::runtime_store_object_jsvalue_slot(
                     obj as usize,
                     fields.add(slot as usize) as usize,
                     slot as usize,
@@ -1065,7 +1068,7 @@ unsafe fn try_delete_stable_sso(obj: *mut ObjectHeader, key: JSValue) -> Option<
     if slot < live_slots {
         let fields =
             (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut crate::JSValue;
-        crate::gc::runtime_store_jsvalue_slot(
+        crate::gc::runtime_store_object_jsvalue_slot(
             obj as usize,
             fields.add(slot as usize) as usize,
             slot as usize,
@@ -1922,7 +1925,7 @@ unsafe fn squeeze_holes_and_delete(
             let v =
                 crate::object::field_get_set::object_field_at_with_live(obj, s as u32, field_count);
             if out < alloc_limit {
-                crate::gc::runtime_store_jsvalue_slot(
+                crate::gc::runtime_store_object_jsvalue_slot(
                     obj as usize,
                     fields_ptr.add(out) as usize,
                     out,

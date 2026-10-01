@@ -9,7 +9,7 @@ use super::*;
 /// Fuse `base[provenSymbol].field` into one weak identity/epoch guard followed
 /// by one exact ShapeId guard and direct slot load.
 ///
-/// The ordinary Symbol IC already proves that its cached intermediate value is
+/// The ordinary Symbol IC already proves that its indexed intermediate value is
 /// the current own Symbol data property and invalidates on every Symbol write
 /// or completed GC. A second ordinary property PIC currently throws that fact
 /// away and repeats receiver tag, GC-header, descriptor, ShapeId, and dispatch
@@ -52,6 +52,8 @@ pub(super) fn lower_symbol_then_named_property_ic(
 
         let probe_idx = ctx.new_block("symfield.probe");
         let identity_idx = ctx.new_block("symfield.identity");
+        let slot_idx = ctx.new_block("symfield.slot");
+        let slot_label = ctx.block_label(slot_idx);
         let hit_idx = ctx.new_block("symfield.hit");
         let live_idx = ctx.new_block("symfield.live");
         let miss_idx = ctx.new_block("symfield.miss");
@@ -102,7 +104,23 @@ pub(super) fn lower_symbol_then_named_property_ic(
         // first. Named-property mutations do not, so independently validate
         // the intermediate object's live ShapeId and descriptor latch.
         ctx.current_block = identity_idx;
-        let intermediate_ptr = ctx.block().gep(I64, &symbol_cache, &[(I64, "3")]);
+        let base_raw = ctx.block().and(I64, &base_bits, POINTER_MASK_I64);
+        let base_shape_addr = ctx.block().add(I64, &base_raw, "4");
+        let base_shape_ptr = ctx.block().inttoptr(I64, &base_shape_addr);
+        let base_shape = ctx.block().load(I32, &base_shape_ptr);
+        let base_shape = ctx.block().zext(I32, &base_shape, I64);
+        let entry_ptr = ctx.block().gep(I64, &symbol_cache, &[(I64, "3")]);
+        let entry = ctx.block().load(I64, &entry_ptr);
+        let cached_shape = ctx.block().lshr(I64, &entry, "32");
+        let shape_matches = ctx.block().icmp_eq(I64, &base_shape, &cached_shape);
+        ctx.block()
+            .cond_br(&shape_matches, &slot_label, &miss_label);
+        ctx.current_block = slot_idx;
+        let slot = ctx.block().and(I64, &entry, "4294967295");
+        let offset = ctx.block().shl(I64, &slot, "3");
+        let fields = ctx.block().add(I64, &base_raw, "16");
+        let addr = ctx.block().add(I64, &fields, &offset);
+        let intermediate_ptr = ctx.block().inttoptr(I64, &addr);
         let intermediate_bits = ctx.block().load(I64, &intermediate_ptr);
         let intermediate_handle = ctx.block().and(I64, &intermediate_bits, POINTER_MASK_I64);
         let descriptor_addr = ctx.block().sub(I64, &intermediate_handle, "6");

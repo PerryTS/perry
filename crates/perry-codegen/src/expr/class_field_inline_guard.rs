@@ -29,11 +29,9 @@
 //! `typed_feedback/guards.rs`): if it passes, the guard call would have returned
 //! "fast". On any miss it falls through to the unchanged guard-call path, so the
 //! optimization is purely additive — it can never take the fast path the guard
-//! would have rejected. The single per-object `GC_OBJ_TYPED_LAYOUT_INTACT` bit
-//! (runtime `gc/layout.rs`) stands in for the thread-local raw-f64 layout probe:
-//! it is set exactly when the object's canonical typed descriptor is installed
-//! and cleared on any downgrade, so "intact bit set + class_id/keys match" ⟹
-//! "slot K is raw-f64" for any field the class declares as a raw-f64 candidate.
+//! would have rejected. The exact ShapeId carries the raw-f64 lane rep, so a
+//! representation change must move to a different ShapeId before this guard
+//! can pass again.
 
 use crate::types::{I1, I16, I32, I64, I8};
 
@@ -43,13 +41,12 @@ use super::FnCtx;
 // decimals because the emitted IR is textual.
 const GC_TYPE_OBJECT: &str = "2";
 const GC_FLAG_FORWARDED_I8: &str = "-128"; // 0x80 as i8
-const TYPED_LAYOUT_INTACT_BIT: &str = "4096"; // GC_OBJ_TYPED_LAYOUT_INTACT (0x1000)
 /// `OBJ_FLAG_HAS_DESCRIPTORS | OBJ_FLAG_STABLE_TOMBSTONES`.
 const OBJ_FLAG_READ_FAST_PATH_BLOCKED: &str = "3072";
 /// `OBJ_FLAG_FROZEN | OBJ_FLAG_STABLE_TOMBSTONES |
-/// OBJ_FLAG_HAS_DESCRIPTORS | OBJ_FLAG_PACKED_NUMERIC_PROOF` — all live in the
-/// same `GcHeader::_reserved` i16, so one mask tests them.
-const OBJ_FLAG_WRITE_FAST_PATH_BLOCKED: &str = "3201";
+/// OBJ_FLAG_HAS_DESCRIPTORS`. Numeric proof is a different ShapeId, so the
+/// exact shape comparison below excludes it.
+const OBJ_FLAG_WRITE_FAST_PATH_BLOCKED: &str = "3073";
 const F64_EXP_MASK: &str = "9218868437227405312"; // 0x7FF0_0000_0000_0000
 
 /// A widening arm for the class-field shape check: one concrete subclass whose
@@ -62,6 +59,8 @@ const F64_EXP_MASK: &str = "9218868437227405312"; // 0x7FF0_0000_0000_0000
 pub(crate) struct ClassFieldSubclassArm {
     pub class_id: u32,
     pub keys_global: String,
+    /// The subclass's birth rep word (`CrossModuleCtx::class_birth_reps`, T1).
+    pub birth_rep: u64,
 }
 
 /// A hierarchy wider than this turns the shape check into a longer compare
@@ -137,21 +136,19 @@ pub(crate) fn class_field_subclass_arms(
         {
             continue;
         }
-        // The fast path's representation choice (raw double vs NaN-boxed) is
-        // fixed at this site, so a subclass whose declared type disagrees would
-        // have the slot read at the wrong representation.
-        let sub_raw_f64 = crate::type_analysis::class_field_declared_type(ctx, sub_name, property)
-            .as_ref()
-            .is_some_and(crate::typed_shape::type_is_raw_f64_candidate);
-        if sub_raw_f64 != requires_raw_f64 {
-            continue;
-        }
         let Some(keys_global) = ctx.class_keys_globals.get(sub_name).cloned() else {
             continue;
         };
+        // A raw site (`class_field_site_raw_f64`) has an `F64` lane at this
+        // slot in every arm's birth rep; a boxed site reads any lane boxed.
+        let birth_rep = ctx.class_birth_reps.get(&keys_global).copied().unwrap_or(0);
+        if requires_raw_f64 && !crate::typed_shape::birth_rep_slot_is_f64(birth_rep, field_index) {
+            continue;
+        }
         seen_ids.push(sub_id);
         arms.push(ClassFieldSubclassArm {
             class_id: sub_id,
+            birth_rep: ctx.class_birth_reps.get(&keys_global).copied().unwrap_or(0),
             keys_global,
         });
         if arms.len() > MAX_CLASS_FIELD_SUBCLASS_ARMS {
@@ -159,6 +156,33 @@ pub(crate) fn class_field_subclass_arms(
         }
     }
     arms
+}
+
+/// Charter step 5, P4: may a class-field site treat slot `field_index` of
+/// `class_name` as a raw double? Exactly when the slot is an `F64` lane of the
+/// birth rep of every ShapeId the site's guard compares against: the declared
+/// class's and each subclass arm's. A subclass whose birth rep has no `F64`
+/// lane at the slot makes the site boxed. The declared type is not consulted:
+/// the birth rep is the one decision (T1 `class_birth_rep_in`), and the
+/// runtime's IC contract flag follows the same answer.
+pub(crate) fn class_field_site_raw_f64(
+    ctx: &FnCtx<'_>,
+    class_name: &str,
+    property: &str,
+    field_index: u32,
+) -> bool {
+    class_birth_slot_is_f64(ctx, class_name, field_index)
+        && class_field_subclass_arms(ctx, class_name, property, field_index, false)
+            .iter()
+            .all(|arm| crate::typed_shape::birth_rep_slot_is_f64(arm.birth_rep, field_index))
+}
+
+/// Is `field_index` an `F64` lane of `class_name`'s own birth rep?
+pub(crate) fn class_birth_slot_is_f64(ctx: &FnCtx<'_>, class_name: &str, field_index: u32) -> bool {
+    ctx.class_keys_globals
+        .get(class_name)
+        .and_then(|keys_global| ctx.class_birth_reps.get(keys_global))
+        .is_some_and(|&rep| crate::typed_shape::birth_rep_slot_is_f64(rep, field_index))
 }
 
 /// Does `arms` name EVERY transitive subclass of `class_name`?
@@ -264,8 +288,8 @@ pub(crate) fn emit_plain_finite_number_check(
 /// keys_array / field_count / the typed-layout intact bit / the frozen bit /
 /// the process-global enable flag mid-loop.
 ///
-/// `require_raw_f64` adds the per-object typed-layout intact check (any raw-f64 read or write in
-/// the loop); `require_not_frozen` adds the frozen-bit check (any write in the
+/// No typed-layout bit is tested (charter step 5, P4: raw-f64 fields are `F64`
+/// birth lanes of the compared id); `require_not_frozen` adds the frozen-bit check (any write in the
 /// loop). Per-store value checks are NOT emitted here — the fast clone's
 /// stores keep their inline plain-finite check and side-exit to `slow_label`.
 ///
@@ -287,7 +311,6 @@ pub(crate) fn emit_class_field_loop_preheader_check(
     obj_handle: &str,
     expected_class_id: &str,
     expected_shape_id: &str,
-    require_raw_f64: bool,
     require_not_frozen: bool,
     slow_label: &str,
 ) -> (String, String) {
@@ -354,11 +377,10 @@ pub(crate) fn emit_class_field_loop_preheader_check(
         let unblocked = blk.icmp_eq(I16, &blocked, "0");
         acc = blk.and(I1, &acc, &unblocked);
 
-        if require_raw_f64 {
-            let intact = blk.and(I16, &reserved, TYPED_LAYOUT_INTACT_BIT);
-            let intact_ok = blk.icmp_ne(I16, &intact, "0");
-            acc = blk.and(I1, &acc, &intact_ok);
-        }
+        // Charter step 5, P4: a raw-f64 field needs no per-object bit. The
+        // site is raw only for an `F64` lane of every compared id's birth rep
+        // (`class_field_site_raw_f64`), and an object carrying such an id holds
+        // a Number in that lane by the shape's invariant.
 
         if require_not_frozen {
             let blocked = blk.and(I16, &reserved, OBJ_FLAG_WRITE_FAST_PATH_BLOCKED);
@@ -472,8 +494,8 @@ pub(crate) fn emit_proven_shape_recheck(
 /// block, which is left current and whose label is returned, so the caller
 /// emits the unchanged `js_typed_feedback_class_field_set_guard` call next.
 ///
-/// It is the read guard ([`emit_class_field_read_precheck`]) plus the two
-/// facts a store needs that no ShapeId carries:
+/// It is the read guard ([`emit_class_field_read_precheck`]) plus the
+/// value check a raw-f64 store needs:
 ///
 /// * the receiver range check, as ONE biased unsigned compare (the shared
 ///   fused receiver test, `crate::expr::receiver_range`);
@@ -487,10 +509,8 @@ pub(crate) fn emit_proven_shape_recheck(
 ///   guard's list therefore covers `OBJ_FLAG_FROZEN` too, and the header word
 ///   test the old write guard made (GC kind, forwarded, descriptor, tombstone,
 ///   frozen) is gone;
-/// * **kept, per object**: `OBJ_FLAG_PACKED_NUMERIC_PROOF` (an Array-subclass
-///   element-prefix claim any owner store must retire first) and, for a
-///   raw-f64 field, `GC_OBJ_TYPED_LAYOUT_INTACT`. Both live in the one
-///   `_reserved` half-word, so they are one load, one mask and one compare;
+/// * a numeric-proof Array subclass carries a sibling ShapeId, so the
+///   exact birth-shape compare refuses its inline store;
 /// * for a raw-f64 store, the value is a plain finite number (a non-number
 ///   must downgrade through the guard call, never a raw store).
 ///
@@ -508,7 +528,24 @@ pub(crate) fn emit_class_field_inline_precheck(
     fast_label: &str,
     subclass_arms: &[ClassFieldSubclassArm],
     keys_global_name: &str,
+    field_index: u32,
 ) -> String {
+    // Charter step 5, T1 (c): a store the shape compare admits into an `F64`
+    // birth lane of ANY accepted class stores only a canonical double. That is
+    // the same plain-finite test the raw-f64 arm emits; a non-Number or
+    // non-finite value takes the guard call, whose checked store generalizes.
+    // It is decided here from the birth rep, not inferred from the declared
+    // field type, so a writer cannot raw-store into an `F64` lane by passing
+    // `require_raw_f64 = false`.
+    let f64_lane = crate::typed_shape::birth_rep_slot_is_f64(
+        ctx.class_birth_reps
+            .get(keys_global_name)
+            .copied()
+            .unwrap_or(0),
+        field_index,
+    ) || subclass_arms
+        .iter()
+        .any(|arm| crate::typed_shape::birth_rep_slot_is_f64(arm.birth_rep, field_index));
     let deref_idx = ctx.new_block("class_field_inline.deref");
     let guardcall_idx = ctx.new_block("class_field_inline.guardcall");
     let deref_label = ctx.block_label(deref_idx);
@@ -572,19 +609,9 @@ pub(crate) fn emit_class_field_inline_precheck(
             }
             ok
         };
-        // GcHeader `_reserved` (u16 @-6): no numeric proof, and for a raw-f64
-        // field the typed layout still intact.
-        let (mask, expected): (u16, u16) = if require_raw_f64 {
-            (WRITE_PROOF_BIT | WRITE_INTACT_BIT, WRITE_INTACT_BIT)
-        } else {
-            (WRITE_PROOF_BIT, 0)
-        };
-        let res_ptr = blk.gep(I8, &obj_ptr, &[(I64, "-6")]);
-        let reserved = blk.load(I16, &res_ptr);
-        let bits = blk.and(I16, &reserved, &(mask as i16).to_string());
-        let facts_ok = blk.icmp_eq(I16, &bits, &(expected as i16).to_string());
-        ok = blk.and(I1, &ok, &facts_ok);
-        if let (Some(value_bits), true) = (set_value_bits, require_raw_f64) {
+        // The compared birth ShapeId has kind Ordinary. A numeric-proof
+        // sibling carries another id, so no per-object proof read is needed.
+        if let (Some(value_bits), true) = (set_value_bits, require_raw_f64 || f64_lane) {
             // Only a plain finite number may be stored raw. Non-finite
             // (exponent all-ones: +-Inf/NaN) and every NaN-boxed tag share the
             // all-ones exponent, so one mask/compare routes them to the call.
@@ -597,12 +624,6 @@ pub(crate) fn emit_class_field_inline_precheck(
     ctx.current_block = guardcall_idx;
     guardcall_label
 }
-
-/// `OBJ_FLAG_PACKED_NUMERIC_PROOF` (0x80) and `GC_OBJ_TYPED_LAYOUT_INTACT`
-/// (0x1000): the two per-object `_reserved` facts the write guard reads.
-const WRITE_PROOF_BIT: u16 = 0x80;
-const WRITE_INTACT_BIT: u16 = 0x1000;
-const _: () = assert!(WRITE_PROOF_BIT as u64 == 128 && WRITE_INTACT_BIT as u64 == 4096);
 
 /// Emit the class-field READ guard: receiver range check, ONE ShapeId compare
 /// against the class's own ShapeId global, and — for a raw-f64 site
@@ -617,8 +638,8 @@ const _: () = assert!(WRITE_PROOF_BIT as u64 == 128 && WRITE_INTACT_BIT as u64 =
 ///
 /// This is the read-side form of [`emit_class_field_inline_precheck`], and it
 /// is deliberately a separate function: the WRITE guard keeps the full header
-/// word test, because `OBJ_FLAG_FROZEN` and `OBJ_FLAG_PACKED_NUMERIC_PROOF` are
-/// per-object facts no ShapeId carries.
+/// word test for `OBJ_FLAG_FROZEN`. The exact ShapeId comparison rejects
+/// the Array-subclass numeric-proof sibling.
 ///
 /// ## What a matching ShapeId already proves (the checks this guard dropped)
 ///
@@ -683,12 +704,8 @@ const _: () = assert!(WRITE_PROOF_BIT as u64 == 128 && WRITE_INTACT_BIT as u64 =
 ///   extends Pt {}` instances all carry `Pt`'s ShapeId, each with its own
 ///   class id (scenario 1 of
 ///   `test-files/test_gap_class_field_read_guard_shape_authority.ts`).
-/// * **raw-f64 sites: `GC_OBJ_TYPED_LAYOUT_INTACT`.** A store that
-///   contradicts the typed descriptor (`gc/layout.rs` `SlotVerdict::
-///   Downgrade`) clears this per-object bit WITHOUT a shape transition, so
-///   the ShapeId says nothing about whether the slot still holds a raw
-///   double. Measured: a downgraded `Pt` keeps its ShapeId with the bit
-///   clear (scenario 2 of the same fixture).
+/// * **raw-f64 sites: exact ShapeId birth rep.** The compared id carries
+///   the F64 lane fact; a contradictory store moves to a sibling id.
 ///
 /// On success the IR branches to `fast_label`; on any miss to a fresh
 /// `class_field_inline.guardcall` block, which is left current (the caller
@@ -772,19 +789,10 @@ pub(crate) fn emit_class_field_read_precheck(
                 ok = blk.or(I1, &ok, &arm_ok);
             }
         }
-        if require_raw_f64 {
-            // GcHeader `_reserved` (u16 @-6): the per-object typed-layout
-            // intact bit. A native-endian half-word, like every other
-            // `_reserved` reader. Same block as the identity compare, so the
-            // conjunction lowers to compare-and-branches that fall through
-            // into the slot load (x86-64: `movzwl`/`and`/`je` after the
-            // identity `cmp`/`jne`).
-            let res_ptr = blk.gep(I8, &obj_ptr, &[(I64, "-6")]);
-            let reserved = blk.load(I16, &res_ptr);
-            let intact = blk.and(I16, &reserved, TYPED_LAYOUT_INTACT_BIT);
-            let intact_ok = blk.icmp_ne(I16, &intact, "0");
-            ok = blk.and(I1, &ok, &intact_ok);
-        }
+        // Charter step 5, P4: no per-object typed-layout bit. A raw-f64 read
+        // is emitted only for an `F64` lane of every compared id's birth rep
+        // (`class_field_site_raw_f64`), so the identity compare alone proves
+        // the slot holds a Number.
         blk.cond_br(&ok, fast_label, &guardcall_label);
     }
 

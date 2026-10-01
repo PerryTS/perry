@@ -58,6 +58,7 @@ pub mod opt_report;
 pub(crate) mod root_reload;
 pub mod rooting;
 pub mod runtime_decls;
+pub mod scope_env;
 pub mod statepoint_report;
 pub(crate) mod stmt;
 pub mod strings;
@@ -95,7 +96,7 @@ pub use codegen::{
     ExportedObjectLiteralCapability, FpContractMode, ImportedClass, ImportedObjectLiteral,
     ImportedObjectLiteralMethod, ModuleBirth, NamespaceEntry, NamespaceEntryKind,
     ObjectLiteralMethodCandidate, ProgramClassShapeIds, ResolvedConstructorContracts,
-    ShortSpreadMethodCandidate, TypedMasks,
+    ShortSpreadMethodCandidate, TypedMasks, STATIC_SEED_FORMAT,
 };
 // #10399: whole-program Worker flag, set by the driver before module codegen.
 pub use codegen::{program_has_worker, set_program_has_worker};

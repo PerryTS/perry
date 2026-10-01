@@ -131,7 +131,11 @@ unsafe fn ensure_key_in_keys_array_inner(
             };
             if let Some(handle) = interned.as_ref() {
                 let probe = handle.with_const_ptr::<crate::StringHeader, _>(|interned_key| {
-                    super::super::transition_cache_lookup(prev_shape_id, interned_key)
+                    super::super::transition_cache_lookup_for_value(
+                        prev_shape_id,
+                        interned_key,
+                        None,
+                    )
                 });
                 if let Some((next_keys, slot_idx, target_shape_id)) = probe {
                     let live = crate::object::object_live_slot_count(obj);
@@ -284,7 +288,7 @@ unsafe fn ensure_key_in_keys_array_inner(
     }
     if let (Some(handle), true) = (interned_handle.as_ref(), prev_shape_id != 0) {
         let probe = handle.with_const_ptr::<crate::StringHeader, _>(|interned| {
-            super::super::transition_cache_lookup(prev_shape_id, interned)
+            super::super::transition_cache_lookup_for_value(prev_shape_id, interned, None)
         });
         if let Some((next_keys, slot_idx, target_shape_id)) = probe {
             let live = crate::object::object_live_slot_count(obj);

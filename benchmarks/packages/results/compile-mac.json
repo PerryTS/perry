@@ -1,17 +1,17 @@
 {
  "env": {
-  "PERRY_BUILD_COMMIT": "21c9f5438a15cefaac70933e6927d8b6ced84e8f"
+  "PERRY_BUILD_COMMIT": "9e29f59d435ee08df161ef460ee6f204fb381d4f"
  },
  "flags": "",
- "host": "MacBookPro.fritz.box",
- "perry": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry",
- "perry_commit": "",
+ "host": "perry-macos.fritz.box",
+ "perry": "/Users/perry/perry-bench.noindex/matrix-rerun/target/release/perry",
+ "perry_commit": "9e29f59d43",
  "perry_version": "perry 0.5.1654",
- "platform": "macOS-26.5-arm64-arm-64bit-Mach-O",
+ "platform": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
  "workloads": {
   "axios/get_json": {
-   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile axios/get_json.ts -o /private/tmp/claude-pkg-bench-out/mac/axios__get_json",
-   "compile_s": 444.22,
+   "cmd": "/Users/perry/perry-bench.noindex/matrix-rerun/target/release/perry compile axios/get_json.ts -o /Users/perry/perry-bench.noindex/matrix-out/mac/axios__get_json",
+   "compile_s": 318.1,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -49,14 +49,14 @@
     "package_modules_compiled": 63,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 19.51,
+   "load1": 2.58,
    "runtime_rebuilt": true,
-   "size_bytes": 25259328,
+   "size_bytes": 25309376,
    "status": "OK"
   },
   "axios/post_json": {
-   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile axios/post_json.ts -o /private/tmp/claude-pkg-bench-out/mac/axios__post_json",
-   "compile_s": 66.99,
+   "cmd": "/Users/perry/perry-bench.noindex/matrix-rerun/target/release/perry compile axios/post_json.ts -o /Users/perry/perry-bench.noindex/matrix-out/mac/axios__post_json",
+   "compile_s": 49.72,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -94,14 +94,14 @@
     "package_modules_compiled": 63,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 20.31,
+   "load1": 3.06,
    "runtime_rebuilt": false,
-   "size_bytes": 25259328,
+   "size_bytes": 25309376,
    "status": "OK"
   },
   "big.js/arith_chain": {
-   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile big.js/arith_chain.ts -o /private/tmp/claude-pkg-bench-out/mac/big_js__arith_chain",
-   "compile_s": 11.95,
+   "cmd": "/Users/perry/perry-bench.noindex/matrix-rerun/target/release/perry compile big.js/arith_chain.ts -o /Users/perry/perry-bench.noindex/matrix-out/mac/big_js__arith_chain",
+   "compile_s": 5.48,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -113,14 +113,14 @@
     "package_modules_compiled": 1,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 18.91,
+   "load1": 2.53,
    "runtime_rebuilt": false,
-   "size_bytes": 6879168,
+   "size_bytes": 6944096,
    "status": "OK"
   },
   "bignumber.js/arith_chain": {
-   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile bignumber.js/arith_chain.ts -o /private/tmp/claude-pkg-bench-out/mac/bignumber_js__arith_chain",
-   "compile_s": 14.99,
+   "cmd": "/Users/perry/perry-bench.noindex/matrix-rerun/target/release/perry compile bignumber.js/arith_chain.ts -o /Users/perry/perry-bench.noindex/matrix-out/mac/bignumber_js__arith_chain",
+   "compile_s": 12.1,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -132,14 +132,14 @@
     "package_modules_compiled": 1,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 27.64,
+   "load1": 2.4,
    "runtime_rebuilt": false,
-   "size_bytes": 9014808,
+   "size_bytes": 9129624,
    "status": "OK"
   },
   "commander/parse_argv": {
-   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile commander/parse_argv.ts -o /private/tmp/claude-pkg-bench-out/mac/commander__parse_argv",
-   "compile_s": 325.08,
+   "cmd": "/Users/perry/perry-bench.noindex/matrix-rerun/target/release/perry compile commander/parse_argv.ts -o /Users/perry/perry-bench.noindex/matrix-out/mac/commander__parse_argv",
+   "compile_s": 219.63,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -151,14 +151,14 @@
     "package_modules_compiled": 7,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 38.1,
+   "load1": 2.66,
    "runtime_rebuilt": true,
-   "size_bytes": 9031032,
+   "size_bytes": 8882280,
    "status": "OK"
   },
   "control/bare_loop": {
-   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile control/bare_loop.ts -o /private/tmp/claude-pkg-bench-out/mac/control__bare_loop",
-   "compile_s": 2.51,
+   "cmd": "/Users/perry/perry-bench.noindex/matrix-rerun/target/release/perry compile control/bare_loop.ts -o /Users/perry/perry-bench.noindex/matrix-out/mac/control__bare_loop",
+   "compile_s": 0.68,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -169,14 +169,14 @@
     "package_modules_compiled": 0,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 35.65,
+   "load1": 2.3,
    "runtime_rebuilt": false,
-   "size_bytes": 5986608,
+   "size_bytes": 5985456,
    "status": "OK"
   },
   "control/prop_read": {
-   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile control/prop_read.ts -o /private/tmp/claude-pkg-bench-out/mac/control__prop_read",
-   "compile_s": 1.99,
+   "cmd": "/Users/perry/perry-bench.noindex/matrix-rerun/target/release/perry compile control/prop_read.ts -o /Users/perry/perry-bench.noindex/matrix-out/mac/control__prop_read",
+   "compile_s": 0.69,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -187,14 +187,14 @@
     "package_modules_compiled": 0,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 34.88,
+   "load1": 2.3,
    "runtime_rebuilt": false,
-   "size_bytes": 5986608,
+   "size_bytes": 5985456,
    "status": "OK"
   },
   "cron/next_dates": {
-   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile cron/next_dates.ts -o /private/tmp/claude-pkg-bench-out/mac/cron__next_dates",
-   "compile_s": 492.13,
+   "cmd": "/Users/perry/perry-bench.noindex/matrix-rerun/target/release/perry compile cron/next_dates.ts -o /Users/perry/perry-bench.noindex/matrix-out/mac/cron__next_dates",
+   "compile_s": 261.64,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -207,14 +207,14 @@
     "package_modules_compiled": 5,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 56.19,
+   "load1": 2.52,
    "runtime_rebuilt": true,
-   "size_bytes": 16137600,
+   "size_bytes": 19192480,
    "status": "OK"
   },
   "date-fns/diff_interval": {
-   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile date-fns/diff_interval.ts -o /private/tmp/claude-pkg-bench-out/mac/date-fns__diff_interval",
-   "compile_s": 4.98,
+   "cmd": "/Users/perry/perry-bench.noindex/matrix-rerun/target/release/perry compile date-fns/diff_interval.ts -o /Users/perry/perry-bench.noindex/matrix-out/mac/date-fns__diff_interval",
+   "compile_s": 3.59,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -226,14 +226,14 @@
     "package_modules_compiled": 20,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 36.3,
+   "load1": 2.3,
    "runtime_rebuilt": false,
-   "size_bytes": 6152152,
+   "size_bytes": 6151032,
    "status": "OK"
   },
   "date-fns/format_add": {
-   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile date-fns/format_add.ts -o /private/tmp/claude-pkg-bench-out/mac/date-fns__format_add",
-   "compile_s": 9.98,
+   "cmd": "/Users/perry/perry-bench.noindex/matrix-rerun/target/release/perry compile date-fns/format_add.ts -o /Users/perry/perry-bench.noindex/matrix-out/mac/date-fns__format_add",
+   "compile_s": 8.29,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -245,14 +245,14 @@
     "package_modules_compiled": 41,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 38.93,
+   "load1": 2.36,
    "runtime_rebuilt": false,
-   "size_bytes": 7342408,
+   "size_bytes": 7324712,
    "status": "OK"
   },
   "dayjs/diff_startof": {
-   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile dayjs/diff_startof.ts -o /private/tmp/claude-pkg-bench-out/mac/dayjs__diff_startof",
-   "compile_s": 4.99,
+   "cmd": "/Users/perry/perry-bench.noindex/matrix-rerun/target/release/perry compile dayjs/diff_startof.ts -o /Users/perry/perry-bench.noindex/matrix-out/mac/dayjs__diff_startof",
+   "compile_s": 3.33,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -264,14 +264,14 @@
     "package_modules_compiled": 2,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 37.36,
+   "load1": 2.4,
    "runtime_rebuilt": false,
-   "size_bytes": 9265104,
+   "size_bytes": 9397360,
    "status": "OK"
   },
   "dayjs/parse_format": {
-   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile dayjs/parse_format.ts -o /private/tmp/claude-pkg-bench-out/mac/dayjs__parse_format",
-   "compile_s": 4.98,
+   "cmd": "/Users/perry/perry-bench.noindex/matrix-rerun/target/release/perry compile dayjs/parse_format.ts -o /Users/perry/perry-bench.noindex/matrix-out/mac/dayjs__parse_format",
+   "compile_s": 3.34,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -283,14 +283,14 @@
     "package_modules_compiled": 2,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 39.13,
+   "load1": 2.52,
    "runtime_rebuilt": false,
-   "size_bytes": 9265104,
+   "size_bytes": 9397360,
    "status": "OK"
   },
   "decimal.js/arith_chain": {
-   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile decimal.js/arith_chain.ts -o /private/tmp/claude-pkg-bench-out/mac/decimal_js__arith_chain",
-   "compile_s": 19.99,
+   "cmd": "/Users/perry/perry-bench.noindex/matrix-rerun/target/release/perry compile decimal.js/arith_chain.ts -o /Users/perry/perry-bench.noindex/matrix-out/mac/decimal_js__arith_chain",
+   "compile_s": 15.36,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -302,14 +302,14 @@
     "package_modules_compiled": 1,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 18.9,
+   "load1": 3.16,
    "runtime_rebuilt": false,
-   "size_bytes": 9262600,
+   "size_bytes": 9360968,
    "status": "OK"
   },
   "decimal.js/parse_sum": {
-   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile decimal.js/parse_sum.ts -o /private/tmp/claude-pkg-bench-out/mac/decimal_js__parse_sum",
-   "compile_s": 24.02,
+   "cmd": "/Users/perry/perry-bench.noindex/matrix-rerun/target/release/perry compile decimal.js/parse_sum.ts -o /Users/perry/perry-bench.noindex/matrix-out/mac/decimal_js__parse_sum",
+   "compile_s": 15.38,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -321,14 +321,14 @@
     "package_modules_compiled": 1,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 16.03,
+   "load1": 2.77,
    "runtime_rebuilt": false,
-   "size_bytes": 9262600,
+   "size_bytes": 9360968,
    "status": "OK"
   },
   "dotenv/parse": {
-   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile dotenv/parse.ts -o /private/tmp/claude-pkg-bench-out/mac/dotenv__parse",
-   "compile_s": 390.11,
+   "cmd": "/Users/perry/perry-bench.noindex/matrix-rerun/target/release/perry compile dotenv/parse.ts -o /Users/perry/perry-bench.noindex/matrix-out/mac/dotenv__parse",
+   "compile_s": 212.97,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -340,14 +340,14 @@
     "package_modules_compiled": 1,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 12.82,
+   "load1": 2.79,
    "runtime_rebuilt": true,
-   "size_bytes": 9661664,
+   "size_bytes": 9777360,
    "status": "OK"
   },
   "exponential-backoff/retry": {
-   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile exponential-backoff/retry.ts -o /private/tmp/claude-pkg-bench-out/mac/exponential-backoff__retry",
-   "compile_s": 3.97,
+   "cmd": "/Users/perry/perry-bench.noindex/matrix-rerun/target/release/perry compile exponential-backoff/retry.ts -o /Users/perry/perry-bench.noindex/matrix-out/mac/exponential-backoff__retry",
+   "compile_s": 1.89,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -359,14 +359,14 @@
     "package_modules_compiled": 10,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 17.94,
+   "load1": 3.16,
    "runtime_rebuilt": false,
-   "size_bytes": 6450024,
+   "size_bytes": 6151000,
    "status": "OK"
   },
   "fastify/inject": {
-   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile fastify/inject.ts -o /private/tmp/claude-pkg-bench-out/mac/fastify__inject",
-   "compile_s": 802.82,
+   "cmd": "/Users/perry/perry-bench.noindex/matrix-rerun/target/release/perry compile fastify/inject.ts -o /Users/perry/perry-bench.noindex/matrix-out/mac/fastify__inject",
+   "compile_s": 469.7,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -419,14 +419,14 @@
     "package_modules_compiled": 33,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 49.32,
+   "load1": 2.23,
    "runtime_rebuilt": true,
-   "size_bytes": 51225632,
+   "size_bytes": 50136496,
    "status": "OK"
   },
   "fastify/listen_fetch": {
-   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile fastify/listen_fetch.ts -o /private/tmp/claude-pkg-bench-out/mac/fastify__listen_fetch",
-   "compile_s": 334.11,
+   "cmd": "/Users/perry/perry-bench.noindex/matrix-rerun/target/release/perry compile fastify/listen_fetch.ts -o /Users/perry/perry-bench.noindex/matrix-out/mac/fastify__listen_fetch",
+   "compile_s": 209.29,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -479,14 +479,14 @@
     "package_modules_compiled": 33,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 15.93,
+   "load1": 2.8,
    "runtime_rebuilt": false,
-   "size_bytes": 51209128,
+   "size_bytes": 50119992,
    "status": "OK"
   },
   "ioredis/pipeline": {
-   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile ioredis/pipeline.ts -o /private/tmp/claude-pkg-bench-out/mac/ioredis__pipeline",
-   "compile_s": 89.03,
+   "cmd": "/Users/perry/perry-bench.noindex/matrix-rerun/target/release/perry compile ioredis/pipeline.ts -o /Users/perry/perry-bench.noindex/matrix-out/mac/ioredis__pipeline",
+   "compile_s": 4.3,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -506,14 +506,14 @@
     "package_modules_compiled": 39,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 16.71,
+   "load1": 2.3,
    "runtime_rebuilt": false,
-   "size_bytes": 20063408,
+   "size_bytes": 20064064,
    "status": "OK"
   },
   "ioredis/set_get": {
-   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile ioredis/set_get.ts -o /private/tmp/claude-pkg-bench-out/mac/ioredis__set_get",
-   "compile_s": 63.93,
+   "cmd": "/Users/perry/perry-bench.noindex/matrix-rerun/target/release/perry compile ioredis/set_get.ts -o /Users/perry/perry-bench.noindex/matrix-out/mac/ioredis__set_get",
+   "compile_s": 4.3,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -533,14 +533,14 @@
     "package_modules_compiled": 39,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 22.28,
+   "load1": 2.41,
    "runtime_rebuilt": false,
-   "size_bytes": 20046896,
+   "size_bytes": 20064064,
    "status": "OK"
   },
   "jsonwebtoken/decode": {
-   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile jsonwebtoken/decode.ts -o /private/tmp/claude-pkg-bench-out/mac/jsonwebtoken__decode",
-   "compile_s": 61.57,
+   "cmd": "/Users/perry/perry-bench.noindex/matrix-rerun/target/release/perry compile jsonwebtoken/decode.ts -o /Users/perry/perry-bench.noindex/matrix-out/mac/jsonwebtoken__decode",
+   "compile_s": 36.58,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -566,14 +566,14 @@
     "package_modules_compiled": 12,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 55.85,
+   "load1": 2.63,
    "runtime_rebuilt": false,
-   "size_bytes": 16620888,
+   "size_bytes": 16621448,
    "status": "OK"
   },
   "jsonwebtoken/hs256": {
-   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile jsonwebtoken/hs256.ts -o /private/tmp/claude-pkg-bench-out/mac/jsonwebtoken__hs256",
-   "compile_s": 464.14,
+   "cmd": "/Users/perry/perry-bench.noindex/matrix-rerun/target/release/perry compile jsonwebtoken/hs256.ts -o /Users/perry/perry-bench.noindex/matrix-out/mac/jsonwebtoken__hs256",
+   "compile_s": 257.32,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -599,14 +599,14 @@
     "package_modules_compiled": 12,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 25.04,
+   "load1": 2.89,
    "runtime_rebuilt": true,
-   "size_bytes": 16620880,
+   "size_bytes": 16604928,
    "status": "OK"
   },
   "jsonwebtoken/rs256": {
-   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile jsonwebtoken/rs256.ts -o /private/tmp/claude-pkg-bench-out/mac/jsonwebtoken__rs256",
-   "compile_s": 84.01,
+   "cmd": "/Users/perry/perry-bench.noindex/matrix-rerun/target/release/perry compile jsonwebtoken/rs256.ts -o /Users/perry/perry-bench.noindex/matrix-out/mac/jsonwebtoken__rs256",
+   "compile_s": 36.18,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -632,14 +632,14 @@
     "package_modules_compiled": 12,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 51.07,
+   "load1": 2.52,
    "runtime_rebuilt": false,
-   "size_bytes": 16620880,
+   "size_bytes": 16621456,
    "status": "OK"
   },
   "lru-cache/churn": {
-   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile lru-cache/churn.ts -o /private/tmp/claude-pkg-bench-out/mac/lru-cache__churn",
-   "compile_s": 334.41,
+   "cmd": "/Users/perry/perry-bench.noindex/matrix-rerun/target/release/perry compile lru-cache/churn.ts -o /Users/perry/perry-bench.noindex/matrix-out/mac/lru-cache__churn",
+   "compile_s": 208.7,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -651,14 +651,14 @@
     "package_modules_compiled": 1,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 13.9,
+   "load1": 2.31,
    "runtime_rebuilt": true,
-   "size_bytes": 7442336,
+   "size_bytes": 7259360,
    "status": "OK"
   },
   "lru-cache/ttl_mixed": {
-   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile lru-cache/ttl_mixed.ts -o /private/tmp/claude-pkg-bench-out/mac/lru-cache__ttl_mixed",
-   "compile_s": 14.98,
+   "cmd": "/Users/perry/perry-bench.noindex/matrix-rerun/target/release/perry compile lru-cache/ttl_mixed.ts -o /Users/perry/perry-bench.noindex/matrix-out/mac/lru-cache__ttl_mixed",
+   "compile_s": 10.2,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -670,14 +670,14 @@
     "package_modules_compiled": 1,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 45.05,
+   "load1": 2.61,
    "runtime_rebuilt": false,
-   "size_bytes": 7442344,
+   "size_bytes": 7259368,
    "status": "OK"
   },
   "moment/diff_duration": {
-   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile moment/diff_duration.ts -o /private/tmp/claude-pkg-bench-out/mac/moment__diff_duration",
-   "compile_s": 95.01,
+   "cmd": "/Users/perry/perry-bench.noindex/matrix-rerun/target/release/perry compile moment/diff_duration.ts -o /Users/perry/perry-bench.noindex/matrix-out/mac/moment__diff_duration",
+   "compile_s": 29.98,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -689,14 +689,14 @@
     "package_modules_compiled": 1,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 20.07,
+   "load1": 2.78,
    "runtime_rebuilt": false,
-   "size_bytes": 15227208,
+   "size_bytes": 17307896,
    "status": "OK"
   },
   "moment/parse_format": {
-   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile moment/parse_format.ts -o /private/tmp/claude-pkg-bench-out/mac/moment__parse_format",
-   "compile_s": 317.94,
+   "cmd": "/Users/perry/perry-bench.noindex/matrix-rerun/target/release/perry compile moment/parse_format.ts -o /Users/perry/perry-bench.noindex/matrix-out/mac/moment__parse_format",
+   "compile_s": 242.45,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -708,14 +708,14 @@
     "package_modules_compiled": 1,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 34.27,
+   "load1": 2.28,
    "runtime_rebuilt": true,
-   "size_bytes": 15227208,
+   "size_bytes": 17307896,
    "status": "OK"
   },
   "mongodb/batch_query": {
-   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile mongodb/batch_query.ts -o /private/tmp/claude-pkg-bench-out/mac/mongodb__batch_query",
-   "compile_s": 188.06,
+   "cmd": "/Users/perry/perry-bench.noindex/matrix-rerun/target/release/perry compile mongodb/batch_query.ts -o /Users/perry/perry-bench.noindex/matrix-out/mac/mongodb__batch_query",
+   "compile_s": 123.73,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -735,14 +735,14 @@
     "package_modules_compiled": 133,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 14.72,
+   "load1": 2.74,
    "runtime_rebuilt": false,
-   "size_bytes": 39424776,
+   "size_bytes": 38005192,
    "status": "OK"
   },
   "mongodb/insert_find": {
-   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile mongodb/insert_find.ts -o /private/tmp/claude-pkg-bench-out/mac/mongodb__insert_find",
-   "compile_s": 615.97,
+   "cmd": "/Users/perry/perry-bench.noindex/matrix-rerun/target/release/perry compile mongodb/insert_find.ts -o /Users/perry/perry-bench.noindex/matrix-out/mac/mongodb__insert_find",
+   "compile_s": 386.56,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -762,14 +762,14 @@
     "package_modules_compiled": 133,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 13.99,
+   "load1": 2.46,
    "runtime_rebuilt": true,
-   "size_bytes": 39424760,
+   "size_bytes": 37988680,
    "status": "OK"
   },
   "mysql2/insert_batch": {
-   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile mysql2/insert_batch.ts -o /private/tmp/claude-pkg-bench-out/mac/mysql2__insert_batch",
-   "compile_s": 98.01,
+   "cmd": "/Users/perry/perry-bench.noindex/matrix-rerun/target/release/perry compile mysql2/insert_batch.ts -o /Users/perry/perry-bench.noindex/matrix-out/mac/mysql2__insert_batch",
+   "compile_s": 88.36,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -790,14 +790,14 @@
     "package_modules_compiled": 92,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 23.44,
+   "load1": 2.91,
    "runtime_rebuilt": false,
-   "size_bytes": 31553896,
+   "size_bytes": 31835384,
    "status": "OK"
   },
   "mysql2/select": {
-   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile mysql2/select.ts -o /private/tmp/claude-pkg-bench-out/mac/mysql2__select",
-   "compile_s": 494.49,
+   "cmd": "/Users/perry/perry-bench.noindex/matrix-rerun/target/release/perry compile mysql2/select.ts -o /Users/perry/perry-bench.noindex/matrix-out/mac/mysql2__select",
+   "compile_s": 357.77,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -818,14 +818,14 @@
     "package_modules_compiled": 92,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 20.04,
+   "load1": 2.27,
    "runtime_rebuilt": true,
-   "size_bytes": 31553888,
+   "size_bytes": 31818864,
    "status": "OK"
   },
   "nanoid/generate": {
-   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile nanoid/generate.ts -o /private/tmp/claude-pkg-bench-out/mac/nanoid__generate",
-   "compile_s": 286.87,
+   "cmd": "/Users/perry/perry-bench.noindex/matrix-rerun/target/release/perry compile nanoid/generate.ts -o /Users/perry/perry-bench.noindex/matrix-out/mac/nanoid__generate",
+   "compile_s": 207.91,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -837,14 +837,14 @@
     "package_modules_compiled": 2,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 37.06,
+   "load1": 2.63,
    "runtime_rebuilt": true,
-   "size_bytes": 6598320,
+   "size_bytes": 6613712,
    "status": "OK"
   },
   "node-cron/match": {
-   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile node-cron/match.ts -o /private/tmp/claude-pkg-bench-out/mac/node-cron__match",
-   "compile_s": 9.99,
+   "cmd": "/Users/perry/perry-bench.noindex/matrix-rerun/target/release/perry compile node-cron/match.ts -o /Users/perry/perry-bench.noindex/matrix-out/mac/node-cron__match",
+   "compile_s": 7.92,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -856,14 +856,14 @@
     "package_modules_compiled": 2,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 17.47,
+   "load1": 3.19,
    "runtime_rebuilt": false,
-   "size_bytes": 13167360,
+   "size_bytes": 13134432,
    "status": "OK"
   },
   "node-cron/validate_parse": {
-   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile node-cron/validate_parse.ts -o /private/tmp/claude-pkg-bench-out/mac/node-cron__validate_parse",
-   "compile_s": 422.13,
+   "cmd": "/Users/perry/perry-bench.noindex/matrix-rerun/target/release/perry compile node-cron/validate_parse.ts -o /Users/perry/perry-bench.noindex/matrix-out/mac/node-cron__validate_parse",
+   "compile_s": 259.19,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -875,46 +875,90 @@
     "package_modules_compiled": 2,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 57.6,
+   "load1": 2.88,
    "runtime_rebuilt": true,
-   "size_bytes": 13167368,
+   "size_bytes": 13134440,
    "status": "OK"
   },
   "node-forge/aes_cbc": {
-   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile node-forge/aes_cbc.ts -o /private/tmp/claude-pkg-bench-out/mac/node-forge__aes_cbc",
-   "compile_s": 200.1,
-   "load1": 10.0,
-   "reason": "compile failed (exit 1): ns \u2014 so the\nbuild fails here rather than emitting a misleading COMPILE_EXIT=0.\n\nFix the codegen errors above (search for `Error compiling module`),\nor set `PERRY_ALLOW_PARTIAL_CODEGEN=1` to link empty `<prefix>__init`\nstubs for the failed modules and surface deeper errors during\niterative debugging (the resulting binary is inert/unsafe in those\nmodules and may crash at runtime).\n\nError: 1 module(s) failed to compile (see errors above); set PERRY_ALLOW_PARTIAL_CODEGEN=1 to link empty stubs anyway",
+   "cmd": "/Users/perry/perry-bench.noindex/matrix-rerun/target/release/perry compile node-forge/aes_cbc.ts -o /Users/perry/perry-bench.noindex/matrix-out/mac/node-forge__aes_cbc",
+   "compile_s": 98.88,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "node-forge": 42
+    },
+    "native_modules": 44,
+    "package_modules_compiled": 42,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 2.31,
    "runtime_rebuilt": false,
-   "status": "FAIL"
+   "size_bytes": 25757488,
+   "status": "OK"
   },
   "node-forge/hmac": {
-   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile node-forge/hmac.ts -o /private/tmp/claude-pkg-bench-out/mac/node-forge__hmac",
-   "compile_s": 104.04,
-   "load1": 14.26,
-   "reason": "compile failed (exit 1): ns \u2014 so the\nbuild fails here rather than emitting a misleading COMPILE_EXIT=0.\n\nFix the codegen errors above (search for `Error compiling module`),\nor set `PERRY_ALLOW_PARTIAL_CODEGEN=1` to link empty `<prefix>__init`\nstubs for the failed modules and surface deeper errors during\niterative debugging (the resulting binary is inert/unsafe in those\nmodules and may crash at runtime).\n\nError: 1 module(s) failed to compile (see errors above); set PERRY_ALLOW_PARTIAL_CODEGEN=1 to link empty stubs anyway",
+   "cmd": "/Users/perry/perry-bench.noindex/matrix-rerun/target/release/perry compile node-forge/hmac.ts -o /Users/perry/perry-bench.noindex/matrix-out/mac/node-forge__hmac",
+   "compile_s": 98.89,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "node-forge": 42
+    },
+    "native_modules": 44,
+    "package_modules_compiled": 42,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 2.78,
    "runtime_rebuilt": false,
-   "status": "FAIL"
+   "size_bytes": 25740976,
+   "status": "OK"
   },
   "node-forge/rsa_sign": {
-   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile node-forge/rsa_sign.ts -o /private/tmp/claude-pkg-bench-out/mac/node-forge__rsa_sign",
-   "compile_s": 102.03,
-   "load1": 9.52,
-   "reason": "compile failed (exit 1): ns \u2014 so the\nbuild fails here rather than emitting a misleading COMPILE_EXIT=0.\n\nFix the codegen errors above (search for `Error compiling module`),\nor set `PERRY_ALLOW_PARTIAL_CODEGEN=1` to link empty `<prefix>__init`\nstubs for the failed modules and surface deeper errors during\niterative debugging (the resulting binary is inert/unsafe in those\nmodules and may crash at runtime).\n\nError: 1 module(s) failed to compile (see errors above); set PERRY_ALLOW_PARTIAL_CODEGEN=1 to link empty stubs anyway",
+   "cmd": "/Users/perry/perry-bench.noindex/matrix-rerun/target/release/perry compile node-forge/rsa_sign.ts -o /Users/perry/perry-bench.noindex/matrix-out/mac/node-forge__rsa_sign",
+   "compile_s": 99.77,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 3,
+     "node-forge": 42
+    },
+    "native_modules": 45,
+    "package_modules_compiled": 42,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 2.14,
    "runtime_rebuilt": false,
-   "status": "FAIL"
+   "size_bytes": 25740984,
+   "status": "OK"
   },
   "node-forge/sha256": {
-   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile node-forge/sha256.ts -o /private/tmp/claude-pkg-bench-out/mac/node-forge__sha256",
-   "compile_s": 107.55,
-   "load1": 24.09,
-   "reason": "compile failed (exit 1): ns \u2014 so the\nbuild fails here rather than emitting a misleading COMPILE_EXIT=0.\n\nFix the codegen errors above (search for `Error compiling module`),\nor set `PERRY_ALLOW_PARTIAL_CODEGEN=1` to link empty `<prefix>__init`\nstubs for the failed modules and surface deeper errors during\niterative debugging (the resulting binary is inert/unsafe in those\nmodules and may crash at runtime).\n\nError: 1 module(s) failed to compile (see errors above); set PERRY_ALLOW_PARTIAL_CODEGEN=1 to link empty stubs anyway",
-   "runtime_rebuilt": false,
-   "status": "FAIL"
+   "cmd": "/Users/perry/perry-bench.noindex/matrix-rerun/target/release/perry compile node-forge/sha256.ts -o /Users/perry/perry-bench.noindex/matrix-out/mac/node-forge__sha256",
+   "compile_s": 328.84,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "node-forge": 42
+    },
+    "native_modules": 44,
+    "package_modules_compiled": 42,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 2.23,
+   "runtime_rebuilt": true,
+   "size_bytes": 25740976,
+   "status": "OK"
   },
   "pg/insert_batch": {
-   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile pg/insert_batch.ts -o /private/tmp/claude-pkg-bench-out/mac/pg__insert_batch",
-   "compile_s": 38.99,
+   "cmd": "/Users/perry/perry-bench.noindex/matrix-rerun/target/release/perry compile pg/insert_batch.ts -o /Users/perry/perry-bench.noindex/matrix-out/mac/pg__insert_batch",
+   "compile_s": 27.51,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -939,14 +983,14 @@
     "package_modules_compiled": 17,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 13.19,
+   "load1": 2.47,
    "runtime_rebuilt": false,
-   "size_bytes": 17901024,
+   "size_bytes": 18000448,
    "status": "OK"
   },
   "pg/select": {
-   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile pg/select.ts -o /private/tmp/claude-pkg-bench-out/mac/pg__select",
-   "compile_s": 316.09,
+   "cmd": "/Users/perry/perry-bench.noindex/matrix-rerun/target/release/perry compile pg/select.ts -o /Users/perry/perry-bench.noindex/matrix-out/mac/pg__select",
+   "compile_s": 260.42,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -971,14 +1015,14 @@
     "package_modules_compiled": 17,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 15.19,
+   "load1": 2.79,
    "runtime_rebuilt": true,
-   "size_bytes": 17901016,
+   "size_bytes": 18000440,
    "status": "OK"
   },
   "qs/parse_nested": {
-   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile qs/parse_nested.ts -o /private/tmp/claude-pkg-bench-out/mac/qs__parse_nested",
-   "compile_s": 339.1,
+   "cmd": "/Users/perry/perry-bench.noindex/matrix-rerun/target/release/perry compile qs/parse_nested.ts -o /Users/perry/perry-bench.noindex/matrix-out/mac/qs__parse_nested",
+   "compile_s": 248.39,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -1008,14 +1052,14 @@
     "package_modules_compiled": 5,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 13.89,
+   "load1": 2.26,
    "runtime_rebuilt": true,
-   "size_bytes": 13711760,
+   "size_bytes": 13810992,
    "status": "OK"
   },
   "qs/stringify_nested": {
-   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile qs/stringify_nested.ts -o /private/tmp/claude-pkg-bench-out/mac/qs__stringify_nested",
-   "compile_s": 24.01,
+   "cmd": "/Users/perry/perry-bench.noindex/matrix-rerun/target/release/perry compile qs/stringify_nested.ts -o /Users/perry/perry-bench.noindex/matrix-out/mac/qs__stringify_nested",
+   "compile_s": 20.32,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -1045,14 +1089,14 @@
     "package_modules_compiled": 5,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 14.45,
+   "load1": 2.93,
    "runtime_rebuilt": false,
-   "size_bytes": 13711784,
+   "size_bytes": 13827528,
    "status": "OK"
   },
   "rate-limiter-flexible/consume": {
-   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile rate-limiter-flexible/consume.ts -o /private/tmp/claude-pkg-bench-out/mac/rate-limiter-flexible__consume",
-   "compile_s": 407.07,
+   "cmd": "/Users/perry/perry-bench.noindex/matrix-rerun/target/release/perry compile rate-limiter-flexible/consume.ts -o /Users/perry/perry-bench.noindex/matrix-out/mac/rate-limiter-flexible__consume",
+   "compile_s": 246.78,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -1064,14 +1108,14 @@
     "package_modules_compiled": 36,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 53.19,
+   "load1": 2.36,
    "runtime_rebuilt": true,
-   "size_bytes": 14589920,
+   "size_bytes": 14590432,
    "status": "OK"
   },
   "rate-limiter-flexible/get_penalty": {
-   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile rate-limiter-flexible/get_penalty.ts -o /private/tmp/claude-pkg-bench-out/mac/rate-limiter-flexible__get_penalty",
-   "compile_s": 33.99,
+   "cmd": "/Users/perry/perry-bench.noindex/matrix-rerun/target/release/perry compile rate-limiter-flexible/get_penalty.ts -o /Users/perry/perry-bench.noindex/matrix-out/mac/rate-limiter-flexible__get_penalty",
+   "compile_s": 26.28,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -1083,14 +1127,14 @@
     "package_modules_compiled": 36,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 26.73,
+   "load1": 2.56,
    "runtime_rebuilt": false,
-   "size_bytes": 14589920,
+   "size_bytes": 14590432,
    "status": "OK"
   },
   "redis/pipeline": {
-   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile redis/pipeline.ts -o /private/tmp/claude-pkg-bench-out/mac/redis__pipeline",
-   "compile_s": 518.93,
+   "cmd": "/Users/perry/perry-bench.noindex/matrix-rerun/target/release/perry compile redis/pipeline.ts -o /Users/perry/perry-bench.noindex/matrix-out/mac/redis__pipeline",
+   "compile_s": 318.27,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -1108,14 +1152,14 @@
     "package_modules_compiled": 1,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 21.14,
+   "load1": 2.37,
    "runtime_rebuilt": false,
-   "size_bytes": 69656880,
+   "size_bytes": 65744864,
    "status": "OK"
   },
   "redis/set_get": {
-   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile redis/set_get.ts -o /private/tmp/claude-pkg-bench-out/mac/redis__set_get",
-   "compile_s": 703.84,
+   "cmd": "/Users/perry/perry-bench.noindex/matrix-rerun/target/release/perry compile redis/set_get.ts -o /Users/perry/perry-bench.noindex/matrix-out/mac/redis__set_get",
+   "compile_s": 547.21,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -1133,14 +1177,14 @@
     "package_modules_compiled": 1,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 18.31,
+   "load1": 3.42,
    "runtime_rebuilt": true,
-   "size_bytes": 69656880,
+   "size_bytes": 65744864,
    "status": "OK"
   },
   "uuid/v4": {
-   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile uuid/v4.ts -o /private/tmp/claude-pkg-bench-out/mac/uuid__v4",
-   "compile_s": 400.08,
+   "cmd": "/Users/perry/perry-bench.noindex/matrix-rerun/target/release/perry compile uuid/v4.ts -o /Users/perry/perry-bench.noindex/matrix-out/mac/uuid__v4",
+   "compile_s": 223.62,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -1152,14 +1196,14 @@
     "package_modules_compiled": 13,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 41.3,
+   "load1": 2.62,
    "runtime_rebuilt": true,
-   "size_bytes": 8486472,
+   "size_bytes": 8601288,
    "status": "OK"
   },
   "uuid/v5_parse": {
-   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile uuid/v5_parse.ts -o /private/tmp/claude-pkg-bench-out/mac/uuid__v5_parse",
-   "compile_s": 2.99,
+   "cmd": "/Users/perry/perry-bench.noindex/matrix-rerun/target/release/perry compile uuid/v5_parse.ts -o /Users/perry/perry-bench.noindex/matrix-out/mac/uuid__v5_parse",
+   "compile_s": 2.55,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -1171,14 +1215,14 @@
     "package_modules_compiled": 10,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 37.06,
+   "load1": 2.63,
    "runtime_rebuilt": false,
-   "size_bytes": 8486464,
+   "size_bytes": 8601280,
    "status": "OK"
   },
   "uuid/v7": {
-   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile uuid/v7.ts -o /private/tmp/claude-pkg-bench-out/mac/uuid__v7",
-   "compile_s": 3.95,
+   "cmd": "/Users/perry/perry-bench.noindex/matrix-rerun/target/release/perry compile uuid/v7.ts -o /Users/perry/perry-bench.noindex/matrix-out/mac/uuid__v7",
+   "compile_s": 2.88,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -1190,14 +1234,14 @@
     "package_modules_compiled": 13,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 37.76,
+   "load1": 2.77,
    "runtime_rebuilt": false,
-   "size_bytes": 8502984,
+   "size_bytes": 8617816,
    "status": "OK"
   },
   "validator/batch": {
-   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile validator/batch.ts -o /private/tmp/claude-pkg-bench-out/mac/validator__batch",
-   "compile_s": 464.19,
+   "cmd": "/Users/perry/perry-bench.noindex/matrix-rerun/target/release/perry compile validator/batch.ts -o /Users/perry/perry-bench.noindex/matrix-out/mac/validator__batch",
+   "compile_s": 274.43,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -1209,14 +1253,14 @@
     "package_modules_compiled": 113,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 14.87,
+   "load1": 3.14,
    "runtime_rebuilt": true,
-   "size_bytes": 19936464,
+   "size_bytes": 18747744,
    "status": "OK"
   },
   "validator/sanitize": {
-   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile validator/sanitize.ts -o /private/tmp/claude-pkg-bench-out/mac/validator__sanitize",
-   "compile_s": 84.01,
+   "cmd": "/Users/perry/perry-bench.noindex/matrix-rerun/target/release/perry compile validator/sanitize.ts -o /Users/perry/perry-bench.noindex/matrix-out/mac/validator__sanitize",
+   "compile_s": 66.89,
    "liveness": {
     "binding_symbols": [],
     "javascript_modules": 0,
@@ -1228,9 +1272,9 @@
     "package_modules_compiled": 113,
     "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
    },
-   "load1": 21.33,
+   "load1": 2.69,
    "runtime_rebuilt": false,
-   "size_bytes": 19936448,
+   "size_bytes": 18731216,
    "status": "OK"
   }
  }

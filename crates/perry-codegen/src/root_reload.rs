@@ -186,8 +186,6 @@ const NON_COLLECTING: &[&str] = &[
     "js_gc_temp_root_set",
     "js_gc_temp_root_truncate",
     // layout / barrier bookkeeping
-    "js_gc_init_typed_shape_layout",
-    "js_gc_declare_typed_shape_layout",
     "js_gc_forget_object_layout",
     // The two real slot-layout note exports. `js_gc_layout_note_slot` used to
     // stand here, and no such symbol has ever existed in the tree: the runtime
@@ -318,7 +316,9 @@ const MAX_RECIPE: usize = 8;
 /// re-tag, which is the entire population this pass needs; admitting `add`
 /// would be sound by the same argument but buys nothing today and widens what
 /// a reader has to check.
-const TRANSPARENT_BIN: &[&str] = &["and", "or", "xor"];
+/// `add` derives a scope-slot address (`base + 8 * index`) from the scope
+/// object's root load (`crate::scope_env`).
+const TRANSPARENT_BIN: &[&str] = &["and", "or", "xor", "add"];
 
 /// Conversions that are pure re-interpretations of a bit pattern.
 const TRANSPARENT_CAST: &[&str] = &["bitcast", "ptrtoint", "inttoptr", "trunc", "zext", "sext"];

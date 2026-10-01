@@ -16,24 +16,8 @@ pub(crate) fn web_stream_to_string_tag(value: f64) -> Option<&'static str> {
     }
 }
 
-/// `Symbol.toStringTag` for Perry's Web/runtime built-ins that carry no
-/// registered class-id hook and (for the handle-backed ones) no real
-/// `ObjectHeader` at all (#10555): `URL`/`URLSearchParams` (ordinary
-/// class_id-0 objects, detected structurally — see `is_url_object_shape` /
-/// `shape_is_url_search_params`), the Web Fetch family `Headers` / `Request`
-/// / `Response` / `Blob` / `FormData` (small-int handles owned by
-/// `perry-stdlib`, reached through `fetch_handle_kind_probe` — the same
-/// probe `instanceof` already uses), `TextEncoder` / `TextDecoder` (small-int
-/// handles owned by this crate's own `text` module), and the class-id-tagged
-/// `AbortController` / `AbortSignal` / `EventTarget` / `Event` / `CustomEvent`
-/// (real `ObjectHeader`s whose instances are never linked to their
-/// `.prototype` object via `object_static_prototype`, so the generic
-/// own/inherited-property walk in `object_to_string_tag_property` can never
-/// reach a tag installed there).
-///
-/// Shared by `js_object_to_string`'s brand string and
-/// `js_object_get_symbol_property`'s `x[Symbol.toStringTag]` own-property
-/// read (`crate::symbol::get`), so the two can never disagree.
+/// Remaining Web built-ins without a recorded prototype chain. Migrated
+/// event and text objects resolve their tags through their real prototypes.
 pub(crate) fn web_builtin_to_string_tag(value: f64) -> Option<&'static str> {
     let bits = value.to_bits();
     if (bits >> 48) != 0x7FFD {
@@ -77,14 +61,7 @@ pub(crate) fn web_builtin_to_string_tag(value: f64) -> Option<&'static str> {
     if crate::url::search_params::shape_is_url_search_params(obj) {
         return Some("URLSearchParams");
     }
-    match unsafe { (*obj).class_id } {
-        crate::url::abort::ABORT_CONTROLLER_CLASS_ID => Some("AbortController"),
-        crate::url::abort::ABORT_SIGNAL_CLASS_ID => Some("AbortSignal"),
-        crate::event_target::CLASS_ID_EVENT_TARGET => Some("EventTarget"),
-        crate::event_target::CLASS_ID_EVENT => Some("Event"),
-        crate::event_target::CLASS_ID_CUSTOM_EVENT => Some("CustomEvent"),
-        _ => None,
-    }
+    None
 }
 
 unsafe fn string_value_to_owned(value: f64) -> Option<String> {

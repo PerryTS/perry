@@ -1187,6 +1187,9 @@ pub struct CompilationContext {
     /// rather than a line shifted by the preamble. Empty unless
     /// source locations are requested, keeping the default build allocation-free.
     pub cjs_wrap_debug_sources: HashMap<PathBuf, CjsWrapDebugSource>,
+    /// Emit CJS dependency diagnostics on discovery, avoiding repeat analysis
+    /// during the cross-module bootstrap recollection pass (#10438).
+    pub cjs_require_diagnostics: bool,
     /// #5247 / #7036: whether a later compiler stage needs source locations.
     /// Gates CJS-wrap source mapping capture for debug symbols and text opt
     /// reports, so the default build never records `cjs_wrap_debug_sources`.
@@ -1367,6 +1370,7 @@ impl CompilationContext {
             parsed_defines: perry_parser::defines::Defines::default(),
             resolve_inputs: BTreeSet::new(),
             cjs_wrap_debug_sources: HashMap::new(),
+            cjs_require_diagnostics: true,
             debug_symbols: false,
         }
     }
@@ -1384,7 +1388,7 @@ pub struct NativeAddonModule {
     pub source_path: PathBuf,
     pub package_dir: PathBuf,
     pub entry_relative: PathBuf,
-    /// Package entries ship their complete package-local payload so adjacent
+    /// Package entries ship their runtime package-local payload so adjacent
     /// data/shared libraries remain available. Exact project-path entries ship
     /// only the explicitly authorized `.node` file.
     pub ship_package_payload: bool,
