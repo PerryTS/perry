@@ -603,3 +603,32 @@ fn the_relocation_budget_is_the_post_rewrite_instruction_budget() {
         super::super::DEFAULT_RS4GC_MAX_INSTRS as u64
     );
 }
+
+/// Cyclic phis can share an existing base without any derived instruction.
+/// The bound must reserve its difference array for these crossings too.
+#[test]
+fn cyclic_phis_with_an_existing_base_do_not_require_a_gep() {
+    let (l, actual) = census(
+        &ir(r#"
+define void @cyclic(ptr addrspace(1) %seed, i1 %again) gc "statepoint-example" {
+entry:
+  br label %head
+head:
+  %a = phi ptr addrspace(1) [ %seed, %entry ], [ %b, %back ]
+  %b = phi ptr addrspace(1) [ %seed, %entry ], [ %a, %back ]
+  call void @may_collect()
+  call void @use2(ptr addrspace(1) %a, ptr addrspace(1) %b)
+  br i1 %again, label %back, label %exit
+back:
+  br label %head
+exit:
+  ret void
+}
+"#),
+        "cyclic",
+    );
+    assert_eq!(l.derived_values, 0, "{l:#?}");
+    assert!(l.derived_crossings > 0, "{l:#?}");
+    assert!(!l.is_exact(), "{l:#?}");
+    assert!(actual <= l.relocation_bound(), "{l:#?} vs {actual}");
+}
