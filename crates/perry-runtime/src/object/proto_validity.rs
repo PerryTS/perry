@@ -1,103 +1,16 @@
-//! Prototype-mutation validity: one word that stands for "no object anybody
-//! inherits from has changed structurally since you looked".
+//! Prototype-mutation validity for cached key-add store verdicts.
 //!
-//! # The problem this replaces
+//! A chain-store verdict records that no inherited setter or non-writable
+//! property blocks a key add. It may depend on prototype hops, so the
+//! [[Prototype]] installation funnel and chain-store prime mark those objects.
+//! A structural mutation of a marked hop, or a semantic property event,
+//! advances the global word. The receiver's own ShapeId covers changes to
+//! its own keys and prototype edge. A plain value overwrite does not change
+//! the chain-store verdict; readers of inherited values load the holder slot
+//! under holder-shape guards and do not use this word.
 //!
-//! A mutation of an object that is used as a prototype is invisible to the
-//! objects that inherit from it. Perry does not record that an ordinary object
-//! is somebody's prototype, so `proto.b = 1` transitions `proto`'s shape and
-//! nothing else: no epoch moves, no instance is touched, and a cache that
-//! remembers "key `a` lives on `proto` at slot 3" has no way to notice.
-//!
-//! The inherited-read cache's first answer (#10834) was to re-prove the chain
-//! on every hit: one ShapeId compare per hop, up to four dependent loads
-//! through prototype objects that are usually cold. That is correct, and it
-//! has two costs. It is proportional to the DEPTH of the chain, so a deep
-//! chain pays for its depth on every read; and, decisively for the emitted
-//! sequence this campaign is aiming at, it is a LOOP — compiled code at a
-//! property-read site cannot emit a variable number of compares, so as long as
-//! the chain check is per-hop the hit can only live behind a call.
-//!
-//! # The mechanism
-//!
-//! This is V8's prototype validity cell, collapsed to one global counter:
-//!
-//! 1. An object is MARKED (`OBJECT_META_FLAG_IS_PROTOTYPE` in its
-//!    `ObjectMeta`) by the `[[Prototype]]` INSTALL funnel — every link kind in
-//!    `prototype_chain::object_set_static_prototype_impl`, plus
-//!    `class_prototype_object_root_store`. The inherited-read cache does NOT
-//!    mark: it REFUSES to record a hop that is not already marked.
-//!
-//!    The cache's prime is the SAFETY NET, not the authority: when it meets an
-//!    unmarked hop it marks that hop and ABANDONS the walk without recording
-//!    anything, so the next read of the pair primes normally. Coverage is
-//!    therefore self-healing — an install route this funnel misses costs one
-//!    declined read, not a permanent loss — while the invariant that matters
-//!    still holds absolutely: **no entry is ever recorded through a hop that
-//!    was not already marked before the walk began.**
-//!
-//!    That polarity is the point. The first version of this flag was set BY
-//!    the prime, for the hop it was about to record, which made the coverage
-//!    argument trivial but meant any way of losing a mark produced a STALE
-//!    VALUE. It lived in `GcHeader::_reserved` bit 13 — which
-//!    `layout::set_layout_state` CLEARS on transitions that have nothing to do
-//!    with prototypes, so marks were erasable and the failure was invisible.
-//!    Both halves of that are fixed here: the flag moved to `ObjectMeta`,
-//!    where nothing else writes it, and the prime no longer records through a
-//!    hop it marked in the same breath.
-//! 2. Any STRUCTURAL mutation of a marked object bumps [`proto_validity`].
-//!    Structural means "the shape word changed": key add, key delete,
-//!    descriptor install, attribute change, `setPrototypeOf`. Every one of
-//!    those publishes through
-//!    `shapes::stamp_object_shape_id_with_carrier_note`, the runtime's single
-//!    structural-mutation publication funnel, where [`note_object_shape_stamped`]
-//!    sits.
-//! 3. The same counter is bumped by `prop_plan::prop_plan_epoch_bump`, so it
-//!    also stands for everything the semantic property epoch stands for
-//!    (descriptor installs and clears, `delete`, per-instance prototype
-//!    recording, class-prototype-object registration, parent-static linking).
-//!    A descriptor install or clear, or a `delete`, bumps it only when its
-//!    owner can be a hop of a recorded chain — a MARKED ordinary object, or
-//!    one that cannot be classified ([`mutation_owner_may_be_a_recorded_hop`]).
-//!    Every consumer records through marked hops only, and the receiver's own
-//!    such mutations transition its ShapeId, so an unmarked object's
-//!    descriptors cannot change a recorded answer. Without that gate every
-//!    `Function.prototype.bind` (which names its result through descriptor
-//!    installs) invalidated every cached verdict in the process. Folding the two
-//!    into one word is what lets a cached entry re-prove itself with ONE load
-//!    and ONE compare instead of two of each.
-//!
-//! 4. A plain value store to an EXISTING key of a marked object bumps it too
-//!    ([`note_marked_value_write`], owner decision D3(b)): an inherited
-//!    method-site entry (`object::method_site`) memoizes the method CLOSURE,
-//!    not (holder, slot), so a replaced value must invalidate it. Store caches
-//!    never learn a marked object's shape ([`store_cache_may_learn`]), so every
-//!    such store reaches a runtime funnel that calls it. Entries that record
-//!    (holder, slot) and load the value on every hit do not need this, and
-//!    must not assume the word stays put across such a store either.
-//!
-//! # Why the counter is global, and what that costs
-//!
-//! Per-prototype validity would need a word per prototype object and a load of
-//! it per hop — which is the per-hop walk again, one indirection shallower. A
-//! single global word is one load, covers a chain of ANY depth, and is the
-//! only form an emitted inline check can use.
-//!
-//! What it buys in over-invalidation is real but small, because the bump is
-//! gated on the mark: mutating an ordinary object — the overwhelming majority
-//! of all mutation — bumps nothing. Only mutating an object that something
-//! actually inherits from does, and then it invalidates every cached inherited
-//! read rather than the ones that name it. Measured (`/root/pv`, one
-//! structural mutation of an UNRELATED prototype per 64 inherited reads, which
-//! a per-prototype design would not invalidate at all): see the PR body.
-//!
-//! # Cost when nothing is marked
-//!
-//! [`note_object_shape_stamped`] is on the structural-mutation path, which a
-//! program that builds objects in a loop runs hot. Until something is marked
-//! it is one relaxed `bool` load and a predictable not-taken branch: the
-//! latch is only ever set by a prime of the inherited-read cache, so a program
-//! with no inherited reads never pays the header load.
+//! The remaining global word can be replaced by per-hop shape facts in the
+//! key-add store path (design decision D-A2).
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -134,7 +47,7 @@ pub(crate) fn proto_validity() -> u64 {
     PROTO_VALIDITY.load(Ordering::Relaxed)
 }
 
-/// Invalidate every cached inherited read. Callers are rare, cold paths by
+/// Invalidate every cached chain-store verdict. Callers are rare, cold paths by
 /// construction: a structural mutation of an object used as a prototype, or a
 /// semantic property event.
 #[inline]
@@ -353,10 +266,8 @@ pub(crate) unsafe fn object_is_marked_prototype(obj: usize) -> bool {
 /// Can a descriptor install or clear, or a `delete`, on `owner` change what
 /// a cached chain verdict answers?
 ///
-/// Every consumer of [`proto_validity`] records a verdict only through
-/// prototype hops that are MARKED ordinary objects (the inherited-read cache
-/// refuses an unmarked or non-object hop; `object::chain_store` marks every
-/// hop its verdict depends on before it records). What such a mutation can
+/// The chain-store verdict records through MARKED ordinary prototype hops;
+/// `object::chain_store` marks each hop it depends on before recording. What such a mutation can
 /// change on its RECEIVER is covered by the receiver's own ShapeId, which
 /// every descriptor install, clear and delete transitions. So the mutation
 /// matters to a verdict only when `owner` can be one of those hops: a marked
@@ -385,7 +296,7 @@ pub(crate) unsafe fn mutation_owner_may_be_a_recorded_hop(owner: usize) -> bool 
 
 /// The hook in the structural-mutation publication funnel
 /// (`shapes::stamp_object_shape_id_with_carrier_note`): a shape word that
-/// CHANGED on a MARKED object invalidates every cached inherited read.
+/// CHANGED on a MARKED object invalidates every cached chain-store verdict.
 ///
 /// `previous == published` is the re-publication of an unchanged descriptor —
 /// the read-side `lookup_ways` restamp, and a birth stamp that agrees with the
@@ -407,46 +318,3 @@ pub(crate) unsafe fn note_object_shape_stamped(obj: usize, previous: u32, publis
 #[cfg(test)]
 #[path = "proto_validity_tests.rs"]
 mod tests;
-
-static MARKED_VALUE_WRITE_BUMPS: AtomicU64 = AtomicU64::new(0);
-
-/// Bumps taken by [`note_marked_value_write`] (diagnostics, tests).
-pub(crate) fn marked_value_write_bumps() -> u64 {
-    MARKED_VALUE_WRITE_BUMPS.load(Ordering::Relaxed)
-}
-
-/// A value was written into an EXISTING slot of `obj`. When `obj` is a marked
-/// prototype this invalidates every cached inherited verdict: a method-call
-/// site memoizes the CLOSURE an inherited key resolves to (owner decision
-/// D3(b)), so a plain store over it must move the word just as a structural
-/// change does. Unmarked objects — nearly every store — pay the latch load,
-/// and a meta-null test once anything is marked.
-///
-/// # Safety
-/// `obj` is a live `ObjectHeader`.
-#[inline]
-pub(crate) unsafe fn note_marked_value_write(obj: *const crate::object::ObjectHeader) {
-    if !any_prototype_marked() {
-        return;
-    }
-    let meta = (*obj).meta;
-    if !meta.is_null() && (*meta).flags & crate::object::OBJECT_META_FLAG_IS_PROTOTYPE != 0 {
-        MARKED_VALUE_WRITE_BUMPS.fetch_add(1, Ordering::Relaxed);
-        bump_proto_validity();
-    }
-}
-
-/// Whether a store cache may LEARN `obj`'s shape: never for a marked
-/// prototype, so every write to one reaches a runtime funnel that calls
-/// [`note_marked_value_write`].
-///
-/// # Safety
-/// `obj` is a live `ObjectHeader`.
-#[inline]
-pub(crate) unsafe fn store_cache_may_learn(obj: *const crate::object::ObjectHeader) -> bool {
-    if !any_prototype_marked() {
-        return true;
-    }
-    let meta = (*obj).meta;
-    meta.is_null() || (*meta).flags & crate::object::OBJECT_META_FLAG_IS_PROTOTYPE == 0
-}
