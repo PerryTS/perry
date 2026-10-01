@@ -25,6 +25,16 @@ fn private_storage_identity_and_value_survive_copied_minor() {
             17.0,
         );
         crate::object::private_lexical_brand_pop();
+        // Prime the qualified key and its shape/slot cache before evacuation.
+        // The cache must continue reading through the relocated receiver and
+        // class identity, without retaining either address (#10501).
+        let request = format!("#<perry:private-value:{CID}:#v>");
+        let key = crate::string::js_string_from_bytes(request.as_ptr(), request.len() as u32);
+        let owner = (js_shadow_slot_get(0) & POINTER_MASK) as *const crate::ObjectHeader;
+        assert_eq!(
+            crate::object::js_object_get_field_by_name_f64(owner, key),
+            17.0
+        );
         let old_class = (js_shadow_slot_get(1) & POINTER_MASK) as *mut crate::ObjectHeader;
         let identity = (*(*old_class).meta).native_state;
         assert_ne!(identity, 0);

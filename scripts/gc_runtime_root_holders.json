@@ -891,6 +891,12 @@
       "why": "#10501 per-agent memo in front of the private-name interner: each entry is a caller name ADDRESS (a codegen .rodata literal, compared as an integer and re-verified by content) and a leaked &'static str. Neither is a managed-heap pointer."
     },
     {
+      "file": "crates/perry-runtime/src/object/field_get_set/ic_miss/private_storage_cache.rs",
+      "name": "PRIVATE_STORAGE_CACHE",
+      "verdict": "not_a_gc_pointer",
+      "why": "#10501 bounded cache of Rust-owned Rc<PrivateStorageKey> strings and scalar class/evaluation identities. Each key contains a String and Cell<Option<(ShapeId, slot index, live inline bound, attributes)>>; names are leaked Rust interner strings. No receiver, class-object address, StringHeader pointer or NaN-boxed value is retained. Reads resolve the current receiver and slot on every hit, so moving GC requires no scanner."
+    },
+    {
       "file": "crates/perry-runtime/src/object/field_set_by_name/fast_paths.rs",
       "name": "TEST_TRANSITION_FAST_HITS",
       "verdict": "not_a_gc_pointer",

@@ -4,35 +4,27 @@
 static NEXT_PRIVATE_EVALUATION_ID: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(1);
 
-fn private_storage_namespace_for(class_id: u32, receiver: Option<f64>) -> String {
-    private_storage_namespace_for_owner(class_id, receiver, None)
-}
+include!("private_storage_cache.rs");
 
-fn private_storage_namespace_for_owner(
-    class_id: u32,
-    receiver: Option<f64>,
-    owner: Option<u64>,
-) -> String {
+fn private_storage_evaluation_id(class_id: u32, receiver: Option<f64>, owner: Option<u64>) -> u64 {
     let Some(brand) = owner
         .or_else(|| current_private_lexical_brand(class_id))
         .or_else(|| receiver.and_then(|value| private_evaluation_brand(value, class_id)))
     else {
-        return class_id.to_string();
+        return 0;
     };
     let object = JSValue::from_bits(brand).as_pointer::<ObjectHeader>();
-    // object_meta_ensure roots the class across metadata allocation; callers
-    // separately root the receiver and any other live operands.
-    // A heap class object cannot also be a native decoder or Set: its
-    // native_state word is available for this class-specific scalar payload.
-    let id = unsafe {
-        let meta = crate::object::object_meta_ensure(object as *mut ObjectHeader);
-        if (*meta).native_state == 0 {
-            (*meta).native_state =
-                NEXT_PRIVATE_EVALUATION_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    unsafe {
+        let meta = (*object).meta;
+        if !meta.is_null() && (*meta).native_state != 0 {
+            return (*meta).native_state;
         }
-        (*meta).native_state
-    };
-    format!("{class_id}:@{id}")
+        // Metadata allocation can move the class; object_meta_ensure roots it.
+        let meta = crate::object::object_meta_ensure(object as *mut ObjectHeader);
+        let id = NEXT_PRIVATE_EVALUATION_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        (*meta).native_state = id;
+        id
+    }
 }
 
 fn private_instance_value_name(
@@ -40,10 +32,13 @@ fn private_instance_value_name(
     field_name: &str,
     receiver: f64,
     owner: Option<u64>,
-) -> String {
-    format!(
-        "#<perry:private-value:{}:{field_name}>",
-        private_storage_namespace_for_owner(class_id, Some(receiver), owner)
+) -> std::rc::Rc<PrivateStorageKey> {
+    private_storage_key(
+        class_id,
+        Some(receiver),
+        owner,
+        field_name,
+        PrivateStorageKind::Value,
     )
 }
 
@@ -65,7 +60,9 @@ unsafe fn private_value_request<'a>(key: *const crate::StringHeader) -> Option<(
         return None;
     }
     let key = super::super::has_own_helpers::str_from_string_header(key)?;
-    let rest = key.strip_prefix("#<perry:private-value:")?.strip_suffix('>')?;
+    let rest = key
+        .strip_prefix("#<perry:private-value:")?
+        .strip_suffix('>')?;
     let (class_id, name) = rest.split_once(':')?;
     if !name.starts_with('#') {
         return None;
@@ -78,6 +75,12 @@ fn private_evaluation_field_get(
     key: *const crate::StringHeader,
 ) -> Option<f64> {
     let (class_id, name) = unsafe { private_value_request(key) }?;
+    if !private_template_may_be_evaluated(class_id) {
+        let receiver = private_member_receiver(obj);
+        let name = intern_private_name(name.as_bytes()).unwrap();
+        return private_storage_key_by_id(class_id, 0, name, PrivateStorageKind::Value)
+            .get_cached(receiver);
+    }
     let owner = take_private_field_owner(class_id, name, false);
     let _owner = PrivateHintBrandScope::new(owner);
     let receiver = private_member_receiver(obj);
@@ -88,15 +91,11 @@ fn private_evaluation_field_get(
     {
         return None;
     }
-    let name = name.to_owned();
+    let name = intern_private_name(name.as_bytes()).unwrap();
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(receiver);
     let name = private_instance_value_name(class_id, &name, receiver.get_nanbox_f64(), owner);
-    Some(crate::object::js_object_get_own_field_or_undef(
-        receiver.get_nanbox_f64(),
-        name.as_ptr(),
-        name.len(),
-    ))
+    Some(name.get(receiver.get_nanbox_f64()))
 }
 
 fn private_evaluation_field_set(
@@ -107,6 +106,12 @@ fn private_evaluation_field_set(
     let Some((class_id, name)) = (unsafe { private_value_request(key) }) else {
         return false;
     };
+    if !private_template_may_be_evaluated(class_id) {
+        let receiver = private_member_receiver(obj);
+        let name = intern_private_name(name.as_bytes()).unwrap();
+        return private_storage_key_by_id(class_id, 0, name, PrivateStorageKind::Value)
+            .set_cached(receiver, value);
+    }
     let owner = take_private_field_owner(class_id, name, true);
     let _owner = PrivateHintBrandScope::new(owner);
     let receiver = private_member_receiver(obj);
@@ -117,12 +122,15 @@ fn private_evaluation_field_set(
     {
         return false;
     }
-    let name = name.to_owned();
+    let name = intern_private_name(name.as_bytes()).unwrap();
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(receiver);
     let value = scope.root_nanbox_f64(value);
     let name = private_instance_value_name(class_id, &name, receiver.get_nanbox_f64(), owner);
-    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    if name.set_cached(receiver.get_nanbox_f64(), value.get_nanbox_f64()) {
+        return true;
+    }
+    let key = crate::string::intern_ascii_literal(name.as_bytes());
     let obj = JSValue::from_bits(receiver.get_nanbox_f64().to_bits()).as_pointer::<ObjectHeader>();
     js_object_set_field_by_name(obj as *mut ObjectHeader, key, value.get_nanbox_f64());
     true
