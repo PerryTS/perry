@@ -18,6 +18,8 @@ use swc_ecma_ast as ast;
 use super::*;
 use crate::ir::*;
 
+mod async_iterator_close;
+pub(crate) use async_iterator_close::emit_driver as async_iterator_close_driver;
 mod for_await_targets;
 use for_await_targets::{
     is_filehandle_readlines_for_await_target, is_fs_dir_for_await_target,
@@ -56,51 +58,6 @@ fn iterator_return_call(iter_id: LocalId, needs_await: bool) -> Expr {
     } else {
         call
     }
-}
-
-fn insert_iterator_return_before_abrupts(
-    stmts: &mut Vec<Stmt>,
-    iter_id: LocalId,
-    needs_await: bool,
-) {
-    let mut rewritten = Vec::with_capacity(stmts.len());
-    for stmt in stmts.drain(..) {
-        match stmt {
-            Stmt::Break => {
-                rewritten.push(Stmt::Expr(iterator_return_call(iter_id, needs_await)));
-                rewritten.push(Stmt::Break);
-            }
-            Stmt::LabeledBreak(label) => {
-                rewritten.push(Stmt::Expr(iterator_return_call(iter_id, needs_await)));
-                rewritten.push(Stmt::LabeledBreak(label));
-            }
-            Stmt::Return(value) => {
-                rewritten.push(Stmt::Expr(iterator_return_call(iter_id, needs_await)));
-                rewritten.push(Stmt::Return(value));
-            }
-            Stmt::Throw(expr) => {
-                rewritten.push(Stmt::Expr(iterator_return_call(iter_id, needs_await)));
-                rewritten.push(Stmt::Throw(expr));
-            }
-            Stmt::If {
-                condition,
-                mut then_branch,
-                mut else_branch,
-            } => {
-                insert_iterator_return_before_abrupts(&mut then_branch, iter_id, needs_await);
-                if let Some(else_stmts) = else_branch.as_mut() {
-                    insert_iterator_return_before_abrupts(else_stmts, iter_id, needs_await);
-                }
-                rewritten.push(Stmt::If {
-                    condition,
-                    then_branch,
-                    else_branch,
-                });
-            }
-            other => rewritten.push(other),
-        }
-    }
-    *stmts = rewritten;
 }
 
 /// Element source for a `for...of` binding: `__result.value` on the lazy
@@ -166,8 +123,7 @@ pub(crate) fn iterator_next_call(iter_id: LocalId) -> Expr {
 /// here cannot carry an `await` in a `for` update clause, so they use this
 /// shape). An SSE consumer's `continue` on ping hung a bundled CLI app.
 ///
-/// The synthetic `if done break` is appended AFTER
-/// `insert_iterator_return_before_abrupts` runs over the user body, so the
+/// The async cleanup driver disables close before advancing, so this
 /// normal-completion exit never triggers a spurious IteratorClose.
 fn iter_driver_while_stmt(result_id: LocalId, next_call: Expr, rest: Vec<Stmt>) -> Stmt {
     let mut body = vec![
@@ -559,11 +515,15 @@ fn lower_runtime_for_await_iterator(
         lower_stmt(ctx, module, &for_of_stmt.body)?;
     }
     let mut user_body: Vec<Stmt> = module.init.drain(init_before..).collect();
-    insert_iterator_return_before_abrupts(&mut user_body, iter_id, true);
     body_stmts.append(&mut user_body);
-    module
-        .init
-        .push(iter_driver_while_stmt(result_id, next_call, body_stmts));
+    async_iterator_close::emit_driver(
+        ctx,
+        &mut module.init,
+        iter_id,
+        result_id,
+        next_call,
+        body_stmts,
+    );
 
     ctx.pop_block_scope(for_scope_mark);
     Ok(())
@@ -849,19 +809,21 @@ pub(super) fn lower_stmt_for_of_inner(
             lower_stmt(ctx, module, &for_of_stmt.body)?;
         }
         let mut user_body: Vec<Stmt> = module.init.drain(init_before..).collect();
-        if is_node_readable_for_await
-            || is_filehandle_readlines_for_await
-            || is_fs_dir_for_await
-            || is_readline_interface_for_await
-            || (for_of_stmt.is_await && is_generator_call && !callee_is_async_gen)
-        {
-            insert_iterator_return_before_abrupts(&mut user_body, iter_id, needs_await);
-        }
         body_stmts.append(&mut user_body);
-        // while (true) { __result = __iter.next(); if (__result.done) break; body }
-        module
-            .init
-            .push(iter_driver_while_stmt(result_id, next_call, body_stmts));
+        if needs_await {
+            async_iterator_close::emit_driver(
+                ctx,
+                &mut module.init,
+                iter_id,
+                result_id,
+                next_call,
+                body_stmts,
+            );
+        } else {
+            module
+                .init
+                .push(iter_driver_while_stmt(result_id, next_call, body_stmts));
+        }
 
         ctx.pop_block_scope(for_scope_mark);
         return Ok(false);

@@ -33,6 +33,7 @@ enum RequestKind {
 
 struct AsyncGeneratorRequest {
     original: *const ClosureHeader,
+    original_throw: *const ClosureHeader,
     arg: f64,
     promise: *mut Promise,
     kind: RequestKind,
@@ -43,7 +44,6 @@ struct AsyncGeneratorQueueState {
     drain_scheduled: bool,
     started: bool,
     completed: bool,
-    original_throw: *const ClosureHeader,
     queue: VecDeque<AsyncGeneratorRequest>,
 }
 
@@ -100,14 +100,11 @@ pub(crate) fn wrap_async_generator_instance(obj: *mut ObjectHeader) {
     let state_id = STATES.with(|states| {
         let mut states = states.borrow_mut();
         let id = states.len() + 1;
-        let original_throw = closure_now(&throw_h);
-        crate::gc::runtime_write_barrier_root_raw_ptr(original_throw);
         states.push(AsyncGeneratorQueueState {
             active: false,
             drain_scheduled: false,
             started: false,
             completed: false,
-            original_throw,
             queue: VecDeque::new(),
         });
         id
@@ -133,9 +130,12 @@ pub(crate) fn wrap_async_generator_instance(obj: *mut ObjectHeader) {
         // would have to bind it BEFORE `js_closure_alloc` runs and the capture
         // store would write a pre-collection address. Reading it from the
         // handle after the allocation is the whole fix.
-        let wrapper = js_closure_alloc(func, 2);
+        // Idle queue metadata must not root the generator. Keep the throw
+        // closure on the instance; only queued requests become runtime roots.
+        let wrapper = js_closure_alloc(func, 3);
         js_closure_set_capture_f64(wrapper, 0, state_id as f64);
         js_closure_set_capture_ptr(wrapper, 1, closure_now(original_h) as i64);
+        js_closure_set_capture_ptr(wrapper, 2, closure_now(&throw_h) as i64);
         // `set_method` roots both of its pointer arguments before it allocates
         // its key string; nothing between here and the call allocates.
         set_method(obj_now(), name, wrapper);
@@ -147,9 +147,9 @@ pub(crate) fn scan_async_generator_queue_roots_mut(
 ) {
     STATES.with(|states| {
         for state in states.borrow_mut().iter_mut() {
-            visitor.visit_raw_const_ptr_slot(&mut state.original_throw);
             for request in state.queue.iter_mut() {
                 visitor.visit_raw_const_ptr_slot(&mut request.original);
+                visitor.visit_raw_const_ptr_slot(&mut request.original_throw);
                 visitor.visit_nanbox_f64_slot(&mut request.arg);
                 visitor.visit_raw_mut_ptr_slot(&mut request.promise);
             }
@@ -320,7 +320,11 @@ fn async_generator_request(closure: *const ClosureHeader, arg: f64, kind: Reques
     let Some(state_id) = state_id_from_wrapper(closure) else {
         return call_original(original_from_wrapper(closure), arg);
     };
-    let original = original_from_wrapper(closure);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let original_h = scope.root_raw_const_ptr(original_from_wrapper(closure));
+    let throw_h =
+        scope.root_raw_const_ptr(js_closure_get_capture_ptr(closure, 2) as *const ClosureHeader);
+    let arg_h = scope.root_nanbox_f64(arg);
 
     let should_queue = STATES.with(|states| {
         let mut states = states.borrow_mut();
@@ -335,21 +339,20 @@ fn async_generator_request(closure: *const ClosureHeader, arg: f64, kind: Reques
     });
 
     if should_queue {
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let original_handle = scope.root_raw_const_ptr(original);
-        let arg_handle = scope.root_nanbox_f64(arg);
         // `across_const` pairs the allocating call with the re-read, so the
         // closure pointer cannot be bound stale in between (#7341).
-        let (promise, original) =
-            original_handle.across_const::<ClosureHeader, _>(|| js_promise_new());
-        let arg = arg_handle.get_nanbox_f64();
+        let (promise, original) = original_h.across_const::<ClosureHeader, _>(|| js_promise_new());
+        let arg = arg_h.get_nanbox_f64();
+        let original_throw = throw_h.with_const_ptr::<ClosureHeader, _>(|throw| throw);
         STATES.with(|states| {
             if let Some(state) = states.borrow_mut().get_mut(state_id - 1) {
                 crate::gc::runtime_write_barrier_root_raw_ptr(original);
+                crate::gc::runtime_write_barrier_root_raw_ptr(original_throw);
                 crate::gc::runtime_write_barrier_root_nanbox(arg.to_bits());
                 crate::gc::runtime_write_barrier_root_raw_ptr(promise);
                 state.queue.push_back(AsyncGeneratorRequest {
                     original,
+                    original_throw,
                     arg,
                     promise,
                     kind,
@@ -366,12 +369,23 @@ fn async_generator_request(closure: *const ClosureHeader, arg: f64, kind: Reques
     // `AsyncGeneratorAwaitReturn` for suspendedStart/completed). Route through
     // an explicit output promise so the unwrap happens on the microtask queue.
     if kind == RequestKind::Return {
-        let out = js_promise_new();
-        dispatch_return_with_await(state_id, original, arg, out);
-        return boxed_promise(out);
+        let out_h = scope.root_raw_mut_ptr(js_promise_new());
+        original_h.with_const_ptr(|original| {
+            throw_h.with_const_ptr(|original_throw| {
+                dispatch_return_with_await(
+                    state_id,
+                    original,
+                    original_throw,
+                    arg_h.get_nanbox_f64(),
+                    out_h.with_mut_ptr::<Promise, _>(|out| out),
+                )
+            })
+        });
+        return out_h.with_mut_ptr::<Promise, _>(boxed_promise);
     }
 
-    let result = call_original(original, arg);
+    let result =
+        original_h.with_const_ptr(|original| call_original(original, arg_h.get_nanbox_f64()));
     after_initial_result(state_id, result);
     result
 }
@@ -383,11 +397,13 @@ fn async_generator_request(closure: *const ClosureHeader, arg: f64, kind: Reques
 fn dispatch_return_with_await(
     state_id: usize,
     original: *const ClosureHeader,
+    original_throw: *const ClosureHeader,
     arg: f64,
     out: *mut Promise,
 ) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let original_h = scope.root_raw_const_ptr(original);
+    let throw_h = scope.root_raw_const_ptr(original_throw);
     let out_h = scope.root_raw_mut_ptr(out);
     let arg_h = scope.root_nanbox_f64(arg);
     let arg_promise = match crate::promise::js_promise_resolved_catching(arg_h.get_nanbox_f64()) {
@@ -398,7 +414,7 @@ fn dispatch_return_with_await(
                     .borrow()
                     .get(state_id - 1)
                     .filter(|state| state.started && !state.completed)
-                    .map(|state| state.original_throw)
+                    .map(|_| throw_h.with_const_ptr::<ClosureHeader, _>(|throw| throw))
             });
             if let Some(throw_original) = suspended_throw {
                 let throw_h = scope.root_raw_const_ptr(throw_original);
@@ -585,7 +601,13 @@ fn process_one_queued_request(state_id: usize) {
     // A queued `.return(v)` awaits `v` before resuming the close path, same as
     // the head-of-line case in `async_generator_request`.
     if request.kind == RequestKind::Return {
-        dispatch_return_with_await(state_id, original, request.arg, request.promise);
+        dispatch_return_with_await(
+            state_id,
+            original,
+            request.original_throw,
+            request.arg,
+            request.promise,
+        );
         return;
     }
     let result = call_original(original, request.arg);
@@ -722,3 +744,7 @@ fn boxed_promise(promise: *mut Promise) -> f64 {
         js_nanbox_pointer(promise as i64)
     }
 }
+
+#[cfg(test)]
+#[path = "async_generator_queue_tests.rs"]
+mod tests;

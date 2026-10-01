@@ -28,9 +28,8 @@ use class_self_binding::{decl_self_binding_init, decl_self_binding_owner, lower_
 use gen_capture_scan::nested_generator_references_outer_locals;
 
 use detect::{
-    insert_iterator_return_before_abrupts, is_fs_dir_for_await_target, is_node_readable_expr,
-    is_readline_interface_for_await_target, is_web_readable_stream_expr,
-    web_readable_stream_values_receiver,
+    is_fs_dir_for_await_target, is_node_readable_expr, is_readline_interface_for_await_target,
+    is_web_readable_stream_expr, web_readable_stream_values_receiver,
 };
 
 use for_await::lower_runtime_for_await_iterator_body;
@@ -1499,36 +1498,35 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                         });
                     }
                 }
-                let mut user_body = lower_body_stmt(ctx, &for_of_stmt.body)?;
-                if is_node_readable_for_await
-                    || is_filehandle_readlines_for_await
-                    || is_fs_dir_for_await
-                    || is_readline_interface_for_await
-                    || (for_of_stmt.is_await && is_generator_call && !callee_is_async_gen)
-                {
-                    insert_iterator_return_before_abrupts(&mut user_body, iter_id, needs_await);
-                }
-                body_stmts.extend(user_body);
-
-                // Advance-at-top driver (see lower_decl/body_stmt/for_await.rs):
-                // `continue` must re-run `next()`, not re-process the same result.
-                let mut loop_body = vec![
-                    Stmt::Expr(Expr::LocalSet(result_id, Box::new(next_call))),
-                    Stmt::If {
-                        condition: Expr::PropertyGet {
-                            byte_offset: 0,
-                            object: Box::new(Expr::LocalGet(result_id)),
-                            property: "done".to_string(),
+                body_stmts.extend(lower_body_stmt(ctx, &for_of_stmt.body)?);
+                if needs_await {
+                    crate::lower::async_iterator_close_driver(
+                        ctx,
+                        &mut result,
+                        iter_id,
+                        result_id,
+                        next_call,
+                        body_stmts,
+                    );
+                } else {
+                    let mut loop_body = vec![
+                        Stmt::Expr(Expr::LocalSet(result_id, Box::new(next_call))),
+                        Stmt::If {
+                            condition: Expr::PropertyGet {
+                                byte_offset: 0,
+                                object: Box::new(Expr::LocalGet(result_id)),
+                                property: "done".to_string(),
+                            },
+                            then_branch: vec![Stmt::Break],
+                            else_branch: None,
                         },
-                        then_branch: vec![Stmt::Break],
-                        else_branch: None,
-                    },
-                ];
-                loop_body.extend(body_stmts);
-                result.push(Stmt::While {
-                    condition: Expr::Bool(true),
-                    body: loop_body,
-                });
+                    ];
+                    loop_body.extend(body_stmts);
+                    result.push(Stmt::While {
+                        condition: Expr::Bool(true),
+                        body: loop_body,
+                    });
+                }
 
                 ctx.pop_block_scope(scope_mark);
                 return Ok(result);

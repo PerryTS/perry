@@ -1,9 +1,8 @@
 //! for-await/for-of TARGET DETECTION helpers: predicates that decide
 //! whether a `for await (…)` / `for (… of …)` head expression is a web
 //! ReadableStream, a Node Readable, a readline interface, or an fs.Dir
-//! handle (each gets a specialized lowering in `lower_body_stmt`), plus
-//! the shared `iterator_return_call` / `insert_iterator_return_before_abrupts`
-//! IteratorClose machinery. Split out of `body_stmt.rs` for the 2000-line
+//! handle (each gets a specialized lowering in `lower_body_stmt`).
+//! Split out of `body_stmt.rs` for the 2000-line
 //! file-size gate; the twins of these helpers for the `lower/stmt_loops.rs`
 //! duplicate lowering path live there (see #4786).
 
@@ -170,67 +169,4 @@ pub(super) fn is_fs_dir_for_await_target(ctx: &LoweringContext, expr: &ast::Expr
         strip_for_of_expr_wrappers(&member.obj),
         ctx,
     ))
-}
-
-pub(super) fn iterator_return_call(iter_id: LocalId, needs_await: bool) -> Expr {
-    let call = Expr::Call {
-        callee: Box::new(Expr::PropertyGet {
-            byte_offset: 0,
-            object: Box::new(Expr::LocalGet(iter_id)),
-            property: "return".to_string(),
-        }),
-        args: vec![],
-        type_args: vec![],
-        byte_offset: 0,
-    };
-    if needs_await {
-        Expr::Await(Box::new(call))
-    } else {
-        call
-    }
-}
-
-pub(super) fn insert_iterator_return_before_abrupts(
-    stmts: &mut Vec<Stmt>,
-    iter_id: LocalId,
-    needs_await: bool,
-) {
-    let mut rewritten = Vec::with_capacity(stmts.len());
-    for stmt in stmts.drain(..) {
-        match stmt {
-            Stmt::Break => {
-                rewritten.push(Stmt::Expr(iterator_return_call(iter_id, needs_await)));
-                rewritten.push(Stmt::Break);
-            }
-            Stmt::LabeledBreak(label) => {
-                rewritten.push(Stmt::Expr(iterator_return_call(iter_id, needs_await)));
-                rewritten.push(Stmt::LabeledBreak(label));
-            }
-            Stmt::Return(value) => {
-                rewritten.push(Stmt::Expr(iterator_return_call(iter_id, needs_await)));
-                rewritten.push(Stmt::Return(value));
-            }
-            Stmt::Throw(expr) => {
-                rewritten.push(Stmt::Expr(iterator_return_call(iter_id, needs_await)));
-                rewritten.push(Stmt::Throw(expr));
-            }
-            Stmt::If {
-                condition,
-                mut then_branch,
-                mut else_branch,
-            } => {
-                insert_iterator_return_before_abrupts(&mut then_branch, iter_id, needs_await);
-                if let Some(else_stmts) = else_branch.as_mut() {
-                    insert_iterator_return_before_abrupts(else_stmts, iter_id, needs_await);
-                }
-                rewritten.push(Stmt::If {
-                    condition,
-                    then_branch,
-                    else_branch,
-                });
-            }
-            other => rewritten.push(other),
-        }
-    }
-    *stmts = rewritten;
 }

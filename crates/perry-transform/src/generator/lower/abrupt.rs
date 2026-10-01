@@ -192,7 +192,39 @@ pub(crate) fn build_completion_resume_stmts(
     pending_type_id: LocalId,
     pending_value_id: LocalId,
     done_id: LocalId,
+    state_id: LocalId,
+    finallys: &[FinallyRoute],
+    hoisted_ids: &std::collections::HashSet<LocalId>,
 ) -> Vec<Stmt> {
+    // Finishing an awaited close still has to unwind enclosing finalizers.
+    // Returning here directly would skip, for example, MongoDB's outer
+    // command cleanup after the inner event iterator's return has settled.
+    let mut return_fallback = vec![Stmt::Expr(Expr::LocalSet(
+        pending_type_id,
+        Box::new(Expr::Number(0.0)),
+    ))];
+    return_fallback.extend(build_finally_run_stmts(finallys, state_id, hoisted_ids));
+    return_fallback.push(Stmt::Expr(Expr::LocalSet(
+        done_id,
+        Box::new(Expr::Bool(true)),
+    )));
+    return_fallback.push(Stmt::Return(Some(make_iter_result(
+        Expr::LocalGet(pending_value_id),
+        true,
+    ))));
+    let resume_return = build_abrupt_routing(
+        &[],
+        finallys,
+        state_id,
+        pending_type_id,
+        pending_value_id,
+        &Expr::LocalGet(pending_value_id),
+        false,
+        2.0,
+        true,
+        true,
+        return_fallback,
+    );
     vec![
         Stmt::If {
             condition: Expr::Compare {
@@ -212,14 +244,7 @@ pub(crate) fn build_completion_resume_stmts(
                 left: Box::new(Expr::LocalGet(pending_type_id)),
                 right: Box::new(Expr::Number(2.0)),
             },
-            then_branch: vec![
-                Stmt::Expr(Expr::LocalSet(pending_type_id, Box::new(Expr::Number(0.0)))),
-                Stmt::Expr(Expr::LocalSet(done_id, Box::new(Expr::Bool(true)))),
-                Stmt::Return(Some(make_iter_result(
-                    Expr::LocalGet(pending_value_id),
-                    true,
-                ))),
-            ],
+            then_branch: resume_return,
             else_branch: None,
         },
     ]
