@@ -1,0 +1,1 @@
+The reflected Script-var HIR test now enables explicit Script mode in an isolated subprocess before lowering. This repairs the main-side cargo-test failure after module-default reflection semantics changed, while keeping sibling module tests isolated and preserving compiler behavior.
