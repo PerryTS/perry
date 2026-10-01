@@ -435,6 +435,28 @@ fn stored_socket_endpoints_reach_dynamic_dispatch() {
             );
         }
     }
+    let flags: [(&str, unsafe extern "C" fn(i64) -> f64); 3] = [
+        ("destroyed", js_net_socket_get_destroyed),
+        ("connecting", js_net_socket_get_connecting),
+        ("writableLength", js_net_socket_get_writable_length),
+    ];
+    for (name, getter) in flags {
+        let expected = unsafe { getter(socket_id) };
+        let mut actual = dispatch::undefined();
+        assert_eq!(
+            unsafe {
+                dispatch::js_ext_net_handle_property_dispatch(
+                    socket_id,
+                    name.as_ptr(),
+                    name.len(),
+                    &mut actual,
+                )
+            },
+            1,
+            "existing {name} remains claimed"
+        );
+        assert_ne!(perry_runtime::value::js_jsvalue_equals(expected, actual), 0);
+    }
     let invalid_id = -30_002;
     assert!(!statics::sockets().lock().unwrap().contains_key(&invalid_id));
     for (name, _) in getters {
