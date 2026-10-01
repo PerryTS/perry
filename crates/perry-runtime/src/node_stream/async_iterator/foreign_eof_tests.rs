@@ -2,14 +2,15 @@ use super::*;
 use crate::promise::{Promise, PromiseState};
 
 fn readable() -> f64 {
-    register_arities();
-    crate::child_process::cp_register_arities();
     crate::child_process::cp_build_readable()
 }
 
 fn pull(iterator: f64) -> f64 {
     let next = get_hidden_value(iterator, hidden_key(b"next")).expect("iterator.next");
-    crate::closure::js_closure_call0(raw_ptr_from_value(next) as *const ClosureHeader)
+    crate::closure::js_closure_call0(
+        raw_ptr_from_value(next) as *const ClosureHeader,
+        crate::closure::plain_call_receiver(),
+    )
 }
 
 fn result_field(promise: f64, name: &[u8]) -> f64 {

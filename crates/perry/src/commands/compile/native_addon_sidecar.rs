@@ -3,6 +3,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use super::{host_target_triple, rust_target_triple, CompilationContext, NativeAddonModule};
@@ -126,37 +127,223 @@ fn payload_key(addon: &NativeAddonModule) -> String {
     perry_hex::encode(&digest[..8])
 }
 
-/// Every package-local file is shipped. Native addons sometimes open data
-/// tables at runtime and their dependent dylibs can have versioned filenames;
-/// extension filtering would silently produce a loader-success/runtime-fail
-/// artifact. Nested node_modules and VCS state are separate packages, not
-/// part of the selected platform payload.
-pub(super) fn addon_payload_files(addon: &NativeAddonModule) -> Vec<PathBuf> {
+/// Keep runtime data and shared libraries, including versioned filenames. Only
+/// recognizable development files and unselected prebuilds are omitted. A
+/// project can retain unusual runtime inputs via perry.nativeAddonFiles.
+pub(super) fn addon_payload_files(
+    ctx: &CompilationContext,
+    addon: &NativeAddonModule,
+) -> Result<Vec<PathBuf>> {
     if !addon.ship_package_payload {
-        return vec![addon.source_path.clone()];
+        return Ok(vec![addon.source_path.clone()]);
     }
-    let mut files = walkdir::WalkDir::new(&addon.package_dir)
+    let manifest_path = ctx
+        .project_root
+        .ancestors()
+        .map(|directory| directory.join("package.json"))
+        .find(|path| path.is_file());
+    let manifest: serde_json::Value = if let Some(manifest_path) = manifest_path {
+        serde_json::from_slice(&fs::read(&manifest_path)?)?
+    } else {
+        serde_json::Value::Null
+    };
+    let extras = manifest.pointer("/perry/nativeAddonFiles");
+    let mut retained = Vec::new();
+    if let Some(extras) = extras {
+        let extras = extras.as_object().ok_or_else(|| {
+            anyhow!(
+                "perry.nativeAddonFiles must map package names to arrays of package-relative paths"
+            )
+        })?;
+        if let Some(paths) = extras.get(&addon.package) {
+            let paths = paths.as_array().ok_or_else(|| {
+                anyhow!("perry.nativeAddonFiles[{}] must be an array", addon.package)
+            })?;
+            for path in paths {
+                let path = path.as_str().ok_or_else(|| {
+                    anyhow!(
+                        "perry.nativeAddonFiles[{}] paths must be strings",
+                        addon.package
+                    )
+                })?;
+                let path = Path::new(path);
+                if path.as_os_str().is_empty()
+                    || path.components().any(|part| {
+                        !matches!(
+                            part,
+                            std::path::Component::Normal(_) | std::path::Component::CurDir
+                        )
+                    })
+                {
+                    anyhow::bail!(
+                        "nativeAddonFiles path must remain inside {}: {}",
+                        addon.package,
+                        path.display()
+                    );
+                }
+                if path.components().any(|part| matches!(part, std::path::Component::Normal(name) if name == "node_modules" || name == ".git")) {
+                    anyhow::bail!("nativeAddonFiles cannot include node_modules or .git: {}", path.display());
+                }
+                let source = addon.package_dir.join(path);
+                let canonical = source.canonicalize().with_context(|| {
+                    format!("missing nativeAddonFiles input {}", source.display())
+                })?;
+                if !canonical.starts_with(addon.package_dir.canonicalize()?) {
+                    anyhow::bail!(
+                        "nativeAddonFiles path escapes {}: {}",
+                        addon.package,
+                        path.display()
+                    );
+                }
+                retained.push(source);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    for entry in walkdir::WalkDir::new(&addon.package_dir)
         .follow_links(false)
         .into_iter()
         .filter_entry(|entry| {
             let name = entry.file_name().to_string_lossy();
             name != "node_modules" && name != ".git"
         })
-        .filter_map(|entry| entry.ok())
-        .map(|entry| entry.into_path())
-        .filter(|path| path.is_file())
-        .collect::<Vec<_>>();
+    {
+        let path = entry?.into_path();
+        if !path.is_file() {
+            continue;
+        }
+        let relative = path.strip_prefix(&addon.package_dir)?;
+        if path == addon.source_path
+            || retained.iter().any(|extra| path.starts_with(extra))
+            || runtime_payload_file(relative, &addon.entry_relative)
+        {
+            files.push(path);
+        }
+    }
     files.sort();
-    files
+    Ok(files)
 }
 
-fn hash_file(path: &Path) -> Result<(String, u64)> {
-    let bytes =
-        fs::read(path).with_context(|| format!("read native addon payload {}", path.display()))?;
-    Ok((
-        perry_hex::encode(Sha256::digest(&bytes)),
-        bytes.len() as u64,
-    ))
+fn runtime_payload_file(relative: &Path, entry: &Path) -> bool {
+    // prebuilds/<platform>/... is node-gyp-build's selected payload. Flat
+    // prebuilds/<platform>.node layouts select just the entry binary.
+    if relative.starts_with("prebuilds") {
+        if entry.starts_with("prebuilds") {
+            let selected = entry.components().nth(1);
+            if entry.components().count() > 2 && relative.components().nth(1) != selected {
+                return false;
+            }
+        }
+        if entry.starts_with("prebuilds") && entry.components().count() == 2 {
+            let selected = entry
+                .file_stem()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default();
+            let candidate = relative
+                .components()
+                .nth(1)
+                .and_then(|component| component.as_os_str().to_str())
+                .unwrap_or_default();
+            let candidate = Path::new(candidate)
+                .file_stem()
+                .and_then(|name| name.to_str())
+                .unwrap_or(candidate);
+            let known_platform = [
+                "linux-",
+                "linuxmusl-",
+                "darwin-",
+                "win32-",
+                "freebsd-",
+                "openbsd-",
+                "netbsd-",
+                "android-",
+                "sunos-",
+                "aix-",
+            ]
+            .iter()
+            .any(|prefix| candidate.starts_with(prefix));
+            if known_platform
+                && candidate != selected
+                && !candidate.starts_with(&format!("{selected}-"))
+            {
+                return false;
+            }
+        }
+        if (!entry.starts_with("prebuilds") || entry.components().count() == 2)
+            && relative
+                .extension()
+                .is_some_and(|extension| extension == "node")
+            && relative != entry
+        {
+            return false;
+        }
+    }
+    if relative.starts_with(".github") {
+        return false;
+    }
+    let name = relative.file_name().unwrap_or_default().to_string_lossy();
+    // Preserve redistribution licenses and unknown data, even under src/deps.
+    if name.starts_with("LICENSE") || name.starts_with("COPYING") || name.starts_with("NOTICE") {
+        return true;
+    }
+    if matches!(
+        name.as_ref(),
+        "binding.gyp" | "Dockerfile" | "Dockerfile-alpine" | "Makefile" | "CMakeLists.txt"
+    ) {
+        return false;
+    }
+    !matches!(
+        relative
+            .extension()
+            .and_then(|extension| extension.to_str()),
+        Some(
+            "c" | "cc"
+                | "cpp"
+                | "cxx"
+                | "h"
+                | "hh"
+                | "hpp"
+                | "gyp"
+                | "gypi"
+                | "md"
+                | "markdown"
+                | "ts"
+                | "cts"
+                | "mts"
+                | "js"
+                | "cjs"
+                | "mjs"
+                | "sh"
+                | "bat"
+                | "ps1"
+                | "patch"
+                | "map"
+        )
+    )
+}
+
+/// Preserve platform copying behavior (permissions, attributes and efficient
+/// kernel copies), then authenticate the staged bytes with bounded memory.
+fn copy_and_hash_file(source: &Path, destination: &Path) -> Result<(String, u64)> {
+    fs::copy(source, destination)?;
+    let mut input = fs::File::open(destination)?;
+    let mut hash = Sha256::new();
+    let mut size = 0u64;
+    let length = input.metadata()?.len();
+    let mut buffer = vec![0u8; length.clamp(1, 256 * 1024) as usize];
+    loop {
+        let count = match input.read(&mut buffer) {
+            Ok(count) => count,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error.into()),
+        };
+        if count == 0 {
+            break;
+        }
+        hash.update(&buffer[..count]);
+        size += count as u64;
+    }
+    Ok((perry_hex::encode(hash.finalize()), size))
 }
 
 fn target_tuple(target: Option<&str>) -> String {
@@ -191,7 +378,7 @@ pub(super) fn stage_native_addon_sidecar(
         let prefix = payload_key(addon);
         let mut files = Vec::new();
         let mut copied = BTreeSet::new();
-        for source in addon_payload_files(addon) {
+        for source in addon_payload_files(ctx, addon)? {
             let relative = source.strip_prefix(&addon.package_dir).with_context(|| {
                 format!(
                     "payload {} is outside package {}",
@@ -207,14 +394,13 @@ pub(super) fn stage_native_addon_sidecar(
             if let Some(parent) = destination.parent() {
                 fs::create_dir_all(parent)?;
             }
-            fs::copy(&source, &destination).with_context(|| {
+            let (sha256, size) = copy_and_hash_file(&source, &destination).with_context(|| {
                 format!(
                     "copy Node-API payload {} to {}",
                     source.display(),
                     destination.display()
                 )
             })?;
-            let (sha256, size) = hash_file(&destination)?;
             files.push(ManifestFile {
                 path: portable_path(&destination_relative),
                 sha256,
@@ -314,6 +500,97 @@ mod tests {
     }
 
     #[test]
+    fn payload_prunes_development_and_foreign_prebuilds_but_keeps_runtime_inputs() {
+        let dir = tempfile::tempdir().unwrap();
+        let package = dir.path().join("node_modules/demo");
+        let kept = [
+            "prebuilds/linux-x64/addon.node",
+            "prebuilds/linux-x64/helper.node",
+            "prebuilds/linux-x64/libdependency.so.2",
+            "deps/table.dat",
+            "data/settings.json",
+            "data/settings.yaml",
+            "LICENSE",
+            "package.json",
+        ];
+        assert!(!runtime_payload_file(
+            Path::new("prebuilds/win32-x64/library.dll"),
+            Path::new("prebuilds/linux-x64.node")
+        ));
+        assert!(!runtime_payload_file(
+            Path::new("prebuilds/darwin-arm64.dylib"),
+            Path::new("prebuilds/linux-x64.node")
+        ));
+        assert!(runtime_payload_file(
+            Path::new("prebuilds/common/table.dat"),
+            Path::new("prebuilds/linux-x64.node")
+        ));
+        assert!(runtime_payload_file(
+            Path::new("prebuilds/linux-x64/libfoo.so.2"),
+            Path::new("prebuilds/linux-x64.node")
+        ));
+        let dropped = [
+            "prebuilds/darwin-arm64/addon.node",
+            "prebuilds/win32-x64/lib.dll",
+            "src/addon.cc",
+            "deps/sqlite3.c",
+            "test/suite.js",
+            ".github/workflows/ci.yml",
+            "binding.gyp",
+            "Dockerfile",
+            "README.md",
+            "lib/wrapper.js",
+        ];
+        for path in kept.iter().chain(dropped.iter()) {
+            let path = package.join(path);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, b"fixture").unwrap();
+        }
+        let addon = NativeAddonModule {
+            logical_id: "demo/prebuilds/linux-x64/addon.node".into(),
+            package: "demo".into(),
+            version: "1".into(),
+            source_path: package.join(kept[0]),
+            package_dir: package.clone(),
+            entry_relative: kept[0].into(),
+            ship_package_payload: true,
+        };
+        let ctx = CompilationContext::new(dir.path().to_path_buf());
+        let actual = addon_payload_files(&ctx, &addon)
+            .unwrap()
+            .into_iter()
+            .map(|path| portable_path(path.strip_prefix(&package).unwrap()))
+            .collect::<BTreeSet<_>>();
+        assert_eq!(actual, kept.iter().map(|path| path.to_string()).collect());
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"perry":{"nativeAddonFiles":{"demo":["test/suite.js","src"]}}}"#,
+        )
+        .unwrap();
+        let retained = addon_payload_files(&ctx, &addon).unwrap();
+        assert!(retained.contains(&package.join("test/suite.js")));
+        assert!(retained.contains(&package.join("src/addon.cc")));
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"perry":{"nativeAddonFiles":{"demo":["../escape"]}}}"#,
+        )
+        .unwrap();
+        assert!(addon_payload_files(&ctx, &addon)
+            .unwrap_err()
+            .to_string()
+            .contains("inside"));
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"perry":{"nativeAddonFiles":{"demo":["missing.dat"]}}}"#,
+        )
+        .unwrap();
+        assert!(addon_payload_files(&ctx, &addon)
+            .unwrap_err()
+            .to_string()
+            .contains("missing"));
+    }
+
+    #[test]
     fn package_entry_aliases_preserve_js_and_exports_precedence() {
         let dir = tempfile::tempdir().unwrap();
         let package = dir.path().canonicalize().unwrap();
@@ -344,6 +621,54 @@ mod tests {
         )
         .unwrap();
         assert!(package_entry_aliases(&addon).is_empty());
+    }
+
+    #[test]
+    fn streaming_copy_hashes_all_chunks_and_preserves_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("large.dat");
+        let destination = dir.path().join("copy.dat");
+        let bytes = (0..(3 * 256 * 1024 + 17))
+            .map(|index| (index % 251) as u8)
+            .collect::<Vec<_>>();
+        fs::write(&source, &bytes).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&source, fs::Permissions::from_mode(0o744)).unwrap();
+        }
+        #[cfg(target_os = "macos")]
+        assert!(std::process::Command::new("xattr")
+            .args(["-w", "com.perry.payload-test", "retained"])
+            .arg(&source)
+            .status()
+            .unwrap()
+            .success());
+        let (hash, size) = copy_and_hash_file(&source, &destination).unwrap();
+        assert_eq!(size, bytes.len() as u64);
+        assert_eq!(hash, perry_hex::encode(Sha256::digest(&bytes)));
+        assert_eq!(fs::read(&destination).unwrap(), bytes);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&destination).unwrap().permissions().mode() & 0o777,
+                0o744
+            );
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let attribute = std::process::Command::new("xattr")
+                .args(["-p", "com.perry.payload-test"])
+                .arg(&destination)
+                .output()
+                .unwrap();
+            assert!(attribute.status.success());
+            assert_eq!(
+                String::from_utf8_lossy(&attribute.stdout).trim(),
+                "retained"
+            );
+        }
     }
 
     #[test]

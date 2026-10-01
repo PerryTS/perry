@@ -299,6 +299,8 @@ pub(crate) struct DirectParser<'a> {
     /// costs nothing inside record-heavy string loops.
     cached_string: Option<ParseStringReuse>,
     batch: Option<crate::arena::ConstructionBatch>,
+    /// The remaining-input record estimate is spent (see `parse_array`).
+    record_estimate_spent: bool,
 }
 
 impl<'a> DirectParser<'a> {
@@ -320,6 +322,7 @@ impl<'a> DirectParser<'a> {
             source: std::ptr::null(),
             cached_string: None,
             batch: None,
+            record_estimate_spent: false,
         }
     }
 
@@ -372,6 +375,7 @@ impl<'a> DirectParser<'a> {
             source: std::ptr::null(),
             cached_string: None,
             batch: None,
+            record_estimate_spent: false,
         }
     }
 
@@ -821,17 +825,17 @@ impl<'a> DirectParser<'a> {
         // Pre-allocate with the known keys_array + field count. No
         // shape cache lookup — the shape is already in the cache from
         // the one-time build at parse entry.
-        let mut saw_pointer = false;
-        let mut js_obj = crate::object::js_object_alloc_class_inline_keys(
-            0, // class_id 0 = plain object (not a class instance)
-            0, // parent_class_id
-            shape.field_count,
-            shape.keys_array,
-        );
         // #8098: parsed records are ordinary plain objects — no class, but an
-        // authoritative ShapeId and no per-object [[Set]] semantics — so mark
-        // them eligible for the object-write fast paths.
-        crate::object::mark_object_plain_ordinary(js_obj);
+        // authoritative ShapeId and no per-object [[Set]] semantics — so they
+        // are born marked eligible for the object-write fast paths, BEFORE
+        // their stamp (charter step 3: the mark is a shape fact).
+        let mut js_obj = crate::object::alloc_plain::alloc_plain_record_with_keys(
+            shape.field_count,
+            #[allow(unused_unsafe)]
+            unsafe {
+                crate::object::ObjectKeys::owned(shape.keys_array)
+            },
+        );
         // Initialize all fields to undefined so JSON with missing
         // fields returns `undefined` for absent properties (matches
         // spec: access to absent own property returns undefined).
@@ -899,13 +903,11 @@ impl<'a> DirectParser<'a> {
                             if fast_idx < alloc_limit {
                                 let slot_idx = fast_idx;
                                 let value_bits = value.bits();
-                                // GC_STORE_AUDIT(BARRIERED): shaped JSON field write uses the
-                                // layout-deferred slot-store helper (#7630); the layout state
-                                // is settled once at the tail of this function.
-                                saw_pointer |=
-                                    crate::object::store_object_field_slot_layout_deferred(
-                                        js_obj, slot_idx, value_bits,
-                                    );
+                                // GC_STORE_AUDIT(BARRIERED): newborn owner store;
+                                // ShapeId rep determines tracing.
+                                crate::object::store_object_field_slot_layout_deferred(
+                                    js_obj, slot_idx, value_bits,
+                                );
                                 fast_idx += 1;
                                 took_fast = true;
                             }
@@ -926,11 +928,7 @@ impl<'a> DirectParser<'a> {
                 // path as generic parse_object).
                 let key_ptr = cached_parse_key_ptr(key_bytes);
                 js_obj = parse_root_object_ptr(obj_slot);
-                // The by-name path stores through the noting helper and may
-                // build a mask mid-construction; treat it as pointer-bearing so
-                // the tail's finalize (which routes through layout_mark_unknown)
-                // removes whatever it recorded (#7630).
-                saw_pointer = true;
+                // The by-name path updates the object shape as needed.
                 crate::object::js_object_set_field_by_name(
                     js_obj,
                     key_ptr as *mut StringHeader,
@@ -949,10 +947,7 @@ impl<'a> DirectParser<'a> {
         }
         self.expect(b'}');
         js_obj = parse_root_object_ptr(obj_slot);
-        // #7630: the construction loop elided per-slot layout notes; settle the
-        // layout state once, on the LIVE pointer (re-read from the parse root
-        // above, so a mid-parse collection cannot leave this on a stale copy).
-        crate::gc::layout_finish_deferred_boxed_object(js_obj as usize, saw_pointer);
+        // Object fields are traced by the shape stamped during construction.
         parse_root_restore(saved_roots);
         JSValue::object_ptr(js_obj as *mut u8)
     }
@@ -1289,13 +1284,22 @@ impl<'a> DirectParser<'a> {
         if self.peek() != Some(b'{') {
             return self.parse_array_prefix(saved_roots);
         }
-        // Same `[{...}]` pre-size heuristic as the typed path.
-        // Preserve the object-leading estimate on large record arrays.
-        let array = super::construction_array::ConstructionArray::presized_records(
-            &mut self.batch,
-            (self.input.len() - self.pos) / 96,
-        );
-        self.parse_array_tail(array, saved_roots)
+        // Same `[{...}]` pre-size heuristic as the typed path, for the one
+        // record array a document is usually built around: the root, or a
+        // member of the root object (`{"items":[...]}`). The estimate is the
+        // whole remaining input, so it is spent once per parse. Every nested
+        // `[{...}]` sized from it reserved slots for the rest of the document:
+        // a 24 MB npm packument holds a two-entry `signatures` array per
+        // version and parsed into 4.2 GB (#11642).
+        if self.depth <= 2 && !self.record_estimate_spent {
+            self.record_estimate_spent = true;
+            let array = super::construction_array::ConstructionArray::presized_records(
+                &mut self.batch,
+                (self.input.len() - self.pos) / 96,
+            );
+            return self.parse_array_tail(array, saved_roots);
+        }
+        self.parse_array_prefix(saved_roots)
     }
 
     /// The direct parser's existing suppression window protects these native
@@ -1344,7 +1348,7 @@ impl<'a> DirectParser<'a> {
         for &value in values {
             array.push(&mut self.batch, value);
         }
-        let result = array.finish(&self.batch);
+        let result = array.finish(&mut self.batch);
         parse_root_restore(saved_roots);
         JSValue::object_ptr(result.cast())
     }
@@ -1371,7 +1375,7 @@ impl<'a> DirectParser<'a> {
             }
         }
         self.expect(b']');
-        let result = array.finish(&self.batch);
+        let result = array.finish(&mut self.batch);
         parse_root_restore(saved_roots);
         JSValue::object_ptr(result.cast())
     }
@@ -1545,6 +1549,9 @@ impl<'a> DirectParser<'a> {
 #[path = "parser_scan_tests.rs"]
 mod scan_tests;
 
+#[cfg(test)]
+#[path = "parser_nested_record_presize_tests.rs"]
+mod nested_record_presize_tests;
 #[cfg(test)]
 #[path = "parser_short_array_tests.rs"]
 mod short_array_tests;

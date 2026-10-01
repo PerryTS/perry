@@ -543,6 +543,7 @@ fn register_setter(class_id: u32, name: &'static str, func_ptr: usize) {
             name.as_ptr(),
             name.len() as i64,
             func_ptr as i64,
+            1,
         );
     }
 }

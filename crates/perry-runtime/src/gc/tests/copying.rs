@@ -17,6 +17,18 @@ mod weakmap_index;
 use super::super::*;
 use super::support::*;
 
+/// The infos the singleton-cache tests allocate through: one per body, so
+/// every allocation of a body shares the cache key.
+static TEST_CAPTURED_SINGLETON_INFO: crate::closure::JsFunctionInfo =
+    crate::closure::JsFunctionInfo::of(
+        test_captured_singleton_func as crate::codegen_abi::JsBody0<crate::closure::ClosureHeader>,
+    );
+static TEST_NO_CAPTURE_SINGLETON_INFO: crate::closure::JsFunctionInfo =
+    crate::closure::JsFunctionInfo::of(
+        test_no_capture_singleton_func
+            as crate::codegen_abi::JsBody0<crate::closure::ClosureHeader>,
+    );
+
 /// Element/field count whose backing store exceeds the POINTER-BEARING
 /// born-tenured threshold, so `arena_alloc_gc` births it in old-gen.
 ///
@@ -185,7 +197,7 @@ fn test_old_managed_closure_capture_write_dirties_old_page() {
         GC_TYPE_CLOSURE,
     ) as *mut crate::closure::ClosureHeader;
     unsafe {
-        (*closure).func_ptr = test_captured_singleton_func as *const u8;
+        (*closure).info = &TEST_CAPTURED_SINGLETON_INFO;
         (*closure).capture_count = 1;
         (*closure).shape_id = crate::closure::shape::function_base_shape(
             crate::closure::shape::FunctionProtoKind::Function,
@@ -211,7 +223,7 @@ fn test_copying_minor_relocates_managed_closure_and_rewrites_capture() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let child = young_leaf();
-    let closure = crate::closure::js_closure_alloc(test_captured_singleton_func as *const u8, 1);
+    let closure = crate::closure::js_closure_alloc(&TEST_CAPTURED_SINGLETON_INFO, 1);
     crate::closure::js_closure_set_capture_f64(closure, 0, f64::from_bits(ptr_bits(child)));
     js_shadow_slot_set(0, ptr_bits(closure as usize));
 
@@ -426,7 +438,13 @@ fn test_copying_minor_rewrites_exact_object_pointer_slot_only() {
     crate::object::js_object_set_field(obj, 0, crate::value::JSValue::number(11.0));
     crate::object::js_object_set_field(obj, 1, crate::value::JSValue::from_bits(ptr_bits(child)));
     crate::object::js_object_set_field(obj, 2, crate::value::JSValue::number(33.0));
-    assert_eq!(test_layout_pointer_slot_count(obj as usize, 8), Some(1));
+    // Charter step 5: the collector traces by the shape. Every lane but the
+    // pointer slot's is `F64`, so the shape selects exactly slot 1.
+    for slot in 3..8 {
+        crate::object::js_object_set_field(obj, slot, crate::value::JSValue::number(0.0));
+    }
+    unsafe { restamp_with_rep(obj, f64_lanes((0..8).filter(|&slot| slot != 1))) };
+    assert_eq!(test_heap_child_slot_count(obj as *mut u8), 1);
     js_shadow_slot_set(0, ptr_bits(obj as usize));
 
     let trace = collect_minor_trace(GcTriggerKind::Direct);
@@ -461,7 +479,7 @@ fn test_copying_minor_rewrites_exact_closure_pointer_capture_only() {
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
 
     let child = young_leaf();
-    let closure = crate::closure::js_closure_alloc(test_captured_singleton_func as *const u8, 8);
+    let closure = crate::closure::js_closure_alloc(&TEST_CAPTURED_SINGLETON_INFO, 8);
     crate::closure::js_closure_set_capture_f64(closure, 0, 10.0);
     crate::closure::js_closure_set_capture_f64(closure, 1, f64::from_bits(ptr_bits(child)));
     crate::closure::js_closure_set_capture_f64(closure, 2, 30.0);
@@ -594,8 +612,7 @@ fn test_copying_minor_marks_array_growth_forwarding_target() {
 
     for i in 0..50 {
         let child = young_leaf();
-        let closure =
-            crate::closure::js_closure_alloc(test_captured_singleton_func as *const u8, 1);
+        let closure = crate::closure::js_closure_alloc(&TEST_CAPTURED_SINGLETON_INFO, 1);
         crate::closure::js_closure_set_capture_f64(closure, 0, f64::from_bits(ptr_bits(child)));
         if i == 0 {
             first_closure = closure as usize;
@@ -1546,7 +1563,7 @@ fn malloc_backed_large_closure_capture_in_old_container_survives_copied_minor() 
         - std::mem::size_of::<crate::closure::ClosureHeader>())
         / std::mem::size_of::<u64>();
     let closure = crate::closure::js_closure_alloc(
-        test_captured_singleton_func as *const u8,
+        &TEST_CAPTURED_SINGLETON_INFO,
         (max_managed_captures + 1) as u32,
     );
     let closure_header = unsafe { header_from_user_ptr(closure as *const u8) };
@@ -1805,7 +1822,7 @@ fn test_copying_minor_rewrites_singleton_closure_caches() {
     crate::closure::test_clear_singleton_closure_caches();
     gc_register_mutable_root_scanner(crate::closure::scan_singleton_closure_roots_mut);
 
-    let no_capture_func = test_no_capture_singleton_func as *const u8;
+    let no_capture_func: *const crate::closure::JsFunctionInfo = &TEST_NO_CAPTURE_SINGLETON_INFO;
     let no_capture = crate::closure::js_closure_alloc_singleton(no_capture_func);
     assert_eq!(
         crate::closure::test_singleton_closure_cache_entry(no_capture_func),
@@ -1816,7 +1833,7 @@ fn test_copying_minor_rewrites_singleton_closure_caches() {
     let capture_bits = ptr_bits(captured_value);
     js_shadow_slot_set(0, capture_bits);
 
-    let captured_func = test_captured_singleton_func as *const u8;
+    let captured_func: *const crate::closure::JsFunctionInfo = &TEST_CAPTURED_SINGLETON_INFO;
     let captures = [capture_bits];
     let captured = crate::closure::js_closure_alloc_with_captures_singleton(
         captured_func,

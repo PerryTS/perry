@@ -88,11 +88,11 @@ RUNTIME_WANTED = {
     "GC_FLAG_FORWARDED",
     "GC_FLAG_TENURED",
     "OBJ_FLAG_FROZEN",
-    "OBJ_FLAG_PACKED_NUMERIC_PROOF",
     "OBJ_FLAG_PLAIN_ORDINARY",
     "OBJ_FLAG_ARRAY_DESCRIPTORS",
     "OBJ_FLAG_STABLE_TOMBSTONES",
     "OBJ_FLAG_HAS_DESCRIPTORS",
+    "GC_LAYOUT_STATE_MASK",
     "GC_LAYOUT_POINTER_FREE",
     "GC_LAYOUT_SIDE_MASK",
     "GC_OBJ_TYPED_LAYOUT_INTACT",
@@ -116,47 +116,26 @@ REGISTRY: list[Restatement] = [
      "GC_TYPE_OBJECT", "byte 0 of the baked header word"),
     ("crates/perry-codegen/src/target_layout.rs", "GC_FLAG_ARENA",
      "GC_FLAG_ARENA", "byte 1 of the baked header word"),
-    ("crates/perry-codegen/src/target_layout.rs", "GC_LAYOUT_POINTER_FREE",
-     "GC_LAYOUT_POINTER_FREE", "_reserved half of the baked header word"),
-    ("crates/perry-codegen/src/target_layout.rs", "GC_LAYOUT_SIDE_MASK",
-     "GC_LAYOUT_SIDE_MASK", "_reserved half of the baked header word"),
-    ("crates/perry-codegen/src/target_layout.rs", "GC_OBJ_TYPED_LAYOUT_INTACT",
-     "GC_OBJ_TYPED_LAYOUT_INTACT", "_reserved half of the baked header word"),
     # `new_alloc.rs` re-derives the same word at the allocation site and
     # cross-checks it against the per-class table; both copies are pinned.
     ("crates/perry-codegen/src/lower_call/new_alloc.rs", "GC_TYPE_OBJECT",
      "GC_TYPE_OBJECT", "allocation-site copy of the baked header word"),
     ("crates/perry-codegen/src/lower_call/new_alloc.rs", "GC_FLAG_ARENA",
      "GC_FLAG_ARENA", "allocation-site copy of the baked header word"),
-    ("crates/perry-codegen/src/lower_call/new_alloc.rs", "GC_LAYOUT_POINTER_FREE",
-     "GC_LAYOUT_POINTER_FREE", "allocation-site copy of the baked header word"),
-    ("crates/perry-codegen/src/lower_call/new_alloc.rs", "GC_OBJ_TYPED_LAYOUT_INTACT",
-     "GC_OBJ_TYPED_LAYOUT_INTACT", "allocation-site copy of the baked header word"),
 
     # --- the class-field inline guard ---------------------------------------
     ("crates/perry-codegen/src/expr/class_field_inline_guard.rs", "GC_TYPE_OBJECT",
      "GC_TYPE_OBJECT", "guard: obj_type byte"),
     ("crates/perry-codegen/src/expr/class_field_inline_guard.rs", "GC_FLAG_FORWARDED_I8",
      "GC_FLAG_FORWARDED - 256", "guard: gc_flags 0x80 spelled as a signed i8"),
-    ("crates/perry-codegen/src/expr/class_field_inline_guard.rs", "TYPED_LAYOUT_INTACT_BIT",
-     "GC_OBJ_TYPED_LAYOUT_INTACT", "guard: raw-f64 slots need the intact bit"),
-    ("crates/perry-codegen/src/expr/class_field_inline_guard.rs", "WRITE_PROOF_BIT",
-     "OBJ_FLAG_PACKED_NUMERIC_PROOF",
-     "write guard: #8690 Array-subclass numeric-prefix proof (per object)"),
-    ("crates/perry-codegen/src/expr/class_field_inline_guard.rs", "WRITE_INTACT_BIT",
-     "GC_OBJ_TYPED_LAYOUT_INTACT", "write guard: raw-f64 slots need the intact bit"),
 
     # --- the key-add hit (`expr/put_value_store_ic.rs`, emit_key_add_hit) ---
     ("crates/perry-codegen/src/expr/put_value_store_ic.rs", "ADD_REFUSE_GC_FLAGS",
      "GC_FLAG_TENURED",
      "key-add hit: an old receiver needs the stamp funnel's carrier note"),
     ("crates/perry-codegen/src/expr/put_value_store_ic.rs", "ADD_REFUSE_RESERVED",
-     "OBJ_FLAG_HAS_DESCRIPTORS | OBJ_FLAG_STABLE_TOMBSTONES"
-     " | OBJ_FLAG_PACKED_NUMERIC_PROOF",
+     "OBJ_FLAG_HAS_DESCRIPTORS | OBJ_FLAG_STABLE_TOMBSTONES",
      "key-add hit: per-object flags refused before the stamp"),
-    ("crates/perry-codegen/src/expr/put_value_store_ic.rs", "ADD_LAYOUT_RESERVED",
-     "GC_LAYOUT_SIDE_MASK | GC_OBJ_TYPED_LAYOUT_INTACT",
-     "key-add hit: layout states whose record is retired before the stamp"),
     ("crates/perry-codegen/src/expr/class_field_inline_guard.rs",
      "OBJ_FLAG_READ_FAST_PATH_BLOCKED",
      "OBJ_FLAG_ARRAY_DESCRIPTORS | OBJ_FLAG_HAS_DESCRIPTORS",
@@ -164,24 +143,18 @@ REGISTRY: list[Restatement] = [
     ("crates/perry-codegen/src/expr/class_field_inline_guard.rs",
      "OBJ_FLAG_WRITE_FAST_PATH_BLOCKED",
      "OBJ_FLAG_ARRAY_DESCRIPTORS | OBJ_FLAG_HAS_DESCRIPTORS"
-     " | OBJ_FLAG_PACKED_NUMERIC_PROOF | OBJ_FLAG_FROZEN",
-     "guard: the write side adds frozen + the packed-numeric proof"),
+     " | OBJ_FLAG_FROZEN",
+     "guard: exact ShapeId refuses numeric proof; the write side adds frozen"),
 
     # --- the element-shape guard's fused masks -------------------------------
     ("crates/perry-codegen/src/expr/element_shape_guard.rs", "GC_TYPE_ARRAY",
      "GC_TYPE_ARRAY", "element guard: obj_type byte"),
     ("crates/perry-codegen/src/expr/element_shape_guard.rs", "ELEM_HEADER_MASK",
-     "0xFF | (GC_FLAG_FORWARDED << 8)"
-     " | ((GC_OBJ_TYPED_LAYOUT_INTACT | OBJ_FLAG_HAS_DESCRIPTORS) << 16)",
+     "0xFF | (GC_FLAG_FORWARDED << 8) | (OBJ_FLAG_HAS_DESCRIPTORS << 16)",
      "element guard: one fused 32-bit mask over all three header bytes"),
     ("crates/perry-codegen/src/expr/element_shape_guard.rs", "ELEM_HEADER_EXPECT",
-     "GC_TYPE_OBJECT | (GC_OBJ_TYPED_LAYOUT_INTACT << 16)",
+     "GC_TYPE_OBJECT",
      "element guard: the value ELEM_HEADER_MASK must produce"),
-    ("crates/perry-codegen/src/expr/element_shape_guard.rs", "ELEM_HEADER_SHAPE_MASK",
-     "0xFF | (GC_FLAG_FORWARDED << 8) | (OBJ_FLAG_HAS_DESCRIPTORS << 16)",
-     "element guard: shape-keyed arm drops the intact conjunct"),
-    ("crates/perry-codegen/src/expr/element_shape_guard.rs", "ELEM_HEADER_SHAPE_EXPECT",
-     "GC_TYPE_OBJECT", "element guard: shape-keyed arm's expected value"),
 
     # --- the array-literal inline allocator's baked header word -------------
     ("crates/perry-codegen/src/expr/array_literal.rs", "GC_TYPE_ARRAY",
@@ -195,12 +168,12 @@ REGISTRY: list[Restatement] = [
     ("crates/perry-codegen/src/lower_call/method_override.rs",
      "GC_OBJECT_METHOD_GUARD_MASK_I32",
      "0xFF | (GC_FLAG_FORWARDED << 8)"
-     " | ((OBJ_FLAG_HAS_DESCRIPTORS | OBJ_FLAG_PACKED_NUMERIC_PROOF) << 16)",
+     " | ((OBJ_FLAG_HAS_DESCRIPTORS) << 16)",
      "method probe: one fused 32-bit mask over all three header bytes"),
     ("crates/perry-codegen/src/lower_call/property_get/imported_object.rs",
      "GC_OBJECT_METHOD_GUARD_MASK_I32",
      "0xFF | (GC_FLAG_FORWARDED << 8)"
-     " | ((OBJ_FLAG_HAS_DESCRIPTORS | OBJ_FLAG_PACKED_NUMERIC_PROOF) << 16)",
+     " | ((OBJ_FLAG_HAS_DESCRIPTORS) << 16)",
      "imported-object probe: second copy of the same fused mask"),
 
     # --- other single-bit restatements --------------------------------------
@@ -220,12 +193,7 @@ REGISTRY: list[Restatement] = [
      "OBJ_FLAG_PLAIN_ORDINARY", "proxy/reflect: plain-ordinary veto"),
     ("crates/perry-codegen/src/expr/proxy_reflect_write_ic.rs", "STABLE_TOMBSTONES_OBJ_FLAG",
      "OBJ_FLAG_STABLE_TOMBSTONES", "proxy write IC: stable-tombstones veto"),
-    ("crates/perry-codegen/src/codegen/string_pool.rs", "GC_LAYOUT_AND_INTACT_MASK",
-     "GC_LAYOUT_POINTER_FREE | GC_LAYOUT_SIDE_MASK | GC_OBJ_TYPED_LAYOUT_INTACT",
-     "module init: the header-image layout bits it may rewrite"),
-    ("crates/perry-codegen/src/codegen/string_pool.rs", "GC_SIDE_MASK_AND_INTACT",
-     "GC_LAYOUT_SIDE_MASK | GC_OBJ_TYPED_LAYOUT_INTACT",
-     "module init: the side-mask + intact pair it writes"),
+
 ]
 
 # Declared constants this checker deliberately does not anchor, each with the
@@ -353,17 +321,17 @@ def check(root: Path) -> list[str]:
 def self_test(root: Path) -> int:
     """Prove the checker can fail: perturb one runtime value and expect a report."""
     values, _ = runtime_values(root)
-    saved = values["GC_OBJ_TYPED_LAYOUT_INTACT"]
+    saved = values["OBJ_FLAG_HAS_DESCRIPTORS"]
     rel, const, expr, why = next(
-        e for e in REGISTRY if e[1] == "TYPED_LAYOUT_INTACT_BIT"
+        e for e in REGISTRY if e[0].endswith("element_shape_guard.rs") and e[1] == "ELEM_HEADER_MASK"
     )
     raw = parse_consts(root / rel).get(const)
     got = literal_value(raw)
     perturbed = dict(values)
-    perturbed["GC_OBJ_TYPED_LAYOUT_INTACT"] = saved << 1
+    perturbed["OBJ_FLAG_HAS_DESCRIPTORS"] = saved << 1
     want = eval(expr, {"__builtins__": {}}, perturbed)  # noqa: S307
     if got == want:
-        print("self-test FAILED: a moved intact bit was not detected", file=sys.stderr)
+        print("self-test FAILED: a moved descriptors bit was not detected", file=sys.stderr)
         return 1
     if check(root):
         print("self-test FAILED: the tree is already red", file=sys.stderr)

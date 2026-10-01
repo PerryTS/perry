@@ -9,6 +9,12 @@ use super::*;
 /// Heap-backed builtins whose reserved ids otherwise dispatch by native brand.
 fn heap_builtin_name(class_id: u32) -> Option<&'static str> {
     Some(match class_id {
+        crate::native_class_ids::EVENT_TARGET => "EventTarget",
+        crate::native_class_ids::EVENT => "Event",
+        crate::native_class_ids::CUSTOM_EVENT => "CustomEvent",
+        crate::native_class_ids::ABORT_CONTROLLER => "AbortController",
+        crate::native_class_ids::ABORT_SIGNAL => "AbortSignal",
+        crate::native_class_ids::DOM_EXCEPTION => "DOMException",
         crate::buffer::BUFFER_TYPE_ID => "Uint8Array",
         crate::buffer::NODE_BUFFER_CLASS_ID => "Buffer",
         0xFFFF0020 => "Date",
@@ -66,7 +72,8 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
     // function `__perry_wk_hasinstance_<class>` and the LLVM backend registers a
     // pointer to it against the class id at module init.
     if let Some(func_ptr) = lookup_has_instance_hook(class_id) {
-        let hook: extern "C" fn(f64) -> f64 = unsafe { std::mem::transmute(func_ptr as *const u8) };
+        let hook =
+            unsafe { crate::closure::body_call::js_bare_body_fn!(func_ptr as *const u8; a0) };
         let result = hook(value);
         // Normalize: any truthy NaN-boxed bool stays as the TAG_TRUE/FALSE
         // sentinel. User-written `return typeof v === "number" && ...`
@@ -113,6 +120,33 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
     if instanceof_lhs_is_primitive(value) {
         return false_val;
     }
+    // #11256: Object.create(Builtin.prototype) has no native brand, but is
+    // still an instance of Builtin. Ordinary objects may store their chain
+    // through a synthetic class id rather than per-object prototype metadata.
+    // Native cells retain their brand path unless their prototype is recorded.
+    // Only a hit is final: a miss falls through to the class-id chain, which
+    // still knows builtin subclasses whose prototype chain is not materialized.
+    if let Some(name) = heap_builtin_name(class_id) {
+        let ordinary = unsafe { crate::value::addr_class::try_read_gc_header(value_addr(value)) }
+            .is_some_and(|header| header.obj_type == crate::gc::GC_TYPE_OBJECT);
+        let matches = if ordinary {
+            prototype_instanceof_builtin(value, name)
+        } else {
+            recorded_prototype_instanceof_builtin(value, name)
+        };
+        if matches == Some(true) {
+            return true_val;
+        }
+        // A miss is final when the value's own prototype is materialized:
+        // the walk read the authoritative chain. Without one, the chain is
+        // carried by the class id, which the paths below still follow.
+        if matches == Some(false)
+            && crate::object::prototype_chain::object_static_prototype(value_addr(value)).is_some()
+        {
+            return false_val;
+        }
+    }
+
     // Subclass-of-built-in: see `subclass_of_builtin_reaches`.
     if subclass_of_builtin_reaches(value, class_id) {
         return true_val;
@@ -290,23 +324,6 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
 
     let bits = value.to_bits();
     let jsval = crate::JSValue::from_bits(bits);
-
-    // #11256: Object.create(Builtin.prototype) has no native brand, but is
-    // still an instance of Builtin. Ordinary objects may store their chain
-    // through a synthetic class id rather than per-object prototype metadata.
-    // Native cells retain their brand path unless their prototype is recorded.
-    if let Some(name) = heap_builtin_name(class_id) {
-        let ordinary = unsafe { crate::value::addr_class::try_read_gc_header(value_addr(value)) }
-            .is_some_and(|header| header.obj_type == crate::gc::GC_TYPE_OBJECT);
-        let matches = if ordinary {
-            prototype_instanceof_builtin(value, name)
-        } else {
-            recorded_prototype_instanceof_builtin(value, name)
-        };
-        if let Some(matches) = matches {
-            return if matches { true_val } else { false_val };
-        }
-    }
 
     // Native/exotic subclass instances (typed arrays, ArrayBuffers, boxed
     // primitives, Dates, …) do not carry a Perry `ObjectHeader.class_id`.

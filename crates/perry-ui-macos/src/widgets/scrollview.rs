@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::sync::Once;
 
 extern "C" {
-    fn js_closure_call0(closure: *const u8) -> f64;
+    fn js_closure_call0(closure: *const u8, this: perry_ffi::JsThis) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
 }
 
@@ -298,7 +298,7 @@ fn check_scroll_end(handle: i64) {
     if should_fire {
         unsafe {
             let ptr = js_nanbox_get_pointer(closure) as *const u8;
-            js_closure_call0(ptr);
+            js_closure_call0(ptr, perry_ffi::JsThis::UNDEFINED);
         }
     }
 }

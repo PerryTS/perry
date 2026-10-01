@@ -32,11 +32,11 @@
 use crate::array::{js_array_alloc, js_array_get_f64, js_array_length, js_array_push_f64};
 use crate::closure::{
     is_closure_ptr, js_closure_alloc, js_closure_call0, js_closure_get_capture_ptr,
-    js_closure_set_capture_ptr, js_native_call_value, js_register_closure_arity, ClosureHeader,
+    js_closure_set_capture_ptr, native_call_value_this, ClosureHeader, JsThis,
 };
 use crate::object::{
-    js_implicit_this_set, js_object_alloc, js_object_get_field_f64, js_object_set_field_by_name,
-    js_object_set_field_f64, js_register_class_extends_error,
+    js_object_alloc, js_object_get_field_f64, js_object_set_field_by_name, js_object_set_field_f64,
+    js_register_class_extends_error,
 };
 use crate::string::js_string_from_bytes;
 use crate::value::{
@@ -97,23 +97,20 @@ fn resolve_dispose_method(resource: f64, want_async: bool) -> f64 {
 // read `this` observe the resource. Used by `stack.use(resource)`.
 // ---------------------------------------------------------------------------
 
-extern "C" fn bound_dispose_thunk(closure: *const ClosureHeader) -> f64 {
+extern "C" fn bound_dispose_thunk(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let method = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
     let resource = f64::from_bits(js_closure_get_capture_ptr(closure, 1) as u64);
     if !is_callable_value(method) {
         return undefined();
     }
-    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-    let prev = this_scope.root_nanbox_f64(js_implicit_this_set(resource));
-    let result = unsafe { js_native_call_value(method, std::ptr::null(), 0) };
-    js_implicit_this_set(prev.get_nanbox_f64());
-    result
+    unsafe { native_call_value_this(method, JsThis::from_f64(resource), std::ptr::null(), 0) }
 }
 
 fn make_bound_dispose_thunk(method: f64, resource: f64) -> f64 {
-    let func = bound_dispose_thunk as *const u8;
-    js_register_closure_arity(func, 0);
-    let closure = js_closure_alloc(func, 2);
+    let closure = js_closure_alloc(crate::fn_info!(bound_dispose_thunk, 0; with_declared(0)), 2);
     if closure.is_null() {
         return undefined();
     }
@@ -216,7 +213,7 @@ fn call_disposer(callable: f64) {
     if ptr.is_null() {
         return;
     }
-    js_closure_call0(ptr);
+    js_closure_call0(ptr, crate::closure::plain_call_receiver());
 }
 
 /// Run every registered disposer in LIFO order and clear the array. Marks the
@@ -245,23 +242,27 @@ fn run_disposers(stack: *mut ObjectHeader) {
 // `adopt` closure: captures (value, onDispose) and calls onDispose(value).
 // ---------------------------------------------------------------------------
 
-extern "C" fn adopt_disposer_thunk(closure: *const ClosureHeader) -> f64 {
+extern "C" fn adopt_disposer_thunk(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let value = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
     let on_dispose = f64::from_bits(js_closure_get_capture_ptr(closure, 1) as u64);
     let cb = JSValue::from_bits(on_dispose.to_bits());
     if cb.is_pointer() {
         let cb_ptr = js_nanbox_get_pointer(on_dispose) as *const ClosureHeader;
         if !cb_ptr.is_null() {
-            crate::closure::js_closure_call1(cb_ptr, value);
+            crate::closure::js_closure_call1(cb_ptr, crate::closure::plain_call_receiver(), value);
         }
     }
     undefined()
 }
 
 fn make_adopt_disposer(value: f64, on_dispose: f64) -> f64 {
-    let func = adopt_disposer_thunk as *const u8;
-    js_register_closure_arity(func, 0);
-    let closure = js_closure_alloc(func, 2);
+    let closure = js_closure_alloc(
+        crate::fn_info!(adopt_disposer_thunk, 0; with_declared(0)),
+        2,
+    );
     if closure.is_null() {
         return undefined();
     }

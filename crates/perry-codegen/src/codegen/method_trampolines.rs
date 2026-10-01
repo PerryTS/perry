@@ -187,7 +187,7 @@ pub(super) fn emit_guarded_nonnegative_index(
     generic_body_name: &str,
     index_param_ids: &[u32],
     expected_class_id: u32,
-    expected_shape_global: &str,
+    expected_keys_global: &str,
     falsy_field_default: Option<&super::param_guard::GuardedFalsyFieldDefaultMethodCandidate>,
 ) {
     debug_assert!(!index_param_ids.is_empty());
@@ -319,10 +319,14 @@ pub(super) fn emit_guarded_nonnegative_index(
             let obj_ptr = blk.inttoptr(I64, &recv_handle);
             let gc_header_ptr = blk.gep(crate::types::I8, &obj_ptr, &[(I64, "-8")]);
             let gc_header = blk.load(I32, &gc_header_ptr);
-            let guarded_gc = blk.and(I32, &gc_header, "142639359");
+            let guarded_gc = blk.and(I32, &gc_header, "134250751");
             let gc_ok = blk.icmp_eq(I32, &guarded_gc, "2");
             let class_shape = blk.load(I64, &obj_ptr);
-            let expected_shape = blk.load(I32, &format!("@{expected_shape_global}"));
+            let expected_shape = crate::typed_shape::class_shape_id_operand_on_block(
+                blk,
+                expected_keys_global,
+                false,
+            );
             let expected_shape_i64 = blk.zext(I32, &expected_shape, I64);
             let expected_shape_high = blk.shl(I64, &expected_shape_i64, "32");
             let expected = blk.or(I64, &expected_shape_high, &expected_class_id.to_string());

@@ -46,6 +46,7 @@ mod packed_range_global_cache_rooting_tests;
 mod prealloc_module_global_tests;
 #[cfg(test)]
 mod prealloc_tdz_path_tests;
+pub(crate) mod region_loop;
 mod region_read_stmts;
 pub(crate) mod stable_packed_accumulator;
 pub(crate) mod stable_packed_loop;
@@ -87,6 +88,15 @@ pub(crate) fn record_boxed_slot_js_value_bits(
 /// statement splits control flow, `ctx.current_block` is updated to the
 /// "fall-through" block after the split.
 pub(crate) fn lower_stmts(ctx: &mut FnCtx<'_>, stmts: &[Stmt]) -> Result<()> {
+    // Step 4b: a loop / body region's body lowers as F-body + G-body.
+    if let Some(idx) = region_loop::pending_for(ctx, stmts) {
+        return region_loop::lower_split(ctx, stmts, idx, lower_region_list);
+    }
+    lower_stmts_inner(ctx, stmts, false)
+}
+
+/// The split's own list lowering: never re-enters the region hook.
+fn lower_region_list(ctx: &mut FnCtx<'_>, stmts: &[Stmt]) -> Result<()> {
     lower_stmts_inner(ctx, stmts, false)
 }
 
@@ -694,14 +704,26 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
 }
 
 fn emit_preallocate_boxes(ctx: &mut FnCtx<'_>, ids: &[u32], tdz: bool) -> Result<()> {
+    // Scope context object: the ids of this statement that `ScopeMap` groups
+    // share ONE allocation and ONE root (`crate::scope_env`).
+    let scoped: Vec<u32> = ids
+        .iter()
+        .copied()
+        .filter(|id| crate::scope_env::access::slot(ctx, *id).is_some())
+        .collect();
+    if !scoped.is_empty() {
+        emit_scope_object(ctx, &scoped, tdz);
+    }
+    let ids: Vec<u32> = ids
+        .iter()
+        .copied()
+        .filter(|id| !scoped.contains(id))
+        .collect();
+    let ids = ids.as_slice();
     // #10464: a generator/async activation frame's list names its
     // compiler-private control cells. That list runs once per frame, and a
     // plain-async step closure holds its cells without a counted capture edge,
     // so it never releases a "previous iteration" cell.
-    let activation_frame = ids.iter().any(|id| {
-        ctx.compiler_private_async_i32_control_locals.contains(id)
-            || ctx.compiler_private_async_i1_control_locals.contains(id)
-    });
     for id in ids {
         // #7521: a module-level binding promoted to `@perry_global_<mod>__<id>`
         // ALREADY has the shared, forward-visible, GC-rooted cell a prealloc box
@@ -747,26 +769,22 @@ fn emit_preallocate_boxes(ctx: &mut FnCtx<'_>, ids: &[u32], tdz: bool) -> Result
         } else {
             crate::nanbox::TAG_UNDEFINED_I64.to_string()
         };
-        use boxed_frame_release as frame_release;
-        let (alloc_fn, alloc_arg, release_fn, cell_note) = if is_i32_control {
+        let (alloc_fn, alloc_arg, cell_note) = if is_i32_control {
             (
                 "js_i32_box_alloc",
                 (crate::types::I32, "0"),
-                frame_release::I32_BOX_SCOPE_RELEASE,
                 "primitive_i32_control_cell",
             )
         } else if is_i1_control {
             (
                 "js_bool_box_alloc",
                 (crate::types::I32, "0"),
-                frame_release::BOOL_BOX_SCOPE_RELEASE,
                 "primitive_i1_control_cell",
             )
         } else {
             (
                 "js_box_alloc_bits",
                 (crate::types::I64, seed_bits.as_str()),
-                frame_release::JS_BOX_SCOPE_RELEASE,
                 "jsvalue_box_cell",
             )
         };
@@ -793,12 +811,8 @@ fn emit_preallocate_boxes(ctx: &mut FnCtx<'_>, ids: &[u32], tdz: bool) -> Result
                 .entry_allocas_push_store(crate::types::I64, &undef_bits, &slot);
             slot
         };
-        if !activation_frame {
-            frame_release::release_previous_iteration_cell(ctx, &slot, release_fn);
-        }
         let box_ptr = ctx.block().call(crate::types::I64, alloc_fn, &[alloc_arg]);
         ctx.block().store(crate::types::I64, &box_ptr, &slot);
-        frame_release::release_at_frame_exit(ctx, &slot, release_fn);
         record_boxed_slot_js_value_bits(ctx, *id, &box_ptr, "preallocate_boxes.box_ptr_slot");
         if cell_note != "jsvalue_box_cell" {
             let lowered = LoweredValue::js_value_bits(&box_ptr);
@@ -826,6 +840,85 @@ fn emit_preallocate_boxes(ctx: &mut FnCtx<'_>, ids: &[u32], tdz: bool) -> Result
     Ok(())
 }
 
+/// Allocate the scope object for one preallocation statement's grouped ids
+/// and publish it into the group's single frame root. Every member's
+/// `ctx.locals` entry is that root. Re-lowering the statement (a finally body
+/// copied onto two paths, a loop body clone) allocates again, exactly as the
+/// per-binding cells did: each execution creates a fresh environment.
+fn emit_scope_object(ctx: &mut FnCtx<'_>, members: &[u32], tdz: bool) {
+    use crate::types::{I32, I64};
+    let slot0 = crate::scope_env::access::slot(ctx, members[0]).expect("scoped");
+    let rep = slot0.rep;
+    let root = if let Some(root) = ctx.locals.get(&rep) {
+        root.clone()
+    } else {
+        let root = ctx.func.alloca_entry(I64);
+        // A path that bypasses this statement (a sibling branch of an async
+        // wrapper, a skipped hoisted declaration) sees the TAG_UNDEFINED
+        // sentinel; the scope accessors answer `undefined` for it and drop a
+        // write — the behaviour an unallocated per-binding cell had.
+        ctx.func
+            .entry_allocas_push_store(I64, crate::nanbox::TAG_UNDEFINED_I64, &root);
+        root
+    };
+    let seed = if tdz {
+        crate::nanbox::TAG_TDZ_I64.to_string()
+    } else {
+        crate::nanbox::TAG_UNDEFINED_I64.to_string()
+    };
+    let len = slot0.len.to_string();
+    let base = ctx
+        .block()
+        .call(I64, "js_scope_alloc", &[(I32, &len), (I64, &seed)]);
+    // Compiler-private control words keep a non-pointer tag in the slot's
+    // high half; their typed loads and stores touch only the low bytes.
+    for id in members {
+        let seed = if crate::expr::is_compiler_private_async_i32_control_local(ctx, *id) {
+            Some("9222809086901354496") // 0x7FFE_0000_0000_0000 (INT32_TAG)
+        } else if crate::expr::is_compiler_private_async_i1_control_local(ctx, *id) {
+            Some("9222246136947933184") // 0x7FFC_0000_0000_0000
+        } else {
+            None
+        };
+        if let Some(seed) = seed {
+            let slot = crate::scope_env::access::slot(ctx, *id).expect("scoped");
+            let addr = crate::scope_env::access::cell_addr(ctx, slot, &base);
+            let ptr = ctx.block().inttoptr(I64, &addr);
+            ctx.block().store(I64, seed, &ptr);
+            let cell_note = if seed.starts_with("92228") {
+                "primitive_i32_control_cell"
+            } else {
+                "primitive_i1_control_cell"
+            };
+            let lowered = LoweredValue::js_value_bits(&addr);
+            ctx.record_lowered_value(
+                "CompilerPrivateAsyncControlCell",
+                Some(*id),
+                cell_note,
+                &lowered,
+                None,
+                None,
+                None,
+                false,
+                false,
+                Vec::new(),
+            );
+        }
+    }
+    ctx.block().store(I64, &base, &root);
+    record_boxed_slot_js_value_bits(ctx, rep, &base, "scope_object.root_slot");
+    for id in members {
+        ctx.locals.insert(*id, root.clone());
+        ctx.prealloc_boxes.insert(*id);
+        ctx.boxed_vars.insert(*id);
+        if tdz {
+            ctx.tdz_boxes.insert(*id);
+        }
+    }
+    ctx.locals.insert(rep, root);
+    crate::expr::emit_shadow_slot_bind_for_local(ctx, rep);
+}
+
 /// Lower `Stmt::ReleaseBoxes`: for each id, load the box-cell pointer (local
 /// prealloc slot or closure capture slot — the async step body's case) and
 /// call the matching `js_*box_release`. Kind selection mirrors
@@ -836,8 +929,20 @@ fn emit_preallocate_boxes(ctx: &mut FnCtx<'_>, ids: &[u32], tdz: bool) -> Result
 /// (module global, not boxed, no slot/capture) is skipped, which is always
 /// sound — the cell just stays live, as before #7933.
 fn emit_release_boxes(ctx: &mut FnCtx<'_>, ids: &[u32]) -> Result<()> {
+    // The runtime's release ends the activation's lifecycle token and ignores
+    // the cell, so one call covers every scoped id of the statement.
+    if ids
+        .iter()
+        .any(|id| ctx.boxed_vars.contains(id) && crate::scope_env::access::slot(ctx, *id).is_some())
+    {
+        ctx.block()
+            .call_void("js_box_release", &[(crate::types::I64, "0")]);
+    }
     for id in ids {
-        if ctx.module_globals.contains_key(id) || !ctx.boxed_vars.contains(id) {
+        if ctx.module_globals.contains_key(id)
+            || !ctx.boxed_vars.contains(id)
+            || crate::scope_env::access::slot(ctx, *id).is_some()
+        {
             continue;
         }
         let Some(box_ptr) = crate::expr::load_boxed_local_pointer(ctx, *id)? else {

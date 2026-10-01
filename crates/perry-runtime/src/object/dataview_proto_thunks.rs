@@ -13,8 +13,8 @@
 //! DataView *instances* already worked: `dv.getInt32(0)`, `dv.byteLength`, etc.
 //! are routed through codegen / `buffer_dispatch::dispatch_buffer_method` on a
 //! `BufferHeader` marked as a DataView. The thunks here only add the
-//! *reflectable* own properties on the prototype; they read the receiver from
-//! `IMPLICIT_THIS` (set by the `.call`/`.apply` dispatch), brand-check that it
+//! *reflectable* own properties on the prototype; they take the receiver as
+//! their `this` argument (supplied by the `.call`/`.apply` dispatch), brand-check that it
 //! is a DataView (throwing `TypeError` otherwise, per spec — covering test262's
 //! `this-has-no-*` / `this-is-not-object` cases), then dispatch to the SAME
 //! runtime helpers the instance path uses.
@@ -24,12 +24,12 @@
 
 use super::*;
 
-/// Resolve the `IMPLICIT_THIS` receiver to a DataView `BufferHeader` address,
+/// Resolve the `this` receiver to a DataView `BufferHeader` address,
 /// or `None` if the receiver is not a DataView. Mirrors `typed_array_receiver`
 /// / `array_buffer_receiver_addr` in `global_this.rs` (NaN-boxed pointer or
 /// raw-i64 form), then brand-checks `is_data_view`.
-fn dataview_receiver_addr() -> Option<usize> {
-    let this_bits = IMPLICIT_THIS.with(|c| c.get());
+fn dataview_receiver_addr(this: crate::closure::JsThis) -> Option<usize> {
+    let this_bits = this.bits();
     let this_jsv = crate::value::JSValue::from_bits(this_bits);
     let raw = if this_jsv.is_pointer() {
         (this_bits & 0x0000_FFFF_FFFF_FFFF) as usize
@@ -47,8 +47,8 @@ fn dataview_receiver_addr() -> Option<usize> {
 
 /// Brand-check helper: returns the DataView address or throws a `TypeError`
 /// for an incompatible receiver. Mirrors `typed_array_brand_error`.
-fn require_dataview_receiver() -> usize {
-    match dataview_receiver_addr() {
+fn require_dataview_receiver(this: crate::closure::JsThis) -> usize {
+    match dataview_receiver_addr(this) {
         Some(addr) => addr,
         None => super::object_ops::throw_object_type_error(
             b"Method DataView.prototype called on incompatible receiver",
@@ -67,8 +67,9 @@ fn undef() -> f64 {
 
 extern "C" fn dataview_byte_length_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let addr = require_dataview_receiver();
+    let addr = require_dataview_receiver(this);
     let buf = addr as *const crate::buffer::BufferHeader;
     f64::from_bits(
         crate::value::JSValue::number(crate::buffer::js_buffer_length(buf) as f64).bits(),
@@ -77,21 +78,25 @@ extern "C" fn dataview_byte_length_getter_thunk(
 
 extern "C" fn dataview_byte_offset_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let addr = require_dataview_receiver();
+    let addr = require_dataview_receiver(this);
     let offset = crate::buffer::buffer_byte_offset(addr);
     f64::from_bits(crate::value::JSValue::number(offset as f64).bits())
 }
 
-extern "C" fn dataview_buffer_getter_thunk(_closure: *const crate::closure::ClosureHeader) -> f64 {
-    let addr = require_dataview_receiver();
+extern "C" fn dataview_buffer_getter_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    let addr = require_dataview_receiver(this);
     let backing = crate::buffer::buffer_backing_array_buffer(addr);
     f64::from_bits(crate::value::js_nanbox_pointer(backing as i64).to_bits())
 }
 
 // ---------------------------------------------------------------------------
 // get* methods (spec length 1): getInt8 … getFloat64. Signature
-// `(closure, byteOffset, rest)` where `rest` bundles the optional
+// `(closure, this, byteOffset, rest)` where `rest` bundles the optional
 // `littleEndian` flag (big-endian default).
 // ---------------------------------------------------------------------------
 
@@ -107,8 +112,8 @@ fn rest_first_arg(rest: f64) -> f64 {
     crate::array::js_array_get_f64(arr, 0)
 }
 
-fn dataview_get(suffix: &str, offset: f64, rest: f64) -> f64 {
-    let addr = require_dataview_receiver();
+fn dataview_get(this: crate::closure::JsThis, suffix: &str, offset: f64, rest: f64) -> f64 {
+    let addr = require_dataview_receiver(this);
     let kind = match crate::buffer::DataViewKind::from_method_suffix(suffix) {
         Some(k) => k,
         None => return undef(),
@@ -118,8 +123,14 @@ fn dataview_get(suffix: &str, offset: f64, rest: f64) -> f64 {
     crate::buffer::js_data_view_get(buf_f64, offset, kind, little)
 }
 
-fn dataview_set(suffix: &str, offset: f64, value: f64, rest: f64) -> f64 {
-    let addr = require_dataview_receiver();
+fn dataview_set(
+    this: crate::closure::JsThis,
+    suffix: &str,
+    offset: f64,
+    value: f64,
+    rest: f64,
+) -> f64 {
+    let addr = require_dataview_receiver(this);
     let kind = match crate::buffer::DataViewKind::from_method_suffix(suffix) {
         Some(k) => k,
         None => return undef(),
@@ -133,10 +144,11 @@ macro_rules! dataview_get_thunk {
     ($name:ident, $suffix:literal) => {
         extern "C" fn $name(
             _closure: *const crate::closure::ClosureHeader,
+            this: crate::closure::JsThis,
             offset: f64,
             rest: f64,
         ) -> f64 {
-            dataview_get($suffix, offset, rest)
+            dataview_get(this, $suffix, offset, rest)
         }
     };
 }
@@ -145,11 +157,12 @@ macro_rules! dataview_set_thunk {
     ($name:ident, $suffix:literal) => {
         extern "C" fn $name(
             _closure: *const crate::closure::ClosureHeader,
+            this: crate::closure::JsThis,
             offset: f64,
             value: f64,
             rest: f64,
         ) -> f64 {
-            dataview_set($suffix, offset, value, rest)
+            dataview_set(this, $suffix, offset, value, rest)
         }
     };
 }
@@ -187,8 +200,7 @@ pub(crate) fn install_dataview_proto_methods(proto_obj: *mut ObjectHeader) {
     // Accessor getters (0-arg). Reflect as `{ get, set: undefined,
     // enumerable: false, configurable: true }`.
     unsafe {
-        let mk = |f: *const u8| -> u64 {
-            crate::closure::js_register_closure_arity(f, 0);
+        let mk = |f: *const crate::closure::JsFunctionInfo| -> u64 {
             let c = crate::closure::js_closure_alloc(f, 0);
             if c.is_null() {
                 0
@@ -196,15 +208,15 @@ pub(crate) fn install_dataview_proto_methods(proto_obj: *mut ObjectHeader) {
                 crate::value::js_nanbox_pointer(c as i64).to_bits()
             }
         };
-        let bl = mk(dataview_byte_length_getter_thunk as *const u8);
+        let bl = mk(crate::fn_info!(dataview_byte_length_getter_thunk, 0; with_declared(0)));
         if bl != 0 {
             super::object_ops::install_builtin_getter(proto_obj, "byteLength", bl);
         }
-        let bo = mk(dataview_byte_offset_getter_thunk as *const u8);
+        let bo = mk(crate::fn_info!(dataview_byte_offset_getter_thunk, 0; with_declared(0)));
         if bo != 0 {
             super::object_ops::install_builtin_getter(proto_obj, "byteOffset", bo);
         }
-        let bf = mk(dataview_buffer_getter_thunk as *const u8);
+        let bf = mk(crate::fn_info!(dataview_buffer_getter_thunk, 0; with_declared(0)));
         if bf != 0 {
             super::object_ops::install_builtin_getter(proto_obj, "buffer", bf);
         }
@@ -212,38 +224,98 @@ pub(crate) fn install_dataview_proto_methods(proto_obj: *mut ObjectHeader) {
 
     // get* methods: spec `.length === 1`, fixed call arity 1 (`byteOffset`),
     // the optional `littleEndian` flag is collected into `rest`.
-    let gets: &[(&str, *const u8)] = &[
-        ("getInt8", dv_get_int8 as *const u8),
-        ("getUint8", dv_get_uint8 as *const u8),
-        ("getInt16", dv_get_int16 as *const u8),
-        ("getUint16", dv_get_uint16 as *const u8),
-        ("getInt32", dv_get_int32 as *const u8),
-        ("getUint32", dv_get_uint32 as *const u8),
-        ("getFloat32", dv_get_float32 as *const u8),
-        ("getFloat64", dv_get_float64 as *const u8),
-        ("getBigInt64", dv_get_bigint64 as *const u8),
-        ("getBigUint64", dv_get_biguint64 as *const u8),
+    let gets: &[(&str, *const crate::closure::JsFunctionInfo)] = &[
+        (
+            "getInt8",
+            crate::fn_info!(dv_get_int8, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
+        ),
+        (
+            "getUint8",
+            crate::fn_info!(dv_get_uint8, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
+        ),
+        (
+            "getInt16",
+            crate::fn_info!(dv_get_int16, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
+        ),
+        (
+            "getUint16",
+            crate::fn_info!(dv_get_uint16, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
+        ),
+        (
+            "getInt32",
+            crate::fn_info!(dv_get_int32, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
+        ),
+        (
+            "getUint32",
+            crate::fn_info!(dv_get_uint32, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
+        ),
+        (
+            "getFloat32",
+            crate::fn_info!(dv_get_float32, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
+        ),
+        (
+            "getFloat64",
+            crate::fn_info!(dv_get_float64, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
+        ),
+        (
+            "getBigInt64",
+            crate::fn_info!(dv_get_bigint64, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
+        ),
+        (
+            "getBigUint64",
+            crate::fn_info!(dv_get_biguint64, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
+        ),
     ];
     for (name, ptr) in gets.iter().copied() {
-        install_proto_method_rest_with_length(proto_obj, name, ptr, 1, 1);
+        install_proto_method_rest_with_length(proto_obj, name, ptr, 1);
     }
 
     // set* methods: spec `.length === 2`, fixed call arity 2
     // (`byteOffset`, `value`), the optional `littleEndian` flag → `rest`.
-    let sets: &[(&str, *const u8)] = &[
-        ("setInt8", dv_set_int8 as *const u8),
-        ("setUint8", dv_set_uint8 as *const u8),
-        ("setInt16", dv_set_int16 as *const u8),
-        ("setUint16", dv_set_uint16 as *const u8),
-        ("setInt32", dv_set_int32 as *const u8),
-        ("setUint32", dv_set_uint32 as *const u8),
-        ("setFloat32", dv_set_float32 as *const u8),
-        ("setFloat64", dv_set_float64 as *const u8),
-        ("setBigInt64", dv_set_bigint64 as *const u8),
-        ("setBigUint64", dv_set_biguint64 as *const u8),
+    let sets: &[(&str, *const crate::closure::JsFunctionInfo)] = &[
+        (
+            "setInt8",
+            crate::fn_info!(dv_set_int8, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
+        ),
+        (
+            "setUint8",
+            crate::fn_info!(dv_set_uint8, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
+        ),
+        (
+            "setInt16",
+            crate::fn_info!(dv_set_int16, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
+        ),
+        (
+            "setUint16",
+            crate::fn_info!(dv_set_uint16, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
+        ),
+        (
+            "setInt32",
+            crate::fn_info!(dv_set_int32, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
+        ),
+        (
+            "setUint32",
+            crate::fn_info!(dv_set_uint32, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
+        ),
+        (
+            "setFloat32",
+            crate::fn_info!(dv_set_float32, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
+        ),
+        (
+            "setFloat64",
+            crate::fn_info!(dv_set_float64, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
+        ),
+        (
+            "setBigInt64",
+            crate::fn_info!(dv_set_bigint64, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
+        ),
+        (
+            "setBigUint64",
+            crate::fn_info!(dv_set_biguint64, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
+        ),
     ];
     for (name, ptr) in sets.iter().copied() {
-        // `install_proto_method_rest` registers spec_length == call_fixed_arity.
+        // `.length` == the fixed arity (`install_proto_method_rest`).
         install_proto_method_rest(proto_obj, name, ptr, 2);
     }
 }

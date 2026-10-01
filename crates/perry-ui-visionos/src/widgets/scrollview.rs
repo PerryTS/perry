@@ -8,7 +8,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 extern "C" {
-    fn js_closure_call0(closure: *const u8) -> f64;
+    fn js_closure_call0(closure: *const u8, this: perry_ffi::JsThis) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
     static _dispatch_main_q: std::ffi::c_void;
     fn dispatch_async_f(
@@ -22,7 +22,7 @@ unsafe extern "C" fn refresh_callback_trampoline(context: *mut std::ffi::c_void)
     let _ = std::panic::catch_unwind(|| {
         let closure_f64 = f64::from_bits(context as u64);
         let closure_ptr = js_nanbox_get_pointer(closure_f64);
-        js_closure_call0(closure_ptr as *const u8);
+        js_closure_call0(closure_ptr as *const u8, perry_ffi::JsThis::UNDEFINED);
     });
 }
 

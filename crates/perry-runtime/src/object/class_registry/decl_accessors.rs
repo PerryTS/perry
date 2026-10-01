@@ -52,7 +52,12 @@ pub(crate) fn install_decl_prototype_accessor(proto: *mut ObjectHeader, class_id
         } else if raw == have_raw && have != 0 {
             have
         } else {
-            class_accessor_function_value(raw, is_setter, name).to_bits()
+            let set_length = if is_setter {
+                class_own_setter_length(class_id, name, false)
+            } else {
+                None
+            };
+            class_accessor_function_value(raw, is_setter, false, name, set_length).to_bits()
         }
     };
     let get = scope.root_nanbox_u64(half(raw_get, existing.raw_get, existing.get, false));
@@ -62,6 +67,8 @@ pub(crate) fn install_decl_prototype_accessor(proto: *mut ObjectHeader, class_id
         set,
         raw_get,
         raw_set,
+        static_get: 0,
+        static_set: 0,
     };
     proto_h.with_mut_ptr(|p: *mut ObjectHeader| {
         crate::object::set_builtin_accessor_pair(
@@ -82,7 +89,7 @@ pub(crate) fn note_instance_accessor_registered(class_id: u32, name: &str) {
         return;
     }
     let proto = class_decl_prototype_object(class_id);
-    if !proto.is_null() && !class_is_key_deleted(class_id, name) {
+    if !proto.is_null() && !class_proto_key_deleted(class_id, name) {
         install_decl_prototype_accessor(proto, class_id, name);
     }
 }
@@ -101,8 +108,8 @@ pub(crate) fn decl_prototype_own_accessor(class_id: u32, name: &str) -> Option<f
         return None;
     }
     let obj = js.as_pointer::<ObjectHeader>();
-    let declared =
-        !class_is_key_deleted(class_id, name) && class_own_accessor_ptrs(class_id, name).is_some();
+    let declared = !class_proto_key_deleted(class_id, name)
+        && class_own_accessor_ptrs(class_id, name).is_some();
     // SAFETY: `obj` is the live decl prototype; nothing below allocates.
     let holds = declared
         || unsafe {
@@ -175,14 +182,10 @@ pub(crate) unsafe fn class_chain_getter_value(
     if acc.raw_get != 0 {
         let scope = crate::gc::RuntimeHandleScope::new();
         let this = scope.root_nanbox_f64(this_of());
-        // The compiled getter reads `this` from its parameter; nested code it
-        // calls may read the implicit `this`, so publish the receiver too.
-        let prev =
-            scope.root_nanbox_f64(crate::object::js_implicit_this_set(this.get_nanbox_f64()));
+        // The compiled getter reads `this` from its parameter.
         let _boundary = crate::object::prototype_chain::UserCodeResolutionBoundary::enter();
-        let f: extern "C" fn(f64) -> f64 = std::mem::transmute(acc.raw_get);
+        let f = crate::closure::body_call::js_method_body_fn!(acc.raw_get as *const u8;);
         let v = f(this.get_nanbox_f64());
-        crate::object::js_implicit_this_set(prev.get_nanbox_f64());
         return Some((crate::JSValue::from_bits(v.to_bits()), acc.raw_get));
     }
     if acc.get != 0 {
@@ -196,8 +199,7 @@ pub(crate) unsafe fn class_chain_getter_value(
 /// declares an accessor for it: `None` when no accessor answers (the caller
 /// keeps resolving), `Some(true)` when a setter ran, `Some(false)` when the
 /// accessor has no setter — the write must not create a data property.
-/// `this` is the receiver the setter sees, also published as the implicit
-/// `this` for the duration of the call.
+/// `this` is the receiver the setter sees.
 ///
 /// # Safety
 /// `this` and `value` are live values.
@@ -215,11 +217,8 @@ pub(crate) unsafe fn class_chain_setter_apply(
     let value_h = scope.root_nanbox_f64(value);
     let (_holder, acc) = class_proto_accessor(class_id, name)?;
     if acc.raw_set != 0 {
-        let prev =
-            scope.root_nanbox_f64(crate::object::js_implicit_this_set(this_h.get_nanbox_f64()));
-        let f: extern "C" fn(f64, f64) -> f64 = std::mem::transmute(acc.raw_set);
+        let f = crate::closure::body_call::js_method_body_fn!(acc.raw_set as *const u8; value);
         let _ = f(this_h.get_nanbox_f64(), value_h.get_nanbox_f64());
-        crate::object::js_implicit_this_set(prev.get_nanbox_f64());
         return Some(true);
     }
     if acc.set != 0 {

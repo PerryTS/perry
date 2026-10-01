@@ -315,7 +315,7 @@ fn a_late_generic_origin_edge_retires_the_cached_chain_verdict() {
 }
 
 #[test]
-fn un_marking_a_deleted_prototype_key_retires_the_cached_chain_verdict() {
+fn a_static_store_never_resurrects_a_deleted_prototype_key() {
     let class_id = probe_test_class_id(0x61);
     crate::object::class_prototype_method_root_store(
         class_id,
@@ -323,27 +323,22 @@ fn un_marking_a_deleted_prototype_key_retires_the_cached_chain_verdict() {
         probe_test_method_bits(),
     );
     assert!(super::test_class_chain_may_have_to_json(class_id));
-    crate::object::class_mark_key_deleted(class_id, "toJSON");
-    // `delete C.prototype.toJSON` reaches `class_mark_key_deleted` through
-    // `js_object_delete_field`, which bumps the semantic epoch; stand in for
-    // that here so the memo holds the post-delete `false` the runtime would.
+    // `delete C.prototype.toJSON` removes the runtime assignment's entry
+    // through `js_object_delete_field`, which bumps the semantic epoch; stand
+    // in for that here so the memo holds the post-delete `false`.
+    crate::object::class_prototype_method_root_remove(class_id, "toJSON");
     crate::object::prop_plan::prop_plan_epoch_bump();
     assert!(!super::test_class_chain_may_have_to_json(class_id));
-    // `CLASS_DELETED_KEYS` is shared between a class's prototype keys and its
-    // STATIC field keys (`class_registry/state.rs`), so a later `C.toJSON = 1`
-    // static store un-marks the key IN PLACE inside
-    // `class_dynamic_prop_root_store` and re-exposes the prototype method to
-    // `lookup_prototype_method` — with no vtable write and no descriptor
-    // install to move either of the other two generations.
+    // The static side lives on the class function object, the prototype side
+    // on the prototype: `C.toJSON = 1` cannot bring the prototype key back.
     crate::object::class_dynamic_prop_root_store(
         class_id,
         "toJSON",
         f64::from_bits(probe_test_method_bits()),
     );
     assert!(
-        super::test_class_chain_may_have_to_json(class_id),
-        "un-marking a deleted key re-exposes the prototype method and must \
-         retire the cached verdict"
+        !super::test_class_chain_may_have_to_json(class_id),
+        "a static store must not re-expose a deleted prototype method"
     );
 }
 

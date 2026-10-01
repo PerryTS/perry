@@ -24,7 +24,7 @@ pub(crate) fn scan_ios_button_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_
 }
 
 extern "C" {
-    fn js_closure_call0(closure: *const u8) -> f64;
+    fn js_closure_call0(closure: *const u8, this: perry_ffi::JsThis) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
     // dispatch_get_main_queue() is a macro; the actual symbol is _dispatch_main_q
     static _dispatch_main_q: std::ffi::c_void;
@@ -39,7 +39,7 @@ unsafe extern "C" fn button_callback_trampoline(context: *mut std::ffi::c_void) 
     let _ = std::panic::catch_unwind(|| {
         let closure_f64 = f64::from_bits(context as u64);
         let closure_ptr = js_nanbox_get_pointer(closure_f64);
-        js_closure_call0(closure_ptr as *const u8);
+        js_closure_call0(closure_ptr as *const u8, perry_ffi::JsThis::UNDEFINED);
     });
 }
 

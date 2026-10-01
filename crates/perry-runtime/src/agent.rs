@@ -82,10 +82,15 @@ thread_local! {
 /// puts into a global queue is tagged as its own.
 ///
 /// Returns the new id so the caller can hand it to [`retire_agent`] at exit.
+///
+/// Every agent start is also where the agent runs the program's static shape
+/// seed (design step 4): once the thread reports its own agent, and before
+/// any user code on it can mint a seeded literal's facts under a counter id.
 pub fn enter_worker_agent() -> AgentId {
     let id = NEXT_AGENT.fetch_add(1, Ordering::Relaxed);
     crate::object::method_site::note_worker_agent();
     CURRENT_AGENT.with(|slot| slot.set(Some(id)));
+    crate::object::static_shapes::js_shape_run_static_seed();
     id
 }
 
@@ -150,6 +155,10 @@ pub fn retire_agent(id: AgentId) {
         id, PRIMARY_AGENT,
         "the primary agent outlives the process; it is never retired"
     );
+    // Finish native-addon ownership while this agent's heap and loop are
+    // still live. TLS destruction cannot safely call back into the runtime.
+    #[cfg(feature = "node-api-host")]
+    crate::node_api_host::shutdown_current_env();
     // turnloop P9: this agent may own a `turnloop::Loop`. Tear it down FIRST,
     // while the arena is still mapped and this thread can still run the
     // bindings' completion sinks.

@@ -163,6 +163,11 @@
 /// modules for windows with no decision at all. An unlisted module is honest;
 /// a listed unaudited one is the distinction slice 4 had to draw the hard way.
 ///
+/// (The pair has since been DELETED with the implicit-`this` cell itself: a
+/// body now receives its receiver as a parameter of the JS body ABI, so there
+/// is no cell to save across a call. The slice-5 and slice-6 lines above that
+/// name it are history.)
+///
 /// Slice 7 lists three `expr/` modules, all load-bearing on the committed
 /// source (`temp_root_{push,get}_double`, `temp_root_truncate`,
 /// `guard_store_operand{,_across}`, `reread_store_operand`,

@@ -14,7 +14,7 @@ use std::sync::{LazyLock, Mutex};
 
 use crate::closure::{
     js_closure_alloc, js_closure_call1, js_closure_call2, js_closure_get_capture_ptr,
-    js_closure_set_capture_ptr, js_register_closure_arity, ClosureHeader,
+    js_closure_set_capture_ptr, ClosureHeader,
 };
 use crate::object::{js_object_get_field_by_name, ObjectHeader};
 use crate::promise::Promise;
@@ -163,12 +163,14 @@ fn register_stop_trampoline_once() {
         if registered.get() {
             return;
         }
-        js_register_closure_arity(promise_hook_stop_trampoline as *const u8, 0);
         registered.set(true);
     });
 }
 
-extern "C" fn promise_hook_stop_trampoline(closure: *const ClosureHeader) -> f64 {
+extern "C" fn promise_hook_stop_trampoline(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     if closure.is_null() {
         return TAG_UNDEFINED_F64;
     }
@@ -179,7 +181,10 @@ extern "C" fn promise_hook_stop_trampoline(closure: *const ClosureHeader) -> f64
 
 fn make_stop_function(index: usize) -> f64 {
     register_stop_trampoline_once();
-    let closure = js_closure_alloc(promise_hook_stop_trampoline as *const u8, 1);
+    let closure = js_closure_alloc(
+        crate::fn_info!(promise_hook_stop_trampoline, 0; with_declared(0)),
+        1,
+    );
     js_closure_set_capture_ptr(closure, 0, index as i64);
     f64::from_bits(JSValue::pointer(closure as *const u8).bits())
 }
@@ -305,7 +310,12 @@ pub(crate) fn promise_hook_init(promise: *mut Promise, parent: *mut Promise) {
         } else {
             promise_value(parent_ptr)
         };
-        js_closure_call2(callback_handle.get_raw_const_ptr(), promise_arg, parent_arg);
+        js_closure_call2(
+            callback_handle.get_raw_const_ptr(),
+            crate::closure::plain_call_receiver(),
+            promise_arg,
+            parent_arg,
+        );
     });
 }
 
@@ -322,6 +332,7 @@ pub(crate) fn promise_hook_before(promise: *mut Promise) {
         let callback_handle = scope.root_raw_const_ptr(callbacks.before);
         js_closure_call1(
             callback_handle.get_raw_const_ptr(),
+            crate::closure::plain_call_receiver(),
             promise_value(promise_handle.get_raw_mut_ptr::<Promise>()),
         );
     });
@@ -340,6 +351,7 @@ pub(crate) fn promise_hook_after(promise: *mut Promise) {
         let callback_handle = scope.root_raw_const_ptr(callbacks.after);
         js_closure_call1(
             callback_handle.get_raw_const_ptr(),
+            crate::closure::plain_call_receiver(),
             promise_value(promise_handle.get_raw_mut_ptr::<Promise>()),
         );
     });
@@ -358,6 +370,7 @@ pub(crate) fn promise_hook_settled(promise: *mut Promise) {
         let callback_handle = scope.root_raw_const_ptr(callbacks.settled);
         js_closure_call1(
             callback_handle.get_raw_const_ptr(),
+            crate::closure::plain_call_receiver(),
             promise_value(promise_handle.get_raw_mut_ptr::<Promise>()),
         );
     });

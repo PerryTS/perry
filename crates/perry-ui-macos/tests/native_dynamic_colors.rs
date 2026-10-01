@@ -104,7 +104,7 @@ fn main() {
         appearance.performAsCurrentDrawingAppearance(&RcBlock::new(|| unsafe {
             let layer: *mut objc2::runtime::AnyObject = msg_send![view, layer];
             for border in [false, true] {
-                let cg: *const std::ffi::c_void = if border {
+                let cg: *const perry_ui_macos::srgb::CGColor = if border {
                     msg_send![layer, borderColor]
                 } else {
                     msg_send![layer, backgroundColor]

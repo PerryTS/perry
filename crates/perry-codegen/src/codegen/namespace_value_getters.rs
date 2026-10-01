@@ -3,7 +3,7 @@
 use super::helpers::sanitize_member;
 use super::opts::CrossModuleCtx;
 use crate::module::LlModule;
-use crate::types::{DOUBLE, I64};
+use crate::types::DOUBLE;
 
 pub(crate) fn symbol(module_prefix: &str, namespace: &str, member: &str) -> String {
     format!(
@@ -31,8 +31,11 @@ pub(super) fn emit(llmod: &mut LlModule, module_prefix: &str, imports: &CrossMod
         );
         let getter_name = format!("perry_fn_{source_prefix}__{origin}");
         llmod.declare_function(&getter_name, DOUBLE, &[]);
-        let wrapper =
-            llmod.define_function(wrapper_name, DOUBLE, vec![(I64, "%closure".to_string())]);
+        let wrapper = llmod.define_function(
+            wrapper_name,
+            DOUBLE,
+            crate::expr::body_call::js_body_params(std::iter::empty::<String>()),
+        );
         wrapper.create_block("entry");
         let block = wrapper.block_mut(0).unwrap();
         let value = block.call(DOUBLE, &getter_name, &[]);

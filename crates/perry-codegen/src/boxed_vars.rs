@@ -88,6 +88,11 @@ pub(crate) fn collect_boxed_param_ids(
     out
 }
 
+/// Ids named by this body's preallocation statements (closures excluded).
+pub(crate) fn collect_prealloc_box_ids_shallow(stmts: &[perry_hir::Stmt], out: &mut HashSet<u32>) {
+    collect_prealloc_box_ids_in_stmts(stmts, out);
+}
+
 fn collect_prealloc_box_ids_in_stmts(stmts: &[perry_hir::Stmt], out: &mut HashSet<u32>) {
     use perry_hir::Stmt;
     for s in stmts {
@@ -202,7 +207,7 @@ fn collect_boxed_vars_scope(stmts: &[perry_hir::Stmt]) -> HashSet<u32> {
     // the first read of fib from inside the body goes through
     // js_box_get which returns the real closure value.
     let mut self_recursive_ids: HashSet<u32> = HashSet::new();
-    collect_self_recursive_closure_ids(stmts, &closure_refs, &mut self_recursive_ids);
+    collect_self_recursive_closure_ids(stmts, &mut self_recursive_ids);
 
     // Box = (declared AND captured AND mutated) OR (self-recursive closure),
     // minus for-loop init vars.
@@ -216,10 +221,126 @@ fn collect_boxed_vars_scope(stmts: &[perry_hir::Stmt]) -> HashSet<u32> {
             continue;
         }
         if closure_refs.contains(id) && (closure_writes.contains(id) || outer_writes.contains(id)) {
+            // Capture by value when every write precedes every capturing
+            // closure: each closure then snapshots the binding's final value
+            // and no cell is needed (see `writes_all_precede_captures`).
+            if !closure_writes.contains(id) && writes_all_precede_captures(stmts, *id) {
+                continue;
+            }
             boxed.insert(*id);
         }
     }
     boxed
+}
+
+/// True when `id` is declared by exactly one `Stmt::Let` of these statements,
+/// directly in the body's top-level list, and every statement of that list
+/// that writes `id` (outside closures, including the declaration itself)
+/// comes strictly before every statement that creates a closure naming `id`,
+/// with no write or closure reference before the declaration.
+/// Then no write can happen after a capture — a loop around both is a loop
+/// around the declaration too, which makes a fresh binding per iteration — so
+/// snapshot capture is exact.
+fn writes_all_precede_captures(stmts: &[perry_hir::Stmt], id: u32) -> bool {
+    use perry_hir::Stmt;
+    fn find_home<'a>(stmts: &'a [Stmt], id: u32, out: &mut Vec<(&'a [Stmt], usize)>) {
+        for (i, s) in stmts.iter().enumerate() {
+            if matches!(s, Stmt::Let { id: d, .. } if *d == id) {
+                out.push((stmts, i));
+            }
+            match s {
+                Stmt::If {
+                    then_branch,
+                    else_branch,
+                    ..
+                } => {
+                    find_home(then_branch, id, out);
+                    if let Some(e) = else_branch {
+                        find_home(e, id, out);
+                    }
+                }
+                Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => find_home(body, id, out),
+                Stmt::For { init, body, .. } => {
+                    if matches!(init.as_deref(), Some(Stmt::Let { id: d, .. }) if *d == id) {
+                        // A `for` head binding: never the snapshot case here.
+                        out.push((&[], 0));
+                        out.push((&[], 0));
+                    }
+                    find_home(body, id, out);
+                }
+                Stmt::Try {
+                    body,
+                    catch,
+                    finally,
+                } => {
+                    find_home(body, id, out);
+                    if let Some(c) = catch {
+                        find_home(&c.body, id, out);
+                    }
+                    if let Some(f) = finally {
+                        find_home(f, id, out);
+                    }
+                }
+                Stmt::Switch { cases, .. } => {
+                    for c in cases {
+                        find_home(&c.body, id, out);
+                    }
+                }
+                Stmt::Labeled { body, .. } => {
+                    find_home(std::slice::from_ref(body.as_ref()), id, out)
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut homes = Vec::new();
+    find_home(stmts, id, &mut homes);
+    let [(list, home)] = homes.as_slice() else {
+        return false;
+    };
+    let (list, home) = (*list, *home);
+    // Every write and closure reference must sit in the home statement or a
+    // later sibling: compare the totals with what that range accounts for.
+    let count = |range: &[Stmt]| {
+        let mut writes = 0usize;
+        let mut captures = 0usize;
+        for s in range {
+            let mut w = HashSet::new();
+            collect_outer_writes_in_stmt(s, &mut w);
+            let mut r = HashSet::new();
+            let mut cw = HashSet::new();
+            collect_closure_refs_and_writes_in_stmt(s, &mut r, &mut cw);
+            writes += usize::from(w.contains(&id));
+            captures += usize::from(r.contains(&id));
+        }
+        (writes, captures)
+    };
+    let mut last_write = None;
+    let mut first_capture = None;
+    for (j, s) in list.iter().enumerate().skip(home) {
+        let (w, c) = count(std::slice::from_ref(s));
+        if w > 0 || (j == home && matches!(s, Stmt::Let { init: Some(_), .. })) {
+            last_write = Some(j);
+        }
+        if c > 0 && first_capture.is_none() {
+            first_capture = Some(j);
+        }
+    }
+    let (Some(last_write), Some(first_capture)) = (last_write, first_capture) else {
+        return false;
+    };
+    if last_write >= first_capture {
+        return false;
+    }
+    // Nothing before the home statement may write or capture the binding.
+    let (w_before, c_before) = count(&list[..home]);
+    if w_before > 0 || c_before > 0 {
+        return false;
+    }
+    // Only a declaration in the body's own top-level list qualifies: then
+    // there is no enclosing statement or sibling branch that could write or
+    // capture the binding outside the range checked above.
+    std::ptr::eq(list.as_ptr(), stmts.as_ptr())
 }
 
 /// Walk the given statements looking for `Expr::Closure` nodes, and
@@ -523,11 +644,7 @@ fn walk_for_self_capturing_closure(e: &perry_hir::Expr, let_id: u32, found: &mut
 /// When a Stmt::Let's Closure init captures the Let's own id, that id must
 /// be boxed so the closure body can read the live value instead of the
 /// stale 0.0 that was in the slot at capture time.
-fn collect_self_recursive_closure_ids(
-    stmts: &[perry_hir::Stmt],
-    closure_refs: &HashSet<u32>,
-    out: &mut HashSet<u32>,
-) {
+fn collect_self_recursive_closure_ids(stmts: &[perry_hir::Stmt], out: &mut HashSet<u32>) {
     use perry_hir::Stmt;
     for s in stmts {
         if let Stmt::Let {
@@ -553,14 +670,6 @@ fn collect_self_recursive_closure_ids(
             // closure reads.
             if init_expr_has_self_capturing_closure(init_expr, *id) {
                 out.insert(*id);
-            } else if matches!(init_expr, perry_hir::Expr::Closure { .. })
-                && closure_refs.contains(id)
-            {
-                // Pre-existing direct-closure-literal arm — kept as a
-                // belt-and-suspenders fallback in case the
-                // walk-the-init detection above misses an edge shape
-                // (e.g. a future HIR variant that holds a Closure).
-                out.insert(*id);
             }
         }
         // Recurse into nested blocks.
@@ -570,48 +679,43 @@ fn collect_self_recursive_closure_ids(
                 else_branch,
                 ..
             } => {
-                collect_self_recursive_closure_ids(then_branch, closure_refs, out);
+                collect_self_recursive_closure_ids(then_branch, out);
                 if let Some(eb) = else_branch {
-                    collect_self_recursive_closure_ids(eb, closure_refs, out);
+                    collect_self_recursive_closure_ids(eb, out);
                 }
             }
             Stmt::For { init, body, .. } => {
                 if let Some(init_stmt) = init {
                     collect_self_recursive_closure_ids(
                         std::slice::from_ref(init_stmt.as_ref()),
-                        closure_refs,
                         out,
                     );
                 }
-                collect_self_recursive_closure_ids(body, closure_refs, out);
+                collect_self_recursive_closure_ids(body, out);
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
-                collect_self_recursive_closure_ids(body, closure_refs, out);
+                collect_self_recursive_closure_ids(body, out);
             }
             Stmt::Try {
                 body,
                 catch,
                 finally,
             } => {
-                collect_self_recursive_closure_ids(body, closure_refs, out);
+                collect_self_recursive_closure_ids(body, out);
                 if let Some(c) = catch {
-                    collect_self_recursive_closure_ids(&c.body, closure_refs, out);
+                    collect_self_recursive_closure_ids(&c.body, out);
                 }
                 if let Some(f) = finally {
-                    collect_self_recursive_closure_ids(f, closure_refs, out);
+                    collect_self_recursive_closure_ids(f, out);
                 }
             }
             Stmt::Switch { cases, .. } => {
                 for case in cases {
-                    collect_self_recursive_closure_ids(&case.body, closure_refs, out);
+                    collect_self_recursive_closure_ids(&case.body, out);
                 }
             }
             Stmt::Labeled { body, .. } => {
-                collect_self_recursive_closure_ids(
-                    std::slice::from_ref(body.as_ref()),
-                    closure_refs,
-                    out,
-                );
+                collect_self_recursive_closure_ids(std::slice::from_ref(body.as_ref()), out);
             }
             _ => {}
         }
@@ -1666,7 +1770,54 @@ fn infer_refinable_type_without_context(init: &perry_hir::Expr) -> Option<perry_
 mod tests {
     use super::*;
     use perry_hir::types::Type;
-    use perry_hir::Expr;
+    use perry_hir::{Expr, Stmt};
+
+    fn closure(func_id: u32, captured_id: u32) -> Expr {
+        Expr::Closure {
+            func_id,
+            params: Vec::new(),
+            return_type: Type::Any,
+            body: vec![Stmt::Return(Some(Expr::LocalGet(captured_id)))],
+            captures: vec![captured_id],
+            mutable_captures: Vec::new(),
+            captures_this: false,
+            captures_new_target: false,
+            enclosing_class: None,
+            is_arrow: true,
+            is_async: false,
+            is_generator: false,
+            is_strict: false,
+        }
+    }
+
+    #[test]
+    fn captured_closure_value_is_boxed_only_for_real_self_capture() {
+        // #10520: the outer closure references `f`, but `f`'s initializer
+        // does not. Only `self_ref` captures itself before initialization.
+        let stmts = vec![
+            Stmt::Let {
+                id: 1,
+                name: "f".into(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(closure(10, 3)),
+            },
+            Stmt::Let {
+                id: 2,
+                name: "self_ref".into(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(closure(11, 2)),
+            },
+            Stmt::Expr(closure(12, 1)),
+        ];
+        let boxed = collect_boxed_vars(&stmts);
+        assert!(!boxed.contains(&1), "captured const closure needs no cell");
+        assert!(
+            boxed.contains(&2),
+            "a self-capturing initializer needs a cell"
+        );
+    }
 
     #[test]
     fn simple_refinement_uses_shared_hir_inference_for_constructed_values() {

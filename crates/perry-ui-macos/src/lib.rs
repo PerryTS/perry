@@ -21,6 +21,7 @@ pub mod menu;
 pub mod network;
 pub mod notifications;
 pub mod pointer;
+pub mod srgb;
 pub mod state;
 pub mod tray;
 pub mod widgets;

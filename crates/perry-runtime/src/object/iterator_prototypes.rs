@@ -25,7 +25,7 @@
 //!   - `getOwnPropertyDescriptor(proto, "next")` reads the recorded builtin
 //!     attrs off the prototype object (it's a regular `GC_TYPE_OBJECT` field).
 //!
-//! The `next` closures are thin thunks: they read `js_implicit_this_get()` and
+//! The `next` closures are thin thunks: they take the receiver as `this` and
 //! route by the receiver's class id to the existing
 //! `dispatch_{array,map,set,string}_iterator_method`. This is the ONLY behaviour
 //! addition for `proto.next.call(it)` / value-read `it.next()`; the class-id CALL
@@ -164,11 +164,11 @@ pub(crate) fn note_iterator_prototype_exposed(value: f64) {
     }
 }
 
-/// Resolve and validate the implicit-`this` object shared by the family
+/// Resolve and validate the `this` object shared by the family
 /// prototype thunks. Keeping the raw-address probe here gives both the generic
 /// family dispatcher and the helper-specific brand check one audited path.
-unsafe fn implicit_this_iterator_object() -> Option<*mut ObjectHeader> {
-    let this = super::js_implicit_this_get();
+unsafe fn this_iterator_object(this: crate::closure::JsThis) -> Option<*mut ObjectHeader> {
+    let this = this.as_f64();
     let jv = JSValue::from_bits(this.to_bits());
     if !jv.is_pointer() {
         return None;
@@ -180,14 +180,14 @@ unsafe fn implicit_this_iterator_object() -> Option<*mut ObjectHeader> {
     Some(obj)
 }
 
-/// Dispatch `method` on the implicit-`this` iterator instance, routing by class
+/// Dispatch `method` on the `this` iterator instance, routing by class
 /// id to the matching existing iterator dispatcher. Shared by the per-family
 /// `next` thunks (read as a value or invoked via `.call`) and the parent
 /// `[Symbol.iterator]` thunk. Returns a `{ value:undefined, done:true }`-ish
 /// throw when `this` is not a recognized iterator (test262 `this-not-object` /
 /// `does-not-have-...-internal-slots` brand checks).
-unsafe fn dispatch_on_implicit_this(method: &str) -> f64 {
-    let Some(obj) = implicit_this_iterator_object() else {
+unsafe fn dispatch_on_this(this: crate::closure::JsThis, method: &str) -> f64 {
+    let Some(obj) = this_iterator_object(this) else {
         return brand_type_error(method);
     };
     let class_id = (*obj).class_id;
@@ -228,38 +228,49 @@ fn brand_type_error(method: &str) -> f64 {
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
-// --- `next` thunks, one per family (all read implicit-this, dispatch by id) ---
+// --- `next` thunks, one per family (all take `this`, dispatch by id) ---
 
 extern "C" fn array_iterator_next_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
-    unsafe { dispatch_on_implicit_this("next") }
+    unsafe { dispatch_on_this(this, "next") }
 }
-extern "C" fn map_iterator_next_thunk(_c: *const crate::closure::ClosureHeader, _arg: f64) -> f64 {
-    unsafe { dispatch_on_implicit_this("next") }
+extern "C" fn map_iterator_next_thunk(
+    _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+    _arg: f64,
+) -> f64 {
+    unsafe { dispatch_on_this(this, "next") }
 }
-extern "C" fn set_iterator_next_thunk(_c: *const crate::closure::ClosureHeader, _arg: f64) -> f64 {
-    unsafe { dispatch_on_implicit_this("next") }
+extern "C" fn set_iterator_next_thunk(
+    _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+    _arg: f64,
+) -> f64 {
+    unsafe { dispatch_on_this(this, "next") }
 }
 extern "C" fn string_iterator_next_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
-    unsafe { dispatch_on_implicit_this("next") }
+    unsafe { dispatch_on_this(this, "next") }
 }
 extern "C" fn regexp_string_iterator_next_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
     unsafe {
-        let Some(obj) = implicit_this_iterator_object() else {
+        let Some(obj) = this_iterator_object(this) else {
             return brand_type_error("next");
         };
         if (*obj).class_id != crate::regex::REGEXP_STRING_ITERATOR_CLASS_ID {
             return brand_type_error("next");
         }
-        dispatch_on_implicit_this("next")
+        dispatch_on_this(this, "next")
     }
 }
 
@@ -268,10 +279,11 @@ extern "C" fn regexp_string_iterator_next_thunk(
 /// a saved/bound canonical method must not re-enter a later `next` override.
 extern "C" fn iterator_helper_next_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
     unsafe {
-        let Some(obj) = implicit_this_iterator_object() else {
+        let Some(obj) = this_iterator_object(this) else {
             return brand_type_error("next");
         };
         if (*obj).class_id != crate::iterator_helpers::ITERATOR_HELPER_CLASS_ID {
@@ -284,9 +296,10 @@ extern "C" fn iterator_helper_next_thunk(
 /// `%IteratorPrototype%[Symbol.iterator]()` returns `this` (the iterator).
 extern "C" fn iterator_proto_symbol_iterator_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
-    super::js_implicit_this_get()
+    this.as_f64()
 }
 
 /// Set `obj[Symbol.toStringTag] = tag` with the spec descriptor
@@ -317,7 +330,7 @@ fn set_to_string_tag(obj: *mut ObjectHeader, tag: &str) {
 /// appeared user-reparented. A caller treating that as "the per-instance chain
 /// is authoritative, resolve methods by ordinary inheriting lookup" then
 /// reached the `%…IteratorPrototype%` `next` THUNK,
-/// which resolves its receiver from `js_implicit_this_get()` rather than the
+/// which resolves its receiver from the call-site `this` rather than the
 /// bound `this` (#7576) — producing `Method %IteratorPrototype%.next called on
 /// incompatible receiver`. The prototype itself is still recorded either way;
 /// the class-default variant also avoids the divergence bit and cache flushes.
@@ -341,17 +354,36 @@ fn build_iterator_prototypes() {
     }
     install_symbol_iterator(shared);
 
-    let array_proto = build_family_proto(array_iterator_next_thunk, "Array Iterator", shared);
-    let map_proto = build_family_proto(map_iterator_next_thunk, "Map Iterator", shared);
-    let set_proto = build_family_proto(set_iterator_next_thunk, "Set Iterator", shared);
-    let string_proto = build_family_proto(string_iterator_next_thunk, "String Iterator", shared);
+    let array_proto = build_family_proto(
+        crate::fn_info!(array_iterator_next_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+        "Array Iterator",
+        shared,
+    );
+    let map_proto = build_family_proto(
+        crate::fn_info!(map_iterator_next_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+        "Map Iterator",
+        shared,
+    );
+    let set_proto = build_family_proto(
+        crate::fn_info!(set_iterator_next_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+        "Set Iterator",
+        shared,
+    );
+    let string_proto = build_family_proto(
+        crate::fn_info!(string_iterator_next_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+        "String Iterator",
+        shared,
+    );
     let regexp_string_proto = build_family_proto(
-        regexp_string_iterator_next_thunk,
+        crate::fn_info!(regexp_string_iterator_next_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
         "RegExp String Iterator",
         shared,
     );
-    let iterator_helper_proto =
-        build_family_proto(iterator_helper_next_thunk, "Iterator Helper", shared);
+    let iterator_helper_proto = build_family_proto(
+        crate::fn_info!(iterator_helper_next_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+        "Iterator Helper",
+        shared,
+    );
 
     ITERATOR_PROTOTYPE_PTR.store(shared as i64, Ordering::Release);
     ARRAY_ITERATOR_PROTOTYPE_PTR.store(array_proto as i64, Ordering::Release);
@@ -365,12 +397,13 @@ fn build_iterator_prototypes() {
 /// Install `[Symbol.iterator]` on the shared parent as a real method whose
 /// `name`/`length` own props match the spec (`"[Symbol.iterator]"`, length 0).
 fn install_symbol_iterator(shared: *mut ObjectHeader) {
-    let func_ptr = iterator_proto_symbol_iterator_thunk as *const u8;
-    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    let closure = crate::closure::js_closure_alloc(
+        crate::fn_info!(iterator_proto_symbol_iterator_thunk, 1; with_declared(0)),
+        0,
+    );
     if closure.is_null() {
         return;
     }
-    crate::closure::js_register_closure_arity(func_ptr, 0);
     super::native_module::set_bound_native_closure_name(closure, "[Symbol.iterator]");
     super::native_module::set_builtin_closure_length(closure as usize, 0);
     set_builtin_property_attrs(
@@ -404,7 +437,7 @@ fn install_symbol_iterator(shared: *mut ObjectHeader) {
 /// Allocate one family prototype with an own `next` method (spec descriptor),
 /// a `[Symbol.toStringTag]`, and `[[Prototype]] === shared %IteratorPrototype%`.
 fn build_family_proto(
-    next_thunk: extern "C" fn(*const crate::closure::ClosureHeader, f64) -> f64,
+    next_info: *const crate::closure::JsFunctionInfo,
     tag: &str,
     shared: *mut ObjectHeader,
 ) -> *mut ObjectHeader {
@@ -416,7 +449,7 @@ fn build_family_proto(
     // configurable:true }` and the closure's `name`/`length` as
     // `{ writable:false, enumerable:false, configurable:true }` — exactly the
     // spec descriptor shape test262 verifies. `.length` 0 (next takes no args).
-    install_proto_method(proto, "next", next_thunk as *const u8, 0);
+    install_proto_method(proto, "next", next_info, 0);
     set_to_string_tag(proto, tag);
     chain_to(proto, shared);
     proto
@@ -517,7 +550,6 @@ pub(crate) unsafe fn call_overridden_iterator_next(
 ) -> Option<f64> {
     let scope = crate::gc::RuntimeHandleScope::new();
     let iter = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(iter_obj as i64));
-    let previous = scope.root_nanbox_f64(super::js_implicit_this_get());
     // #9019: an OWN `next` (`it.next = fn`, stored past the reserved floor
     // by `object/reserved_floor.rs`) shadows the prototype thunk and exists
     // independently of the tower, so probe it BEFORE the tower-null
@@ -551,11 +583,14 @@ pub(crate) unsafe fn call_overridden_iterator_next(
             crate::closure::throw_not_callable();
         }
         let method = scope.root_nanbox_f64(own);
-        super::js_implicit_this_set(iter.get_nanbox_f64());
         let result = crate::exception::js_call_catching(|| {
-            crate::closure::js_native_call_value(method.get_nanbox_f64(), std::ptr::null(), 0)
+            crate::closure::native_call_value_this(
+                method.get_nanbox_f64(),
+                crate::closure::JsThis::from_f64(iter.get_nanbox_f64()),
+                std::ptr::null(),
+                0,
+            )
         });
-        super::js_implicit_this_set(previous.get_nanbox_f64());
         return match result {
             Ok(value) => Some(value),
             Err(error) => crate::exception::js_throw(error),
@@ -634,11 +669,14 @@ pub(crate) unsafe fn call_overridden_iterator_next(
     }
 
     let method = scope.root_nanbox_f64(method);
-    super::js_implicit_this_set(iter.get_nanbox_f64());
     let result = crate::exception::js_call_catching(|| {
-        crate::closure::js_native_call_value(method.get_nanbox_f64(), std::ptr::null(), 0)
+        crate::closure::native_call_value_this(
+            method.get_nanbox_f64(),
+            crate::closure::JsThis::from_f64(iter.get_nanbox_f64()),
+            std::ptr::null(),
+            0,
+        )
     });
-    super::js_implicit_this_set(previous.get_nanbox_f64());
     match result {
         Ok(value) => Some(value),
         Err(error) => crate::exception::js_throw(error),
@@ -682,11 +720,17 @@ mod override_probe_allocation_tests {
 
     const PATCHED_SENTINEL: f64 = 4242.0;
 
-    extern "C" fn patched_next_thunk(_closure: *const ClosureHeader) -> f64 {
+    extern "C" fn patched_next_thunk(
+        _closure: *const ClosureHeader,
+        _this: crate::closure::JsThis,
+    ) -> f64 {
         PATCHED_SENTINEL
     }
 
-    extern "C" fn accessor_getter_thunk(_closure: *const ClosureHeader) -> f64 {
+    extern "C" fn accessor_getter_thunk(
+        _closure: *const ClosureHeader,
+        _this: crate::closure::JsThis,
+    ) -> f64 {
         f64::from_bits(TAG_UNDEFINED)
     }
 
@@ -784,8 +828,10 @@ mod override_probe_allocation_tests {
                 "premise: the prototype carries an own `next` closure"
             );
 
-            let patched = crate::closure::js_closure_alloc(patched_next_thunk as *const u8, 0);
-            crate::closure::js_register_closure_arity(patched_next_thunk as *const u8, 0);
+            let patched = crate::closure::js_closure_alloc(
+                crate::fn_info!(patched_next_thunk, 0; with_declared(0)),
+                0,
+            );
             let patched_h = scope.root_nanbox_f64(js_nanbox_pointer(patched as i64));
             set_proto_next(patched_h.get_nanbox_f64());
             assert!(
@@ -827,8 +873,10 @@ mod override_probe_allocation_tests {
                 "premise: unpatched prototype passes the proof"
             );
 
-            let getter = crate::closure::js_closure_alloc(accessor_getter_thunk as *const u8, 0);
-            crate::closure::js_register_closure_arity(accessor_getter_thunk as *const u8, 0);
+            let getter = crate::closure::js_closure_alloc(
+                crate::fn_info!(accessor_getter_thunk, 0; with_declared(0)),
+                0,
+            );
             let getter_h = scope.root_nanbox_f64(js_nanbox_pointer(getter as i64));
             let key =
                 scope.root_string_ptr(crate::string::js_string_from_bytes(b"next".as_ptr(), 4));

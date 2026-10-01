@@ -33,7 +33,10 @@ pub(super) unsafe fn call_net_socket_method(handle: i64, name: &str, args: &[f64
     )
 }
 
-extern "C" fn events_abort_listener_dispose(closure: *const ClosureHeader) -> f64 {
+extern "C" fn events_abort_listener_dispose(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     use perry_runtime::closure::js_closure_get_capture_ptr;
 
     let signal_ptr = js_closure_get_capture_ptr(closure, 0);
@@ -75,7 +78,8 @@ pub unsafe extern "C" fn js_events_add_abort_listener(signal: f64, listener: f64
     let listener_val = js_nanbox_pointer(callback_ptr);
     perry_runtime::url::js_abort_signal_add_listener(signal_ptr, event_val, listener_val);
 
-    let dispose_closure = js_closure_alloc(events_abort_listener_dispose as *const u8, 2);
+    let dispose_closure =
+        js_closure_alloc(perry_runtime::fn_info!(events_abort_listener_dispose, 0), 2);
     js_closure_set_capture_ptr(dispose_closure, 0, signal_ptr as i64);
     js_closure_set_capture_ptr(dispose_closure, 1, callback_ptr);
     let dispose_val = js_nanbox_pointer(dispose_closure as i64);

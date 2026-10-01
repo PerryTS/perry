@@ -109,7 +109,8 @@ fn intl_constructor_kind(parent_val: f64) -> Option<&'static str> {
     if closure.is_null() {
         return None;
     }
-    let fp = unsafe { (*closure).func_ptr };
+    // Validated: `parent_val` may be any heap object, not a function.
+    let fp = crate::closure::get_valid_func_ptr(closure);
     intl_constructor_entries()
         .iter()
         .find(|(p, _)| *p == fp)
@@ -147,16 +148,19 @@ pub(crate) unsafe fn intl_subclass_super(
     if !is_intl_constructor_value(parent_val) {
         return false;
     }
-    // #9445: the parent constructor is user-reachable code; root the displaced
-    // receiver AND `this_box`, which is consumed again after the call.
+    // #9445: the parent constructor is user-reachable code; root `this_box`,
+    // which is passed as the receiver and consumed again after the call.
     let this_scope = crate::gc::RuntimeHandleScope::new();
     let this_h = this_scope.root_nanbox_f64(this_box);
-    let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(this_box));
     // #10490: the displaced `new.target` crosses the same call.
     let prev_nt = this_scope.root_nanbox_f64(crate::object::js_new_target_set(parent_val));
-    let instance = crate::closure::js_native_call_value(parent_val, args_ptr, args_len);
+    let instance = crate::closure::native_call_value_this(
+        parent_val,
+        crate::closure::JsThis::from_f64(this_h.get_nanbox_f64()),
+        args_ptr,
+        args_len,
+    );
     crate::object::js_new_target_set(prev_nt.get_nanbox_f64());
-    crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     // Re-home the freshly-built instance's brand + bound methods onto `this`.
     let this_bits = this_h.get_nanbox_f64().to_bits();
     if (this_bits >> 48) == 0x7FFD {

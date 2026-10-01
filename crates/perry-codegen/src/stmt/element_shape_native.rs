@@ -55,8 +55,8 @@
 //!   clones (`emit_gc_loop_safepoint`), so no collection observes the stale
 //!   root slot, and a stale slot holds a Number, which a scan treats as data.
 //! * **JS `+`.** The redirect admits no write the clone did not already lower
-//!   as a bare `fadd`: the accumulator is the fact's `numeric_accumulator`,
-//!   which `is_numeric_expr` already trusted as a raw double inside this clone.
+//!   as a bare `fadd`: the accumulator is in the clone's 5L Number scope
+//!   (`type_analysis::local_is_number`), which `is_numeric_expr` already trusted as a raw double inside this clone.
 //!   Keeping that same double in a register instead of a stack slot is the
 //!   same IEEE arithmetic on the same operands in the same order, so `-0`, NaN
 //!   and overflow to Infinity are bit-identical.

@@ -4,6 +4,8 @@ use perry_hir::{Class, Expr, Function, Module, ModuleInitKind, Stmt};
 
 fn empty_opts() -> CompileOptions {
     CompileOptions {
+        static_shape_ids: Vec::new(),
+        program_class_shape_ids: Default::default(),
         target: None,
         is_entry_module: false,
         non_entry_module_prefixes: Vec::new(),
@@ -217,20 +219,51 @@ fn duplicate_class_static_methods_use_class_id_in_symbols() {
     let ir = String::from_utf8(compile_module(&duplicate_static_module(), empty_opts()).unwrap())
         .unwrap();
 
+    // The body: exactly one definition.
     assert_eq!(
         count(
             &ir,
-            "define double @perry_static_marked_symbol_hygiene_ts__x__c11__lex"
+            "define double @perry_static_marked_symbol_hygiene_ts__x__c11__lex("
+        ),
+        1
+    );
+    // This module hands codegen two classes of one name. Registration keys
+    // each class by its ClassId, so both static methods are registered, each
+    // with its own function-object entry `<body>__clo`.
+    assert_eq!(
+        count(
+            &ir,
+            "define double @perry_static_marked_symbol_hygiene_ts__x__c11__lex__clo("
+        ),
+        1
+    );
+    // The body, and its function object's closure-convention entry
+    // `<body>__clo`: exactly one definition each.
+    assert_eq!(
+        count(
+            &ir,
+            "define double @perry_static_marked_symbol_hygiene_ts__x__c12__lex("
         ),
         1
     );
     assert_eq!(
         count(
             &ir,
-            "define double @perry_static_marked_symbol_hygiene_ts__x__c12__lex"
+            "define double @perry_static_marked_symbol_hygiene_ts__x__c12__lex__clo("
         ),
         1
     );
+    // Each class registers its own static method under its own id.
+    for cid in [11, 12] {
+        assert_eq!(
+            count(
+                &ir,
+                &format!("call void @js_register_class_static_method_entry(i64 {cid}, ")
+            ),
+            1,
+            "class {cid}"
+        );
+    }
     assert_eq!(
         count(
             &ir,
@@ -254,10 +287,19 @@ fn static_and_instance_methods_with_same_name_keep_distinct_symbols() {
         ),
         1
     );
+    // The body, and its function object's closure-convention entry
+    // `<body>__clo`: exactly one definition each.
     assert_eq!(
         count(
             &ir,
-            "define double @perry_static_static_instance_symbol_hygiene_ts__x__c11__lex"
+            "define double @perry_static_static_instance_symbol_hygiene_ts__x__c11__lex("
+        ),
+        1
+    );
+    assert_eq!(
+        count(
+            &ir,
+            "define double @perry_static_static_instance_symbol_hygiene_ts__x__c11__lex__clo("
         ),
         1
     );

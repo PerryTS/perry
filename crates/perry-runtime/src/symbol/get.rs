@@ -82,6 +82,9 @@ pub(crate) unsafe fn has_own_symbol_property(obj_f64: f64, sym_f64: f64) -> bool
     if obj_key == 0 || sym_key == 0 {
         return false;
     }
+    if crate::object::shaped_symbols::owner(obj_key).is_some() {
+        return crate::object::shaped_symbols::get(obj_key, sym_key).is_some();
+    }
     let guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
     match guard.as_ref().and_then(|map| map.get(&obj_key)) {
         Some(entries) => entries.iter().any(|&(sk, _)| sk == sym_key),
@@ -150,6 +153,9 @@ pub(crate) unsafe fn own_symbol_slot(obj_f64: f64, sym_f64: f64) -> Option<OwnSy
     if obj_key == 0 || sym_key == 0 {
         return None;
     }
+    if crate::object::shaped_symbols::owner(obj_key).is_some() {
+        return crate::object::shaped_symbols::get(obj_key, sym_key).map(OwnSymbolSlot::Data);
+    }
     let guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
     if let Some(map) = guard.as_ref() {
         if let Some(entries) = map.get(&obj_key) {
@@ -164,7 +170,7 @@ pub(crate) unsafe fn own_symbol_slot(obj_f64: f64, sym_f64: f64) -> Option<OwnSy
 }
 
 /// Words in a per-site Symbol-keyed read cache: `[epoch, obj_bits, sym_bits,
-/// value_bits]`. Word 0 is published last with release ordering and read
+/// packed_shape_and_slot]`. Word 0 is published last with release ordering and read
 /// first with acquire by the emitted hit path.
 pub const SYMBOL_PIC_WORDS: usize = 4;
 /// A per-site Symbol-keyed read cache, as the emitted slot resolves it.
@@ -185,8 +191,8 @@ unsafe fn symbol_cache_of(slot: *mut SymbolPicCacheSlot) -> *mut u64 {
 
 /// Miss path for the generated weak own-Symbol-property IC.
 ///
-/// Cache layout (all `u64`): epoch, receiver bits, symbol bits, value bits.
-/// The receiver and value are intentionally *not* GC roots. The process-wide
+/// Cache layout (all `u64`): epoch, receiver bits, symbol bits, packed shape/slot.
+/// The receiver is intentionally *not* a GC root. The process-wide
 /// epoch changes after every collection, so a moved/reclaimed address can
 /// never hit; it also changes after every Symbol-property mutation, so a data
 /// write, deletion, or data/accessor conversion cannot return a stale value.
@@ -212,17 +218,16 @@ pub unsafe extern "C" fn js_object_get_symbol_property_ic_miss(
                 if sym_key != 0
                     && accessors::symbol_accessor_property_by_key(obj_key, sym_key).is_none()
                 {
-                    let value_bits = {
-                        let guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
-                        guard.as_ref().and_then(|map| {
-                            map.get(&obj_key).and_then(|entries| {
-                                entries
-                                    .iter()
-                                    .find(|(entry_sym, _)| *entry_sym == sym_key)
-                                    .map(|(_, value_bits)| *value_bits)
-                            })
-                        })
-                    };
+                    let obj = obj_key as *mut crate::object::ObjectHeader;
+                    let slot = crate::object::shaped_symbols::position(obj, sym_key);
+                    let shape = crate::object::shapes::object_shape_stamp(obj);
+                    // The generated hit reads the inline slot directly, so only
+                    // a slot inside the published live inline bound may prime.
+                    let slot = slot.filter(|&index| {
+                        shape != 0 && index < crate::object::object_live_slot_count(obj)
+                    });
+                    let value_bits =
+                        slot.map(|index| crate::object::js_object_get_field(obj, index).bits());
                     if let Some(value_bits) = value_bits {
                         let epoch = PERRY_SYMBOL_PROPERTY_IC_EPOCH
                             .load(std::sync::atomic::Ordering::Acquire);
@@ -230,11 +235,11 @@ pub unsafe extern "C" fn js_object_get_symbol_property_ic_miss(
                         // successful prime, never for a miss that cannot
                         // prime.
                         let cache = crate::object::pic_slot_resolve(cache_slot) as *mut u64;
-                        // Publish identity/value first and epoch last. The
+                        // Publish identity/layout first and epoch last. The
                         // generated hit path acquire-loads this first word.
                         *cache.add(1) = obj_bits;
                         *cache.add(2) = sym_f64.to_bits();
-                        *cache.add(3) = value_bits;
+                        *cache.add(3) = ((shape as u64) << 32) | slot.unwrap() as u64;
                         (&*(cache as *const std::sync::atomic::AtomicU64))
                             .store(epoch, std::sync::atomic::Ordering::Release);
                         return f64::from_bits(value_bits);
@@ -318,7 +323,8 @@ pub unsafe extern "C" fn js_object_get_symbol_then_field_ic_miss(
     let field_primed = !field_cache.is_null()
         && ((*field_cache)[0] as u64 & crate::object::shapes::PIC_ID_TOKEN_BIT) != 0;
     let symbol_primed = !symbol_cache.is_null()
-        && *symbol_cache.add(3) == intermediate_bits
+        && *symbol_cache.add(1) == obj_f64.to_bits()
+        && *symbol_cache.add(2) == sym_f64.to_bits()
         && (&*(symbol_cache as *const std::sync::atomic::AtomicU64))
             .load(std::sync::atomic::Ordering::Acquire)
             == PERRY_SYMBOL_PROPERTY_IC_EPOCH.load(std::sync::atomic::Ordering::Acquire);
@@ -411,8 +417,7 @@ unsafe fn object_header_ptr_from_value_bits(bits: u64) -> Option<usize> {
 unsafe fn receiver_ptr_from_value_bits(bits: u64) -> Option<usize> {
     let (raw, obj_type) = heap_ptr_and_type_from_value_bits(bits)?;
     if obj_type == crate::gc::GC_TYPE_OBJECT
-        || obj_type == crate::gc::GC_TYPE_ARRAY
-        || obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
+        || crate::object::prototype_chain::residual_prototype_owner_type(obj_type)
     {
         Some(raw)
     } else {
@@ -721,11 +726,10 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
         }
         return f64::from_bits(TAG_UNDEFINED);
     }
-    // Check CLASS_STATIC_SYMBOLS first when receiver is a class ref
+    // Check the class's static symbols first when receiver is a class ref
     // (top16 == 0x7FFE, INT32_TAG).
     let bits = obj_f64.to_bits();
-    if (bits >> 48) == 0x7FFE {
-        let class_id = (bits & 0xFFFF_FFFF) as u32;
+    if let Some(class_id) = crate::object::class_value::legacy_class_value_word(bits) {
         let sym_key = sym_key_from_f64(sym_f64);
         if sym_key != 0 {
             if let Some(v) =
@@ -734,7 +738,12 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
                 return v;
             }
         }
-        if let Some(vb) = class_static_symbol_lookup(class_id, sym_f64) {
+        let static_lookup = if crate::object::class_prototype_ref_id(obj_f64).is_some() {
+            class_static_symbol_lookup(class_id, sym_f64)
+        } else {
+            super::class_static_symbol_lookup_in_chain(class_id, sym_f64)
+        };
+        if let Some(vb) = static_lookup {
             return f64::from_bits(vb);
         }
         // #9101: statically-known well-known-symbol METHODS are registered
@@ -1790,7 +1799,10 @@ mod own_data_ic_tests {
             assert_eq!(got.to_bits(), first.to_bits());
             assert_eq!(cache[1], obj.to_bits());
             assert_eq!(cache[2], sym.to_bits());
-            assert_eq!(cache[3], first.to_bits());
+            assert_eq!(
+                cache[3],
+                (crate::object::shapes::object_shape_stamp(obj_ptr) as u64) << 32
+            );
             assert_eq!(
                 cache[0],
                 PERRY_SYMBOL_PROPERTY_IC_EPOCH.load(Ordering::Acquire)
@@ -1806,7 +1818,11 @@ mod own_data_ic_tests {
             );
             let got = js_object_get_symbol_property_ic_miss(obj, sym, &mut cache_slot);
             assert_eq!(got.to_bits(), second.to_bits());
-            assert_eq!(cache[3], second.to_bits());
+            assert_eq!(cache[3] as u32, 0);
+            assert_eq!(
+                crate::object::js_object_get_field(obj_ptr, cache[3] as u32).bits(),
+                second.to_bits()
+            );
         }
     }
 

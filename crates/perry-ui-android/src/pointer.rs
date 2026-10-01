@@ -19,7 +19,7 @@ use crate::jni_bridge;
 use jni::JValue;
 
 extern "C" {
-    fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+    fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
     fn js_pointer_event_new(x: f64, y: f64, button: u32, pointer_type: u32) -> f64;
 }
@@ -49,7 +49,7 @@ pub extern "C" fn Java_com_perry_app_PerryBridge_nativeInvokePointerCallback(
     }
     unsafe {
         let pe = js_pointer_event_new(x, y, button.max(0) as u32, POINTER_TYPE_TOUCH);
-        js_closure_call1(closure_ptr, pe);
+        js_closure_call1(closure_ptr, perry_ffi::JsThis::UNDEFINED, pe);
     }
 }
 

@@ -249,12 +249,16 @@ pub(crate) fn compiled_function_source_for_closure(closure: usize) -> Option<Str
 }
 
 pub(crate) fn function_source_for_closure(closure: usize) -> String {
+    // A class function object renders its class's retained source.
+    if let Some(class_id) = crate::object::class_value::class_closure_id(closure) {
+        return crate::object::class_ref_to_string(class_id).into_owned();
+    }
     compiled_function_source_for_closure(closure).unwrap_or_else(|| {
         let closure_ptr = closure as *const ClosureHeader;
         let func_ptr = unsafe {
             crate::closure::bound_method_source_func_ptr(closure_ptr)
                 .or_else(|| crate::object::class_accessor_source_func_ptr(closure_ptr))
-                .unwrap_or((*closure_ptr).func_ptr as usize)
+                .unwrap_or((*closure_ptr).code() as usize)
         };
         crate::builtins::function_source_for_func_ptr(func_ptr)
     })
@@ -1145,15 +1149,13 @@ fn script_metadata(script_value: f64) -> Option<ScriptMetadata> {
 fn install_script_method(
     obj: *mut ObjectHeader,
     name: &str,
-    func: extern "C" fn(*const ClosureHeader, f64, f64) -> f64,
+    info: *const crate::closure::JsFunctionInfo,
     arity: u32,
 ) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj = scope.root_raw_mut_ptr(obj);
     let key = scope.root_string_ptr(field_key(name));
-    let func_ptr = func as *const u8;
-    crate::closure::js_register_closure_arity(func_ptr, 2);
-    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    let closure = crate::closure::js_closure_alloc(info, 0);
     let closure = scope.root_raw_mut_ptr(closure);
     closure.with_mut_ptr::<ClosureHeader, _>(|closure| {
         crate::object::set_builtin_closure_length(closure as usize, arity)
@@ -1175,8 +1177,8 @@ fn install_script_method(
     });
 }
 
-fn script_receiver() -> f64 {
-    crate::object::js_implicit_this_get()
+fn script_receiver(this: crate::closure::JsThis) -> f64 {
+    this.as_f64()
 }
 
 pub(crate) fn install_script_prototypes(constructor: f64) {
@@ -1236,33 +1238,35 @@ pub(crate) fn install_script_prototypes(constructor: f64) {
             PropertyAttrs::new(true, false, true),
         )
     });
+    // One info for both `runInContext` installs, so the two share a body identity.
+    let run_in_context = crate::fn_info!(vm_script_run_in_context_method, 2; with_declared(2));
     proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
         install_script_method(
             proto,
             "runInThisContext",
-            vm_script_run_in_this_context_method,
+            crate::fn_info!(vm_script_run_in_this_context_method, 2; with_declared(2)),
             1,
         )
     });
     proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
-        install_script_method(proto, "runInContext", vm_script_run_in_context_method, 2)
+        install_script_method(proto, "runInContext", run_in_context, 2)
     });
     proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
         install_script_method(
             proto,
             "runInNewContext",
-            vm_script_run_in_new_context_method,
+            crate::fn_info!(vm_script_run_in_new_context_method, 2; with_declared(2)),
             2,
         )
     });
     base.with_mut_ptr::<ObjectHeader, _>(|base| {
-        install_script_method(base, "runInContext", vm_script_run_in_context_method, 2)
+        install_script_method(base, "runInContext", run_in_context, 2)
     });
     base.with_mut_ptr::<ObjectHeader, _>(|base| {
         install_script_method(
             base,
             "createCachedData",
-            vm_script_create_cached_data_method,
+            crate::fn_info!(vm_script_create_cached_data_method, 2; with_declared(2)),
             0,
         )
     });
@@ -1319,10 +1323,11 @@ fn make_script(code: String, options: f64) -> f64 {
 
 extern "C" fn vm_script_create_cached_data_method(
     _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
     _unused1: f64,
     _unused2: f64,
 ) -> f64 {
-    let script = script_receiver();
+    let script = script_receiver(this);
     let Some(metadata) = script_metadata(script) else {
         return cached_data_buffer(CACHE_KIND_SCRIPT, 0);
     };
@@ -1334,10 +1339,11 @@ extern "C" fn vm_script_create_cached_data_method(
 
 extern "C" fn vm_script_run_in_this_context_method(
     _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
     _options: f64,
     _unused: f64,
 ) -> f64 {
-    let script = script_receiver();
+    let script = script_receiver(this);
     let Some(metadata) = script_metadata(script) else {
         return undefined_value();
     };
@@ -1354,10 +1360,11 @@ extern "C" fn vm_script_run_in_this_context_method(
 
 extern "C" fn vm_script_run_in_context_method(
     _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
     contextified_object: f64,
     _options: f64,
 ) -> f64 {
-    let script = script_receiver();
+    let script = script_receiver(this);
     let Some(metadata) = script_metadata(script) else {
         return undefined_value();
     };
@@ -1373,10 +1380,11 @@ extern "C" fn vm_script_run_in_context_method(
 
 extern "C" fn vm_script_run_in_new_context_method(
     _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
     context_object: f64,
     options: f64,
 ) -> f64 {
-    let script = script_receiver();
+    let script = script_receiver(this);
     let Some(metadata) = script_metadata(script) else {
         return undefined_value();
     };

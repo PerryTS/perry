@@ -105,6 +105,8 @@ pub extern "C" fn js_object_get_field_ic_fast_miss(
 ) -> f64 {
     // Under feedback the fast entry asked nothing, so the probe runs here
     // (and records its observe and guard pass, as the single helper did).
+    // Charter step 5: migrate-on-miss (DESIGN §1.5 step 4).
+    crate::object::field_rep_store::migrate_on_miss_value(obj_bits as u64);
     let probe_mru = crate::typed_feedback::typed_feedback_active();
     get_field_ic_dispatch(obj_bits, key, site_id, cache_slot, probe_mru)
 }

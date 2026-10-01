@@ -68,7 +68,7 @@ pub fn bound_native_callable_export_value(module_name: &str, property_name: &str
         callable_module_name.as_ptr(),
         callable_module_name.len(),
     ));
-    let closure = crate::closure::js_closure_alloc(crate::closure::BOUND_METHOD_FUNC_PTR, 3);
+    let closure = crate::closure::js_closure_alloc(&crate::closure::BOUND_METHOD_INFO, 3);
     let closure = scope.root_raw_mut_ptr(closure);
     closure.with_mut_ptr(|c: *mut crate::closure::ClosureHeader| {
         crate::closure::js_closure_set_capture_f64(c, 0, ns.get_nanbox_f64());
@@ -192,15 +192,14 @@ fn attach_stream_promisify_custom(pipeline_value: f64, property_name: &str) -> f
     target.get_nanbox_f64()
 }
 
+/// `info` is the rest body's (`with_rest(fixed)`); `.length` is `length`.
 fn async_hooks_static_method_value(
-    func_ptr: *const u8,
+    info: *const crate::closure::JsFunctionInfo,
     name: &str,
-    fixed_arity: u32,
     length: u32,
 ) -> f64 {
-    crate::closure::js_register_closure_rest(func_ptr, fixed_arity);
     let scope = crate::gc::RuntimeHandleScope::new();
-    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    let closure = crate::closure::js_closure_alloc(info, 0);
     if closure.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
@@ -220,6 +219,7 @@ fn async_hooks_static_method_value(
 
 extern "C" fn fs_namespace_descriptor_getter_thunk(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     unsafe {
         let property_ptr = crate::closure::js_closure_get_capture_ptr(closure, 0) as *const u8;
@@ -230,6 +230,7 @@ extern "C" fn fs_namespace_descriptor_getter_thunk(
 
 extern "C" fn fs_namespace_descriptor_setter_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _value: f64,
 ) -> f64 {
     f64::from_bits(crate::value::TAG_UNDEFINED)
@@ -242,8 +243,7 @@ pub(crate) fn fs_namespace_descriptor_getter_value(property_name: &str) -> f64 {
     }
 
     let property_bytes: &'static [u8] = property_name.as_bytes().to_vec().leak();
-    let func_ptr = fs_namespace_descriptor_getter_thunk as *const u8;
-    crate::closure::js_register_closure_arity(func_ptr, 0);
+    let func_ptr = crate::fn_info!(fs_namespace_descriptor_getter_thunk, 0; with_declared(0));
     let closure = crate::closure::js_closure_alloc(func_ptr, 2);
     crate::closure::js_closure_set_capture_ptr(closure, 0, property_bytes.as_ptr() as i64);
     crate::closure::js_closure_set_capture_ptr(closure, 1, property_bytes.len() as i64);
@@ -268,8 +268,7 @@ pub(crate) fn fs_namespace_descriptor_setter_value(property_name: &str) -> f64 {
         return f64::from_bits(bits);
     }
 
-    let func_ptr = fs_namespace_descriptor_setter_thunk as *const u8;
-    crate::closure::js_register_closure_arity(func_ptr, 1);
+    let func_ptr = crate::fn_info!(fs_namespace_descriptor_setter_thunk, 1; with_declared(1));
     let closure = crate::closure::js_closure_alloc(func_ptr, 0);
     let name = format!("set {property_name}");
     set_bound_native_closure_name(closure, &name);
@@ -306,12 +305,14 @@ pub(crate) fn is_cluster_emitter_method(prop: &str) -> bool {
 
 extern "C" fn sqlite_statement_sync_constructor_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     crate::fs::validate::throw_error_with_code("Illegal constructor", "ERR_ILLEGAL_CONSTRUCTOR")
 }
 
 extern "C" fn sqlite_session_constructor_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     crate::fs::validate::throw_error_with_code("Illegal constructor", "ERR_ILLEGAL_CONSTRUCTOR")
 }
@@ -323,8 +324,8 @@ pub(crate) fn sqlite_statement_sync_constructor_value() -> f64 {
             return f64::from_bits(cached);
         }
 
-        let func_ptr = sqlite_statement_sync_constructor_thunk as *const u8;
-        crate::closure::js_register_closure_arity(func_ptr, 0);
+        let func_ptr =
+            crate::fn_info!(sqlite_statement_sync_constructor_thunk, 0; with_declared(0));
         let closure = crate::closure::js_closure_alloc_singleton(func_ptr);
         if closure.is_null() {
             return f64::from_bits(crate::value::TAG_UNDEFINED);
@@ -343,8 +344,7 @@ pub(crate) fn sqlite_session_constructor_value() -> f64 {
             return f64::from_bits(cached);
         }
 
-        let func_ptr = sqlite_session_constructor_thunk as *const u8;
-        crate::closure::js_register_closure_arity(func_ptr, 0);
+        let func_ptr = crate::fn_info!(sqlite_session_constructor_thunk, 0; with_declared(0));
         let closure = crate::closure::js_closure_alloc_singleton(func_ptr);
         if closure.is_null() {
             return f64::from_bits(crate::value::TAG_UNDEFINED);
@@ -371,6 +371,7 @@ fn native_callable_export_display_name<'a>(module: &str, prop: &'a str) -> &'a s
 
 extern "C" fn buffer_constructor_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
     encoding_or_offset: f64,
     length: f64,
@@ -416,12 +417,15 @@ extern "C" fn buffer_constructor_thunk(
     crate::value::js_nanbox_pointer(buf as i64)
 }
 
-extern "C" fn buffer_prototype_method_thunk(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn buffer_prototype_method_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
 /// `this` for a `Buffer.prototype.offset`/`.parent` accessor read, resolved
-/// through `IMPLICIT_THIS` (the same mechanism `require_webcrypto_this` in
+/// from the getter's `this` argument (the same mechanism `require_webcrypto_this` in
 /// `ctor_thunks.rs` uses for Web Crypto getters). `None` for a non-buffer
 /// receiver — Node's real getters answer `undefined` rather than throwing
 /// (`isInstance(this, Buffer) ? … : undefined`), and ordinary Buffer/typed-
@@ -429,8 +433,8 @@ extern "C" fn buffer_prototype_method_thunk(_closure: *const crate::closure::Clo
 /// `.offset`/`.parent` directly — see `get_field_by_name_tail.rs`); this only
 /// matters for reflection (`Object.getOwnPropertyDescriptor(Buffer.prototype,
 /// "offset").get.call(x)`) and enumeration.
-fn buffer_prototype_this_addr() -> Option<usize> {
-    let this_bits = crate::object::IMPLICIT_THIS.with(|c| c.get());
+fn buffer_prototype_this_addr(this: crate::closure::JsThis) -> Option<usize> {
+    let this_bits = this.bits();
     let jv = crate::value::JSValue::from_bits(this_bits);
     if !jv.is_pointer() {
         return None;
@@ -447,8 +451,9 @@ fn buffer_prototype_this_addr() -> Option<usize> {
 /// Node's `Buffer.prototype`.
 extern "C" fn buffer_prototype_parent_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    match buffer_prototype_this_addr() {
+    match buffer_prototype_this_addr(this) {
         Some(addr) => {
             crate::value::js_nanbox_pointer(crate::buffer::buffer_backing_array_buffer(addr) as i64)
         }
@@ -460,8 +465,9 @@ extern "C" fn buffer_prototype_parent_getter_thunk(
 /// `.byteOffset`, still a real own accessor on Node's `Buffer.prototype`.
 extern "C" fn buffer_prototype_offset_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    match buffer_prototype_this_addr() {
+    match buffer_prototype_this_addr(this) {
         Some(addr) => crate::buffer::buffer_byte_offset(addr) as f64,
         None => f64::from_bits(crate::value::TAG_UNDEFINED),
     }
@@ -472,12 +478,15 @@ extern "C" fn buffer_prototype_offset_getter_thunk(
 /// `ObjectDefineProperty(Buffer.prototype, name, { enumerable: true, get()
 /// {…} })` (no `configurable: true`, so it defaults false). Mirrors
 /// `install_webcrypto_proto_getter`'s shape for a `*mut ObjectHeader` proto.
-fn install_buffer_prototype_getter(proto_obj: *mut ObjectHeader, name: &str, func_ptr: *const u8) {
+fn install_buffer_prototype_getter(
+    proto_obj: *mut ObjectHeader,
+    name: &str,
+    info: *const crate::closure::JsFunctionInfo,
+) {
     if proto_obj.is_null() {
         return;
     }
-    crate::closure::js_register_closure_arity(func_ptr, 0);
-    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    let closure = crate::closure::js_closure_alloc(info, 0);
     let value = if closure.is_null() {
         f64::from_bits(crate::value::TAG_UNDEFINED)
     } else {
@@ -757,6 +766,7 @@ fn attach_assert_prototype(constructor_value: f64) {
 
 extern "C" fn sqlite_database_sync_prototype_method_thunk(
     closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     arg0: f64,
     arg1: f64,
     arg2: f64,
@@ -764,7 +774,7 @@ extern "C" fn sqlite_database_sync_prototype_method_thunk(
     unsafe {
         let method_name_ptr = crate::closure::js_closure_get_capture_ptr(closure, 0) as *const i8;
         let method_name_len = crate::closure::js_closure_get_capture_ptr(closure, 1) as usize;
-        let receiver = crate::object::js_implicit_this_get();
+        let receiver = this.as_f64();
         let args = [arg0, arg1, arg2];
         crate::object::js_native_call_method(
             receiver,
@@ -802,8 +812,8 @@ fn attach_sqlite_database_sync_prototype(constructor_value: f64) {
         super::PropertyAttrs::new(true, false, true),
     );
 
-    let func_ptr = sqlite_database_sync_prototype_method_thunk as *const u8;
-    crate::closure::js_register_closure_arity(func_ptr, 3);
+    let func_ptr =
+        crate::fn_info!(sqlite_database_sync_prototype_method_thunk, 3; with_declared(3));
     for method in SQLITE_DATABASE_SYNC_PROTOTYPE_METHODS {
         let leaked: &'static [u8] = method.as_bytes().to_vec().leak();
         let method_closure = crate::closure::js_closure_alloc(func_ptr, 2);
@@ -849,8 +859,8 @@ fn attach_sqlite_session_prototype(constructor_value: f64) {
         return;
     }
 
-    let func_ptr = sqlite_database_sync_prototype_method_thunk as *const u8;
-    crate::closure::js_register_closure_arity(func_ptr, 3);
+    let func_ptr =
+        crate::fn_info!(sqlite_database_sync_prototype_method_thunk, 3; with_declared(3));
     for method in SQLITE_SESSION_PROTOTYPE_METHODS {
         let leaked: &'static [u8] = method.as_bytes().to_vec().leak();
         let method_closure = crate::closure::js_closure_alloc(func_ptr, 2);
@@ -937,14 +947,13 @@ pub(crate) fn buffer_constructor_value() -> f64 {
         // mint, mirroring `install_native_module_vtable()` above.
         super::super::native_module_registry::js_nm_install_buffer();
 
-        let func_ptr = buffer_constructor_thunk as *const u8;
+        let func_ptr = crate::fn_info!(buffer_constructor_thunk, 3; with_declared(3));
         let closure = crate::closure::js_closure_alloc(func_ptr, 0);
         if closure.is_null() {
             return f64::from_bits(crate::value::TAG_UNDEFINED);
         }
         let scope = crate::gc::RuntimeHandleScope::new();
         let closure = scope.root_raw_mut_ptr(closure);
-        crate::closure::js_register_closure_arity(func_ptr, 3);
         closure.with_mut_ptr::<crate::closure::ClosureHeader, _>(|ptr| {
             set_bound_native_closure_name(ptr, "Buffer")
         });
@@ -997,7 +1006,7 @@ pub(crate) fn buffer_constructor_value() -> f64 {
             });
 
             for method in BUFFER_PROTOTYPE_METHODS {
-                let method_ptr = buffer_prototype_method_thunk as *const u8;
+                let method_ptr = crate::fn_info!(buffer_prototype_method_thunk, 0);
                 let method_closure = crate::closure::js_closure_alloc(method_ptr, 0);
                 if method_closure.is_null() {
                     continue;
@@ -1028,12 +1037,12 @@ pub(crate) fn buffer_constructor_value() -> f64 {
                 install_buffer_prototype_getter(
                     proto,
                     "parent",
-                    buffer_prototype_parent_getter_thunk as *const u8,
+                    crate::fn_info!(buffer_prototype_parent_getter_thunk, 0; with_declared(0)),
                 );
                 install_buffer_prototype_getter(
                     proto,
                     "offset",
-                    buffer_prototype_offset_getter_thunk as *const u8,
+                    crate::fn_info!(buffer_prototype_offset_getter_thunk, 0; with_declared(0)),
                 );
             });
             let proto_value = proto.with_mut_ptr(|proto: *mut ObjectHeader| {
@@ -1104,6 +1113,7 @@ fn attach_crypto_key_object_shape(closure_addr: usize, constructor_value: f64) {
 
 extern "C" fn x509_issuer_certificate_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
@@ -1125,12 +1135,10 @@ fn attach_crypto_x509_certificate_shape(closure_addr: usize, constructor_value: 
     );
 
     unsafe {
-        crate::closure::js_register_closure_arity(
-            x509_issuer_certificate_getter_thunk as *const u8,
+        let getter = crate::closure::js_closure_alloc(
+            crate::fn_info!(x509_issuer_certificate_getter_thunk, 0; with_declared(0)),
             0,
         );
-        let getter =
-            crate::closure::js_closure_alloc(x509_issuer_certificate_getter_thunk as *const u8, 0);
         if !getter.is_null() {
             let getter_bits = crate::value::js_nanbox_pointer(getter as i64).to_bits();
             super::object_ops::install_builtin_getter(proto, "issuerCertificate", getter_bits);
@@ -1342,12 +1350,13 @@ pub(crate) fn scan_tls_derived_prototype_roots_mut(
 
 extern "C" fn tls_prototype_method_thunk(
     closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     unsafe {
         let name_ptr = crate::closure::js_closure_get_capture_ptr(closure, 0) as *const i8;
         let name_len = crate::closure::js_closure_get_capture_ptr(closure, 1) as usize;
-        let receiver = crate::object::js_implicit_this_get();
+        let receiver = this.as_f64();
         let args_array = crate::value::js_nanbox_get_pointer(rest);
         crate::object::js_native_call_method_apply(receiver, name_ptr, name_len, args_array)
     }
@@ -1396,8 +1405,7 @@ fn attach_tls_constructor_prototype(constructor_value: f64, constructor_name: &s
         super::super::PropertyAttrs::new(true, false, true),
     );
 
-    let thunk = tls_prototype_method_thunk as *const u8;
-    crate::closure::js_register_closure_rest(thunk, 0);
+    let thunk = crate::fn_info!(tls_prototype_method_thunk, 1; with_rest(0));
     for &(name, length) in methods {
         let method = crate::closure::js_closure_alloc(thunk, 2);
         if method.is_null() {
@@ -1509,7 +1517,7 @@ pub(crate) unsafe fn bound_native_callable_module_and_method(
     // host) before probing `CLOSURE_MAGIC`. Refs test262
     // class/subclass/superclass-{arrow,async,generator,async-generator}-function.
     if !crate::closure::is_closure_ptr(closure as usize)
-        || (*closure).func_ptr != crate::closure::BOUND_METHOD_FUNC_PTR
+        || (*closure).code() != crate::closure::BOUND_METHOD_FUNC_PTR
     {
         return None;
     }
@@ -1642,6 +1650,15 @@ pub(crate) unsafe fn nm_attach_tls(
         attach_tls_secure_context_prototype(value);
     } else if matches!(property_name, "Server" | "TLSSocket") {
         value = attach_tls_constructor_prototype(value, property_name);
+    }
+    value
+}
+
+/// #10454: `http.ServerResponse.prototype` carries its methods so
+/// `util.inherits` / `setPrototypeOf` / `extends` subclasses inherit them.
+pub(crate) unsafe fn nm_attach_http(property_name: &str, value: f64, _closure_addr: usize) -> f64 {
+    if property_name == "ServerResponse" {
+        return crate::object::native_this_alias::attach_http_server_response_prototype(value);
     }
     value
 }
@@ -1819,9 +1836,8 @@ pub(crate) unsafe fn nm_attach_async_hooks(
             ),
         );
         let bind = scope.root_nanbox_f64(async_hooks_static_method_value(
-            crate::async_hooks::js_async_local_storage_static_bind_method as *const u8,
+            crate::fn_info!(crate::async_hooks::js_async_local_storage_static_bind_method, 2; with_rest(1)),
             "bind",
-            1,
             1,
         ));
         crate::closure::closure_set_dynamic_prop(
@@ -1830,9 +1846,8 @@ pub(crate) unsafe fn nm_attach_async_hooks(
             bind.get_nanbox_f64(),
         );
         let snapshot = scope.root_nanbox_f64(async_hooks_static_method_value(
-            crate::async_hooks::js_async_local_storage_static_snapshot_method as *const u8,
+            crate::fn_info!(crate::async_hooks::js_async_local_storage_static_snapshot_method, 1; with_rest(0)),
             "snapshot",
-            0,
             0,
         ));
         crate::closure::closure_set_dynamic_prop(
@@ -1849,9 +1864,8 @@ pub(crate) unsafe fn nm_attach_async_hooks(
             ),
         );
         let bind = scope.root_nanbox_f64(async_hooks_static_method_value(
-            crate::async_hooks::js_async_resource_static_bind_method as *const u8,
+            crate::fn_info!(crate::async_hooks::js_async_resource_static_bind_method, 4; with_rest(3)),
             "bind",
-            3,
             3,
         ));
         crate::closure::closure_set_dynamic_prop(

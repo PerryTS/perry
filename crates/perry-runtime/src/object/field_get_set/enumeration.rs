@@ -171,8 +171,14 @@ pub extern "C" fn js_object_keys_value(value: f64) -> *mut ArrayHeader {
         if super::super::class_prototype_ref_id(value).is_none() {
             // Static accessors are defined before static fields, so an
             // enumerable one (#10480) precedes them.
-            let mut names =
-                super::super::class_registry::static_enumerable_accessor_names(class_id);
+            let mut names: Vec<String> =
+                crate::object::class_value::class_static_accessor_names(class_id)
+                    .into_iter()
+                    .filter(|name| {
+                        crate::object::class_value::class_static_own_accessor(class_id, name)
+                            .is_some_and(|(_, enumerable, _)| enumerable)
+                    })
+                    .collect();
             names.extend(super::super::class_registry::class_own_enumerable_field_names(class_id));
             super::super::descriptors::sort_property_names_ecma(&mut names);
             let arr = crate::array::js_array_alloc(names.len().max(1) as u32);
@@ -656,7 +662,8 @@ fn closure_dynamic_enumerable_props(ptr: usize) -> Vec<(String, f64)> {
         } else {
             // "name"
             let func_ptr =
-                unsafe { (*(ptr as *const crate::closure::ClosureHeader)).func_ptr as usize };
+                crate::closure::get_valid_func_ptr(ptr as *const crate::closure::ClosureHeader)
+                    as usize;
             let fname = crate::builtins::function_name_for_ptr(func_ptr).unwrap_or_default();
             let s = crate::string::js_string_from_bytes(fname.as_ptr(), fname.len() as u32);
             f64::from_bits(JSValue::string_ptr(s).bits())
@@ -1545,7 +1552,8 @@ fn js_object_keys_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
                 // path below skips holes for free (`js_string_key_bytes`
                 // rejects them); this raw-push path must skip explicitly or
                 // `Object.keys` would emit the hole marker itself.
-                if key_val.bits() == crate::value::TAG_HOLE
+                if !key_val.is_any_string()
+                    || key_val.bits() == crate::value::TAG_HOLE
                     || key_val.bits() == crate::value::TAG_UNDEFINED
                 {
                     // Tombstoned slot from an O(1) delete. `js_array_get` translates

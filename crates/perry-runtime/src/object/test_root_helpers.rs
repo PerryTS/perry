@@ -166,6 +166,8 @@ pub(crate) fn test_realm_owned_root_snapshot() -> Vec<(&'static str, usize, u64)
             "ASYNC_GENERATOR_PROTOTYPE_PTR",
             &ASYNC_GENERATOR_PROTOTYPE_PTR,
         ),
+        ("OBJECT_INTRINSIC_PTR", &OBJECT_INTRINSIC_PTR),
+        ("OBJECT_INTRINSIC_PROTO_PTR", &OBJECT_INTRINSIC_PROTO_PTR),
         ("LOCAL_STORAGE_PTR", &LOCAL_STORAGE_PTR),
         ("SESSION_STORAGE_PTR", &SESSION_STORAGE_PTR),
         (

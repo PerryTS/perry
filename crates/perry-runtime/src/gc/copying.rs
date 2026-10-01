@@ -1,4 +1,4 @@
-use super::copying_parent_facts::weak_holder_fact;
+use super::copying_parent_facts::{weak_holder_fact, ParentRemembering};
 use super::copying_phase::{
     finalize_dead_copied_minor_from_space_side_allocations, CopyingMinorPhase as Phase,
     CopyingMinorPhaseDiag as PhaseDiag,
@@ -416,8 +416,15 @@ impl CopyingNurseryCollector {
         if addr == self.memo_addr {
             return Some(self.memo_result);
         }
-        let ptr = self.ptrs.classify(addr)?;
+        let ptr = self.ptrs.classify_inline(addr)?;
         Some(self.mark_classified(addr, ptr))
+    }
+
+    /// The memo's answer for `addr`, if `addr` is the last address a mark
+    /// classified successfully this cycle. See `memo_addr`.
+    #[inline(always)]
+    pub(super) fn memo_hit(&self, addr: usize) -> Option<usize> {
+        (addr == self.memo_addr).then_some(self.memo_result)
     }
 
     /// [`mark_addr`](Self::mark_addr) for an address the caller has already
@@ -439,7 +446,7 @@ impl CopyingNurseryCollector {
             CopyingPointerKind::Longlived | CopyingPointerKind::Malloc => {
                 unsafe {
                     let flags = (*ptr.header).gc_flags;
-                    if flags & (GC_FLAG_MARKED | GC_FLAG_PINNED) == 0 {
+                    if flags & GC_FLAG_MARKED == 0 && !super::pin::pinned_counts_as_marked(flags) {
                         (*ptr.header).gc_flags = flags | GC_FLAG_MARKED;
                         self.worklist.push(ptr.header);
                         self.survival_push();
@@ -710,17 +717,27 @@ impl CopyingNurseryCollector {
     }
 
     pub(super) unsafe fn scan_object_fields(&mut self, header: *mut GcHeader) {
+        // The common case, written out (#11549): see `gc/copying_object_scan.rs`.
+        if self.scan_plain_object(header) {
+            return;
+        }
         let mut changed = false;
         // LAZY, not eager. Reading the fact once per traced OBJECT regressed
         // all six fixtures (+0.88 % to +5.09 % instructions): a great many
         // traced objects — strings, pointer-free arrays — have no slot to
         // visit at all, and paid for an answer nobody then asked for.
         let mut weak_holder: Option<bool> = None;
-        visit_gc_rewrite_slots(header, |slot| unsafe {
+        // Same laziness as the weak fact, and the same per-object shape: see
+        // `ParentRemembering`.
+        let mut remembering: Option<ParentRemembering> = None;
+        let skip_remembering = self.skip_remembering;
+        visit_gc_rewrite_slots_inline(header, |slot| unsafe {
             slot.record_layout_read();
             let before = *slot.slot;
             let weak = *weak_holder.get_or_insert_with(|| weak_holder_fact(header));
-            self.visit_slot_with_weak_fact(slot.slot, header, weak, slot.external());
+            let remembering =
+                *remembering.get_or_insert_with(|| ParentRemembering::of(header, skip_remembering));
+            self.visit_slot_with_parent_facts(slot, header, weak, remembering);
             changed |= *slot.slot != before;
         });
         if changed {

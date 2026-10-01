@@ -54,7 +54,7 @@ use ksni::{Handle, MenuItem, ToolTip, TrayMethods};
 use std::sync::{Arc, Mutex, OnceLock};
 
 extern "C" {
-    fn js_closure_call0(closure: *const u8) -> f64;
+    fn js_closure_call0(closure: *const u8, this: perry_ffi::JsThis) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
 }
 
@@ -176,7 +176,7 @@ fn invoke_callback_on_main(callback: f64) {
         let ptr = unsafe { js_nanbox_get_pointer(callback) } as *const u8;
         if !ptr.is_null() {
             unsafe {
-                js_closure_call0(ptr);
+                js_closure_call0(ptr, perry_ffi::JsThis::UNDEFINED);
             }
         }
     });

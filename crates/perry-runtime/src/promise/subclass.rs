@@ -152,11 +152,16 @@ pub extern "C" fn js_promise_subclass_init(this: f64, executor: f64) -> f64 {
     // closures and raw-pointer-bits closures, so `executor` is passed as-is.
     let args = [resolve.get_nanbox_f64(), reject.get_nanbox_f64()];
     if let Err(reason) = super::combinators::combinator_catch_js(|| unsafe {
-        crate::closure::js_native_call_value(executor.get_nanbox_f64(), args.as_ptr(), args.len())
+        crate::closure::js_native_call_value(
+            executor.get_nanbox_f64(),
+            crate::closure::plain_call_receiver(),
+            args.as_ptr(),
+            args.len(),
+        )
     }) {
         let reject = crate::value::js_nanbox_get_pointer(reject.get_nanbox_f64())
             as *const crate::closure::ClosureHeader;
-        crate::closure::js_closure_call1(reject, reason);
+        crate::closure::js_closure_call1(reject, crate::closure::plain_call_receiver(), reason);
     }
 
     // #7795: arm the probe gate before the field exists, so no reader can

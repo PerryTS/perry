@@ -1,0 +1,345 @@
+//! The static-id seeds (design step 4, §7.3): the mint adopts a requested
+//! static id only on a by-facts miss, and a refusal (the id outside its band,
+//! or already naming other facts) aborts: ids are assigned by content.
+use super::*;
+use crate::object::shapes::{is_shape_id, SHAPE_ID_BASE, STATIC_SHAPE_ID_END};
+
+fn seed(requested: u32, names: &[&str]) -> u32 {
+    seed_with_rep(requested, names, 0)
+}
+
+fn seed_with_rep(requested: u32, names: &[&str], rep: u64) -> u32 {
+    let packed: Vec<u8> = names
+        .iter()
+        .flat_map(|n| n.bytes().chain(std::iter::once(0)))
+        .collect();
+    js_shape_seed_plain(
+        requested,
+        packed.as_ptr(),
+        packed.len() as u32,
+        names.len() as u32,
+        names.len() as u32,
+        rep,
+    )
+}
+
+fn is_carrier(id: u32) -> bool {
+    shapes::test_shape_record_is_carrier(id)
+}
+
+#[test]
+fn a_seed_mints_the_requested_id_and_every_later_mint_of_those_facts_resolves_to_it() {
+    let requested = SHAPE_ID_BASE + 0x1234;
+    let id = seed(requested, &["lt4s_a", "lt4s_b"]);
+    assert_eq!(id, requested, "the seed must mint the requested static id");
+    assert!(
+        is_carrier(id),
+        "a seeded record must carry RECORD_FLAG_EXTERNAL_CARRIER (never pruned)"
+    );
+    // The ordinary literal birth of the same key list (the canonical node,
+    // count = live bound, proto 0) reaches the seeded record.
+    let keys = unsafe { canonical_keys_for_names(&[b"lt4s_a", b"lt4s_b"]) };
+    assert_eq!(shapes::shape_id_for_keys_ensure(keys.arr(), 2), requested);
+    // A second seed of the same facts under another id finds the first.
+    assert_eq!(
+        seed(SHAPE_ID_BASE + 0x1235, &["lt4s_a", "lt4s_b"]),
+        requested
+    );
+    assert!(
+        shapes::shape_descriptor_by_id(SHAPE_ID_BASE + 0x1235).is_none(),
+        "a by-facts hit must not mint the second requested id"
+    );
+}
+
+/// Charter step 5 x step 4: a literal born with `F64` lanes is seeded with
+/// its birth rep, so the seeded id is the shape every lazy mint of the same
+/// (keys, live, rep) reaches: the literal's own class-keys mint (module init
+/// of its anonymous class) and a chain of Number key-adds. A Number stored
+/// into an `F64` lane of the seeded shape keeps the shape (the store check's
+/// fast outcome: no generalization, the canonical double in the slot).
+/// Sabotage: a seed that drops its rep mints the all-`Any` facts under the
+/// static id, and the seeded record no longer carries the birth rep (nor
+/// would the lazy mint below reach it).
+#[test]
+fn a_rep_literal_seed_is_the_shape_its_lazy_mints_reach_and_keeps_its_f64_lanes() {
+    use crate::object::field_rep::{slot_rep, with_slot_rep, REP_F64};
+    use crate::object::shapes::object_shape_stamp;
+    let _lock = crate::gc::global_side_table_test_lock();
+    const REP_SEED_ANON_CLASS_ID: u32 = 0x0075_5eed;
+    let rep = with_slot_rep(with_slot_rep(0, 0, REP_F64), 1, REP_F64);
+    let requested = SHAPE_ID_BASE + 0x5678;
+    let id = seed_with_rep(requested, &["lt5s_a", "lt5s_b"], rep);
+    assert_eq!(id, requested, "the seed must mint the requested static id");
+    let record = shapes::shape_descriptor_by_id(id).expect("seeded record");
+    assert_eq!(record.rep, rep, "the seeded shape must carry the birth rep");
+    assert_eq!(record.proto_id, shapes::PROTO_ID_DEFAULT);
+
+    // The literal's module-init mint WITHOUT a static id (a module whose
+    // guards embed none): the lazy mint of the same facts is the seeded id.
+    unsafe { crate::object::js_register_anon_shape_class_id(REP_SEED_ANON_CLASS_ID) };
+    let packed = b"lt5s_a\0lt5s_b\0";
+    let keys = crate::object::js_build_class_keys_array(
+        REP_SEED_ANON_CLASS_ID,
+        2,
+        packed.as_ptr(),
+        packed.len() as u32,
+        0,
+    ) as u64;
+    assert_eq!(
+        shapes::js_object_shape_id_for_class_keys(keys, 2, REP_SEED_ANON_CLASS_ID, rep),
+        requested,
+        "the literal's lazy mint must resolve to the seeded id"
+    );
+    // ...and its static request (module init with the id) hits.
+    assert_eq!(
+        js_object_shape_id_for_class_keys_static(
+            keys,
+            2,
+            2,
+            REP_SEED_ANON_CLASS_ID,
+            requested,
+            rep
+        ),
+        requested
+    );
+    // The all-`Any` sibling is other facts: never the static id.
+    let any = shapes::js_object_shape_id_for_class_keys(keys, 2, REP_SEED_ANON_CLASS_ID, 0);
+    assert_ne!(
+        any, requested,
+        "the rep is identity: Any lanes are another shape"
+    );
+
+    unsafe {
+        // Number key-adds on a plain `{}` earn F64 lanes and reach the seed.
+        let obj = crate::object::js_object_alloc_with_parent(0, 0, 2);
+        crate::object::shapes::store_kind::premark_plain_ordinary(obj);
+        for (name, v) in [("lt5s_a", 1.5f64), ("lt5s_b", 2.5)] {
+            let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            crate::object::js_object_set_field_by_name(obj, key, v);
+        }
+        assert_eq!(
+            object_shape_stamp(obj),
+            requested,
+            "a Number key-add chain of these keys must reach the seeded id"
+        );
+        // An F64-lane store of a Number stays on the shape.
+        crate::object::store_object_field_slot(obj, 1, crate::value::INT32_TAG | 7);
+        assert_eq!(
+            object_shape_stamp(obj),
+            requested,
+            "a Number store never transitions"
+        );
+        let fields =
+            (obj as *mut u8).add(std::mem::size_of::<crate::object::ObjectHeader>()) as *const u64;
+        assert_eq!(
+            *fields.add(1),
+            7.0f64.to_bits(),
+            "the lane holds the canonical double"
+        );
+        let record = shapes::shape_descriptor_by_id(requested).expect("seeded record");
+        assert_eq!(
+            slot_rep(record.rep, 1),
+            REP_F64,
+            "the lane is still F64 (not deprecated)"
+        );
+    }
+}
+
+/// Run `name` in a child test process with `SABOTAGE_ENV` set and require it
+/// to abort with the mint's refusal message.
+fn child_aborts_with_refusal(name: &str) {
+    let out = std::process::Command::new(std::env::current_exe().expect("test binary"))
+        .arg(name)
+        .arg("--exact")
+        .arg("--nocapture")
+        .arg("--test-threads=1")
+        .env(SABOTAGE_ENV, "1")
+        .output()
+        .expect("launch the sabotaged child");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "the refused static id did not abort");
+    assert!(
+        stderr.contains("was refused by the shape mint"),
+        "the child died without the refusal message: {stderr}"
+    );
+}
+
+const SABOTAGE_ENV: &str = "PERRY_TEST_PLAIN_STATIC_REFUSAL_CHILD";
+
+/// Ids are assigned by content, so a static id already naming OTHER facts in
+/// this agent is an invariant violation: the mint aborts rather than hand a
+/// counter id to code whose immediates name the static one.
+#[test]
+fn a_static_id_already_naming_other_facts_aborts() {
+    if std::env::var_os(SABOTAGE_ENV).is_none() {
+        child_aborts_with_refusal(
+            "object::static_shapes::tests::a_static_id_already_naming_other_facts_aborts",
+        );
+        return;
+    }
+    let requested = SHAPE_ID_BASE + 0x2345;
+    assert_eq!(seed(requested, &["lt4d_x"]), requested);
+    seed(requested, &["lt4d_y"]);
+}
+
+/// A requested id outside the static band is never generated by the driver;
+/// the mint aborts on it (each bad id in its own child).
+#[test]
+fn a_requested_id_outside_the_static_band_aborts() {
+    const BAD: [u32; 3] = [0x7000_0000, STATIC_SHAPE_ID_END, STATIC_SHAPE_ID_END + 5];
+    match std::env::var(SABOTAGE_ENV) {
+        Err(_) => {
+            for i in 0..BAD.len() {
+                let out = std::process::Command::new(std::env::current_exe().expect("test binary"))
+                    .arg("object::static_shapes::tests::a_requested_id_outside_the_static_band_aborts")
+                    .arg("--exact")
+                    .arg("--nocapture")
+                    .arg("--test-threads=1")
+                    .env(SABOTAGE_ENV, i.to_string())
+                    .output()
+                    .expect("launch the sabotaged child");
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                assert!(
+                    !out.status.success(),
+                    "out-of-band {:#x} did not abort",
+                    BAD[i]
+                );
+                assert!(
+                    stderr.contains("was refused by the shape mint"),
+                    "the child died without the refusal message: {stderr}"
+                );
+            }
+        }
+        Ok(i) => {
+            let bad = BAD[i.parse::<usize>().unwrap_or(0)];
+            seed(bad, &["lt4b_q", &format!("lt4b_{bad:x}")]);
+        }
+    }
+}
+
+#[test]
+fn the_counter_never_mints_into_the_static_band() {
+    let keys = unsafe { canonical_keys_for_names(&[b"lt4c_only"]) };
+    let id = shapes::shape_id_for_keys_ensure(keys.arr(), 1);
+    assert!(is_shape_id(id) && id >= STATIC_SHAPE_ID_END, "{id:#x}");
+}
+
+#[test]
+fn a_class_seed_takes_the_class_prototype_identity() {
+    const SEEDED_CLASS_ID: u32 = 0x0074_1c11;
+    let packed = b"lt4k_a\0lt4k_b\0";
+    let keys =
+        crate::object::js_build_class_keys_array(SEEDED_CLASS_ID, 2, packed.as_ptr(), 14, 0) as u64;
+    let requested = SHAPE_ID_BASE + 0x3456;
+    let id = js_object_shape_id_for_class_keys_static(keys, 2, 2, SEEDED_CLASS_ID, requested, 0);
+    let record = shapes::shape_descriptor_by_id(id).expect("seeded record");
+    assert_eq!(record.proto_id, shapes::class_proto_id(SEEDED_CLASS_ID));
+    // Registration is idempotent: a second registration (another module
+    // importing the class) resolves to the same id.
+    assert_eq!(
+        js_object_shape_id_for_class_keys_static(keys, 2, 2, SEEDED_CLASS_ID, requested, 0),
+        id
+    );
+    assert!(is_carrier(id));
+}
+
+/// The key literal's atom, as a module pool mints it at init
+/// (`js_string_pool_atom`): the pointer every read site of that text passes.
+fn pool_atom(text: &str) -> *const crate::StringHeader {
+    let hash = super::super::key_bytes_hash(text.as_ptr(), text.len());
+    crate::string::js_string_pool_atom(text.as_ptr(), text.len() as u32, hash, 0)
+}
+
+/// The megamorphic confirm as the miss entry asks it: this agent's directory,
+/// the site's key as NaN-boxed bits.
+unsafe fn confirmed(id: u32, key: *const crate::StringHeader, guess: usize) -> bool {
+    shapes::slot_guess_confirmed(
+        shapes::ordinary_dir_addr(),
+        id,
+        crate::JSValue::string_ptr(key as *mut _).bits(),
+        guess,
+    )
+}
+
+/// A seeded literal shape answers the megamorphic read's slot-guess confirm
+/// (`shapes::slot_guess_confirmed`: the position bound, then ONE pointer
+/// compare of the listed key against the site's key atom) exactly as a shape
+/// minted after the pools ran does. The seed runs before any module's pool
+/// mints its atoms, so a list that stored its own strings instead of the
+/// atoms confirms nothing, and every megamorphic read of a seeded literal
+/// falls to the by-name walk (lead_mega1 225.8 -> 435.8 instructions/read).
+///
+/// Sabotage: drop the atom mint in `build_longlived_keys_array` -> the seeded
+/// record's confirms fail (the minted twin's still pass).
+#[test]
+fn a_seeded_literal_shape_answers_the_megamorphic_confirm_like_a_minted_one() {
+    let requested = SHAPE_ID_BASE + 0x1240;
+    let seeded = seed(requested, &["lt4m_a", "lt4m_k0"]);
+    assert_eq!(seeded, requested, "the seed must mint the requested id");
+    // Module init: the pools mint the atoms of their key literals.
+    let (a, k0, k1) = (
+        pool_atom("lt4m_a"),
+        pool_atom("lt4m_k0"),
+        pool_atom("lt4m_k1"),
+    );
+    // A literal minted by facts after the pools ran (the dynamic path).
+    let minted_keys = unsafe { canonical_keys_for_names(&[b"lt4m_a", b"lt4m_k1"]) };
+    let minted = shapes::shape_id_for_keys_ensure(minted_keys.arr(), 2);
+    for (id, key, guess, what) in [
+        (seeded, a, 0, "seeded `a` at 0"),
+        (seeded, k0, 1, "seeded `k0` at 1"),
+        (minted, a, 0, "minted `a` at 0"),
+        (minted, k1, 1, "minted `k1` at 1"),
+    ] {
+        // POSBOUND is a fact of the record: a seeded shape (built by the
+        // slab insert, like every other) carries it, nonzero, equal to its
+        // definition.
+        let (stored, by_facts) = shapes::test_positional_of_id(id).expect("a record");
+        assert!(
+            stored > 0 && stored == by_facts,
+            "{what}: the record must answer by position (POSBOUND {stored}, by facts {by_facts})"
+        );
+        assert!(
+            unsafe { confirmed(id, key, guess) },
+            "{what}: the megamorphic confirm must accept the key atom"
+        );
+    }
+    // And refutes a wrong guess or another key.
+    assert!(!unsafe { confirmed(seeded, a, 1) });
+    assert!(!unsafe { confirmed(seeded, k1, 1) });
+}
+
+/// A class key list answers the megamorphic confirm when the class registers
+/// BEFORE any pool holding its key texts has run. Module init order is the
+/// import order: a class of module A registers (`js_build_class_keys_array`,
+/// then its ShapeId) while the only literal of one of its keys lives in the
+/// pool of module B, which runs later. The list built at registration must
+/// hold the atom B's pool then finds, or every megamorphic read of the class
+/// through B's key falls to the by-name walk.
+///
+/// Sabotage: drop the atom mint in `build_longlived_keys_array` -> the
+/// class's confirms fail.
+#[test]
+fn a_class_registered_before_the_pools_answers_the_megamorphic_confirm() {
+    const LATE_POOL_CLASS_ID: u32 = 0x0074_1c77;
+    let packed = b"ltca_x\0ltca_only_in_b\0";
+    let keys = crate::object::js_build_class_keys_array(
+        LATE_POOL_CLASS_ID,
+        2,
+        packed.as_ptr(),
+        packed.len() as u32,
+        0,
+    ) as u64;
+    let id = shapes::js_object_shape_id_for_class_keys(keys, 2, LATE_POOL_CLASS_ID, 0);
+    // Module B's pool runs afterwards and mints its key literals.
+    let (x, b) = (pool_atom("ltca_x"), pool_atom("ltca_only_in_b"));
+    assert!(
+        unsafe { confirmed(id, x, 0) },
+        "class `x` at 0: the megamorphic confirm must accept the key atom"
+    );
+    assert!(
+        unsafe { confirmed(id, b, 1) },
+        "class `only_in_b` at 1: the megamorphic confirm must accept the key atom"
+    );
+    assert!(!unsafe { confirmed(id, x, 1) });
+}

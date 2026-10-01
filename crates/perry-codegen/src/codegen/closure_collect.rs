@@ -88,6 +88,7 @@ pub(crate) fn select_versioned_loop_callbacks(
     trusted_box_closures: &std::collections::HashMap<u32, TrustedBoxClosure>,
     module_boxed_vars: &std::collections::HashSet<u32>,
     module_globals: &std::collections::HashMap<u32, String>,
+    scope_map: &crate::scope_env::ScopeMap,
 ) -> std::collections::HashSet<u32> {
     closures
         .iter()
@@ -141,8 +142,17 @@ pub(crate) fn select_versioned_loop_callbacks(
                     body,
                     captures,
                     module_globals,
+                    scope_map,
                 )
                 .into_iter()
+                .flat_map(|id| {
+                    let members = scope_map.members(id);
+                    if members.is_empty() {
+                        vec![id]
+                    } else {
+                        members.to_vec()
+                    }
+                })
                 .collect();
             (capture_ids.contains(&target)
                 && value
@@ -534,6 +544,7 @@ pub(crate) fn select_trusted_box_closures(
     module_boxed_vars: &std::collections::HashSet<u32>,
     module_globals: &std::collections::HashMap<u32, String>,
     excluded_func_ids: &std::collections::HashSet<u32>,
+    scope_map: &crate::scope_env::ScopeMap,
 ) -> std::collections::HashMap<u32, TrustedBoxClosure> {
     let mut candidates: Vec<(usize, u32, TrustedBoxClosure)> = closures
         .iter()
@@ -570,6 +581,7 @@ pub(crate) fn select_trusted_box_closures(
                 body,
                 captures,
                 module_globals,
+                scope_map,
             );
             let capture_count = auto_captures.len()
                 + usize::from(*captures_new_target)
@@ -730,9 +742,8 @@ pub(crate) fn collect_module_closures(hir: &HirModule) -> ModuleClosures {
     // HIR-synthesized `arguments` need to bundle ALL passed args into
     // the rest slot at dispatch time — JS spec semantics for
     // `arguments.length` count every passed arg, not just the trailing
-    // tail after the fixed params. The runtime side reads this through
-    // `js_register_closure_synthetic_arguments` (vs the regular
-    // `js_register_closure_rest`).
+    // tail after the fixed params. The runtime reads this rest kind from the
+    // body's `JsFunctionInfo` (`crate::fn_info`).
     let closure_synthetic_arguments: std::collections::HashSet<u32> = closures
         .iter()
         .filter_map(|(fid, expr)| {
@@ -777,9 +788,10 @@ pub(crate) fn collect_module_closures(hir: &HirModule) -> ModuleClosures {
         })
         .collect();
 
-    // Refs #421: declared param count for every non-rest closure. Used by
-    // `emit_string_pool` to register each closure's ABI arity so the runtime
-    // can pad missing args with TAG_UNDEFINED in the dynamic-dispatch path.
+    // Refs #421: declared param count for every non-rest closure: the
+    // `declared` fact of its `JsFunctionInfo` (`fn.length`'s fallback). The
+    // runtime pads a short call to the body's parameter count, which the info
+    // takes from the body's definition.
     let closure_arities: HashMap<u32, u32> = closures
         .iter()
         .filter_map(|(fid, expr)| {

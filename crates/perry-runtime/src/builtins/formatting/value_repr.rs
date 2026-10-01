@@ -50,7 +50,7 @@ pub(crate) fn class_ref_inspect_label(value: f64) -> Option<String> {
 }
 
 /// `[class …]` for a resolved class id.
-fn class_label_for_id(class_id: u32) -> String {
+pub(crate) fn class_label_for_id(class_id: u32) -> String {
     // The name comes from whatever `class_name_for_id` reports — deliberately
     // NOT re-derived here. #9413 covers class `.name` leaking compiler-internal
     // spellings; when that lands, the corrected name flows straight through.

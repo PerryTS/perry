@@ -34,7 +34,11 @@ pub(crate) fn channel_from_object_property(obj_value: f64, prop: &str) -> i64 {
     })
 }
 
-pub(crate) extern "C" fn diag_trace_subscribe(closure: *const ClosureHeader, handlers: f64) -> f64 {
+pub(crate) extern "C" fn diag_trace_subscribe(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    handlers: f64,
+) -> f64 {
     let id = method_id(closure);
     let events = DIAG_TRACES.with(|m| m.borrow().get(&id).map(|t| t.events).unwrap_or([0; 5]));
     for (idx, name) in ["start", "end", "asyncStart", "asyncEnd", "error"]
@@ -62,6 +66,7 @@ pub(crate) extern "C" fn diag_trace_subscribe(closure: *const ClosureHeader, han
 
 pub(crate) extern "C" fn diag_trace_unsubscribe(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     handlers: f64,
 ) -> f64 {
     let id = method_id(closure);
@@ -86,15 +91,24 @@ pub(crate) fn call_fn_value(fn_value: f64, this_arg: f64, args: &[f64]) -> f64 {
     if !valid_closure_value(fn_value) {
         crate::closure::throw_not_callable();
     }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    // The rebind clone allocates, so the receiver is re-read from a root.
+    let this_arg_handle = scope.root_nanbox_f64(this_arg);
     let rebound = crate::closure::clone_closure_rebind_this(fn_value.to_bits(), this_arg);
     let cb = (rebound & crate::value::POINTER_MASK) as *const ClosureHeader;
-    with_implicit_this(this_arg, || unsafe {
-        js_closure_call_array(cb as i64, args.as_ptr(), args.len() as i64)
-    })
+    unsafe {
+        crate::closure::js_closure_call_array(
+            cb as i64,
+            crate::closure::JsThis::from_f64(this_arg_handle.get_nanbox_f64()),
+            args.as_ptr(),
+            args.len() as i64,
+        )
+    }
 }
 
 pub(crate) extern "C" fn diag_trace_sync(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     fn_value: f64,
     context: f64,
     this_arg: f64,
@@ -141,6 +155,7 @@ pub(crate) extern "C" fn diag_trace_sync(
 
 pub(crate) extern "C" fn diag_trace_promise(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     fn_value: f64,
     context: f64,
     this_arg: f64,
@@ -214,12 +229,13 @@ pub(crate) extern "C" fn diag_trace_promise(
 }
 
 /// The callback installed in place of the user's callback by
-/// `traceCallback`. Registered as a synthetic-arguments closure so it forwards
+/// `traceCallback`. Its body is a synthetic-arguments body so it forwards
 /// every argument the traced function passes (`cb(null, "a", "b")`) to the
 /// user callback, matching Node's `ReflectApply(callback, this, arguments)`
 /// (#3086). `arguments[0]` is `err`, `arguments[1]` is `res`.
 pub(crate) extern "C" fn diag_trace_wrapped_callback(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     all_args: f64,
 ) -> f64 {
     let callback = js_closure_get_capture_f64(closure, 0);
@@ -262,7 +278,11 @@ fn throw_trace_callback_not_function() -> ! {
     crate::exception::js_throw(boxed_ptr(err))
 }
 
-pub(crate) extern "C" fn diag_trace_callback(closure: *const ClosureHeader, all_args: f64) -> f64 {
+pub(crate) extern "C" fn diag_trace_callback(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    all_args: f64,
+) -> f64 {
     // Synthetic-arguments rest array: [fn, position, context, thisArg, ...args]
     // (#3086). `position` defaults to -1 (the last trailing arg), the callback
     // lives at `args[position]`, and the wrapped callback is spliced in at that
@@ -324,13 +344,16 @@ pub(crate) extern "C" fn diag_trace_callback(closure: *const ClosureHeader, all_
         throw_trace_callback_not_function();
     }
 
-    let wrapped = js_closure_alloc(diag_trace_wrapped_callback as *const u8, 5);
+    let wrapped = js_closure_alloc(
+        crate::fn_info!(diag_trace_wrapped_callback, 1; with_rest_kind(0, crate::closure::FN_REST_SYNTHETIC_ARGUMENTS)),
+        5,
+    );
     js_closure_set_capture_f64(wrapped, 0, callback);
     js_closure_set_capture_f64(wrapped, 1, context);
     js_closure_set_capture_ptr(wrapped, 2, events[2]);
     js_closure_set_capture_ptr(wrapped, 3, events[3]);
     js_closure_set_capture_ptr(wrapped, 4, events[4]);
-    js_register_closure_synthetic_arguments(diag_trace_wrapped_callback as *const u8, 0);
+
     let wrapped_value = boxed_ptr(wrapped);
 
     // Splice the wrapped callback in at the resolved position, preserving all

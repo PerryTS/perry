@@ -220,6 +220,8 @@ pub(super) fn rerun_collect_with_class_field_types(
     }
     ctx.cross_module_class_field_types = field_map;
     ctx.cross_module_class_accessors = accessor_map;
+    let cjs_require_diagnostics = ctx.cjs_require_diagnostics;
+    ctx.cjs_require_diagnostics = false;
     ctx.native_modules.clear();
     ctx.reexport_pruner = Default::default();
     visited.clear();
@@ -251,6 +253,7 @@ pub(super) fn rerun_collect_with_class_field_types(
             )?;
         }
     }
+    ctx.cjs_require_diagnostics = cjs_require_diagnostics;
     Ok(())
 }
 

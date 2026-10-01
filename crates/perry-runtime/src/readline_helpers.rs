@@ -246,7 +246,11 @@ pub fn split_keypress_chunks(bytes: &[u8]) -> Vec<Vec<u8>> {
     chunks
 }
 
-extern "C" fn emit_keypress_data(closure: *const ClosureHeader, chunk: f64) -> f64 {
+extern "C" fn emit_keypress_data(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    chunk: f64,
+) -> f64 {
     let stream_scope = crate::gc::RuntimeHandleScope::new();
     let stream = stream_scope.root_nanbox_f64(js_closure_get_capture_f64(closure, 0));
     let chunk = stream_scope.root_nanbox_f64(chunk);
@@ -297,7 +301,7 @@ pub extern "C" fn js_readline_emit_keypress_events_args(
     if raw_ptr_from_value(stream.get_nanbox_f64()).is_none() {
         return undefined();
     }
-    let listener = js_closure_alloc(emit_keypress_data as *const u8, 1);
+    let listener = js_closure_alloc(crate::fn_info!(emit_keypress_data, 1), 1);
     js_closure_set_capture_f64(listener, 0, stream.get_nanbox_f64());
     let listener = scope.root_raw_const_ptr(listener as *const ClosureHeader);
     let Some(raw) = raw_ptr_from_value(stream.get_nanbox_f64()) else {

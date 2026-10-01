@@ -96,7 +96,6 @@ impl Substitution<'_, '_> {
                         )
                     })??;
                     let key = scope.root_string_ptr(key);
-                    let previous = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
                     let groups = self.groups.unwrap();
                     let value = api::caught(|| {
                         let key = key
@@ -107,7 +106,6 @@ impl Substitution<'_, '_> {
                             groups.get_nanbox_f64(),
                         )
                     });
-                    crate::object::js_implicit_this_set(previous.get_nanbox_f64());
                     let value = scope.root_nanbox_f64(value?);
                     if value.get_nanbox_f64().to_bits() != TAG_UNDEFINED {
                         selected = Some(text(&scope, &value)?);

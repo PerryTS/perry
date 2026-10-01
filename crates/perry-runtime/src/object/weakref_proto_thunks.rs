@@ -242,11 +242,16 @@ fn throw_incompatible(proto: &str, method: &str) -> ! {
     ))
 }
 
-/// Resolve `IMPLICIT_THIS` to a receiver of the expected weak-wrapper class id,
+/// Resolve the `this` receiver to a receiver of the expected weak-wrapper class id,
 /// or throw a `TypeError`. Mirrors `collection_proto_thunks`'
 /// `weak_receiver_or_throw` for the WeakRef/FinalizationRegistry pair.
-fn wrapper_receiver_or_throw(expected: u32, proto: &str, method: &str) -> f64 {
-    let receiver = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+fn wrapper_receiver_or_throw(
+    this: crate::closure::JsThis,
+    expected: u32,
+    proto: &str,
+    method: &str,
+) -> f64 {
+    let receiver = f64::from_bits(this.bits());
     if is_weak_wrapper(receiver, expected) {
         receiver
     } else {
@@ -256,18 +261,21 @@ fn wrapper_receiver_or_throw(expected: u32, proto: &str, method: &str) -> f64 {
 
 pub(super) extern "C" fn weakref_proto_deref_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let r = wrapper_receiver_or_throw(CLASS_ID_WEAKREF, "WeakRef.prototype", "deref");
+    let r = wrapper_receiver_or_throw(this, CLASS_ID_WEAKREF, "WeakRef.prototype", "deref");
     js_weakref_deref(r)
 }
 
 pub(super) extern "C" fn finreg_proto_register_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     target: f64,
     held: f64,
     token: f64,
 ) -> f64 {
     let r = wrapper_receiver_or_throw(
+        this,
         CLASS_ID_FINALIZATION_REGISTRY,
         "FinalizationRegistry.prototype",
         "register",
@@ -277,9 +285,11 @@ pub(super) extern "C" fn finreg_proto_register_thunk(
 
 pub(super) extern "C" fn finreg_proto_unregister_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     token: f64,
 ) -> f64 {
     let r = wrapper_receiver_or_throw(
+        this,
         CLASS_ID_FINALIZATION_REGISTRY,
         "FinalizationRegistry.prototype",
         "unregister",
@@ -304,7 +314,7 @@ pub(super) fn install_weakref_proto_methods(
             ipm(
                 proto_obj,
                 "deref",
-                weakref_proto_deref_thunk as *const u8,
+                crate::fn_info!(weakref_proto_deref_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
         }
@@ -312,13 +322,13 @@ pub(super) fn install_weakref_proto_methods(
             ipm(
                 proto_obj,
                 "register",
-                finreg_proto_register_thunk as *const u8,
+                crate::fn_info!(finreg_proto_register_thunk, 3; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
                 2,
             );
             ipm(
                 proto_obj,
                 "unregister",
-                finreg_proto_unregister_thunk as *const u8,
+                crate::fn_info!(finreg_proto_unregister_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
         }
@@ -366,11 +376,18 @@ mod tests {
     /// answer, so the assertions below cannot pass by accident.
     const FOREIGN_SENTINEL: i32 = 7947;
 
-    extern "C" fn foreign_method_thunk(_c: *const crate::closure::ClosureHeader) -> f64 {
+    extern "C" fn foreign_method_thunk(
+        _c: *const crate::closure::ClosureHeader,
+        _this: crate::closure::JsThis,
+    ) -> f64 {
         f64::from_bits(JSValue::int32(FOREIGN_SENTINEL).bits())
     }
 
-    extern "C" fn foreign_method_thunk_1(_c: *const crate::closure::ClosureHeader, _a: f64) -> f64 {
+    extern "C" fn foreign_method_thunk_1(
+        _c: *const crate::closure::ClosureHeader,
+        _this: crate::closure::JsThis,
+        _a: f64,
+    ) -> f64 {
         f64::from_bits(JSValue::int32(FOREIGN_SENTINEL).bits())
     }
 
@@ -378,11 +395,13 @@ mod tests {
     /// shape a name-collided fold hands to the weak helpers (`{ deref: … }`,
     /// `class Cache { deref() {…} }`, an array with `.deref` attached, or a
     /// function parameter).
-    fn plain_object_with_method(method_name: &str, func_ptr: *const u8, arity: u32) -> f64 {
+    fn plain_object_with_method(
+        method_name: &str,
+        info: *const crate::closure::JsFunctionInfo,
+    ) -> f64 {
         let obj = crate::object::js_object_alloc(0, 0);
-        let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+        let closure = crate::closure::js_closure_alloc(info, 0);
         assert!(!closure.is_null(), "closure alloc failed");
-        crate::closure::js_register_closure_arity(func_ptr, arity);
         let key =
             crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
         let value = crate::value::js_nanbox_pointer(closure as i64);
@@ -403,7 +422,10 @@ mod tests {
     fn folded_weak_helpers_delegate_a_foreign_receiver_to_its_own_method() {
         let sentinel = JSValue::int32(FOREIGN_SENTINEL).bits();
 
-        let deref_recv = plain_object_with_method("deref", foreign_method_thunk as *const u8, 0);
+        let deref_recv = plain_object_with_method(
+            "deref",
+            crate::fn_info!(foreign_method_thunk, 0; with_declared(0)),
+        );
         assert_eq!(
             crate::weakref::js_weakref_deref(deref_recv).to_bits(),
             sentinel,
@@ -411,12 +433,11 @@ mod tests {
         );
 
         let key = f64::from_bits(JSValue::int32(1).bits());
-        for (name, ptr) in [
-            ("get", foreign_method_thunk_1 as *const u8),
-            ("has", foreign_method_thunk_1 as *const u8),
-            ("delete", foreign_method_thunk_1 as *const u8),
-        ] {
-            let recv = plain_object_with_method(name, ptr, 1);
+        for name in ["get", "has", "delete"] {
+            let recv = plain_object_with_method(
+                name,
+                crate::fn_info!(foreign_method_thunk_1, 1; with_declared(1)),
+            );
             let got = match name {
                 "get" => crate::weakref::js_weakmap_get(recv, key),
                 "has" => crate::weakref::js_weakmap_has(recv, key),
@@ -429,7 +450,10 @@ mod tests {
             );
         }
 
-        let add_recv = plain_object_with_method("add", foreign_method_thunk_1 as *const u8, 1);
+        let add_recv = plain_object_with_method(
+            "add",
+            crate::fn_info!(foreign_method_thunk_1, 1; with_declared(1)),
+        );
         assert_eq!(
             crate::weakref::js_weakset_add(add_recv, key).to_bits(),
             sentinel,

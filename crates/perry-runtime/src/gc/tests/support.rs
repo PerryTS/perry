@@ -465,7 +465,6 @@ pub(super) fn reset_copying_nursery_runtime_test_state() {
     crate::timer::test_clear_all_timer_scanner_roots();
     crate::closure::test_clear_singleton_closure_caches();
     crate::closure::test_clear_closure_side_tables();
-    crate::r#box::test_clear_box_registry();
     crate::builtins::test_set_console_log_singleton(0);
     crate::geisterhand_registry::test_clear_geisterhand_roots();
     crate::ui_text_registry::test_clear_ui_text_registry_roots();
@@ -747,19 +746,21 @@ pub(super) fn old_page_dirty_for(page: usize) -> bool {
 
 pub(super) extern "C" fn test_no_capture_singleton_func(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     0.0
 }
 
 pub(super) extern "C" fn test_captured_singleton_func(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     0.0
 }
 
 pub(super) unsafe fn init_test_closure(ptr: *mut u8) {
     let closure = ptr as *mut crate::closure::ClosureHeader;
-    (*closure).func_ptr = std::ptr::null();
+    (*closure).info = std::ptr::null();
     (*closure).capture_count = 0;
     (*closure).shape_id = crate::closure::shape::function_base_shape(
         crate::closure::shape::FunctionProtoKind::Function,
@@ -772,7 +773,7 @@ pub(super) unsafe fn init_test_closure_with_one_capture(
     capture_bits: u64,
 ) -> *mut u64 {
     let closure = ptr as *mut crate::closure::ClosureHeader;
-    (*closure).func_ptr = std::ptr::null();
+    (*closure).info = std::ptr::null();
     (*closure).capture_count = 1;
     (*closure).shape_id = crate::closure::shape::function_base_shape(
         crate::closure::shape::FunctionProtoKind::Function,
@@ -880,6 +881,9 @@ pub(super) unsafe fn alloc_old_test_object(
     let obj = crate::arena::arena_alloc_gc_old(payload, 8, GC_TYPE_OBJECT)
         as *mut crate::object::ObjectHeader;
     (*obj).class_id = 0;
+    // The fixture uses an Ordinary ShapeId; mark its newborn store kind
+    // before publishing that id, as the production plain-record allocator does.
+    crate::object::shapes::store_kind::premark_plain_ordinary(obj);
     (*obj).parent_class_id = shape_id;
     (*obj).meta = std::ptr::null_mut();
     let fields =
@@ -919,6 +923,9 @@ pub(super) unsafe fn alloc_nursery_test_object(
     let obj = crate::arena::arena_alloc_gc(payload, 8, GC_TYPE_OBJECT)
         as *mut crate::object::ObjectHeader;
     (*obj).class_id = 0;
+    // The fixture uses an Ordinary ShapeId; mark its newborn store kind
+    // before publishing that id, as the production plain-record allocator does.
+    crate::object::shapes::store_kind::premark_plain_ordinary(obj);
     (*obj).parent_class_id = shape_id;
     (*obj).meta = std::ptr::null_mut();
     let fields =
@@ -1047,4 +1054,38 @@ pub(super) unsafe fn retire_old_test_map(
     (*map).capacity = 0;
     (*map).entries = std::ptr::null_mut();
     std::alloc::dealloc(entries as *mut u8, layout);
+}
+
+/// Charter step 5: re-stamp `obj` with the shape that has its current facts
+/// and field representation `rep`. The collector traces an object by its
+/// shape: every non-`Any` lane is skipped, every other slot gets the tag test.
+/// Returns the new ShapeId.
+pub(super) unsafe fn restamp_with_rep(obj: *mut crate::object::ObjectHeader, rep: u64) -> u32 {
+    use crate::object::shapes::{
+        object_shape_stamp, publish_shape_result, shape_descriptor_by_id,
+        shape_descriptor_ensure_with_rep, stamp_object_shape_id_with_carrier_note,
+    };
+    let d = shape_descriptor_by_id(object_shape_stamp(obj)).expect("live shape");
+    let id = publish_shape_result(shape_descriptor_ensure_with_rep(
+        d.keys as usize as *const crate::array::ArrayHeader,
+        d.logical_key_count,
+        d.live_inline_slot_count,
+        d.semantic_generation,
+        d.object_kind,
+        d.hole_count,
+        d.proto_id,
+        d.summary,
+        rep,
+        None,
+    ));
+    stamp_object_shape_id_with_carrier_note(obj, id);
+    id
+}
+
+/// A field representation with an `F64` lane on each of `slots`.
+pub(super) fn f64_lanes(slots: impl IntoIterator<Item = u32>) -> u64 {
+    use crate::object::field_rep::{with_slot_rep, REP_ANY, REP_F64};
+    slots
+        .into_iter()
+        .fold(REP_ANY, |rep, slot| with_slot_rep(rep, slot, REP_F64))
 }

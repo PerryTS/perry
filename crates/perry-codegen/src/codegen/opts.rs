@@ -493,6 +493,16 @@ pub struct CompileOptions {
     /// `0` for non-wrapped modules and the entire default build (offsets inside
     /// the preamble — wrapped line `<=` this — resolve to no location).
     pub debug_source_line_offset: u32,
+    /// Design step 4: the static ShapeIds the driver assigned to this
+    /// module's class-birth contents (`module_birth_shapes`), sorted. Empty
+    /// when the driver ran no pre-pass: every class then mints as before.
+    pub static_shape_ids: Vec<(super::BirthShape, u32)>,
+    /// Decision 16: this module's slice of the program-wide map of each
+    /// class's static id as its defining module assigns it (typed or plain):
+    /// the ids its importer guards and foreign shape globals compare against.
+    /// Part of the object-cache key. Default (empty) when the driver ran no
+    /// pre-pass.
+    pub program_class_shape_ids: super::ProgramClassShapeIds,
 }
 
 /// Issue #100: one entry in a module's namespace-population list.
@@ -742,7 +752,7 @@ pub struct ShortSpreadMethodCandidate {
 pub struct ImportedObjectLiteralMethod {
     pub name: String,
     pub func_id: u32,
-    /// Exact closure-call ABI function stored in the live own slot. This is a
+    /// Exact JS body (`perry_abi::JS_BODY_*`) stored in the live own slot. This is a
     /// `perry_closure_*` body for a `this`-capturing method and a
     /// `__perry_wrap_perry_fn_*` wrapper for HIR's lifted no-`this` method.
     pub target: String,
@@ -978,6 +988,10 @@ pub(crate) struct CrossModuleCtx {
     /// both come from `target_layout::inline_alloc_gc_packed`, but a header
     /// word is not something to trust by argument.
     pub class_header_images: std::collections::HashMap<String, (String, u64, u32)>,
+    /// Keys global -> the class's birth rep word (charter step 5, T1;
+    /// `typed_shape::class_birth_rep_in`): what module init mints and what
+    /// every inline allocation and class-field store of the class obeys.
+    pub class_birth_reps: std::collections::HashMap<String, u64>,
     /// Imported class constructor function names. Maps class_name →
     /// full constructor symbol (e.g. "Editor" → "hone_editor_...__Editor_constructor").
     /// Populated from `opts.imported_classes`.
@@ -1189,6 +1203,8 @@ pub(crate) struct CrossModuleCtx {
     /// primitive heap cells while preserving closure-shared lifetime.
     pub compiler_private_async_i32_control_locals: std::collections::HashSet<u32>,
     pub compiler_private_async_i1_control_locals: std::collections::HashSet<u32>,
+    /// Scope context object groups (`crate::scope_env`), module-wide.
+    pub scope_map: crate::scope_env::ScopeMap,
     /// Debug/benchmark switch that forces Buffer/Uint8Array accesses through
     /// the generic helper path.
     pub disable_buffer_fast_path: bool,
