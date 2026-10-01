@@ -2625,11 +2625,10 @@ unsafe fn pipe_through_rooted_pair(readable_handle: f64, pair: f64, options: f64
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
     let pair_root = pair_is_object.then(|| scope.root_nanbox_f64(pair));
     let options_root = options_is_object.then(|| scope.root_nanbox_f64(options));
-    let pair = pair_root
-        .as_ref()
-        .map(|root| root.get_nanbox_f64())
-        .unwrap_or(pair);
-    let transform = subclass::unwrap_pair_stream_handle(pair);
+    let transform = match pair_root {
+        Some(root) => subclass::unwrap_rooted_pair_stream_handle(root),
+        None => pair,
+    };
     let transform_root = JSValue::from_bits(transform.to_bits())
         .is_pointer()
         .then(|| {

@@ -87,6 +87,18 @@ pub(super) unsafe fn unwrap_pair_stream_handle(value: f64) -> f64 {
     }
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(value);
+    unwrap_rooted_pair_stream_handle(receiver)
+}
+
+// The caller owns this root for the entire conversion, including allocations
+// and getter calls. Borrow it rather than parking a second copy in a new scope.
+#[inline]
+pub(super) unsafe fn unwrap_rooted_pair_stream_handle(
+    receiver: perry_runtime::gc::RuntimeHandle<'_>,
+) -> f64 {
+    if this_object_ptr(receiver.get_nanbox_f64()).is_none() {
+        return receiver.get_nanbox_f64();
+    }
     let key = subclass_handle_key();
     let obj = js_nanbox_get_pointer(receiver.get_nanbox_f64()) as *const ObjectHeader;
     let result = js_object_get_field_by_name(obj, key);
