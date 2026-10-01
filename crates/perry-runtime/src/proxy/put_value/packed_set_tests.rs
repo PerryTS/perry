@@ -56,6 +56,39 @@ fn store_fresh(target: f64, key: *const crate::StringHeader, value: f64) -> (f64
 
 const SRC: &[u8] = br#"{"a":1,"n":2,"b":3}"#;
 
+/// #10500: pool literals such as `name` can differ from the runtime's
+/// interned copy. A static overwrite must still publish its packed store
+/// entry; otherwise every iteration falls through the slow miss path.
+#[test]
+fn pooled_runtime_key_names_prime_static_overwrites() {
+    let target = parsed(br#"{"name":0,"nam":0,"E":0,"X":0,"length":0,"len":0,"now":0,"later":0}"#);
+    for (index, name) in [
+        b"name".as_slice(),
+        b"nam",
+        b"E",
+        b"X",
+        b"length",
+        b"len",
+        b"now",
+        b"later",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let runtime_key = interned(name);
+        let pooled_key =
+            crate::string::js_string_pool_atom(name.as_ptr(), name.len() as u32, fnv1a(name), 0);
+        assert_ne!(
+            pooled_key as *const _, runtime_key,
+            "fixture must use the pooled copy"
+        );
+        let (stored, word) = store_fresh(target, pooled_key, index as f64 + 1.0);
+        assert_eq!(stored, index as f64 + 1.0);
+        assert_eq!(word as u32, stamp(target), "{name:?} did not prime");
+        assert_eq!(word >> 32, index as u64, "{name:?} primed the wrong slot");
+    }
+}
+
 #[test]
 fn packed_set_empty_matches_codegen() {
     // perry-codegen `expr/put_value_store_ic.rs::PACKED_SET_EMPTY`.
@@ -137,6 +170,139 @@ fn per_object_facts_the_hit_retests_are_refused_at_publication() {
         packed.load(Ordering::Relaxed),
         PACKED_SET_EMPTY,
         "a native-module receiver must not publish"
+    );
+}
+
+/// A real Array-subclass loop proof moves the receiver to its proof sibling.
+/// An existing-key site learned before that transition cannot match it, and
+/// neither set nor add priming may publish the proof ShapeId. An SSO overwrite
+/// through the miss entry must retire the proof before any new site is learned.
+#[test]
+fn real_numeric_proof_shape_cannot_prime_packed_set_or_add() {
+    let _representation =
+        crate::array::subclass_elements::ArraySubclassRepresentationGuard::shape_carried();
+    let _global = crate::gc::global_side_table_test_lock();
+    const ARRAY_CLASS: u32 = 0x0074_8696;
+    crate::object::js_register_class_parent(ARRAY_CLASS, 0xFFFF_0024);
+    let obj = crate::object::js_object_alloc(ARRAY_CLASS, 2);
+    assert!(!obj.is_null());
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(obj as i64));
+    crate::node_stream::js_array_subclass_init(receiver.get_nanbox_f64(), 0.0);
+    for number in [11.0, 22.0] {
+        crate::array::js_array_push_f64(obj as *mut crate::array::ArrayHeader, number);
+    }
+    let key = interned(b"1");
+    let ordinary = stamp(receiver.get_nanbox_f64());
+    // The indexed key is a spill slot in this shape (live bound 2), so it
+    // enters a runtime way with the spill flip rather than the inline word.
+    let first: &'static PackedSetSite = Box::leak(Box::new(PackedSetSite::empty()));
+    let mut first_cache = packed_set_cache_empty();
+    let mut first_slot: PackedSetWaysSlot = &mut first_cache;
+    unsafe {
+        prime_packed_set(receiver.get_nanbox_f64(), key, &mut first_slot, &first.set);
+    }
+    assert_eq!(first_cache[0] as u32 ^ super::SPILL_FLIP, ordinary);
+    assert_eq!(first.set.load(Ordering::Relaxed), PACKED_SET_EMPTY);
+
+    let mut facts = [0u64; 7];
+    assert_eq!(
+        crate::array::js_packed_arraylike_loop_guard(
+            receiver.get_nanbox_f64(),
+            2.0,
+            1,
+            facts.as_mut_ptr(),
+        ),
+        2,
+    );
+    let proven = stamp(receiver.get_nanbox_f64());
+    assert_ne!(proven, ordinary);
+    assert_eq!(
+        crate::object::shapes::shape_object_kind_by_id(proven),
+        Some(crate::object::shapes::ShapeObjectKind::OrdinaryNumericProof)
+    );
+    assert_ne!(first_cache[0] as u32 ^ super::SPILL_FLIP, proven);
+
+    let while_proven: &'static PackedSetSite = Box::leak(Box::new(PackedSetSite::empty()));
+    let mut proof_cache = packed_set_cache_empty();
+    let mut proof_slot: PackedSetWaysSlot = &mut proof_cache;
+    unsafe {
+        prime_packed_set(
+            receiver.get_nanbox_f64(),
+            key,
+            &mut proof_slot,
+            &while_proven.set,
+        );
+    }
+    assert_eq!(while_proven.set.load(Ordering::Relaxed), PACKED_SET_EMPTY);
+    assert!(
+        proof_cache[..PACKED_SET_WAYS]
+            .iter()
+            .all(|word| *word == PACKED_SET_EMPTY),
+        "a proof sibling must not enter any existing-key way"
+    );
+
+    let sso = f64::from_bits(
+        crate::value::JSValue::try_short_string(b"x")
+            .unwrap()
+            .bits(),
+    );
+    js_put_value_set_packed_miss(
+        receiver.get_nanbox_f64(),
+        key,
+        sso,
+        0,
+        &mut first_slot,
+        &first.set,
+    );
+    assert_ne!(
+        crate::object::shapes::shape_object_kind_by_id(stamp(receiver.get_nanbox_f64())),
+        Some(crate::object::shapes::ShapeObjectKind::OrdinaryNumericProof),
+        "the tagged overwrite must retire the proof"
+    );
+
+    // Re-establish a real proof, then add a new key through a fresh site.
+    crate::object::js_object_set_field_by_name(object_of(receiver.get_nanbox_f64()), key, 22.0);
+    assert_eq!(
+        crate::array::js_packed_arraylike_loop_guard(
+            receiver.get_nanbox_f64(),
+            2.0,
+            1,
+            facts.as_mut_ptr(),
+        ),
+        2,
+    );
+    let add_pre = stamp(receiver.get_nanbox_f64());
+    assert_eq!(
+        crate::object::shapes::shape_object_kind_by_id(add_pre),
+        Some(crate::object::shapes::ShapeObjectKind::OrdinaryNumericProof)
+    );
+    let add_key = interned(b"proof_add");
+    let add_site: &'static PackedSetSite = Box::leak(Box::new(PackedSetSite::empty()));
+    let mut add_ways_slot: PackedSetWaysSlot = std::ptr::null_mut();
+    js_put_value_set_packed_miss(
+        receiver.get_nanbox_f64(),
+        add_key,
+        7.0,
+        0,
+        &mut add_ways_slot,
+        &add_site.set,
+    );
+    let post = stamp(receiver.get_nanbox_f64());
+    assert_ne!(post, add_pre);
+    unsafe {
+        super::super::packed_add::packed_add_prime(
+            add_site,
+            receiver.get_nanbox_f64(),
+            add_key,
+            add_pre,
+        );
+    }
+    assert_ne!(add_site.add_shapes.load(Ordering::Relaxed) as u32, add_pre);
+    assert_eq!(
+        add_site.add_ways.load(Ordering::Relaxed),
+        0,
+        "a proof pre-shape must not enter an add way"
     );
 }
 
@@ -572,7 +738,11 @@ fn an_object_create_receiver_publishes_its_shape_and_inline_slot() {
         stamp(target),
         "an Object.create receiver must publish its ShapeId to the site word"
     );
-    assert_eq!(word >> 32, 1, "high half: `b` is the second own slot");
+    assert_eq!(
+        (word & !PACKED_SET_F64_SLOT) >> 32,
+        1,
+        "high half: `b` is the second own slot"
+    );
     // Its shape is store-admitted (charter step 3: `Ordinary`), so the
     // published word is actually served inline.
     assert!(
@@ -582,4 +752,28 @@ fn an_object_create_receiver_publishes_its_shape_and_inline_slot() {
     // Its prototype is still the one it was created with.
     let got = crate::object::js_object_get_prototype_of(target);
     assert_eq!(got.to_bits(), proto.to_bits());
+}
+
+/// Charter step 5 (P2c): a store word for a non-`Any` lane carries the flag
+/// that makes the emitted hit check the value; an `Any` lane's does not.
+#[test]
+fn an_f64_lane_publishes_the_store_check_flag() {
+    let key_x = interned(b"p2c_f64_x");
+    let target = parsed(br#"{"p2c_a":1}"#);
+    crate::object::js_object_set_field_by_name(object_of(target), key_x as *mut _, 2.5);
+    assert!(
+        !crate::object::field_rep_store::shape_slot_is_any(stamp(target), 1),
+        "the key-add of a Number earned an F64 lane"
+    );
+    let (_, word) = store_fresh(target, key_x, 3.5);
+    assert_eq!(word as u32, stamp(target));
+    assert_ne!(word & PACKED_SET_F64_SLOT, 0);
+    assert_eq!((word & !PACKED_SET_F64_SLOT) >> 32, 1);
+    let (_, any_word) = store_fresh(target, interned(b"p2c_a"), 4.0);
+    assert_eq!(
+        any_word & PACKED_SET_F64_SLOT,
+        0,
+        "a JSON birth lane is Any"
+    );
+    assert_eq!(any_word >> 32, 0);
 }

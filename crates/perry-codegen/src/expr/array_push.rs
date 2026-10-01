@@ -375,6 +375,10 @@ pub(super) fn emit_push_writeback(
     // Boxed var takes priority: write through the box so every closure sharing
     // the box sees the new pointer.
     if ctx.boxed_vars.contains(&array_id) {
+        let new_bits = ctx.block().bitcast_double_to_i64(new_box);
+        if crate::scope_env::access::write_scoped(ctx, array_id, &new_bits)? {
+            return Ok(());
+        }
         // Captured-through-closure boxed var.
         if let Some(&capture_idx) = ctx.closure_captures.get(&array_id) {
             let closure_ptr =

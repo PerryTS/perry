@@ -108,7 +108,7 @@ pub extern "C" fn js_closure_resolve_plain_direct_call(
     while mask != 0 {
         let index = mask.trailing_zeros();
         let box_ptr = crate::closure::js_closure_get_capture_bits(closure, index);
-        if crate::r#box::box_slot_contents_bits(box_ptr).is_none() {
+        if !crate::r#box::scope::is_capture_cell_ptr(box_ptr) {
             return func_ptr;
         }
         mask &= mask - 1;
@@ -141,7 +141,7 @@ pub extern "C" fn js_closure_resolve_versioned_loop_direct_call(
     while mask != 0 {
         let index = mask.trailing_zeros();
         let box_ptr = crate::closure::js_closure_get_capture_bits(closure, index);
-        if crate::r#box::box_slot_contents_bits(box_ptr).is_none() {
+        if !crate::r#box::scope::is_capture_cell_ptr(box_ptr) {
             return std::ptr::null();
         }
         mask &= mask - 1;

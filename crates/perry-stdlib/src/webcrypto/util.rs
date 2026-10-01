@@ -60,13 +60,13 @@ pub(super) use ml_kem::pkcs8::{
 };
 
 pub(super) use perry_runtime::{
-    buffer::{buffer_alloc, buffer_data_mut, is_registered_buffer, BufferHeader},
+    buffer::{buffer_data_mut, is_registered_buffer, BufferHeader},
     js_object_alloc, js_object_set_field_by_name, js_promise_resolved, JSValue, Promise,
     StringHeader,
 };
 
 extern "C" {
-    fn js_buffer_register_external(addr: usize);
+    fn js_buffer_alloc_unsafe(size: i32) -> *mut BufferHeader;
     fn js_buffer_mark_as_uint8array_external(addr: usize);
     fn js_buffer_mark_as_crypto_key_external(
         addr: usize,
@@ -944,7 +944,10 @@ pub(super) fn require_usage(
 /// Allocate a fresh Buffer marked as Uint8Array (so `instanceof Uint8Array`
 /// is true and `new Uint8Array(buf)` memcpy's correctly), copy `bytes` in.
 pub(super) unsafe fn alloc_uint8array_from_slice(bytes: &[u8]) -> *mut BufferHeader {
-    let buf = buffer_alloc(bytes.len() as u32);
+    // Allocate through the runtime provider's C ABI. A separately packaged
+    // stdlib must not depend on registering a Rust-allocated cell afterwards.
+    // A negative size makes the runtime raise its ordinary allocation error.
+    let buf = js_buffer_alloc_unsafe(i32::try_from(bytes.len()).unwrap_or(-1));
     if buf.is_null() {
         return buf;
     }
@@ -953,7 +956,6 @@ pub(super) unsafe fn alloc_uint8array_from_slice(bytes: &[u8]) -> *mut BufferHea
         let dst = buffer_data_mut(buf);
         std::ptr::copy_nonoverlapping(bytes.as_ptr(), dst, bytes.len());
     }
-    js_buffer_register_external(buf as usize);
     js_buffer_mark_as_uint8array_external(buf as usize);
     buf
 }

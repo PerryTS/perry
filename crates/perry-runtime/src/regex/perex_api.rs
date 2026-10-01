@@ -48,9 +48,7 @@ fn raise(error: EngineError) -> ! {
     if let EngineError::Abrupt(value) = error {
         crate::exception::js_throw(value);
     }
-    if let EngineError::Build(BuildError::Abrupt(bits))
-    | EngineError::Storage(StorageError::Abrupt(bits)) = error
-    {
+    if let EngineError::Build(BuildError::Abrupt(bits)) = error {
         crate::exception::js_throw(f64::from_bits(bits));
     }
     let type_error = matches!(error, EngineError::Type(_));

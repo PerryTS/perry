@@ -72,6 +72,15 @@ use super::*;
 /// as either), so the compare refuses an unprimed site by itself.
 pub const PACKED_SET_EMPTY: u64 = 0xFFFF_FFFF;
 
+/// Charter step 5 (P2c, DESIGN §3.2): the top bit of a store word whose slot
+/// is not an `Any` lane of its ShapeId. The emitted hit then stores inline
+/// only a value whose exponent is not all ones (a finite double, already
+/// canonical); anything else takes the miss, whose store is the checked
+/// funnel. A lane never becomes `Any` -> `F64` under one id, so the flag is a
+/// function of the id like the rest of the word. **Must equal perry-codegen
+/// `expr/put_value_store_ic.rs` (the word's sign bit).**
+pub const PACKED_SET_F64_SLOT: u64 = 1 << 63;
+
 /// Ways in a site's cache. The first [`PACKED_SET_INLINE_WAYS`] are compared by
 /// the emitted code (**must equal `PACKED_SET_INLINE_WAYS` in
 /// `perry-codegen/src/expr/put_value_store_ic.rs`**); the rest by this entry.
@@ -325,7 +334,7 @@ unsafe fn packed_ways_store_impl(
     for (way, word) in ways.iter().enumerate() {
         let word = word.load(Ordering::Relaxed);
         let stamp = word as u32;
-        let index = (word >> 32) as u32;
+        let index = ((word & !PACKED_SET_F64_SLOT) >> 32) as u32;
         if stamp == sid && way >= first_way {
             // Charter step 3: the matched id is an `Ordinary` shape (the only
             // kind `prime_packed_set` publishes), which proves the receiver
@@ -461,7 +470,12 @@ unsafe fn prime_packed_set(
     } else {
         (stamp ^ SPILL_FLIP, idx)
     };
-    let entry = (u64::from(index) << 32) | u64::from(key32);
+    let f64_slot = if inline && !crate::object::field_rep_store::shape_slot_is_any(stamp, idx) {
+        PACKED_SET_F64_SLOT
+    } else {
+        0
+    };
+    let entry = (u64::from(index) << 32) | u64::from(key32) | f64_slot;
 
     // The way cache: fill the first empty way, never evict.
     if !cache_slot.is_null() {

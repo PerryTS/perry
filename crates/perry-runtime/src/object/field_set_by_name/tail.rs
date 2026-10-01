@@ -569,7 +569,11 @@ pub(crate) fn set_field_by_name_object_tail(
                     super::prop_plan::receiver_proto_bits(obj),
                 );
             }
-            let lane_probe = transition_cache_lookup(prev_shape_id, interned_key);
+            let lane_probe = transition_cache_lookup_for_value(
+                prev_shape_id,
+                interned_key,
+                Some(value.to_bits()),
+            );
             if let Some((next_keys, slot_idx, target_shape_id)) = lane_probe {
                 // Defensive: strip a raw-null POINTER_TAG value the same
                 // way the slow overflow path below does, so a bogus
@@ -599,21 +603,14 @@ pub(crate) fn set_field_by_name_object_tail(
                     // check) by the prelude above, and `vbits` has had
                     // the null-POINTER-TAG replacement applied. No
                     // point re-doing it in `js_object_set_field`.
-                    let fields_ptr =
-                        (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut JSValue;
-                    let slot = fields_ptr.add(slot_idx as usize);
                     // Publish the expanded traced range and its exact
                     // descriptor before the pointer-bearing slot value.
                     if slot_idx >= live_slots {
                         set_object_live_slot_count(obj, slot_idx + 1);
                     }
-                    crate::object::proto_validity::note_marked_value_write(obj);
-                    crate::gc::runtime_store_jsvalue_slot(
-                        obj as usize,
-                        slot as usize,
-                        slot_idx as usize,
-                        vbits,
-                    );
+                    // The funnel: the store check keeps an `F64` lane's
+                    // double canonical (charter step 5).
+                    crate::object::store_object_field_slot(obj, slot_idx as usize, vbits);
                 } else {
                     // Cached slot is past the object's inline capacity —
                     // store in the overflow map (same as the slow path's
@@ -663,8 +660,6 @@ pub(crate) fn set_field_by_name_object_tail(
                 }
             };
             refresh_roots_after_alloc!();
-            set_object_keys(obj, new_keys);
-            super::mark_object_dynamic_shape_unknown(obj);
 
             // Reallocate fields to hold at least one value
             // Note: We assume the object has enough field slots pre-allocated
@@ -675,9 +670,17 @@ pub(crate) fn set_field_by_name_object_tail(
             // slot is undefined-initialized at allocation, so the widened range
             // can only expose non-pointer sentinels — then publish the value.
             // Bump field_count so Object.keys()/values()/entries() see the new property.
-            if crate::object::object_live_slot_count(obj) == 0 {
-                set_object_live_slot_count(obj, 1);
-            }
+            // Charter step 5 (T2): the keys edge, the bound, and the successor's
+            // rep, published before the value (`publish_key_add_edge`).
+            super::field_rep_store::publish_key_add_edge(
+                obj,
+                new_keys,
+                super::field_rep_store::shape_rep(prev_shape_id),
+                0,
+                Some(value.to_bits()),
+                true,
+            );
+            refresh_roots_after_alloc!();
             js_object_set_field(obj, 0, JSValue::from_bits(value.to_bits()));
             refresh_roots_after_alloc!();
             mirror_class_object_static_write(obj, key, value);
@@ -879,8 +882,17 @@ pub(crate) fn set_field_by_name_object_tail(
             };
             refresh_roots_after_alloc!();
             if new_index >= alloc_limit {
-                set_object_keys(obj, new_keys);
-                super::mark_object_dynamic_shape_unknown(obj);
+                // Charter step 5 (T2): carry the predecessor's lanes; an overflow
+                // slot is `Any`.
+                super::field_rep_store::publish_key_add_edge(
+                    obj,
+                    new_keys,
+                    super::field_rep_store::shape_rep(prev_shape_id),
+                    new_index as u32,
+                    None,
+                    false,
+                );
+                refresh_roots_after_alloc!();
                 // #7538: derive the stored bits from the REFRESHED `value` —
                 // see the twin below the linear scan.
                 let vbits = overflow_store_bits(value, obj, new_index);
@@ -915,17 +927,23 @@ pub(crate) fn set_field_by_name_object_tail(
                 );
                 return;
             }
-            set_object_keys(obj, new_keys);
-            super::mark_object_dynamic_shape_unknown(obj);
             // #7154 publication order: `gc_field_slot_range` bounds the
             // collector's view of the payload by `field_count`, so a slot at an
             // index the count does not yet cover is invisible to BOTH tracing
             // and evacuation rewriting. Widen the count FIRST — every physical
             // slot is undefined-initialized at allocation, so the widened range
             // can only expose non-pointer sentinels — then publish the value.
-            if new_index as u32 >= crate::object::object_live_slot_count(obj) {
-                set_object_live_slot_count(obj, new_index as u32 + 1);
-            }
+            // Charter step 5 (T2): the keys edge, the bound, and the successor's
+            // rep, published before the value (`publish_key_add_edge`).
+            super::field_rep_store::publish_key_add_edge(
+                obj,
+                new_keys,
+                super::field_rep_store::shape_rep(prev_shape_id),
+                new_index as u32,
+                Some(value.to_bits()),
+                true,
+            );
+            refresh_roots_after_alloc!();
             js_object_set_field(obj, new_index as u32, JSValue::from_bits(value.to_bits()));
             refresh_roots_after_alloc!();
             mirror_class_object_static_write(obj, key, value);
@@ -1074,8 +1092,17 @@ pub(crate) fn set_field_by_name_object_tail(
         if new_index >= alloc_limit {
             // No inline room — store in the overflow HashMap so the value is not lost.
             // Also add the key to keys_array so Object.keys() sees it.
-            set_object_keys(obj, new_keys);
-            super::mark_object_dynamic_shape_unknown(obj);
+            // Charter step 5 (T2): carry the predecessor's lanes; an overflow
+            // slot is `Any`.
+            super::field_rep_store::publish_key_add_edge(
+                obj,
+                new_keys,
+                super::field_rep_store::shape_rep(prev_shape_id),
+                new_index as u32,
+                None,
+                false,
+            );
+            refresh_roots_after_alloc!();
             // #7538: the bits stored into overflow must come from the
             // REFRESHED `value`. This was snapshotted ABOVE the
             // `js_array_push` that grows the keys array — an allocation, so a
@@ -1127,8 +1154,6 @@ pub(crate) fn set_field_by_name_object_tail(
             return;
         }
         // Publish the canonical successor computed above.
-        set_object_keys(obj, new_keys);
-        super::mark_object_dynamic_shape_unknown(obj);
 
         // Set the field at the new index and update logical field_count
         // #7154 publication order: `gc_field_slot_range` bounds the
@@ -1138,9 +1163,17 @@ pub(crate) fn set_field_by_name_object_tail(
         // slot is undefined-initialized at allocation, so the widened range
         // can only expose non-pointer sentinels — then publish the value.
         // Bump field_count to reflect the newly added property
-        if new_index as u32 >= crate::object::object_live_slot_count(obj) {
-            set_object_live_slot_count(obj, new_index as u32 + 1);
-        }
+        // Charter step 5 (T2): the keys edge, the bound, and the successor's
+        // rep, published before the value (`publish_key_add_edge`).
+        super::field_rep_store::publish_key_add_edge(
+            obj,
+            new_keys,
+            super::field_rep_store::shape_rep(prev_shape_id),
+            new_index as u32,
+            Some(value.to_bits()),
+            true,
+        );
+        refresh_roots_after_alloc!();
         js_object_set_field(obj, new_index as u32, JSValue::from_bits(value.to_bits()));
         refresh_roots_after_alloc!();
         mirror_class_object_static_write(obj, key, value);

@@ -378,6 +378,105 @@ fn deferred_connect_reaches_the_loop_on_every_route() {
     assert_eq!(handles_after, handles_before);
 }
 
+/// Endpoint dispatch depends on stored socket state, independently of the OS
+/// listener used by the adopted-stream regression below.
+#[test]
+fn stored_socket_endpoints_reach_dynamic_dispatch() {
+    let _guard = GcTestGuard::new();
+    let socket_id = -30_001;
+    let _cleanup = NetHandleCleanup::new(vec![socket_id]);
+    let getters: [(&str, unsafe extern "C" fn(i64) -> f64); 6] = [
+        ("remoteAddress", js_net_socket_get_remote_address),
+        ("remotePort", js_net_socket_get_remote_port),
+        ("remoteFamily", js_net_socket_get_remote_family),
+        ("localAddress", js_net_socket_get_local_address),
+        ("localPort", js_net_socket_get_local_port),
+        ("localFamily", js_net_socket_get_local_family),
+    ];
+    for endpoints in [
+        Some(("127.0.0.1:12001", "127.0.0.2:12002")),
+        Some(("[::1]:12003", "[2001:db8::1]:12004")),
+        None,
+    ] {
+        let mut socket = SocketState::for_test(false);
+        if let Some((local, remote)) = endpoints {
+            socket.local_addr = Some(local.parse().unwrap());
+            socket.remote_addr = Some(remote.parse().unwrap());
+        }
+        statics::sockets().lock().unwrap().insert(socket_id, socket);
+        for (name, getter) in getters {
+            let expected = unsafe { getter(socket_id) };
+            assert_eq!(
+                expected.to_bits() == dispatch::undefined().to_bits(),
+                endpoints.is_none(),
+                "{name} follows the stored endpoint"
+            );
+            // Preserve an address/family string if the dispatch getter allocates
+            // across a moving collection before the value comparison.
+            perry_runtime::gc::js_shadow_slot_set(0, expected.to_bits());
+            let mut actual = dispatch::undefined();
+            assert_eq!(
+                unsafe {
+                    dispatch::js_ext_net_handle_property_dispatch(
+                        socket_id,
+                        name.as_ptr(),
+                        name.len(),
+                        &mut actual,
+                    )
+                },
+                1,
+                "{name} is claimed for a socket"
+            );
+            let expected = f64::from_bits(perry_runtime::gc::js_shadow_slot_get(0));
+            assert_ne!(
+                perry_runtime::value::js_jsvalue_equals(expected, actual),
+                0,
+                "{name} agrees with its direct getter"
+            );
+        }
+    }
+    let flags: [(&str, unsafe extern "C" fn(i64) -> f64); 3] = [
+        ("destroyed", js_net_socket_get_destroyed),
+        ("connecting", js_net_socket_get_connecting),
+        ("writableLength", js_net_socket_get_writable_length),
+    ];
+    for (name, getter) in flags {
+        let expected = unsafe { getter(socket_id) };
+        let mut actual = dispatch::undefined();
+        assert_eq!(
+            unsafe {
+                dispatch::js_ext_net_handle_property_dispatch(
+                    socket_id,
+                    name.as_ptr(),
+                    name.len(),
+                    &mut actual,
+                )
+            },
+            1,
+            "existing {name} remains claimed"
+        );
+        assert_ne!(perry_runtime::value::js_jsvalue_equals(expected, actual), 0);
+    }
+    let invalid_id = -30_002;
+    assert!(!statics::sockets().lock().unwrap().contains_key(&invalid_id));
+    for (name, _) in getters {
+        let mut actual = 123.0;
+        assert_eq!(
+            unsafe {
+                dispatch::js_ext_net_handle_property_dispatch(
+                    invalid_id,
+                    name.as_ptr(),
+                    name.len(),
+                    &mut actual,
+                )
+            },
+            0,
+            "{name} is not claimed for an invalid handle"
+        );
+        assert_eq!(actual, 123.0);
+    }
+}
+
 /// #11155: `adopt_upgraded_tcp_stream` adopts on the calling thread's own loop
 /// or refuses outright. It used to park the stream in a process-wide map and
 /// post the adoption with no agent named, so a caller that did not own the
@@ -479,6 +578,43 @@ fn upgraded_stream_adoption_is_on_the_callers_loop_or_refused() {
             handles_before + 1,
             "the adoption must be on this thread's loop when the call returns"
         );
+        // Accepted/upgraded sockets carry both endpoints already; the dynamic
+        // property path must serve the same getters as a statically typed one.
+        for (name, expected) in unsafe {
+            [
+                ("remoteAddress", js_net_socket_get_remote_address(id)),
+                ("remotePort", js_net_socket_get_remote_port(id)),
+                ("remoteFamily", js_net_socket_get_remote_family(id)),
+                ("localAddress", js_net_socket_get_local_address(id)),
+                ("localPort", js_net_socket_get_local_port(id)),
+                ("localFamily", js_net_socket_get_local_family(id)),
+            ]
+        } {
+            assert_ne!(
+                expected.to_bits(),
+                dispatch::undefined().to_bits(),
+                "{name} has an endpoint"
+            );
+            let mut actual = dispatch::undefined();
+            assert_eq!(
+                unsafe {
+                    dispatch::js_ext_net_handle_property_dispatch(
+                        id,
+                        name.as_ptr(),
+                        name.len(),
+                        &mut actual,
+                    )
+                },
+                1,
+                "{name} is claimed"
+            );
+            // Address/family reads allocate strings; compare their JS values.
+            assert_ne!(
+                perry_runtime::value::js_jsvalue_equals(expected, actual),
+                0,
+                "{name} matches"
+            );
+        }
         crate::lifecycle::js_ext_net_destroy_socket(id);
         let _ = unsafe { js_net_process_pending() };
         perry_runtime::agent::retire_agent(agent);

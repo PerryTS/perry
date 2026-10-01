@@ -9,6 +9,8 @@ use super::*;
 /// Context for emitting a single function body
 pub(super) struct FuncEmitCtx<'a> {
     pub(super) emitter: &'a WasmModuleEmitter,
+    /// Compiler-only lexical binding stack; emitted storage is WASM locals.
+    pub(super) scoped_temp_ids: Vec<LocalId>,
     pub(super) local_map: &'a BTreeMap<LocalId, u32>,
     /// Block nesting depth for break/continue
     pub(super) break_depth: Vec<u32>,
@@ -49,6 +51,7 @@ impl<'a> FuncEmitCtx<'a> {
         Self {
             emitter,
             local_map,
+            scoped_temp_ids: Vec::new(),
             break_depth: Vec::new(),
             loop_depth: Vec::new(),
             block_depth: 0,

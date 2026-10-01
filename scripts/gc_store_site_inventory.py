@@ -601,12 +601,15 @@ CODEGEN_TESTS_SUFFIX = "_tests.rs"
 STEM_EMITTER_ARG_INDEX = {
     "emit_write_barrier_slot_generation_tested": 5,
     "emit_write_barrier_slot_value_and_generation_tested": 5,
-    "emit_jsvalue_slot_store_pointer_tested": 11,
+    # 8a51a41b5 retired the layout-note/header-state parameters (object
+    # layout notes are gone after ShapeId tracing): 12 args -> 9, and the
+    # static-key bookkeeping 8 -> 6. The stems themselves are unchanged.
+    "emit_jsvalue_slot_store_pointer_tested": 8,
     "emit_guarded_inbounds_array_store": 4,
     "emit_guarded_inbounds_array_store_keyed": 4,
     # The static-key store IC (`expr/put_value_store_ic.rs`): its bookkeeping
     # emitter takes the stem after the value.
-    "emit_static_store_ic_bookkeeping": 7,
+    "emit_static_store_ic_bookkeeping": 5,
 }
 
 # Emitter wrappers that forward a caller-supplied stem: their INTERNAL emitter
@@ -1637,8 +1640,8 @@ def run_self_tests() -> int:
                 "// GC_STORE_AUDIT(BARRIERED): planted\n"
                 "// GC_STORE_AUDIT(BARRIERED): planted add\n"
                 "fn lower_store(ctx: &mut FnCtx) {\n"
-                "    emit_static_store_ic_bookkeeping(ctx, a, b, c, d, e, f, \"put.pic\");\n"
-                "    emit_static_store_ic_bookkeeping(ctx, a, b, c, d, e, f, \"put.pic\");\n"
+                "    emit_static_store_ic_bookkeeping(ctx, a, b, c, d, \"put.pic\");\n"
+                "    emit_static_store_ic_bookkeeping(ctx, a, b, c, d, \"put.pic\");\n"
                 "}\n"
             ),
             # Step 4b's bare pointer store (one marker, the same put.pic
@@ -1646,7 +1649,7 @@ def run_self_tests() -> int:
             "crates/perry-codegen/src/stmt/region_loop/bare.rs": (
                 "// GC_STORE_AUDIT(BARRIERED): planted\n"
                 "fn lower_put(ctx: &mut FnCtx) {\n"
-                "    emit_static_store_ic_bookkeeping(ctx, a, b, c, d, e, f, \"put.pic\");\n"
+                "    emit_static_store_ic_bookkeeping(ctx, a, b, c, d, \"put.pic\");\n"
                 "}\n"
             ),
             STEM_REGISTRY_PATH: (
@@ -1711,6 +1714,30 @@ def run_self_tests() -> int:
         "}\n"
     )
     expect_verify("V-P4 non-literal stem", t, "non-literal stem")
+
+    # Arity drift (8a51a41b5 shrank both shared emitters and this gate went
+    # red on main): a call SHORTER than STEM_EMITTER_ARG_INDEX expects must
+    # fail loudly, and so must a call at the old, longer arity — its stem
+    # index then lands on a non-literal argument.
+    t = dict(base)
+    t["crates/perry-codegen/src/expr/put_value_store_ic.rs"] = t[
+        "crates/perry-codegen/src/expr/put_value_store_ic.rs"
+    ].replace(
+        'emit_static_store_ic_bookkeeping(ctx, a, b, c, d, "put.pic");',
+        'emit_static_store_ic_bookkeeping(ctx, a, "put.pic");',
+        1,
+    )
+    expect_verify("V-P4b emitter arity shrank", t, "expected stem at index")
+
+    t = dict(base)
+    t["crates/perry-codegen/src/expr/put_value_store_ic.rs"] = t[
+        "crates/perry-codegen/src/expr/put_value_store_ic.rs"
+    ].replace(
+        'emit_static_store_ic_bookkeeping(ctx, a, b, c, d, "put.pic");',
+        'emit_static_store_ic_bookkeeping(ctx, a, b, c, d, e, f, "put.pic");',
+        1,
+    )
+    expect_verify("V-P4c emitter arity grew", t, "non-literal stem")
 
     t = dict(base)
     del t[STEM_REGISTRY_PATH]

@@ -608,6 +608,25 @@ jobs:
       # sweep. Scanner under-counts have shipped twice (#8207: 18 symbols
       # including js_throw; 2026-09-22: 56 via macros), both silent, both
       # toward green.
+      - name: GC macro export scanner regression
+        if: ${{ !cancelled() }}
+        run: python3 scripts/gc_macro_exports_test.py
+
+      - name: Native export collision inventory
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/native_export_collisions.py --self-test
+          python3 scripts/native_export_collisions.py
+
+      - name: Native export collision baseline may not rise
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null \
+            || git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          python3 scripts/native_export_collisions.py --no-raise-vs "$BASE_SHA"
+
       - name: Macro-defined export item position (GC root dominance)
         if: ${{ !cancelled() }}
         run: python3 scripts/gc_root_dominance_check.py --audit-macro-item-position

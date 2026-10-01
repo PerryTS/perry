@@ -262,7 +262,7 @@ pub(crate) unsafe fn try_reuse_parse_object_template(
                     for &element in &elements[..len as usize] {
                         array.push(&mut batch, element);
                     }
-                    JSValue::object_ptr(array.finish(&batch).cast())
+                    JSValue::object_ptr(array.finish(&mut batch).cast())
                 }
             };
         }

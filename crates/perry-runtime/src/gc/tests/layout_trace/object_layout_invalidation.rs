@@ -11,6 +11,8 @@ use super::*;
 // The prototype-only twins (zero-raw-field scan, pointer-write fallback,
 // `layout_transfer` on move) were dropped — `typed_shape.rs` and
 // `object_closure_slots.rs` already pin those paths for the default installer.
+// Charter step 5: the raw-numeric scan skipping and the copy transfer are now
+// the shape's `F64` lanes (the collector traces an object by its shape).
 
 #[test]
 fn test_layout_scan_trace_counts_raw_numeric_object_fields() {
@@ -29,15 +31,8 @@ fn test_layout_scan_trace_counts_raw_numeric_object_fields() {
     let obj = crate::object::js_object_alloc(0, 2);
     crate::object::js_object_set_field(obj, 0, crate::value::JSValue::number(1.25));
     crate::object::js_object_set_field(obj, 1, crate::value::JSValue::number(-2.5));
-    let raw_mask = [0b11u64];
-    js_gc_init_typed_shape_layout(
-        obj as u64,
-        2,
-        raw_mask.as_ptr(),
-        raw_mask.len() as u32,
-        std::ptr::null(),
-        0,
-    );
+    // Charter step 5: the raw-numeric fields are the shape's `F64` lanes.
+    unsafe { restamp_with_rep(obj, f64_lanes(0..2)) };
 
     let valid_ptrs = build_valid_pointer_set();
     assert!(try_mark_value(
@@ -87,16 +82,8 @@ fn test_layout_scan_trace_counts_mixed_raw_numeric_object_fields() {
     );
     let child = crate::string::js_string_from_bytes(b"mixed-child".as_ptr(), 11);
     crate::object::js_object_set_field(obj, 1, crate::value::JSValue::string_ptr(child));
-    let raw_mask = [0b01u64];
-    let pointer_mask = [0b10u64];
-    js_gc_init_typed_shape_layout(
-        obj as u64,
-        2,
-        raw_mask.as_ptr(),
-        raw_mask.len() as u32,
-        pointer_mask.as_ptr(),
-        pointer_mask.len() as u32,
-    );
+    // Charter step 5: slot 0 is the shape's `F64` lane, slot 1 stays `Any`.
+    unsafe { restamp_with_rep(obj, f64_lanes([0])) };
 
     let valid_ptrs = build_valid_pointer_set();
     assert!(try_mark_value(
@@ -126,7 +113,7 @@ fn test_layout_scan_trace_counts_mixed_raw_numeric_object_fields() {
 }
 
 #[test]
-fn test_raw_numeric_object_descriptor_transfers_on_copying_minor_and_skips_raw_slots() {
+fn test_f64_lanes_move_with_the_shape_on_copying_minor_and_skip_raw_slots() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
 
@@ -135,19 +122,10 @@ fn test_raw_numeric_object_descriptor_transfers_on_copying_minor_and_skips_raw_s
     crate::object::js_object_set_field(obj, 0, crate::value::JSValue::number(10.5));
     crate::object::js_object_set_field(obj, 1, crate::value::JSValue::from_bits(ptr_bits(child)));
     crate::object::js_object_set_field(obj, 2, crate::value::JSValue::number(-3.25));
-    let raw_mask = [0b101u64];
-    let pointer_mask = [0b010u64];
-    js_gc_init_typed_shape_layout(
-        obj as u64,
-        3,
-        raw_mask.as_ptr(),
-        raw_mask.len() as u32,
-        pointer_mask.as_ptr(),
-        pointer_mask.len() as u32,
-    );
-    assert!(layout_typed_raw_f64_slot_for_user(obj as usize, 0));
-    assert!(layout_typed_raw_f64_slot_for_user(obj as usize, 2));
-    assert_eq!(test_layout_pointer_slot_count(obj as usize, 3), Some(1));
+    // Charter step 5: slots 0 and 2 are the shape's `F64` lanes; the shape
+    // moves with the object, so the copy is traced the same way.
+    let shape = unsafe { restamp_with_rep(obj, f64_lanes([0, 2])) };
+    assert_eq!(test_heap_child_slot_count(obj as *mut u8), 1);
     js_shadow_slot_set(0, ptr_bits(obj as usize));
 
     let trace = collect_minor_trace(GcTriggerKind::Direct);
@@ -166,9 +144,11 @@ fn test_raw_numeric_object_descriptor_transfers_on_copying_minor_and_skips_raw_s
     assert!(crate::arena::pointer_in_nursery(child_after));
     assert_eq!(first, 10.5);
     assert_eq!(third, -3.25);
-    assert!(layout_typed_raw_f64_slot_for_user(after, 0));
-    assert!(layout_typed_raw_f64_slot_for_user(after, 2));
-    assert_eq!(test_layout_pointer_slot_count(after, 3), Some(1));
+    assert_eq!(
+        unsafe { crate::object::shapes::object_shape_id(after as *const _) },
+        shape,
+        "the copy carries the shape, and with it the F64 lanes"
+    );
     assert_eq!(test_heap_child_slot_count(after as *mut u8), 1);
     assert!(
         trace.layout_scans.masked_pointer_slots_read >= 1,
@@ -182,155 +162,19 @@ fn test_raw_numeric_object_descriptor_transfers_on_copying_minor_and_skips_raw_s
     );
 }
 
-fn typed_point_for_shape_change_test(shape_id: u32) -> *mut crate::object::ObjectHeader {
-    let packed_keys = b"x\0y\0";
-    let obj = crate::object::js_object_alloc_with_shape(
-        shape_id,
-        2,
-        packed_keys.as_ptr(),
-        packed_keys.len() as u32,
-    );
-    crate::object::js_object_set_field(obj, 0, crate::value::JSValue::number(1.0));
-    crate::object::js_object_set_field(obj, 1, crate::value::JSValue::number(2.0));
-    let raw_mask = [0b11u64];
-    js_gc_init_typed_shape_layout(
-        obj as u64,
-        2,
-        raw_mask.as_ptr(),
-        raw_mask.len() as u32,
-        std::ptr::null(),
-        0,
-    );
-    assert_eq!(test_layout_pointer_slot_count(obj as usize, 2), Some(0));
-    obj
-}
-
-fn descriptor_object_with_single_field(
-    shape_id: u32,
-    key: &[u8],
-    value: crate::value::JSValue,
-) -> *mut crate::object::ObjectHeader {
-    let mut packed_key = Vec::with_capacity(key.len() + 1);
-    packed_key.extend_from_slice(key);
-    packed_key.push(0);
-    let desc = crate::object::js_object_alloc_with_shape(
-        shape_id,
-        1,
-        packed_key.as_ptr(),
-        packed_key.len() as u32,
-    );
-    crate::object::js_object_set_field(desc, 0, value);
-    desc
-}
-
 #[test]
-fn test_typed_object_dynamic_added_property_falls_back() {
-    clear_marks();
-    clear_mark_seeds();
-
-    let obj = typed_point_for_shape_change_test(86_101);
-    let z_key = crate::string::js_string_from_bytes(b"z".as_ptr(), 1);
-    crate::object::js_object_set_field_by_name(obj, z_key, 3.0);
-
-    assert_eq!(
-        test_layout_pointer_slot_count(obj as usize, 3),
-        None,
-        "adding a dynamic property must invalidate the exact typed shape"
-    );
-
-    clear_marks();
-    clear_mark_seeds();
-}
-
-#[test]
-fn test_typed_object_delete_falls_back() {
-    clear_marks();
-    clear_mark_seeds();
-
-    let obj = typed_point_for_shape_change_test(86_102);
-    let x_key = crate::string::js_string_from_bytes(b"x".as_ptr(), 1);
-    assert_eq!(crate::object::js_object_delete_field(obj, x_key), 1);
-
-    assert_eq!(
-        test_layout_pointer_slot_count(obj as usize, 1),
-        None,
-        "delete shifts keys/fields and must invalidate the exact typed shape"
-    );
-
-    clear_marks();
-    clear_mark_seeds();
-}
-
-#[test]
-fn test_typed_object_define_property_falls_back() {
-    clear_marks();
-    clear_mark_seeds();
-
-    let obj = typed_point_for_shape_change_test(86_103);
-    let x_key = crate::string::js_string_from_bytes(b"x".as_ptr(), 1);
-    let desc =
-        descriptor_object_with_single_field(86_104, b"value", crate::value::JSValue::number(9.0));
-
-    crate::object::js_object_define_property(
-        crate::value::js_nanbox_pointer(obj as i64),
-        f64::from_bits(crate::value::JSValue::string_ptr(x_key).bits()),
-        crate::value::js_nanbox_pointer(desc as i64),
-    );
-
-    assert_eq!(
-        test_layout_pointer_slot_count(obj as usize, 2),
-        None,
-        "Object.defineProperty must invalidate the exact typed shape even for existing keys"
-    );
-
-    clear_marks();
-    clear_mark_seeds();
-}
-
-#[test]
-fn test_typed_object_accessor_define_property_falls_back() {
-    clear_marks();
-    clear_mark_seeds();
-
-    let obj = typed_point_for_shape_change_test(86_105);
-    let x_key = crate::string::js_string_from_bytes(b"x".as_ptr(), 1);
-    // #2817: an accessor descriptor's `get` must be callable — a non-function
-    // value now throws. Use a real (capture-less) closure as the getter so we
-    // still exercise the accessor shape-invalidation path under test.
-    let getter = crate::closure::js_closure_alloc(std::ptr::null(), 0);
-    let desc = descriptor_object_with_single_field(
-        86_106,
-        b"get",
-        crate::value::JSValue::pointer(getter as *const u8),
-    );
-
-    crate::object::js_object_define_property(
-        crate::value::js_nanbox_pointer(obj as i64),
-        f64::from_bits(crate::value::JSValue::string_ptr(x_key).bits()),
-        crate::value::js_nanbox_pointer(desc as i64),
-    );
-
-    assert_eq!(
-        test_layout_pointer_slot_count(obj as usize, 2),
-        None,
-        "accessor descriptors must invalidate the exact typed shape"
-    );
-
-    clear_marks();
-    clear_mark_seeds();
-}
-
-#[test]
-fn test_heap_child_iterator_pointer_free_object_yields_no_child_slots() {
+fn test_heap_child_iterator_all_f64_lane_object_yields_no_child_slots() {
     clear_marks();
     clear_mark_seeds();
 
     let obj = crate::object::js_object_alloc(0, 3);
     crate::object::js_object_set_field(obj, 0, crate::value::JSValue::number(1.0));
     crate::object::js_object_set_field(obj, 1, crate::value::JSValue::number(2.0));
-    crate::object::js_object_set_field(obj, 2, crate::value::JSValue::bool(false));
+    crate::object::js_object_set_field(obj, 2, crate::value::JSValue::number(3.0));
+    // Charter step 5: an object is traced by its shape; every lane `F64`
+    // makes the payload pointer-free.
+    unsafe { restamp_with_rep(obj, f64_lanes(0..3)) };
 
-    assert_eq!(test_layout_pointer_slot_count(obj as usize, 3), Some(0));
     assert_eq!(test_heap_child_slot_count(obj as *mut u8), 0);
 
     let valid_ptrs = build_valid_pointer_set();

@@ -23,6 +23,7 @@ fn seed_here() -> u32 {
         packed.len() as u32,
         2,
         2,
+        0,
     )
 }
 

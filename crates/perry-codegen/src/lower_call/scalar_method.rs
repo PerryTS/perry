@@ -609,8 +609,15 @@ fn materialize_scalar_receiver(
         ctx.pending_declares.push((
             "js_object_alloc_class_inline_keys_stamped".to_string(),
             I64,
-            vec![I32, I32, I32, I64, I32],
+            vec![I32, I32, I32, I64, I32, I64],
         ));
+        // The birth rep module init minted that id with (T1).
+        let rep = ctx
+            .class_birth_reps
+            .get(&keys_global_name)
+            .copied()
+            .unwrap_or(0)
+            .to_string();
         let obj_handle = ctx.block().call(
             I64,
             "js_object_alloc_class_inline_keys_stamped",
@@ -620,9 +627,9 @@ fn materialize_scalar_receiver(
                 (I32, &field_count_str),
                 (I64, &keys_ptr),
                 (I32, &shape_id),
+                (I64, &rep),
             ],
         );
-        emit_materialized_scalar_receiver_typed_shape_init(ctx, class_name, &obj_handle);
         (obj_handle, true)
     } else {
         (
@@ -668,54 +675,6 @@ fn materialize_scalar_receiver(
     Ok(nanbox_pointer_inline(ctx.block(), &obj_handle))
 }
 
-fn emit_materialized_scalar_receiver_typed_shape_init(
-    ctx: &mut FnCtx<'_>,
-    class_name: &str,
-    obj_handle: &str,
-) {
-    let Some(keys_global_name) = ctx.class_keys_globals.get(class_name).cloned() else {
-        return;
-    };
-    // Refs #5094: prefer the prefix-disambiguated chain so slot/word counts
-    // agree with the mask globals emitted in compile_module (same-named
-    // cross-module parents mis-resolve in the name-keyed walk).
-    let typed_layout = ctx
-        .class_init_chains
-        .get(class_name)
-        .map(|chain| crate::typed_shape::class_typed_layout_from_chain(chain))
-        .unwrap_or_else(|| crate::typed_shape::class_typed_layout(ctx.classes, class_name));
-    let slot_count_str = typed_layout.slot_count.to_string();
-    let raw_mask_word_count_str = typed_layout.raw_f64_mask_words.len().to_string();
-    let pointer_mask_word_count_str = typed_layout.pointer_mask_words.len().to_string();
-    let raw_mask_ref = if typed_layout.raw_f64_mask_words.is_empty() {
-        "null".to_string()
-    } else {
-        format!(
-            "@{}",
-            crate::typed_shape::raw_f64_mask_global_name_from_keys_global(&keys_global_name)
-        )
-    };
-    let pointer_mask_ref = if typed_layout.pointer_mask_words.is_empty() {
-        "null".to_string()
-    } else {
-        format!(
-            "@{}",
-            crate::typed_shape::mask_global_name_from_keys_global(&keys_global_name)
-        )
-    };
-    ctx.block().call_void(
-        "js_gc_init_typed_shape_layout",
-        &[
-            (I64, obj_handle),
-            (I32, &slot_count_str),
-            (PTR, &raw_mask_ref),
-            (I32, &raw_mask_word_count_str),
-            (PTR, &pointer_mask_ref),
-            (I32, &pointer_mask_word_count_str),
-        ],
-    );
-}
-
 fn emit_materialized_scalar_receiver_direct_field_store(
     ctx: &mut FnCtx<'_>,
     receiver_id: u32,
@@ -733,9 +692,12 @@ fn emit_materialized_scalar_receiver_direct_field_store(
         let fields_base = blk.gep(I8, &obj_ptr, &[(I64, &header_skip)]);
         blk.gep(DOUBLE, &fields_base, &[(I64, &field_idx_str)])
     };
-    let is_raw_f64 = crate::type_analysis::class_field_declared_type(ctx, class_name, field)
-        .as_ref()
-        .is_some_and(crate::typed_shape::type_is_raw_f64_candidate);
+    // Charter step 5, P4: raw exactly for an `F64` lane of the birth rep.
+    let is_raw_f64 = crate::expr::class_field_inline_guard::class_birth_slot_is_f64(
+        ctx,
+        class_name,
+        field_index,
+    );
     let stored = if is_raw_f64 {
         let raw = ctx.block().call(
             DOUBLE,
@@ -756,7 +718,7 @@ fn emit_materialized_scalar_receiver_direct_field_store(
             value,
             obj_handle,
             &field_idx_str,
-            true,
+            false,
             obj_handle,
             &field_addr,
             true,
