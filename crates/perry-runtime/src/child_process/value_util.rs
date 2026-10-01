@@ -1,10 +1,7 @@
 use super::*;
 
 use crate::closure::{js_closure_get_capture_ptr, ClosureHeader};
-use crate::object::{
-    js_implicit_this_get, js_object_get_field_by_name_f64, js_object_set_field_by_name,
-    ObjectHeader,
-};
+use crate::object::{js_object_get_field_by_name_f64, js_object_set_field_by_name, ObjectHeader};
 use crate::string::{js_string_from_bytes, StringHeader};
 use crate::value::JSValue;
 
@@ -20,9 +17,9 @@ pub(crate) fn cp_box_ptr(ptr: *const u8) -> f64 {
 
 /// Recover the host object value captured in closure slot 0 by `cp_build_object`.
 #[inline]
-pub(crate) fn cp_this(closure: *const ClosureHeader) -> f64 {
+pub(crate) fn cp_this(this: crate::closure::JsThis, closure: *const ClosureHeader) -> f64 {
     if closure.is_null() {
-        return js_implicit_this_get();
+        return this.as_f64();
     }
     f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64)
 }

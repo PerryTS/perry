@@ -943,6 +943,15 @@ pub(crate) unsafe fn get_native_module_constant(
     }
 }
 
+/// Live properties answered by a dispatch call above: the ESM export snapshot
+/// cache (`NATIVE_ESM_EXPORT_VALUES`) must never memoize them.
+pub(crate) fn native_module_constant_is_live(module_name: &str, property: &str) -> bool {
+    matches!(
+        (module_name, property),
+        ("domain", "_stack") | ("domain", "active")
+    )
+}
+
 /// Sorted table for `fs_const_tail`: block-level `#[cfg]` predicates mirrored
 /// verbatim as per-platform tables; per-arm cfg chains composed with
 /// `not(any(..))` so first-match-wins semantics survive; every value kept

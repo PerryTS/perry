@@ -223,3 +223,93 @@ fn test_7187_minor_in_the_unarmed_window_has_complete_old_young_coverage() {
     reset_remembered_set();
     clear_marks();
 }
+
+// ── #11549: the arming walk skips wholly-nursery blocks ────────────────────
+//
+// The same triad shape. The positive test proves the skip ENGAGED (the walk
+// visited fewer objects than the nursery alone holds) and that the edge is
+// still recovered; the sabotage arm skips old blocks too and must lose the
+// edge, which proves the positive test's recovery comes from the walk under
+// test and not from some other coverage.
+
+const ARMING_WALK_YOUNG_OBJECTS: usize = 4096;
+
+/// The born-old fixture plus a young generation far larger than the old one.
+fn arming_walk_fixture() -> (usize, Vec<usize>) {
+    let (_old, fields, young) = unsafe { born_old_parent_with_young_child() };
+    let mut keep = vec![young];
+    for _ in 0..ARMING_WALK_YOUNG_OBJECTS {
+        keep.push(crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize);
+    }
+    (
+        crate::arena::generation_page_for_addr(fields as usize),
+        keep,
+    )
+}
+
+#[test]
+fn test_11549_arming_walk_skips_nursery_blocks_and_recovers_the_edge() {
+    let _guard = GcTestIsolationGuard::new();
+    reset_remembered_set();
+    clear_marks();
+    let _window = UnarmedWindowGuard::open();
+
+    let (slot_page, young) = arming_walk_fixture();
+    assert!(
+        young.iter().all(|&addr| matches!(
+            crate::arena::classify_heap_generation(addr),
+            crate::arena::HeapGeneration::Nursery
+        )),
+        "the fixture's young objects must be nursery-resident for the skip to have a subject"
+    );
+    let valid_ptrs = build_valid_pointer_set();
+    let _ = mark_remembered_set_roots(&valid_ptrs);
+
+    let census = remembered_reconstruct_census();
+    assert_eq!(census.reconstructs, 1);
+    assert!(
+        old_page_dirty_for(slot_page),
+        "skipping nursery blocks must not lose the born-old parent's edge"
+    );
+    assert!(
+        census.objects_walked < ARMING_WALK_YOUNG_OBJECTS as u64,
+        "the walk visited {} objects while the nursery alone holds {} — the \
+         nursery-block skip did not engage",
+        census.objects_walked,
+        ARMING_WALK_YOUNG_OBJECTS
+    );
+    assert!(
+        census.objects_walked >= 1,
+        "the old parent must have been walked"
+    );
+
+    reset_remembered_set();
+    clear_marks();
+}
+
+/// Sabotage arm: a skip that also drops OLD blocks must lose the edge.
+#[test]
+fn test_11549_arming_walk_that_skips_old_blocks_loses_the_edge() {
+    let _guard = GcTestIsolationGuard::new();
+    reset_remembered_set();
+    clear_marks();
+    let _window = UnarmedWindowGuard::open();
+
+    let (slot_page, _young) = arming_walk_fixture();
+    let _sabotage = crate::gc::verify::arming_walk_sabotage::Guard::arm();
+    let valid_ptrs = build_valid_pointer_set();
+    let _ = mark_remembered_set_roots(&valid_ptrs);
+
+    let census = remembered_reconstruct_census();
+    assert_eq!(census.reconstructs, 1, "the reconstruct must still run");
+    assert_eq!(census.objects_walked, 0, "sabotage must skip every block");
+    assert!(
+        !old_page_dirty_for(slot_page),
+        "with every block skipped the edge must be uncovered — if the page is \
+         dirty, something other than the walk covers it and the positive test \
+         proves nothing"
+    );
+
+    reset_remembered_set();
+    clear_marks();
+}

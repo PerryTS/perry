@@ -246,7 +246,7 @@ pub(super) unsafe fn class_object_name_value(
         return Some(v);
     }
     let class_id = (*obj).class_id;
-    if super::super::class_registry::class_is_key_deleted(class_id, "name") {
+    if super::super::class_registry::class_static_key_deleted(class_id, "name") {
         return None;
     }
     let cname = super::super::class_registry::class_name_for_id(class_id)?;
@@ -363,7 +363,7 @@ pub(super) unsafe fn instance_constructor_value(
         // The prototype's OWN `constructor` data field answers the common
         // shapes directly — `Object.prototype`, a declared `C.prototype`, a
         // materialized `F.prototype`, a `{ constructor: F }` literal — so take
-        // it without the general chain walk, whose implicit-`this` juggling,
+        // it without the general chain walk, whose receiver juggling,
         // accessor-receiver override and registry probes cost ~3000
         // instructions per read. Skipped when an accessor owns the key, which
         // must run through the walk to fire with the right receiver.
@@ -383,8 +383,9 @@ pub(super) unsafe fn instance_constructor_value(
         );
     }
     if class_id != 0 && is_class_id_registered(class_id) {
-        let bits = 0x7FFE_0000_0000_0000u64 | (class_id as u64);
-        return Some(JSValue::from_bits(bits));
+        return Some(JSValue::from_bits(
+            crate::object::class_value::class_value(class_id).to_bits(),
+        ));
     }
     // class_id == 0 fallback: plain ObjectHeader allocated
     // without an HIR shape (Object.create(null) hybrids, raw

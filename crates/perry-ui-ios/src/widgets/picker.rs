@@ -21,7 +21,7 @@ pub(crate) fn scan_ios_picker_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_
 }
 
 extern "C" {
-    fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+    fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
     // dispatch_get_main_queue() is a macro; the actual symbol is _dispatch_main_q
     static _dispatch_main_q: std::ffi::c_void;
@@ -43,7 +43,11 @@ unsafe extern "C" fn picker_callback_trampoline(context: *mut std::ffi::c_void) 
     let _ = std::panic::catch_unwind(|| {
         let payload = Box::from_raw(context as *mut PickerDispatch);
         let closure_ptr = js_nanbox_get_pointer(payload.closure_f64);
-        js_closure_call1(closure_ptr as *const u8, payload.index);
+        js_closure_call1(
+            closure_ptr as *const u8,
+            perry_ffi::JsThis::UNDEFINED,
+            payload.index,
+        );
     });
 }
 

@@ -36,8 +36,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 extern "C" {
-    fn js_closure_call0(closure: *const u8) -> f64;
-    fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+    fn js_closure_call0(closure: *const u8, this: perry_ffi::JsThis) -> f64;
+    fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
     fn js_pointer_event_new(x: f64, y: f64, button: u32, pointer_type: u32) -> f64;
 }
@@ -273,7 +273,7 @@ fn fire_click(handle: i64) {
     unsafe {
         let closure_ptr = js_nanbox_get_pointer(cb_f64);
         if closure_ptr != 0 {
-            js_closure_call0(closure_ptr as *const u8);
+            js_closure_call0(closure_ptr as *const u8, perry_ffi::JsThis::UNDEFINED);
         }
     }
 }
@@ -286,7 +286,7 @@ fn fire_pointer_event(cb_f64: f64, x: f64, y: f64, button: u32) {
             return;
         }
         let pe = js_pointer_event_new(x, y, button, POINTER_TYPE_MOUSE);
-        js_closure_call1(closure_ptr as *const u8, pe);
+        js_closure_call1(closure_ptr as *const u8, perry_ffi::JsThis::UNDEFINED, pe);
     }
 }
 
@@ -301,7 +301,11 @@ fn fire_hover(handle: i64, is_hovering: bool) {
             return;
         }
         let bits = if is_hovering { TAG_TRUE } else { TAG_FALSE };
-        js_closure_call1(closure_ptr as *const u8, f64::from_bits(bits));
+        js_closure_call1(
+            closure_ptr as *const u8,
+            perry_ffi::JsThis::UNDEFINED,
+            f64::from_bits(bits),
+        );
     }
 }
 

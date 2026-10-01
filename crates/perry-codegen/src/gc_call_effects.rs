@@ -436,9 +436,6 @@ mod tests {
     const ISSUE_11523: &[&str] = &[
         "js_gc_note_slot_layout",
         "js_gc_note_slot_layout_aware",
-        "js_gc_key_add_layout_unknown",
-        "js_gc_init_typed_shape_layout",
-        "js_gc_declare_typed_shape_layout",
         "js_typed_feedback_record_guard_pass",
         "js_typed_feedback_record_guard_fail",
         "js_typed_feedback_record_fallback_call",
@@ -482,12 +479,15 @@ mod tests {
         "js_object_get_class_id",
         "js_closure_get_capture_bits",
         "js_closure_exact_func_guard",
-        "js_box_alloc_bits",
+        // js_box_alloc_bits is deliberately NOT pinned here: #11179 made box/
+        // scope-cell allocation go through arena_alloc -> arena_cell_alloc,
+        // which can reach gc_try_emergency_reclaim, so the generated tables
+        // now (correctly) classify it AllocOnly, not Leaf. The read/write
+        // helpers below still are.
         "js_box_set_bits",
         "js_i32_box_get",
         "js_box_release",
         "js_box_scope_release",
-        "js_implicit_this_get",
         "js_tdz_suppress_begin",
         "js_tdz_suppress_end",
     ];
@@ -619,7 +619,9 @@ mod tests {
             );
             leaf += usize::from(classify_direct_callee(name) == GcCallEffect::CannotCollect);
         }
-        assert!(leaf >= 15, "only {leaf} of the #11523 helpers are Leaf");
+        // P4 retired three object-layout helpers that were Leaf. The surviving
+        // list has 14 Leaf helpers and six helpers that reenter on their own paths.
+        assert_eq!(leaf, ISSUE_11523.len() - 6, "#11523 Leaf census changed");
     }
 
     /// The box/closure family's containment in the root-dominance checker's
@@ -762,6 +764,25 @@ mod tests {
         }
     }
 
+    /// First-read D3: a generic read's miss front must be a proven GC leaf
+    /// (`read_confirm.rs` says why). If the generated table ever classifies
+    /// it otherwise, the front grew a collecting path — a design error in the
+    /// front, not a table update. Its decline continuation still collects.
+    #[test]
+    fn the_generic_read_miss_front_is_leaf_and_its_continuation_collects() {
+        assert_eq!(
+            runtime_class("js_object_get_field_ic_front"),
+            RuntimeClass::Leaf
+        );
+        assert!(external_callee_cannot_collect(
+            "js_object_get_field_ic_front"
+        ));
+        assert!(external_callee_cannot_collect("perry_shape_dir_cell"));
+        assert!(!external_callee_cannot_collect(
+            "js_object_get_field_ic_slow"
+        ));
+    }
+
     #[test]
     fn register_global_root_tracks_the_barrier_it_wraps() {
         assert_eq!(
@@ -788,7 +809,7 @@ mod tests {
             "js_object_get_field_ic_miss_packed",
             "js_object_get_field_ic_slow",
             "js_object_get_field_ic_nonptr",
-            "js_implicit_this_get_sloppy",
+            "js_this_coerce_sloppy",
             "js_box_get_bits",
             "js_box_get_bits_trusted",
             "js_box_get_bits_named",

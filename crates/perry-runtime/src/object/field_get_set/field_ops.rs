@@ -147,8 +147,6 @@ pub extern "C" fn js_object_set_field(obj: *mut ObjectHeader, field_index: u32, 
         } else {
             value
         };
-        let fields_ptr = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut JSValue;
-        let slot = fields_ptr.add(field_index as usize);
         // #7164 publication order (same invariant as the two "#7154
         // publication order" sites in field_set_by_name/tail.rs): widen
         // `field_count` FIRST, before the store. `object::gc_field_slot_range`
@@ -170,13 +168,8 @@ pub extern "C" fn js_object_set_field(obj: *mut ObjectHeader, field_index: u32, 
         if field_index >= stored_field_count {
             set_object_live_slot_count(obj, field_index + 1);
         }
-        crate::object::proto_validity::note_marked_value_write(obj);
-        crate::gc::runtime_store_jsvalue_slot(
-            obj as usize,
-            slot as usize,
-            field_index as usize,
-            value.bits(),
-        );
+        // The funnel: the field-representation store check (charter step 5).
+        crate::object::store_object_field_slot(obj, field_index as usize, value.bits());
     }
 }
 
@@ -317,7 +310,11 @@ pub extern "C" fn js_object_set_field_by_index(
                             let closure = (acc.set & crate::value::POINTER_MASK)
                                 as *const crate::closure::ClosureHeader;
                             if !closure.is_null() {
-                                crate::closure::js_closure_call1(closure, value);
+                                crate::closure::js_closure_call1(
+                                    closure,
+                                    crate::closure::plain_call_receiver(),
+                                    value,
+                                );
                             }
                         }
                         return;

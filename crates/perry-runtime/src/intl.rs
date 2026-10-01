@@ -988,11 +988,31 @@ fn dt_component_option_from_handle(
 /// (`"MEZ"`, `"invalid"`, `"Europe/İstanbul"`, …) do not. Returns the (best
 /// effort, un-recased) canonical identifier, or `None` to signal `RangeError`.
 fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, options: f64) -> f64 {
+    make_instance_this(
+        closure,
+        crate::closure::JsThis::UNDEFINED,
+        kind,
+        locales,
+        options,
+    )
+}
+
+/// [`make_instance`] for a constructor native called with receiver `this`:
+/// the receiver the legacy ChainNumberFormat / ChainDateTimeFormat path
+/// (`ctor_guard::chain_legacy_constructed`) installs the instance on.
+fn make_instance_this(
+    closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+    kind: &str,
+    locales: f64,
+    options: f64,
+) -> f64 {
     // Locale/option access can invoke user Proxy traps. Keep both arguments and
     // the partially initialized result live across those calls; the handles are
     // refreshed explicitly in the long PluralRules read-order sequence below.
     let scope = crate::gc::RuntimeHandleScope::new();
     let closure_handle = scope.root_raw_const_ptr(closure);
+    let this_handle = scope.root_nanbox_f64(this.as_f64());
     let locales_handle = scope.root_nanbox_f64(locales);
     let options_handle = scope.root_nanbox_f64(options);
     let locale = locale_or_default(locales_handle.get_nanbox_f64());
@@ -1015,7 +1035,7 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
             let format_fn = install_bound_instance_function_from_handle(
                 &obj_handle,
                 "format",
-                number_format_bound_format_thunk as *const u8,
+                crate::fn_info!(number_format_bound_format_thunk, 1; with_declared(1)),
                 1,
             );
             if !format_fn.is_null() {
@@ -1029,7 +1049,7 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
             install_bound_instance_function_from_handle(
                 &obj_handle,
                 "formatToParts",
-                number_format_bound_to_parts_thunk as *const u8,
+                crate::fn_info!(number_format_bound_to_parts_thunk, 1; with_declared(1)),
                 1,
             );
             // `formatRange`/`formatRangeToParts` are installed as own instance
@@ -1042,23 +1062,19 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
             install_function_from_handle(
                 &obj_handle,
                 "formatRange",
-                number_format_range_thunk as *const u8,
+                crate::fn_info!(number_format_range_thunk, 2; with_declared(2)),
                 2,
-                2,
-                false,
             );
             install_function_from_handle(
                 &obj_handle,
                 "formatRangeToParts",
-                number_format_range_to_parts_thunk as *const u8,
+                crate::fn_info!(number_format_range_to_parts_thunk, 2; with_declared(2)),
                 2,
-                2,
-                false,
             );
             install_bound_instance_function_from_handle(
                 &obj_handle,
                 "resolvedOptions",
-                number_format_bound_resolved_options_thunk as *const u8,
+                crate::fn_info!(number_format_bound_resolved_options_thunk, 0; with_declared(0)),
                 0,
             );
         }
@@ -1335,7 +1351,7 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
             let format_fn = install_bound_instance_function_from_handle(
                 &obj_handle,
                 "format",
-                date_time_format_bound_format_thunk as *const u8,
+                crate::fn_info!(date_time_format_bound_format_thunk, 1; with_declared(1)),
                 1,
             );
             if !format_fn.is_null() {
@@ -1349,25 +1365,25 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
             install_bound_instance_function_from_handle(
                 &obj_handle,
                 "formatToParts",
-                date_time_format_bound_to_parts_thunk as *const u8,
+                crate::fn_info!(date_time_format_bound_to_parts_thunk, 1; with_declared(1)),
                 1,
             );
             install_bound_instance_function_from_handle(
                 &obj_handle,
                 "formatRange",
-                date_time_format_bound_range_thunk as *const u8,
+                crate::fn_info!(date_time_format_bound_range_thunk, 2; with_declared(2)),
                 2,
             );
             install_bound_instance_function_from_handle(
                 &obj_handle,
                 "formatRangeToParts",
-                date_time_format_bound_range_to_parts_thunk as *const u8,
+                crate::fn_info!(date_time_format_bound_range_to_parts_thunk, 2; with_declared(2)),
                 2,
             );
             install_bound_instance_function_from_handle(
                 &obj_handle,
                 "resolvedOptions",
-                date_time_format_bound_resolved_options_thunk as *const u8,
+                crate::fn_info!(date_time_format_bound_resolved_options_thunk, 0; with_declared(0)),
                 0,
             );
         }
@@ -1448,7 +1464,7 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
             let compare_fn = install_bound_instance_function_from_handle(
                 &obj_handle,
                 "compare",
-                collator_bound_compare_thunk as *const u8,
+                crate::fn_info!(collator_bound_compare_thunk, 2; with_declared(2)),
                 2,
             );
             if !compare_fn.is_null() {
@@ -1462,7 +1478,7 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
             install_bound_instance_function_from_handle(
                 &obj_handle,
                 "resolvedOptions",
-                collator_bound_resolved_options_thunk as *const u8,
+                crate::fn_info!(collator_bound_resolved_options_thunk, 0; with_declared(0)),
                 0,
             );
         }
@@ -1486,13 +1502,13 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
             install_bound_instance_function_from_handle(
                 &obj_handle,
                 "segment",
-                segmenter_bound_segment_thunk as *const u8,
+                crate::fn_info!(segmenter_bound_segment_thunk, 1; with_declared(1)),
                 1,
             );
             install_bound_instance_function_from_handle(
                 &obj_handle,
                 "resolvedOptions",
-                segmenter_bound_resolved_options_thunk as *const u8,
+                crate::fn_info!(segmenter_bound_resolved_options_thunk, 0; with_declared(0)),
                 0,
             );
         }
@@ -1524,19 +1540,19 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
             install_bound_instance_function_from_handle(
                 &obj_handle,
                 "format",
-                list_format_bound_format_thunk as *const u8,
+                crate::fn_info!(list_format_bound_format_thunk, 1; with_declared(1)),
                 1,
             );
             install_bound_instance_function_from_handle(
                 &obj_handle,
                 "formatToParts",
-                list_format_bound_to_parts_thunk as *const u8,
+                crate::fn_info!(list_format_bound_to_parts_thunk, 1; with_declared(1)),
                 1,
             );
             install_bound_instance_function_from_handle(
                 &obj_handle,
                 "resolvedOptions",
-                list_format_bound_resolved_options_thunk as *const u8,
+                crate::fn_info!(list_format_bound_resolved_options_thunk, 0; with_declared(0)),
                 0,
             );
         }
@@ -1588,19 +1604,19 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
             install_bound_instance_function_from_handle(
                 &obj_handle,
                 "format",
-                rtf_bound_format_thunk as *const u8,
+                crate::fn_info!(rtf_bound_format_thunk, 2; with_declared(2)),
                 2,
             );
             install_bound_instance_function_from_handle(
                 &obj_handle,
                 "formatToParts",
-                rtf_bound_to_parts_thunk as *const u8,
+                crate::fn_info!(rtf_bound_to_parts_thunk, 2; with_declared(2)),
                 2,
             );
             install_bound_instance_function_from_handle(
                 &obj_handle,
                 "resolvedOptions",
-                rtf_bound_resolved_options_thunk as *const u8,
+                crate::fn_info!(rtf_bound_resolved_options_thunk, 0; with_declared(0)),
                 0,
             );
         }
@@ -1632,92 +1648,21 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
     // ChainNumberFormat / ChainDateTimeFormat only (see `chain_legacy_constructed`):
     // Intl.Collator ignores its this-value, so it is deliberately excluded.
     if matches!(kind, KIND_NUMBER | KIND_DATE_TIME) {
-        if let Some(this_value) = closure_handle
-            .with_const_ptr(|closure| ctor_guard::chain_legacy_constructed(closure, instance))
-        {
+        if let Some(this_value) = closure_handle.with_const_ptr(|closure| {
+            ctor_guard::chain_legacy_constructed(closure, this_handle.get_nanbox_f64(), instance)
+        }) {
             return this_value;
         }
     }
     instance
 }
 
-pub(super) extern "C" fn number_format_constructor_thunk(
-    closure: *const ClosureHeader,
-    rest: f64,
-) -> f64 {
-    make_instance(closure, KIND_NUMBER, rest_arg(rest, 0), rest_arg(rest, 1))
-}
-
-pub(super) extern "C" fn date_time_format_constructor_thunk(
-    closure: *const ClosureHeader,
-    rest: f64,
-) -> f64 {
-    make_instance(
-        closure,
-        KIND_DATE_TIME,
-        rest_arg(rest, 0),
-        rest_arg(rest, 1),
-    )
-}
-
-pub(super) extern "C" fn collator_constructor_thunk(
-    closure: *const ClosureHeader,
-    rest: f64,
-) -> f64 {
-    make_instance(closure, KIND_COLLATOR, rest_arg(rest, 0), rest_arg(rest, 1))
-}
-
-pub(super) extern "C" fn segmenter_constructor_thunk(
-    closure: *const ClosureHeader,
-    rest: f64,
-) -> f64 {
-    require_new_target("Segmenter");
-    make_instance(
-        closure,
-        KIND_SEGMENTER,
-        rest_arg(rest, 0),
-        rest_arg(rest, 1),
-    )
-}
-
-pub(super) extern "C" fn list_format_constructor_thunk(
-    closure: *const ClosureHeader,
-    rest: f64,
-) -> f64 {
-    require_new_target("ListFormat");
-    make_instance(
-        closure,
-        KIND_LIST_FORMAT,
-        rest_arg(rest, 0),
-        rest_arg(rest, 1),
-    )
-}
-
-pub(super) extern "C" fn relative_time_format_constructor_thunk(
-    closure: *const ClosureHeader,
-    rest: f64,
-) -> f64 {
-    require_new_target("RelativeTimeFormat");
-    make_instance(
-        closure,
-        KIND_RELATIVE_TIME,
-        rest_arg(rest, 0),
-        rest_arg(rest, 1),
-    )
-}
-
-pub(super) extern "C" fn plural_rules_constructor_thunk(
-    closure: *const ClosureHeader,
-    rest: f64,
-) -> f64 {
-    require_new_target("PluralRules");
-    make_instance(
-        closure,
-        KIND_PLURAL_RULES,
-        rest_arg(rest, 0),
-        rest_arg(rest, 1),
-    )
-}
+mod constructor_thunks;
+pub(super) use constructor_thunks::{
+    collator_constructor_thunk, date_time_format_constructor_thunk, list_format_constructor_thunk,
+    number_format_constructor_thunk, plural_rules_constructor_thunk,
+    relative_time_format_constructor_thunk, segmenter_constructor_thunk,
+};
 
 fn supported_locales_array(locales: f64, options: f64) -> f64 {
     // `supportedLocalesOf(locales, options)`:
@@ -1752,7 +1697,11 @@ fn supported_locales_array(locales: f64, options: f64) -> f64 {
     js_nanbox_pointer(arr as i64)
 }
 
-extern "C" fn supported_locales_of_thunk(_closure: *const ClosureHeader, rest: f64) -> f64 {
+extern "C" fn supported_locales_of_thunk(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    rest: f64,
+) -> f64 {
     supported_locales_array(rest_arg(rest, 0), rest_arg(rest, 1))
 }
 
@@ -1795,98 +1744,115 @@ fn install_intl_namespace_members(ns_obj: *mut ObjectHeader) {
     install_function(
         ns_obj,
         "getCanonicalLocales",
-        get_canonical_locales_thunk as *const u8,
+        crate::fn_info!(get_canonical_locales_thunk, 1; with_declared(1)),
         1,
-        1,
-        false,
     );
     install_function(
         ns_obj,
         "supportedValuesOf",
-        supported_values_of_thunk as *const u8,
+        crate::fn_info!(supported_values_of_thunk, 1; with_declared(1)),
         1,
-        1,
-        false,
     );
     locale::install_locale(ns_obj);
     install_constructor(
         ns_obj,
         "NumberFormat",
-        number_format_constructor_thunk as *const u8,
+        crate::fn_info!(number_format_constructor_thunk, 1; with_rest(0)),
         0,
         &[
             (
                 "formatToParts",
-                number_format_to_parts_thunk as *const u8,
+                crate::fn_info!(number_format_to_parts_thunk, 1; with_declared(1)),
                 1,
             ),
             // `formatRange`/`formatRangeToParts` are plain (non-bound) prototype
             // methods (Intl.NumberFormat-v3): a detached reference loses `this`
             // and the `this_intl_object` guard throws, so they are installed on
             // the prototype only — never as own bound instance functions.
-            ("formatRange", number_format_range_thunk as *const u8, 2),
+            (
+                "formatRange",
+                crate::fn_info!(number_format_range_thunk, 2; with_declared(2)),
+                2,
+            ),
             (
                 "formatRangeToParts",
-                number_format_range_to_parts_thunk as *const u8,
+                crate::fn_info!(number_format_range_to_parts_thunk, 2; with_declared(2)),
                 2,
             ),
             (
                 "resolvedOptions",
-                number_format_resolved_options_thunk as *const u8,
+                crate::fn_info!(number_format_resolved_options_thunk, 0; with_declared(0)),
                 0,
             ),
         ],
         // `format` is an accessor (getter) per ECMA-402, not a plain method.
-        &[("format", number_format_format_getter_thunk as *const u8)],
+        &[(
+            "format",
+            crate::fn_info!(number_format_format_getter_thunk, 0; with_declared(0)),
+        )],
     );
     install_constructor(
         ns_obj,
         "DateTimeFormat",
-        date_time_format_constructor_thunk as *const u8,
+        crate::fn_info!(date_time_format_constructor_thunk, 1; with_rest(0)),
         0,
         &[
             // `format` is an accessor (getter) per ECMA-402 §11.4.3 — see below.
             (
                 "formatToParts",
-                date_time_format_to_parts_thunk as *const u8,
+                crate::fn_info!(date_time_format_to_parts_thunk, 1; with_declared(1)),
                 1,
             ),
-            ("formatRange", date_time_format_range_thunk as *const u8, 2),
+            (
+                "formatRange",
+                crate::fn_info!(date_time_format_range_thunk, 2; with_declared(2)),
+                2,
+            ),
             (
                 "formatRangeToParts",
-                date_time_format_range_to_parts_thunk as *const u8,
+                crate::fn_info!(date_time_format_range_to_parts_thunk, 2; with_declared(2)),
                 2,
             ),
             (
                 "resolvedOptions",
-                date_time_format_resolved_options_thunk as *const u8,
+                crate::fn_info!(date_time_format_resolved_options_thunk, 0; with_declared(0)),
                 0,
             ),
         ],
-        &[("format", date_time_format_format_getter_thunk as *const u8)],
+        &[(
+            "format",
+            crate::fn_info!(date_time_format_format_getter_thunk, 0; with_declared(0)),
+        )],
     );
     install_constructor(
         ns_obj,
         "Collator",
-        collator_constructor_thunk as *const u8,
+        crate::fn_info!(collator_constructor_thunk, 1; with_rest(0)),
         0,
         &[(
             "resolvedOptions",
-            collator_resolved_options_thunk as *const u8,
+            crate::fn_info!(collator_resolved_options_thunk, 0; with_declared(0)),
             0,
         )],
-        &[("compare", collator_compare_getter_thunk as *const u8)],
+        &[(
+            "compare",
+            crate::fn_info!(collator_compare_getter_thunk, 0; with_declared(0)),
+        )],
     );
     install_constructor(
         ns_obj,
         "Segmenter",
-        segmenter_constructor_thunk as *const u8,
+        crate::fn_info!(segmenter_constructor_thunk, 1; with_rest(0)),
         0,
         &[
-            ("segment", segmenter_segment_thunk as *const u8, 1),
+            (
+                "segment",
+                crate::fn_info!(segmenter_segment_thunk, 1; with_declared(1)),
+                1,
+            ),
             (
                 "resolvedOptions",
-                segmenter_resolved_options_thunk as *const u8,
+                crate::fn_info!(segmenter_resolved_options_thunk, 0; with_declared(0)),
                 0,
             ),
         ],
@@ -1895,14 +1861,22 @@ fn install_intl_namespace_members(ns_obj: *mut ObjectHeader) {
     install_constructor(
         ns_obj,
         "ListFormat",
-        list_format_constructor_thunk as *const u8,
+        crate::fn_info!(list_format_constructor_thunk, 1; with_rest(0)),
         0,
         &[
-            ("format", list_format_format_thunk as *const u8, 1),
-            ("formatToParts", list_format_to_parts_thunk as *const u8, 1),
+            (
+                "format",
+                crate::fn_info!(list_format_format_thunk, 1; with_declared(1)),
+                1,
+            ),
+            (
+                "formatToParts",
+                crate::fn_info!(list_format_to_parts_thunk, 1; with_declared(1)),
+                1,
+            ),
             (
                 "resolvedOptions",
-                list_format_resolved_options_thunk as *const u8,
+                crate::fn_info!(list_format_resolved_options_thunk, 0; with_declared(0)),
                 0,
             ),
         ],
@@ -1911,14 +1885,22 @@ fn install_intl_namespace_members(ns_obj: *mut ObjectHeader) {
     install_constructor(
         ns_obj,
         "RelativeTimeFormat",
-        relative_time_format_constructor_thunk as *const u8,
+        crate::fn_info!(relative_time_format_constructor_thunk, 1; with_rest(0)),
         0,
         &[
-            ("format", rtf_format_thunk as *const u8, 2),
-            ("formatToParts", rtf_to_parts_thunk as *const u8, 2),
+            (
+                "format",
+                crate::fn_info!(rtf_format_thunk, 2; with_declared(2)),
+                2,
+            ),
+            (
+                "formatToParts",
+                crate::fn_info!(rtf_to_parts_thunk, 2; with_declared(2)),
+                2,
+            ),
             (
                 "resolvedOptions",
-                rtf_resolved_options_thunk as *const u8,
+                crate::fn_info!(rtf_resolved_options_thunk, 0; with_declared(0)),
                 0,
             ),
         ],
@@ -1927,18 +1909,22 @@ fn install_intl_namespace_members(ns_obj: *mut ObjectHeader) {
     install_constructor(
         ns_obj,
         "PluralRules",
-        plural_rules_constructor_thunk as *const u8,
+        crate::fn_info!(plural_rules_constructor_thunk, 1; with_rest(0)),
         0,
         &[
-            ("select", plural_rules_select_thunk as *const u8, 1),
+            (
+                "select",
+                crate::fn_info!(plural_rules_select_thunk, 1; with_declared(1)),
+                1,
+            ),
             (
                 "selectRange",
-                plural_rules_select_range_thunk as *const u8,
+                crate::fn_info!(plural_rules_select_range_thunk, 2; with_declared(2)),
                 2,
             ),
             (
                 "resolvedOptions",
-                plural_rules_resolved_options_thunk as *const u8,
+                crate::fn_info!(plural_rules_resolved_options_thunk, 0; with_declared(0)),
                 0,
             ),
         ],
@@ -1947,18 +1933,22 @@ fn install_intl_namespace_members(ns_obj: *mut ObjectHeader) {
     install_constructor(
         ns_obj,
         "DurationFormat",
-        duration_format::constructor_thunk as *const u8,
+        crate::fn_info!(duration_format::constructor_thunk, 1; with_rest(0)),
         0,
         &[
-            ("format", duration_format::format_thunk as *const u8, 1),
+            (
+                "format",
+                crate::fn_info!(duration_format::format_thunk, 1; with_declared(1)),
+                1,
+            ),
             (
                 "formatToParts",
-                duration_format::to_parts_thunk as *const u8,
+                crate::fn_info!(duration_format::to_parts_thunk, 1; with_declared(1)),
                 1,
             ),
             (
                 "resolvedOptions",
-                duration_format::resolved_options_thunk as *const u8,
+                crate::fn_info!(duration_format::resolved_options_thunk, 0; with_declared(0)),
                 0,
             ),
         ],
@@ -1967,13 +1957,17 @@ fn install_intl_namespace_members(ns_obj: *mut ObjectHeader) {
     install_constructor(
         ns_obj,
         "DisplayNames",
-        display_names::constructor_thunk as *const u8,
+        crate::fn_info!(display_names::constructor_thunk, 1; with_rest(0)),
         2,
         &[
-            ("of", display_names::of_thunk as *const u8, 1),
+            (
+                "of",
+                crate::fn_info!(display_names::of_thunk, 1; with_declared(1)),
+                1,
+            ),
             (
                 "resolvedOptions",
-                display_names::resolved_options_thunk as *const u8,
+                crate::fn_info!(display_names::resolved_options_thunk, 0; with_declared(0)),
                 0,
             ),
         ],

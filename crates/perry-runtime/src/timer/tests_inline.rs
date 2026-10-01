@@ -44,6 +44,7 @@ pub(crate) fn test_seed_timer_scanner_roots(
             deadline,
             86_400_000,
             callback,
+            f64::from_bits(crate::value::TAG_UNDEFINED),
             vec![arg],
             context.clone(),
             0,
@@ -56,6 +57,7 @@ pub(crate) fn test_seed_timer_scanner_roots(
             deadline,
             86_400_000,
             callback,
+            f64::from_bits(crate::value::TAG_UNDEFINED),
             Vec::new(),
             context.clone(),
             0,
@@ -145,7 +147,10 @@ mod mock_dispatch_own_pin_tests {
     /// the shared registry when the churn starts, so it is the very first one
     /// evicted once the churn passes the cap — and this callback observes its
     /// own eviction while it is still running.
-    extern "C" fn churn_then_check_self(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    extern "C" fn churn_then_check_self(
+        _closure: *const crate::closure::ClosureHeader,
+        _this: crate::closure::JsThis,
+    ) -> f64 {
         let id = SELF_ID.load(Ordering::SeqCst);
         for _ in 0..(ref_states::TIMER_REF_STATES_CAP + 2_000) {
             // #340/#341: the producer returns the handle object; `clearTimeout`
@@ -180,7 +185,8 @@ mod mock_dispatch_own_pin_tests {
         js_mock_timers_reset();
         js_mock_timers_enable(MOCK_TIMERS_API_SET_TIMEOUT, 0.0);
 
-        let closure = crate::closure::js_closure_alloc(churn_then_check_self as *const u8, 0);
+        let closure =
+            crate::closure::js_closure_alloc(crate::fn_info!(churn_then_check_self, 0), 0);
         let id = schedule_mock_callback_timer(
             closure as i64,
             10.0,

@@ -206,6 +206,7 @@ pub(crate) fn adapt_foreign_promise_value(value: f64) -> f64 {
     }
 
     unsafe {
+        // NOT-A-JS-BODY: a native Rust helper registered by another crate.
         let func: ForeignPromiseAdapterFn = std::mem::transmute(f);
         func(value)
     }

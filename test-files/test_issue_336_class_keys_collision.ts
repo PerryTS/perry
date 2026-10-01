@@ -41,12 +41,8 @@ namespace B {
 // (deduplicated) class. Pre-fix this test failed at clang IR validation;
 // post-fix it compiles + runs.
 //
-// The lookup pipeline is purely name-based today, so the dedup keeps the
-// FIRST `Refinement` (the one in namespace A) and both `make()` bodies
-// resolve `new Refinement()` to it — `b.kind` therefore prints `a`, not
-// `b`. That's the existing function-scoped semantics extended to namespace
-// scope; pinning a distinct identity per scope would need scope info on
-// `Expr::New { class_name }` and is a separate, larger change.
+// Each namespace resolves its own Refinement (classes are
+// registered by identity), so b.kind prints b.
 const a = A.make();
 const b = B.make();
 console.log("a.kind:", a.kind);

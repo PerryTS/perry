@@ -215,6 +215,7 @@ pub(crate) fn is_stream_event_emitter_prototype_value(value: f64) -> bool {
 
 extern "C" fn stream_static_method_thunk(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     arg0: f64,
     arg1: f64,
 ) -> f64 {
@@ -245,9 +246,10 @@ extern "C" fn stream_static_method_thunk(
 }
 
 fn stream_static_method_value(method: &str, kind: f64, exposed_length: u32) -> f64 {
-    let func_ptr = stream_static_method_thunk as *const u8;
-    crate::closure::js_register_closure_arity(func_ptr, 2);
-    let closure = crate::closure::js_closure_alloc(func_ptr, 1);
+    let closure = crate::closure::js_closure_alloc(
+        crate::fn_info!(stream_static_method_thunk, 2; with_declared(2)),
+        1,
+    );
     crate::closure::js_closure_set_capture_f64(closure, 0, kind);
     set_bound_native_closure_name(closure, method);
     set_builtin_closure_length(closure as usize, exposed_length);
@@ -490,7 +492,12 @@ mod tests {
         ));
         let readable_to_web = static_method_value(readable, "toWeb");
         let web_readable = unsafe {
-            crate::closure::js_native_call_value(readable_to_web, [node_readable].as_ptr(), 1)
+            crate::closure::js_native_call_value(
+                readable_to_web,
+                crate::closure::plain_call_receiver(),
+                [node_readable].as_ptr(),
+                1,
+            )
         };
         assert_object_property_function(web_readable, b"getReader");
 
@@ -499,7 +506,12 @@ mod tests {
         ));
         let writable_to_web = static_method_value(writable, "toWeb");
         let web_writable = unsafe {
-            crate::closure::js_native_call_value(writable_to_web, [node_writable].as_ptr(), 1)
+            crate::closure::js_native_call_value(
+                writable_to_web,
+                crate::closure::plain_call_receiver(),
+                [node_writable].as_ptr(),
+                1,
+            )
         };
         assert_object_property_function(web_writable, b"getWriter");
 
@@ -508,7 +520,12 @@ mod tests {
         ));
         let duplex_to_web = static_method_value(duplex, "toWeb");
         let web_pair = unsafe {
-            crate::closure::js_native_call_value(duplex_to_web, [node_duplex].as_ptr(), 1)
+            crate::closure::js_native_call_value(
+                duplex_to_web,
+                crate::closure::plain_call_receiver(),
+                [node_duplex].as_ptr(),
+                1,
+            )
         };
         let web_pair_readable = unsafe { property(web_pair, b"readable") };
         let web_pair_writable = unsafe { property(web_pair, b"writable") };

@@ -95,13 +95,16 @@ fn prototype_data_mutation_shadow_delete_and_freeze_match_forced_slow() {
 
 static GETTER_CALLS: AtomicUsize = AtomicUsize::new(0);
 
-extern "C" fn getter(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn getter(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     GETTER_CALLS.fetch_add(1, Ordering::Relaxed);
     47.0
 }
 
 fn install_getter(object: *mut ObjectHeader, name: &str, has_getter: bool) {
-    let closure = crate::closure::js_closure_alloc(getter as *const u8, 0);
+    let closure = crate::closure::js_closure_alloc(crate::fn_info!(getter, 0), 0);
     crate::object::descriptor_state::set_accessor_descriptor(
         object as usize,
         name.to_string(),
@@ -156,7 +159,7 @@ fn unsupported_receivers_and_private_names_decline_and_preserve_results() {
     let array = crate::array::js_array_alloc(4);
     let array_value = crate::value::js_nanbox_pointer(array as i64);
     js_object_set_field_by_name(array as *mut ObjectHeader, key("value"), 59.0);
-    let closure = crate::closure::js_closure_alloc(getter as *const u8, 0);
+    let closure = crate::closure::js_closure_alloc(crate::fn_info!(getter, 0), 0);
     js_object_set_field_by_name(closure as *mut ObjectHeader, key("value"), 59.0);
     for receiver in [
         proxy,

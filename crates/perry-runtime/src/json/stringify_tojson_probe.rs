@@ -482,7 +482,6 @@ fn class_chain_may_have_to_json_uncached(class_id: u32) -> bool {
 /// | `Object.setPrototypeOf`, a descriptor install, or a `delete` anywhere | the SEMANTIC property epoch |
 /// | a prototype OBJECT materializing for this class or an ancestor — the very thing the walk looks for, since such an object can carry arbitrary later-added properties | `CLASS_LOOKUP_SURFACE_GEN`, bumped inside `class_prototype_object_root_store` and `class_decl_prototype_object_root_store` |
 /// | `js_register_class_generic_origin`, which redirects both prototype-object readers and `lookup_prototype_method`'s chain hop | `CLASS_LOOKUP_SURFACE_GEN` |
-/// | re-exposing a `delete`d prototype key through the in-place `CLASS_DELETED_KEYS` un-mark in `class_dynamic_prop_root_store` | `CLASS_LOOKUP_SURFACE_GEN` |
 ///
 /// Garbage collection is deliberately NOT an input. The class side-table
 /// scanners only rewrite EXISTING slots, so no collection can add a registry

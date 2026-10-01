@@ -45,6 +45,12 @@ pub const ERROR_KIND_SYNTAX_ERROR: u32 = 4;
 pub const ERROR_KIND_AGGREGATE_ERROR: u32 = 5;
 pub const ERROR_KIND_EVAL_ERROR: u32 = 6;
 pub const ERROR_KIND_URI_ERROR: u32 = 7;
+pub(crate) const ERROR_KIND_DOM_EXCEPTION: u32 = 8;
+
+pub(crate) unsafe fn mark_dom_exception(error: *mut ErrorHeader) {
+    (*error).error_kind = ERROR_KIND_DOM_EXCEPTION;
+    (*error).flags &= !ERROR_FLAG_HAS_MESSAGE;
+}
 
 const ERROR_FLAG_HAS_MESSAGE: u32 = 1 << 0;
 const ERROR_FLAG_HAS_CAUSE: u32 = 1 << 1;
@@ -75,6 +81,7 @@ pub(crate) fn error_kind_constructor_name(kind: u32) -> &'static str {
         ERROR_KIND_AGGREGATE_ERROR => "AggregateError",
         ERROR_KIND_EVAL_ERROR => "EvalError",
         ERROR_KIND_URI_ERROR => "URIError",
+        ERROR_KIND_DOM_EXCEPTION => "DOMException",
         _ => "Error",
     }
 }
@@ -883,7 +890,9 @@ pub extern "C" fn js_error_is_error(value: f64) -> f64 {
         if ptr.is_null() || !crate::object::is_valid_obj_ptr(ptr) {
             return f64::from_bits(crate::value::TAG_FALSE);
         }
-        if ptr_is_native_error(ptr as usize) {
+        if ptr_is_native_error(ptr as usize)
+            || crate::event_target::is_dom_exception_object(ptr.cast())
+        {
             return f64::from_bits(crate::value::TAG_TRUE);
         }
     }
@@ -1180,29 +1189,50 @@ fn throw_capture_stack_trace_target_type_error() -> ! {
 // .getFileName()` throws `(string).getFileName is not a function` and modules
 // like `next/dist/compiled/send` (bundled depd) crash at eager init.
 
-extern "C" fn callsite_undefined(_c: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn callsite_undefined(
+    _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
-extern "C" fn callsite_null(_c: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn callsite_null(
+    _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     f64::from_bits(crate::value::TAG_NULL)
 }
-extern "C" fn callsite_zero(_c: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn callsite_zero(
+    _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     0.0
 }
-extern "C" fn callsite_false(_c: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn callsite_false(
+    _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     f64::from_bits(crate::value::TAG_FALSE)
 }
-extern "C" fn callsite_true(_c: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn callsite_true(
+    _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     f64::from_bits(crate::value::TAG_TRUE)
 }
-extern "C" fn callsite_to_string(_c: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn callsite_to_string(
+    _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let s = js_string_from_bytes(b"<anonymous>".as_ptr(), 11);
     crate::value::js_nanbox_string(s as i64)
 }
 
-fn attach_call_site_method(obj: *mut crate::object::ObjectHeader, name: &str, fp: *const u8) {
-    crate::closure::js_register_closure_arity(fp, 0);
-    // Singleton (func_ptr-keyed, permanent) closure — never collected/moved, so
+fn attach_call_site_method(
+    obj: *mut crate::object::ObjectHeader,
+    name: &str,
+    fp: *const crate::closure::JsFunctionInfo,
+) {
+    // Singleton (per body, permanent) closure — never collected/moved, so
     // the CallSite's method field stays valid across GC cycles.
     let closure = crate::closure::js_closure_alloc_singleton(fp);
     if closure.is_null() {
@@ -1215,11 +1245,11 @@ fn attach_call_site_method(obj: *mut crate::object::ObjectHeader, name: &str, fp
 
 fn make_call_site() -> f64 {
     let obj = crate::object::js_object_alloc(0, 20);
-    let undef = callsite_undefined as *const u8;
-    let null = callsite_null as *const u8;
-    let zero = callsite_zero as *const u8;
-    let f = callsite_false as *const u8;
-    let t = callsite_true as *const u8;
+    let undef = crate::fn_info!(callsite_undefined, 0; with_declared(0));
+    let null = crate::fn_info!(callsite_null, 0; with_declared(0));
+    let zero = crate::fn_info!(callsite_zero, 0; with_declared(0));
+    let f = crate::fn_info!(callsite_false, 0; with_declared(0));
+    let t = crate::fn_info!(callsite_true, 0; with_declared(0));
     attach_call_site_method(obj, "getFileName", undef);
     attach_call_site_method(obj, "getScriptNameOrSourceURL", undef);
     attach_call_site_method(obj, "getLineNumber", zero);
@@ -1239,7 +1269,11 @@ fn make_call_site() -> f64 {
     attach_call_site_method(obj, "isConstructor", f);
     attach_call_site_method(obj, "isAsync", f);
     attach_call_site_method(obj, "isPromiseAll", f);
-    attach_call_site_method(obj, "toString", callsite_to_string as *const u8);
+    attach_call_site_method(
+        obj,
+        "toString",
+        crate::fn_info!(callsite_to_string, 0; with_declared(0)),
+    );
     crate::value::js_nanbox_pointer(obj as i64)
 }
 
@@ -1276,7 +1310,7 @@ fn error_prepare_stack_trace_override() -> Option<f64> {
     if !crate::closure::is_closure_ptr(ptr) {
         return None;
     }
-    let fp = unsafe { (*(ptr as *const crate::closure::ClosureHeader)).func_ptr } as usize;
+    let fp = unsafe { (*(ptr as *const crate::closure::ClosureHeader)).code() } as usize;
     if fp == crate::object::default_prepare_stack_trace_func_ptr() {
         return None;
     }
@@ -1294,7 +1328,12 @@ unsafe fn compute_stack_value(receiver: f64) -> f64 {
         let structured = build_structured_stack(10);
         let prep_ptr =
             crate::value::js_nanbox_get_pointer(prep) as *const crate::closure::ClosureHeader;
-        return crate::closure::js_closure_call2(prep_ptr, receiver, structured);
+        return crate::closure::js_closure_call2(
+            prep_ptr,
+            crate::closure::plain_call_receiver(),
+            receiver,
+            structured,
+        );
     }
     let s = make_stack("Error", "");
     crate::value::js_nanbox_string(s as i64)
@@ -1303,15 +1342,17 @@ unsafe fn compute_stack_value(receiver: f64) -> f64 {
 /// Lazy `stack` accessor installed by `Error.captureStackTrace`. Fires on read
 /// with `this` bound to the target object (V8 semantics: `prepareStackTrace` is
 /// consulted at access time, not capture time).
-extern "C" fn error_stack_lazy_getter(_closure: *const crate::closure::ClosureHeader) -> f64 {
-    let receiver = crate::object::js_implicit_this_get();
+extern "C" fn error_stack_lazy_getter(
+    _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    let receiver = this.as_f64();
     unsafe { compute_stack_value(receiver) }
 }
 
 /// Install the lazy `stack` getter accessor on `target`.
 unsafe fn install_lazy_stack_accessor(target_ptr: *mut crate::object::ObjectHeader) {
-    let fp = error_stack_lazy_getter as *const u8;
-    crate::closure::js_register_closure_arity(fp, 0);
+    let fp = crate::fn_info!(error_stack_lazy_getter, 0; with_declared(0));
     let closure = crate::closure::js_closure_alloc(fp, 0);
     if closure.is_null() {
         return;

@@ -313,7 +313,10 @@ unsafe fn read_string_field(obj_f64: f64, field: &str) -> Option<String> {
     JsValue::from_bits(bits).to_owned_string()
 }
 
-extern "C" fn agent_connection_abort_listener(closure: *const RawClosureHeader) -> f64 {
+extern "C" fn agent_connection_abort_listener(
+    closure: *const RawClosureHeader,
+    _this: perry_ffi::JsThis,
+) -> f64 {
     let socket = unsafe { perry_ffi::closure_capture_f64(closure, 0) } as i64;
     let signal_value = unsafe { perry_ffi::closure_capture_f64(closure, 1) };
     unsafe {
@@ -361,7 +364,10 @@ unsafe fn install_connection_abort_signal(options: f64, socket: Handle) {
         perry_ext_net::js_ext_net_socket_emit_abort_error(socket);
         return;
     }
-    let listener = perry_ffi::alloc_closure(agent_connection_abort_listener as *const u8, 2);
+    let listener = perry_ffi::alloc_closure(
+        perry_ffi::js_function_info!(agent_connection_abort_listener, 0),
+        2,
+    );
     if listener.is_null() {
         return;
     }
@@ -1644,7 +1650,7 @@ unsafe fn invoke_create_connection_closure(
     let cc = scope.root_addr(closure_ptr);
     let options = scope.root_nanbox(build_connect_options(agent_handle, host, port, path));
     let closure = JsClosure::from_raw(cc.get() as *const RawClosureHeader);
-    let ret = closure.call1(options.get());
+    let ret = closure.call1(perry_ffi::JsThis::UNDEFINED, options.get());
 
     // `net.connect` / `net.createConnection` return the socket id NaN-boxed
     // with POINTER_TAG; some codegen paths hand back a bare raw pointer.

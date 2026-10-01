@@ -193,12 +193,12 @@ mod tests {
     use super::*;
     use perry_ffi::alloc_string;
 
-    extern "C" fn noop_listener(_c: *const RawClosureHeader) -> f64 {
+    extern "C" fn noop_listener(_c: *const RawClosureHeader, _this: perry_ffi::JsThis) -> f64 {
         undefined_value()
     }
 
     fn listener_value() -> f64 {
-        let closure = unsafe { js_closure_alloc(noop_listener as *const u8, 0) };
+        let closure = perry_ffi::alloc_closure(perry_ffi::js_function_info!(noop_listener, 0), 0);
         nanbox_pointer_bits(closure as i64)
     }
 

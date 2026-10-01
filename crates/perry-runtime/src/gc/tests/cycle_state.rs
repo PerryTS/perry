@@ -564,7 +564,7 @@ fn root_scan_slices_many_registered_class_side_table_roots_with_tiny_budget() {
     const ROOTS: usize = 32;
     let children = (0..ROOTS).map(|_| young_leaf()).collect::<Vec<_>>();
     for (idx, &child) in children.iter().enumerate() {
-        crate::object::test_seed_class_dynamic_prop_root(
+        crate::object::test_seed_class_prototype_method_root(
             0x5300 + idx as u32,
             "root",
             string_bits(child),
@@ -961,26 +961,19 @@ fn gap_born_child_stored_between_finalize_and_sweep_survives() {
 }
 
 /// Regression (#6495): the trace must visit EVERY overflow slot of a live
-/// object, not the subset its layout mask claims. The per-object slot mask
-/// is maintained by `layout_note_slot` at store time, but not every
-/// overflow write path notes (GC owner moves merge entries via
-/// `merge_overflow_fields` with no notes) — a stale SIDE_MASK then hides
-/// pointer-bearing slots from the trace, and their referents are swept
-/// while referenced. Observed at bundle scale as masks capped at bit 48
-/// with live NaN-boxed pointers sitting at slots 49..63.
+/// object, even when an old address-keyed mask names fewer slots. Overflow
+/// writes do not all update that mask. Object tracing now follows the shape
+/// and treats every spill slot as Any, so an incomplete legacy mask cannot hide
+/// the child at slot 50.
 #[test]
-fn overflow_slots_beyond_layout_mask_are_traced() {
+fn overflow_slots_beyond_legacy_layout_mask_are_traced() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
 
     let (owner, _fields) = unsafe { alloc_nursery_test_object(1) };
     js_shadow_slot_set(0, ptr_bits(owner as usize));
 
-    // Build a usable SIDE_MASK layout claiming slots 0..=48 as the complete
-    // pointer set. A pointer note only creates a side mask from the
-    // POINTER_FREE state (notes on an UNKNOWN object leave it UNKNOWN =
-    // conservative full visit), so first rebuild the layout from the
-    // object's single non-pointer inline slot.
+    // Plant a legacy layout claim. Object tracing must ignore it.
     unsafe {
         let zero: u64 = 0;
         crate::gc::layout_rebuild_from_slots(owner as *mut u8, &zero as *const u64, 1);
@@ -989,9 +982,8 @@ fn overflow_slots_beyond_layout_mask_are_traced() {
     for i in 0..49 {
         crate::gc::layout_note_slot(owner as usize, i, string_bits(dummy));
     }
-    // The bug path: an overflow write that never runs `layout_note_slot`.
-    // Slot 50 holds the ONLY reference to a live string; the mask does not
-    // know about it.
+    // Slot 50 holds the only reference to a live string, and no layout note
+    // records it.
     let child = young_leaf();
     let mut values = vec![crate::value::TAG_UNDEFINED; 51];
     values[50] = string_bits(child);
@@ -1842,8 +1834,8 @@ fn full_cycle_step_scanner_covers_promise_overflow_reactions() {
 
     let promise = unsafe { alloc_old_test_promise() };
     js_shadow_slot_set(0, ptr_bits(promise as usize));
-    let cb1 = crate::closure::js_closure_alloc(test_captured_singleton_func as *const u8, 0);
-    let cb2 = crate::closure::js_closure_alloc(test_captured_singleton_func as *const u8, 0);
+    let cb1 = crate::closure::js_closure_alloc(crate::fn_info!(test_captured_singleton_func, 0), 0);
+    let cb2 = crate::closure::js_closure_alloc(crate::fn_info!(test_captured_singleton_func, 0), 0);
     // First reaction lands inline in the promise's own fields; the second
     // goes to PROMISE_OVERFLOW_REACTIONS — the table under test.
     let _next1 = crate::promise::js_promise_then(promise, cb1, std::ptr::null());

@@ -21,8 +21,8 @@ pub use perry_ui_windows::widgets::{
 pub mod text_registry;
 
 extern "C" {
-    fn js_closure_call0(closure: *const u8) -> f64;
-    fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+    fn js_closure_call0(closure: *const u8, this: perry_ffi::JsThis) -> f64;
+    fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
     fn js_nanbox_string(ptr: i64) -> f64;
     fn js_string_from_bytes(data: *const u8, len: u32) -> *mut u8;
@@ -247,7 +247,7 @@ fn invoke_node0(handle: i64, slot: CallbackSlot) {
     let callback = node_callback(handle, slot);
     if callback != 0 {
         unsafe {
-            js_closure_call0(callback as *const u8);
+            js_closure_call0(callback as *const u8, perry_ffi::JsThis::UNDEFINED);
         }
     }
 }
@@ -256,7 +256,7 @@ fn invoke_node1(handle: i64, slot: CallbackSlot, value: f64) {
     let callback = node_callback(handle, slot);
     if callback != 0 {
         unsafe {
-            js_closure_call1(callback as *const u8, value);
+            js_closure_call1(callback as *const u8, perry_ffi::JsThis::UNDEFINED, value);
         }
     }
 }
@@ -269,7 +269,7 @@ fn invoke_node_string(handle: i64, slot: CallbackSlot, value: &str) {
         // so even that collection's rewritten slot is observed.
         let callback = node_callback(handle, slot);
         if callback != 0 {
-            js_closure_call1(callback as *const u8, boxed);
+            js_closure_call1(callback as *const u8, perry_ffi::JsThis::UNDEFINED, boxed);
         }
     }
 }

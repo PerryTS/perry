@@ -233,7 +233,7 @@ impl BlockPersistCycleState {
             }
             let header = header_ptr as *mut GcHeader;
             unsafe {
-                if (*header).gc_flags & (GC_FLAG_MARKED | GC_FLAG_PINNED) != 0 {
+                if (*header).gc_flags & GC_FLAG_MARKED != 0 {
                     self.block_has_live[block_idx] = true;
                 }
             }
@@ -272,7 +272,8 @@ impl BlockPersistCycleState {
             }
             let header = header_ptr as *mut GcHeader;
             unsafe {
-                if (*header).gc_flags & (GC_FLAG_MARKED | GC_FLAG_PINNED) == 0 {
+                let flags = (*header).gc_flags;
+                if flags & GC_FLAG_MARKED == 0 && !super::pin::pinned_counts_as_marked(flags) {
                     (*header).gc_flags |= GC_FLAG_MARKED;
                     self.worklist.push(header);
                     self.newly_marked = self.newly_marked.saturating_add(1);
@@ -1503,6 +1504,9 @@ impl GcCycleState {
                 // `PERRY_GC_CENSUS` pass 2: marks are final and nothing is
                 // swept yet; only synchronous full cycles are exact.
                 super::census::census_take_if_armed_at_full_sweep_start();
+                // Charter step 3 (`shape-fact-audit` only; nothing otherwise):
+                // every live object's store facts agree with its shape.
+                crate::object::shapes::store_kind::audit_heap_at_full_sweep_start();
                 // #10241: same point, for a promoted-cohort full's survival
                 // probe (a no-op unless one is armed).
                 super::promoted_cohort::survival::check_minor_view_at_full_sweep_start();

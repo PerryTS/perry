@@ -5538,6 +5538,9 @@ pub fn run_with_parse_cache(
             namespace_member_nested: namespace_member_nested.into_iter().collect(),
             imported_classes,
             constructor_param_counts: Default::default(),
+            // Filled per module after the static-shape pre-pass.
+            static_shape_ids: Vec::new(),
+            program_class_shape_ids: Default::default(),
             short_spread_method_candidates: std::sync::Arc::clone(&short_spread_method_candidates),
             object_literal_method_candidates: std::sync::Arc::clone(
                 &object_literal_method_candidates,
@@ -5665,6 +5668,91 @@ pub fn run_with_parse_cache(
         }
     }
     let constructor_contracts = constructor_contracts.resolve();
+    // Design step 4 (DESIGN 7.2): link-time ShapeIds. Collect the content of
+    // every class birth each module's string pool will mint — from codegen's
+    // own derivation, run on the options the module's codegen gets — and
+    // assign each distinct content one id in the static band, probing on
+    // collision. A module then embeds the ids of its own contents; nothing
+    // is keyed by class name.
+    let static_shape_started = Instant::now();
+    let module_births: Vec<(&PathBuf, Vec<perry_codegen::ModuleBirth>)> = module_pool
+        .install(|| {
+            ctx.native_modules
+                .par_iter()
+                .map(|(path, hir_module)| -> Result<_, String> {
+                    if hir_module.classes.is_empty()
+                        && prepare_module(path, hir_module, true)?
+                            .imported_classes
+                            .is_empty()
+                    {
+                        return Ok((path, Vec::new()));
+                    }
+                    let mut opts = prepare_module(path, hir_module, false)?;
+                    constructor_contracts.apply(
+                        &compute_module_prefix(&path.to_string_lossy(), &ctx.project_root),
+                        hir_module,
+                        &mut opts,
+                    );
+                    let births = perry_codegen::module_birth_shapes(hir_module, opts)
+                        .map_err(|e| format!("{}: {e:#}", path.display()))?;
+                    Ok((path, births))
+                })
+                .collect::<Result<Vec<_>, String>>()
+        })
+        .map_err(|error| anyhow!(error))?;
+    let static_shape_ids = perry_codegen::assign_static_shape_ids(
+        module_births
+            .iter()
+            .flat_map(|(_, b)| b.iter().map(|m| &m.shape)),
+    );
+    // Decision 16: each class's id as its DEFINING module assigns it. Every
+    // module gets the slice it can name (its classes and stubs, plus the
+    // producer classes of its short-spread candidates); the slice is in its
+    // object-cache key.
+    let program_class_shape_ids = perry_codegen::ProgramClassShapeIds::from_births(
+        module_births.iter().flat_map(|(_, b)| b),
+        &static_shape_ids,
+    );
+    #[allow(clippy::type_complexity)]
+    let static_shape_ids_by_module: HashMap<
+        &PathBuf,
+        (Vec<(perry_codegen::BirthShape, u32)>, BTreeSet<u32>),
+    > = module_births
+        .into_iter()
+        .map(|(path, births)| {
+            let class_ids: BTreeSet<u32> = births.iter().map(|b| b.class_id).collect();
+            let mut ids: Vec<(perry_codegen::BirthShape, u32)> = births
+                .into_iter()
+                .filter_map(|b| static_shape_ids.get(&b.shape).map(|&id| (b.shape, id)))
+                .collect();
+            ids.sort();
+            ids.dedup();
+            (path, (ids, class_ids))
+        })
+        .collect();
+    if std::env::var_os("PERRY_STATIC_SHAPE_IDS_REPORT").is_some() {
+        let literal = static_shape_ids
+            .keys()
+            .filter(|b| b.proto == perry_codegen::BirthProto::Literal)
+            .count();
+        let typed = static_shape_ids
+            .keys()
+            .filter(|b| b.typed.is_some())
+            .count();
+        eprintln!(
+            "perry: static shape ids: {} contents ({} literal, {} typed), {} distinct ids, {:.1} ms",
+            static_shape_ids.len(),
+            literal,
+            typed,
+            static_shape_ids.values().collect::<HashSet<_>>().len(),
+            static_shape_started.elapsed().as_secs_f64() * 1000.0
+        );
+    }
+    // Design step 4: the program's static shape seed set — every seedable
+    // static id some module's guards embed — collected from each module's
+    // codegen (or its cache sidecar on a hit) and linked as one seed unit.
+    let program_static_seeds: std::sync::Mutex<BTreeMap<u32, perry_codegen::BirthShape>> =
+        std::sync::Mutex::new(BTreeMap::new());
     let compile_results: Vec<Result<NativeObjectArtifact, String>> = module_pool.install(|| {
         ctx.native_modules.par_iter().map(|(path, hir_module)| {
             let _permit =
@@ -5696,6 +5784,16 @@ pub fn run_with_parse_cache(
                 hir_module,
                 &mut opts,
             );
+            if let Some((ids, class_ids)) = static_shape_ids_by_module.get(path) {
+                opts.static_shape_ids = ids.clone();
+                let foreign = opts
+                    .short_spread_method_candidates
+                    .values()
+                    .flatten()
+                    .map(|c| c.class_id);
+                opts.program_class_shape_ids = program_class_shape_ids
+                    .restricted_to(class_ids.iter().copied().chain(foreign));
+            }
             // V2.2 + #686 object cache lookup. The key hashes every
             // codegen-affecting field of `opts` together with this
             // module's post-transform HIR fingerprint and the perry
@@ -5740,9 +5838,26 @@ pub fn run_with_parse_cache(
                 object_output_dir.join(format!("{}.{}", obj_name, ext))
             };
 
-            if let Some((key, cached_path, ffi_symbols)) = cache_key
-                .and_then(|k| object_cache.lookup_path_with_ffi(k).map(|(p, s)| (k, p, s)))
-            {
+            if let Some((key, cached_path, ffi_symbols, seed_lines)) = cache_key.and_then(|k| {
+                object_cache
+                    .lookup_path_with_ffi(k)
+                    .map(|(p, s, seeds)| (k, p, s, seeds))
+            }) {
+                // Design step 4: a hit replays the module's static shape
+                // seeds exactly as the skipped codegen reported them, so the
+                // seed unit is the same cold and warm. A malformed line makes
+                // the entry unusable rather than silently dropping a seed.
+                let seeds = seed_lines
+                    .iter()
+                    .map(|line| perry_codegen::decode_static_seed(line))
+                    .collect::<Option<Vec<_>>>()
+                    .ok_or_else(|| {
+                        format!("corrupt static shape seed sidecar for cache key {key:016x}")
+                    })?;
+                program_static_seeds
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .extend(seeds);
                 // #6439: a hit skips `compile_module`, and `compile_module`
                 // is what populates the ext_registry (`record_ffi_call`
                 // fires from `LlBlock::call`). The registry drives
@@ -5848,6 +5963,7 @@ pub fn run_with_parse_cache(
                     perry_codegen::compile_module(hir_module, opts)
                 })
             };
+            let module_static_seeds = perry_codegen::take_module_static_seeds();
             let object_code = compiled.map_err(|e| {
                 perry_codegen::ext_registry::take_module_capture();
                 format!(
@@ -5858,6 +5974,10 @@ pub fn run_with_parse_cache(
                 )
             })?;
             let emitted_ffi_symbols = perry_codegen::ext_registry::take_module_capture();
+            program_static_seeds
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .extend(module_static_seeds.iter().cloned());
             let object_fingerprint = cache_key
                 .map(|k| format!("cache:{:016x}", k))
                 .unwrap_or_else(|| format!("bytes:{:016x}", djb2_hash(&object_code)));
@@ -5866,6 +5986,14 @@ pub fn run_with_parse_cache(
                 // as a miss to a concurrent build (correct, just a wasted
                 // recompile), whereas the reverse ordering can never mislead.
                 object_cache.store_ffi_manifest(k, &emitted_ffi_symbols);
+                let seed_lines: Vec<String> = module_static_seeds
+                    .iter()
+                    .map(|(id, shape)| perry_codegen::encode_static_seed(*id, shape))
+                    .collect();
+                object_cache.store_static_seeds(
+                    k,
+                    &seed_lines.iter().map(String::as_str).collect::<Vec<_>>(),
+                );
                 object_cache.store_and_get_path(k, &object_code)
             }) {
                 // #7167: handing back the cache path saves a copy for a
@@ -6411,6 +6539,29 @@ pub fn run_with_parse_cache(
         fs::write(&installer_path, &installer_bytes)?;
         obj_cleanup_paths.push(installer_path.clone());
         obj_paths.push(installer_path);
+        obj_fingerprints.push(None);
+    }
+
+    // Design step 4: the static shape seed unit (see
+    // `perry_codegen::stubs::static_shape_seed_ll`). No seedable id = no unit;
+    // the runtime's seed hook then does nothing.
+    let program_static_seeds: Vec<(u32, perry_codegen::BirthShape)> = program_static_seeds
+        .into_inner()
+        .unwrap_or_else(|e| e.into_inner())
+        .into_iter()
+        .collect();
+    if !program_static_seeds.is_empty() {
+        if matches!(format, OutputFormat::Text) && verbose > 0 {
+            eprintln!("  static shape seeds: {}", program_static_seeds.len());
+        }
+        let seed_bytes = perry_codegen::stubs::generate_static_shape_seed_object(
+            &program_static_seeds,
+            target.as_deref(),
+        )?;
+        let seed_path = object_output_dir.join("_perry_static_shape_seeds.o");
+        fs::write(&seed_path, &seed_bytes)?;
+        obj_cleanup_paths.push(seed_path.clone());
+        obj_paths.push(seed_path);
         obj_fingerprints.push(None);
     }
 

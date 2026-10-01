@@ -15,29 +15,49 @@ fn reporter_with_kind(kind: i32, source: f64) -> f64 {
     readable_from_text(output)
 }
 
-pub(crate) extern "C" fn thunk_reporter_spec(_closure: *const ClosureHeader, source: f64) -> f64 {
+pub(crate) extern "C" fn thunk_reporter_spec(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    source: f64,
+) -> f64 {
     reporter_with_kind(REPORTER_SPEC, source)
 }
 
-pub(crate) extern "C" fn thunk_reporter_tap(_closure: *const ClosureHeader, source: f64) -> f64 {
+pub(crate) extern "C" fn thunk_reporter_tap(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    source: f64,
+) -> f64 {
     reporter_with_kind(REPORTER_TAP, source)
 }
 
-pub(crate) extern "C" fn thunk_reporter_dot(_closure: *const ClosureHeader, source: f64) -> f64 {
+pub(crate) extern "C" fn thunk_reporter_dot(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    source: f64,
+) -> f64 {
     reporter_with_kind(REPORTER_DOT, source)
 }
 
-pub(crate) extern "C" fn thunk_reporter_junit(_closure: *const ClosureHeader, source: f64) -> f64 {
+pub(crate) extern "C" fn thunk_reporter_junit(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    source: f64,
+) -> f64 {
     reporter_with_kind(REPORTER_JUNIT, source)
 }
 
-pub(crate) extern "C" fn thunk_reporter_lcov(_closure: *const ClosureHeader, source: f64) -> f64 {
+pub(crate) extern "C" fn thunk_reporter_lcov(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    source: f64,
+) -> f64 {
     reporter_with_kind(REPORTER_LCOV, source)
 }
 
 fn reporter_transform(kind: i32) -> f64 {
     let captures = if kind == REPORTER_SPEC { 2 } else { 1 };
-    let transform = make_closure(reporter_transform_chunk as *const u8, 3, captures);
+    let transform = make_closure(crate::fn_info!(reporter_transform_chunk, 3), 3, captures);
     js_closure_set_capture_f64(transform, 0, kind as f64);
     if kind == REPORTER_SPEC {
         js_closure_set_capture_f64(transform, 1, undefined_value());
@@ -49,6 +69,7 @@ fn reporter_transform(kind: i32) -> f64 {
 
 extern "C" fn reporter_transform_chunk(
     closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
     chunk: f64,
     _encoding: f64,
     callback: f64,
@@ -75,12 +96,15 @@ extern "C" fn reporter_transform_chunk(
         });
     }
     if !output.is_empty() {
-        let this = crate::object::js_implicit_this_get();
+        let this = this.as_f64();
         let handle = (this.to_bits() & POINTER_MASK) as i64;
         crate::node_stream::js_node_stream_method_push(handle, string_value(&output));
     }
     if is_callable_value(callback) {
-        js_closure_call0(raw_ptr_from_value(callback) as *const ClosureHeader);
+        js_closure_call0(
+            raw_ptr_from_value(callback) as *const ClosureHeader,
+            crate::closure::plain_call_receiver(),
+        );
     }
     undefined_value()
 }

@@ -303,6 +303,7 @@ fn test_registry_tracks_holder_across_three_moving_minors() {
 
 extern "C" fn finreg_registry_test_callback(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _held: f64,
 ) -> f64 {
     f64::from_bits(crate::value::TAG_UNDEFINED)
@@ -340,7 +341,8 @@ fn prepare_moved_full_path_weak_holders() {
         f64::from_bits(js_shadow_slot_get(6)),
     );
 
-    let callback = crate::closure::js_closure_alloc(finreg_registry_test_callback as *const u8, 0);
+    let callback =
+        crate::closure::js_closure_alloc(crate::fn_info!(finreg_registry_test_callback, 1), 0);
     let registry = crate::weakref::js_finreg_new(f64::from_bits(ptr_bits(callback as usize)));
     let finreg_target = crate::object::js_object_alloc(0, 0);
     js_shadow_slot_set(3, obj_bits(registry));
@@ -450,7 +452,7 @@ fn test_fallback_registry_path_handles_all_weak_kinds_moved_dead_and_stale_holde
 fn test_copied_minor_finreg_enqueues_cleanup_via_registry() {
     let _guard = CopyingNurseryTestGuard::new(1);
 
-    let cb = crate::closure::js_closure_alloc(finreg_registry_test_callback as *const u8, 0);
+    let cb = crate::closure::js_closure_alloc(crate::fn_info!(finreg_registry_test_callback, 1), 0);
     let reg = crate::weakref::js_finreg_new(f64::from_bits(ptr_bits(cb as usize)));
     js_shadow_slot_set(0, obj_bits(reg));
 
@@ -592,7 +594,7 @@ fn test_copied_minor_finreg_promoted_live_target_not_collected() {
     js_shadow_slot_set(1, obj_bits(target));
     let target_old = promote_rooted_to_old(1);
 
-    let cb = crate::closure::js_closure_alloc(finreg_registry_test_callback as *const u8, 0);
+    let cb = crate::closure::js_closure_alloc(crate::fn_info!(finreg_registry_test_callback, 1), 0);
     let reg = crate::weakref::js_finreg_new(f64::from_bits(ptr_bits(cb as usize)));
     js_shadow_slot_set(0, obj_bits(reg));
     let reg_v = f64::from_bits(js_shadow_slot_get(0));

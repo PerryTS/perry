@@ -424,6 +424,7 @@ fn collect_module_one(
             cjs_is_entry_module,
             Some(&ctx.compile_packages),
             Some(&ctx.native_addon_paths),
+            ctx.cjs_require_diagnostics,
         );
         if ctx.debug_symbols {
             // Preserve original-source locations after injecting the wrapper.

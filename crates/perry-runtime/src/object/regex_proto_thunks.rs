@@ -33,11 +33,11 @@ enum RegexReceiver {
     Prototype,
 }
 
-/// Resolve `IMPLICIT_THIS` to a RegExp instance or `RegExp.prototype`, throwing
+/// Resolve the `this` receiver to a RegExp instance or `RegExp.prototype`, throwing
 /// `TypeError` otherwise (matching the spec brand check shared by every
 /// flag/`source` getter).
-fn regex_receiver_or_throw(getter: &str) -> RegexReceiver {
-    let receiver = crate::value::JSValue::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+fn regex_receiver_or_throw(this: crate::closure::JsThis, getter: &str) -> RegexReceiver {
+    let receiver = crate::value::JSValue::from_bits(this.bits());
     if receiver.is_pointer() {
         let ptr = receiver.as_pointer::<u8>() as usize;
         if crate::regex::is_registered_regex(ptr) {
@@ -78,8 +78,8 @@ fn regex_has_flag(re: *const crate::regex::RegExpHeader, flag: char) -> bool {
 
 /// Shared body for the boolean flag getters: regex → boolean, prototype →
 /// undefined, else TypeError.
-fn flag_getter(getter: &str, flag: char) -> f64 {
-    match regex_receiver_or_throw(getter) {
+fn flag_getter(this: crate::closure::JsThis, getter: &str, flag: char) -> f64 {
+    match regex_receiver_or_throw(this, getter) {
         RegexReceiver::Regex(re) => {
             f64::from_bits(crate::value::JSValue::bool(regex_has_flag(re, flag)).bits())
         }
@@ -89,49 +89,58 @@ fn flag_getter(getter: &str, flag: char) -> f64 {
 
 pub(super) extern "C" fn regex_proto_global_getter(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    flag_getter("global", 'g')
+    flag_getter(this, "global", 'g')
 }
 pub(super) extern "C" fn regex_proto_ignore_case_getter(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    flag_getter("ignoreCase", 'i')
+    flag_getter(this, "ignoreCase", 'i')
 }
 pub(super) extern "C" fn regex_proto_multiline_getter(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    flag_getter("multiline", 'm')
+    flag_getter(this, "multiline", 'm')
 }
 pub(super) extern "C" fn regex_proto_dot_all_getter(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    flag_getter("dotAll", 's')
+    flag_getter(this, "dotAll", 's')
 }
 pub(super) extern "C" fn regex_proto_sticky_getter(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    flag_getter("sticky", 'y')
+    flag_getter(this, "sticky", 'y')
 }
 pub(super) extern "C" fn regex_proto_unicode_getter(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    flag_getter("unicode", 'u')
+    flag_getter(this, "unicode", 'u')
 }
 pub(super) extern "C" fn regex_proto_unicode_sets_getter(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    flag_getter("unicodeSets", 'v')
+    flag_getter(this, "unicodeSets", 'v')
 }
 pub(super) extern "C" fn regex_proto_has_indices_getter(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    flag_getter("hasIndices", 'd')
+    flag_getter(this, "hasIndices", 'd')
 }
 
 pub(super) extern "C" fn regex_proto_source_getter(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    match regex_receiver_or_throw("source") {
+    match regex_receiver_or_throw(this, "source") {
         RegexReceiver::Regex(re) => {
             // `js_regexp_get_source` returns the *escaped* source string.
             let s = crate::regex::js_regexp_get_source(re);
@@ -147,17 +156,19 @@ pub(super) extern "C" fn regex_proto_source_getter(
 /// `get RegExp.prototype.flags` — spec 22.2.6.4. Reads each flag property off
 /// the (generic) receiver via `Get` + `ToBoolean` and assembles in canonical
 /// order `d g i m s u v y`. Throws `TypeError` only if `this` is not an Object.
-pub(super) extern "C" fn regex_proto_flags_getter(_c: *const crate::closure::ClosureHeader) -> f64 {
+pub(super) extern "C" fn regex_proto_flags_getter(
+    _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
     #[cfg(feature = "regex-engine")]
     {
-        let value = crate::regex::perex_api::finish(crate::regex::perex_match_search::flags(
-            crate::object::js_implicit_this_get(),
-        ));
+        let value =
+            crate::regex::perex_api::finish(crate::regex::perex_match_search::flags(this.as_f64()));
         crate::value::js_nanbox_string(value as i64)
     }
     #[cfg(not(feature = "regex-engine"))]
     {
-        let receiver = crate::value::JSValue::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+        let receiver = crate::value::JSValue::from_bits(this.bits());
         // Type(R) must be Object. Pointer-tagged values are objects EXCEPT Symbols
         // (which are also pointer-tagged via the symbol side-table); a Symbol `this`
         // must throw a TypeError, not silently assemble "".
@@ -194,13 +205,16 @@ pub(super) extern "C" fn regex_proto_flags_getter(_c: *const crate::closure::Clo
 /// Install one accessor getter (`set: undefined`) onto `proto_obj` with the
 /// spec attributes (`enumerable: false`, `configurable: true`) and the proper
 /// getter `name` (`"get <prop>"`) / `length` (`0`).
-fn install_getter(proto_obj: *mut ObjectHeader, name: &str, func_ptr: *const u8) {
+fn install_getter(
+    proto_obj: *mut ObjectHeader,
+    name: &str,
+    info: *const crate::closure::JsFunctionInfo,
+) {
     if proto_obj.is_null() {
         return;
     }
     unsafe {
-        crate::closure::js_register_closure_arity(func_ptr, 0);
-        let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+        let closure = crate::closure::js_closure_alloc(info, 0);
         if closure.is_null() {
             return;
         }
@@ -230,9 +244,10 @@ fn install_getter(proto_obj: *mut ObjectHeader, name: &str, func_ptr: *const u8)
 #[cfg(feature = "regex-engine")]
 pub(super) extern "C" fn regex_proto_exec_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     arg: f64,
 ) -> f64 {
-    let re = regex_instance_or_throw("exec");
+    let re = regex_instance_or_throw(this, "exec");
     let scope = crate::gc::RuntimeHandleScope::new();
     let re = scope.root_raw_const_ptr(re);
     let s = crate::value::js_jsvalue_to_string_coerce(arg);
@@ -263,10 +278,12 @@ pub(crate) fn is_builtin_regexp_exec(value: f64) -> bool {
 #[cfg(feature = "regex-engine")]
 pub(super) extern "C" fn regex_proto_test_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     arg: f64,
 ) -> f64 {
     let matched = crate::regex::perex_api::finish(crate::regex::perex_dispatch::test_value(
-        crate::object::js_implicit_this_get(),
+        this,
+        this.as_f64(),
         arg,
     ));
     f64::from_bits(crate::value::JSValue::bool(matched).bits())
@@ -282,10 +299,11 @@ pub(super) extern "C" fn regex_proto_test_thunk(
 #[cfg(feature = "regex-engine")]
 pub(super) extern "C" fn regex_proto_compile_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     pattern: f64,
     flags: f64,
 ) -> f64 {
-    let re = regex_instance_or_throw("compile");
+    let re = regex_instance_or_throw(this, "compile");
     crate::regex::js_regexp_compile_value(re as *mut crate::regex::RegExpHeader, pattern, flags)
 }
 
@@ -295,8 +313,9 @@ pub(super) extern "C" fn regex_proto_compile_thunk(
 /// `RegExp.prototype.toString.call({ source: "x", flags: "g" })` works.
 pub(super) extern "C" fn regex_proto_to_string_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let receiver = crate::value::JSValue::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    let receiver = crate::value::JSValue::from_bits(this.bits());
     if !receiver.is_pointer()
         || crate::symbol::is_registered_symbol(receiver.as_pointer::<u8>() as usize)
     {
@@ -323,12 +342,15 @@ pub(super) extern "C" fn regex_proto_to_string_thunk(
     f64::from_bits(crate::js_nanbox_string(s as i64).to_bits())
 }
 
-/// Resolve `IMPLICIT_THIS` to a live RegExp instance (with `[[RegExpMatcher]]`),
+/// Resolve the `this` receiver to a live RegExp instance (with `[[RegExpMatcher]]`),
 /// throwing `TypeError` otherwise. Unlike the flag/`source` getters, this does
 /// NOT treat `RegExp.prototype` specially — builtin exec requires a matcher.
 #[cfg(feature = "regex-engine")]
-fn regex_instance_or_throw(method: &str) -> *const crate::regex::RegExpHeader {
-    let receiver = crate::value::JSValue::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+fn regex_instance_or_throw(
+    this: crate::closure::JsThis,
+    method: &str,
+) -> *const crate::regex::RegExpHeader {
+    let receiver = crate::value::JSValue::from_bits(this.bits());
     if receiver.is_pointer() {
         let ptr = receiver.as_pointer::<u8>() as usize;
         if crate::regex::is_registered_regex(ptr) {
@@ -716,9 +738,19 @@ fn record_canonical_test_site(proto_obj: *mut ObjectHeader) {
 pub(super) fn install_regex_proto_methods(proto_obj: *mut ObjectHeader) {
     use super::global_this::install_proto_method as ipm;
     #[cfg(feature = "regex-engine")]
-    ipm(proto_obj, "exec", regex_proto_exec_thunk as *const u8, 1);
+    ipm(
+        proto_obj,
+        "exec",
+        crate::fn_info!(regex_proto_exec_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        1,
+    );
     #[cfg(feature = "regex-engine")]
-    ipm(proto_obj, "test", regex_proto_test_thunk as *const u8, 1);
+    ipm(
+        proto_obj,
+        "test",
+        crate::fn_info!(regex_proto_test_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        1,
+    );
     #[cfg(feature = "regex-engine")]
     record_canonical_test_site(proto_obj);
     // Annex B `compile` re-initializes the receiver in place. It needs a real
@@ -728,13 +760,13 @@ pub(super) fn install_regex_proto_methods(proto_obj: *mut ObjectHeader) {
     ipm(
         proto_obj,
         "compile",
-        regex_proto_compile_thunk as *const u8,
+        crate::fn_info!(regex_proto_compile_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
         2,
     );
     ipm(
         proto_obj,
         "toString",
-        regex_proto_to_string_thunk as *const u8,
+        crate::fn_info!(regex_proto_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
         0,
     );
     #[cfg(feature = "regex-engine")]
@@ -747,41 +779,40 @@ fn install_regex_symbol_methods(proto: *mut crate::object::ObjectHeader) {
     use crate::value::js_nanbox_pointer;
     let scope = RuntimeHandleScope::new();
     let proto = scope.root_raw_mut_ptr(proto);
-    for (symbol, name, fp, arity) in [
+    for (symbol, name, info, arity) in [
         (
             "match",
             "[Symbol.match]",
-            crate::regex::perex_match_search::match_thunk as *const u8,
+            crate::fn_info!(crate::regex::perex_match_search::match_thunk, 1; with_declared(1)),
             1,
         ),
         (
             "search",
             "[Symbol.search]",
-            crate::regex::perex_match_search::search_thunk as *const u8,
+            crate::fn_info!(crate::regex::perex_match_search::search_thunk, 1; with_declared(1)),
             1,
         ),
         (
             "matchAll",
             "[Symbol.matchAll]",
-            crate::regex::match_all::regexp_thunk as *const u8,
+            crate::fn_info!(crate::regex::match_all::regexp_thunk, 1; with_declared(1)),
             1,
         ),
         (
             "split",
             "[Symbol.split]",
-            crate::regex::perex_split::regexp_thunk as *const u8,
+            crate::fn_info!(crate::regex::perex_split::regexp_thunk, 2; with_declared(2)),
             2,
         ),
         (
             "replace",
             "[Symbol.replace]",
-            crate::regex::perex_replace::regexp_thunk as *const u8,
+            crate::fn_info!(crate::regex::perex_replace::regexp_thunk, 2; with_declared(2)),
             2,
         ),
     ] {
         let iteration = RuntimeHandleScope::new();
-        crate::closure::js_register_closure_arity(fp, arity);
-        let function = iteration.root_raw_mut_ptr(crate::closure::js_closure_alloc(fp, 0));
+        let function = iteration.root_raw_mut_ptr(crate::closure::js_closure_alloc(info, 0));
         function.with_mut_ptr(|function| {
             super::native_module::set_bound_native_closure_name(function, name)
         });
@@ -815,35 +846,55 @@ fn install_regex_symbol_methods(proto: *mut crate::object::ObjectHeader) {
 
 /// Install all RegExp.prototype accessor getters.
 pub(super) fn install_regex_proto_accessors(proto_obj: *mut ObjectHeader) {
-    install_getter(proto_obj, "flags", regex_proto_flags_getter as *const u8);
-    install_getter(proto_obj, "source", regex_proto_source_getter as *const u8);
-    install_getter(proto_obj, "global", regex_proto_global_getter as *const u8);
+    install_getter(
+        proto_obj,
+        "flags",
+        crate::fn_info!(regex_proto_flags_getter, 0; with_declared(0)),
+    );
+    install_getter(
+        proto_obj,
+        "source",
+        crate::fn_info!(regex_proto_source_getter, 0; with_declared(0)),
+    );
+    install_getter(
+        proto_obj,
+        "global",
+        crate::fn_info!(regex_proto_global_getter, 0; with_declared(0)),
+    );
     install_getter(
         proto_obj,
         "ignoreCase",
-        regex_proto_ignore_case_getter as *const u8,
+        crate::fn_info!(regex_proto_ignore_case_getter, 0; with_declared(0)),
     );
     install_getter(
         proto_obj,
         "multiline",
-        regex_proto_multiline_getter as *const u8,
+        crate::fn_info!(regex_proto_multiline_getter, 0; with_declared(0)),
     );
-    install_getter(proto_obj, "dotAll", regex_proto_dot_all_getter as *const u8);
-    install_getter(proto_obj, "sticky", regex_proto_sticky_getter as *const u8);
+    install_getter(
+        proto_obj,
+        "dotAll",
+        crate::fn_info!(regex_proto_dot_all_getter, 0; with_declared(0)),
+    );
+    install_getter(
+        proto_obj,
+        "sticky",
+        crate::fn_info!(regex_proto_sticky_getter, 0; with_declared(0)),
+    );
     install_getter(
         proto_obj,
         "unicode",
-        regex_proto_unicode_getter as *const u8,
+        crate::fn_info!(regex_proto_unicode_getter, 0; with_declared(0)),
     );
     install_getter(
         proto_obj,
         "unicodeSets",
-        regex_proto_unicode_sets_getter as *const u8,
+        crate::fn_info!(regex_proto_unicode_sets_getter, 0; with_declared(0)),
     );
     install_getter(
         proto_obj,
         "hasIndices",
-        regex_proto_has_indices_getter as *const u8,
+        crate::fn_info!(regex_proto_has_indices_getter, 0; with_declared(0)),
     );
 }
 
@@ -864,7 +915,6 @@ pub(crate) fn regexp_get_property(
             as *const crate::regex::RegExpHeader;
         return crate::JSValue::from_bits(crate::regex::js_regexp_get_last_index(re).to_bits());
     }
-    let previous = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
     let result = crate::exception::catch_js_throw(|| {
         if let Some(name) = &name {
             let addr = crate::value::js_nanbox_get_pointer(receiver.get_nanbox_f64()) as usize;
@@ -892,7 +942,6 @@ pub(crate) fn regexp_get_property(
         });
         crate::proxy::js_reflect_get(proto.get_nanbox_f64(), key, receiver.get_nanbox_f64())
     });
-    crate::object::js_implicit_this_set(previous.get_nanbox_f64());
     drop(name);
     match result {
         Ok(value) => crate::JSValue::from_bits(value.to_bits()),

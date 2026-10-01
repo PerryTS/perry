@@ -2,15 +2,27 @@
 
 use super::*;
 
-extern "C" fn bun_glob_scan(closure: *const ClosureHeader, options: f64) -> f64 {
+extern "C" fn bun_glob_scan(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    options: f64,
+) -> f64 {
     crate::fs::js_bun_glob_async_iterator(captured(closure), options)
 }
 
-extern "C" fn bun_glob_scan_sync(closure: *const ClosureHeader, options: f64) -> f64 {
+extern "C" fn bun_glob_scan_sync(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    options: f64,
+) -> f64 {
     crate::fs::js_bun_glob_sync_iterator(captured(closure), options)
 }
 
-extern "C" fn bun_glob_match(closure: *const ClosureHeader, path: f64) -> f64 {
+extern "C" fn bun_glob_match(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    path: f64,
+) -> f64 {
     match crate::fs::bun_glob_matches(captured(closure), path) {
         Ok(matches) => bool_value(matches),
         Err(error) => crate::exception::js_throw(error),
@@ -34,17 +46,26 @@ pub extern "C-unwind" fn js_bun_glob_new(pattern: f64) -> f64 {
     set_field(
         obj,
         b"scan",
-        bound_method1(bun_glob_scan, pattern.get_nanbox_f64()),
+        bound_method(
+            crate::fn_info!(bun_glob_scan, 1; with_declared(1)),
+            pattern.get_nanbox_f64(),
+        ),
     );
     set_field(
         obj,
         b"scanSync",
-        bound_method1(bun_glob_scan_sync, pattern.get_nanbox_f64()),
+        bound_method(
+            crate::fn_info!(bun_glob_scan_sync, 1; with_declared(1)),
+            pattern.get_nanbox_f64(),
+        ),
     );
     set_field(
         obj,
         b"match",
-        bound_method1(bun_glob_match, pattern.get_nanbox_f64()),
+        bound_method(
+            crate::fn_info!(bun_glob_match, 1; with_declared(1)),
+            pattern.get_nanbox_f64(),
+        ),
     );
     f64::from_bits(JSValue::pointer(obj as *const u8).bits())
 }

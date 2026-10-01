@@ -9,7 +9,6 @@
 //! sub-modules, split by API at clean function boundaries:
 //!
 //! - `notification.rs` — perry/system `notificationSchedule({...})`
-//! - `abort.rs`         — `AbortController` / `AbortSignal`
 //! - `fetch.rs`         — Web Fetch family (fetch / axios / Headers /
 //!                        Request / Response / blob / readable_stream)
 //!
@@ -24,10 +23,8 @@ use crate::expr::{lower_expr, FnCtx};
 use crate::rooting::{with_rooted_group, Repr};
 use crate::types::{DOUBLE, I64};
 
-mod abort;
 mod fetch;
 mod notification;
-pub(in crate::lower_call) use abort::lower_abort_controller_call;
 pub(in crate::lower_call) use fetch::lower_fetch_native_method;
 pub(in crate::lower_call) use notification::lower_notification_schedule;
 

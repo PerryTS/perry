@@ -59,10 +59,8 @@ pub(crate) fn test_bump_vtable_generation() {
 ///   `Object.getPrototypeOf(instance)`, a `super` chain);
 /// * `js_register_class_generic_origin` — redirects BOTH prototype-object
 ///   readers and `lookup_prototype_method`'s chain hop to another class id;
-/// * the in-place `CLASS_DELETED_KEYS` un-mark inside
-///   `class_dynamic_prop_root_store` — re-exposes a `delete`d prototype key.
 ///
-/// Bumped INSIDE those four writers, after the store, so a new call site
+/// Bumped INSIDE those three writers, after the store, so a new call site
 /// cannot forget it — the same enforced-funnel rule `prop_plan_epoch_bump`
 /// follows. Kept separate from `VTABLE_GEN` precisely so that a consumer of
 /// this counter does not impose the dispatch-speculation cost that bumping
@@ -97,7 +95,7 @@ pub(crate) fn class_lookup_surface_gen_bump() {
     // and recorded prototype bits all unchanged and the old prototype object
     // unmutated, so nothing else in that entry's guard can see it — and the
     // entry would then answer with a different object than the chain walk
-    // beside it. All four callers are registry stores on cold paths.
+    // beside it. All three callers are registry stores on cold paths.
     crate::object::proto_validity::bump_proto_validity();
 }
 

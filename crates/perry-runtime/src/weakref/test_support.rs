@@ -82,13 +82,17 @@ fn empty_checkpoint_delivers_recorded_finalization_job() {
         use super::*;
         use std::sync::atomic::{AtomicU64, Ordering};
         static DELIVERED: AtomicU64 = AtomicU64::new(0);
-        extern "C" fn cleanup(_: *const crate::closure::ClosureHeader, held: f64) -> f64 {
+        extern "C" fn cleanup(
+            _: *const crate::closure::ClosureHeader,
+            _this: crate::closure::JsThis,
+            held: f64,
+        ) -> f64 {
             DELIVERED.store(held.to_bits(), Ordering::Relaxed);
             0.0
         }
         crate::gc::js_gc_init();
-        crate::closure::js_register_closure_arity(cleanup as *const u8, 1);
-        let closure = crate::closure::js_closure_alloc(cleanup as *const u8, 0);
+        let closure =
+            crate::closure::js_closure_alloc(crate::fn_info!(cleanup, 1; with_declared(1)), 0);
         let scope = crate::gc::RuntimeHandleScope::new();
         let callback = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(closure as i64));
         let registry = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(js_finreg_new(

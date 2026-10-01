@@ -577,15 +577,27 @@ fn declared_array_element_type_hint<'a>(
 /// keeps the answer independent of `ctx.classes` iteration order, which is a
 /// `HashMap`'s.
 fn anon_shape_class_for_element_type(ctx: &FnCtx<'_>, array_id: u32) -> Option<String> {
-    use perry_hir::types::Type as HirType;
-
     // The annotation selects a candidate versioned clone.  The clone's
     // preheader validates the receiver kind, array head, shape, and key token
     // before any representation-specific access, and falls back on failure.
     let elem = declared_array_element_type_hint(ctx, array_id)?;
+    anon_shape_class_for_object_type(ctx, elem)
+}
+
+/// The `__AnonShape_<hash>` class a declared CLOSED object type names (see
+/// [`anon_shape_class_for_element_type`] for why it is matched by property
+/// order, not recomputed), or `None` when no single anon shape matches. A
+/// candidate only: every consumer validates it against the receiver at run
+/// time (the element clone's preheader, a loop region's static supplier).
+pub(crate) fn anon_shape_class_for_object_type(
+    ctx: &FnCtx<'_>,
+    ty: &perry_hir::types::Type,
+) -> Option<String> {
+    use perry_hir::types::Type as HirType;
+
     // `type Node = {v: number; w: number}` — the annotation names the shape one
     // indirection away. Both levels are resolved (`type Row = Node[]` too).
-    let HirType::Object(obj) = resolve_type_alias(ctx, elem) else {
+    let HirType::Object(obj) = resolve_type_alias(ctx, ty) else {
         return None;
     };
     // Only a CLOSED shape names a layout: an index signature, a method
@@ -1370,9 +1382,12 @@ fn match_class_identity(
             return None;
         }
         let field_index = crate::type_analysis::class_field_global_index(ctx, class_name, prop)?;
-        let raw_f64 = crate::type_analysis::class_field_declared_type(ctx, class_name, prop)
-            .as_ref()
-            .is_some_and(crate::typed_shape::type_is_raw_f64_candidate);
+        let raw_f64 = crate::expr::class_field_inline_guard::class_field_site_raw_f64(
+            ctx,
+            class_name,
+            prop,
+            field_index,
+        );
         if !raw_f64 {
             return None;
         }
@@ -1742,8 +1757,11 @@ pub(super) fn lower_element_shape_versioned_for(
             fields,
             synthesized_body: matched.fast_body.is_some(),
             element_binding: matched.element_binding,
-            numeric_accumulator: matched.accumulator_id,
         });
+    // The preheader proved the accumulator's current value is a Number and the
+    // matcher admits only Number-preserving writes: the clone's 5L scope.
+    ctx.receiver_descriptors
+        .materialize_number_locals(scope_id, &[matched.accumulator_id]);
     let lowered = lower_for_after_init_with_i32_bound(
         ctx,
         init,
@@ -1755,6 +1773,7 @@ pub(super) fn lower_element_shape_versioned_for(
     );
     ctx.element_shape_loop_facts
         .retain(|fact| fact.scope_id != scope_id);
+    ctx.receiver_descriptors.dematerialize_scope(scope_id);
     native.finish(ctx, &merge_label);
     lowered?;
     if !ctx.block().is_terminated() {

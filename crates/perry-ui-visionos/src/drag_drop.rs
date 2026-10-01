@@ -36,8 +36,8 @@ use std::ffi::c_void;
 use std::rc::Rc;
 
 extern "C" {
-    fn js_closure_call0(closure: *const u8) -> f64;
-    fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+    fn js_closure_call0(closure: *const u8, this: perry_ffi::JsThis) -> f64;
+    fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
     fn js_nanbox_pointer(ptr: i64) -> f64;
     fn js_nanbox_string(ptr: i64) -> f64;
@@ -86,7 +86,7 @@ unsafe fn call_provider(cb: f64) -> Option<String> {
     if p.is_null() {
         return None;
     }
-    let ret = js_closure_call0(p);
+    let ret = js_closure_call0(p, perry_ffi::JsThis::UNDEFINED);
     let sh = js_jsvalue_to_string(ret);
     if sh.is_null() {
         None
@@ -204,7 +204,7 @@ unsafe fn perform_drop_impl(interaction: *mut AnyObject, session: *mut AnyObject
         }
         let payload = js_nanbox_pointer(obj as i64);
         let cb_ptr = js_nanbox_get_pointer(a.cb) as *const u8;
-        js_closure_call1(cb_ptr, payload);
+        js_closure_call1(cb_ptr, perry_ffi::JsThis::UNDEFINED, payload);
     }
 
     // text

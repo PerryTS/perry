@@ -433,7 +433,7 @@ pub extern "C" fn js_readline_process_pending() -> i32 {
                 .collect();
             for callback in callback_handles {
                 let closure = callback.get_raw_const_ptr::<ClosureHeader>();
-                js_closure_call0(closure);
+                js_closure_call0(closure, perry_runtime::closure::plain_call_receiver());
                 fired += 1;
             }
         }
@@ -482,7 +482,11 @@ pub extern "C" fn js_readline_process_pending() -> i32 {
             let arg_handle = arg_scope.root_nanbox_f64(arg);
             for callback in &data_callback_handles {
                 let closure = callback.get_raw_const_ptr::<ClosureHeader>();
-                js_closure_call1(closure, arg_handle.get_nanbox_f64());
+                js_closure_call1(
+                    closure,
+                    perry_runtime::closure::plain_call_receiver(),
+                    arg_handle.get_nanbox_f64(),
+                );
                 fired += 1;
             }
         }
@@ -500,7 +504,12 @@ pub extern "C" fn js_readline_process_pending() -> i32 {
                     scope.root_nanbox_f64(f64::from_bits(JSValue::string_ptr(seq_str).bits()));
                 let arg2 = build_keypress_object(&name, ctrl, shift, meta, &seq);
                 let closure = callback.get_raw_const_ptr::<ClosureHeader>();
-                js_closure_call2(closure, arg1.get_nanbox_f64(), arg2);
+                js_closure_call2(
+                    closure,
+                    perry_runtime::closure::plain_call_receiver(),
+                    arg1.get_nanbox_f64(),
+                    arg2,
+                );
                 fired += 1;
             }
         }
@@ -524,14 +533,14 @@ pub extern "C" fn js_readline_process_pending() -> i32 {
         let q_cb = QUESTION_CALLBACK.with(|cb| cb.borrow_mut().take());
         if let Some(cb_i64) = q_cb {
             let closure = cb_i64 as *const ClosureHeader;
-            js_closure_call1(closure, arg);
+            js_closure_call1(closure, perry_runtime::closure::plain_call_receiver(), arg);
             fired += 1;
             continue;
         }
         let line_cb = LINE_CALLBACK.with(|cb| *cb.borrow());
         if let Some(cb_i64) = line_cb {
             let closure = cb_i64 as *const ClosureHeader;
-            js_closure_call1(closure, arg);
+            js_closure_call1(closure, perry_runtime::closure::plain_call_receiver(), arg);
             fired += 1;
         }
     }
@@ -570,7 +579,11 @@ pub extern "C" fn js_readline_process_pending() -> i32 {
                 let arg_handle = flush_scope.root_nanbox_f64(flushed);
                 for callback in &flush_handles {
                     let closure = callback.get_raw_const_ptr::<ClosureHeader>();
-                    js_closure_call1(closure, arg_handle.get_nanbox_f64());
+                    js_closure_call1(
+                        closure,
+                        perry_runtime::closure::plain_call_receiver(),
+                        arg_handle.get_nanbox_f64(),
+                    );
                     fired += 1;
                 }
             }
@@ -579,7 +592,7 @@ pub extern "C" fn js_readline_process_pending() -> i32 {
             let cb = CLOSE_CALLBACK.with(|c| c.borrow_mut().take());
             if let Some(cb_i64) = cb {
                 let closure = cb_i64 as *const ClosureHeader;
-                js_closure_call0(closure);
+                js_closure_call0(closure, perry_runtime::closure::plain_call_receiver());
                 fired += 1;
             }
         }
@@ -592,7 +605,10 @@ pub extern "C" fn js_readline_process_pending() -> i32 {
                 .map(|mut v| std::mem::take(&mut *v))
                 .unwrap_or_default();
             for cb_i64 in end_cbs {
-                js_closure_call0(cb_i64 as *const ClosureHeader);
+                js_closure_call0(
+                    cb_i64 as *const ClosureHeader,
+                    perry_runtime::closure::plain_call_receiver(),
+                );
                 fired += 1;
             }
         }

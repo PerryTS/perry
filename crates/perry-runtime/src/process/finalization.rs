@@ -6,6 +6,7 @@ use super::*;
 
 extern "C" fn process_finalization_before_exit_listener(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _code: f64,
 ) -> f64 {
     js_process_run_finalization_before_exit();
@@ -18,9 +19,7 @@ fn process_finalization_before_exit_listener_ptr() -> *const crate::closure::Clo
         if !existing.is_null() {
             return existing;
         }
-        let func_ptr = process_finalization_before_exit_listener as *const u8;
-        crate::closure::js_register_closure_arity(func_ptr, 1);
-        crate::closure::js_register_closure_length(func_ptr, 1);
+        let func_ptr = crate::fn_info!(process_finalization_before_exit_listener, 1; with_declared(1), with_length(1));
         let closure = crate::closure::js_closure_alloc(func_ptr, 0);
         crate::object::set_bound_native_closure_name(closure, "processFinalizationBeforeExit");
         crate::object::set_builtin_closure_length(closure as usize, 1);
@@ -163,7 +162,12 @@ fn run_process_finalization_callbacks(kind: ProcessFinalizationKind) {
         }
         let args = [obj_handle.get_nanbox_f64(), event_handle.get_nanbox_f64()];
         unsafe {
-            crate::closure::js_native_call_value(callback, args.as_ptr(), args.len());
+            crate::closure::js_native_call_value(
+                callback,
+                crate::closure::plain_call_receiver(),
+                args.as_ptr(),
+                args.len(),
+            );
         }
     }
 }
@@ -191,6 +195,7 @@ pub fn scan_process_finalization_roots_mut(visitor: &mut crate::gc::RuntimeRootV
 
 extern "C" fn process_finalization_register_function(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     obj: f64,
     callback: f64,
 ) -> f64 {
@@ -199,6 +204,7 @@ extern "C" fn process_finalization_register_function(
 
 extern "C" fn process_finalization_register_before_exit_function(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     obj: f64,
     callback: f64,
 ) -> f64 {
@@ -207,6 +213,7 @@ extern "C" fn process_finalization_register_before_exit_function(
 
 extern "C" fn process_finalization_unregister_function(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     obj: f64,
 ) -> f64 {
     process_finalization_unregister(obj)
@@ -234,21 +241,29 @@ pub(crate) fn process_finalization_value() -> f64 {
     module_set_field(
         obj,
         "register",
-        module_function2("register", process_finalization_register_function, 2),
+        module_function2(
+            "register",
+            crate::fn_info!(process_finalization_register_function, 2; with_declared(2), with_length(2)),
+            2,
+        ),
     );
     module_set_field(
         obj,
         "registerBeforeExit",
         module_function2(
             "registerBeforeExit",
-            process_finalization_register_before_exit_function,
+            crate::fn_info!(process_finalization_register_before_exit_function, 2; with_declared(2), with_length(2)),
             2,
         ),
     );
     module_set_field(
         obj,
         "unregister",
-        module_function1("unregister", process_finalization_unregister_function, 1),
+        module_function1(
+            "unregister",
+            crate::fn_info!(process_finalization_unregister_function, 1; with_declared(1), with_length(1)),
+            1,
+        ),
     );
     let value = module_object_value(obj);
     PROCESS_FINALIZATION_OBJECT.with(|c| c.set(value));

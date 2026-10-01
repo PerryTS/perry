@@ -4,9 +4,9 @@ Real-source npm packages (their perry-ext-* native bindings removed) on **Perry 
 
 ## Setup
 
-- Perry: `perry 0.5.1654` at commit `36420d2e56`, compiled with `perry compile <wl>.ts -o <bin>` (auto-optimize ON, the default) on `ideal-mastodon`.
-- Instructions: host `ideal-mastodon` (Linux-6.17.0-23-generic-x86_64-with-glibc2.39, 16 CPUs), node 26.5.1, bun 1.3.14, run 2026-09-26T23:58:12+0000 → 2026-09-27T02:30:10+0000 (resumed once), load-flag threshold 8.0.
-- Wall-clock / cold start / RSS: host `perry-macos.fritz.box` (macOS-26.5.1-arm64-arm-64bit, 8 CPUs), node 26.5.1, bun 1.3.14, run 2026-09-26T15:44:34-0700 → 2026-09-26T17:13:22-0700, load-flag threshold 2.5.
+- Perry: `perry 0.5.1654` at commit `9e29f59d43`, compiled with `perry compile <wl>.ts -o <bin>` (auto-optimize ON, the default) on `ideal-mastodon`.
+- Instructions: host `ideal-mastodon` (Linux-6.17.0-23-generic-x86_64-with-glibc2.39, 16 CPUs), node 26.5.1, bun 1.3.14, run 2026-09-30T19:32:51+0000 → 2026-09-30T20:09:03+0000, load-flag threshold 8.0.
+- Wall-clock / cold start / RSS: host `perry-macos.fritz.box` (macOS-26.5.1-arm64-arm-64bit-Mach-O, 8 CPUs), node 26.5.1, bun 1.3.14, run 2026-09-30T13:04:37-0700 → 2026-09-30T14:15:30-0700, load-flag threshold 4.0.
 
 Per-iteration cost uses the **two-N method**: every workload is run at two iteration counts n1 < n2 (same warm-up) and per-iteration = (X(n2) − X(n1)) / (n2 − n1), which cancels process startup, module init and warm-up. Instructions are `perf stat -e instructions:u` (all threads of the process — so Node/Bun JIT and GC helper threads count), median of 3 per N. Wall is the median of ≥ 7 interleaved runs per N. Cold start is the median wall of a `0 0` run (startup + module init only). Every measured run's stdout is compared byte-for-byte against Node's at the same N.
 
@@ -14,131 +14,140 @@ Per-iteration cost uses the **two-N method**: every workload is run at two itera
 
 | # | workload | Perry/Node instr | Perry/Node wall | Bun/Node instr | Bun/Node wall | Node instr/iter | Perry instr/iter | Node µs/iter | Perry µs/iter | first-pass attribution |
 |---|---|---|---|---|---|---|---|---|---|---|
-| 1 | `lru-cache/churn` | 256.17× | 130.85× | 3.45× | 2.41× | 836 | 214.0k | 0.086 | 11.2 | top-5: `object::shapes::shape_descriptor_by_id` 8%, `object::field_get_set::get_field_by_name::get...` 5%, `map::compact_map_entries` 5%, `object::field_get_set::ic_miss::private_evalu...` 4%, `object::field_get_set::get_field_by_name_tail...` 3% |
-| 2 | `cron/next_dates` | 159.22× | 173.04× | 0.82× | 0.95× | 2.96M | 471.93M | 155.6 | 26922.7 | top-5: `object::shapes::shape_descriptor_by_id` 9%, `object::native_get::try_data_get_bytes` 8%, `object::field_get_set::get_field_by_name::get...` 5%, `object::class_registry::class_meta::is_anon_s...` 4%, `core::str::converts::from_utf8` 3% |
-| 3 | `mongodb/batch_query` | 83.84× | — | — | — | 2.54M | 213.23M | — | — | top-5: `object::shapes::shape_descriptor_by_id` 5%, `buffer::header::is_registered_buffer_slow` 2%, `object::native_get::try_data_get_bytes` 2%, `__memcmp_evex_movbe` 2%, `object::inherited_read_cache::inherited_read_...` 1% |
-| 4 | `qs/stringify_nested` | 69.18× | 89.92× | 1.28× | 1.51× | 231.3k | 16.00M | 13.4 | 1202.8 | top-5: `object::shapes::shape_descriptor_by_id` 4%, `object::field_get_set::get_field_by_name_tail...` 3%, `arena::allocators::arena_alloc` 3%, `object::native_get::try_data_get_bytes` 3%, `js_closure_set_box_capture_ptr` 2% |
-| 5 | `lru-cache/ttl_mixed` | 58.27× | 42.97× | 2.55× | 1.17× | 1238 | 72.1k | 0.091 | 3.9 | top-5: `object::shapes::shape_descriptor_by_id` 7%, `object::field_get_set::get_field_by_name::get...` 4%, `object::field_get_set::ic_miss::private_membe...` 4%, `object::field_get_set::ic_miss::private_evalu...` 4%, `object::field_get_set::ic_miss::private_value...` 2% |
-| 6 | `redis/pipeline` | 57.67× | — | 1.93× | — | 637.9k | 36.79M | — | — | top-5: `object::shapes::shape_descriptor_by_id` 7%, `object::field_get_set::get_field_by_name::get...` 3%, `core::str::converts::from_utf8` 3%, `object::class_registry::class_meta::is_anon_s...` 2%, `__memcmp_evex_movbe` 2% |
-| 7 | `dayjs/diff_startof` | 49.90× | 67.56× | 0.61× | 0.76× | 186.9k | 9.32M | 9.5 | 639.2 | top-5: `object::shapes::shape_descriptor_by_id` 6%, `object::descriptor_state::get_accessor_descri...` 3%, `object::field_get_set::get_field_by_name::get...` 3%, `object::native_get::try_data_get_bytes` 2%, `arena::allocators::arena_alloc` 2% |
-| 8 | `moment/diff_duration` | 38.57× | 48.98× | 1.16× | 0.86× | 90.2k | 3.48M | 4.2 | 205.7 | top-5: `object::shapes::shape_descriptor_by_id` 5%, `object::field_get_set::get_field_by_name_tail...` 4%, `object::field_get_set::get_field_by_name::get...` 4%, `object::native_get::try_data_get_bytes` 4%, `object::descriptor_state::get_accessor_descri...` 3% |
-| 9 | `mysql2/select` | 37.40× | — | 1.33× | — | 174.6k | 6.53M | — | — | top-5: `object::shapes::shape_descriptor_by_id` 6%, `core::str::converts::from_utf8` 2%, `object::field_get_set::get_field_by_name::get...` 2%, `__memcmp_evex_movbe` 2%, `js_array_get_f64` 2% |
-| 10 | `dayjs/parse_format` | 31.39× | 45.40× | 0.96× | 0.94× | 65.4k | 2.05M | 3.2 | 146.4 | top-5: `object::shapes::shape_descriptor_by_id` 4%, `arena::allocators::arena_alloc` 2%, `object::field_get_set::get_field_by_name_tail...` 2%, `__memcmp_evex_movbe` 2%, `object::descriptor_state::get_accessor_descri...` 2% |
-| 11 | `mysql2/insert_batch` | 30.75× | — | 1.58× | — | 133.2k | 4.10M | — | — | top-5: `object::shapes::shape_descriptor_by_id` 5%, `object::class_meta_registry::get_parent_class_id` 2%, `<core::hash::sip::Hasher as core::hash::Hashe...` 2%, `object::descriptor_state::get_accessor_descri...` 2%, `core::str::converts::from_utf8` 2% |
-| 12 | `moment/parse_format` | 30.50× | 41.96× | 1.50× | 1.02× | 116.0k | 3.54M | 5.3 | 222.4 | top-5: `object::shapes::shape_descriptor_by_id` 5%, `object::field_get_set::get_field_by_name_tail...` 2%, `object::keys_lookup::keys_find_slot_by_bytes` 2%, `object::descriptor_state::get_accessor_descri...` 2%, `object::field_get_set::get_field_by_name::get...` 2% |
-| 13 | `validator/batch` | 28.79× | 36.09× | 1.01× | 1.19× | 951.8k | 27.40M | 49.4 | 1783.2 | top-5: `object::shapes::shape_descriptor_by_id` 5%, `object::field_get_set::get_field_by_name_tail...` 3%, `core::str::converts::from_utf8` 2%, `object::native_get::try_data_get_bytes` 2%, `object::field_get_set::get_field_by_name::get...` 2% |
-| 14 | `redis/set_get` | 27.72× | — | 1.70× | — | 250.3k | 6.94M | — | — | top-5: `object::shapes::shape_descriptor_by_id` 5%, `__memcmp_evex_movbe` 2%, `object::class_registry::parent_static::class_...` 2%, `object::native_get::try_data_get_bytes` 2%, `object::descriptor_state::get_accessor_descri...` 1% |
-| 15 | `rate-limiter-flexible/get_penalty` | 27.44× | 25.31× | 1.44× | 0.73× | 3963 | 108.7k | 0.271 | 6.9 | top-5: `object::shapes::shape_descriptor_by_id` 7%, `object::field_get_set::get_field_by_name_tail...` 3%, `js_native_call_method` 3%, `box::is_registered_box_ptr` 3%, `js_closure_get_capture_bits` 3% |
-| 16 | `axios/get_json` | 23.91× | 15.35× | 0.92× | 0.85× | 1.27M | 30.27M | 135.4 | 2078.9 | top-5: `object::shapes::shape_descriptor_by_id` 5%, `object::descriptor_state::get_accessor_descri...` 3%, `buffer::header::is_registered_buffer_slow` 3%, `object::native_get::try_data_get_bytes` 3%, `__memcmp_evex_movbe` 2% |
-| 17 | `decimal.js/parse_sum` | 23.76× | 33.66× | 0.75× | 0.84× | 1.72M | 40.78M | 81.3 | 2736.7 | top-5: `object::descriptor_state::get_accessor_descri...` 6%, `closure::dynamic_props::closure_get_dynamic_prop` 4%, `arena::allocators::arena_alloc` 4%, `object::shapes::shape_descriptor_by_id` 2%, `js_native_call_method` 2% |
-| 18 | `qs/parse_nested` | 23.70× | 27.96× | 0.99× | 1.00× | 161.4k | 3.83M | 9.3 | 259.6 | top-5: `object::shapes::shape_descriptor_by_id` 4%, `object::descriptor_state::get_accessor_descri...` 3%, `arena::allocators::arena_alloc` 3%, `js_native_call_method` 3%, `object::field_get_set::get_field_by_name_tail...` 3% |
-| 19 | `axios/post_json` | 23.20× | 15.35× | 0.94× | 0.87× | 1.35M | 31.42M | 139.9 | 2146.9 | top-5: `object::shapes::shape_descriptor_by_id` 5%, `buffer::header::is_registered_buffer_slow` 3%, `object::keys_lookup::keys_find_slot_by_bytes` 3%, `object::field_get_set::get_field_by_name::get...` 3%, `object::descriptor_state::get_accessor_descri...` 3% |
-| 20 | `big.js/arith_chain` | 22.42× | 17.96× | 0.89× | 0.96× | 9.74M | 218.41M | 518.6 | 9312.6 | top-5: `perry_closure_node_modules_big_js_big_mjs__22` 14%, `js_dyn_index_set_strict` 11%, `trunc` 9%, `perry_closure_node_modules_big_js_big_mjs__8` 6%, `object::prototype_chain::object_static_prototype` 5% |
-| 21 | `nanoid/generate` | 21.49× | 17.35× | 0.86× | 0.74× | 2865 | 61.6k | 0.181 | 3.1 | top-5: `buffer::header::is_registered_buffer_slow` 16%, `buffer::header::buffer_data` 13%, `Cursor::next_unit` 7%, `perry_closure_node_modules_nanoid_index_js__7` 6%, `Vm::atom_result` 6% |
-| 22 | `commander/parse_argv` | 19.90× | 40.68× | 1.43× | 1.07× | 192.5k | 3.83M | 7.0 | 285.2 | top-5: `arena::allocators::arena_alloc` 4%, `object::shapes::shape_descriptor_by_id` 2%, `object::descriptor_state::get_accessor_descri...` 2%, `gc::layout_tables::layout_forget_object` 2%, `object::shapes::shape_slot_lookup_verdict` 2% |
-| 23 | `decimal.js/arith_chain` | 18.19× | 7.28× | 1.65× | 1.04× | 239.4k | 4.35M | 38.4 | 279.6 | top-5: `object::descriptor_state::get_accessor_descri...` 4%, `js_native_call_method` 3%, `arena::allocators::arena_alloc` 3%, `perry_closure_node_modules_decimal_js_decimal...` 3%, `compiler_builtins::math::libm_math::fmod::fmod` 2% |
-| 24 | `validator/sanitize` | 17.75× | 24.14× | 0.91× | 1.10× | 32.3k | 573.2k | 1.5 | 36.6 | top-5: `object::shapes::shape_descriptor_by_id` 5%, `object::native_get::try_data_get_bytes` 4%, `object::field_get_set::get_field_by_name_tail...` 4%, `core::str::converts::from_utf8` 3%, `object::field_set_by_name::tail::set_field_by...` 2% |
-| 25 | `ioredis/pipeline` | 16.83× | — | 1.81× | — | 761.7k | 12.82M | — | — | top-5: `object::field_get_set::get_field_by_name::get...` 5%, `object::shapes::shape_descriptor_by_id` 5%, `object::native_get::try_data_get_bytes` 3%, `core::str::converts::from_utf8` 3%, `object::field_get_set::get_field_by_name_tail...` 2% |
-| 26 | `bignumber.js/arith_chain` | 15.10× | 3.50× | 1.67× | 0.70× | 366.7k | 5.54M | 113.0 | 394.9 | top-5: `compiler_builtins::math::libm_math::fmod::fmod` 9%, `perry_closure_node_modules_bignumber_js_dist_...` 5%, `js_array_get_f64` 5%, `object::descriptor_state::get_accessor_descri...` 4%, `js_native_call_method` 3% |
-| 27 | `dotenv/parse` | 13.50× | 16.03× | 0.82× | 0.93× | 205.1k | 2.77M | 10.2 | 163.6 | top-5: `Vm::trial::` 9%, `Vm::run` 8%, `__memmove_avx512_unaligned_erms` 4%, `Vm::class_step` 4%, `regex::perex_runtime::find_near::` 3% |
-| 28 | `date-fns/format_add` | 12.54× | 16.77× | 1.22× | 1.08× | 88.6k | 1.11M | 4.3 | 71.3 | top-5: `Vm::trial::` 7%, `Vm::run` 4%, `__memcmp_evex_movbe` 4%, `regex::perex_api::execute_output::` 3%, `__memmove_avx512_unaligned_erms` 2% |
-| 29 | `node-cron/validate_parse` | 9.64× | 11.09× | 0.90× | 0.82× | 427.1k | 4.12M | 21.8 | 242.0 | top-5: `regex::perex_api::execute_output::` 5%, `regex::perex_runtime::find_near::` 4%, `__memmove_avx512_unaligned_erms` 4%, `<perex::executor::Search<perex::binding::Boun...` 3%, `Vm::run` 3% |
-| 30 | `uuid/v4` | 9.02× | 6.62× | 0.38× | 0.24× | 6605 | 59.6k | 0.484 | 3.2 | top-5: `Vm::begin_class` 12%, `Vm::trial::` 8%, `Vm::run` 7%, `Vm::atom_result` 6%, `Vm::atom_scan` 5% |
-| 31 | `ioredis/set_get` | 8.30× | — | 1.46× | — | 198.7k | 1.65M | — | — | top-5: `box::is_registered_box_ptr` 3%, `object::shapes::shape_descriptor_by_id` 3%, `object::inherited_read_cache::inherited_read_...` 3%, `core::str::converts::from_utf8` 2%, `object::native_get::try_data_get_bytes` 2% |
-| 32 | `date-fns/diff_interval` | 7.86× | 11.01× | 1.28× | 0.96× | 84.4k | 663.2k | 4.3 | 47.2 | top-5: `object::native_get::try_data_get_bytes` 5%, `gc::trigger_watermark::retire_trigger_watermark` 4%, `symbol::get::own_symbol_slot` 4%, `core::str::converts::from_utf8` 4%, `object::descriptor_state::get_accessor_descri...` 3% |
-| 33 | `jsonwebtoken/decode` | 6.36× | 6.80× | 1.19× | 1.39× | 35.2k | 223.7k | 1.8 | 12.4 | top-5: `Vm::run` 21%, `Vm::atom_scan` 6%, `Vm::read` 3%, `Vm::atom_holds` 3%, `Vm::atom_result` 3% |
-| 34 | `uuid/v7` | 5.15× | 4.09× | 0.44× | 0.24× | 18.3k | 94.5k | 1.3 | 5.2 | top-5: `Vm::begin_class` 7%, `Vm::atom_result` 6%, `buffer::header::is_uint8array_buffer_slow` 5%, `arena::allocators::arena_alloc` 5%, `Vm::trial::` 5% |
-| 35 | `uuid/v5_parse` | 4.87× | 4.85× | 0.65× | 0.77× | 48.1k | 234.3k | 2.9 | 14.1 | top-5: `arena::allocators::arena_alloc` 6%, `buffer::header::is_registered_buffer_slow` 5%, `Vm::begin_class` 4%, `buffer::header::mark_as_uint8array` 4%, `js_dyn_index_get` 3% |
-| 36 | `jsonwebtoken/hs256` | 3.88× | 2.98× | 0.44× | 0.41× | 450.6k | 1.75M | 41.4 | 123.1 | top-5: `object::shapes::shape_descriptor_by_id` 6%, `closure::registry::resolve_strategy_slow` 2%, `object::field_get_set::get_field_by_name::get...` 2%, `arena::allocators::arena_alloc` 2%, `Vm::run` 2% |
-| 37 | `fastify/listen_fetch` | 2.03× | 1.96× | 0.34× | 0.55× | 872.7k | 1.77M | 91.8 | 180.0 | top-5: `object::shapes::shape_descriptor_by_id` 3%, `object::native_get::try_data_get_bytes` 2%, `js_native_call_method` 2%, `object::field_get_set::get_field_by_name::get...` 2%, `object::field_get_set::get_field_by_name_tail...` 2% |
-| 38 | `exponential-backoff/retry` | 1.45× | 0.003× | 2.30× | 1.02× | 360.3k | 523.1k | 4008.1 | 11.5 |  |
+| 1 | `mongodb/insert_find` | 222.18× | — | — | — | 787.6k | 174.99M | — | — | top-5: `object::shapes::shape_descriptor_by_id` 7%, `buffer::header::is_registered_buffer_slow` 4%, `object::native_get::try_data_get_bytes` 3%, `js_array_get_f64` 2%, `object::class_registry::dispatch::call_vtable...` 2% |
+| 2 | `cron/next_dates` | 145.04× | 162.78× | 0.84× | 0.92× | 2.96M | 429.85M | 156.9 | 25548.2 | top-5: `object::native_get::try_data_get_bytes` 12%, `object::shapes::shape_descriptor_by_id` 10%, `string::intern::intern_dispatch_bytes` 6%, `object::field_get_set::get_field_by_name::get...` 5%, `object::shapes::shape_live_inline_slot_count_...` 4% |
+| 3 | `lru-cache/churn` | 142.91× | 74.51× | 3.13× | 1.82× | 879 | 125.6k | 0.085 | 6.3 | top-5: `object::field_get_set::ic_miss::private_evalu...` 11%, `object::shapes::shape_descriptor_by_id` 7%, `object::field_get_set::ic_miss::private_membe...` 7%, `object::field_get_set::ic_miss::private_value...` 6%, `object::field_get_set::ic_miss::private_membe...` 5% |
+| 4 | `mongodb/batch_query` | 57.81× | — | — | — | 2.62M | 151.46M | — | — | top-5: `object::shapes::shape_descriptor_by_id` 7%, `buffer::header::is_registered_buffer_slow` 3%, `object::native_get::try_data_get_bytes` 2%, `__memcmp_evex_movbe` 2%, `core::str::converts::from_utf8` 2% |
+| 5 | `redis/pipeline` | 52.29× | — | 1.89× | — | 630.6k | 32.97M | — | — | top-5: `object::shapes::shape_descriptor_by_id` 7%, `object::field_set_by_name::tail::set_field_by...` 2%, `object::field_get_set::ic_miss::current_priva...` 2%, `arena::allocators::arena_alloc` 2%, `object::keys_lookup::keys_find_slot_by_bytes` 2% |
+| 6 | `lru-cache/ttl_mixed` | 39.76× | 27.37× | 2.68× | 1.21× | 1160 | 46.1k | 0.087 | 2.4 | top-5: `object::field_get_set::ic_miss::private_membe...` 9%, `object::field_get_set::ic_miss::private_evalu...` 9%, `object::field_get_set::ic_miss::private_value...` 6%, `object::shapes::shape_descriptor_by_id` 4%, `js_object_get_own_field_or_undef` 4% |
+| 7 | `node-forge/hmac` | 36.90× | 46.88× | 1.15× | 1.07× | 127.0k | 4.68M | 6.3 | 294.6 | top-5: `object::shapes::shape_descriptor_by_id` 7%, `perry_closure_node_modules_node_forge_lib_sha...` 6%, `object::native_call_method::handle_methods::d...` 4%, `RandomState::hash_one::` 4%, `object::shapes::shape_slot_lookup_verdict` 3% |
+| 8 | `redis/set_get` | 32.77× | — | 1.72× | — | 219.9k | 7.21M | — | — | top-5: `object::shapes::shape_descriptor_by_id` 5%, `buffer::header::is_registered_buffer_slow` 3%, `object::field_get_set::ic_miss::get_field_ic_...` 2%, `map::is_registered_map` 2%, `symbol::is_registered_symbol_slow` 2% |
+| 9 | `mysql2/select` | 27.13× | — | 1.08× | — | 178.6k | 4.84M | — | — | top-5: `object::shapes::shape_descriptor_by_id` 4%, `array::prototype_addr::resolve_prototype_addr` 2%, `object::class_meta_registry::get_parent_class_id` 2%, `js_array_get_f64` 2%, `core::str::converts::from_utf8` 2% |
+| 10 | `dayjs/diff_startof` | 26.56× | 35.47× | 0.62× | 0.74× | 187.6k | 4.98M | 9.5 | 337.2 | top-5: `object::shapes::shape_descriptor_by_id` 7%, `js_array_get_f64` 4%, `arena::allocators::arena_alloc` 3%, `__memcmp_evex_movbe` 3%, `js_native_call_method` 2% |
+| 11 | `pg/insert_batch` | 22.10× | — | 1.70× | — | 121.8k | 2.69M | — | — | top-5: `js_array_get_f64` 7%, `object::shapes::shape_live_inline_slot_count_...` 5%, `js_param_or_class_capture_value` 4%, `object::shapes::shape_descriptor_by_id` 4%, `arena::allocators::arena_alloc` 3% |
+| 12 | `node-forge/aes_cbc` | 21.87× | 28.98× | 1.03× | 1.06× | 1.05M | 22.88M | 47.0 | 1361.9 | top-5: `perry_closure_node_modules_node_forge_lib_aes...` 9%, `object::shapes::shape_descriptor_by_id` 6%, `object::native_call_method::handle_methods::d...` 5%, `js_native_call_method` 5%, `core::str::converts::from_utf8` 3% |
+| 13 | `mysql2/insert_batch` | 21.64× | — | 1.26× | — | 138.2k | 2.99M | — | — | top-5: `object::shapes::shape_descriptor_by_id` 4%, `object::shapes::shape_slot_lookup_verdict` 4%, `object::field_set_by_name::tail::set_field_by...` 3%, `gc::barrier_store::barrier_child_prologue` 3%, `object::class_registry::state::class_id_for_d...` 2% |
+| 14 | `decimal.js/parse_sum` | 20.49× | 26.66× | 0.74× | 0.84× | 1.75M | 35.78M | 81.2 | 2165.8 | top-5: `arena::allocators::arena_alloc` 4%, `object::shapes::shape_descriptor_by_id` 3%, `object::descriptor_state::get_accessor_descri...` 3%, `js_native_call_method` 3%, `object::shapes::shape_slot_lookup_verdict` 3% |
+| 15 | `pg/select` | 19.70× | — | 1.48× | — | 134.0k | 2.64M | — | — | top-5: `object::shapes::shape_descriptor_by_id` 5%, `core::str::converts::from_utf8` 4%, `js_string_equals` 3%, `__memcmp_evex_movbe` 3%, `js_array_get_f64` 3% |
+| 16 | `rate-limiter-flexible/get_penalty` | 18.41× | 20.46× | 1.41× | 0.92× | 3786 | 69.7k | 0.231 | 4.7 | top-5: `object::shapes::shape_descriptor_by_id` 7%, `object::class_registry::state::class_id_for_d...` 6%, `<core::hash::sip::Hasher as core::hash::Hashe...` 6%, `arena::allocators::arena_alloc` 5%, `object::field_get_set::get_field_by_name_tail...` 3% |
+| 17 | `validator/batch` | 18.13× | 22.20× | 1.00× | 1.17× | 948.7k | 17.20M | 50.7 | 1126.3 | top-5: `object::shapes::shape_descriptor_by_id` 5%, `__memmove_avx512_unaligned_erms` 4%, `__memcmp_evex_movbe` 3%, `arena::allocators::arena_alloc` 3%, `core::str::converts::from_utf8` 2% |
+| 18 | `commander/parse_argv` | 17.93× | 30.80× | 1.39× | 1.02× | 194.8k | 3.49M | 7.5 | 231.5 | top-5: `object::shapes::shape_descriptor_by_id` 5%, `arena::allocators::arena_alloc` 4%, `js_object_get_own_field_or_undef` 4%, `__memcmp_evex_movbe` 3%, `object::field_set_by_name::tail::set_field_by...` 3% |
+| 19 | `dayjs/parse_format` | 16.46× | 24.25× | 0.97× | 0.97× | 66.0k | 1.09M | 3.2 | 78.1 | top-5: `arena::allocators::arena_alloc` 3%, `object::shapes::shape_descriptor_by_id` 3%, `RandomState::hash_one::` 3%, `js_native_call_method` 2%, `object::class_registry::state::class_id_for_d...` 2% |
+| 20 | `moment/diff_duration` | 15.98× | 20.34× | 0.93× | 0.84× | 96.2k | 1.54M | 4.2 | 85.5 | top-5: `js_array_get_f64` 5%, `object::shapes::shape_descriptor_by_id` 4%, `object::native_get::try_data_get_bytes` 4%, `object::class_registry::state::class_id_for_d...` 4%, `object::spill::overflow_get` 3% |
+| 21 | `decimal.js/arith_chain` | 14.79× | 5.89× | 1.69× | 1.03× | 240.0k | 3.55M | 38.6 | 227.3 | top-5: `compiler_builtins::math::libm_math::fmod::fmod` 7%, `perry_closure_node_modules_decimal_js_decimal...` 4%, `object::descriptor_state::get_accessor_descri...` 3%, `js_native_call_method` 3%, `arena::allocators::arena_alloc` 3% |
+| 22 | `moment/parse_format` | 14.72× | 20.64× | 1.47× | 1.08× | 115.5k | 1.70M | 5.1 | 106.0 | top-5: `Vm::run` 5%, `object::shapes::shape_descriptor_by_id` 5%, `Vm::trial::` 4%, `__memcmp_evex_movbe` 3%, `arena::allocators::arena_alloc` 3% |
+| 23 | `qs/stringify_nested` | 14.16× | 43.82× | 1.27× | 1.52× | 232.3k | 3.29M | 13.3 | 584.8 | top-5: `arena::allocators::arena_alloc` 7%, `perry_closure_node_modules_qs_lib_stringify_j...` 4%, `object::shapes::shape_descriptor_by_id` 4%, `closure::dynamic_props::is_closure_ptr` 3%, `gc::layout_tables::count_new_young_layout_record` 2% |
+| 24 | `big.js/arith_chain` | 13.96× | 10.23× | 0.88× | 0.96× | 9.74M | 136.05M | 518.9 | 5308.7 | top-5: `perry_closure_node_modules_big_js_big_mjs__22` 36%, `perry_closure_node_modules_big_js_big_mjs__8` 13%, `js_dynamic_mod` 12%, `proxy::own_set_descriptor` 5%, `js_to_primitive` 3% |
+| 25 | `node-forge/sha256` | 12.81× | 11.95× | 0.53× | 1.06× | 390.6k | 5.01M | 19.3 | 230.5 | top-5: `perry_closure_node_modules_node_forge_lib_sha...` 20%, `object::shapes::shape_descriptor_by_id` 5%, `object::native_call_method::handle_methods::d...` 5%, `js_array_get_f64` 4%, `js_native_call_method` 3% |
+| 26 | `bignumber.js/arith_chain` | 11.67× | 2.88× | 1.69× | 0.70× | 366.5k | 4.28M | 113.0 | 325.0 | top-5: `compiler_builtins::math::libm_math::fmod::fmod` 19%, `perry_closure_node_modules_bignumber_js_dist_...` 11%, `js_dynamic_mod` 4%, `js_native_call_method` 3%, `object::descriptor_state::get_accessor_descri...` 3% |
+| 27 | `ioredis/pipeline` | 11.37× | — | 1.85× | — | 734.0k | 8.35M | — | — | top-5: `buffer::header::is_registered_buffer_slow` 7%, `object::shapes::shape_descriptor_by_id` 5%, `object::class_registry::dispatch::obj_dispatc...` 5%, `object::class_registry::parent_static::lookup...` 4%, `core::str::converts::from_utf8` 3% |
+| 28 | `validator/sanitize` | 11.23× | 16.36× | 0.93× | 1.07× | 32.9k | 368.9k | 1.5 | 25.3 | top-5: `object::shapes::shape_descriptor_by_id` 4%, `__memmove_avx512_unaligned_erms` 4%, `__memcmp_evex_movbe` 3%, `core::str::converts::from_utf8` 3%, `__sigjmp_save` 3% |
+| 29 | `axios/post_json` | 10.96× | 10.69× | 0.93× | 0.88× | 1.32M | 14.50M | 139.5 | 1490.9 | top-5: `object::shapes::shape_descriptor_by_id` 6%, `buffer::header::is_registered_buffer_slow` 4%, `closure::dynamic_props::is_closure_ptr` 3%, `Vm::fixed_atom_charge` 2%, `object::keys_lookup::keys_find_slot_by_bytes` 2% |
+| 30 | `axios/get_json` | 10.91× | 10.42× | 0.92× | 0.85× | 1.25M | 13.61M | 135.3 | 1409.5 | top-5: `object::shapes::shape_descriptor_by_id` 6%, `buffer::header::is_registered_buffer_slow` 4%, `object::native_get::try_data_get_bytes` 3%, `core::str::converts::from_utf8` 3%, `object::keys_lookup::keys_find_slot_by_bytes_...` 2% |
+| 31 | `date-fns/format_add` | 10.13× | 12.75× | 1.35× | 1.03× | 86.6k | 876.5k | 4.4 | 56.3 | top-5: `Vm::trial::` 7%, `Vm::run` 7%, `__memcmp_evex_movbe` 6%, `regex::perex_api::execute_output::` 5%, `__memmove_avx512_unaligned_erms` 4% |
+| 32 | `qs/parse_nested` | 9.85× | 17.65× | 0.97× | 0.99× | 163.9k | 1.61M | 9.4 | 166.4 | top-5: `__memcmp_evex_movbe` 4%, `object::shapes::shape_descriptor_by_id` 4%, `arena::allocators::arena_alloc` 4%, `gc::layout::layout_note_slot` 2%, `js_method_site_miss` 2% |
+| 33 | `nanoid/generate` | 9.85× | 7.26× | 0.85× | 0.75× | 2899 | 28.5k | 0.181 | 1.3 | top-5: `perry_closure_node_modules_nanoid_index_js__7` 20%, `buffer::header::buffer_data` 12%, `regex::perex_api::execute_output::` 8%, `js_object_get_index_polymorphic` 7%, `__memmove_avx512_unaligned_erms` 6% |
+| 34 | `node-cron/validate_parse` | 9.14× | 10.46× | 0.90× | 0.79× | 428.6k | 3.92M | 21.9 | 228.9 | top-5: `regex::perex_api::execute_output::` 8%, `__memcmp_evex_movbe` 7%, `__memmove_avx512_unaligned_erms` 7%, `regex::perex_runtime::find_near::` 6%, `<perex::executor::Search<perex::binding::Boun...` 3% |
+| 35 | `dotenv/parse` | 9.13× | 11.22× | 0.82× | 0.95× | 203.7k | 1.86M | 10.0 | 111.9 | top-5: `Vm::trial::` 15%, `Vm::run` 7%, `__memmove_avx512_unaligned_erms` 5%, `arena::allocators::arena_alloc` 5%, `Vm::fixed_atom_charge` 4% |
+| 36 | `node-cron/match` | 8.89× | 8.80× | 0.57× | 0.64× | 318.8k | 2.83M | 19.7 | 173.2 | top-5: `object::shapes::shape_descriptor_by_id` 6%, `arena::allocators::arena_alloc` 5%, `__memcmp_evex_movbe` 3%, `object::shapes::shape_live_inline_slot_count_...` 2%, `object::field_get_set::get_field_by_name_tail...` 2% |
+| 37 | `date-fns/diff_interval` | 8.11× | 11.46× | 1.22× | 1.03× | 87.7k | 711.2k | 4.1 | 47.0 | top-5: `object::shapes::shape_descriptor_by_id` 5%, `symbol::is_registered_symbol_slow` 5%, `value::addr_class::try_read_tracked_gc_header` 4%, `object::shapes::shape_slot_lookup_verdict` 4%, `gc::trigger_watermark::retire_trigger_watermark` 3% |
+| 38 | `jsonwebtoken/rs256` | 7.05× | 4.28× | 0.74× | 0.94× | 11.12M | 78.36M | 859.5 | 3680.0 | top-5: `num_bigint_dig::biguint::monty::montgomery` 89%, `<base64ct::decoder::Decoder>::perform_decode` 2%, `num_bigint_dig::algorithms::mul::mul3` 1%, `<smallvec::SmallVec as core::iter::traits::co...` 1%, `object::keys_lookup::keys_find_slot_by_bytes` 1% |
+| 39 | `ioredis/set_get` | 5.98× | — | 1.12× | — | 203.7k | 1.22M | — | — | top-5: `object::shapes::shape_descriptor_by_id` 3%, `arena::allocators::arena_alloc` 3%, `object::field_get_set::ic_miss::get_field_ic_...` 2%, `core::str::converts::from_utf8` 2%, `mi_free` 2% |
+| 40 | `uuid/v4` | 4.75× | 3.77× | 0.38× | 0.24× | 6627 | 31.5k | 0.479 | 1.8 | top-5: `Vm::fixed_atom_charge` 12%, `Vm::trial::` 10%, `__memmove_avx512_unaligned_erms` 5%, `object::shapes::shape_descriptor_by_id` 5%, `object::class_meta_registry::get_parent_class_id` 5% |
+| 41 | `rate-limiter-flexible/consume` | 4.52× | 5.27× | 0.60× | 0.53× | 14.6k | 65.8k | 0.825 | 4.3 | top-5: `arena::allocators::arena_alloc` 8%, `js_native_call_method` 7%, `gc::barrier_store::runtime_write_barrier_gc_slot` 5%, `object::inherited_read_cache::accessor_hit` 5%, `object::keys_lookup::keys_array_dense_slots` 5% |
+| 42 | `uuid/v5_parse` | 3.00× | 2.98× | 0.65× | 0.77× | 48.2k | 144.5k | 2.9 | 8.7 | top-5: `arena::allocators::arena_alloc` 11%, `Vm::fixed_atom_charge` 5%, `string::string_storage_alloc` 5%, `js_array_get_f64` 5%, `__memmove_avx512_unaligned_erms` 5% |
+| 43 | `uuid/v7` | 2.94× | 2.31× | 0.44× | 0.27× | 18.3k | 53.9k | 1.3 | 2.9 | top-5: `Vm::trial::` 7%, `Vm::fixed_atom_charge` 7%, `js_string_concat` 5%, `__memcmp_evex_movbe` 5%, `arena::allocators::arena_alloc` 5% |
+| 44 | `jsonwebtoken/hs256` | 2.27× | 1.85× | 0.43× | 0.41× | 454.6k | 1.03M | 41.0 | 75.9 | top-5: `LayoutSlotMask::set_slot` 11%, `object::keys_lookup::keys_find_slot_by_bytes` 5%, `gc::policy::flush_deferred_gc_request` 4%, `js_get_global_this_builtin_value` 4%, `mi_theap_malloc_aligned` 3% |
+| 45 | `jsonwebtoken/decode` | 1.91× | 2.40× | 1.22× | 1.36× | 34.2k | 65.3k | 1.9 | 4.4 |  |
+| 46 | `fastify/listen_fetch` | 1.71× | 1.47× | 0.38× | 0.54× | 769.1k | 1.31M | 93.2 | 137.0 |  |
+| 47 | `exponential-backoff/retry` | 1.03× | 0.001× | 1.55× | 1.02× | 405.2k | 418.0k | 4006.7 | 3.4 |  |
 
 ## Packages (geometric mean over their workloads)
 
 | package | workloads | Perry/Node instr | Perry/Node wall | Bun/Node instr | Bun/Node wall |
 |---|---|---|---|---|---|
-| cron | 1 | 159.22× | 173.04× | 0.82× | 0.95× |
-| lru-cache | 2 | 122.18× | 74.98× | 2.97× | 1.68× |
-| mongodb | 2 | 83.84× | — | — | — |
-| qs | 2 | 40.49× | 50.14× | 1.13× | 1.23× |
-| redis | 2 | 39.98× | — | 1.82× | — |
-| dayjs | 2 | 39.58× | 55.38× | 0.77× | 0.85× |
-| moment | 2 | 34.30× | 45.33× | 1.32× | 0.94× |
-| mysql2 | 2 | 33.91× | — | 1.45× | — |
-| rate-limiter-flexible | 2 | 27.44× | 25.31× | 0.83× | 0.60× |
-| axios | 2 | 23.55× | 15.35× | 0.93× | 0.86× |
-| validator | 2 | 22.61× | 29.51× | 0.96× | 1.15× |
-| big.js | 1 | 22.42× | 17.96× | 0.89× | 0.96× |
-| nanoid | 1 | 21.49× | 17.35× | 0.86× | 0.74× |
-| decimal.js | 2 | 20.79× | 15.65× | 1.11× | 0.93× |
-| commander | 1 | 19.90× | 40.68× | 1.43× | 1.07× |
-| bignumber.js | 1 | 15.10× | 3.50× | 1.67× | 0.70× |
-| dotenv | 1 | 13.50× | 16.03× | 0.82× | 0.93× |
-| ioredis | 2 | 11.82× | — | 1.63× | — |
-| date-fns | 2 | 9.93× | 13.59× | 1.25× | 1.02× |
-| node-cron | 2 | 9.64× | 11.09× | 0.72× | 0.72× |
-| uuid | 3 | 6.09× | 5.08× | 0.48× | 0.35× |
-| jsonwebtoken | 3 | 4.96× | 4.50× | 0.73× | 0.81× |
-| fastify | 2 | 2.03× | 1.96× | 0.52× | 0.48× |
-| exponential-backoff | 1 | 1.45× | 0.003× | 2.30× | 1.02× |
-| node-forge | 4 | — | — | 1.30× | 1.24× |
-| pg | 2 | — | — | 1.71× | — |
+| cron | 1 | 145.04× | 162.78× | 0.84× | 0.92× |
+| mongodb | 2 | 113.33× | — | — | — |
+| lru-cache | 2 | 75.38× | 45.16× | 2.90× | 1.48× |
+| redis | 2 | 41.40× | — | 1.80× | — |
+| mysql2 | 2 | 24.23× | — | 1.17× | — |
+| node-forge | 4 | 21.79× | 25.32× | 1.04× | 1.25× |
+| dayjs | 2 | 20.91× | 29.33× | 0.77× | 0.85× |
+| pg | 2 | 20.86× | — | 1.59× | — |
+| commander | 1 | 17.93× | 30.80× | 1.39× | 1.02× |
+| decimal.js | 2 | 17.41× | 12.53× | 1.12× | 0.93× |
+| moment | 2 | 15.33× | 20.49× | 1.17× | 0.95× |
+| validator | 2 | 14.27× | 19.06× | 0.96× | 1.12× |
+| big.js | 1 | 13.96× | 10.23× | 0.88× | 0.96× |
+| qs | 2 | 11.81× | 27.81× | 1.11× | 1.23× |
+| bignumber.js | 1 | 11.67× | 2.88× | 1.69× | 0.70× |
+| axios | 2 | 10.94× | 10.55× | 0.92× | 0.87× |
+| nanoid | 1 | 9.85× | 7.26× | 0.85× | 0.75× |
+| dotenv | 1 | 9.13× | 11.22× | 0.82× | 0.95× |
+| rate-limiter-flexible | 2 | 9.12× | 10.38× | 0.92× | 0.69× |
+| date-fns | 2 | 9.06× | 12.09× | 1.28× | 1.03× |
+| node-cron | 2 | 9.01× | 9.60× | 0.72× | 0.71× |
+| ioredis | 2 | 8.24× | — | 1.44× | — |
+| uuid | 3 | 3.47× | 2.96× | 0.48× | 0.37× |
+| jsonwebtoken | 3 | 3.13× | 2.67× | 0.73× | 0.81× |
+| fastify | 2 | 1.71× | 1.47× | 0.53× | 0.48× |
+| exponential-backoff | 1 | 1.03× | 0.001× | 1.55× | 1.02× |
 
 ## Cold start, peak RSS, binary size, compile time
 
 | workload | cold node ms | cold bun ms | cold perry ms | RSS node MB | RSS bun MB | RSS perry MB | perry binary MB | perry compile s |
 |---|---|---|---|---|---|---|---|---|
-| `control/bare_loop` | 64 | 17 | 3 | 85 | 36 | 7 | 7.1 | 15.89 |
-| `control/prop_read` | 64 | 17 | 3 | 85 | 37 | 7 | 7.1 | 18.66 |
-| `jsonwebtoken/hs256` | 78 | 30 | 14 | 96 | 87 | 68 | 19.0 | 1132.41 † |
-| `jsonwebtoken/rs256` | 79 | 30 | — | 94 | 52 | — | 19.0 | 116.57 |
-| `jsonwebtoken/decode` | 82 | 33 | 22 | 93 | 93 | 61 | 19.0 | 173.36 |
-| `uuid/v4` | 70 | 19 | 8 | 91 | 64 | 28 | 10.2 | 790.07 † |
-| `uuid/v7` | 69 | 19 | 8 | 92 | 99 | 47 | 10.3 | 6.23 |
-| `uuid/v5_parse` | 70 | 19 | 8 | 92 | 104 | 97 | 10.2 | 4.41 |
-| `nanoid/generate` | 65 | 18 | 6 | 90 | 69 | 41 | 7.8 | 492.29 † |
-| `validator/batch` | 77 | 32 | 16 | 92 | 121 | 53 | 21.0 | 584.62 † |
-| `validator/sanitize` | 77 | 32 | 16 | 91 | 81 | 54 | 21.0 | 232.72 |
-| `qs/parse_nested` | 72 | 26 | 10 | 92 | 106 | 161 | 15.8 | 1157.41 † |
-| `qs/stringify_nested` | 74 | 26 | 10 | 98 | 107 | 496 | 15.8 | 33.0 |
-| `dotenv/parse` | 66 | 18 | 7 | 89 | 86 | 27 | 11.3 | 658.24 † |
-| `commander/parse_argv` | 68 | 22 | 9 | 95 | 101 | 172 | 10.5 | 468.47 † |
-| `lru-cache/churn` | 66 | 19 | 8 | 90 | 132 | 29 | 8.7 | 630.2 † |
-| `lru-cache/ttl_mixed` | 66 | 18 | 7 | 93 | 109 | 26 | 8.7 | 13.53 |
-| `dayjs/parse_format` | 65 | 18 | 7 | 92 | 105 | 193 | 10.9 | 3.47 |
-| `dayjs/diff_startof` | 65 | 18 | 7 | 91 | 102 | 214 | 10.9 | 3.88 |
-| `date-fns/format_add` | 527 | 28 | 7 | 406 | 133 | 31 | 8.6 | 6.98 |
-| `date-fns/diff_interval` | 528 | 28 | 6 | 377 | 111 | 28 | 7.3 | 2.98 |
-| `moment/parse_format` | 67 | 20 | 9 | 93 | 107 | 38 | 13.0 | 563.81 † |
-| `moment/diff_duration` | 69 | 21 | 10 | 93 | 102 | 40 | 13.0 | 111.34 |
-| `cron/next_dates` | 68 | 22 | 8 | 107 | 154 | 72 | 18.8 | 603.03 † |
-| `node-cron/validate_parse` | 68 | 20 | 9 | 92 | 103 | 56 | 15.7 | 514.5 † |
-| `node-cron/match` | 82 | 23 | — | 187 | 100 | — | 15.7 | 8.25 |
-| `exponential-backoff/retry` | 67 | 18 | 6 | 105 | 48 | 41 | 7.6 | 1.86 |
-| `decimal.js/arith_chain` | 66 | 18 | 9 | 108 | 91 | 36 | 11.2 | 16.25 |
-| `decimal.js/parse_sum` | 66 | 18 | 9 | 91 | 88 | 36 | 11.2 | 14.02 |
-| `big.js/arith_chain` | 65 | 17 | 6 | 97 | 93 | 32 | 8.1 | 4.45 |
-| `bignumber.js/arith_chain` | 65 | 18 | 8 | 103 | 106 | 36 | 10.9 | 10.49 |
-| `node-forge/sha256` | 78 | 34 | — | 132 | 89 | — | — | 82.72 |
-| `node-forge/hmac` | 77 | 34 | — | 180 | 102 | — | — | 94.16 |
-| `node-forge/rsa_sign` | 79 | 36 | — | 100 | 91 | — | — | 79.69 |
-| `node-forge/aes_cbc` | 77 | 34 | — | 101 | 92 | — | — | 94.11 |
-| `fastify/inject` | 112 | 84 | — | 210 | 107 | — | 57.0 | 465.57 † |
-| `fastify/listen_fetch` | 116 | 90 | 43 | 202 | 81 | 82 | 56.9 | 185.13 |
-| `rate-limiter-flexible/consume` | 71 | 25 | — | 93 | 65 | — | 17.0 | 212.92 † |
-| `rate-limiter-flexible/get_penalty` | 72 | 24 | 10 | 91 | 56 | 48 | 17.0 | 41.45 |
-| `axios/get_json` | 102 | 45 | 29 | 190 | 119 | 139 | 29.3 | 586.97 † |
-| `axios/post_json` | 103 | 45 | 29 | 190 | 119 | 145 | 29.3 | 80.94 |
-| `pg/select` | — | — | — | 90 | 66 | — | 21.0 | 427.15 † |
-| `pg/insert_batch` | — | — | — | 83 | 64 | — | 21.0 | 40.68 |
-| `mysql2/select` | — | — | — | 92 | 74 | 147 | 36.4 | 479.34 † |
-| `mysql2/insert_batch` | — | — | — | 90 | 72 | 117 | 36.4 | 83.44 |
-| `mongodb/insert_find` | — | — | — | — | — | — | 45.2 | 491.38 † |
-| `mongodb/batch_query` | — | — | — | 111 | — | 390 | 45.2 | 124.35 |
-| `redis/set_get` | — | — | — | 148 | 82 | 163 | 70.3 | 537.45 † |
-| `redis/pipeline` | — | — | — | 141 | 86 | 146 | 70.4 | 284.25 |
-| `ioredis/set_get` | — | — | — | 96 | 67 | 83 | 23.1 | 52.81 |
-| `ioredis/pipeline` | — | — | — | 106 | 75 | 112 | 23.1 | 49.14 |
+| `control/bare_loop` | 66 | 19 | 5 | 85 | 36 | 6 | 7.1 | 0.76 |
+| `control/prop_read` | 66 | 19 | 5 | 85 | 37 | 6 | 7.2 | 0.78 |
+| `jsonwebtoken/hs256` | 81 | 33 | 16 | 96 | 87 | 41 | 19.6 | 2.35 |
+| `jsonwebtoken/rs256` | 81 | 33 | 16 | 94 | 53 | 29 | 19.6 | 2.21 |
+| `jsonwebtoken/decode` | 84 | 35 | 23 | 93 | 94 | 45 | 19.6 | 2.27 |
+| `uuid/v4` | 72 | 21 | 10 | 91 | 64 | 20 | 10.4 | 1.08 |
+| `uuid/v7` | 71 | 21 | 10 | 92 | 99 | 35 | 10.4 | 1.11 |
+| `uuid/v5_parse` | 71 | 21 | 10 | 92 | 105 | 52 | 10.4 | 1.08 |
+| `nanoid/generate` | 67 | 20 | 8 | 90 | 69 | 34 | 7.8 | 0.71 |
+| `validator/batch` | 80 | 35 | 17 | 92 | 121 | 31 | 21.8 | 2.74 |
+| `validator/sanitize` | 80 | 35 | 17 | 91 | 81 | 30 | 21.8 | 2.6 |
+| `qs/parse_nested` | 75 | 29 | 12 | 92 | 105 | 24 | 16.3 | 1.53 |
+| `qs/stringify_nested` | 75 | 29 | 12 | 98 | 107 | 26 | 16.3 | 2.45 |
+| `dotenv/parse` | 68 | 21 | 9 | 89 | 86 | 17 | 11.5 | 0.88 |
+| `commander/parse_argv` | 71 | 25 | 12 | 94 | 101 | 23 | 10.5 | 1.35 |
+| `lru-cache/churn` | 69 | 22 | 10 | 90 | 385 | 19 | 8.6 | 0.75 |
+| `lru-cache/ttl_mixed` | 68 | 21 | 9 | 93 | 109 | 19 | 8.6 | 0.78 |
+| `dayjs/parse_format` | 67 | 20 | 9 | 92 | 105 | 61 | 11.1 | 0.83 |
+| `dayjs/diff_startof` | 68 | 20 | 9 | 92 | 102 | 196 | 11.1 | 0.87 |
+| `date-fns/format_add` | 527 | 31 | 9 | 406 | 121 | 18 | 8.6 | 1.19 |
+| `date-fns/diff_interval` | 530 | 31 | 9 | 348 | 111 | 17 | 7.3 | 1.09 |
+| `moment/parse_format` | 69 | 22 | 12 | 93 | 107 | 42 | 13.6 | 1.1 |
+| `moment/diff_duration` | 72 | 24 | 13 | 93 | 103 | 27 | 13.6 | 1.07 |
+| `cron/next_dates` | 71 | 24 | 14 | 107 | 158 | 39 | 19.2 | 2.35 |
+| `node-cron/validate_parse` | 71 | 23 | 12 | 92 | 99 | 32 | 15.8 | 1.53 |
+| `node-cron/match` | 85 | 26 | 14 | 188 | 101 | 25 | 15.8 | 1.53 |
+| `exponential-backoff/retry` | 68 | 21 | 8 | 105 | 48 | 18 | 7.3 | 0.68 |
+| `decimal.js/arith_chain` | 68 | 21 | 11 | 108 | 93 | 22 | 11.5 | 1.12 |
+| `decimal.js/parse_sum` | 69 | 21 | 11 | 91 | 86 | 21 | 11.5 | 1.1 |
+| `big.js/arith_chain` | 67 | 20 | 8 | 97 | 94 | 17 | 8.3 | 0.73 |
+| `bignumber.js/arith_chain` | 68 | 21 | 10 | 103 | 106 | 22 | 11.2 | 1.13 |
+| `node-forge/sha256` | 79 | 37 | 17 | 132 | 90 | 33 | 31.5 | 3.42 |
+| `node-forge/hmac` | 80 | 37 | 17 | 180 | 102 | 33 | 31.5 | 3.34 |
+| `node-forge/rsa_sign` | 81 | 38 | — | 100 | 91 | — | 31.5 | 3.37 |
+| `node-forge/aes_cbc` | 80 | 37 | 17 | 101 | 93 | 34 | 31.5 | 3.43 |
+| `fastify/inject` | 116 | 88 | — | 210 | 113 | — | 59.0 | 8.61 |
+| `fastify/listen_fetch` | 120 | 94 | 42 | 215 | 81 | 72 | 59.0 | 8.64 |
+| `rate-limiter-flexible/consume` | 74 | 28 | 15 | 93 | 65 | 41 | 17.3 | 1.81 |
+| `rate-limiter-flexible/get_penalty` | 74 | 28 | 15 | 91 | 56 | 36 | 17.3 | 1.87 |
+| `axios/get_json` | 106 | 48 | 31 | 190 | 117 | 116 | 30.2 | 3.3 |
+| `axios/post_json` | 106 | 48 | 30 | 189 | 116 | 142 | 30.2 | 3.26 |
+| `pg/select` | — | — | — | 88 | 71 | 67 | 21.6 | 2.49 |
+| `pg/insert_batch` | — | — | — | 88 | 67 | 67 | 21.6 | 2.48 |
+| `mysql2/select` | — | — | — | 93 | 81 | 115 | 37.9 | 5.89 |
+| `mysql2/insert_batch` | — | — | — | 91 | 77 | 107 | 37.9 | 5.91 |
+| `mongodb/insert_find` | — | — | — | 115 | — | 1185 | 43.9 | 8.81 |
+| `mongodb/batch_query` | — | — | — | 112 | — | 398 | 43.9 | 5.78 |
+| `redis/set_get` | — | — | — | 157 | 86 | 169 | 72.3 | 16.27 |
+| `redis/pipeline` | — | — | — | 142 | 94 | 141 | 72.3 | 16.21 |
+| `ioredis/set_get` | — | — | — | 97 | 71 | 73 | 23.7 | 3.03 |
+| `ioredis/pipeline` | — | — | — | 105 | 86 | 73 | 23.7 | 3.0 |
 
 † this compile was the first with its auto-optimize feature set, so it includes a one-time runtime+stdlib archive rebuild (cached for later compiles). Compile times were taken on a shared, loaded host and are indicative only.
 
@@ -146,43 +155,8 @@ Per-iteration cost uses the **two-N method**: every workload is run at two itera
 
 | control | node instr | bun instr | perry instr | node µs | bun µs | perry µs |
 |---|---|---|---|---|---|---|
-| `control/bare_loop` | 56 | 102 | 26 | 0.009 | 0.008 | 0.016 |
-| `control/prop_read` | 50 | 58 | 119 | 0.010 | 0.007 | 0.030 |
-
-## Load during the instruction runs
-
-140 workload×arm instruction measurements ran while the host's 1-minute load exceeded the flag threshold (8.0); the shared build host was never below it for long. `instructions:u` counts only the measured process's user-mode instructions, so load changes them far less than wall time — the evidence is the spread of the 3 samples per N, reported per arm in the JSON (`instr_spread` = (max−min)/median over both N). Worst spread among flagged arms: 83.4%. Arms with spread > 5%:
-
-Worst spread per arm: bun 83.4%, node 7.2%, perry 5.6%. Bun's and Node's counts include their JIT/GC helper threads, whose work varies run to run even on an idle host; Perry's counts are the stable ones (worst Perry spread above).
-
-- `node-forge/sha256` [bun]: spread 83.4%, load max 52.37
-- `control/bare_loop` [bun]: spread 31.8%, load max 18.64
-- `dayjs/parse_format` [bun]: spread 20.4%, load max 31.97
-- `control/prop_read` [bun]: spread 20.3%, load max 47.73
-- `exponential-backoff/retry` [bun]: spread 18.1%, load max 46.15
-- `moment/parse_format` [bun]: spread 17.6%, load max 46.66
-- `axios/post_json` [bun]: spread 15.9%, load max 60.04
-- `lru-cache/churn` [bun]: spread 14.7%, load max 29.92
-- `dayjs/diff_startof` [bun]: spread 12.1%, load max 47.86
-- `moment/diff_duration` [bun]: spread 12.0%, load max 50.69
-- `fastify/inject` [bun]: spread 9.8%, load max 57.77
-- `lru-cache/ttl_mixed` [bun]: spread 9.4%, load max 29.72
-- `redis/set_get` [bun]: spread 9.3%, load max 42.4
-- `axios/get_json` [bun]: spread 9.0%, load max 50.25
-- `rate-limiter-flexible/consume` [bun]: spread 9.0%, load max 53.59
-- `big.js/arith_chain` [bun]: spread 8.7%, load max 57.83
-- `rate-limiter-flexible/get_penalty` [bun]: spread 7.7%, load max 52.66
-- `node-forge/hmac` [bun]: spread 7.4%, load max 52.98
-- `fastify/listen_fetch` [bun]: spread 7.3%, load max 55.82
-- `lru-cache/ttl_mixed` [node]: spread 7.2%, load max 29.72
-- `date-fns/format_add` [bun]: spread 6.7%, load max 52.55
-- `commander/parse_argv` [bun]: spread 6.5%, load max 29.49
-- `ioredis/pipeline` [bun]: spread 5.7%, load max 47.55
-- `mongodb/batch_query` [perry]: spread 5.6%, load max 45.19
-- `ioredis/set_get` [bun]: spread 5.4%, load max 48.35
-- `redis/set_get` [node]: spread 5.3%, load max 42.08
-- `fastify/inject` [node]: spread 5.2%, load max 57.77
-- `validator/batch` [bun]: spread 5.2%, load max 15.92
+| `control/bare_loop` | 58 | 53 | 26 | 0.010 | 0.006 | 0.016 |
+| `control/prop_read` | 55 | 97 | 130 | 0.010 | 0.008 | 0.030 |
 
 ## Liveness (compiled from source, no removed binding)
 
@@ -190,145 +164,131 @@ From a `PERRY_KEEP_SYMBOLS=1` compile of every workload (same commit and flags, 
 
 | workload | status | modules | deps | JS | binding-symbol check |
 |---|---|---|---|---|---|
-| `axios/get_json` | OK | 63 | 66 | 0 | ran over 14777 symbols |
-| `axios/post_json` | OK | 63 | 66 | 0 | ran over 14776 symbols |
-| `big.js/arith_chain` | OK | 1 | 0 | 0 | ran over 3535 symbols |
-| `bignumber.js/arith_chain` | OK | 1 | 0 | 0 | ran over 6274 symbols |
-| `commander/parse_argv` | OK | 7 | 0 | 0 | ran over 5173 symbols |
-| `control/bare_loop` | OK | 0 | 0 | 0 | ran over 3343 symbols |
-| `control/prop_read` | OK | 0 | 0 | 0 | ran over 3348 symbols |
-| `cron/next_dates` | OK | 5 | 1 | 0 | ran over 13047 symbols |
-| `date-fns/diff_interval` | OK | 20 | 0 | 0 | ran over 3709 symbols |
-| `date-fns/format_add` | OK | 41 | 0 | 0 | ran over 4277 symbols |
-| `dayjs/diff_startof` | OK | 2 | 0 | 0 | ran over 4307 symbols |
-| `dayjs/parse_format` | OK | 2 | 0 | 0 | ran over 4307 symbols |
-| `decimal.js/arith_chain` | OK | 1 | 0 | 0 | ran over 6393 symbols |
-| `decimal.js/parse_sum` | OK | 1 | 0 | 0 | ran over 6390 symbols |
-| `dotenv/parse` | OK | 1 | 0 | 0 | ran over 4406 symbols |
-| `exponential-backoff/retry` | OK | 10 | 0 | 0 | ran over 3565 symbols |
-| `fastify/inject` | OK | 33 | 251 | 0 | ran over 23700 symbols |
-| `fastify/listen_fetch` | OK | 33 | 251 | 0 | ran over 23695 symbols |
-| `ioredis/pipeline` | OK | 39 | 16 | 0 | ran over 11509 symbols |
-| `ioredis/set_get` | OK | 39 | 16 | 0 | ran over 11508 symbols |
-| `jsonwebtoken/decode` | OK | 12 | 64 | 0 | ran over 9090 symbols |
-| `jsonwebtoken/hs256` | OK | 12 | 64 | 0 | ran over 9086 symbols |
-| `jsonwebtoken/rs256` | FAIL | 0 | 40 | 0 | ran over 9097 symbols |
-| `lru-cache/churn` | OK | 1 | 0 | 0 | ran over 3897 symbols |
-| `lru-cache/ttl_mixed` | OK | 1 | 0 | 0 | ran over 3895 symbols |
-| `moment/diff_duration` | OK | 1 | 0 | 0 | ran over 4741 symbols |
-| `moment/parse_format` | OK | 1 | 0 | 0 | ran over 4741 symbols |
-| `mongodb/batch_query` | OK | 133 | 60 | 0 | ran over 24289 symbols |
-| `mongodb/insert_find` | OK | 133 | 60 | 0 | ran over 24283 symbols |
-| `mysql2/insert_batch` | OK | 92 | 32 | 0 | ran over 24226 symbols |
-| `mysql2/select` | OK | 92 | 32 | 0 | ran over 24227 symbols |
-| `nanoid/generate` | OK | 2 | 0 | 0 | ran over 3495 symbols |
-| `node-cron/match` | OK | 2 | 0 | 0 | ran over 7749 symbols |
-| `node-cron/validate_parse` | OK | 2 | 0 | 0 | ran over 7744 symbols |
-| `node-forge/aes_cbc` | FAIL | — | 0 | — |  |
-| `node-forge/hmac` | FAIL | — | 0 | — |  |
-| `node-forge/rsa_sign` | FAIL | — | 0 | — |  |
-| `node-forge/sha256` | FAIL | — | 0 | — |  |
-| `pg/insert_batch` | OK | 17 | 23 | 0 | ran over 12063 symbols |
-| `pg/select` | OK | 17 | 23 | 0 | ran over 12064 symbols |
-| `qs/parse_nested` | OK | 5 | 41 | 0 | ran over 5797 symbols |
-| `qs/stringify_nested` | OK | 5 | 41 | 0 | ran over 5813 symbols |
-| `rate-limiter-flexible/consume` | OK | 36 | 0 | 0 | ran over 9307 symbols |
-| `rate-limiter-flexible/get_penalty` | OK | 36 | 0 | 0 | ran over 9307 symbols |
-| `redis/pipeline` | OK | 1 | 642 | 0 | ran over 48990 symbols |
-| `redis/set_get` | OK | 1 | 642 | 0 | ran over 48989 symbols |
-| `uuid/v4` | OK | 13 | 0 | 0 | ran over 6299 symbols |
-| `uuid/v5_parse` | OK | 10 | 0 | 0 | ran over 6270 symbols |
-| `uuid/v7` | OK | 13 | 0 | 0 | ran over 6305 symbols |
-| `validator/batch` | OK | 113 | 0 | 0 | ran over 7689 symbols |
-| `validator/sanitize` | OK | 113 | 0 | 0 | ran over 7686 symbols |
+| `axios/get_json` | OK | 63 | 66 | 0 | ran over 16508 symbols |
+| `axios/post_json` | OK | 63 | 66 | 0 | ran over 16507 symbols |
+| `big.js/arith_chain` | OK | 1 | 0 | 0 | ran over 3498 symbols |
+| `bignumber.js/arith_chain` | OK | 1 | 0 | 0 | ran over 6453 symbols |
+| `commander/parse_argv` | OK | 7 | 0 | 0 | ran over 5488 symbols |
+| `control/bare_loop` | OK | 0 | 0 | 0 | ran over 3275 symbols |
+| `control/prop_read` | OK | 0 | 0 | 0 | ran over 3280 symbols |
+| `cron/next_dates` | OK | 5 | 1 | 0 | ran over 15197 symbols |
+| `date-fns/diff_interval` | OK | 20 | 0 | 0 | ran over 3704 symbols |
+| `date-fns/format_add` | OK | 41 | 0 | 0 | ran over 4439 symbols |
+| `dayjs/diff_startof` | OK | 2 | 0 | 0 | ran over 4365 symbols |
+| `dayjs/parse_format` | OK | 2 | 0 | 0 | ran over 4365 symbols |
+| `decimal.js/arith_chain` | OK | 1 | 0 | 0 | ran over 6627 symbols |
+| `decimal.js/parse_sum` | OK | 1 | 0 | 0 | ran over 6623 symbols |
+| `dotenv/parse` | OK | 1 | 0 | 0 | ran over 4405 symbols |
+| `exponential-backoff/retry` | OK | 10 | 0 | 0 | ran over 3506 symbols |
+| `fastify/inject` | OK | 33 | 251 | 0 | ran over 29956 symbols |
+| `fastify/listen_fetch` | OK | 33 | 251 | 0 | ran over 29950 symbols |
+| `ioredis/pipeline` | OK | 39 | 16 | 0 | ran over 12908 symbols |
+| `ioredis/set_get` | OK | 39 | 16 | 0 | ran over 12907 symbols |
+| `jsonwebtoken/decode` | OK | 12 | 64 | 0 | ran over 10319 symbols |
+| `jsonwebtoken/hs256` | OK | 12 | 64 | 0 | ran over 10315 symbols |
+| `jsonwebtoken/rs256` | OK | 12 | 64 | 0 | ran over 10326 symbols |
+| `lru-cache/churn` | OK | 1 | 0 | 0 | ran over 3948 symbols |
+| `lru-cache/ttl_mixed` | OK | 1 | 0 | 0 | ran over 3947 symbols |
+| `moment/diff_duration` | OK | 1 | 0 | 0 | ran over 10117 symbols |
+| `moment/parse_format` | OK | 1 | 0 | 0 | ran over 10117 symbols |
+| `mongodb/batch_query` | OK | 133 | 60 | 0 | ran over 27975 symbols |
+| `mongodb/insert_find` | OK | 133 | 60 | 0 | ran over 27969 symbols |
+| `mysql2/insert_batch` | OK | 92 | 32 | 0 | ran over 29246 symbols |
+| `mysql2/select` | OK | 92 | 32 | 0 | ran over 29247 symbols |
+| `nanoid/generate` | OK | 2 | 0 | 0 | ran over 3434 symbols |
+| `node-cron/match` | OK | 2 | 0 | 0 | ran over 8146 symbols |
+| `node-cron/validate_parse` | OK | 2 | 0 | 0 | ran over 8139 symbols |
+| `node-forge/aes_cbc` | OK | 42 | 0 | 0 | ran over 12558 symbols |
+| `node-forge/hmac` | OK | 42 | 0 | 0 | ran over 12554 symbols |
+| `node-forge/rsa_sign` | OK | 42 | 0 | 0 | ran over 12566 symbols |
+| `node-forge/sha256` | OK | 42 | 0 | 0 | ran over 12556 symbols |
+| `pg/insert_batch` | OK | 17 | 23 | 0 | ran over 13250 symbols |
+| `pg/select` | OK | 17 | 23 | 0 | ran over 13251 symbols |
+| `qs/parse_nested` | OK | 5 | 41 | 0 | ran over 6371 symbols |
+| `qs/stringify_nested` | OK | 5 | 41 | 0 | ran over 6387 symbols |
+| `rate-limiter-flexible/consume` | OK | 36 | 0 | 0 | ran over 10276 symbols |
+| `rate-limiter-flexible/get_penalty` | OK | 36 | 0 | 0 | ran over 10276 symbols |
+| `redis/pipeline` | OK | 1 | 642 | 0 | ran over 52328 symbols |
+| `redis/set_get` | OK | 1 | 642 | 0 | ran over 52327 symbols |
+| `uuid/v4` | OK | 13 | 0 | 0 | ran over 6426 symbols |
+| `uuid/v5_parse` | OK | 10 | 0 | 0 | ran over 6387 symbols |
+| `uuid/v7` | OK | 13 | 0 | 0 | ran over 6431 symbols |
+| `validator/batch` | OK | 113 | 0 | 0 | ran over 9310 symbols |
+| `validator/sanitize` | OK | 113 | 0 | 0 | ran over 9307 symbols |
 
 ## MISMATCH / FAIL
 
-- **FAIL** `jsonwebtoken/rs256` [perry, instr host]: exit 1: jsonwebtoken/rs256 jsonwebtoken@9.0.3 n=50 warm=20 TypeError: Cannot read properties of undefined (reading 'update') at <anonymous>
-- **FAIL** `jsonwebtoken/rs256` [perry, wall host]: exit 1: jsonwebtoken/rs256 jsonwebtoken@9.0.3 n=50 warm=20 TypeError: Cannot read properties of undefined (reading 'update') at sign (<anonymous>) at jwsSign (<anonymous>) at isValid (<anonymous>)
-- **MISMATCH** `node-cron/match` [perry, instr host]: line 2: node='checksum 76b74a7f' arm='checksum 00000000'
-- **MISMATCH** `node-cron/match` [perry, wall host]: line 2: node='checksum 76b74a7f' arm='checksum 00000000'
-- **FAIL** `node-forge/sha256` [perry, instr host]: perry compile failed (exit 1): ns — so the build fails here rather than emitting a misleading COMPILE_EXIT=0. Fix the codegen errors above (search for `Error compiling module`), or set `PERRY_ALLOW_PARTIAL_CODEGEN=1` to link empty `<prefix>__init` stubs for the failed modules and surface deeper erro
-- **FAIL** `node-forge/sha256` [perry, wall host]: perry compile failed (exit 1): ns — so the build fails here rather than emitting a misleading COMPILE_EXIT=0. Fix the codegen errors above (search for `Error compiling module`), or set `PERRY_ALLOW_PARTIAL_CODEGEN=1` to link empty `<prefix>__init` stubs for the failed modules and surface deeper erro
-- **FAIL** `node-forge/hmac` [perry, instr host]: perry compile failed (exit 1): ns — so the build fails here rather than emitting a misleading COMPILE_EXIT=0. Fix the codegen errors above (search for `Error compiling module`), or set `PERRY_ALLOW_PARTIAL_CODEGEN=1` to link empty `<prefix>__init` stubs for the failed modules and surface deeper erro
-- **FAIL** `node-forge/hmac` [perry, wall host]: perry compile failed (exit 1): ns — so the build fails here rather than emitting a misleading COMPILE_EXIT=0. Fix the codegen errors above (search for `Error compiling module`), or set `PERRY_ALLOW_PARTIAL_CODEGEN=1` to link empty `<prefix>__init` stubs for the failed modules and surface deeper erro
-- **FAIL** `node-forge/rsa_sign` [perry, instr host]: perry compile failed (exit 1): ns — so the build fails here rather than emitting a misleading COMPILE_EXIT=0. Fix the codegen errors above (search for `Error compiling module`), or set `PERRY_ALLOW_PARTIAL_CODEGEN=1` to link empty `<prefix>__init` stubs for the failed modules and surface deeper erro
-- **FAIL** `node-forge/rsa_sign` [perry, wall host]: perry compile failed (exit 1): ns — so the build fails here rather than emitting a misleading COMPILE_EXIT=0. Fix the codegen errors above (search for `Error compiling module`), or set `PERRY_ALLOW_PARTIAL_CODEGEN=1` to link empty `<prefix>__init` stubs for the failed modules and surface deeper erro
-- **FAIL** `node-forge/aes_cbc` [perry, instr host]: perry compile failed (exit 1): ns — so the build fails here rather than emitting a misleading COMPILE_EXIT=0. Fix the codegen errors above (search for `Error compiling module`), or set `PERRY_ALLOW_PARTIAL_CODEGEN=1` to link empty `<prefix>__init` stubs for the failed modules and surface deeper erro
-- **FAIL** `node-forge/aes_cbc` [perry, wall host]: perry compile failed (exit 1): ns — so the build fails here rather than emitting a misleading COMPILE_EXIT=0. Fix the codegen errors above (search for `Error compiling module`), or set `PERRY_ALLOW_PARTIAL_CODEGEN=1` to link empty `<prefix>__init` stubs for the failed modules and surface deeper erro
-- **FAIL** `fastify/inject` [perry, instr host]: exit 1: fastify/inject fastify@5.12.5 n=1250 warm=300 ERROR setHeader is not a function
-- **FAIL** `fastify/inject` [perry, wall host]: exit 1: fastify/inject fastify@5.12.5 n=1250 warm=300 ERROR setHeader is not a function
-- **FAIL** `rate-limiter-flexible/consume` [perry, instr host]: perf run exit 1: 
-- **FAIL** `rate-limiter-flexible/consume` [perry, wall host]: wall run exit 1: 
-- **FAIL** `pg/select` [perry, instr host]: exit -11: pg/select pg@8.23.0 n=500 warm=200
-- **FAIL** `pg/insert_batch` [perry, instr host]: exit -11: pg/insert_batch pg@8.23.0 n=500 warm=200
-- **FAIL** `mongodb/insert_find` [perry, instr host]: known hang, skipped: perry: 'Cannot read properties of undefined (reading state)' then hangs (seen 2febf4214e and 36420d2e56)
-- **FAIL** `mongodb/batch_query` [bun, instr host]: exit 1: s/packages/node_modules/bson/lib/bson.cjs:2607:1) at <anonymous> (/root/claude-pkg-bench-main/benchmarks/packages/node_modules/mongodb/lib/bson.js:9:7) at <anonymous> (/root/claude-pkg-bench-main/benchmarks/packages/node_modules/mongodb/lib/admin.js:4:7) at <anonymous> (/root/claude-pkg-benc
+- **FAIL** `node-forge/rsa_sign` [perry, instr host]: exit 1: node-forge/rsa_sign node-forge@1.4.0 n=12 warm=5 TypeError: Cannot read properties of undefined (reading 'data') at <anonymous>
+- **FAIL** `node-forge/rsa_sign` [perry, wall host]: exit 1: node-forge/rsa_sign node-forge@1.4.0 n=12 warm=5 TypeError: Cannot read properties of undefined (reading 'data') at handler [0x1033c9d60] (<anonymous>) at _getValueLength (<anonymous>) at _fromDer (<anonymous>) at _getValueLength (<anonymous>)
+- **FAIL** `fastify/inject` [perry, instr host]: exit 1: fastify/inject fastify@5.12.5 n=1250 warm=300 ERROR Cannot read properties of undefined (reading 'once')
+- **FAIL** `fastify/inject` [perry, wall host]: exit 1: fastify/inject fastify@5.12.5 n=1250 warm=300 ERROR Cannot read properties of undefined (reading 'once')
+- **FAIL** `mongodb/insert_find` [bun, instr host]: exit 1: chmarks/packages/node_modules/bson/lib/bson.cjs:2607:1) at <anonymous> (/root/claude-matrix-rerun/benchmarks/packages/node_modules/mongodb/lib/bson.js:9:7) at <anonymous> (/root/claude-matrix-rerun/benchmarks/packages/node_modules/mongodb/lib/admin.js:4:7) at <anonymous> (/root/claude-matrix
+- **FAIL** `mongodb/insert_find` [perry, wall host]: known hang, skipped: perry: 'Cannot read properties of undefined (reading state)' then hangs (seen 2febf4214e and 36420d2e56)
+- **FAIL** `mongodb/batch_query` [bun, instr host]: exit 1: chmarks/packages/node_modules/bson/lib/bson.cjs:2607:1) at <anonymous> (/root/claude-matrix-rerun/benchmarks/packages/node_modules/mongodb/lib/bson.js:9:7) at <anonymous> (/root/claude-matrix-rerun/benchmarks/packages/node_modules/mongodb/lib/admin.js:4:7) at <anonymous> (/root/claude-matrix
 
 ### SKIP (server not available on that host)
 
 - wall host: `pg/insert_batch`, `pg/select` — pg: no postgres binaries (--pg-bin-dir / PKG_BENCH_PG_BIN_DIR)
 - wall host: `mysql2/insert_batch`, `mysql2/select` — mysql: no mysqld (--mysqld / PKG_BENCH_MYSQLD)
-- instr host: `mongodb/insert_find` — workload skipped (perry arm is a known hang)
-- wall host: `mongodb/batch_query`, `mongodb/insert_find` — mongo: no mongod (--mongod / PKG_BENCH_MONGOD)
+- wall host: `mongodb/insert_find` — workload skipped (perry arm is a known hang)
+- wall host: `mongodb/batch_query` — mongo: no mongod (--mongod / PKG_BENCH_MONGOD)
 - wall host: `ioredis/pipeline`, `ioredis/set_get`, `redis/pipeline`, `redis/set_get` — redis: no redis-server (--redis-server / PKG_BENCH_REDIS_SERVER)
 
 ## Notes, known issues and what was not measured
 
+**This is the post-fixing-phase re-run** (2026-09-30) at `origin/main` **`9e29f59d43`** — the merge of #11645
+(survival-aware nursery pacing + #11612 regex memory). The pre-fix baseline is the Phase-1 run at `36420d2e56`
+(this file's previous version, commit `24a5262bd6`). The before/after comparison, the re-ranking and the attribution
+of the top offenders are in [`RERUN-2026-09-30.md`](RERUN-2026-09-30.md).
+
 **Build.** Perry arm = `cargo build --release -p perry -p perry-runtime-static -p perry-stdlib-static` (the workspace
-`[profile.release]`: thin LTO, codegen-units=1, opt-level 3, panic=abort — not `dist`), then plain
-`perry compile <wl>.ts -o <bin>` with **no flags**, so auto-optimize is ON: every compile resolved the workspace from
-the binary's own path and rebuilt (or reused) a per-feature-set `libperry_{runtime,stdlib}.a` under
-`target/perry-auto-*` (the † compiles below). No `PERRY_GC_*`, `PERRY_WRITE_BARRIERS`, debug or `PERRY_NO_AUTO_OPTIMIZE`
-variable was set; the environment is recorded in each `compile.json` (`PERRY_BUILD_COMMIT` was set to the commit
-perry was built at — it only stamps the archive build id so harness commits on top don't trip the stale-archive
-guard; `PERRY_RUNTIME_DIR`, present in the Linux login profile, was unset). The macOS binaries were compiled by a perry built from `21c9f5438a` = main `36420d2e56` plus this PR's harness-only commits (no compiler/runtime change). Binaries are stripped (default); the
-liveness/attribution pass recompiled the same sources with `PERRY_KEEP_SYMBOLS=1`.
+`[profile.release]`), built **separately on each host from the same commit** `9e29f59d43`, then plain
+`perry compile <wl>.ts -o <bin>` with **no flags** (auto-optimize ON; each feature set rebuilds its own
+`libperry_{runtime,stdlib}.a` under `target/perry-auto-*`, the † compiles). No `PERRY_GC_*`, `PERRY_WRITE_BARRIERS`,
+debug or `PERRY_NO_AUTO_OPTIMIZE` variable was set; `PERRY_BUILD_COMMIT` was set to the built commit and
+`PERRY_RUNTIME_DIR` was unset. To fit the Linux host's disk, workloads were compiled one at a time and each
+`perry-auto-*` dir's intermediate `deps/`/`build/` trees were deleted after its archives were stamped (the cached
+archives + stamp are all the freshness check reads, so later compiles still reused them) — compile times are
+therefore per-workload and † marks the first compile of each feature set, as before. Binaries are stripped
+(default); the liveness pass recompiled the same sources with `PERRY_KEEP_SYMBOLS=1` (`compile-linux-symbols.json`).
 
-**Hosts.** Instructions (+ a Linux RSS sample) on `perrymaster` (x86-64, shared with other agents; its wall-clock is
-not trusted, so none is reported from it). Wall-clock, cold start and the RSS table on the quiet M1 bench mini. The
-mini has no Postgres / MySQL / MongoDB / Redis, so the database workloads have **instruction counts only**.
-Measurements on both hosts took the shared mkdir mutex `/tmp/perry-bench-lock.d` (see
-`/tmp/perry-bench-lock.README` on each host), which the Phase 3 profiling agent and the tokio-measure agent also use.
+**Hosts.** Instructions (+ a Linux RSS sample) on `perrymaster` (x86-64); its wall-clock is not trusted, so none is
+reported from it. Wall-clock, cold start and the RSS table on the quiet M1 bench mini (Node 26.5.1, Bun 1.3.14 —
+the same pins as the baseline). Both runs took the shared mkdir mutex `/tmp/perry-bench-lock.d`. **Both hosts were
+quiet this time**: max 1-minute load during any measured sample was 2.94 on perrymaster (16 CPUs) and 2.52 on the
+mini (8 CPUs), and no workload was load-flagged. The Phase-1 baseline's instruction host ran at load ~30–53 and every
+workload there was load-flagged; instruction counts are far less load-sensitive than wall time, but treat
+small (< ~5 %) before/after instruction deltas as noise. The mini has no Postgres / MySQL / MongoDB / Redis, so the
+database workloads have **instruction counts only** (as in the baseline).
 
-**Controls and the first-draft ~1,040 instr/iter.** An earlier draft reported Perry's bare-loop control at ~1,040
-instructions/iteration (Node 58). That was harness cost, not a call floor: every workload re-read `it.n` (a
-property of the object returned by `iters()`) in its loop condition, and the checksum helpers called `Math.imul`;
-each is a by-name property read in Perry (`js_object_get_field_by_name_f64` → `inherited_read_cache_lookup`, the
-cost reported in #11420). Loop bounds are now hoisted into locals and the helpers use an exact
-`((x << 24) + x * 403) >>> 0`. `control/bare_loop` (plain function call, no `this`, no property read) is now ~26
-instructions/iteration for Perry. `control/prop_read` adds one static-key read of a plain object per iteration
-and costs Perry ~93 more instructions (Node ~0 extra) — kept as a visible probe of #11420-style read cost. **No
-control is subtracted from any workload.**
+**Controls.** `control/bare_loop` 26 instr/iter (Node 58), unchanged. `control/prop_read` 130 (Node 55) — was 119;
+see RERUN-2026-09-30.md. **No control is subtracted from any workload.**
 
-**Perry failures on main `36420d2e56`** (each re-run on main and reproduced outside the harness):
+**Perry failures on `9e29f59d43`** (each reproduced outside the harness, deterministic 3/3):
 
 | workload | symptom | issue |
 |---|---|---|
-| `node-forge/*` (all 4) | **regression**: compile fails, `node-forge/lib/prime.js` emits invalid LLVM IR (`use of undefined value`). Compiled and ran at `2febf4214e`. | #11450 |
-| `jsonwebtoken/rs256` | `crypto.createSign('RSA-SHA' + bits)` via CJS `require('crypto')` returns `undefined` → `reading 'update'` in `jwa` | #11447 |
-| `node-cron/match` | `task.match(date)` returns `null` for tasks created inside `Array.map` (checksum `00000000`) | #11446 |
-| `pg/select`, `pg/insert_batch` | first parameterized query segfaults; plain queries work | #11459 |
-| `mongodb/insert_find` | `insertOne` after `deleteMany` rejects with `reading 'state'`, then the process hangs — now skipped as `known_hang` | #11460 |
-| `rate-limiter-flexible/consume` | awaiting non-Error rejections in `try/catch` trips the async step driver's runaway re-entry guard (n=20000; n=5000 fine) | #11449 — fixed by #11457, which landed after this measurement |
-| `fastify/inject` | `setHeader is not a function` (light-my-request `ServerResponse` subclass) | #10454 (existing) |
-| `axios/*` (portability) | a compiled binary `require()`s `mime-db/db.json` through the **build host's absolute path**; the binary breaks when moved to another machine or when the tree moves. The mini run avoided it only by building and running under the same `/private/tmp/claude-pkg-bench` path. | #11448 |
+| `node-forge/rsa_sign` | compiles now (#11450 fixed codegen) but throws `TypeError: Cannot read properties of undefined (reading 'data')` on the first sign; Node prints the checksum | none filed yet (listed for triage) |
+| `fastify/inject` | `ERROR Cannot read properties of undefined (reading 'once')` — a new symptom; the baseline's `setHeader is not a function` (#10454) is fixed | none filed yet (listed for triage) |
 
-**Fixed between `2febf4214e` and main** (failed in the first run, pass on main): `qs/parse_nested` (nondeterministic
-checksum / hangs above n≈3000 — 3/3 correct at n=5000 plus every harness run on main), `mysql2/*` (SIGSEGV; #11335),
-`redis/set_get` (one intermittent empty-output run at `2febf4214e`; 15/15 plus all harness runs correct on main — no
-issue filed).
+**Fixed since the baseline** (failed at `36420d2e56`, correct now): `node-forge/sha256`, `/hmac`, `/aes_cbc` (#11450),
+`jsonwebtoken/rs256` (#11447), `node-cron/match` (#11446), `pg/select`, `pg/insert_batch` (#11459),
+`rate-limiter-flexible/consume` (#11449 via #11457), axios binary portability (#11448).
 
-**Bun failures** (not Perry's): `mongodb/*` — Bun 1.3.14 throws `node:v8 isBuildingSnapshot is not yet implemented`
-while loading `bson`.
+**`mongodb/insert_find` now runs correctly** (3/3 instruction reps plus the correctness run, output identical to Node)
+although the manifest still marks it `known_hang` (#11460, still open). The main `run` skipped it per the manifest;
+it was then run separately at the same commit with `--include-known-hangs` and merged into `instr.json`
+(`note_rerun` field). Whether #11460 can be closed is for its owner to confirm; the manifest entry is left as is.
+
+**Bun failures** (not Perry's): `mongodb/*` — Bun 1.3.14 throws `node:v8 isBuildingSnapshot is not yet implemented`.
 
 **`exponential-backoff/retry` wall ratio is not a compute comparison.** It retries with a 0 ms delay: Node clamps
 `setTimeout(0)` to ≥ 1 ms, Perry fires it immediately. Use its instruction ratio.
 
 **Two-N caveats.** Node/Bun instruction counts include their JIT and GC threads; Perry's include its GC. The method
-assumes cost is linear between n1 and n2 (true for every workload here once warmed).
+assumes cost is linear between n1 and n2.
 
-**Not done in Phase 1:** deep profiling — the attribution column here is a flat top-5 only; Phase 3's call-chain attribution (`profile --callgraph`) is in `PROFILE.md` and `profile/`; a comparison
-against the removed native bindings (owner decision: they were buggy); tursodb / iroh; a CI/nightly job (the harness
-is deliberately not wired into any required gate).
+**Not done:** a full Phase-3 `--callgraph` sweep (only the top offenders were re-profiled — see RERUN-2026-09-30.md;
+`PROFILE.md` still describes the `36420d2e56` attribution); a comparison against the removed native bindings (owner
+decision); a CI/nightly job.
 

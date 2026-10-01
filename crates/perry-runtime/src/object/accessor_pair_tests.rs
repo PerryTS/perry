@@ -7,10 +7,13 @@ fn key(name: &str) -> *mut crate::StringHeader {
 }
 
 unsafe fn closure_bits() -> u64 {
-    extern "C" fn noop(_c: *const crate::closure::ClosureHeader) -> f64 {
+    extern "C" fn noop(
+        _c: *const crate::closure::ClosureHeader,
+        _this: crate::closure::JsThis,
+    ) -> f64 {
         f64::from_bits(crate::value::TAG_UNDEFINED)
     }
-    let c = crate::closure::js_closure_alloc(noop as *const u8, 0);
+    let c = crate::closure::js_closure_alloc(crate::fn_info!(noop, 0), 0);
     crate::value::js_nanbox_pointer(c as i64).to_bits()
 }
 
@@ -24,6 +27,8 @@ fn a_pair_round_trips_both_forms() {
             set: 0,
             raw_get: 0x5555_1234_5678,
             raw_set: 0,
+            static_get: 0,
+            static_set: 0x5555_8765_4320,
         };
         let pair = pair_new(acc);
         let value = crate::value::js_nanbox_pointer(pair as i64).to_bits();

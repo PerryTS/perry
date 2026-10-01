@@ -196,7 +196,6 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     //   js_write_barrier_root_nanbox(child_bits: u64)
     //   js_write_barrier_root_heap_word(child_bits: u64)
     //   js_gc_note_slot_layout(parent_bits: u64, slot_index: u32, value_bits: u64)
-    //   js_gc_init_typed_shape_layout(obj: u64, slot_count: u32, raw_f64_mask_words: *const u64, raw_f64_mask_word_count: u32, pointer_mask_words: *const u64, pointer_mask_word_count: u32)
     module.declare_function("js_write_barrier", VOID, &[I64, I64]);
     module.declare_function("js_write_barrier_slot", VOID, &[I64, I64, I64]);
     // perry-runtime: `array::indexing_support::js_array_live_head` — resolves a
@@ -210,27 +209,10 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     module.declare_function("js_write_barrier_root_nanbox", VOID, &[I64]);
     module.declare_function("js_write_barrier_root_heap_word", VOID, &[I64]);
     module.declare_function("js_gc_note_slot_layout", VOID, &[I64, I32, I64]);
-    //   js_gc_key_add_layout_unknown(obj_handle: u64) -- the key-add hit's
-    //   layout retirement (`expr/put_value_store_ic.rs`).
-    module.declare_function("js_gc_key_add_layout_unknown", VOID, &[I64]);
     //   js_gc_note_slot_layout_aware(parent, slot_index, value_bits, old_bits)
     module.declare_function("js_gc_note_slot_layout_aware", VOID, &[I64, I32, I64, I64]);
-    module.declare_function(
-        "js_gc_init_typed_shape_layout",
-        VOID,
-        &[I64, I32, PTR, I32, PTR, I32],
-    );
-    // #7510: same signature, but for a FRESHLY ALLOCATED instance whose slots
-    // are still the allocator's fill — it declares the layout instead of
-    // validating it, so a constructor's own field stores can see it.
-    module.declare_function(
-        "js_gc_declare_typed_shape_layout",
-        VOID,
-        &[I64, I32, PTR, I32, PTR, I32],
-    );
-    // #7834: the address-dependent half of the declare, on its own. Emitted
-    // behind a `PERRY_PER_OBJECT_LAYOUTS_ANY` test by a construction site whose
-    // shape half is already baked into the inline-bump header constant.
+    // #7834: clears a previous tenant's per-object layout record at a fresh
+    // instance's address, behind a `PERRY_PER_OBJECT_LAYOUTS_ANY` test.
     module.declare_function("js_gc_forget_object_layout", VOID, &[I64]);
     // Array methods (Phase B.12).
     // - js_array_pop_f64(arr) -> f64    (last element, NaN if empty)

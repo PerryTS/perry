@@ -1,7 +1,8 @@
 //! The `ast::Expr::OptChain` arm of `lower_expr_impl`, extracted to a helper.
-//! Pure code move — no behavior change.
+//! Side-effecting optional-chain bases use lexical expression temporaries.
 
 use super::*;
+use crate::types::LocalId;
 use anyhow::Result;
 use swc_ecma_ast as ast;
 
@@ -25,6 +26,59 @@ fn receiver_is_optional_chain(expr: &ast::Expr) -> bool {
         ast::Expr::TsConstAssertion(inner) => receiver_is_optional_chain(&inner.expr),
         _ => false,
     }
+}
+
+// Keep captures outside the conditional so both its guard and continuation
+// read the same value. Peel upstream captures before composing another link;
+// its conditional must remain visible to the existing short-circuit lowering.
+fn capture_base(
+    ctx: &mut LoweringContext,
+    mut value: Expr,
+    bindings: &mut Vec<(LocalId, Expr)>,
+    preserve_chain_conditional: bool,
+) -> Expr {
+    while let Expr::ScopedTemp {
+        id,
+        value: init,
+        body,
+    } = value
+    {
+        bindings.push((id, *init));
+        value = *body;
+    }
+    let repeatable = matches!(
+        value,
+        Expr::LocalGet(_)
+            | Expr::GlobalGet(_)
+            | Expr::This
+            | Expr::Undefined
+            | Expr::Null
+            | Expr::Number(_)
+            | Expr::Integer(_)
+            | Expr::String(_)
+            | Expr::Bool(_)
+            | Expr::FuncRef(_)
+            | Expr::ClassRef(_)
+            | Expr::NativeModuleRef(_)
+    );
+    if repeatable || (preserve_chain_conditional && matches!(value, Expr::Conditional { .. })) {
+        value
+    } else {
+        let id = ctx.fresh_local();
+        bindings.push((id, value));
+        Expr::LocalGet(id)
+    }
+}
+
+fn bind_bases(mut body: Expr, bindings: Vec<(LocalId, Expr)>) -> Expr {
+    for (id, value) in bindings.into_iter().rev() {
+        body = Expr::ScopedTemp {
+            id,
+            value: Box::new(value),
+            body: Box::new(body),
+        };
+    }
+    body
 }
 
 pub(crate) fn lower_opt_chain_expr(
@@ -54,7 +108,14 @@ pub(crate) fn lower_opt_chain_expr(
                 return Ok(folded);
             }
             // obj?.prop -> obj == null ? undefined : obj.prop
-            let obj_expr = lower_expr(ctx, &member.obj)?;
+            let mut bindings = Vec::new();
+            let base = lower_expr(ctx, &member.obj)?;
+            let obj_expr = capture_base(
+                ctx,
+                base,
+                &mut bindings,
+                !opt_chain.optional && receiver_is_optional_chain(&member.obj),
+            );
 
             // Get the property access
             let prop_expr = match &member.prop {
@@ -102,15 +163,18 @@ pub(crate) fn lower_opt_chain_expr(
             // `===` only matches null, leaving undefined to
             // fall through and dereference (returning
             // `[object Object]` for Map.get's missing value).
-            Ok(Expr::Conditional {
-                condition: Box::new(Expr::Compare {
-                    op: CompareOp::LooseEq,
-                    left: Box::new(obj_expr),
-                    right: Box::new(Expr::Null),
-                }),
-                then_expr: Box::new(Expr::Undefined),
-                else_expr: Box::new(prop_expr),
-            })
+            Ok(bind_bases(
+                Expr::Conditional {
+                    condition: Box::new(Expr::Compare {
+                        op: CompareOp::LooseEq,
+                        left: Box::new(obj_expr),
+                        right: Box::new(Expr::Null),
+                    }),
+                    then_expr: Box::new(Expr::Undefined),
+                    else_expr: Box::new(prop_expr),
+                },
+                bindings,
+            ))
         }
         ast::OptChainBase::Call(call) => {
             // OptChain(Call) is `<expr>?.(args)` — the `?.` is between the
@@ -145,6 +209,7 @@ pub(crate) fn lower_opt_chain_expr(
             // the call, or an `undefined` property is invoked and throws
             // "X is not a function" (issue #4699: zod `safeParse`'s
             // `iss.inst?._zod.def?.error?.(iss)` error-map probe).
+            let mut bindings = Vec::new();
             let mut callee_from_chain = false;
             // True when the CALLEE's member access itself is optional
             // (`recv?.method(args)` — the `?.` before the method name),
@@ -170,7 +235,13 @@ pub(crate) fn lower_opt_chain_expr(
             let receiver_is_chain;
             let (check_expr, callee_expr) = {
                 let mut lower_member_flat = |member: &ast::MemberExpr| -> Result<(Expr, Expr)> {
-                    let obj = lower_expr(ctx, &member.obj)?;
+                    let base = lower_expr(ctx, &member.obj)?;
+                    let obj = capture_base(
+                        ctx,
+                        base,
+                        &mut bindings,
+                        receiver_is_optional_chain(&member.obj),
+                    );
                     let prop = match &member.prop {
                         ast::MemberProp::Ident(id) => Expr::PropertyGet {
                             byte_offset: 0,
@@ -252,13 +323,25 @@ pub(crate) fn lower_opt_chain_expr(
                         }
                         _ => {
                             receiver_is_chain = true;
-                            let ce = lower_expr(ctx, callee)?;
+                            let base = lower_expr(ctx, callee)?;
+                            let ce = capture_base(
+                                ctx,
+                                base,
+                                &mut bindings,
+                                receiver_is_optional_chain(callee),
+                            );
                             (ce.clone(), ce)
                         }
                     },
                     _ => {
                         receiver_is_chain = receiver_is_optional_chain(callee);
-                        let ce = lower_expr(ctx, callee)?;
+                        let base = lower_expr(ctx, callee)?;
+                        let ce = capture_base(
+                            ctx,
+                            base,
+                            &mut bindings,
+                            receiver_is_optional_chain(callee),
+                        );
                         (ce.clone(), ce)
                     }
                 }
@@ -285,6 +368,12 @@ pub(crate) fn lower_opt_chain_expr(
                     else_expr: inner_else,
                 } = check_expr
                 {
+                    // Evaluate the live continuation once, inside the upstream
+                    // guard. Hoisting it outside would run getters/calls on
+                    // the nullish short-circuit path.
+                    let mut live_bindings = Vec::new();
+                    let inner_else =
+                        Box::new(capture_base(ctx, *inner_else, &mut live_bindings, false));
                     // The receiver of the method call is `inner_else` (the
                     // un-short-circuited result of the upstream chain, e.g.
                     // `a.b` for `a?.b?.method(args)`). Keep a copy so an
@@ -390,11 +479,14 @@ pub(crate) fn lower_opt_chain_expr(
                     } else {
                         Box::new(outer_call)
                     };
-                    return Ok(Expr::Conditional {
-                        condition: inner_cond,
-                        then_expr: inner_then,
-                        else_expr,
-                    });
+                    return Ok(bind_bases(
+                        Expr::Conditional {
+                            condition: inner_cond,
+                            then_expr: inner_then,
+                            else_expr: Box::new(bind_bases(*else_expr, live_bindings)),
+                        },
+                        bindings,
+                    ));
                 }
             }
 
@@ -491,11 +583,14 @@ pub(crate) fn lower_opt_chain_expr(
                     right: Box::new(Expr::Null),
                 }
             };
-            Ok(Expr::Conditional {
-                condition: Box::new(condition),
-                then_expr: Box::new(Expr::Undefined),
-                else_expr,
-            })
+            Ok(bind_bases(
+                Expr::Conditional {
+                    condition: Box::new(condition),
+                    then_expr: Box::new(Expr::Undefined),
+                    else_expr,
+                },
+                bindings,
+            ))
         }
     }
 }

@@ -15,6 +15,7 @@ fn entry_at(id: i64, class: Class, base: Instant, delay_ms: u64) -> Entry {
         base + Duration::from_millis(delay_ms),
         delay_ms,
         0,
+        f64::from_bits(crate::value::TAG_UNDEFINED),
         Vec::new(),
         crate::async_context::AsyncContextSnapshot::default(),
         0,
@@ -390,6 +391,68 @@ fn purging_an_agent_drops_its_partition() {
     purge_agent(crate::agent::current_agent());
     assert!(!any_pending());
     assert!(with_current_existing(|t| t.any_pending()).is_none());
+}
+
+/// `clearImmediate` + a `setTimeout` reusing its slot used to panic "heap index is live".
+#[test]
+fn stale_check_placeholder_does_not_steal_a_reused_slab_slot() {
+    reset_for_test();
+    let base = Instant::now();
+    with_current(|timers| {
+        let immediate = timers.insert_check(entry_at(1, Class::Immediate, base, 0));
+        assert!(timers
+            .remove_by_id(1, |class| class == Class::Immediate)
+            .is_some());
+
+        let reused = timers.insert_timer(entry_at(2, Class::Timeout, base, 10));
+        assert_eq!(
+            reused, immediate,
+            "the test must actually exercise slab slot reuse"
+        );
+
+        assert!(
+            timers.pop_check(u64::MAX).is_none(),
+            "the stale placeholder must not steal the reused entry"
+        );
+
+        let now = base + Duration::from_millis(50);
+        assert_eq!(
+            timers.pop_due(now, u64::MAX).map(|e| e.id),
+            Some(2),
+            "the reused Timeout must still be reachable through the heap"
+        );
+    });
+}
+
+#[test]
+fn stale_poll_placeholder_does_not_steal_a_reused_slab_slot() {
+    reset_for_test();
+    let base = Instant::now();
+    with_current(|timers| {
+        let pending = timers.insert_pending(entry_at(1, Class::Pending, base, 0));
+        timers.promote_pending();
+        assert!(timers
+            .remove_by_id(1, |class| class == Class::Pending)
+            .is_some());
+
+        let reused = timers.insert_timer(entry_at(2, Class::Timeout, base, 10));
+        assert_eq!(
+            reused, pending,
+            "the test must actually exercise slab slot reuse"
+        );
+
+        assert!(
+            timers.pop_poll().is_none(),
+            "the stale placeholder must not steal the reused entry"
+        );
+
+        let now = base + Duration::from_millis(50);
+        assert_eq!(
+            timers.pop_due(now, u64::MAX).map(|e| e.id),
+            Some(2),
+            "the reused Timeout must still be reachable through the heap"
+        );
+    });
 }
 
 /// A thousand inserts and cancels in mixed order must leave the heap a valid

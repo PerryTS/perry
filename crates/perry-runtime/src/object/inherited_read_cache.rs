@@ -164,7 +164,7 @@
 //! # Hook points for lane 4
 //!
 //! Two, both one call wide:
-//!   * [`inherited_read_cache_hit`] — the guard-and-load. Called at the top of
+//!   * `inherited_read_cache_hit` (test-only) — the guard-and-load. Called at the top of
 //!     `js_object_get_field_by_name` and of `get_field_ic_miss_impl`.
 //!   * [`inherited_read_cache_prime`] — the chain walk. Called from
 //!     `get_field_ic_miss_impl` only, at the point where the own-key search has
@@ -446,6 +446,7 @@ fn address_is_prime_stable(addr: usize) -> bool {
 /// # Safety
 /// `obj` is a masked, non-null heap pointer the caller has already established
 /// is a plausible heap address; `key` may be null.
+#[cfg(test)]
 #[inline]
 pub(crate) unsafe fn inherited_read_cache_hit(
     obj: *const ObjectHeader,
@@ -596,6 +597,29 @@ pub(crate) unsafe fn inherited_read_cache_lookup(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
 ) -> Lookup {
+    lookup_entry::<true>(obj, key)
+}
+
+/// [`inherited_read_cache_lookup`] for the DATA entries only: an accessor
+/// entry answers `Unknown`. This instance has no edge to [`accessor_hit`], so
+/// the GC-leaf callers (`js_inherited_read_cache_hit_f64`, and through it
+/// `js_class_field_get_ic_fast`) provably never run user code.
+///
+/// # Safety
+/// As [`inherited_read_cache_lookup`].
+#[inline]
+pub(crate) unsafe fn inherited_read_cache_lookup_data(
+    obj: *const ObjectHeader,
+    key: *const crate::StringHeader,
+) -> Lookup {
+    lookup_entry::<false>(obj, key)
+}
+
+#[inline(always)]
+unsafe fn lookup_entry<const SERVE_ACCESSORS: bool>(
+    obj: *const ObjectHeader,
+    key: *const crate::StringHeader,
+) -> Lookup {
     let entry = match proved_entry(obj, key) {
         Ok(entry) => entry,
         Err(answer) => return answer,
@@ -612,7 +636,10 @@ pub(crate) unsafe fn inherited_read_cache_lookup(
         as *const u64;
     let bits = *field;
     if entry.accessor {
-        return accessor_hit(obj, bits);
+        if SERVE_ACCESSORS {
+            return accessor_hit(obj, bits);
+        }
+        return Lookup::Unknown;
     }
     // A deleted holder slot is a `TAG_HOLE`. `delete` bumps the semantic epoch
     // so this is unreachable today; it costs one compare and it is the check
@@ -665,7 +692,7 @@ unsafe fn accessor_hit(obj: *const ObjectHeader, pair_bits: u64) -> Lookup {
         if crate::object::prototype_chain::resolution_stack_savepoint() != 0 {
             return Lookup::Unknown;
         }
-        let f: extern "C" fn(f64) -> f64 = std::mem::transmute(acc.raw_get);
+        let f = crate::closure::body_call::js_method_body_fn!(acc.raw_get as *const u8;);
         return Lookup::Hit(JSValue::from_bits(f(this).to_bits()));
     }
     if acc.get != 0 {
@@ -863,7 +890,7 @@ unsafe fn accessor_set(obj: *const ObjectHeader, pair_bits: u64, value: f64) -> 
         // A compiled class setter is called directly with the receiver as its
         // `this` parameter, exactly as the class-setter arm of the generic
         // `[[Set]]` calls it (that arm opens no resolution boundary either).
-        let f: extern "C" fn(f64, f64) -> f64 = std::mem::transmute(acc.raw_set);
+        let f = crate::closure::body_call::js_method_body_fn!(acc.raw_set as *const u8; value);
         let _ = f(this, value);
         return true;
     }
@@ -1132,7 +1159,7 @@ unsafe fn inherited_read_cache_walk(
         return None;
     }
     match shapes::object_shape_descriptor(obj) {
-        Some(shape) if shape.object_kind == shapes::ShapeObjectKind::Ordinary => {}
+        Some(shape) if shape.object_kind.is_ordinary_layout() => {}
         _ => return None,
     }
     let recv_class_id = (*obj).class_id;
@@ -1266,7 +1293,7 @@ unsafe fn inherited_read_cache_walk(
             Some(shape) => shape,
             None => return None,
         };
-        if shape.object_kind != shapes::ShapeObjectKind::Ordinary {
+        if !shape.object_kind.is_ordinary_layout() {
             return None;
         }
         if shapes::object_shape_stamp(next) == 0 {
@@ -1647,12 +1674,9 @@ pub unsafe extern "C" fn js_inherited_read_cache_hit_f64(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
 ) -> f64 {
-    if matches!(proved_entry(obj, key), Ok(entry) if entry.accessor) {
-        return f64::from_bits(crate::value::TAG_HOLE);
-    }
-    match inherited_read_cache_hit(obj, key) {
-        Some(value) => f64::from_bits(value.bits()),
-        None => f64::from_bits(crate::value::TAG_HOLE),
+    match inherited_read_cache_lookup_data(obj, key) {
+        Lookup::Hit(value) => f64::from_bits(value.bits()),
+        Lookup::Declined | Lookup::Unknown => f64::from_bits(crate::value::TAG_HOLE),
     }
 }
 

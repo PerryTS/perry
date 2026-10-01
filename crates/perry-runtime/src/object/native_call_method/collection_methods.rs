@@ -454,6 +454,7 @@ pub(super) unsafe fn dispatch_raw_pointer(
                                 if field_val.is_pointer() {
                                     return Some(crate::closure::js_native_call_value(
                                         f64::from_bits(field_val.bits()),
+                                        crate::closure::plain_call_receiver(),
                                         args_ptr,
                                         args_len,
                                     ));

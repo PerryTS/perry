@@ -71,10 +71,13 @@ pub(super) fn try_patched_builtin_call(
     }
     // The live namespace object off the global object — the same object the
     // patching write stored into (and the replacement object after
-    // `globalThis.console = {…}`).
+    // `globalThis.console = {…}`). Read through the real global object, not
+    // the `GlobalGet(0)` sentinel: codegen recognizes
+    // `GlobalGet(0).Promise.resolve(…)` as the intrinsic again and would
+    // bind the call straight back to it.
     let object = Expr::PropertyGet {
         byte_offset: 0,
-        object: Box::new(Expr::GlobalGet(0)),
+        object: Box::new(Expr::GlobalThisExpr),
         property: ns,
     };
 

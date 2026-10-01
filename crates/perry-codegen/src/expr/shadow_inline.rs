@@ -413,6 +413,48 @@ mod tests {
             .unwrap_or_else(|| panic!("no inline clear block in:\n{body}"))
     }
 
+    /// Every block whose label starts with `prefix`, in order (label line and
+    /// terminating `br` excluded) — the same extraction as `store_blocks`,
+    /// generalized to the guard-check block families (`ss.chk_top.`,
+    /// `ss.chk_len.`), whose numeric suffix (and every register named inside
+    /// them) shifts whenever unrelated prologue code — e.g. #10812's
+    /// stack-guard check — adds instructions ahead of them.
+    fn blocks_with_prefix(body: &str, prefix: &str) -> Vec<String> {
+        let mut blocks: Vec<String> = Vec::new();
+        let mut current: Option<String> = None;
+        for line in body.lines() {
+            if line.starts_with(prefix) {
+                current = Some(String::new());
+                continue;
+            }
+            if let Some(buf) = current.as_mut() {
+                if line.trim().starts_with("br ") {
+                    blocks.push(std::mem::take(buf));
+                    current = None;
+                } else {
+                    buf.push_str(line);
+                    buf.push('\n');
+                }
+            }
+        }
+        blocks
+    }
+
+    /// The register mirroring the value into the entry: the first "value
+    /// word" store in an inline store block (always emitted before the meta
+    /// word — see `pointer_store_roots_inline_with_the_runtime_entry_layout`'s
+    /// "value first" comment).
+    fn stored_value_reg(blk: &str) -> String {
+        blk.lines()
+            .find_map(|l| {
+                l.trim()
+                    .strip_prefix("store i64 %r")
+                    .and_then(|rest| rest.split(',').next())
+                    .map(|s| s.to_string())
+            })
+            .unwrap_or_else(|| panic!("no value-word store in block:\n{blk}"))
+    }
+
     /// The frame push must go through `js_shadow_frame_enter` and derive the
     /// pop handle from `frame_top`, because the state pointer — not the handle
     /// — is what the inline stores need.
@@ -498,31 +540,46 @@ mod tests {
     /// another frame — the same wrap-around class #7079 fixed in `frame_pop`.
     ///
     /// Sabotage check: delete either guard from `emit_inline_slot_write`.
+    ///
+    /// Register-agnostic and scoped to each guard's own block: #10812's
+    /// entry-level stack-guard check adds registers ahead of the function
+    /// body, shifting every register number named below it. It has its own
+    /// `icmp ult` (stack pointer vs. limit), so these checks are scoped to
+    /// the `ss.chk_top.`/`ss.chk_len.` blocks rather than searched for across
+    /// the whole body, or a deleted guard could pass by coincidentally
+    /// matching the stack-guard's unrelated comparison.
     #[test]
     fn inline_store_keeps_the_sentinel_and_bounds_guards() {
         // This test asserts on the SHADOW-STACK lowering. Native roots are the
         // default now, so it has to say which lowering it is testing.
         let _shadow = crate::codegen::helpers::NativeRootsPin::shadow();
         let body = roots_body(&rooted_local_ir());
+        let chk_top_blocks = blocks_with_prefix(&body, "ss.chk_top.");
+        let chk_len_blocks = blocks_with_prefix(&body, "ss.chk_len.");
         assert!(
-            body.contains("ss.chk_top") && body.contains("ss.chk_len"),
+            !chk_top_blocks.is_empty() && !chk_len_blocks.is_empty(),
             "inline store must keep both guards; body:\n{body}"
         );
         assert!(
-            body.contains("icmp eq i64 %r16, -1"),
+            chk_top_blocks.iter().any(|b| b
+                .lines()
+                .any(|l| l.contains("icmp eq i64 %r") && l.trim_end().ends_with(", -1"))),
             "frame_top must be tested against the usize::MAX no-frame sentinel; \
              body:\n{body}"
         );
         assert!(
-            body.contains("icmp ult i64 %r18, %r20"),
+            chk_len_blocks.iter().any(|b| b
+                .lines()
+                .any(|l| l.contains("icmp ult i64 %r") && l.contains(", %r"))),
             "slot index must be bounds-checked against ShadowStackState::len; \
              body:\n{body}"
         );
         assert!(
-            body.contains(&format!(
-                "getelementptr inbounds i8, ptr %r13, i64 {}",
-                SHADOW_STATE_LEN_OFFSET
-            )),
+            chk_len_blocks.iter().any(|b| b.lines().any(|l| {
+                l.contains("getelementptr inbounds i8, ptr %r")
+                    && l.trim_end()
+                        .ends_with(&format!(", i64 {SHADOW_STATE_LEN_OFFSET}"))
+            })),
             "the bounds check must read len at offset {SHADOW_STATE_LEN_OFFSET}; \
              body:\n{body}"
         );
@@ -534,6 +591,12 @@ mod tests {
     /// Sabotage check: drop the `emit_inline_root_shading_barrier` call — a
     /// pointer written into a root after the collector scanned roots is then
     /// never shaded, and an in-flight incremental cycle frees a live object.
+    ///
+    /// The barrier's argument register is derived from the bind block's own
+    /// value-word store (`stored_value_reg`) rather than pinned to a literal
+    /// number: #10812's entry-level stack-guard check adds registers ahead of
+    /// the function body, so the exact number shifts, but the barrier must
+    /// still shade the *same* register the bind just stored.
     #[test]
     fn inline_bind_keeps_the_gated_root_shading_barrier() {
         // This test asserts on the SHADOW-STACK lowering. Native roots are the
@@ -547,10 +610,13 @@ mod tests {
             "inline bind must use the runtime's relaxed ordering for the incremental-mark gate; \
              body:\n{body}"
         );
+        let value_reg = stored_value_reg(&bind_block(&body));
         assert!(
-            body.contains("call void @js_write_barrier_root_nanbox(i64 %r26)"),
-            "inline bind must shade the value it just stored when a cycle is in \
-             flight; body:\n{body}"
+            body.contains(&format!(
+                "call void @js_write_barrier_root_nanbox(i64 %r{value_reg})"
+            )),
+            "inline bind must shade the value it just stored (%r{value_reg}) when a \
+             cycle is in flight; body:\n{body}"
         );
     }
 

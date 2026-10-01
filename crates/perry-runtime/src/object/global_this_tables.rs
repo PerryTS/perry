@@ -105,8 +105,8 @@ pub(crate) const GLOBAL_THIS_BUILTIN_CONSTRUCTORS: &[&str] = &[
 ///
 /// #7518: `try_dispatch_value_called_proto_method` needs this to tell a built-in
 /// *prototype method* invoked as a value — the #3716 uncurry-this idiom, which it
-/// must re-dispatch by name on `IMPLICIT_THIS` — from a global *constructor*
-/// invoked as a value, which it must not: `IMPLICIT_THIS.EventTarget(…)` resolves
+/// must re-dispatch by name on the call's `this` — from a global *constructor*
+/// invoked as a value, which it must not: `this.EventTarget(…)` resolves
 /// to nothing and the by-name tower's catch-all throws
 /// `TypeError: EventTarget is not a function`.
 ///

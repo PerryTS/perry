@@ -227,7 +227,16 @@ fn artifact_records_write_barrier_child_js_value_bits() {
 
 #[test]
 fn artifact_records_raw_numeric_class_field_f64_fast_paths_and_fallback_reasons() {
-    let point = class(101, "Point", vec![class_field("x", Type::Number)]);
+    // `x = 0`: a number field is an F64 birth lane only when the construction
+    // writes it, as real classes do.
+    let point = class(
+        101,
+        "Point",
+        vec![ClassField {
+            init: Some(Expr::Number(0.0)),
+            ..class_field("x", Type::Number)
+        }],
+    );
     let module = module_with_classes_and_params(
         "artifact_raw_numeric_class_field.ts",
         vec![point],

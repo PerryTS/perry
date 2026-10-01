@@ -39,7 +39,6 @@ use crate::type_analysis::{
 use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 
 use super::{
-    class_field_store_layout_note_is_conforming, class_field_store_needs_layout_note,
     class_field_store_needs_string_addref, emit_jsvalue_slot_store_pointer_tested,
     emit_typed_feedback_register_site, expr_produces_non_pointer_bits_by_construction, lower_expr,
     lower_expr_native, raw_f64_layout_fact, try_lower_pod_field_set,
@@ -914,13 +913,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                         // ShapeIds it actually sees. A receiver the compiler
                         // proved (ptr-shape) and a raw-f64 field keep the
                         // class route: both depend on the declared class.
-                        let route_raw_f64 = crate::type_analysis::class_field_declared_type(
-                            ctx,
-                            &class_name,
-                            property,
-                        )
-                        .as_ref()
-                        .is_some_and(crate::typed_shape::type_is_raw_f64_candidate);
+                        let route_raw_f64 =
+                            crate::expr::class_field_inline_guard::class_field_site_raw_f64(
+                                ctx,
+                                &class_name,
+                                property,
+                                field_index,
+                            );
                         let route_proven = ctx
                             .ptr_shape_receiver_fact(object.as_ref())
                             .is_some_and(|fact| fact.class_name == class_name);
@@ -977,14 +976,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                                 );
                                 let field_idx_str = field_index.to_string();
                                 let expected_class_id_str = expected_class_id.to_string();
+                                // Charter step 5, P4: raw exactly for an `F64`
+                                // lane of every guarded id's birth rep.
                                 let requires_raw_f64 =
-                                    crate::type_analysis::class_field_declared_type(
+                                    crate::expr::class_field_inline_guard::class_field_site_raw_f64(
                                         ctx,
                                         &class_name,
                                         property,
-                                    )
-                                    .as_ref()
-                                    .is_some_and(crate::typed_shape::type_is_raw_f64_candidate);
+                                        field_index,
+                                    );
                                 let requires_raw_f64_str = if requires_raw_f64 { "1" } else { "0" };
                                 // #5093 loop versioning: inside the fast clone of a
                                 // class-field versioned loop, a tracked raw-f64 field
@@ -1224,8 +1224,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                                         // into a pointer-masked slot is deliberately
                                         // NOT elided, is on
                                         // `class_field_store_needs_layout_note`.
-                                        let layout_note_needed =
-                                            class_field_store_needs_layout_note(ctx, value);
                                         let string_addref_needed =
                                             class_field_store_needs_string_addref(ctx, value);
                                         let field_addr = ctx.block().ptrtoint(&field_ptr, I64);
@@ -1238,17 +1236,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                                             &field_ptr,
                                             &val_double,
                                             &obj_handle,
-                                            &field_idx_str,
                                             string_addref_needed,
-                                            layout_note_needed,
                                             &obj_bits,
                                             &field_addr,
                                             field_set_barrier_needed,
-                                            class_field_store_layout_note_is_conforming(
-                                                ctx,
-                                                &class_name,
-                                                field_index,
-                                            ),
                                             "class_field_set",
                                         );
                                     }
@@ -1308,7 +1299,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                                 // `-O3` pipeline.
                                 // Only the call's own operands are materialized (the key
                                 // handle + expected ShapeId), not the inline-store scaffolding.
-                                let expected_shape_id = crate::typed_shape::load_class_shape_id(
+                                let expected_shape_id = crate::typed_shape::class_shape_id_operand(
                                     ctx,
                                     &class_name,
                                     &keys_global_name,
@@ -1423,6 +1414,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                                 &fast_label,
                                 &subclass_arms,
                                 &keys_global_name,
+                                field_index,
                             );
                                 super::store_census::bump(ctx, super::store_census::CFIELD_IC_CALL);
                                 let guard_ok = ctx.block().call(
@@ -1465,8 +1457,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                                 // note on the guarded arm — computed here because the
                                 // predicates take `&FnCtx` and the block builder is
                                 // borrowed below.
-                                let guarded_note_needed =
-                                    class_field_store_needs_layout_note(ctx, value);
                                 let guarded_addref_needed =
                                     class_field_store_needs_string_addref(ctx, value);
                                 let raw_stored_value = {
@@ -1533,17 +1523,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                                             &field_ptr,
                                             &val_double,
                                             &obj_handle,
-                                            &field_idx_str,
                                             guarded_addref_needed,
-                                            guarded_note_needed,
                                             &obj_bits,
                                             &field_addr,
                                             field_set_barrier_needed,
-                                            class_field_store_layout_note_is_conforming(
-                                                ctx,
-                                                &class_name,
-                                                field_index,
-                                            ),
                                             "class_field_set",
                                         );
                                         None

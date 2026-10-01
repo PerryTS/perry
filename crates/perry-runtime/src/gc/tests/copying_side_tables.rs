@@ -80,13 +80,88 @@ fn test_copying_minor_rewrites_class_side_table_values_and_function_keys() {
     );
 }
 
+/// #11635: the synthetic class id a `Func.prototype.x = fn` registration
+/// allocates is keyed by the function's NaN-boxed bits in
+/// `FUNCTION_CLASS_IDS`. When the function moves in a copying minor, the key
+/// must follow it: a second registration and a `new Func()` made through the
+/// POST-move address must land on the SAME id, or `F.prototype` methods
+/// registered before the move are split from instances created after it.
+///
+/// Driven through the real entry point (`js_register_function_prototype_method`)
+/// rather than a seeded key, and asserts the subject moved, so a green run
+/// cannot be one where nothing was relocated.
+#[test]
+fn test_function_prototype_registration_class_id_survives_a_move() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    crate::object::test_clear_class_side_table_roots();
+    gc_register_mutable_root_scanner(crate::object::scan_class_side_table_roots_mut);
+
+    let func = crate::arena::arena_alloc_gc(
+        std::mem::size_of::<crate::closure::ClosureHeader>(),
+        std::mem::align_of::<crate::closure::ClosureHeader>(),
+        GC_TYPE_CLOSURE,
+    ) as usize;
+    unsafe { init_test_closure(func as *mut u8) };
+    js_shadow_slot_set(0, ptr_bits(func));
+    let before = young_leaf();
+    let before_cid = unsafe {
+        crate::object::js_register_function_prototype_method(
+            f64::from_bits(ptr_bits(func)),
+            b"before".as_ptr(),
+            6,
+            f64::from_bits(string_bits(before)),
+        )
+    };
+    assert_ne!(
+        before_cid, 0,
+        "a verified closure must get a synthetic class id"
+    );
+
+    let _ = gc_collect_minor();
+
+    let func_after_bits = js_shadow_slot_get(0);
+    assert_ne!(
+        func_after_bits,
+        ptr_bits(func),
+        "the function must MOVE, or this test proves nothing"
+    );
+    assert!(crate::arena::pointer_in_nursery(
+        (func_after_bits & POINTER_MASK) as usize
+    ));
+
+    let after = young_leaf();
+    let after_cid = unsafe {
+        crate::object::js_register_function_prototype_method(
+            f64::from_bits(func_after_bits),
+            b"after".as_ptr(),
+            5,
+            f64::from_bits(string_bits(after)),
+        )
+    };
+    assert_eq!(
+        after_cid, before_cid,
+        "a registration through the moved function must reuse its class id"
+    );
+    assert_eq!(
+        crate::object::synthetic_class_id_for_function(f64::from_bits(func_after_bits)),
+        before_cid,
+        "`new F()` through the moved function must stamp the same class id"
+    );
+    assert_eq!(
+        crate::object::test_class_prototype_method_root_bits(before_cid, "before") & TAG_MASK,
+        STRING_TAG,
+        "the method registered before the move must stay on the same class"
+    );
+}
+
 #[test]
 fn test_copying_minor_rewrites_symbol_side_table_roots_and_lookups() {
     let _guard = CopyingNurseryTestGuard::new(1);
     crate::symbol::test_clear_symbol_side_table_roots();
     gc_register_mutable_root_scanner(crate::symbol::scan_symbol_side_table_roots_mut);
 
-    let owner = crate::object::js_object_alloc(0, 0) as usize;
+    // Ordinary-object symbols are shape slots; arrays still use this scanner.
+    let owner = crate::array::js_array_alloc(0) as usize;
     let sym_key = unsafe { alloc_nursery_test_symbol() };
     let value = young_leaf();
     let static_sym_key = unsafe { alloc_nursery_test_symbol() };

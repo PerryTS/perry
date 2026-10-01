@@ -346,6 +346,9 @@ mod temp_root;
 
 pub(crate) use temp_root::{expr_is_inert_primitive, TempRootPool};
 
+mod scoped_binding;
+pub(crate) use scoped_binding::{lower_scoped_binding, read_scoped_binding};
+
 use anyhow::Result;
 use perry_hir::Expr;
 
@@ -668,16 +671,13 @@ pub(crate) fn operand_may_collect(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
 mod group;
 mod ledger;
 
-// `ImplicitThisSave` and `NewTargetSave` are deliberately absent: no caller
-// names either type — both are only ever held as an inferred local between the
-// `*_save` and `*_restore` pair — so re-exporting them would be an unused
-// import. They stay `pub(crate)` in `group.rs`, where the functions that
-// produce them live.
+// `NewTargetSave` is deliberately absent: no caller names the type — it is
+// only ever held as an inferred local between the `new_target_save` and
+// `new_target_restore` pair — so re-exporting it would be an unused import. It
+// stays `pub(crate)` in `group.rs`, where the functions that produce it live.
 pub(crate) use group::{
-    implicit_this_cell_ptr, implicit_this_restore, implicit_this_restore_at, implicit_this_save,
-    implicit_this_save_at, new_target_restore, new_target_save, new_target_save_for_super,
-    open_rooted_group, with_rooted_accumulator, with_rooted_group, AccArray, EmittedValue,
-    RootedAcc, RootedGroup,
+    new_target_restore, new_target_save, new_target_save_for_super, open_rooted_group,
+    with_rooted_accumulator, with_rooted_group, AccArray, EmittedValue, RootedAcc, RootedGroup,
 };
 
 // ---------------------------------------------------------------------------

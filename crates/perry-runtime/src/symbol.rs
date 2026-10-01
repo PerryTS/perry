@@ -54,7 +54,8 @@ pub(crate) use properties::{
     symbol_property_is_non_writable, symbol_property_root_bits,
 };
 pub use properties::{
-    class_static_symbol_lookup, js_class_register_static_symbol, js_object_has_own_symbol,
+    class_static_symbol_lookup, class_static_symbol_lookup_in_chain,
+    js_class_register_static_symbol, js_object_has_own_symbol,
     js_object_literal_infer_computed_function_name, js_object_set_method_by_name,
     js_object_set_symbol_method, js_object_set_symbol_property,
 };
@@ -959,22 +960,9 @@ pub(crate) fn release_symbol_tables_in_freed_ranges(
             changed |= map.len() != before;
         }
     }
-    // Class ids are process-global, but a member a dying thread stored holds
-    // its symbol and/or value. The symbol is deliberately NOT dereferenced: a
-    // `gc_malloc`'d symbol may already have been freed by the thread's
-    // `MallocState` destructor. `CLASS_STATIC_SYMBOL_ORDER` therefore keeps
-    // the removed member's symbol id; ids are monotonic and never reissued,
-    // so a stale id can only cost a few bytes, never a wrong position.
-    {
-        let mut guard = CLASS_STATIC_SYMBOLS
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        if let Some(map) = guard.as_mut() {
-            let before = map.len();
-            map.retain(|&(_, sym), bits| !freed.contains(sym) && !freed.holds_bits(*bits));
-            changed |= map.len() != before;
-        }
-    }
+    // A class's static symbol members are own symbol properties of its
+    // function object (`SYMBOL_PROPERTIES`, owner = that object), which lives
+    // in the agent's heap: the owner-keyed pass above releases them.
     if changed {
         symbol_property_ic_epoch_bump();
     }
@@ -1037,15 +1025,25 @@ pub fn symbol_property_tables_hold_for_test(owner: usize, sym: usize) -> (bool, 
     (props, attrs)
 }
 
-/// Test probe (#11471): does class `class_id` hold a static member under the
-/// symbol at `sym`?
+/// Test probe (#11471): the owner key class `class_id`'s static symbol
+/// members are stored under in the calling agent — its function object.
 #[doc(hidden)]
-pub fn class_static_symbol_held_for_test(class_id: u32, sym: usize) -> bool {
-    CLASS_STATIC_SYMBOLS
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .as_ref()
-        .is_some_and(|map| map.contains_key(&(class_id, sym)))
+pub fn class_static_symbol_owner_for_test(class_id: u32) -> usize {
+    crate::object::class_value::class_value_ptr(class_id) as usize
+}
+
+/// Test probe (#11696): is `sym` an own key of the ordinary object `owner`'s
+/// shape (#11682 stores those on the object, not in `SYMBOL_PROPERTIES`)?
+/// `Some(is_accessor)` when it is, `None` when `owner` is not an ordinary
+/// object or has no such key.
+#[doc(hidden)]
+pub fn symbol_on_object_for_test(owner: usize, sym: usize) -> Option<bool> {
+    // SAFETY: `owner` validates the address as a tracked GC object first.
+    unsafe {
+        crate::object::shaped_symbols::owner(owner)?;
+        crate::object::shaped_symbols::entry(owner, sym)
+            .map(|entry| entry & crate::object::key_attrs::ENTRY_ACCESSOR != 0)
+    }
 }
 
 // Monotonic id counter for fresh symbols. Not thread-safe per-thread but
@@ -1258,6 +1256,14 @@ pub(crate) fn store_object_symbol_property_root(
 ) -> bool {
     note_symbol_key_installed(sym_key);
     note_symbol_owner_installed(obj_key);
+    if unsafe { crate::object::shaped_symbols::owner(obj_key).is_some() } {
+        let existed = unsafe { crate::object::shaped_symbols::entry(obj_key, sym_key) };
+        let entry = existed.unwrap_or(0) & !crate::object::key_attrs::ENTRY_ACCESSOR_MASK;
+        unsafe {
+            crate::object::shaped_symbols::define(obj_key, sym_key, value_bits, entry);
+        }
+        return existed.is_none();
+    }
     crate::closure::shape::note_function_own_state_changed(obj_key);
     {
         let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
@@ -1284,56 +1290,21 @@ pub(crate) fn store_object_symbol_property_root(
 
 /// Idle until a class declares a static Symbol-keyed member.
 ///
-/// `js_instanceof` consults `CLASS_STATIC_SYMBOLS` for a `Symbol.hasInstance`
+/// `js_instanceof` consults a class's static symbols for a `Symbol.hasInstance`
 /// override on EVERY evaluation, which meant a process-global `Mutex` plus a
 /// SipHash probe of an empty map for every `x instanceof C` in a program that
 /// never mentions a Symbol (#7769).
 pub(crate) static CLASS_STATIC_SYMBOLS_LATCH: crate::registry_latch::RegistryLatch =
     crate::registry_latch::RegistryLatch::new();
 
+/// A class's static Symbol-keyed data property (`static [sym] = v`,
+/// `C[sym] = v`): an own symbol property of the class's function object, in
+/// the same per-object store every object uses (the object is pinned, so its
+/// address is a stable owner key).
 pub(crate) fn store_class_static_symbol_root(class_id: u32, sym_key: usize, value_bits: u64) {
-    note_symbol_key_installed(sym_key);
     CLASS_STATIC_SYMBOLS_LATCH.arm();
-    let symbol_id = unsafe { (*(sym_key as *const SymbolHeader)).id };
-    let created;
-    {
-        let mut guard = crate::gc::lock_gc_root_registry(&CLASS_STATIC_SYMBOLS);
-        if guard.is_none() {
-            *guard = Some(HashMap::new());
-        }
-        created = guard
-            .as_mut()
-            .unwrap()
-            .insert((class_id, sym_key), value_bits)
-            .is_none();
-    }
-    if created {
-        let mut order = CLASS_STATIC_SYMBOL_ORDER.lock().unwrap();
-        if order.is_none() {
-            *order = Some(HashMap::new());
-        }
-        order
-            .as_mut()
-            .unwrap()
-            .entry(class_id)
-            .or_default()
-            .push(symbol_id);
-    }
-    publish_symbol_side_table_root_edges(sym_key, value_bits);
-}
-
-per_test_global! {
-    /// Class-id-keyed side table for static Symbol-keyed properties.
-    /// drizzle's `static [entityKind] = "Table"` registers
-    /// (class_id, sym_ptr) → value here at module init via
-    /// `js_class_register_static_symbol`. Consulted by `js_object_has_own`
-    /// when the receiver is a class identifier (NaN-boxed INT32_TAG).
-    /// Refs #420.
-    static CLASS_STATIC_SYMBOLS: Mutex<Option<HashMap<(u32, usize), u64>>> = Mutex::new(None);
-
-    /// Symbol-id creation order for static symbol data properties. IDs are
-    /// stable across moving GC, unlike the pointer keys in the value table.
-    static CLASS_STATIC_SYMBOL_ORDER: Mutex<Option<HashMap<u32, Vec<u64>>>> = Mutex::new(None);
+    let owner = crate::object::class_value::class_value_ptr(class_id) as usize;
+    store_object_symbol_property_root(owner, sym_key, value_bits);
 }
 
 #[cfg(test)]

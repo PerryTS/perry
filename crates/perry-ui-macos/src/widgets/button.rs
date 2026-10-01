@@ -1,3 +1,4 @@
+use crate::srgb;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Sel};
 use objc2::{define_class, msg_send, AnyThread, DefinedClass};
@@ -20,7 +21,7 @@ pub(crate) fn scan_macos_button_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<
 }
 
 extern "C" {
-    fn js_closure_call0(closure: *const u8) -> f64;
+    fn js_closure_call0(closure: *const u8, this: perry_ffi::JsThis) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
 }
 
@@ -46,7 +47,7 @@ define_class!(
                 if let Some(closure_f64) = closure_f64 {
                     let closure_ptr = unsafe { js_nanbox_get_pointer(closure_f64) };
                     unsafe {
-                        js_closure_call0(closure_ptr as *const u8);
+                        js_closure_call0(closure_ptr as *const u8, perry_ffi::JsThis::UNDEFINED);
                     }
                 }
             }));
@@ -134,7 +135,7 @@ pub fn set_bordered(handle: i64, bordered: bool) {
 /// Set the text color of a button.
 /// Uses both NSAttributedString (for bordered buttons) and contentTintColor (for borderless).
 pub fn set_text_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
-    set_ns_text_color(handle, &super::dynamic_color::rgba([r, g, b, a]));
+    set_ns_text_color(handle, &srgb::ns_color(r, g, b, a));
 }
 
 pub(super) fn set_ns_text_color(handle: i64, color: &objc2_app_kit::NSColor) {
@@ -276,13 +277,7 @@ pub fn set_content_tint_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
     if let Some(view) = super::get_widget(handle) {
         unsafe {
             let btn: &NSButton = &*(Retained::as_ptr(&view) as *const NSButton);
-            let color: Retained<AnyObject> = msg_send![
-                AnyClass::get(c"NSColor").unwrap(),
-                colorWithRed: r as objc2_core_foundation::CGFloat,
-                green: g as objc2_core_foundation::CGFloat,
-                blue: b as objc2_core_foundation::CGFloat,
-                alpha: a as objc2_core_foundation::CGFloat
-            ];
+            let color = srgb::ns_color(r, g, b, a);
             let _: () = msg_send![btn, setContentTintColor: &*color];
         }
     }

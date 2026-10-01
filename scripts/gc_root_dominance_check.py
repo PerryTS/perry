@@ -462,23 +462,8 @@ NONCOLLECTING = {
     "js_shadow_frame_push", "js_shadow_frame_pop", "js_shadow_state_addr",
     "js_gc_temp_root_push", "js_gc_temp_root_get", "js_gc_temp_root_set",
     "js_gc_temp_root_truncate",
-    # layout / barrier bookkeeping (no allocation)
-    #
-    # This block is a second copy of a fact the compiler already states:
-    # `perry-codegen/src/gc_call_effects.rs` answers `GcCallEffect::CannotCollect`
-    # for the same helpers. The two lists must agree, and `js_gc_declare_typed_shape_layout`
-    # is where they drifted -- #7510 added it beside `js_gc_init_typed_shape_layout`
-    # in the Rust match and not here, which stayed invisible only because the
-    # corpus then contained no class the #7510 gate admitted. #5094 widened that
-    # gate to pointer-bearing classes and the omission printed 358 violations, all
-    # of them `js_object_alloc_class_inline_keys->js_gc_declare_typed_shape_layout`
-    # and every one spurious. The two entry points share a body
-    # (`typed_shape_layout_entry` -> `init_typed_shape_layout`) and differ only in
-    # a `TypedShapeProof` that makes `declare` do strictly LESS: it skips the slot
-    # validation loop. So `declare` cannot collect for exactly the reason `init`
-    # cannot -- side-table metadata writes through the system allocator, which
-    # arms no Perry GC trigger.
-    "js_gc_init_typed_shape_layout", "js_gc_declare_typed_shape_layout",
+    # layout / barrier bookkeeping (no allocation); must agree with
+    # `perry-codegen/src/gc_call_effects.rs` (`GcCallEffect::CannotCollect`).
     "js_write_barrier_root_nanbox", "perry_transition_cache_base",
     "js_transition_ic_note_hit",
     # object/inherited_read_cache.rs `js_inherited_read_cache_hit_f64`: a
@@ -512,19 +497,11 @@ NONCOLLECTING = {
     "js_closure_set_box_capture_ptr", # declared box edge + same raw slot write
     "js_closure_get_capture_bits",   # closure/alloc.rs:463 raw slot read
     "js_closure_set_capture_ptr", "js_closure_get_capture_ptr",
-    "js_box_set_bits", "js_box_set_bits_trusted_no_barrier",
+    "js_box_capture_cell_ptr", "js_box_set_bits", "js_box_set_bits_trusted_no_barrier",
+    "js_scope_capture_base",                         # box/scope.rs: object-start probe + select
     "js_box_get_bits",                               # box.rs: raw cell access
     "js_i32_box_set", "js_bool_box_set",
     "js_i32_box_get", "js_bool_box_get",            # registry check + raw read, no TDZ
-    # Box allocators (#8132): `std::alloc::alloc` + a TLS registry insert.
-    # A raw Rust allocation arms no Perry GC trigger (the malloc-count
-    # trigger counts MALLOC_STATE GC objects), so the call cannot enter the
-    # collector. The premise is machine-checked: IMMOVABLE_SOURCES' "box"
-    # probes below fail if box.rs ever arena-allocates or grows a free path,
-    # and these entries must be removed with them. Required here for the
-    # one-way containment `gc_call_effects.rs` documents (its CannotCollect
-    # set must stay a subset of this one).
-    "js_box_alloc_bits", "js_i32_box_alloc", "js_bool_box_alloc",
     # Box release (#8208): registry remove + positive-cache evict + raw cell
     # clear + a push onto a TLS quarantine Vec. No GC-heap allocation, no user
     # code, no collection trigger — the same audit as the accessors above, and
@@ -567,8 +544,6 @@ NONCOLLECTING = {
     # (closure/dynamic_props.rs:1040) when the callee captures `this`. That one
     # IS a collection point, and #7154's fix re-reads the arguments below it.
     "js_closure_unbox_callee_checked",
-    # object/this_binding.rs:160 -- a thread-local cell swap
-    "js_implicit_this_set", "js_implicit_this_get",
     # `js_gc_note_slot_layout` (gc/layout.rs:814) and its `_aware` sibling
     # (:833). `_aware` is the same body behind an early return taken when
     # neither the new nor the old bits are pointer-bearing, so it does strictly
@@ -946,6 +921,9 @@ _NON_DEFINING_MACROS = frozenset((
     "assert", "assert_eq", "assert_ne", "debug_assert", "debug_assert_eq",
     "debug_assert_ne", "matches", "println", "eprintln", "print", "eprint",
     "write", "writeln", "format", "panic", "vec", "dbg", "todo", "unimplemented",
+    # `fn_info!(body, n)` names a body to build its private `static INFO`
+    # (a JsFunctionInfo); it defines no export.
+    "fn_info",
 ))
 _INDENTED_MACRO_RE = re.compile(
     r'^[ \t]+(?:\w+::)*(\w+)!\s*[({]\s*(js_\w+)\s*(?:=>|[,)])')
@@ -1312,15 +1290,39 @@ def audit_poll_reach(roots=SYMBOL_ROOTS, bodies=None):
 
 
 # Bit-level / identity producers a heap address flows through unchanged.
-TRANSPARENT_OPS = ("or i64", "and i64", "bitcast", "inttoptr", "ptrtoint",
-                   "select", "phi", "add i64", "sub i64")
+#
+# Matched on the instruction's OPCODE (and, for the integer ops, its type), never
+# as a substring of the line. The substring form was correct only by accident:
+# `xor i64` -- the NaN-box re-tag, and the handle derivation
+# `bits ^ POINTER_TAG` that `root_reload.rs` treats as transparent -- was
+# tracked solely because the text "or i64" occurs inside it, and any line whose
+# REGISTER NAMES contained "phi", "select" or "bitcast" was taken for a
+# transparent op and skipped as a use. Deleting the word "or" from the old tuple
+# would have made every xor-derived stale handle invisible with every self-test
+# still green; `self_test()` now carries the xor fixtures that turn red instead.
+TRANSPARENT_OPS = ("or i64", "and i64", "xor i64", "add i64", "sub i64",
+                   "bitcast", "inttoptr", "ptrtoint", "select", "phi")
+# `%r = <opcode> <first type token>`: the two tokens a TRANSPARENT_OPS entry
+# names. No flags are skipped: `add nuw i64` was never matched by "add i64"
+# and still is not, so the change widens nothing but the xor it names.
+_OPCODE_RE = re.compile(r"^\s*%[\w.$-]+\s*=\s*([a-z]+)\s+(\S+)")
+
+
+# opcode -> the type it must carry ("" = any), derived from TRANSPARENT_OPS
+# once: this predicate runs for every instruction of every closure walk.
+_TRANSPARENT_TYPE = {op.partition(" ")[0]: op.partition(" ")[2] for op in TRANSPARENT_OPS}
+
+
+def rhs_is_transparent(text):
+    """Is `text` (a whole instruction, `%r = ...`) one of TRANSPARENT_OPS?"""
+    m = _OPCODE_RE.match(text)
+    if not m:
+        return False
+    want_ty = _TRANSPARENT_TYPE.get(m.group(1))
+    return want_ty is not None and (not want_ty or m.group(2) == want_ty)
 TRANSPARENT_CALLS = {"js_ctor_return_override"}
 # Calls that ROOT their argument (protecting it from that point on).
-# `js_box_set_bits` publishes into a mutable-capture box, which `BOX_REGISTRY`
-# / `scan_box_roots_mut` marks AND rewrites (gc/mod.rs:547).
-ROOTING_CALLS = {"js_gc_temp_root_push", "js_gc_temp_root_set",
-                 "js_box_set_bits", "js_box_set_bits_trusted_no_barrier",
-                 "js_i32_box_set", "js_bool_box_set"}
+ROOTING_CALLS = {"js_gc_temp_root_push", "js_gc_temp_root_set"}
 
 
 def operand_regs(text):
@@ -1334,7 +1336,7 @@ def is_transparent(ins):
         return True
     if ins.callee is not None:
         return False
-    return any(op in ins.text for op in TRANSPARENT_OPS)
+    return rhs_is_transparent(ins.text)
 
 
 def provenance(def_of, reg, limit=64):
@@ -1487,14 +1489,8 @@ POLL_CAPABLE_RUNTIME = {
     # Calling a JS closure. The four names this replaces
     # (`js_call_closure`, `js_invoke_closure`, `js_function_call`,
     # `js_apply_function`) were not symbols; these are.
-    "js_closure_call0", "js_closure_call1", "js_closure_call2",
-    "js_closure_call3", "js_closure_call4", "js_closure_call5",
-    "js_closure_call6", "js_closure_call7", "js_closure_call8",
-    "js_closure_call9", "js_closure_call10", "js_closure_call11",
-    "js_closure_call12", "js_closure_call13", "js_closure_call14",
-    "js_closure_call15", "js_closure_call16",
-    "js_closure_call_array", "js_closure_call_apply_with_spread",
-    "js_native_call_value",
+    # ... every JS-call entry point, read from `perry_abi::JS_CALL_ENTRIES`
+    # (added below) so a new entry cannot be missing here.
     "js_object_get_property_key", "js_object_set_property_key",
     "js_object_set_property_key_method",
     "js_object_get_field_by_name", "js_object_set_field_by_name",
@@ -1689,6 +1685,24 @@ POLL_CAPABLE_RUNTIME = {
     # `lower_call/new.rs::construction_runs_user_code`.
     "js_private_brand_add",
 }
+
+
+def _js_call_entries():
+    """`perry_abi::JS_CALL_ENTRIES` — the runtime entry points emitted code
+    calls to run a JS function. Read from the ABI crate, the one list both
+    sides compile against; an empty read is an error, never an empty set."""
+    abi = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
+                       "crates", "perry-abi", "src", "lib.rs")
+    with open(abi, encoding="utf-8") as fh:
+        text = fh.read()
+    m = re.search(r"pub const JS_CALL_ENTRIES:[^=]*=\s*\[(.*?)\];", text, re.S)
+    names = re.findall(r'"([A-Za-z0-9_]+)"', m.group(1)) if m else []
+    if not names:
+        raise SystemExit("gc_root_dominance_check: perry_abi::JS_CALL_ENTRIES not found")
+    return set(names)
+
+
+POLL_CAPABLE_RUNTIME |= _js_call_entries()
 
 
 def compute_poll_reaching(all_funcs):
@@ -2366,7 +2380,7 @@ def _reaches_alloc(defs, reg, limit=32):
             if ALLOC_RE.match(cm.group(1)):
                 return True
             continue
-        if any(op in rhs for op in TRANSPARENT_OPS):
+        if rhs_is_transparent("%x = " + rhs):
             q.extend(re.findall(r"%([\w.$]+)", rhs))
     return False
 
@@ -2761,17 +2775,14 @@ ROOT_READ_CALLS = {
     "js_closure_get_capture_ptr",
     "js_gc_temp_root_get",           # a MUTABLE root: rewritten on evacuation
     "js_box_get_bits",               # box.rs mutable-capture cell read
-    "js_implicit_this_get",          # object/this_binding.rs:160 thread-local
     "js_new_target_get",
-    # object/this_binding.rs:159 -- `js_implicit_this_SET` is a swap, so its
-    # RETURN value is a read of the same scanned mutable cell
-    # (`scan_implicit_this_roots_mut`, this_binding.rs:176) and the swap has
-    # already overwritten the only other copy. Listing the setter as a reader
-    # looks odd, which is exactly why #7214 left `prev_this` unrooted for a
-    # whole PR: the checker saw a call it knew could not collect, never
-    # classified the result as a heap value, and reported nothing at either
-    # end. Being non-collecting is what makes a call a root READ.
-    "js_implicit_this_set",
+    # A non-collecting SETTER of a scanned mutable cell that returns the
+    # previous value is a root READ too (#7214 left `prev_this` unrooted for a
+    # whole PR because the implicit-`this` swap was not listed here): being
+    # non-collecting is what makes a call a root read. `js_new_target_set`
+    # returns its previous value too; it must be listed here if generated
+    # code ever uses that result (`new_target_save` reads the cell with
+    # `js_new_target_get` first instead).
     # `js_get_string_pointer_unified` is a candidate and is deliberately left
     # out for now: its result IS a raw heap address in a bare register, but it
     # is not in NONCOLLECTING (its SSO branch allocates), so classifying it as
@@ -2795,7 +2806,11 @@ RECEIVER_SINKS = re.compile(
     # A stale RegExpHeader* is dereferenced immediately by both of these —
     # this is #7154's residual, and it faulted rather than merely answering
     # wrong, so it belongs in the fatal ranking and not just the raw count.
-    r"regexp_test|regexp_exec|regexp_match\w*|regexp_replace\w*"
+    r"regexp_test|regexp_exec|regexp_match\w*|regexp_replace\w*|"
+    # Both read the function's closure header (`is_callable_function_value`)
+    # to key its synthetic class id. A stale function register here faulted
+    # at moment's module init (#11635), so it ranks as fatal too.
+    r"register_function_prototype_method|get_function_prototype_method"
     r")$"
 )
 
@@ -3117,7 +3132,7 @@ def run_stale(parsed, poll_reaching, verbose, moving_only, fatal_only,
 # hands back an object the collector can move).
 HEAP_SOURCE_CALLS = frozenset({
     "js_gc_temp_root_get", "js_shadow_slot_get", "js_closure_get_capture_bits",
-    "js_box_get_bits", "js_implicit_this_get", "js_new_target_get",
+    "js_box_get_bits", "js_new_target_get",
     "js_static_this_resolve", "js_get_exception",
 })
 
@@ -3141,7 +3156,8 @@ HEAP_SOURCE_CALLS = frozenset({
 # `js_build_class_keys_array` through `js_array_alloc_with_length_longlived`
 # (`perry-runtime/src/object/alloc.rs:320,337`), i.e. in the OLD arena, which
 # the nursery copying minor never relocates. 64 of the 66 were that, and 2 were
-# `js_box_alloc_bits`, which is `std::alloc::alloc` — not in the GC heap at all.
+# `js_box_alloc_bits`, which formerly allocated outside the GC heap. Both
+# exemptions have since been removed: class-key arrays and boxes can move.
 #
 # A register naming an object can go bad in exactly two independent ways, and
 # the exemptions below have to close BOTH or they are unsound:
@@ -3216,169 +3232,7 @@ def rust_fn_body(path, fn_name):
     return None
 
 
-def _probe_boxes_outside_the_gc_heap():
-    """Boxes are `std::alloc::alloc`, never handed back, never arena-allocated.
-
-    #8208 changed what "never reclaimed" means, so this probe changed with it.
-    A released cell is now recycled through an activation-owned quarantine
-    into a per-kind free pool and re-registered by a later `js_box_alloc*`.
-    Cell MEMORY is still never returned to the allocator, which is the leg the
-    exemption actually rests on: an address minted by `js_box_alloc*` stays
-    readable box-cell memory for the life of the thread, so it can never
-    become "some other kind of object" and the address never moves. What is no
-    longer monotonic is which LOCAL a given cell belongs to.
-
-    So the old `dealloc` grep is kept (it is still the thing that would break
-    the address-validity leg) and a second check is added for the property that
-    now carries the reuse argument: release must PARK into the current
-    activation's quarantine, and only that activation's zero-reference
-    transition may feed the reuse pool. A release that pushed straight onto
-    the free pool could hand a cell to a second activation while the first can
-    still resume, which is a use-after-release aliasing hazard that this
-    exemption would otherwise silently suppress. The old global quarantine is
-    retained only as a conservative fallback for untracked callers.
-
-    #10464 adds the scope-exit release of an ordinary frame's cells
-    (`box/scope_release.rs`). It may publish directly only because it is gated
-    on the cell's closure capture count; a captured cell must take the same
-    drained-pending path closure death pruning publishes from.
-    """
-    try:
-        with open("crates/perry-runtime/src/box.rs",
-                  encoding="utf-8", errors="replace") as fh:
-            src = fh.read()
-    except OSError:
-        return (False, "crates/perry-runtime/src/box.rs not readable")
-    body = rust_fn_body("crates/perry-runtime/src/box.rs", "js_box_alloc_bits")
-    if body is None:
-        return (False, "js_box_alloc_bits not found in box.rs")
-    if "alloc(layout)" not in body:
-        return (False, "js_box_alloc_bits no longer allocates via "
-                       "std::alloc::alloc; if it now uses arena_alloc_gc the "
-                       "box IS a GC object and the exemption is void")
-    if re.search(r"arena_alloc\w*\s*\(", src):
-        return (False, "box.rs now calls an arena allocator — boxes may be GC "
-                       "heap objects, which makes them movable AND sweepable")
-    if re.search(r"\bdealloc\s*\(", src):
-        return (False, "box.rs now returns cell memory to the allocator; a "
-                       "recycled address could become a non-box object, which "
-                       "voids both perry#4898's pointer rejection and #7906's "
-                       "positive cache")
-    # The reuse path must stay activation-reachability-gated. Each tracked
-    # release parks through park_async_activation_cell; the per-kind global
-    # quarantine is only the null-activation fallback. No release entry point
-    # may touch the intrusive free lists directly.
-    for fn, quarantine in (("js_box_release", "BOX_RELEASE_QUARANTINE"),
-                           ("js_i32_box_release", "I32_BOX_RELEASE_QUARANTINE"),
-                           ("js_bool_box_release", "BOOL_BOX_RELEASE_QUARANTINE")):
-        rel = rust_fn_body("crates/perry-runtime/src/box.rs", fn)
-        if rel is None:
-            return (False, f"{fn} not found in box.rs; the #8208 release path "
-                           "changed shape and this premise must be re-argued")
-        if "park_async_activation_cell" not in rel:
-            return (False, f"{fn} no longer parks tracked cells in their "
-                           "activation quarantine")
-        if quarantine not in rel:
-            return (False, f"{fn} lost its conservative {quarantine} fallback")
-        if "FREE_HEAD" in rel:
-            return (False, f"{fn} touches the free list directly — release must "
-                           "park until its activation reaches zero references. "
-                           "Publishing overwrites the terminal value a stray "
-                           "resume still writes through.")
-    scope_path = "crates/perry-runtime/src/box/scope_release.rs"
-    scope = rust_fn_body(scope_path, "release_scope_cell")
-    if scope is None:
-        return (False, "release_scope_cell not found in box/scope_release.rs; "
-                       "the #10464 scope-exit release changed shape")
-    if "note_frame_released_cell" not in scope \
-            or "FrameRelease::Deferred" not in scope:
-        return (False, "scope-exit release no longer defers a closure-captured "
-                       "cell to closure death")
-    try:
-        with open(scope_path, encoding="utf-8", errors="replace") as fh:
-            scope_src = fh.read()
-    except OSError:
-        return (False, f"{scope_path} not readable")
-    if re.search(r"\bdealloc\s*\(|arena_alloc\w*\s*\(", scope_src):
-        return (False, "box/scope_release.rs frees or arena-allocates cells")
-    release_ref = rust_fn_body("crates/perry-runtime/src/box.rs",
-                               "release_async_box_activation")
-    if release_ref is None or "if new == 0" not in release_ref \
-            or "publish_async_activation_cells(ptr)" not in release_ref:
-        return (False, "activation cells are no longer published only by the "
-                       "zero-reference transition")
-    publish = rust_fn_body("crates/perry-runtime/src/box.rs",
-                           "publish_async_activation_cells")
-    publish_cell = rust_fn_body("crates/perry-runtime/src/box.rs",
-                                "publish_box_cell")
-    if publish is None or "publish_box_cell" not in publish \
-            or publish_cell is None or "push_free_cell" not in publish_cell:
-        return (False, "the activation zero-reference publisher no longer "
-                       "feeds the intrusive free pools")
-    capture_zero = rust_fn_body("crates/perry-runtime/src/box.rs",
-                                "box_capture_count_reached_zero")
-    if capture_zero is None or "ASYNC_RELEASE_DRAINED" not in capture_zero \
-            or "publish_box_cell" not in capture_zero:
-        return (False, "closure-death publication is no longer gated on an "
-                       "already-drained async activation")
-    try:
-        with open("crates/perry-runtime/src/promise/async_step.rs",
-                  encoding="utf-8", errors="replace") as fh:
-            async_step = fh.read()
-        with open("crates/perry-runtime/src/promise/microtasks.rs",
-                  encoding="utf-8", errors="replace") as fh:
-            microtasks = fh.read()
-    except OSError:
-        return (False, "async-step pump sources not readable")
-    if "retain_async_box_activation(trap.box_activation)" not in async_step:
-        return (False, "Task::AsyncStep enqueue no longer retains its "
-                       "activation")
-    if "release_async_box_activation(box_activation)" not in microtasks:
-        return (False, "Task::AsyncStep dispatch no longer releases its "
-                       "activation")
-    return (True, "std::alloc::alloc, no arena allocation, cell memory never "
-                  "returned to the allocator; reuse is gated by each async "
-                  "activation's queued/running-step refcount")
-
-
-IMMOVABLE_SOURCES = (
-    ImmovableSource(
-        key="box",
-        label="js_box_alloc* (outside the GC heap)",
-        knob="assume_boxes_in_gc_heap",
-        callees={"js_box_alloc", "js_box_alloc_bits", "js_i32_box_alloc",
-                 "js_bool_box_alloc"},
-        not_movable_because=(
-            "js_box_alloc_bits uses std::alloc::alloc, so the Box is not an "
-            "arena object and no collector phase relocates it. What the "
-            "collector does touch is the JSValue INSIDE the box, which "
-            "scan_box_roots_mut rewrites in place — the box's own address "
-            "never changes."),
-        not_reclaimable_because=(
-            "box CELL MEMORY is never returned to the allocator: box.rs has no "
-            "dealloc. #8208 made a completed async activation's cells "
-            "RECYCLABLE — released cells are parked in an activation-owned "
-            "quarantine, published to a per-kind free pool when that "
-            "activation has no queued or running async step, and re-registered "
-            "by a later js_box_alloc* — "
-            "so BOX_REGISTRY membership is no longer monotonic. The exemption "
-            "does not rest on that membership. It rests on the weaker property "
-            "#8208 preserves deliberately: every address js_box_alloc* ever "
-            "returns stays 8 readable bytes of box-cell memory for the life of "
-            "the thread. It never moves, and it can never be recycled into a "
-            "different KIND of object, which is what perry#4898's pointer "
-            "rejection and #7906's positive cache actually depend on."),
-        becomes_real_when=(
-            "boxes become GC-heap allocations (arena_alloc_gc), or box.rs "
-            "starts handing cell memory back to the allocator (dealloc), or "
-            "the release path stops being activation-refcount-gated so a cell "
-            "could be reused while that activation can still resume. Re-check with "
-            "--assume-boxes-in-gc-heap."),
-        probes=(("box cells never move and are never returned to the "
-                 "allocator; reuse stays activation-refcount-gated",
-                 _probe_boxes_outside_the_gc_heap),),
-    ),
-)
+IMMOVABLE_SOURCES = ()
 
 
 def audit_immovable_sources():
@@ -3394,10 +3248,8 @@ def audit_immovable_sources():
               "(crates/perry-runtime/src not found).", file=sys.stderr)
         return 2
     if not IMMOVABLE_SOURCES:
-        print("error: IMMOVABLE_SOURCES is empty, so this audit checks "
-              "nothing. Delete the audit with the last exemption.",
-              file=sys.stderr)
-        return 2
+        print("=== no immovable-source exemptions; boxes are GC objects")
+        return 0
     bad = 0
     n_probes = 0
     for src in IMMOVABLE_SOURCES:
@@ -3877,6 +3729,49 @@ entry.0:
 """
 
 
+# The HANDLE form of the same window: the receiver is un-tagged with `xor`
+# (`bits ^ POINTER_TAG`), not masked with `and`. A region-scoped guard keeps
+# exactly this register (the object's address) for every access it covers, and
+# `root_reload.rs` re-derives it as a transparent `xor`, so the checker must
+# follow the same derivation or a handle held across a collecting call is
+# invisible. Before the opcode match this was reported only because the text
+# "or i64" happens to occur inside "xor i64".
+_SELFTEST_XOR_HANDLE_WINDOW = """\
+define double @perry_fn_selftest__xor_handle(double %a1, double %a2, i64 %a3) {
+entry.0:
+  %d = alloca double
+  store double %a2, ptr %d
+  call void @js_shadow_slot_bind(i32 1, ptr %d)
+  %def = load double, ptr %d
+  %db = bitcast double %def to i64
+  %dh = xor i64 %db, 9222809086901354496
+  %rb = bitcast double %a1 to i64
+  %rh = and i64 %rb, 281474976710655
+  %inner = call double @js_object_get_field_ic_miss(i64 %rh, i64 %a3, ptr @perry_ic_1)
+  %out = call double @js_object_get_field_by_name_f64(i64 %dh, i64 %a3)
+  ret double %out
+}
+"""
+
+# The fix: the handle is re-derived from the slot BELOW the collecting call.
+_SELFTEST_XOR_HANDLE_RELOADED = """\
+define double @perry_fn_selftest__xor_handle_reloaded(double %a1, double %a2, i64 %a3) {
+entry.0:
+  %d = alloca double
+  store double %a2, ptr %d
+  call void @js_shadow_slot_bind(i32 1, ptr %d)
+  %rb = bitcast double %a1 to i64
+  %rh = and i64 %rb, 281474976710655
+  %inner = call double @js_object_get_field_ic_miss(i64 %rh, i64 %a3, ptr @perry_ic_1)
+  %def = load double, ptr %d
+  %db = bitcast double %def to i64
+  %dh = xor i64 %db, 9222809086901354496
+  %out = call double @js_object_get_field_by_name_f64(i64 %dh, i64 %a3)
+  ret double %out
+}
+"""
+
+
 # ------------------------------------------------- the STATEPOINT mode ---
 #
 # Everything above this line reads the SHADOW-STACK lowering. Since #7370 that
@@ -4039,16 +3934,9 @@ def native_heap_source_kind(ins, token_callee):
 def native_immovable_exemption(ins, effective_callee, source_opts):
     """The `IMMOVABLE_SOURCES` entry that exempts this source, if any.
 
-    The #7210 adjudication is about the ALLOCATOR, not about the lowering: a
-    box is still `std::alloc::alloc` under statepoints exactly as under the
-    shadow stack. Re-deriving that judgement here would be the
-    `REWRITTEN_LOAD_RE` mistake again — two modes with two answers to one
-    question, of which the narrower was wrong (#7240). Class-key arrays used
-    to share this exemption, but default old-page relocation makes them
-    movable; their cached copies are now ordinary mutable roots (#7876).
-
-    The premises are gated by `--audit-immovable-sources`, which runs in CI
-    ahead of both corpora, and each exemption's knob turns it back off.
+    The allocator determines mobility, independently of the root lowering.
+    Share the classification between native and shadow modes. There are
+    currently no exemptions: boxes and class-key arrays are GC-managed.
     """
     for src in IMMOVABLE_SOURCES:
         hit = (effective_callee is not None and effective_callee in src.callees)
@@ -4784,6 +4672,24 @@ __SAFEPOINT__
 }
 """.replace("__SAFEPOINT__", _sp(live=("rs4gc.s1",)))
 
+# `_SELFTEST_SP_STALE` with the raw word un-tagged by `xor` before the
+# safepoint and only the xor result used below it: the region-guard handle. The
+# stale register is the DERIVED one, so the forward closure has to cross the
+# `xor` to see it.
+_SELFTEST_SP_XOR_STALE = """\
+define double @perry_fn_selftest__sp_xor_stale(double %a) gc "statepoint-example" {
+entry.0:
+  %rs4gc.b1 = bitcast double %a to i64
+  %rs4gc.s1 = inttoptr i64 %rs4gc.b1 to ptr addrspace(1)
+  %raw = ptrtoint ptr addrspace(1) %rs4gc.s1 to i64
+  %h = xor i64 %raw, 9222809086901354496
+__SAFEPOINT__
+  %rs4gc.s1.relocated = call coldcc ptr addrspace(1) @llvm.experimental.gc.relocate.p1(token %tok, i32 0, i32 0)
+  %r = call double @js_object_get_field_by_name_f64(i64 %h, i64 0)
+  ret double %r
+}
+""".replace("__SAFEPOINT__", _sp(live=("rs4gc.s1",)))
+
 # ★★ THE CONTROL FOR THE TRACKED/UNTRACKED LINE, and the one fixture whose
 # absence was found by sabotage rather than by design.
 #
@@ -5044,7 +4950,8 @@ def statepoint_self_test():
                            ("roundtrip", _SELFTEST_SP_TRACKED_ROUNDTRIP),
                            ("quoted", _SELFTEST_SP_QUOTED_NAME),
                            ("phi_safe_edge", _SELFTEST_SP_PHI_SAFE_EDGE),
-                           ("phi_hazard_edge", _SELFTEST_SP_PHI_HAZARD_EDGE)):
+                           ("phi_hazard_edge", _SELFTEST_SP_PHI_HAZARD_EDGE),
+                           ("xor_stale", _SELFTEST_SP_XOR_STALE)):
             p = os.path.join(td, f"sp_{name}.ll")
             with open(p, "w") as fh:
                 fh.write(text)
@@ -5073,6 +4980,15 @@ def statepoint_self_test():
                       "--moving-only -- the arm CI gates on -- drops it and "
                       "the proof is vacuous.", file=sys.stderr)
                 ok = False
+
+        hits = _scan_statepoints([paths["xor_stale"]], moving_only=True)
+        if len(hits) != 1 or hits[0].kind_class != "stale":
+            print("self-test FAIL: a raw word un-tagged by `xor` above a "
+                  "safepoint and used below it must report exactly one stale "
+                  f"hazard, got {[(h.kind_class, h.kind) for h in hits]}. The "
+                  "forward closure must cross `xor`, the handle derivation "
+                  "root_reload.rs and region guards use.", file=sys.stderr)
+            ok = False
 
         hits = _scan_statepoints([paths["reloaded"]], moving_only=True)
         if hits:
@@ -5793,6 +5709,50 @@ def self_test():
                   "code shape rather than on the staleness.", file=sys.stderr)
             ok = False
 
+        # The xor-derived HANDLE, both directions (see the fixtures).
+        xh = os.path.join(td, "xor_handle_window.ll")
+        xh_fixed = os.path.join(td, "xor_handle_reloaded.ll")
+        for p, text in ((xh, _SELFTEST_XOR_HANDLE_WINDOW),
+                        (xh_fixed, _SELFTEST_XOR_HANDLE_RELOADED)):
+            with open(p, "w") as fh:
+                fh.write(text)
+        for moving_only in (False, True):
+            got = _stale_kinds_probe(xh, moving_only=moving_only).get("slotload", 0)
+            if got != 1:
+                print("self-test FAIL: a receiver handle derived from a shadow "
+                      "slot by `xor` (bits ^ POINTER_TAG) and used below the "
+                      "generic GET dispatch must report exactly one slotload "
+                      f"hazard (moving_only={moving_only}), got {got}. `xor` must "
+                      "be a transparent op: root_reload.rs re-derives through it, "
+                      "and region-scoped guards hold exactly this register.",
+                      file=sys.stderr)
+                ok = False
+            got = _stale_kinds_probe(xh_fixed, moving_only=moving_only).get("slotload", 0)
+            if got != 0:
+                print("self-test FAIL: re-deriving the xor handle BELOW the call is "
+                      f"the fix; the control must report 0, got {got}.",
+                      file=sys.stderr)
+                ok = False
+        # The matcher itself: opcode and type, never a substring of the line.
+        for text, want in (
+                ("  %h = xor i64 %b, 9222809086901354496", True),
+                ("  %h = or i64 %b, 1", True),
+                ("  %h = and i64 %b, 281474976710655", True),
+                ("  %h = bitcast double %v to i64", True),
+                ("  %h = phi i64 [ %a, %bb1 ], [ %b, %bb2 ]", True),
+                ("  %h = add nuw i64 %b, 16", False),
+                ("  %h = xor i32 %b, 1", False),
+                ("  %h = fadd double %phi.3, %select.1", False),
+                ("  store double %bitcast.7, ptr %slot", False),
+                ("  %h = load double, ptr %phi.slot", False)):
+            if rhs_is_transparent(text) != want:
+                print(f"self-test FAIL: rhs_is_transparent({text.strip()!r}) "
+                      f"must be {want}: transparency is the instruction's opcode "
+                      "and type, not a substring of the line (a register named "
+                      "`%phi.3` does not make a load transparent).",
+                      file=sys.stderr)
+                ok = False
+
         # The packed entry is the name emitted by generic property reads now,
         # and since T1 the SLOW entry is the only one most sites carry at all:
         # the tower's six other calls collapsed into it, so a set that named
@@ -5917,35 +5877,11 @@ def self_test():
             with open(p, "w") as fh:
                 fh.write(text)
 
-        for path, knob, label in ((bx, "assume_boxes_in_gc_heap", "box"),):
-            found, n_allocas = _scan_unrooted([path], moving_only=True)
-            if found:
-                print(f"self-test FAIL: the {label} exemption fixture must "
-                      f"report 0 under --moving-only, got {len(found)}. That "
-                      "is the arm #7198's promote-to-required clock depends on.",
-                      file=sys.stderr)
-                ok = False
-            found, n_allocas = _scan_unrooted([path])
-            if found:
-                print(f"self-test FAIL: the {label} exemption fixture must "
-                      f"report 0, got {len(found)}. _is_heap_source has gone "
-                      "back to conflating 'the collector rewrites this "
-                      "location' with 'this object can move' (#7210).",
-                      file=sys.stderr)
-                ok = False
-            if n_allocas != 1:
-                print(f"self-test FAIL: {label} fixture -> {n_allocas} "
-                      "gc-capable allocas, expected 1. A fixture that stopped "
-                      "parsing would clear for the wrong reason.",
-                      file=sys.stderr)
-                ok = False
-            found, _ = _scan_unrooted([path], **{knob: True})
-            if len(found) != 1:
-                print(f"self-test FAIL: --{knob.replace('_', '-')} must make "
-                      f"the {label} fixture report again (got {len(found)}). "
-                      "#7210 recorded the exact condition under which these "
-                      "become real hazards; a knob that cannot restore them is "
-                      "a condition nobody can re-check.", file=sys.stderr)
+        for opts in ({}, {"moving_only": True}, {"assume_boxes_in_gc_heap": True}):
+            found, n_allocas = _scan_unrooted([bx], **opts)
+            if len(found) != 1 or n_allocas != 1:
+                print("self-test FAIL: a GC box in an unrooted alloca must "
+                      "be reported, including by default", file=sys.stderr)
                 ok = False
 
         found, n_allocas = _scan_unrooted([ck], moving_only=True)
@@ -6359,8 +6295,7 @@ def main():
                          "came from. Takes no corpus.")
     ap.add_argument("--audit-immovable-sources", action="store_true",
                     help="re-check the PREMISES of every --unrooted-allocas "
-                         "exemption against the runtime source (#7210): boxes "
-                         "are still outside the GC heap and never freed. An "
+                         "exemption against the runtime source (#7210). An "
                          "exemption whose premise has "
                          "quietly lapsed reads as a triaged false positive and "
                          "is a live hazard. Takes no corpus.")
@@ -6392,10 +6327,7 @@ def main():
                          "not a list of adjudicated sites -- the same call "
                          "--max-stale makes. It can only be lowered.")
     ap.add_argument("--assume-boxes-in-gc-heap", action="store_true",
-                    help="treat js_box_alloc* results as GC-heap objects, i.e. "
-                         "#7210's second counterfactual: what "
-                         "--unrooted-allocas reports if boxes ever stop being "
-                         "std::alloc::alloc allocations. Widens only.")
+                    help="compatibility flag; boxes are always treated as GC-heap objects.")
     ns = ap.parse_args()
 
     # Standalone static audits: they read the crates, not an IR corpus, so they

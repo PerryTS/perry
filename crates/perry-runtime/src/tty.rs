@@ -221,12 +221,12 @@ fn heap_object_ptr(value: f64) -> Option<*mut ObjectHeader> {
     }
 }
 
-fn this_value() -> f64 {
-    crate::object::js_implicit_this_get()
+fn this_value(this: crate::closure::JsThis) -> f64 {
+    this.as_f64()
 }
 
-fn this_object() -> Option<*mut ObjectHeader> {
-    heap_object_ptr(this_value())
+fn this_object(this: crate::closure::JsThis) -> Option<*mut ObjectHeader> {
+    heap_object_ptr(this_value(this))
 }
 
 fn fd_from_object(obj: *mut ObjectHeader) -> Option<i32> {
@@ -241,12 +241,14 @@ fn fd_from_object(obj: *mut ObjectHeader) -> Option<i32> {
     None
 }
 
-fn current_fd(default_fd: i32) -> i32 {
-    this_object().and_then(fd_from_object).unwrap_or(default_fd)
+fn current_fd(default_fd: i32, this: crate::closure::JsThis) -> i32 {
+    this_object(this)
+        .and_then(fd_from_object)
+        .unwrap_or(default_fd)
 }
 
-fn this_has_fd() -> bool {
-    this_object().and_then(fd_from_object).is_some()
+fn this_has_fd(this: crate::closure::JsThis) -> bool {
+    this_object(this).and_then(fd_from_object).is_some()
 }
 
 fn value_to_string(value: f64) -> Option<String> {
@@ -620,6 +622,7 @@ fn validate_color_count(count: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_tty_write_stream_get_color_depth(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     env: f64,
 ) -> f64 {
     let jsval = JSValue::from_bits(env.to_bits());
@@ -635,6 +638,7 @@ pub extern "C" fn js_tty_write_stream_get_color_depth(
 #[no_mangle]
 pub extern "C" fn js_tty_write_stream_has_colors(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     count: f64,
     env: f64,
 ) -> f64 {
@@ -665,9 +669,8 @@ pub extern "C" fn js_tty_write_stream_has_colors(
     js_bool(has_colors_for_depth(count, color_depth_for_env(env)))
 }
 
-fn closure_value(func_ptr: *const u8, name: &str, arity: u32) -> f64 {
-    crate::closure::js_register_closure_arity(func_ptr, arity);
-    let closure = crate::closure::js_closure_alloc_singleton(func_ptr);
+fn closure_value(info: *const crate::closure::JsFunctionInfo, name: &str, arity: u32) -> f64 {
+    let closure = crate::closure::js_closure_alloc_singleton(info);
     crate::object::set_bound_native_closure_name(closure, name);
     crate::object::set_builtin_closure_length(closure as usize, arity);
     crate::value::js_nanbox_pointer(closure as i64)
@@ -693,7 +696,7 @@ fn ensure_tty_prototypes() {
         1,
         JSValue::from_bits(
             closure_value(
-                js_tty_read_stream_set_raw_mode as *const u8,
+                crate::fn_info!(js_tty_read_stream_set_raw_mode, 1; with_declared(1)),
                 "setRawMode",
                 1,
             )
@@ -715,7 +718,7 @@ fn ensure_tty_prototypes() {
         2,
         JSValue::from_bits(
             closure_value(
-                js_tty_write_stream_get_color_depth as *const u8,
+                crate::fn_info!(js_tty_write_stream_get_color_depth, 1; with_declared(1)),
                 "getColorDepth",
                 1,
             )
@@ -726,7 +729,12 @@ fn ensure_tty_prototypes() {
         write_proto,
         3,
         JSValue::from_bits(
-            closure_value(js_tty_write_stream_has_colors as *const u8, "hasColors", 2).to_bits(),
+            closure_value(
+                crate::fn_info!(js_tty_write_stream_has_colors, 2; with_declared(2)),
+                "hasColors",
+                2,
+            )
+            .to_bits(),
         ),
     );
     crate::object::js_object_set_field(
@@ -734,7 +742,7 @@ fn ensure_tty_prototypes() {
         4,
         JSValue::from_bits(
             closure_value(
-                js_tty_write_stream_refresh_size as *const u8,
+                crate::fn_info!(js_tty_write_stream_refresh_size, 0; with_declared(0)),
                 "_refreshSize",
                 0,
             )
@@ -745,7 +753,12 @@ fn ensure_tty_prototypes() {
         write_proto,
         5,
         JSValue::from_bits(
-            closure_value(js_tty_write_stream_cursor_to as *const u8, "cursorTo", 3).to_bits(),
+            closure_value(
+                crate::fn_info!(js_tty_write_stream_cursor_to, 3; with_declared(3)),
+                "cursorTo",
+                3,
+            )
+            .to_bits(),
         ),
     );
     crate::object::js_object_set_field(
@@ -753,7 +766,7 @@ fn ensure_tty_prototypes() {
         6,
         JSValue::from_bits(
             closure_value(
-                js_tty_write_stream_move_cursor as *const u8,
+                crate::fn_info!(js_tty_write_stream_move_cursor, 3; with_declared(3)),
                 "moveCursor",
                 3,
             )
@@ -764,7 +777,12 @@ fn ensure_tty_prototypes() {
         write_proto,
         7,
         JSValue::from_bits(
-            closure_value(js_tty_write_stream_clear_line as *const u8, "clearLine", 2).to_bits(),
+            closure_value(
+                crate::fn_info!(js_tty_write_stream_clear_line, 2; with_declared(2)),
+                "clearLine",
+                2,
+            )
+            .to_bits(),
         ),
     );
     crate::object::js_object_set_field(
@@ -772,7 +790,7 @@ fn ensure_tty_prototypes() {
         8,
         JSValue::from_bits(
             closure_value(
-                js_tty_write_stream_clear_screen_down as *const u8,
+                crate::fn_info!(js_tty_write_stream_clear_screen_down, 1; with_declared(1)),
                 "clearScreenDown",
                 1,
             )
@@ -784,7 +802,7 @@ fn ensure_tty_prototypes() {
         9,
         JSValue::from_bits(
             closure_value(
-                js_tty_write_stream_get_window_size as *const u8,
+                crate::fn_info!(js_tty_write_stream_get_window_size, 0; with_declared(0)),
                 "getWindowSize",
                 0,
             )
@@ -803,7 +821,7 @@ pub(crate) fn attach_tty_constructor_prototype(constructor_value: f64, name: &st
             CLASS_ID_TTY_READ_STREAM,
             Some(1),
             Some(closure_value(
-                js_tty_read_stream_set_raw_mode as *const u8,
+                crate::fn_info!(js_tty_read_stream_set_raw_mode, 1; with_declared(1)),
                 "setRawMode",
                 1,
             )),
@@ -843,12 +861,16 @@ fn add_write_stream_listener_fields(obj: *mut ObjectHeader) {
 }
 
 pub(crate) fn tty_listener_on_value() -> f64 {
-    closure_value(js_tty_write_stream_on as *const u8, "on", 2)
+    closure_value(
+        crate::fn_info!(js_tty_write_stream_on, 2; with_declared(2)),
+        "on",
+        2,
+    )
 }
 
 pub(crate) fn tty_listener_remove_value() -> f64 {
     closure_value(
-        js_tty_write_stream_remove_listener as *const u8,
+        crate::fn_info!(js_tty_write_stream_remove_listener, 2; with_declared(2)),
         "removeListener",
         2,
     )
@@ -856,7 +878,7 @@ pub(crate) fn tty_listener_remove_value() -> f64 {
 
 pub(crate) fn tty_listener_remove_all_value() -> f64 {
     closure_value(
-        js_tty_write_stream_remove_all_listeners as *const u8,
+        crate::fn_info!(js_tty_write_stream_remove_all_listeners, 1; with_declared(1)),
         "removeAllListeners",
         1,
     )
@@ -908,15 +930,16 @@ pub(crate) fn is_tty_stream_instance(value: f64, class_name: &str) -> bool {
 #[no_mangle]
 pub extern "C" fn js_tty_read_stream_set_raw_mode(
     _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
     mode: f64,
 ) -> f64 {
     let enabled = crate::value::js_is_truthy(mode) != 0;
-    let fd = current_fd(0);
+    let fd = current_fd(0, this);
     let _ = set_fd_raw_mode(fd, enabled);
-    if let Some(obj) = this_object() {
+    if let Some(obj) = this_object(this) {
         crate::object::js_object_set_field_by_name(obj, named_key(b"isRaw"), js_bool(enabled));
     }
-    this_value()
+    this_value(this)
 }
 
 fn write_all_fd(fd: i32, bytes: &[u8]) -> bool {
@@ -962,13 +985,14 @@ fn numeric_arg(value: f64, default: i32) -> i32 {
     default
 }
 
-fn write_control_sequence(sequence: String) -> f64 {
-    js_bool(write_all_fd(current_fd(1), sequence.as_bytes()))
+fn write_control_sequence(sequence: String, this: crate::closure::JsThis) -> f64 {
+    js_bool(write_all_fd(current_fd(1, this), sequence.as_bytes()))
 }
 
 #[no_mangle]
 pub extern "C" fn js_tty_write_stream_cursor_to(
     _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
     x: f64,
     y: f64,
     _callback: f64,
@@ -981,12 +1005,13 @@ pub extern "C" fn js_tty_write_stream_cursor_to(
         let y = numeric_arg(y, 0).max(0);
         format!("\x1b[{};{}H", y + 1, x + 1)
     };
-    write_control_sequence(sequence)
+    write_control_sequence(sequence, this)
 }
 
 #[no_mangle]
 pub extern "C" fn js_tty_write_stream_move_cursor(
     _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
     dx: f64,
     dy: f64,
     _callback: f64,
@@ -1004,12 +1029,13 @@ pub extern "C" fn js_tty_write_stream_move_cursor(
     } else if dy > 0 {
         sequence.push_str(&format!("\x1b[{}B", dy));
     }
-    write_control_sequence(sequence)
+    write_control_sequence(sequence, this)
 }
 
 #[no_mangle]
 pub extern "C" fn js_tty_write_stream_clear_line(
     _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
     dir: f64,
     _callback: f64,
 ) -> f64 {
@@ -1018,15 +1044,16 @@ pub extern "C" fn js_tty_write_stream_clear_line(
         1 => 0,
         _ => 2,
     };
-    write_control_sequence(format!("\x1b[{}K", mode))
+    write_control_sequence(format!("\x1b[{}K", mode), this)
 }
 
 #[no_mangle]
 pub extern "C" fn js_tty_write_stream_clear_screen_down(
     _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
     _callback: f64,
 ) -> f64 {
-    write_control_sequence("\x1b[0J".to_string())
+    write_control_sequence("\x1b[0J".to_string(), this)
 }
 
 fn winsize_value(fd: i32) -> Option<(i32, i32)> {
@@ -1046,8 +1073,11 @@ pub(crate) fn tty_write_stream_dimension(property: &str) -> Option<f64> {
 }
 
 #[no_mangle]
-pub extern "C" fn js_tty_write_stream_get_window_size(_closure: *const ClosureHeader) -> f64 {
-    let fd = current_fd(1);
+pub extern "C" fn js_tty_write_stream_get_window_size(
+    _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    let fd = current_fd(1, this);
     let arr = crate::array::js_array_alloc(2);
     let (cols, rows) = winsize_value(fd).unwrap_or((0, 0));
     let col_value = if cols > 0 {
@@ -1066,8 +1096,11 @@ pub extern "C" fn js_tty_write_stream_get_window_size(_closure: *const ClosureHe
 }
 
 #[no_mangle]
-pub extern "C" fn js_tty_write_stream_refresh_size(_closure: *const ClosureHeader) -> f64 {
-    let _ = winsize_value(current_fd(1));
+pub extern "C" fn js_tty_write_stream_refresh_size(
+    _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    let _ = winsize_value(current_fd(1, this));
     TAG_UNDEFINED_F64
 }
 
@@ -1083,42 +1116,45 @@ fn register_resize_callback(callback: i64) {
 #[no_mangle]
 pub extern "C" fn js_tty_write_stream_on(
     _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
     event: f64,
     callback: f64,
 ) -> f64 {
-    if event_name_from_value(event).as_deref() == Some("resize") && this_has_fd() {
+    if event_name_from_value(event).as_deref() == Some("resize") && this_has_fd(this) {
         let callback = callback_ptr_from_value(callback);
         if callback != 0 {
             register_resize_callback(callback);
         }
     }
-    this_value()
+    this_value(this)
 }
 
 #[no_mangle]
 pub extern "C" fn js_tty_write_stream_remove_listener(
     _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
     event: f64,
     _callback: f64,
 ) -> f64 {
-    if event_name_from_value(event).as_deref() == Some("resize") && this_has_fd() {
+    if event_name_from_value(event).as_deref() == Some("resize") && this_has_fd(this) {
         RESIZE_CALLBACK.with(|cb| *cb.borrow_mut() = None);
     }
-    this_value()
+    this_value(this)
 }
 
 #[no_mangle]
 pub extern "C" fn js_tty_write_stream_remove_all_listeners(
     _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
     event: f64,
 ) -> f64 {
     let event_js = JSValue::from_bits(event.to_bits());
     if (event_js.is_undefined() || event_name_from_value(event).as_deref() == Some("resize"))
-        && this_has_fd()
+        && this_has_fd(this)
     {
         RESIZE_CALLBACK.with(|cb| *cb.borrow_mut() = None);
     }
-    this_value()
+    this_value(this)
 }
 
 pub fn throw_invalid_fd(fd: f64) -> ! {
@@ -1246,7 +1282,7 @@ pub extern "C" fn js_tty_resize_drain() -> i32 {
     let cb = RESIZE_CALLBACK.with(|c| *c.borrow());
     if let Some(cb_i64) = cb {
         let closure = cb_i64 as *const ClosureHeader;
-        js_closure_call0(closure);
+        js_closure_call0(closure, crate::closure::plain_call_receiver());
         return 1;
     }
     0

@@ -732,10 +732,9 @@ pub(super) fn try_mark_conservative_word(
 
     unsafe {
         let header = header_from_user_ptr(target as *const u8);
-        if (*header).gc_flags & GC_FLAG_MARKED != 0 {
-            return false;
-        }
-        if (*header).gc_flags & GC_FLAG_PINNED != 0 {
+        if (*header).gc_flags & GC_FLAG_MARKED != 0
+            || super::pin::pinned_counts_as_marked((*header).gc_flags)
+        {
             return false;
         }
         if matches!(
@@ -806,11 +805,10 @@ pub(crate) fn try_mark_value_or_raw(word: u64, valid_ptrs: &ValidPointerSet) -> 
     };
     unsafe {
         let header = header_from_user_ptr(target as *const u8);
-        if (*header).gc_flags & GC_FLAG_MARKED != 0 {
+        if (*header).gc_flags & GC_FLAG_MARKED != 0
+            || super::pin::pinned_counts_as_marked((*header).gc_flags)
+        {
             return false; // Already marked
-        }
-        if (*header).gc_flags & GC_FLAG_PINNED != 0 {
-            return false; // Pinned objects are always live
         }
         (*header).gc_flags |= GC_FLAG_MARKED;
         push_mark_seed(header);
@@ -1783,7 +1781,7 @@ pub(super) fn mark_copy_only_scanner_bits(
     };
     unsafe {
         let flags = (*header).gc_flags;
-        if flags & (GC_FLAG_MARKED | GC_FLAG_PINNED) == 0 {
+        if flags & GC_FLAG_MARKED == 0 && !super::pin::pinned_counts_as_marked(flags) {
             (*header).gc_flags = flags | GC_FLAG_MARKED;
             push_mark_seed(header);
         }

@@ -429,7 +429,16 @@ pub unsafe extern "C" fn napi_fatal_exception(env: NapiEnv, error: NapiValue) ->
 /// Idempotent owning-agent shutdown. Cleanup callbacks and finalizers run only
 /// after all internal borrows have been released.
 pub fn shutdown_current_env() {
-    let env_pointer = current_env();
+    // A worker that never loaded an addon has no environment to shut down.
+    // Do not create one during retirement.
+    let env_pointer = NODE_API_ENV.with(|cell| {
+        cell.borrow_mut()
+            .as_deref_mut()
+            .map(|env| env as *mut Env as NapiEnv)
+    });
+    let Some(env_pointer) = env_pointer else {
+        return;
+    };
     let state = with_env_mut(env_pointer, |env| {
         if env.shutting_down {
             return None;
@@ -482,6 +491,7 @@ pub fn shutdown_current_env() {
             super::metadata::enqueue_finalizer(finalizer);
         }
     }
+    crate::buffer::enqueue_all_foreign_finalizers();
     super::metadata::enqueue_all_object_finalizers();
     super::process_pending();
     super::loader::close_loaded_addons(env_pointer);

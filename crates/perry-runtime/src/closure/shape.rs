@@ -32,6 +32,12 @@ pub(crate) const INTRINSIC_SERIAL_FUNCTION: u64 = 1;
 pub(crate) const INTRINSIC_SERIAL_ASYNC_FUNCTION: u64 = 2;
 pub(crate) const INTRINSIC_SERIAL_GENERATOR_FUNCTION: u64 = 3;
 pub(crate) const INTRINSIC_SERIAL_ASYNC_GENERATOR_FUNCTION: u64 = 4;
+/// Not a prototype: the marker `proto_id` of the class-constructor ShapeId
+/// ([`function_class_shape`]). Shapes are canonical per facts, so without a
+/// fact of its own the class shape would BE the FunctionDictionary id. No
+/// object is ever assigned this serial; a class constructor's real
+/// [[Prototype]] lives on the object (dictionary kind: "ask the object").
+pub(crate) const INTRINSIC_SERIAL_CLASS_CONSTRUCTOR_MARKER: u64 = 5;
 
 /// Which intrinsic prototype a function BODY's closures inherit from.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -53,14 +59,14 @@ impl FunctionProtoKind {
         }
     }
 
-    /// The body kind recorded for `func_ptr` — the same registries
+    /// The body kind `info` records — the same bits
     /// `generator_function_proto_of` answers [[GetPrototypeOf]] from.
-    pub(crate) fn of_body(func_ptr: *const u8) -> FunctionProtoKind {
-        if super::is_registered_async_generator_function(func_ptr) {
+    pub(crate) fn of_body(info: &super::JsFunctionInfo) -> FunctionProtoKind {
+        if info.flags & super::FN_ASYNC_GENERATOR != 0 {
             FunctionProtoKind::AsyncGenerator
-        } else if super::is_registered_generator_function(func_ptr) {
+        } else if info.flags & super::FN_GENERATOR != 0 {
             FunctionProtoKind::Generator
-        } else if super::is_registered_async_function(func_ptr) {
+        } else if info.flags & super::FN_ASYNC != 0 {
             FunctionProtoKind::AsyncFunction
         } else {
             FunctionProtoKind::Function
@@ -96,8 +102,9 @@ crate::perry_thread_local! {
     /// This agent's base Function ShapeIds, indexed by `FunctionProtoKind`,
     /// then the FunctionDictionary id (0 = not minted yet).
     static BASE_SHAPES: std::cell::Cell<[u32; 5]> = const { std::cell::Cell::new([0; 5]) };
-    /// One-entry body cache: the last `func_ptr` born and its base shape.
-    static LAST_BODY: std::cell::Cell<(usize, u32)> = const { std::cell::Cell::new((0, 0)) };
+    /// This agent's class-constructor ShapeId (0 = not minted yet). Its own
+    /// cell: the base-shape array is copied on every closure birth.
+    static CLASS_SHAPE: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
 /// The attribute summary a Function shape publishes. Its keys are not in a
@@ -178,27 +185,50 @@ pub(crate) fn function_dictionary_shape() -> u32 {
     )
 }
 
-/// The ShapeId a fresh closure of `func_ptr` is born with.
+/// The ShapeId of every class function object (`object::class_value`): its
+/// kind is a shape fact. Dictionary-kind ("ask the object": statics, the
+/// recorded [[Prototype]], accessors live on the object) and STICKY — no
+/// own-property transition moves a class function object off it, so a site
+/// that compares ShapeIds tells a class constructor from any other function
+/// with that one compare.
 #[inline]
-pub(crate) fn birth_shape_for_body(func_ptr: *const u8) -> u32 {
-    let (last, id) = LAST_BODY.with(std::cell::Cell::get);
-    if last == func_ptr as usize && id != 0 {
-        return id;
+pub(crate) fn function_class_shape() -> u32 {
+    let mut id = CLASS_SHAPE.with(std::cell::Cell::get);
+    if id == 0 {
+        id = mint(
+            ShapeObjectKind::FunctionDictionary,
+            INTRINSIC_SERIAL_CLASS_CONSTRUCTOR_MARKER,
+        );
+        CLASS_SHAPE.with(|c| c.set(id));
     }
-    let id = function_base_shape(FunctionProtoKind::of_body(func_ptr));
-    LAST_BODY.with(|c| c.set((func_ptr as usize, id)));
+    debug_assert_ne!(
+        id,
+        function_dictionary_shape(),
+        "the class shape is its own id"
+    );
     id
 }
 
-/// A body was (re)classified as async/generator: forget the one-entry cache
-/// so the next birth re-reads the registries.
+/// Is `info` the class function object info — i.e. is a closure carrying it a
+/// class function object? Equivalent to its ShapeId being
+/// [`function_class_shape`] (both are set at mint and never change); used on
+/// hot paths where the shape id would need a thread-local read.
+#[inline(always)]
+pub(crate) fn is_class_info(info: *const super::JsFunctionInfo) -> bool {
+    std::ptr::eq(info, &crate::object::class_value::CLASS_CONSTRUCTOR_INFO)
+}
+
+/// The ShapeId a fresh closure of the body `info` describes is born with.
 #[inline]
-pub(crate) fn forget_body_classification(func_ptr: *const u8) {
-    LAST_BODY.with(|c| {
-        if c.get().0 == func_ptr as usize {
-            c.set((0, 0));
-        }
-    });
+pub(crate) fn birth_shape_for_body(info: *const super::JsFunctionInfo) -> u32 {
+    // SAFETY: a non-null info is a static one (the allocation entries' contract).
+    let kind = match unsafe { info.as_ref() } {
+        Some(info) => FunctionProtoKind::of_body(info),
+        // A function object with no body: every call through it is refused
+        // (`get_valid_info` answers null), and it has the plain Function shape.
+        None => FunctionProtoKind::Function,
+    };
+    function_base_shape(kind)
 }
 
 /// Is `closure` on a DESCRIBED Function shape (base or keyed, any body
@@ -214,10 +244,14 @@ pub(crate) unsafe fn closure_on_base_shape(closure: *const ClosureHeader) -> boo
     let id = (*closure).shape_id;
     debug_assert!(
         id == function_dictionary_shape()
+            || id == function_class_shape()
             || shapes::shape_object_kind_by_id(id) == Some(ShapeObjectKind::Function),
-        "a closure carries a Function or the FunctionDictionary shape: {id:#x}"
+        "a closure carries a Function, FunctionDictionary or class shape: {id:#x}"
     );
-    id != function_dictionary_shape()
+    // The class shape is sticky and implies the class info,
+    // so the info-pointer compare (a link-time constant, no thread-local
+    // read) excludes it for free on this hot path.
+    id != function_dictionary_shape() && !is_class_info((*closure).info)
 }
 
 /// Record that `closure` now answers something its base shape does not:
@@ -230,7 +264,9 @@ pub(crate) unsafe fn closure_on_base_shape(closure: *const ClosureHeader) -> boo
 #[inline]
 pub(crate) unsafe fn closure_become_dictionary(closure: *mut ClosureHeader) {
     let dict = function_dictionary_shape();
-    if (*closure).shape_id != dict {
+    let id = (*closure).shape_id;
+    // A class function object keeps its (sticky, dictionary-kind) class shape.
+    if id != dict && !is_class_info((*closure).info) {
         // GC_STORE_AUDIT(POINTER_FREE): a ShapeId, never a heap reference.
         (*closure).shape_id = dict;
     }
@@ -252,21 +288,21 @@ pub(crate) fn refresh_closure_shape(ptr: usize) {
     unsafe {
         let closure = ptr as *mut ClosureHeader;
         let dict = function_dictionary_shape();
-        if (*closure).shape_id == dict {
+        if (*closure).shape_id == dict || is_class_info((*closure).info) {
             return;
         }
         if super::props::has_state(ptr) {
             closure_become_dictionary(closure);
             return;
         }
-        let base = birth_shape_for_body((*closure).func_ptr);
+        let base = birth_shape_for_body((*closure).info);
         let bag = super::props::bag_of(ptr);
         let next = if bag.is_null() {
             base
         } else {
             match shapes::object_shape_descriptor(bag) {
                 Some(d)
-                    if d.object_kind == ShapeObjectKind::Ordinary
+                    if d.object_kind.is_ordinary_layout()
                         && d.hole_count == 0
                         && d.semantic_generation == 0 =>
                 {
@@ -310,7 +346,8 @@ pub(crate) fn function_shape_inherits_from_function_prototype(id: u32, key: &[u8
     if id == function_dictionary_shape() {
         return false;
     }
-    // A keyed shape: its verdict for the three Function.prototype intrinsics
+    // A keyed shape (the class shape is dictionary-kind: the verdict below
+    // answers false for it without a compare of its own): its verdict for the three Function.prototype intrinsics
     // is a fact of the (immutable) ShapeId, cached per agent.
     let bit = match key {
         b"bind" => VERDICT_BIND,
@@ -319,7 +356,9 @@ pub(crate) fn function_shape_inherits_from_function_prototype(id: u32, key: &[u8
         _ => return keyed_shape_lacks_key(id, key),
     };
     let slot = (id as usize).wrapping_mul(0x9E37_79B9) >> 26 & (VERDICT_CACHE_LEN - 1);
-    let cached = VERDICT_CACHE.with(|c| c.get()[slot]);
+    // Index in place: `Cell::get` would copy the whole 64-entry array.
+    // SAFETY: this agent's own cell; no reference to it outlives the read.
+    let cached = VERDICT_CACHE.with(|c| unsafe { (*c.as_ptr())[slot] });
     let mask = if cached.0 == id {
         cached.1
     } else {
@@ -339,11 +378,8 @@ pub(crate) fn function_shape_inherits_from_function_prototype(id: u32, key: &[u8
             } else {
                 0
             };
-        VERDICT_CACHE.with(|c| {
-            let mut all = c.get();
-            all[slot] = (id, mask);
-            c.set(all);
-        });
+        // SAFETY: as above; a single-entry store in place.
+        VERDICT_CACHE.with(|c| unsafe { (*c.as_ptr())[slot] = (id, mask) });
         mask
     };
     mask & bit != 0
@@ -422,10 +458,10 @@ mod tests {
         closure_set_dynamic_prop, closure_set_static_prototype, js_closure_alloc,
     };
 
-    extern "C" fn plain_body(_c: *const ClosureHeader) -> f64 {
+    extern "C" fn plain_body(_c: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
         1.0
     }
-    extern "C" fn async_body(_c: *const ClosureHeader) -> f64 {
+    extern "C" fn async_body(_c: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
         2.0
     }
 
@@ -433,15 +469,23 @@ mod tests {
         shapes::shape_object_kind_by_id(unsafe { (*c).shape_id })
     }
 
-    fn fresh(body: extern "C" fn(*const ClosureHeader) -> f64) -> *mut ClosureHeader {
-        js_closure_alloc(body as *const u8, 0)
+    static PLAIN_BODY: crate::closure::JsFunctionInfo = crate::closure::JsFunctionInfo::of(
+        plain_body as crate::codegen_abi::JsBody0<ClosureHeader>,
+    );
+    static ASYNC_BODY: crate::closure::JsFunctionInfo = crate::closure::JsFunctionInfo::of(
+        async_body as crate::codegen_abi::JsBody0<ClosureHeader>,
+    )
+    .with_flags(crate::closure::FN_ASYNC);
+
+    fn fresh(info: &'static crate::closure::JsFunctionInfo) -> *mut ClosureHeader {
+        js_closure_alloc(info, 0)
     }
 
     #[test]
     fn a_closure_is_born_with_the_base_function_shape_at_plus_four() {
         let _lock = crate::gc::global_side_table_test_lock();
         let _t = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-        let c = fresh(plain_body);
+        let c = fresh(&PLAIN_BODY);
         let word =
             unsafe { *((c as *const u8).add(super::super::CLOSURE_SHAPE_OFFSET) as *const u32) };
         assert!(shapes::is_exotic_shape_id(word), "{word:#x}");
@@ -462,15 +506,15 @@ mod tests {
     fn an_async_body_is_born_with_the_async_function_prototype() {
         let _lock = crate::gc::global_side_table_test_lock();
         let _t = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-        crate::closure::js_register_closure_async_function(async_body as *const u8);
-        let c = fresh(async_body);
+
+        let c = fresh(&ASYNC_BODY);
         let id = unsafe { (*c).shape_id };
         assert_eq!(kind_of(c), Some(ShapeObjectKind::Function));
         assert_eq!(
             shapes::shape_proto_id(id),
             Some(INTRINSIC_SERIAL_ASYNC_FUNCTION)
         );
-        assert_ne!(id, unsafe { (*fresh(plain_body)).shape_id });
+        assert_ne!(id, unsafe { (*fresh(&PLAIN_BODY)).shape_id });
     }
 
     /// An own string key moves a function to a KEYED Function shape: the
@@ -480,8 +524,8 @@ mod tests {
     fn own_keys_give_a_canonical_keyed_function_shape() {
         let _lock = crate::gc::global_side_table_test_lock();
         let _t = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-        let a = fresh(plain_body);
-        let b = fresh(plain_body);
+        let a = fresh(&PLAIN_BODY);
+        let b = fresh(&PLAIN_BODY);
         let base = unsafe { (*a).shape_id };
         for c in [a, b] {
             closure_set_dynamic_prop(c as usize, "tag", 7.0);
@@ -515,7 +559,7 @@ mod tests {
     fn a_recorded_prototype_a_delete_and_an_accessor_each_leave_the_base_shape() {
         let _lock = crate::gc::global_side_table_test_lock();
         let _t = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-        let a = fresh(plain_body);
+        let a = fresh(&PLAIN_BODY);
         let proto = crate::object::js_object_alloc(0, 0);
         closure_set_static_prototype(
             a as usize,
@@ -523,11 +567,11 @@ mod tests {
         );
         assert_eq!(kind_of(a), Some(ShapeObjectKind::FunctionDictionary));
 
-        let b = fresh(plain_body);
+        let b = fresh(&PLAIN_BODY);
         crate::closure::closure_mark_key_deleted(b as usize, "length");
         assert_eq!(kind_of(b), Some(ShapeObjectKind::FunctionDictionary));
 
-        let c = fresh(plain_body);
+        let c = fresh(&PLAIN_BODY);
         crate::object::descriptor_state::set_accessor_descriptor(
             c as usize,
             "x".to_string(),
@@ -540,7 +584,7 @@ mod tests {
     fn a_symbol_keyed_own_property_leaves_the_base_shape() {
         let _lock = crate::gc::global_side_table_test_lock();
         let _t = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-        let c = fresh(plain_body);
+        let c = fresh(&PLAIN_BODY);
         let sym =
             unsafe { crate::symbol::js_symbol_new(f64::from_bits(crate::value::TAG_UNDEFINED)) };
         crate::symbol::store_object_symbol_property_root(
@@ -568,10 +612,16 @@ mod tests {
             assert!(!closure_kind_probe(obj as usize));
             (*obj).parent_class_id = saved;
         }
-        assert!(crate::closure::is_closure_ptr(fresh(plain_body) as usize));
+        assert!(crate::closure::is_closure_ptr(fresh(&PLAIN_BODY) as usize));
     }
 
-    extern "C" fn three_arg_body(_c: *const ClosureHeader, a: f64, b: f64, c: f64) -> f64 {
+    extern "C" fn three_arg_body(
+        _c: *const ClosureHeader,
+        _this: crate::closure::JsThis,
+        a: f64,
+        b: f64,
+        c: f64,
+    ) -> f64 {
         a + b + c
     }
 
@@ -583,8 +633,8 @@ mod tests {
     fn a_bind_result_keeps_its_length_in_a_capture() {
         let _lock = crate::gc::global_side_table_test_lock();
         let _t = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-        crate::closure::js_register_closure_arity(three_arg_body as *const u8, 3);
-        let target = js_closure_alloc(three_arg_body as *const u8, 0);
+
+        let target = js_closure_alloc(crate::fn_info!(three_arg_body, 3; with_declared(3)), 0);
         let args = [f64::from_bits(crate::value::TAG_UNDEFINED), 1.0];
         let bound = unsafe {
             crate::closure::js_function_bind(
@@ -605,7 +655,12 @@ mod tests {
             "target, this, partial args, name snapshot, bound length"
         );
         // The bound call still sees target + partial args + call args.
-        let r = crate::closure::js_closure_call2(b as *const ClosureHeader, 2.0, 3.0);
+        let r = crate::closure::js_closure_call2(
+            b as *const ClosureHeader,
+            crate::closure::plain_call_receiver(),
+            2.0,
+            3.0,
+        );
         assert_eq!(r, 6.0);
     }
 
@@ -618,7 +673,7 @@ mod tests {
         let _t = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
         let acc = crate::object::descriptor_state::AccessorDescriptor { get: 0, set: 0 };
         let attrs = crate::object::PropertyAttrs::new(false, false, true);
-        let a = fresh(plain_body);
+        let a = fresh(&PLAIN_BODY);
         crate::object::descriptor_state::install_fresh_accessor_property(
             a as usize,
             "length".into(),
@@ -626,7 +681,7 @@ mod tests {
             attrs,
         );
         assert_eq!(kind_of(a), Some(ShapeObjectKind::FunctionDictionary));
-        let b = fresh(plain_body);
+        let b = fresh(&PLAIN_BODY);
         crate::object::descriptor_state::set_builtin_accessor_descriptor(
             b as usize,
             "name".into(),

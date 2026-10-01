@@ -9,7 +9,7 @@ use perry_ffi::{
     GcRootVisitor, JsClosure, JsValue, RawClosureHeader, StringHeader, TransientRootScope,
 };
 
-use crate::server::request::{handle_to_pointer_f64, with_implicit_this, IncomingMessage};
+use crate::server::request::{handle_to_pointer_f64, IncomingMessage};
 use crate::server::response::ServerResponse;
 use crate::server::server::{
     finalize_or_park_request, synthesize_default_response_if_needed, HttpPendingRequest, HttpServer,
@@ -382,7 +382,7 @@ fn invoke_fetch(server_handle: i64, request: f64) -> ClosureCallResult {
     }
     let closure = unsafe { JsClosure::from_raw(handler.get() as *const RawClosureHeader) };
     let server = handle_to_pointer_f64(server_handle);
-    unsafe { call_catching(|| with_implicit_this(server, || closure.call2(request, server))) }
+    unsafe { call_catching(|| closure.call2(perry_ffi::JsThis::from_f64(server), request, server)) }
 }
 
 fn invoke_error(server_handle: i64, reason: f64) -> Option<ClosureCallResult> {
@@ -394,7 +394,9 @@ fn invoke_error(server_handle: i64, reason: f64) -> Option<ClosureCallResult> {
     }
     let closure = unsafe { JsClosure::from_raw(handler.get() as *const RawClosureHeader) };
     let server = handle_to_pointer_f64(server_handle);
-    Some(unsafe { call_catching(|| with_implicit_this(server, || closure.call1(reason.get()))) })
+    Some(unsafe {
+        call_catching(|| closure.call1(perry_ffi::JsThis::from_f64(server), reason.get()))
+    })
 }
 
 fn apply_response(response_handle: i64, value: f64) -> bool {

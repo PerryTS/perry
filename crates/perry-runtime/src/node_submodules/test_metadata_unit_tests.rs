@@ -1,12 +1,17 @@
 use super::*;
 
-extern "C" fn original_two_args(_closure: *const ClosureHeader, _first: f64, _second: f64) -> f64 {
+extern "C" fn original_two_args(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    _first: f64,
+    _second: f64,
+) -> f64 {
     undefined_value()
 }
 
 #[test]
 fn mock_function_preserves_original_name_length_and_descriptors() {
-    let original = make_closure(original_two_args as *const u8, 2, 0);
+    let original = make_closure(crate::fn_info!(original_two_args, 2), 2, 0);
     crate::object::set_bound_native_closure_name(original, "original");
     let original = boxed_ptr(original);
 

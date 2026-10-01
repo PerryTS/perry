@@ -1,7 +1,6 @@
-// #10856 — textSetColor must color a Text() label. install_label_cell used to
-// restore the text with setAttributedStringValue:, baking the default
-// labelColor into the field; an NSTextField holding an attributed string
-// ignores setTextColor:, so the color was silently overridden. This drives the
+// #10856 — textSetColor must color a Text() label. An NSTextField holding an
+// attributed string ignores setTextColor:, because the string's own color
+// attribute wins, so the label must hold a plain string. This drives the
 // real create + set_color path (the same entry points textSetColor lowers to)
 // and asserts the label's rendered foreground color is the requested red.
 //

@@ -389,7 +389,7 @@ pub fn try_lower_closure_typed_local_call(
         // enters it.
         if matches!(ctx.local_type_hint(id), Some(HirType::Function(_)))
             || ctx
-                .resolved_arrow_callback_targets
+                .resolved_plain_callback_targets
                 .contains_key(&(*id, args.len()))
         {
             // #7803: the callee outlives the arguments here too, and this is
@@ -424,11 +424,10 @@ pub fn try_lower_closure_typed_local_call(
                 lowered_args.push(lower_expr(ctx, a)?);
             }
 
-            // Issue #493: rest-bundling is now handled inside js_closure_callN
-            // via the runtime closure-rest registry — see
-            // `js_register_closure_rest` (registered for every closure body
-            // with `...rest` at module init) and `dispatch_rest_bundled` in
-            // `crates/perry-runtime/src/closure.rs`. Bundling at the static
+            // Issue #493: rest-bundling is handled inside js_closure_callN from
+            // the body's `JsFunctionInfo` (every body with `...rest` records
+            // it, `crate::fn_info`) — see `dispatch_rest_bundled` in
+            // `crates/perry-runtime/src/closure/registry.rs`. Bundling at the static
             // call site here would double-wrap (the runtime would re-bundle
             // the already-bundled array into `[[a,b,c]]`), so the call site
             // now passes the raw args through and lets the runtime
@@ -448,13 +447,10 @@ pub fn try_lower_closure_typed_local_call(
                 let blk = ctx.block();
                 unbox_to_i64(blk, &recv_box)
             };
-            let undef_this =
-                crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             // A method callback parameter can be resolved once at entry when
-            // its actual value is a directly callable arrow. Keep the full
-            // dispatcher as a nullable-target fallback: TypeScript's function
-            // annotation is not a runtime proof, and ordinary functions must
-            // still receive receiverless `this === undefined` semantics.
+            // its actual value is directly callable. Keep the full dispatcher
+            // as a nullable-target fallback: TypeScript's function annotation
+            // is not a runtime proof.
             //
             // Exact immutable aliases (`const cb = callback`) have the same
             // identity whenever their read succeeds. A TDZ read throws while
@@ -473,57 +469,60 @@ pub fn try_lower_closure_typed_local_call(
                 if callback_local_id == *id && callback_arity == lowered_args.len() {
                     let context_bits = ctx.block().ptrtoint(&context, I64);
                     let context_box = ctx.block().bitcast_i64_to_double(&context_bits);
-                    let mut direct_args: Vec<(crate::types::LlvmType, &str)> =
-                        Vec::with_capacity(lowered_args.len() + 1);
-                    direct_args.push((I64, &closure_handle));
-                    direct_args.extend(lowered_args.iter().enumerate().map(|(index, value)| {
-                        if index == 0 {
-                            (DOUBLE, context_box.as_str())
-                        } else {
-                            (DOUBLE, value.as_str())
-                        }
-                    }));
+                    // The versioned-loop clone repurposes JS argument 0 for
+                    // the caller's deopt context (see `codegen/closure.rs`).
+                    let mut direct_args: Vec<String> = lowered_args.to_vec();
+                    direct_args[0] = context_box;
                     // The exact clone marks the caller's counter for an
                     // immediate side exit before any cold arm that can run
                     // user code or collect. Hot returns cannot collect; cold
                     // returns never observe caller-side cached heap handles.
-                    let value = ctx
-                        .block()
-                        .call_indirect_gc_leaf(DOUBLE, &target, &direct_args);
+                    // An arrow (the versioned-loop clone admits only arrows):
+                    // lexical `this`, so the receiver parameter is unread.
+                    let value = crate::expr::body_call::emit_js_body_call_gc_leaf(
+                        ctx.block(),
+                        &target,
+                        &closure_handle,
+                        crate::expr::body_call::JS_THIS_UNDEFINED,
+                        &direct_args,
+                    );
                     callee_group.release(ctx);
                     return Ok(Some(value));
                 }
             }
             if let Some(target) = ctx
-                .resolved_arrow_callback_targets
+                .resolved_plain_callback_targets
                 .get(&(*id, lowered_args.len()))
                 .cloned()
             {
                 let fast_ok = ctx.block().icmp_ne(PTR, &target, "null");
-                let fast_idx = ctx.new_block("callback_arrow_direct.fast");
-                let fallback_idx = ctx.new_block("callback_arrow_direct.fallback");
-                let merge_idx = ctx.new_block("callback_arrow_direct.merge");
+                let fast_idx = ctx.new_block("callback_plain_direct.fast");
+                let fallback_idx = ctx.new_block("callback_plain_direct.fallback");
+                let merge_idx = ctx.new_block("callback_plain_direct.merge");
                 let fast_label = ctx.block_label(fast_idx);
                 let fallback_label = ctx.block_label(fallback_idx);
                 let merge_label = ctx.block_label(merge_idx);
                 ctx.block().cond_br(&fast_ok, &fast_label, &fallback_label);
 
                 ctx.current_block = fast_idx;
-                let mut direct_args: Vec<(crate::types::LlvmType, &str)> =
-                    Vec::with_capacity(lowered_args.len() + 1);
-                direct_args.push((I64, &closure_handle));
-                direct_args.extend(lowered_args.iter().map(|value| (DOUBLE, value.as_str())));
-                let fast_value = ctx.block().call_indirect(DOUBLE, &target, &direct_args);
+                // A plain call: the receiver is `undefined`, as
+                // `js_closure_callN` would pass it.
+                let fast_value = crate::expr::body_call::emit_js_body_call(
+                    ctx.block(),
+                    crate::expr::body_call::JsBody::Pointer(&target),
+                    &closure_handle,
+                    crate::expr::body_call::JS_THIS_UNDEFINED,
+                    &lowered_args,
+                );
                 let after_fast = ctx.block().label.clone();
                 if !ctx.block().is_terminated() {
                     ctx.block().br(&merge_label);
                 }
 
                 ctx.current_block = fallback_idx;
-                let prev_this = crate::rooting::implicit_this_save(ctx, &undef_this);
+                // A plain call: the body receives `undefined`.
                 let fallback_value =
                     super::emit_closure_handle_call(ctx, &closure_handle, &lowered_args);
-                crate::rooting::implicit_this_restore(ctx, prev_this);
                 let after_fallback = ctx.block().label.clone();
                 if !ctx.block().is_terminated() {
                     ctx.block().br(&merge_label);
@@ -540,19 +539,10 @@ pub fn try_lower_closure_typed_local_call(
                 callee_group.release(ctx);
                 return Ok(Some(merged));
             }
-            // Receiverless call of a closure-typed local: bind `this` to
-            // undefined for the duration of the call (OrdinaryCallBindThis,
-            // #3576) so an enclosing method dispatch's IMPLICIT_THIS does
-            // not leak into the callee body. Like the FuncRef path, the
-            // reset is gated on the statically-known callee actually reading
-            // dynamic `this`, so a hot-loop call of a plain helper closure
-            // pays nothing (#5030). When the typed-feedback guard falls back
-            // (the receiver is NOT the statically-mapped closure), the
-            // fallback block does its own reset — that callee is unknown.
+            // Receiverless call of a closure-typed local: a plain call, the
+            // body receives `undefined` as `this` (OrdinaryCallBindThis,
+            // #3576) — no enclosing receiver can leak into it.
             let known_func_id = ctx.local_closure_func_ids.get(id).copied();
-            let callee_reads_this = known_func_id
-                .map(|fid| ctx.funcs_reading_dynamic_this.contains(&fid))
-                .unwrap_or(true);
             if let Some(func_id) = known_func_id {
                 let declared_count = ctx
                     .local_closure_param_counts
@@ -569,16 +559,6 @@ pub fn try_lower_closure_typed_local_call(
                         &format!("closure:{}", func_id),
                         TypedFeedbackContract::closure_direct_call(),
                     );
-                    // #7211: rooted save/restore. The displaced value is the
-                    // enclosing method's receiver and it is live across the
-                    // callee body; the restore below sits in the merge block,
-                    // so the slot index crosses the diamond exactly as the
-                    // bare register used to.
-                    let prev_this = if callee_reads_this {
-                        Some(crate::rooting::implicit_this_save(ctx, &undef_this))
-                    } else {
-                        None
-                    };
                     let expected_arity = declared_count.to_string();
                     let call_arity = lowered_args.len().to_string();
                     let fast_idx = ctx.new_block("closure_direct.fast");
@@ -600,14 +580,15 @@ pub fn try_lower_closure_typed_local_call(
                     // dynamic question is "is the value still the closure
                     // whose body is `@closure_fn`", and two compare-only loads
                     // answer it: the GcHeader's (type, flags) halfword is exactly
-                    // (CLOSURE, not FORWARDED) and `func_ptr == @closure_fn`. A
+                    // (CLOSURE, not FORWARDED) and its info word is
+                    // `@closure_fn$info` (`crate::fn_info`). A
                     // forwarded (moved) closure fails the header compare and
                     // takes the guard, which resolves forwarding as it always
                     // did. A non-closure heap cell fails the header compare —
                     // the kind is the GC type byte, not payload bytes; the
                     // runtime's volatile-ordering
                     // ceremony guards a transmute-and-call of an ARBITRARY
-                    // func_ptr, which this compare-only probe never does.
+                    // code pointer, which this compare-only probe never does.
                     // #7170 R1 single-binding fact: identity holds with
                     // FuncRef strength, so the runtime guard AND the probe
                     // are both unnecessary — the value cannot be anything but
@@ -637,10 +618,9 @@ pub fn try_lower_closure_typed_local_call(
                         }
                         ctx.current_block = probe_idx;
                         {
-                            let fp_offset = crate::target_layout::closure_func_ptr_offset_bytes(
-                                ctx.target_triple,
-                            )
-                            .to_string();
+                            let info_offset =
+                                crate::target_layout::closure_info_offset_bytes(ctx.target_triple)
+                                    .to_string();
                             let blk = ctx.block();
                             let bits = blk.bitcast_double_to_i64(&recv_box);
                             let handle = blk.and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
@@ -662,24 +642,27 @@ pub fn try_lower_closure_typed_local_call(
                                 &masked,
                                 &crate::runtime_abi::GC_TYPE_CLOSURE.to_string(),
                             );
-                            let fp_addr = blk.add(I64, &handle, &fp_offset);
-                            let fp_ptr = blk.inttoptr(I64, &fp_addr);
-                            let fp = blk.load(I64, &fp_ptr);
-                            let expected_fp = blk.ptrtoint(&format!("@{}", closure_fn), I64);
-                            let fp_ok = blk.icmp_eq(I64, &fp, &expected_fp);
-                            let hit = blk.and(I1, &kind_ok, &fp_ok);
+                            let info_addr = blk.add(I64, &handle, &info_offset);
+                            let info_ptr = blk.inttoptr(I64, &info_addr);
+                            let info = blk.load(I64, &info_ptr);
+                            let expected_info = blk.fn_info_ref(&closure_fn);
+                            let expected_info = blk.ptrtoint(&expected_info, I64);
+                            let info_ok = blk.icmp_eq(I64, &info, &expected_info);
+                            let hit = blk.and(I1, &kind_ok, &info_ok);
                             blk.cond_br(&hit, &fast_label, &guard_call_label);
                         }
                         ctx.current_block = guard_call_idx;
                     }
                     if !guard_free {
+                        // The guard compares the value's info with the body's.
+                        let expected_info = ctx.block().fn_info_ref(&closure_fn);
                         let guard_ok = ctx.block().call(
                             I32,
                             "js_typed_feedback_closure_direct_call_guard",
                             &[
                                 (I64, &site_id),
                                 (DOUBLE, &recv_box),
-                                (crate::types::PTR, &format!("@{}", closure_fn)),
+                                (crate::types::PTR, &expected_info),
                                 (I32, &expected_arity),
                                 (I32, &call_arity),
                             ],
@@ -690,6 +673,8 @@ pub fn try_lower_closure_typed_local_call(
                     }
 
                     ctx.current_block = fast_idx;
+                    // A plain call: the body receives `undefined`.
+                    let direct_this_bits = crate::expr::body_call::JS_THIS_UNDEFINED;
                     let typed_f64_param_reps = if ctx.typed_f64_closures.contains(&func_id) {
                         ctx.typed_i1_closure_param_reps
                             .get(&func_id)
@@ -800,13 +785,13 @@ pub fn try_lower_closure_typed_local_call(
                         }
 
                         ctx.current_block = generic_idx;
-                        let mut generic_args: Vec<(crate::types::LlvmType, &str)> =
-                            vec![(I64, &closure_handle)];
-                        for v in &lowered_args {
-                            generic_args.push((DOUBLE, v.as_str()));
-                        }
-                        let generic_value =
-                            ctx.block().call(DOUBLE, &generic_closure_fn, &generic_args);
+                        let generic_value = crate::expr::body_call::emit_js_body_call(
+                            ctx.block(),
+                            crate::expr::body_call::JsBody::Symbol(&generic_closure_fn),
+                            &closure_handle,
+                            direct_this_bits,
+                            &lowered_args,
+                        );
                         let after_generic = ctx.block().label.clone();
                         if !ctx.block().is_terminated() {
                             ctx.block().br(&typed_merge_label);
@@ -901,13 +886,13 @@ pub fn try_lower_closure_typed_local_call(
                         }
 
                         ctx.current_block = generic_idx;
-                        let mut generic_args: Vec<(crate::types::LlvmType, &str)> =
-                            vec![(I64, &closure_handle)];
-                        for v in &lowered_args {
-                            generic_args.push((DOUBLE, v.as_str()));
-                        }
-                        let generic_value =
-                            ctx.block().call(DOUBLE, &generic_closure_fn, &generic_args);
+                        let generic_value = crate::expr::body_call::emit_js_body_call(
+                            ctx.block(),
+                            crate::expr::body_call::JsBody::Symbol(&generic_closure_fn),
+                            &closure_handle,
+                            direct_this_bits,
+                            &lowered_args,
+                        );
                         let after_generic = ctx.block().label.clone();
                         if !ctx.block().is_terminated() {
                             ctx.block().br(&typed_merge_label);
@@ -1005,13 +990,13 @@ pub fn try_lower_closure_typed_local_call(
                         }
 
                         ctx.current_block = generic_idx;
-                        let mut generic_args: Vec<(crate::types::LlvmType, &str)> =
-                            vec![(I64, &closure_handle)];
-                        for v in &lowered_args {
-                            generic_args.push((DOUBLE, v.as_str()));
-                        }
-                        let generic_value =
-                            ctx.block().call(DOUBLE, &generic_closure_fn, &generic_args);
+                        let generic_value = crate::expr::body_call::emit_js_body_call(
+                            ctx.block(),
+                            crate::expr::body_call::JsBody::Symbol(&generic_closure_fn),
+                            &closure_handle,
+                            direct_this_bits,
+                            &lowered_args,
+                        );
                         let after_generic = ctx.block().label.clone();
                         if !ctx.block().is_terminated() {
                             ctx.block().br(&typed_merge_label);
@@ -1112,13 +1097,13 @@ pub fn try_lower_closure_typed_local_call(
                         }
 
                         ctx.current_block = generic_idx;
-                        let mut generic_args: Vec<(crate::types::LlvmType, &str)> =
-                            vec![(I64, &closure_handle)];
-                        for v in &lowered_args {
-                            generic_args.push((DOUBLE, v.as_str()));
-                        }
-                        let generic_value =
-                            ctx.block().call(DOUBLE, &generic_closure_fn, &generic_args);
+                        let generic_value = crate::expr::body_call::emit_js_body_call(
+                            ctx.block(),
+                            crate::expr::body_call::JsBody::Symbol(&generic_closure_fn),
+                            &closure_handle,
+                            direct_this_bits,
+                            &lowered_args,
+                        );
                         let after_generic = ctx.block().label.clone();
                         if !ctx.block().is_terminated() {
                             ctx.block().br(&typed_merge_label);
@@ -1152,12 +1137,13 @@ pub fn try_lower_closure_typed_local_call(
                         );
                         result
                     } else {
-                        let mut direct_args: Vec<(crate::types::LlvmType, &str)> =
-                            vec![(I64, &closure_handle)];
-                        for v in &lowered_args {
-                            direct_args.push((DOUBLE, v.as_str()));
-                        }
-                        ctx.block().call(DOUBLE, &closure_fn, &direct_args)
+                        crate::expr::body_call::emit_js_body_call(
+                            ctx.block(),
+                            crate::expr::body_call::JsBody::Symbol(&closure_fn),
+                            &closure_handle,
+                            direct_this_bits,
+                            &lowered_args,
+                        )
                     };
                     let after_fast = ctx.block().label.clone();
                     if !ctx.block().is_terminated() {
@@ -1170,22 +1156,9 @@ pub fn try_lower_closure_typed_local_call(
                         "js_typed_feedback_record_fallback_call",
                         &[(I64, &site_id)],
                     );
-                    // Guard failed: the receiver is some OTHER closure whose
-                    // body codegen never saw — reset `this` here (and only
-                    // here) when the static gating skipped the outer reset.
-                    let fallback_prev_this = if prev_this.is_none() {
-                        Some(crate::rooting::implicit_this_save(ctx, &undef_this))
-                    } else {
-                        None
-                    };
+                    // Guard failed: some OTHER closure, a plain call.
                     let fallback_value =
                         super::emit_closure_handle_call(ctx, &closure_handle, &lowered_args);
-                    // Inner save, released inside its own arm — so the outer
-                    // slot (restored in the merge block) is still live and the
-                    // temp-root depth matches on both paths into the merge.
-                    if let Some(prev) = fallback_prev_this {
-                        crate::rooting::implicit_this_restore(ctx, prev);
-                    }
                     let after_fallback = ctx.block().label.clone();
                     if !ctx.block().is_terminated() {
                         ctx.block().br(&merge_label);
@@ -1199,9 +1172,6 @@ pub fn try_lower_closure_typed_local_call(
                             (fallback_value.as_str(), after_fallback.as_str()),
                         ],
                     );
-                    if let Some(prev) = prev_this {
-                        crate::rooting::implicit_this_restore(ctx, prev);
-                    }
                     // Below both arms' calls, in the merge that post-dominates
                     // them — which is why this group is `open_rooted_group`.
                     callee_group.release(ctx);
@@ -1209,12 +1179,9 @@ pub fn try_lower_closure_typed_local_call(
                 }
             }
             // Generic js_closure_callN dispatch (unknown func id, rest
-            // params, or arity mismatch): the runtime-resolved callee may
-            // read `this`, so the reset is unconditional here.
-            // #7211: rooted save/restore across the runtime-resolved callee.
-            let prev_this = crate::rooting::implicit_this_save(ctx, &undef_this);
+            // params, or arity mismatch): a plain call, the body receives
+            // `undefined`.
             let result = super::emit_closure_handle_call(ctx, &closure_handle, &lowered_args);
-            crate::rooting::implicit_this_restore(ctx, prev_this);
             callee_group.release(ctx);
             return Ok(Some(result));
         }

@@ -11,12 +11,38 @@ use swc_ecma_visit::{Visit, VisitWith};
 /// Use the AST: brace scanning misses concise arrows, unbraced branches, and
 /// short-circuit expressions. On a parse failure retain the existing scanner's
 /// function-local classification (some CJS sources need wrapping to parse).
-pub(super) fn deferred_require_specs(source: &str) -> HashSet<String> {
+#[cfg(test)]
+fn deferred_require_specs(source: &str) -> HashSet<String> {
+    analyze_require_specs(source, None)
+}
+
+pub(super) fn deferred_require_specs_for_path(
+    source: &str,
+    path: &std::path::Path,
+    diagnose_computed_requires: bool,
+) -> HashSet<String> {
+    analyze_require_specs(source, diagnose_computed_requires.then_some(path))
+}
+
+fn analyze_require_specs(source: &str, path: Option<&std::path::Path>) -> HashSet<String> {
     let Ok(module) = perry_parser::parse_typescript(source, "requires.cjs") else {
         return super::extract_requires::function_local_specs(source);
     };
     let mut visitor = Requires::default();
     module.visit_with(&mut visitor);
+    // Reuse the mandatory dependency walk as a zero-allocation admission
+    // check. Literal-only CJS modules need no alias/scope diagnostic analysis.
+    if let Some(path) = path.filter(|_| visitor.computed_call_candidate) {
+        for offset in super::computed_requires::computed_require_offsets(&module) {
+            let prefix = &source[..offset.min(source.len())];
+            let line = prefix.bytes().filter(|byte| *byte == b'\n').count() + 1;
+            let column = prefix.rsplit('\n').next().unwrap_or("").chars().count() + 1;
+            eprintln!(
+                "warning: {}:{}:{}: computed CommonJS require does not automatically include target files; add static imports for the possible targets and use explicit file extensions in computed requests (#10438)",
+                path.display(), line, column,
+            );
+        }
+    }
     visitor
         .sites
         .into_iter()
@@ -28,6 +54,7 @@ pub(super) fn deferred_require_specs(source: &str) -> HashSet<String> {
 struct Requires {
     deferred: bool,
     sites: HashMap<String, bool>,
+    computed_call_candidate: bool,
 }
 
 impl Requires {
@@ -42,6 +69,12 @@ impl Requires {
 impl Visit for Requires {
     fn visit_call_expr(&mut self, call: &ast::CallExpr) {
         if let ast::Callee::Expr(callee) = &call.callee {
+            if matches!(callee.as_ref(), ast::Expr::Ident(_)) {
+                self.computed_call_candidate |= call.args.first().is_some_and(|arg| {
+                    arg.spread.is_some()
+                        || !matches!(arg.expr.as_ref(), ast::Expr::Lit(ast::Lit::Str(_)))
+                });
+            }
             if matches!(callee.as_ref(), ast::Expr::Ident(name) if name.sym == *"require") {
                 if let [arg] = call.args.as_slice() {
                     if arg.spread.is_none() {
@@ -178,6 +211,25 @@ impl Visit for Requires {
 #[cfg(test)]
 mod tests {
     use super::deferred_require_specs;
+    use swc_ecma_visit::VisitWith;
+
+    #[test]
+    fn literal_only_modules_skip_scoped_diagnostic_analysis() {
+        for (source, expected) in [
+            (
+                "const dep = require('./dep.js'); function f(value) { return value + 1; }",
+                false,
+            ),
+            ("const r = require; r('./' + name);", true),
+            ("require(name);", true),
+            ("require(...names);", true),
+        ] {
+            let module = perry_parser::parse_typescript(source, "admission.cjs").unwrap();
+            let mut visitor = super::Requires::default();
+            module.visit_with(&mut visitor);
+            assert_eq!(visitor.computed_call_candidate, expected, "{source}");
+        }
+    }
 
     #[test]
     fn preserves_conditional_and_function_evaluation_boundaries() {

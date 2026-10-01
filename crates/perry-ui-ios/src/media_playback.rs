@@ -30,8 +30,8 @@ use std::sync::OnceLock;
 
 extern "C" {
     fn js_nanbox_get_pointer(value: f64) -> i64;
-    fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
-    fn js_closure_call2(closure: *const u8, a: f64, b: f64) -> f64;
+    fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
+    fn js_closure_call2(closure: *const u8, this: perry_ffi::JsThis, a: f64, b: f64) -> f64;
     // Signature matches the rest of perry-ui-macos (see audio.rs:133,
     // lib.rs:113/118/1662). Runtime returns `*mut StringHeader` which is
     // i64-sized on Apple platforms.
@@ -935,7 +935,11 @@ fn fire_state_callback(closure_f64: f64, state: MediaState) {
         let s = state.as_str();
         let str_f64 = js_string_new_sso(s.as_ptr(), s.len() as u32);
         let closure_ptr = js_nanbox_get_pointer(closure_f64);
-        let _ = js_closure_call1(closure_ptr as *const u8, str_f64);
+        let _ = js_closure_call1(
+            closure_ptr as *const u8,
+            perry_ffi::JsThis::UNDEFINED,
+            str_f64,
+        );
     }
 }
 
@@ -944,7 +948,12 @@ fn fire_time_callback(closure_f64: f64, current: f64, duration: f64) {
         js_run_stdlib_pump();
         let _ = js_promise_run_microtasks();
         let closure_ptr = js_nanbox_get_pointer(closure_f64);
-        let _ = js_closure_call2(closure_ptr as *const u8, current, duration);
+        let _ = js_closure_call2(
+            closure_ptr as *const u8,
+            perry_ffi::JsThis::UNDEFINED,
+            current,
+            duration,
+        );
     }
 }
 

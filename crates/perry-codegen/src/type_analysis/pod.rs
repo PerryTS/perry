@@ -614,7 +614,7 @@ pub(crate) fn numeric_proof_is_declared_only(ctx: &FnCtx<'_>, expr: &Expr) -> bo
                 // `undefined` seed overwritten on every path before use).
                 // Keep the historical marker for generic/unproven bodies,
                 // but do not let it mask that runtime-derived proof.
-                && !ctx.number_by_construction_locals.contains(id)
+                && !crate::type_analysis::local_is_number(ctx, *id)
         }
         // `a + b` is numeric only when both sides are, so it is violable when
         // either side is; `a || b` / `a && b` / `a ?? b` pass one operand
