@@ -589,10 +589,14 @@ fn reset_young_after_promotion() {
 
     ARENA.with(|arena| unsafe {
         let arena = &mut *arena.get();
+        // #11736: the blocks promotion took were the occupied ones; the idle
+        // ones that remain are aged and released exactly as the plain
+        // from-space reset ages them, so a promoting minor leaves the same
+        // Eden as a recycling one. The count it sets must survive the loop.
+        super::reset::release_idle_eden_blocks(arena);
         for block in arena.blocks.iter_mut() {
             block.clear_object_starts();
             block.offset = 0;
-            block.dead_cycles = 0;
         }
         // `install_fresh_block` allocates through the NO-GC path
         // (`alloc_block_no_gc`) — the collecting `reserve_arena_block` would
