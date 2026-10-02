@@ -1204,6 +1204,7 @@ pub(super) fn compile_function(
         proven_local_types: spec_param_proofs,
         guarded_discriminant_aliases: HashMap::new(),
         module_global_proven_types: &cross_module.module_global_proven_types,
+        module_global_transfers: &cross_module.module_global_transfers,
         reassigned_locals: crate::collectors::reassigned_locals(&f.body),
         const_string_locals: std::collections::HashMap::new(),
         const_number_locals: std::collections::HashMap::new(),

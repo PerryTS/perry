@@ -20,6 +20,10 @@ mod entry_allocas;
 
 use precise_roots::{lower_precise_roots_to_native_stack, retype_landing_pads_for_statepoints};
 
+/// The intrinsic [`LlFunction::entry_tls_address`] calls, for a thread-local
+/// global in address space 0.
+pub const TLS_ADDRESS_INTRINSIC: &str = "llvm.threadlocal.address.p0";
+
 pub struct LlFunction {
     pub name: String,
     pub return_type: LlvmType,
@@ -183,6 +187,10 @@ pub struct LlFunction {
     /// Entry/module-init functions use this for process-level diagnostics
     /// that must run regardless of which block reaches the normal epilogue.
     pre_return_void_calls: Vec<String>,
+    /// Thread-local globals whose current-thread address this function has
+    /// already computed in its entry block, with the SSA register holding it
+    /// (see [`Self::entry_tls_address`]).
+    entry_tls_addresses: Vec<(String, String)>,
 }
 
 /// Render the frame-push instruction. Kept in one place so the eager
@@ -308,6 +316,7 @@ impl LlFunction {
             force_shadow_frame: false,
             outline_straight_line_store_ics: false,
             pre_return_void_calls: Vec::new(),
+            entry_tls_addresses: Vec::new(),
         }
     }
 
@@ -556,6 +565,36 @@ impl LlFunction {
         let r = format!("%r{}", self.reg_counter.next());
         self.entry_allocas.push(format!("  {} = alloca {}", r, ty));
         r
+    }
+
+    /// The current thread's address of the thread-local global `@global`,
+    /// computed ONCE per function invocation at the top of the entry block
+    /// (`llvm.threadlocal.address`) and returned as an SSA `ptr` register that
+    /// every later access in the function reuses.
+    ///
+    /// Each textual use of a thread-local global is otherwise materialized
+    /// per basic block by the backend: a `tlv_get_addr` call on Darwin for
+    /// every load, and an `fs:`-based address recomputed every loop iteration
+    /// on x86_64. One address per invocation makes a hit a plain load.
+    ///
+    /// It is correct because a perry function invocation runs start to finish
+    /// on one thread: an agent never migrates a running frame, and every
+    /// re-entry (another agent calling the same function, an async or
+    /// generator step) is a new invocation that computes its own address. The
+    /// address is not a heap value, so collections never move it.
+    ///
+    /// The caller declares `llvm.threadlocal.address.p0` in the module.
+    pub fn entry_tls_address(&mut self, global: &str) -> String {
+        if let Some((_, reg)) = self.entry_tls_addresses.iter().find(|(g, _)| g == global) {
+            return reg.clone();
+        }
+        let reg = format!("%r{}", self.reg_counter.next());
+        self.entry_allocas.push(format!(
+            "  {reg} = call ptr @{TLS_ADDRESS_INTRINSIC}(ptr @{global})"
+        ));
+        self.entry_tls_addresses
+            .push((global.to_string(), reg.clone()));
+        reg
     }
 
     /// Allocate a fixed-size `[count x elem_ty]` array slot in the function
