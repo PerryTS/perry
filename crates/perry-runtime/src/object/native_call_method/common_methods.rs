@@ -548,6 +548,12 @@ pub(super) unsafe fn dispatch_common(
                     return Some(f64::from_bits(JSValue::string_ptr(str_ptr).bits()));
                 }
             }
+            // A per-evaluation class object (`ClassExprFresh`) is a function too.
+            if let Some(source) = super::field_get_set::class_object_default_to_string(object) {
+                let str_ptr =
+                    crate::string::js_string_from_bytes(source.as_ptr(), source.len() as u32);
+                return Some(f64::from_bits(JSValue::string_ptr(str_ptr).bits()));
+            }
             if let Some((_, payload)) = crate::builtins::boxed_primitive_payload(object) {
                 let payload_jsv = JSValue::from_bits(payload.to_bits());
                 match crate::builtins::boxed_primitive_to_string_tag(object) {

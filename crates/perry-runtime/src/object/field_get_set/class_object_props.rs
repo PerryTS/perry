@@ -393,6 +393,39 @@ pub(crate) fn class_object_has_prototype_property(key: &[u8]) -> bool {
     key == b"prototype"
 }
 
+/// `Function.prototype.toString` of a class object: the class's source text,
+/// as for the class's function object (`class_ref_to_string`). Every
+/// evaluation of a class shares its source, so the template id names it.
+/// `None` when `value` is not a class object.
+pub(crate) fn class_object_source_text(value: f64) -> Option<String> {
+    if !super::super::class_registry::is_class_object_value(value) {
+        return None;
+    }
+    let obj = JSValue::from_bits(value.to_bits()).as_pointer::<ObjectHeader>();
+    // SAFETY: `is_class_object_value` proved a live class object.
+    let class_id = unsafe { (*obj).class_id };
+    Some(super::super::class_registry::class_ref_to_string(class_id).into_owned())
+}
+
+/// The text `String(C)` / `` `${C}` `` produce for the class object `value`
+/// when no `toString` of the program's is in the way, else `None`. A static
+/// `toString` of this evaluation or of a class it inherits from answers
+/// instead (the caller's ordinary conversion finds and runs it).
+pub(crate) fn class_object_default_to_string(value: f64) -> Option<String> {
+    let text = class_object_source_text(value)?;
+    let obj = JSValue::from_bits(value.to_bits()).as_pointer::<ObjectHeader>();
+    // SAFETY: a live class object (above).
+    let class_id = unsafe { (*obj).class_id };
+    let own = super::super::class_registry::class_object_own_field_bytes(obj, b"toString")
+        .is_some_and(|v| !JSValue::from_bits(v.to_bits()).is_undefined());
+    if own
+        || super::super::class_registry::lookup_static_method_owner(class_id, "toString").is_some()
+    {
+        return None;
+    }
+    Some(text)
+}
+
 /// #4949: heap class-expression values (`ClassExprFresh`) are real
 /// OBJECT_TYPE_CLASS objects, not INT32 class refs. Their `.prototype`
 /// read must still expose the live declared-class prototype object so

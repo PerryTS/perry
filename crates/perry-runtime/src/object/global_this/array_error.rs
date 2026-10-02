@@ -653,6 +653,11 @@ pub(crate) extern "C" fn function_prototype_to_string_thunk(
                 return f64::from_bits(JSValue::string_ptr(str_ptr).bits());
             }
         }
+        // A per-evaluation class object (`ClassExprFresh`) is a function too.
+        if let Some(source) = super::super::field_get_set::class_object_source_text(this_val) {
+            let str_ptr = crate::string::js_string_from_bytes(source.as_ptr(), source.len() as u32);
+            return f64::from_bits(JSValue::string_ptr(str_ptr).bits());
+        }
         super::super::object_ops::throw_object_type_error(
             b"Function.prototype.toString requires that 'this' be a Function",
         );
