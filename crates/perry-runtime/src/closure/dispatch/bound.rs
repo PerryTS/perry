@@ -222,6 +222,21 @@ pub unsafe fn dispatch_bound_method(
         return result;
     }
 
+    // A static method value of a per-evaluation class object is stored in the
+    // object's own property of that name, so resolving the name on the object
+    // would find this very closure again. Run the declaration instead, in the
+    // evaluation the value was read from.
+    if method_name_len > 0 && !method_name_ptr.is_null() {
+        if let Some(result) = crate::object::class_object_static_method_call(
+            namespace_obj,
+            method_name_ptr as *const u8,
+            method_name_len,
+            args,
+        ) {
+            return result;
+        }
+    }
+
     crate::object::js_native_call_method(
         namespace_obj,
         method_name_ptr,

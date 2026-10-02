@@ -376,7 +376,11 @@ pub(crate) const CLASS_OBJECT_PARENT_KEY: &str = "__perry_parent_class";
 /// A no-parent class expression pins nothing (the getter yields undefined or a
 /// static ClassRef fallback, which the field walk treats as "no own edge").
 #[no_mangle]
-pub extern "C" fn js_class_object_pin_parent(obj: i64, template_class_id: u32) {
+pub extern "C" fn js_class_object_pin_parent(
+    obj: i64,
+    template_class_id: u32,
+    static_field_mask: u32,
+) {
     const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
     if obj == 0 || template_class_id == 0 {
         return;
@@ -387,6 +391,14 @@ pub extern "C" fn js_class_object_pin_parent(obj: i64, template_class_id: u32) {
     // would answer with an enclosing constructor replay's parent when a factory
     // is re-entered from inside a constructor body.
     let parent = template_dynamic_parent_value(template_class_id);
+    // Every class object owns its `length`, `name` and static methods from
+    // creation, with or without heritage.
+    unsafe {
+        crate::object::field_get_set::define_class_object_own_properties(
+            obj as *mut crate::object::ObjectHeader,
+            static_field_mask,
+        );
+    }
     if parent.to_bits() == TAG_UNDEFINED {
         return;
     }
@@ -965,6 +977,25 @@ pub(crate) fn class_has_own_static_method(class_id: u32, name: &str) -> bool {
                 .and_then(|m| m.get(&class_id).map(|inner| inner.contains_key(name)))
         })
         .unwrap_or(false)
+}
+
+/// The name of ClassBody static method `name` declared by class `class_id`
+/// itself, as the bytes of its declaration's record: `None` when the class
+/// declares no such method.
+///
+/// The bytes are the record's own key, so they live as long as the class's
+/// image — the agent that holds every value of the class. A value that names
+/// the method for its whole life (a class object's bound static method) points
+/// at them instead of keeping a copy. That holds only while no writer of
+/// `CLASS_STATIC_METHODS` removes or re-keys a record: each must insert a new
+/// record or update a value in place.
+pub(crate) fn class_own_static_method_name_bytes(
+    class_id: u32,
+    name: &str,
+) -> Option<(*const u8, usize)> {
+    let guard = CLASS_STATIC_METHODS.read().ok()?;
+    let (key, _) = guard.as_ref()?.get(&class_id)?.get_key_value(name)?;
+    Some((key.as_ptr(), key.len()))
 }
 
 /// ClassBody static method `name` declared by class `class_id` itself:

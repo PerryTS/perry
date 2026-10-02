@@ -109,7 +109,7 @@ fn an_active_replay_resolves_this_evaluations_pinned_heritage() {
         // as codegen does right after `RegisterClassParentDynamic`.
         js_register_class_parent_dynamic(TEMPLATE, class_ref(FIRST_PARENT));
         class_handle.with_mut_ptr::<crate::ObjectHeader, _>(|class| {
-            super::super::parent_static::js_class_object_pin_parent(class as i64, TEMPLATE)
+            super::super::parent_static::js_class_object_pin_parent(class as i64, TEMPLATE, 0)
         });
 
         // A LATER evaluation of the same template overwrites the shared stash.
@@ -196,7 +196,7 @@ fn sibling_class_objects_of_the_same_template_keep_distinct_pins() {
     });
     js_register_class_parent_dynamic(TEMPLATE, class_ref(FIRST_PARENT));
     first_handle.with_mut_ptr::<crate::ObjectHeader, _>(|class| {
-        super::super::parent_static::js_class_object_pin_parent(class as i64, TEMPLATE)
+        super::super::parent_static::js_class_object_pin_parent(class as i64, TEMPLATE, 0)
     });
     let first_pin = first_handle.with_mut_ptr::<crate::ObjectHeader, _>(|class| {
         super::super::parent_static::class_object_pinned_parent(class as *const crate::ObjectHeader)
@@ -216,7 +216,7 @@ fn sibling_class_objects_of_the_same_template_keep_distinct_pins() {
     });
     js_register_class_parent_dynamic(TEMPLATE, class_ref(LAST_PARENT));
     last_handle.with_mut_ptr::<crate::ObjectHeader, _>(|class| {
-        super::super::parent_static::js_class_object_pin_parent(class as i64, TEMPLATE)
+        super::super::parent_static::js_class_object_pin_parent(class as i64, TEMPLATE, 0)
     });
 
     // The EARLIER evaluation's own pin must be UNCHANGED by the later one.
