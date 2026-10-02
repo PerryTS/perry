@@ -51,7 +51,7 @@ fn compile(source: &str) -> (String, String) {
 }
 
 #[test]
-fn original_recursive_class_field_push_emits_inline_append() {
+fn original_recursive_class_field_push_calls_guarded_builtin() {
     let (ir, stdout) = compile(
         r#"
 class DocNode {
@@ -86,8 +86,8 @@ console.log(root.children.length, root.children[3].parent === root);
         "missing receiver/method guard:\n{body}"
     );
     assert!(
-        body.contains("apush.inbounds"),
-        "missing inline append:\n{body}"
+        body.contains("call i64 @js_array_push_f64_spec("),
+        "missing direct builtin append:\n{body}"
     );
     assert!(
         !body.contains("@js_typed_feedback_native_call_method_by_id"),
@@ -133,4 +133,55 @@ fn prototype_patches_keep_lookup_first_dispatch() {
         ir.contains("@js_native_call_value"),
         "must call the captured method"
     );
+}
+
+// A single source site becomes 64 sites after nested unrolling. Count the
+// allocating argument as well as builtin calls: per-site append guards alone
+// would miss duplication of an arbitrarily large argument in both branches.
+#[test]
+fn unrolled_field_pushes_share_argument_code_and_do_not_expand_append() {
+    let (ir, stdout) = compile(
+        r#"
+class Holder { children: number[] = []; }
+function append(h: Holder): void {
+  if (h.children.length > 10000) { append(h); return; }
+  for (let i = 0; i < 8; i++) {
+    for (let j = 0; j < 8; j++) {
+      h.children.push(process.memoryUsage().heapUsed);
+    }
+  }
+}
+const h = new Holder();
+append(h);
+console.log(h.children.length, h.children[0] > 0);
+"#,
+    );
+    assert_eq!(stdout, "64 true\n");
+    let bodies: Vec<_> = ir
+        .split("\ndefine ")
+        .filter(|body| body.lines().next().unwrap_or("").contains("append"))
+        .map(|body| body.split("\n}").next().unwrap())
+        .filter(|body| body.contains("fieldpush.header"))
+        .collect();
+    assert!(
+        !bodies.is_empty(),
+        "the size regression must exercise the new lowering"
+    );
+    for body in bodies {
+        assert_eq!(
+            body.matches("call double @js_process_memory_usage(")
+                .count(),
+            64,
+            "emit each allocating argument once"
+        );
+        assert_eq!(
+            body.matches("call i64 @js_array_push_f64_spec(").count(),
+            64,
+            "each site calls the shared builtin implementation"
+        );
+        assert!(
+            !body.contains("apush.inbounds"),
+            "do not expand append at every site"
+        );
+    }
 }

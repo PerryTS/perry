@@ -699,7 +699,7 @@ fn a_field_push_writes_the_field_back_on_a_handle_bits_change_behind_a_plain_obj
 }
 
 #[test]
-fn class_field_push_checks_method_before_argument_and_reuses_inline_append() {
+fn class_field_push_checks_method_before_shared_argument_and_calls_builtin() {
     let mut module = field_push_module(None);
     let value = Expr::NativeMethodCall {
         module: "process".into(),
@@ -716,6 +716,7 @@ fn class_field_push_checks_method_before_argument_and_reuses_inline_append() {
         args: vec![value],
     });
     let ir = ir_for(module);
+    let ir = function_body(&ir, "add");
     assert!(
         ir.contains("fieldpush.header"),
         "must guard the actual receiver:\n{ir}"
@@ -725,8 +726,8 @@ fn class_field_push_checks_method_before_argument_and_reuses_inline_append() {
         "must retain lookup-first fallback:\n{ir}"
     );
     assert!(
-        ir.contains("apush.inbounds"),
-        "must reuse guarded inline append:\n{ir}"
+        !ir.contains("apush.inbounds"),
+        "must not expand append machinery:\n{ir}"
     );
     assert!(
         ir.contains("call i64 @js_array_push_f64_spec("),
@@ -739,6 +740,11 @@ fn class_field_push_checks_method_before_argument_and_reuses_inline_append() {
     assert!(
         ir.contains("call double @js_native_call_value("),
         "call the captured method:\n{ir}"
+    );
+    assert_eq!(
+        ir.matches("call double @js_process_memory_usage(").count(),
+        1,
+        "emit the argument once"
     );
     let lookup = ir.find("\nfieldpush.lookup.").expect("lookup label");
     let slow = &ir[lookup..];
@@ -778,8 +784,8 @@ fn private_module_init_field_receiver_does_not_repeat_lookup_after_argument() {
     ];
     let ir = ir_for(module);
     assert!(
-        ir.contains("apush.inbounds"),
-        "a private init binding retains inline append:\n{ir}"
+        ir.contains("call i64 @js_array_push_f64_spec("),
+        "a private init binding calls the resolved builtin:\n{ir}"
     );
     assert!(
         !ir.contains("call i64 @js_array_push_f64_spec_or_own("),
