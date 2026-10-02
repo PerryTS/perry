@@ -29,3 +29,10 @@ Fix synchronous for-of IteratorClose when an inner break or continue from finall
 Preserve normal call boundaries for closure-bearing inline candidates inside loops that perform receiver field arithmetic. This keeps closure creation out of the body that guarded numeric regions must version, while retaining codegen's refusal to duplicate closures and its recheck after calls. Tiny callees, calls outside these loops, and loops without receiver field arithmetic continue to inline. Focused tests cover all loop forms, nested helper inlining, and both controls.
 
 Run the try/catch native-root probe on Windows after its exception lowering moved to landing pads. Require Node-equivalent execution, a native root map, nonzero evacuation and RS4GC root records; keep the linker refusal for actual WinEH funclet IR. Use the runtime TLS declaration macro for worker launch test observations.
+
+Reuse cached key-add transitions for an exact safe ConstFn body when its traced
+Any intermediate is still live. Store the current receiver's closure with the
+ordinary barrier before publishing its body-specific shape, using one existing
+cache probe. Missing intermediates, deprecated facts and unsupported targets
+retain the rooted slow publication path. Regressions cover distinct captures,
+actual moving collections, pointer-key fallback and publication ordering.
