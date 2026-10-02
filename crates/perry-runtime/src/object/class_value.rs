@@ -1274,6 +1274,8 @@ mod tests {
         for cid in [0, 0x7FFF_FF00, 0xFFFF_0024, u32::MAX] {
             assert!(class_static_get(cid, "from").is_none());
             assert!(class_static_own_accessor(cid, "from").is_none());
+            assert!(crate::object::class_registry::class_static_prototype(cid).is_null());
+            assert!(!crate::object::class_registry::class_static_prototype_is_nulled(cid));
             assert!(class_value_cached(cid).is_none());
         }
     }
