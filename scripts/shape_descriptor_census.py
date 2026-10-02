@@ -514,12 +514,19 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
                 "again; the descriptor is the authoritative edge since #8112"
             )
 
-    # The insert/reverse-index body lives in the `_with_holes` variant since
-    # the tombstone-delete work; `_with_generation` is a thin forwarding
-    # wrapper, and so is `_with_rep` since charter step 5 split the intern
-    # (`shape_descriptor_intern_with_rep`, which takes an exact summary) out of
-    # it. The authority ordering is checked where the writes are.
-    ensure = function_body(shapes, "shape_descriptor_intern_with_rep")
+    # ConstFn adds exact body facts to the same mint. Follow both forwarding
+    # wrappers and check ordering in the shared body that actually publishes
+    # the descriptor and its reverse indexes.
+    for wrapper, callee in (
+        ("shape_descriptor_intern_with_rep", "shape_descriptor_intern_with_special"),
+        ("shape_descriptor_intern_with_special", "shape_descriptor_intern_with_special_mode"),
+    ):
+        require_code(
+            function_body(shapes, wrapper),
+            rf"\b{callee}\s*\(",
+            f"{wrapper} delegates to the shared shape mint",
+        )
+    ensure = function_body(shapes, "shape_descriptor_intern_with_special_mode")
     # The property is that the by-id descriptor is installed BEFORE the reverse
     # accelerator points at it — never which append spells it. #9768 added
     # `family_append_fresh`, which is `family_push_back` minus a membership scan
@@ -533,13 +540,19 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     if ensure_append is None:
         raise CensusError(
             "shape descriptor authority surface missing: family append in "
-            "shape_descriptor_intern_with_rep"
+            "shape_descriptor_intern_with_special_mode"
         )
     assert_before(
         ensure,
         "slab_mut().insert",
         ensure_append,
         "by-id descriptor before reverse accelerator",
+    )
+    assert_before(
+        ensure,
+        "slab_mut().insert",
+        "facts_append_fresh",
+        "by-id descriptor before facts accelerator",
     )
     # The structural publish body (charter step 5: `publish_object_shape_from`
     # delegates to it with an all-Any rep).
@@ -1209,6 +1222,22 @@ def run_sabotage_selftests(sources: dict[str, str], baseline: dict[str, object])
         "copying plain-object scan reads the header mirror for a fact",
         lambda: assert_authority_surfaces(plan_fact_read),
     )
+
+    # Both reverse accelerators must remain downstream of the actual mint,
+    # including after a wrapper refactor. Exercise each ordering separately.
+    for accelerator in ("family_append_fresh", "facts_append_fresh"):
+        inverted_mint = dict(sources)
+        mint_body = function_body(
+            inverted_mint[shapes_path], "shape_descriptor_intern_with_special_mode"
+        )
+        inverted_body = swap_once(mint_body, "slab_mut().insert", accelerator)
+        inverted_mint[shapes_path] = inverted_mint[shapes_path].replace(
+            mint_body, inverted_body, 1
+        )
+        expect_rejected(
+            f"{accelerator} before descriptor publication",
+            lambda: assert_authority_surfaces(inverted_mint),
+        )
 
     inverted_publication = dict(sources)
     path = "crates/perry-runtime/src/object/shapes.rs"
