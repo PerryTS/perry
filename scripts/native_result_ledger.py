@@ -127,8 +127,13 @@ LEDGER = Path("scripts/native_result_ledger.tsv")
 # with its provider classified in the ledger TSV.
 # 282 -> 277 rows, 248 -> 246 providers; each figure is what the script reports on
 # the resolved tree, not arithmetic.
+# +2 providers / unchanged rows (#11757): cork and uncork replace two
+# noop-self rows, but return the same registry handle unchanged. The shared
+# noop provider remains used by other methods, so retain it and classify both
+# new providers as NR_HANDLE_ID. writableCorked returns NR_F64 and is not part
+# of this pointer-kind ledger.
 EXPECTED_ROWS = 277
-EXPECTED_PROVIDERS = 246
+EXPECTED_PROVIDERS = 248
 KINDS = {
     "NR_GCPTR",
     "NR_NULLABLE_GCPTR",
