@@ -216,6 +216,13 @@ pub(crate) fn js_jsvalue_to_string_impl(
                     return js_jsvalue_to_string_impl(primitive, reject_symbol);
                 }
             }
+            // A per-evaluation class object is a function: without a
+            // `toString` of the program's its text is the class source, as for
+            // a class ref (`ClassExprFresh`; the object has no
+            // `Function.prototype` of its own to inherit `toString` from).
+            if let Some(source) = crate::object::class_object_default_to_string(value) {
+                return crate::string::js_string_from_bytes(source.as_ptr(), source.len() as u32);
+            }
             // BufferHeader-backed values need handling before GC-header probes.
             // ArrayBuffer, SharedArrayBuffer, and DataView inherit object tags.
             if crate::buffer::is_registered_buffer(ptr as usize) {
