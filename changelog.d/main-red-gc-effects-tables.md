@@ -1,0 +1,1 @@
+Regenerate the committed gc-call-effects tables (linux/macos/windows) from main's archives. Drift is only in the safe direction: js_arguments_object_map_index Reenters->Leaf (all targets), plus on windows js_thread_global_materialize Reenters->AllocOnly and js_thread_global_publish Reenters->Leaf.

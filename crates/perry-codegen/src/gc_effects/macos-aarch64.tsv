@@ -49,7 +49,7 @@ js_arguments_bundle_get_slow	Reenters
 js_arguments_bundle_index_get	Reenters
 js_arguments_object_alloc	Reenters
 js_arguments_object_alloc_mapped	Reenters
-js_arguments_object_map_index	Reenters
+js_arguments_object_map_index	Leaf
 js_array_alloc	ThrowOnly
 js_array_alloc_literal	ThrowOnly
 js_array_alloc_with_length	ThrowOnly
