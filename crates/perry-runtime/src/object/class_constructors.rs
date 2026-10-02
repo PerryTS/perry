@@ -11,6 +11,10 @@ use std::collections::HashMap;
 use std::sync::RwLock;
 
 use super::class_registry::call_vtable_method;
+use super::class_super_chain::{
+    class_super_base, declared_chain_has_relinked_prototype, static_chain_relinked,
+    super_call_on_live_base, super_call_on_relinked_chain, super_home_owner,
+};
 use super::ObjectHeader;
 
 /// Replace the capture array carried by one heap class-expression value.
@@ -881,11 +885,7 @@ pub unsafe extern "C" fn js_super_method_call_dynamic(
     // Repeated evaluations can share a template id, so the template parent
     // table cannot represent their heritage edge. Resolve the method's own
     // evaluation first, then read its pinned parent.
-    let lexical_owner = super::field_get_set::current_private_lexical_brand_value(child_class_id)
-        .or_else(|| {
-            super::field_get_set::private_evaluation_brand_value(this_value)
-                .and_then(|owner| pinned_class_object_for_ancestor(owner, child_class_id))
-        });
+    let lexical_owner = super_home_owner(child_class_id, this_value);
     let parent_owner = lexical_owner.and_then(|owner| {
         let object = crate::value::JSValue::from_bits(owner.to_bits()).as_pointer::<ObjectHeader>();
         super::class_registry::class_object_pinned_parent(object)
@@ -905,16 +905,67 @@ pub unsafe extern "C" fn js_super_method_call_dynamic(
     };
     let _parent_brand =
         super::field_get_set::PrivateHintBrandScope::new(parent_owner.map(f64::to_bits));
+    // `super.name` is a property lookup on the home object's CURRENT
+    // `[[Prototype]]`, with `this` as the receiver: a patched, deleted or
+    // accessor parent member and a relinked home all apply. Where the runtime
+    // models that chain end to end, read it; the declared-chain lookups below
+    // serve the rest (native and builtin bases, per-evaluation classes).
+    let is_static = super::class_ref_id(this_value).is_some()
+        || super::class_registry::is_class_object_value(this_value);
+    // A static member's declared lookup reads the class function objects (an
+    // assigned or deleted static ends it), so it is the property lookup unless
+    // a constructor on the way was relinked. An instance member reaches here
+    // when the compiler could not resolve the name or a prototype-surgery
+    // guard byte is set: the declared vtable no longer describes the chain.
+    let static_entry = if is_static {
+        super::class_registry::parent_static::lookup_static_method_owner(parent_cid, name)
+    } else {
+        None
+    };
+    let mut base = None;
+    // The probes below can allocate (materializing a prototype or a class
+    // value), so the receiver and the arguments ride across them in handles;
+    // the declared-chain paths below read the refreshed copies.
+    let refreshed_args: Vec<f64>;
+    let (this_value, args_ptr) = if static_entry.is_none()
+        || super::prototype_chain::any_user_prototype_override()
+    {
+        let live_scope = crate::gc::RuntimeHandleScope::new();
+        let this_handle = live_scope.root_nanbox_f64(this_value);
+        let arg_handles =
+            live_scope.root_nanbox_f64_slice(if args_len > 0 && !args_ptr.is_null() {
+                std::slice::from_raw_parts(args_ptr, args_len)
+            } else {
+                &[]
+            });
+        let live = match static_entry {
+            Some((owner, _)) => static_chain_relinked(child_class_id, owner),
+            None => true,
+        };
+        if live {
+            base = class_super_base(child_class_id, parent_cid, lexical_owner, is_static);
+        }
+        refreshed_args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
+        (
+            this_handle.get_nanbox_f64(),
+            if refreshed_args.is_empty() {
+                args_ptr
+            } else {
+                refreshed_args.as_ptr()
+            },
+        )
+    } else {
+        (this_value, args_ptr)
+    };
+    if let Some(base) = base {
+        return super_call_on_live_base(name, this_value, args_ptr, args_len, base);
+    }
     // Static-context super call (`super.m()` inside a `static` method): the
     // receiver is the class constructor (a ClassRef), so resolve the PARENT's
     // STATIC method (not an instance/prototype method) and invoke it with
     // `this` bound to the current class. Refs class/super/in-static-methods.
-    if super::class_ref_id(this_value).is_some()
-        || super::class_registry::is_class_object_value(this_value)
-    {
-        if let Some((func_ptr, param_count, has_rest)) =
-            super::class_registry::lookup_static_method_in_chain(parent_cid, name)
-        {
+    if is_static {
+        if let Some((_, (func_ptr, param_count, has_rest))) = static_entry {
             crate::object::static_this_arm_if_unarmed(this_value);
             let result = if has_rest {
                 // Mirror `js_class_static_method_call`'s rest bundling: fixed
@@ -1022,92 +1073,6 @@ pub unsafe extern "C" fn js_super_method_call_dynamic(
     // vtable nor the prototype registry knows `emit`; the displaced base method
     // does. Runs LAST so a genuine user-class parent method always wins.
     call_displaced_native_base_method(this_value, name, args_ptr, args_len, undef)
-}
-
-/// Is the prototype of `cid` or of one of its declared ancestors relinked by a
-/// user operation? Asked only after the declared-member lookups missed.
-fn declared_chain_has_relinked_prototype(cid: u32) -> bool {
-    let mut cur = cid;
-    for _ in 0..32 {
-        if cur == 0 {
-            return false;
-        }
-        if super::class_registry::class_decl_prototype_relinked(cur) {
-            return true;
-        }
-        match crate::object::get_parent_class_id(cur) {
-            Some(p) if p != cur => cur = p,
-            _ => return false,
-        }
-    }
-    false
-}
-
-/// `super.name(...args)` resolved by `read` on a relinked chain: call the value
-/// with `this_value` as receiver, or throw the TypeError a call of a
-/// non-callable `super.name` throws.
-///
-/// # Safety
-/// `args_ptr` must point to `args_len` valid `f64`s (or be null when
-/// `args_len == 0`).
-unsafe fn super_call_on_relinked_chain(
-    name: &str,
-    this_value: f64,
-    args_ptr: *const f64,
-    args_len: usize,
-    read: impl FnOnce(*const crate::StringHeader, f64) -> Option<crate::value::JSValue>,
-) -> f64 {
-    // The key allocation and the read (a getter on the new chain) can collect;
-    // the receiver and the arguments ride across them in handles.
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let this_handle = scope.root_nanbox_f64(this_value);
-    let args: Vec<f64> = if args_len > 0 && !args_ptr.is_null() {
-        std::slice::from_raw_parts(args_ptr, args_len).to_vec()
-    } else {
-        Vec::new()
-    };
-    let arg_handles = scope.root_nanbox_f64_slice(&args);
-    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    let value = if key.is_null() {
-        None
-    } else {
-        read(
-            key as *const crate::StringHeader,
-            this_handle.get_nanbox_f64(),
-        )
-    };
-    let callable = value.filter(|v| {
-        let boxed = f64::from_bits(v.bits());
-        v.is_pointer()
-            && ((crate::proxy::js_proxy_is_proxy(boxed) == 1
-                && crate::proxy::proxy_wraps_callable(boxed))
-                || crate::closure::is_closure_ptr(
-                    crate::value::js_nanbox_get_pointer(boxed) as usize
-                ))
-    });
-    let Some(method) = callable else {
-        crate::error::js_throw_type_error_not_a_function(
-            std::ptr::null(),
-            0,
-            name.as_ptr(),
-            name.len(),
-        )
-    };
-    let method_handle = scope.root_nanbox_f64(f64::from_bits(method.bits()));
-    let args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
-    if crate::proxy::js_proxy_is_proxy(method_handle.get_nanbox_f64()) == 1 {
-        return crate::proxy::call_proxy_value_with_this(
-            method_handle.get_nanbox_f64(),
-            this_handle.get_nanbox_f64(),
-            &args,
-        );
-    }
-    crate::closure::native_call_value_this(
-        method_handle.get_nanbox_f64(),
-        crate::closure::JsThis::from_f64(this_handle.get_nanbox_f64()),
-        args.as_ptr(),
-        args.len(),
-    )
 }
 
 /// Invoke the native base method a subclass override displaced (#6316), with

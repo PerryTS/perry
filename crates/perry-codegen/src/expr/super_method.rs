@@ -24,11 +24,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 }
                 return Ok(double_literal(0.0));
             };
-            // Walk parent chain starting from extends_name.
-            let mut parent = ctx
-                .classes
-                .get(&current_class_name)
-                .and_then(|c| c.extends_name.clone());
+            // Walk parent chain starting from extends_name. The method tables
+            // hold INSTANCE methods only: in a static member `super` is the
+            // parent constructor, which the runtime path resolves.
+            let mut parent = if ctx.in_static_member {
+                None
+            } else {
+                ctx.classes
+                    .get(&current_class_name)
+                    .and_then(|c| c.extends_name.clone())
+            };
             let mut resolved_fn: Option<String> = None;
             // #8040: the class the body actually lives on, so the trailing
             // parameter shape below is read off the callee we are calling.
@@ -344,11 +349,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let Some(current_class_name) = ctx.class_stack.last().cloned() else {
                 return Ok(undef);
             };
-            let immediate_parent = ctx
-                .classes
-                .get(&current_class_name)
-                .and_then(|c| c.extends_name.clone());
-            let mut parent = immediate_parent.clone();
+            // As for the call form: in a static member the instance method
+            // tables do not describe `super`.
+            let mut parent = if ctx.in_static_member {
+                None
+            } else {
+                ctx.classes
+                    .get(&current_class_name)
+                    .and_then(|c| c.extends_name.clone())
+            };
             let mut resolved_fn: Option<String> = None;
             while let Some(p) = parent {
                 let key = (p.clone(), property.clone());
@@ -358,18 +367,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 }
                 parent = ctx.classes.get(&p).and_then(|c| c.extends_name.clone());
             }
-            let Some(fn_name) = resolved_fn else {
-                // Not a method on the parent chain — `super.prop` then reads the
-                // property off the parent prototype with `this` as receiver:
-                // an accessor (getter) is INVOKED, a data property
-                // (`B.prototype.x = 42`) is returned. Route to the runtime,
-                // which walks the parent class chain. Refs
-                // class/super/in-{constructor,getter,methods,setter}.
-                let parent_cid = immediate_parent
-                    .as_ref()
-                    .and_then(|p| ctx.class_ids.get(p))
-                    .copied()
-                    .unwrap_or(0);
+            // `super.prop` reads the property off the home object's current
+            // `[[Prototype]]` with `this` as receiver: an accessor (getter) is
+            // INVOKED, a data property (`B.prototype.x = 42`) is returned. The
+            // runtime reads that chain from the home class id. Refs
+            // class/super/in-{constructor,getter,methods,setter}.
+            let home_cid = ctx.class_ids.get(&current_class_name).copied().unwrap_or(0);
+            let runtime_get = |ctx: &mut FnCtx<'_>| -> String {
                 let recv_v = if let Some(this_slot) = ctx.this_stack.last().cloned() {
                     ctx.block().load(DOUBLE, &this_slot)
                 } else {
@@ -378,12 +382,41 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let key_idx = ctx.strings.intern(property);
                 let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
                 let key_box = ctx.block().load(DOUBLE, &key_handle_global);
-                let parent_cid_s = parent_cid.to_string();
-                return Ok(ctx.block().call(
+                let home_cid_s = home_cid.to_string();
+                ctx.block().call(
                     DOUBLE,
                     "js_super_accessor_get",
-                    &[(I32, &parent_cid_s), (DOUBLE, &key_box), (DOUBLE, &recv_v)],
-                ));
+                    &[(I32, &home_cid_s), (DOUBLE, &key_box), (DOUBLE, &recv_v)],
+                )
+            };
+            let Some(fn_name) = resolved_fn else {
+                return Ok(runtime_get(ctx));
+            };
+            // The method above was resolved along the declared `extends`
+            // chain, which holds while no prototype surgery touched this
+            // name (the guard bytes `super.m()` reads too).
+            let guarded = if home_cid != 0 {
+                let key_idx = ctx.strings.intern(property);
+                let slot = (ctx.strings.entry(key_idx).dispatch_hash & 0xffff).to_string();
+                let direct_idx = ctx.new_block("super_get.direct");
+                let dynamic_idx = ctx.new_block("super_get.dynamic");
+                let merge_idx = ctx.new_block("super_get.merge");
+                let direct_label = ctx.block_label(direct_idx);
+                let dynamic_label = ctx.block_label(dynamic_idx);
+                let merge_label = ctx.block_label(merge_idx);
+                let ok = crate::lower_call::method_override::emit_prototype_method_guard_ok(
+                    ctx.block(),
+                    &slot,
+                );
+                ctx.block().cond_br(&ok, &direct_label, &dynamic_label);
+                ctx.current_block = dynamic_idx;
+                let dynamic_value = runtime_get(ctx);
+                let dynamic_end = ctx.block().label.clone();
+                ctx.block().br(&merge_label);
+                ctx.current_block = direct_idx;
+                Some((merge_idx, merge_label, dynamic_value, dynamic_end))
+            } else {
+                None
             };
             // Mirror Expr::FuncRef: route through the singleton wrapper
             // so callers can invoke via the closure-call ABI. The
@@ -413,7 +446,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let blk = ctx.block();
             let wrap_info = blk.fn_info_ref(&wrap_name);
             let closure_handle = blk.call(I64, "js_closure_alloc_singleton", &[(PTR, &wrap_info)]);
-            Ok(nanbox_pointer_inline(blk, &closure_handle))
+            let direct_value = nanbox_pointer_inline(blk, &closure_handle);
+            let Some((merge_idx, merge_label, dynamic_value, dynamic_end)) = guarded else {
+                return Ok(direct_value);
+            };
+            let direct_end = ctx.block().label.clone();
+            ctx.block().br(&merge_label);
+            ctx.current_block = merge_idx;
+            Ok(ctx.block().phi(
+                DOUBLE,
+                &[(&direct_value, &direct_end), (&dynamic_value, &dynamic_end)],
+            ))
         }
 
         Expr::SuperPropertySet {
