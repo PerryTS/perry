@@ -1410,7 +1410,19 @@ jobs:
             # `function_apply_with_runtime_args_defers_to_a_located_aot_error`
             # pass.
             if printf '%s\n' "$scope" | grep -qE '^(perry|perry-stdlib)$'; then
-              cargo build --release -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static
+              if printf '%s\n' "$scope" | grep -qx 'perry' && [ "${{ needs.plan.outputs.tier }}" != "full" ]; then
+                # Sweep tier runs every perry integration target here, including
+                # the coherent-require fixtures. Prepare their providers in one
+                # graph outside the fixture's ten-minute spawnSync bound, else
+                # the fixture rebuilds the perry-dev graph and ETIMEDOUTs.
+                cargo build --release -p perry -p perry-runtime -p perry-stdlib \
+                  -p perry-runtime-static -p perry-stdlib-static \
+                  -p perry-ext-events -p perry-ext-http -p perry-ext-net \
+                  -p perry-ext-typescript -p perry-ext-ws -p perry-ext-zlib
+                export PERRY_TEST_RUNTIME_PREBUILT=1
+              else
+                cargo build --release -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static
+              fi
               export PERRY_RUNTIME_DIR="$PWD/target/release"
             fi
             find target/debug/deps -maxdepth 1 -type f -perm -111 ! -name '*.so' -delete 2>/dev/null || true
