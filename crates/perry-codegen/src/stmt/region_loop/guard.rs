@@ -195,12 +195,15 @@ pub(super) fn emit_body_guard_direct(
 /// class for the receiver, the driver assigned the class no static id, or a
 /// key is not an inline slot of that shape.
 ///
-/// The class is a GUESS, not a proof: the guard compares the receiver's own
-/// ShapeId against the id, so a declared type (a parameter `p: C`, a
-/// reassigned binding) serves as well as a proven one — a receiver of any
-/// other shape misses into the learned supplier.
-fn static_region_word(ctx: &FnCtx<'_>, rv: &Receiver) -> Option<(u64, u32)> {
-    let class_name =
+/// Class provenance chooses the supplier when available; otherwise a class
+/// hint suffices. Neither licenses a slot access: the guard compares the live
+/// ShapeId against the supplier's id, and a different shape selects G.
+fn static_region_word(ctx: &FnCtx<'_>, rv: &Receiver) -> Option<(u64, u32, bool)> {
+    // Use containment's exact class to select the supplier when available.
+    // This consumes only class provenance: the compared ShapeId below remains
+    // the sole authority for slot locations and Number representation.
+    let proven_class = ctx.ptr_shape_region_class(&rv.recv.expr());
+    let class_name = proven_class.clone().or_else(|| {
         crate::type_analysis::receiver_class_name(ctx, &rv.recv.expr()).or_else(|| {
             match rv.recv {
                 Recv::Local(id) => match ctx.local_type_hint(&id)? {
@@ -214,7 +217,8 @@ fn static_region_word(ctx: &FnCtx<'_>, rv: &Receiver) -> Option<(u64, u32)> {
                 },
                 Recv::This => None,
             }
-        })?;
+        })
+    })?;
     let keys_global = ctx.class_keys_globals.get(&class_name)?;
     let (id, slots, r_mask) =
         crate::codegen::static_region_slots(keys_global, &rv.keys, rv.boxed_mask)?;
@@ -222,7 +226,7 @@ fn static_region_word(ctx: &FnCtx<'_>, rv: &Receiver) -> Option<(u64, u32)> {
     for (i, slot) in slots.iter().enumerate() {
         word |= u64::from(*slot) << (32 + SLOT_BITS * i as u32);
     }
-    Some((word, r_mask))
+    Some((word, r_mask, proven_class.is_some()))
 }
 
 /// A guard whose receiver the compiler names (DESIGN §4.1, static-exclusive):
@@ -302,8 +306,9 @@ pub(super) fn emit_guard(
 ) -> Result<(String, String, String)> {
     // A receiver whose class the compiler names takes its guard's ShapeId
     // from the driver's static id (DESIGN §4.1): no loaded supplier.
-    if let Some((w, r_mask)) = static_region_word(ctx, rv) {
+    if let Some((w, r_mask, uses_ptr_shape_class)) = static_region_word(ctx, rv) {
         rv.r_mask = r_mask;
+        rv.uses_ptr_shape_class = uses_ptr_shape_class;
         return emit_static_guard(ctx, rv, w);
     }
     // A retired region (every bounded prime refused) is decided by the word

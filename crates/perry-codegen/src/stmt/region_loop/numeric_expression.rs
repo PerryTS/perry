@@ -131,6 +131,7 @@ fn emit(
 ) -> Result<String> {
     let mut rv = Receiver {
         recv,
+        uses_ptr_shape_class: false,
         keys: vec![key.to_string()],
         has_store: false,
         // This expression never stores. R already requires an inline F64

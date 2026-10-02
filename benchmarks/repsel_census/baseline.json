@@ -2,6 +2,15 @@
   "schema_version": 1,
   "workloads": [
     {
+      "name": "fixture_ptr_shape_straight_line",
+      "role": "liveness",
+      "source": "benchmarks/repsel_census/fixtures/fixture_ptr_shape_straight_line.ts",
+      "floors": {
+        "ptr-shape": 1,
+        "ptr-shape-consumed": 1
+      }
+    },
+    {
       "name": "fixture_ptr_shape",
       "role": "liveness",
       "source": "benchmarks/repsel_census/fixtures/fixture_ptr_shape.ts",

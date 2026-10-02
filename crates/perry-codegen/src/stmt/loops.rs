@@ -6767,6 +6767,7 @@ pub(crate) fn lower_for(
     // array/storage tiers above retain first refusal. Restore the previous
     // context both when planning declines and when lowering fails.
     let saved_ptr_shape_context = ctx.repsel_context_allows_ptr_shape;
+    let saved_ptr_shape_denial = ctx.repsel_ptr_shape_context_denial;
     ctx.repsel_context_allows_ptr_shape = false;
     let lowered = (|| -> Result<()> {
         let region = super::region_loop::begin(ctx, condition, body, update)?;
@@ -6774,6 +6775,10 @@ pub(crate) fn lower_for(
         // consume its pre-existing straight-line receiver facts as before.
         if region.is_none() {
             ctx.repsel_context_allows_ptr_shape = saved_ptr_shape_context;
+        } else if saved_ptr_shape_context {
+            // Planning alone is not a refusal. Only an admitted region owns
+            // the accesses lowered below, and its handoff must be visible.
+            ctx.repsel_ptr_shape_context_denial = Some(crate::expr::PTR_SHAPE_REGION_AUTHORITY);
         }
         let lowered = super::region_loop::lower_loop(ctx, region, &mut |ctx| {
             if i32_counter::lower(ctx, init, condition, update, body)? {
@@ -6786,6 +6791,7 @@ pub(crate) fn lower_for(
         lowered
     })();
     ctx.repsel_context_allows_ptr_shape = saved_ptr_shape_context;
+    ctx.repsel_ptr_shape_context_denial = saved_ptr_shape_denial;
     lowered
 }
 

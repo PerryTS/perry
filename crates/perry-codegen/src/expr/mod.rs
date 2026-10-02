@@ -276,7 +276,7 @@ pub(crate) use slot_rep::{
     deny_canonical_context, deny_canonical_i32, load_canonical_local_boxed, local_is_canonical_str,
     local_rep_is_canonical_i32, note_canonical_local, ptr_shape_context_rule_text,
     store_canonical_local_from_double, CanonicalI32Denial, SlotRep, PTR_SHAPE_NO_ACCESS_SITE,
-    PTR_SHAPE_SCALAR_REPLACED,
+    PTR_SHAPE_REGION_AUTHORITY, PTR_SHAPE_SCALAR_REPLACED,
 };
 
 pub(crate) use dispatch::{lower_expr, lower_math_operand};
@@ -2840,8 +2840,9 @@ impl<'a> FnCtx<'a> {
     }
 
     /// The `Ptr<Shape>` fact for `e` ignoring the context gate — the proof the
-    /// analysis actually produced, as opposed to the proof codegen is allowed
-    /// to act on. Report-only.
+    /// analysis actually produced, as opposed to permission for an unguarded
+    /// access. Used for reporting and for class provenance in a separately
+    /// shape-guarded region; never grants native-slot or numeric permission.
     fn ptr_shape_fact_ignoring_context(
         &self,
         e: &perry_hir::Expr,
@@ -2851,6 +2852,20 @@ impl<'a> FnCtx<'a> {
             perry_hir::Expr::This => self.proven_this.as_ref(),
             _ => None,
         }
+    }
+
+    /// Class provenance for a region's static supplier, never a license for
+    /// raw access. The supplier must validate the live ShapeId and obtain all
+    /// offsets/representations from that shape. Unlike the unguarded accessor,
+    /// this route is valid while region lowering owns representation authority.
+    /// Other unguarded-context denials do not invalidate a class hint either:
+    /// region eligibility still rejects unsupported bindings, and its guarded
+    /// loads re-read tagged roots. No native-slot permission is inherited here.
+    /// The collection OFF knob removes the fact itself; this accessor cannot
+    /// recreate it from a type annotation.
+    pub(crate) fn ptr_shape_region_class(&self, e: &perry_hir::Expr) -> Option<String> {
+        self.ptr_shape_fact_ignoring_context(e)
+            .map(|fact| fact.class_name.clone())
     }
 
     /// Record that a selected `Ptr<Shape>` proof was dropped by the context
@@ -2889,7 +2904,7 @@ impl<'a> FnCtx<'a> {
             tier: crate::opt_report::Tier::CompilerLimitation,
             issue: Some(issue),
             detail: Some(format!(
-                "proven Ptr<Shape> of class {}; every access site keeps the guard diamond",
+                "proven Ptr<Shape> of class {}; this access cannot use the unguarded receiver route",
                 fact.class_name
             )),
         });
@@ -2898,7 +2913,10 @@ impl<'a> FnCtx<'a> {
     /// Record that codegen COMMITTED to a `Ptr<Shape>` lowering for `e`.
     ///
     /// Call from the taken branch of a site that has already decided to emit
-    /// the guard-free form — never from the accessor, which answers `Some` at
+    /// the guard-free form, or from an emitted region access whose static
+    /// supplier was selected using this fact's class provenance. The region's
+    /// ShapeId guard still owns its slot/representation authority. Never call
+    /// from the accessor, which answers `Some` at
     /// sites that then reject the fact on a class or numeric-field mismatch and
     /// emit the guarded diamond anyway.
     pub(crate) fn note_ptr_shape_consumed(&self, e: &perry_hir::Expr, site: &'static str) {

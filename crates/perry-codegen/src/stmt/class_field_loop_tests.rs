@@ -2,6 +2,9 @@
 //! class increment shapes. Runtime, hostile-value, and cost acceptance remains
 //! separate and must use the unchanged original TypeScript fixtures.
 
+#[path = "ptr_shape_region_report_tests.rs"]
+mod ptr_shape_region_report_tests;
+
 use crate::{compile_module, AppMetadata, CompileOptions};
 use perry_hir::types::Type;
 use perry_hir::{

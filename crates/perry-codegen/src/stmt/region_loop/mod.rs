@@ -179,6 +179,9 @@ impl Recv {
 #[derive(Clone)]
 pub(crate) struct Receiver {
     pub(crate) recv: Recv,
+    /// Report provenance only: a Ptr<Shape> fact selected the static supplier.
+    /// No slot or representation decision may consult this flag.
+    uses_ptr_shape_class: bool,
     pub(crate) keys: Vec<String>,
     pub(crate) has_store: bool,
     /// Bit `i`: the body stores `keys[i]` (the runtime then requires it inline).
@@ -463,6 +466,7 @@ fn begin_with(
             .iter()
             .map(|(r, k, st, sm, bm, rm)| Receiver {
                 recv: *r,
+                uses_ptr_shape_class: false,
                 keys: k.clone(),
                 has_store: *st,
                 stored_mask: effective_stored_mask(*sm, k.len()),
@@ -698,6 +702,7 @@ fn body_pending(p: Plan, body: &[Stmt], split_at: usize) -> Pending {
         .iter()
         .map(|(r, k, st, sm, bm, rm)| Receiver {
             recv: *r,
+            uses_ptr_shape_class: false,
             keys: k.clone(),
             has_store: *st,
             stored_mask: effective_stored_mask(*sm, k.len()),
