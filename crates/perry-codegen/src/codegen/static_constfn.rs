@@ -265,6 +265,19 @@ pub(crate) fn emit_final_entries(
             entries_symbol(prefix, *id),
             shape.constfn.len()
         ));
+        // Packed key names are finalizer metadata, not JavaScript strings.
+        // Putting them in StringPool would allocate and root a heap string
+        // for every distinct final layout, although only its bytes are used.
+        let packed = shape
+            .keys
+            .iter()
+            .map(|byte| format!("\\{byte:02X}"))
+            .collect::<String>();
+        module.add_named_string_constant(
+            &format!("{}_keys", entries_symbol(prefix, *id)),
+            shape.keys.len(),
+            &format!("c\"{packed}\""),
+        );
     }
 }
 
@@ -326,11 +339,8 @@ fn finalize_shape(ctx: &mut crate::expr::FnCtx<'_>, shape: &BirthShape, object: 
         return object.to_string();
     };
     let entries = format!("@{}", entries_symbol(ctx.strings.module_prefix(), id));
-    let packed = String::from_utf8(shape.keys.clone()).expect("UTF-8 property names");
-    let key_idx = ctx.strings.intern(&packed);
-    let key = ctx.strings.entry(key_idx);
-    let global = format!("@{}", key.bytes_global);
-    let len = key.byte_len.to_string();
+    let global = format!("{entries}_keys");
+    let len = shape.keys.len().to_string();
     use crate::types::{I32, I64, PTR};
     ctx.block().call(
         I64,

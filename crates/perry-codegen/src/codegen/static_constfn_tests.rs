@@ -109,6 +109,19 @@ fn final_literal_seed_and_lowering_share_symbols_and_stamp_after_stores_and_patc
         crate::stubs::static_shape_seed_ll(&[warm]),
         "cold and sidecar replay must have identical seed references"
     );
+    std::env::set_var("PERRY_CONSTFN_SHAPE", "0");
+    let off = String::from_utf8(crate::compile_module(&m, opts("executable")).unwrap()).unwrap();
+    let ordinary_atoms = off.matches("call i64 @js_string_pool_atom").count();
+    assert!(
+        ordinary_atoms > 0,
+        "the ordinary string pool must be exercised"
+    );
+    assert_eq!(
+        ir.matches("call i64 @js_string_pool_atom").count(),
+        ordinary_atoms,
+        "packed finalizer metadata must not allocate JavaScript string-pool atoms"
+    );
+    std::env::set_var("PERRY_CONSTFN_SHAPE", "1");
     options.output_type = "dylib".into();
     let unloadable = String::from_utf8(crate::compile_module(&m, options).unwrap()).unwrap();
     assert!(!unloadable.contains("call i64 @js_object_finalize_constfn_static"));
@@ -146,6 +159,71 @@ fn literal_proof_rejects_duplicates_and_rebindable_rest_bodies() {
         });
     }
     assert!(literal_final("p", &[("m".into(), rest)], 0).is_none());
+}
+
+#[cfg(feature = "llvm-inprocess")]
+#[test]
+fn final_key_bytes_survive_llvm_decoding_and_codegen_unit_splitting() {
+    use crate::types::{I32, PTR, VOID};
+
+    let shape = literal_final(
+        "packed_keys",
+        &[
+            ("mé雪🦀".into(), closure(1, false)),
+            ("quote\"slash\\".into(), Expr::Number(1.0)),
+        ],
+        0,
+    )
+    .unwrap();
+    let expected = "mé雪🦀\0quote\"slash\\\0".as_bytes();
+    let entries = entries_symbol("packed_keys", 23);
+    let keys = format!("{entries}_keys");
+    for target in [
+        "x86_64-unknown-linux-gnu",
+        "x86_64-pc-windows-msvc",
+        "arm64-apple-macosx15.0.0",
+    ] {
+        let mut module = crate::module::LlModule::new(target);
+        module.add_external_global(&shape.constfn[0].symbol, PTR);
+        emit_final_entries(&mut module, "packed_keys", &[(shape.clone(), 23)]);
+        module.declare_function("consume", VOID, &[PTR, PTR, I32]);
+        // Both units use the same layout: ELF/COFF need one owner plus an
+        // external reference; Mach-O needs duplicate-safe definitions.
+        for name in ["first_factory", "second_factory"] {
+            let block = module
+                .define_function(name, VOID, vec![])
+                .create_block("entry");
+            block.call_void(
+                "consume",
+                &[
+                    (PTR, &format!("@{keys}")),
+                    (PTR, &format!("@{entries}")),
+                    (I32, &expected.len().to_string()),
+                ],
+            );
+            block.ret_void();
+        }
+        let units = module.render_codegen_units(2);
+        assert_eq!(units.len(), 2);
+        let context = inkwell::context::Context::create();
+        let mut definitions = 0;
+        for unit in units {
+            let parsed = crate::inprocess::parse_ir_text(&context, &unit, "final_key_bytes")
+                .expect("packed metadata and all cross-unit references must parse");
+            parsed.verify().expect("valid finalizer metadata unit");
+            let global = parsed.get_global(&keys).expect("every consumer needs keys");
+            assert!(global.is_constant());
+            if let Some(initializer) = global.get_initializer() {
+                definitions += 1;
+                assert_eq!(
+                    initializer.into_array_value().as_const_string().unwrap(),
+                    expected,
+                    "LLVM must decode exact UTF-8 bytes and one NUL per key"
+                );
+            }
+        }
+        assert_eq!(definitions, if target.contains("apple") { 2 } else { 1 });
+    }
 }
 
 fn empty_class() -> Class {
