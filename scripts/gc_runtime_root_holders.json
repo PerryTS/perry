@@ -360,7 +360,7 @@
         "sources": {
           "crates/perry-runtime/src/gc/census.rs": "4a611bfe5615559642b0e6e1eaf0f25440c5e228db5302d67dba43e577e0a1b6",
           "crates/perry-runtime/src/gc/cycle.rs": "9b992d27700382c84758f6f4a5574115a9862234bed2e18e0c5a3cca25c25236",
-          "crates/perry-runtime/src/gc/mod.rs": "dd9761bc38694444bf4839c5829c328828a465548d08cae4b256002972a4bd1f",
+          "crates/perry-runtime/src/gc/mod.rs": "8c0c1ce5f553fe71563dbb05b957cdebfd4ebcf2183071b3b37332f10504f4e6",
           "crates/perry-runtime/src/gc/policy.rs": "84a869e0aa09e932a4d2b6601186260129ba851b4482f29579047713c60fc95e",
           "crates/perry-runtime/src/gc/progress.rs": "a5ad3971bbe4047229ca57325234780daa85921dbc778e1c08dff4ad07ccfb96"
         }

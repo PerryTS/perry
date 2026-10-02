@@ -616,6 +616,7 @@ fn constfn_verifier_valid_stale_deprecated_and_lifecycle() {
         }
         // Restore before the checked store; its Any successor relinquishes the
         // image-body fact, so revocation requires no metadata dereference.
+        // GC_STORE_AUDIT(INIT): restore the live body before leaving deliberate sabotage.
         *fields = crate::JSValue::object_ptr(a.cast()).bits();
         crate::object::js_object_set_field_by_name(
             obj,
