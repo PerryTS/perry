@@ -1591,7 +1591,7 @@ jobs:
 
       - name: Run perry integration shard ${{ matrix.shard }}
         env:
-          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C linker-features=-lld"
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C linker-features=-lld -C force-unwind-tables=yes -C force-frame-pointers=yes"
           CARGO_PROFILE_TEST_DEBUG: "0"
           CARGO_PROFILE_DEV_DEBUG: "0"
           SHARD: ${{ matrix.shard }}
@@ -1606,6 +1606,7 @@ jobs:
           shard_heartbeat_pid=$!
           trap 'kill "$shard_heartbeat_pid" 2>/dev/null || true' EXIT
 
+          node --test scripts/test-require-runtime.test.mjs
           mapfile -t test_targets < <(
             python3 scripts/ci_cargo_test_shard.py --package perry \
               --shard "$SHARD" --total-shards "$TOTAL_SHARDS"
@@ -1619,8 +1620,21 @@ jobs:
 
           # Match cargo-test's shipped panic semantics and provide the static
           # archives used by PERRY_NO_AUTO_OPTIMIZE=1 integration fixtures.
-          cargo build --release -p perry-runtime -p perry-stdlib \
-            -p perry-runtime-static -p perry-stdlib-static
+          if printf '%s\n' "${test_targets[@]}" | grep -qE '^(bun_text_modules|bun_embedded_compression|import_meta_require_value|minsize_inline_policy|child_output_late_iterator|async_resource_own_bind)$'; then
+            # Build the coherent require providers outside the fixture's
+            # ten-minute timeout, as the scoped integration job does.
+            # Otherwise fresh full-tier shards rebuild the perry-dev graph
+            # inside a bounded Node fixture and fail before running it.
+            cargo build --release -p perry -p perry-runtime -p perry-stdlib \
+              -p perry-runtime-static -p perry-stdlib-static \
+              -p perry-ext-events -p perry-ext-http -p perry-ext-net \
+              -p perry-ext-typescript -p perry-ext-ws -p perry-ext-zlib \
+              --features perry-stdlib/external-net-pump
+            export PERRY_TEST_RUNTIME_PREBUILT=1
+          else
+            cargo build --release -p perry-runtime -p perry-stdlib \
+              -p perry-runtime-static -p perry-stdlib-static
+          fi
           export PERRY_RUNTIME_DIR="$PWD/target/release"
           export CARGO_BUILD_JOBS=1
 
