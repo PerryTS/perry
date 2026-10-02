@@ -34,8 +34,8 @@ mod worker_paths;
 use binding_origin::{resolve_binding_origin, BindingOrigin};
 pub use top_level_await::detect_top_level_await;
 pub use visitors::{
-    for_each_dynamic_import, for_each_dynamic_import_mut, for_each_worker_new,
-    for_each_worker_new_mut,
+    for_each_dynamic_import, for_each_dynamic_import_mut, for_each_module_expr,
+    for_each_worker_new, for_each_worker_new_mut,
 };
 pub use worker_paths::resolve_worker_path;
 

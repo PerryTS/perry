@@ -449,7 +449,7 @@ impl LlModule {
     }
 
     /// #10399: the thread-local form of [`Self::add_internal_global`].
-    pub fn add_internal_thread_local_global(&mut self, name: &str, ty: LlvmType, init: &str) {
+    pub fn add_internal_thread_local_global(&mut self, name: &str, ty: &str, init: &str) {
         self.globals.push(format!(
             "@{} = internal thread_local global {} {}",
             name, ty, init
