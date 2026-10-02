@@ -325,6 +325,17 @@ fn compute_object_cache_key_with_env(
             "0"
         },
     );
+    // Immutable-global transfer (perry-codegen codegen/global_transfer.rs)
+    // changes every eligible binding's storage, reads and initializer in
+    // modules that never launch a thread; versioned with its runtime ABI.
+    h.field(
+        "thread_global_transfer",
+        if perry_codegen::program_has_thread_agents() && !perry_codegen::program_has_worker() {
+            "leaf-v1"
+        } else {
+            "0"
+        },
+    );
     // Design step 4 (DESIGN 7.2): the static ShapeIds this module's code
     // embeds as immediates. A cached object is reused exactly when every id
     // it embeds is unchanged.

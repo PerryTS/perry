@@ -226,7 +226,11 @@ mod tdz_names;
 // (`inline_hot_small_enabled` / `inline_hot_small_hint_threshold`).
 pub(crate) mod helpers;
 // #10399: the driver sets this before any module codegen runs.
-pub use helpers::{program_has_worker, set_program_has_worker};
+pub use helpers::{
+    program_has_thread_agents, program_has_worker, set_program_has_thread_agents,
+    set_program_has_worker,
+};
+pub(crate) mod global_transfer;
 mod literal_constructor;
 mod method;
 mod method_registry;
@@ -464,6 +468,21 @@ fn compile_module_impl(
     let collect_births = births.is_some();
     let (live_cjs_hir, cjs_property_exports) = cjs_exports::prepare(hir);
     let hir = live_cjs_hir.as_ref();
+    // The driver sets the whole-program perry/thread flag before any module
+    // codegen. A direct compile_module caller has no graph, so also detect a
+    // launch in this module without changing shared compiler state.
+    let mut local_thread_use = false;
+    if !program_has_thread_agents() {
+        perry_hir::for_each_module_expr(hir, &mut |expr| {
+            if matches!(expr, perry_hir::Expr::NativeMethodCall { module, method, .. }
+                if module == "perry/thread"
+                    && matches!(method.as_str(), "spawn" | "parallelMap" | "parallelFilter"))
+            {
+                local_thread_use = true;
+            }
+        });
+    }
+    let thread_agents = program_has_thread_agents() || local_thread_use;
     let progress = CompileProgress::new(&hir.name, module_callable_count(hir));
     let triple = opts.target.clone().unwrap_or_else(default_target_triple);
     if let Some(refusal) = crate::target_layout::ilp32_codegen_refusal(&triple) {
@@ -2552,6 +2571,7 @@ fn compile_module_impl(
         local_generator_funcs,
         async_step_closures: hir.async_step_closures.iter().copied().collect(),
         module_global_proven_types: std::collections::HashMap::new(),
+        module_global_transfers: std::collections::HashMap::new(),
         funcs_reading_dynamic_this,
         literal_method_home_classes: crate::collectors::literal_method_home_classes(hir),
         type_aliases: opts.type_aliases,
@@ -2857,6 +2877,7 @@ fn compile_module_impl(
         module_global_types,
         module_global_proven_types,
         static_field_globals,
+        module_global_transfers,
     } = module_globals_emit::emit_module_globals(
         &mut llmod,
         hir,
@@ -2864,8 +2885,10 @@ fn compile_module_impl(
         &cross_module.compile_time_constants,
         &module_prefix,
         &cjs_property_exports,
+        global_transfer::enabled(thread_agents),
     );
     cross_module.module_global_proven_types = module_global_proven_types;
+    cross_module.module_global_transfers = module_global_transfers;
 
     // Method registry + cross-module method/getter/setter/ctor/static
     // extern declares. See `method_registry::build_method_names`.
