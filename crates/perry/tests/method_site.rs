@@ -28,6 +28,19 @@ fn run(source: &str) -> (String, u64, u64, u64) {
 
 /// Compile and run `source`; return stdout and a reader of the site counters.
 fn run_counted(source: &str) -> (String, impl Fn(&str) -> u64) {
+    let (stdout, stderr) = compile_and_run(source, &[]);
+    let count = move |name: &str| stat(&stderr, name);
+    (stdout, count)
+}
+
+fn stat(stderr: &str, name: &str) -> u64 {
+    stderr
+        .split_whitespace()
+        .find_map(|w| w.strip_prefix(name)?.strip_prefix('=')?.parse().ok())
+        .unwrap_or(0)
+}
+
+fn compile_and_run(source: &str, envs: &[(&str, &str)]) -> (String, String) {
     let dir = tempfile::tempdir().expect("tempdir");
     let entry = dir.path().join("main.ts");
     let output = dir.path().join("main_bin");
@@ -47,26 +60,23 @@ fn run_counted(source: &str) -> (String, impl Fn(&str) -> u64) {
         String::from_utf8_lossy(&compile.stdout),
         String::from_utf8_lossy(&compile.stderr)
     );
-    let run = Command::new(&output)
+    let mut command = Command::new(&output);
+    command
         .current_dir(dir.path())
-        .env("PERRY_METHOD_SITE_STATS", "1")
-        .output()
-        .expect("run compiled binary");
+        .env("PERRY_METHOD_SITE_STATS", "1");
+    for &(key, value) in envs {
+        command.env(key, value);
+    }
+    let run = command.output().expect("run compiled binary");
     let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
     assert!(
         run.status.success(),
         "binary failed ({:?})\nstderr:\n{stderr}",
         run.status
     );
-    let count = move |name: &str| -> u64 {
-        stderr
-            .split_whitespace()
-            .find_map(|w| w.strip_prefix(name)?.strip_prefix('=')?.parse().ok())
-            .unwrap_or(0)
-    };
     (
         String::from_utf8_lossy(&run.stdout).trim().to_owned(),
-        count,
+        stderr,
     )
 }
 
@@ -101,8 +111,8 @@ console.log(s, out.join(","));
     );
 }
 
-/// Sabotage: an existing-slot write to a marked prototype does not bump PERRY_PROTO_VALIDITY, or the
-/// emitted inherited hit skips the validity compare -> the old closure is called.
+/// Sabotage: the inherited hit reuses a memoized closure instead of loading
+/// the holder's slot -> a replacement still calls the old method.
 #[test]
 fn an_inherited_method_reassigned_by_any_store_spelling_is_seen() {
     let (stdout, own, inherited, misses) = run(
@@ -141,8 +151,8 @@ console.log(s, out.join(","));
     );
 }
 
-/// Sabotage: the emitted inherited hit skips the validity compare -> the redefined / deleted method is
-/// still called.
+/// Sabotage: the emitted inherited hit skips the holder-word compare -> a
+/// redefined or deleted method is still called.
 #[test]
 fn define_property_and_delete_on_the_holder_invalidate_the_inherited_entry() {
     let (stdout, own, inherited, misses) = run(
@@ -166,6 +176,7 @@ for (let i = 0; i < N; i++) {
   s += r;
   if (i % 1000 < 2) out.push(r);
 }
+
 console.log(s, out.join(","));
 "#,
     );
@@ -179,6 +190,143 @@ console.log(s, out.join(","));
     );
 }
 
+/// Mutating an unrelated marked prototype must not invalidate the inherited
+/// method entry: the receiver and its direct holder keep their shape words.
+#[test]
+fn an_unrelated_prototype_write_does_not_invalidate_the_method_site() {
+    let (stdout, own, inherited, misses) =
+        run(r#"const proto: any = { m(x: number) { return x + 1; } };
+const o: any = Object.create(proto);
+const unrelated: any = { y: 0 };
+const child: any = Object.create(unrelated);
+let sum = 0;
+for (let i = 0; i < 6000; i++) {
+  unrelated.y = i;
+  sum += o.m(i);
+}
+
+console.log(sum, unrelated.y, child.y);
+"#);
+    assert_eq!(stdout, "18003000 5999 5999");
+    assert!(
+        inherited > 0 && misses < 20,
+        "the inherited entry was invalidated by an unrelated store (own={own} inherited={inherited} misses={misses})"
+    );
+}
+
+/// The inherited entry holds the direct prototype as a strong, rewriteable
+/// root. The holder is young when the site primes; a forced copying minor
+/// must actually relocate objects, then the same site must keep calling the
+/// live method through the moved holder. Dropping the method-site root scan
+/// makes this fail under poisoned from-space.
+#[test]
+fn an_inherited_method_holder_survives_a_moving_collection() {
+    let (stdout, stderr) = compile_and_run(
+        r#"function call(o: any, x: number): number { return o.m(x); }
+const p: any = { m(x: number) { return x + 1; } };
+const o: any = Object.create(p);
+let sum = 0;
+for (let i = 0; i < 3000; i++) {
+  if (i === 1000) {
+    (globalThis as any).gc();
+    const junk: any[] = [];
+    for (let j = 0; j < 20000; j++) junk.push({ j });
+  }
+  if (i === 2000) p.m = function (x: number) { return x * 3; };
+  sum += call(o, i);
+}
+console.log(sum, call(o, 7));
+"#,
+        &[
+            ("PERRY_GC_FORCE_EVACUATE", "1"),
+            ("PERRY_GC_VERIFY_EVACUATION", "1"),
+            ("PERRY_GC_POISON_FROMSPACE", "1"),
+            ("PERRY_GC_DIAG", "1"),
+        ],
+    );
+    assert_eq!(stdout, "9499500 21", "{stderr}");
+    assert!(
+        stat(&stderr, "primes_inherited") > 0,
+        "site never primed: {stderr}"
+    );
+    assert!(stat(&stderr, "misses") < 50, "site did not hit: {stderr}");
+    assert!(
+        stat(&stderr, "holder_rewrites") > 0,
+        "the method-site holder was not relocated: {stderr}"
+    );
+    let moved: u64 = stderr
+        .lines()
+        .filter_map(|line| line.strip_prefix("[gc-copy-minor] ran "))
+        .filter(|line| !line.split_whitespace().any(|f| f == "in_place=true"))
+        .flat_map(|line| line.split_whitespace())
+        .filter_map(|f| {
+            f.strip_prefix("copied_objects=")
+                .and_then(|v| v.parse::<u64>().ok())
+        })
+        .sum();
+    assert!(moved > 0, "no copying minor relocated an object: {stderr}");
+}
+
+/// Starting a worker gates every process-global site without clearing a
+/// primary holder while primary code may be reading it. Both agents execute
+/// the same call site while the worker is live. Their copying collections
+/// must scan only the roots in their own heaps.
+#[test]
+fn a_worker_never_uses_the_primary_heaps_inherited_holder() {
+    let (stdout, stderr) = compile_and_run(
+        r#"import { spawn } from "perry/thread";
+function call(o: any, x: number): number { return o.m(x); }
+async function main(): Promise<void> {
+  const p: any = { m(x: number) { return x + 1; } };
+  const o: any = Object.create(p);
+  let before = 0;
+  for (let i = 0; i < 1000; i++) before += call(o, i);
+  const sab = new SharedArrayBuffer(8);
+  const gate = new Int32Array(sab);
+  const pending = spawn(() => {
+    const workerGate = new Int32Array(sab);
+    const wp: any = {};
+    wp.m = (x: number) => x * 2;
+    const wo: any = Object.create(wp);
+    (globalThis as any).gc();
+    Atomics.store(workerGate, 0, 1);
+    Atomics.notify(workerGate, 0);
+    if (Atomics.wait(workerGate, 1, 0, 10000) === 'timed-out') throw new Error('primary did not overlap worker');
+    let total = 0;
+    for (let i = 0; i < 1000; i++) total += call(wo, i);
+    return total;
+  });
+  if (Atomics.wait(gate, 0, 0, 10000) === 'timed-out') throw new Error('worker did not start');
+  let overlap = 0;
+  for (let i = 0; i < 1000; i++) overlap += call(o, i);
+  Atomics.store(gate, 1, 1);
+  Atomics.notify(gate, 1);
+  const worker = await pending;
+  (globalThis as any).gc();
+  console.log(before, worker, overlap, call(o, 5));
+}
+main();
+"#,
+        &[
+            ("PERRY_GC_FORCE_EVACUATE", "1"),
+            ("PERRY_GC_VERIFY_EVACUATION", "1"),
+            ("PERRY_GC_POISON_FROMSPACE", "1"),
+        ],
+    );
+    assert_eq!(stdout, "500500 999000 500500 6", "{stderr}");
+    assert!(
+        stat(&stderr, "primes_inherited") > 0,
+        "primary site never primed: {stderr}"
+    );
+    assert!(
+        stat(&stderr, "misses") >= 1000,
+        "worker did not take the inherited miss path: {stderr}"
+    );
+    assert!(
+        stat(&stderr, "refused.inh_workers") > 0,
+        "site miss did not refuse admission after worker startup: {stderr}"
+    );
+}
 /// What the prime must refuse (rest, `arguments`, bound) and what the hit must keep (arity padding,
 /// per-object captures, `this` after a throw, a GC-moved inherited closure). Sabotage: the own hit
 /// skips the code-pointer compare -> another object's method runs.

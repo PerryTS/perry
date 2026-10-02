@@ -61,6 +61,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::*;
 
+mod setter_site;
+pub(crate) use setter_site::scan_roots as scan_setter_site_roots_mut;
+
 /// The value `@perry_ic_N_packed_set` holds before its first prime.
 ///
 /// **Must equal `PACKED_SET_EMPTY` in
@@ -91,15 +94,18 @@ pub const PACKED_SET_INLINE_WAYS: usize = 4;
 /// (`object::chain_store`), 0 until the site primes one. Never compared by
 /// the emitted code, which reads only ways `0..PACKED_SET_INLINE_WAYS`.
 pub const PACKED_SET_CHAIN_WORD: usize = PACKED_SET_WAYS;
+/// Collecting-only direct class setter memo; emitted code never reads it.
+pub const PACKED_SET_SETTER_WORD: usize = PACKED_SET_WAYS + 1;
 
 /// A site's way cache: packed words in the compact word's format, then the
 /// chain entry word.
-pub type PackedSetWays = [u64; PACKED_SET_WAYS + 1];
+pub type PackedSetWays = [u64; PACKED_SET_WAYS + 2];
 
 /// A site cache no prime has touched: every way empty, no chain entry.
 pub const fn packed_set_cache_empty() -> PackedSetWays {
-    let mut cache = [PACKED_SET_EMPTY; PACKED_SET_WAYS + 1];
+    let mut cache = [PACKED_SET_EMPTY; PACKED_SET_WAYS + 2];
     cache[PACKED_SET_CHAIN_WORD] = 0;
+    cache[PACKED_SET_SETTER_WORD] = 0;
     cache
 }
 
@@ -177,24 +183,12 @@ pub extern "C" fn js_put_value_set_packed_miss(
         }
     }
 
-    // Charter step 3: a key this receiver shape inherits as an accessor runs
-    // its setter from the inherited-access table (the same entries reads use),
-    // ahead of the key interning, chain proof and rooting below, which it
-    // would pay for nothing.
-    {
-        let tb = target.to_bits();
-        if tb & !crate::value::POINTER_MASK == crate::value::POINTER_TAG && !key.is_null() {
-            let obj = (tb & crate::value::POINTER_MASK) as *const crate::ObjectHeader;
-            if crate::value::addr_class::is_above_handle_band(obj as usize)
-                && unsafe {
-                    crate::object::inherited_read_cache::inherited_write_through(obj, key, value)
-                }
-            {
-                return value;
-            }
-        }
+    // P4 checked inherited setters before key interning and the clear-chain
+    // add memo. A direct setter cannot add a receiver key, and this collecting
+    // route validates its own live link and descriptor before invocation.
+    if let Some(stored) = unsafe { setter_site::try_set(cache_slot, target, key, value) } {
+        return stored;
     }
-
     // Inherited-access lane: a key-adding store whose chain this site has
     // already proved clear takes the transition append (`object::chain_store`).
     // Allocation-free on a decline.
@@ -384,7 +378,6 @@ unsafe fn prime_packed_set(
         || !crate::object::shapes::store_kind::shape_admits_plain_store(
             crate::object::shapes::object_shape_stamp(obj),
         )
-        || !crate::object::proto_validity::store_cache_may_learn(obj)
     {
         return;
     }

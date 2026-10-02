@@ -179,21 +179,6 @@ pub extern "C" fn js_put_value_set(
         if unsafe { crate::object::try_existing_own_data_overwrite(obj, key_ptr, value) } {
             return value;
         }
-        // Charter step 3: a key this receiver shape inherits as an accessor
-        // runs its setter from the inherited-access table.
-        if crate::value::addr_class::is_above_handle_band(obj as usize) {
-            if let Some(interned) = unsafe {
-                crate::object::chain_store::interned_key_for_store(f64::from_bits(key_bits))
-            } {
-                if unsafe {
-                    crate::object::inherited_read_cache::inherited_write_through(
-                        obj, interned, value,
-                    )
-                } {
-                    return value;
-                }
-            }
-        }
     }
 
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -418,6 +403,7 @@ pub use packed_add::PackedSetSite;
 pub(crate) use packed_add::{
     census as store_census, C_REP_CONVERGE, C_REP_MIGRATE, C_REP_VALIDITY_BUMP,
 };
+pub(crate) use packed_set::scan_setter_site_roots_mut;
 pub use packed_set::{js_put_value_set_packed_miss, PACKED_SET_EMPTY};
 pub(crate) use packed_set::{packed_set_cache_resolve, PackedSetWaysSlot, PACKED_SET_CHAIN_WORD};
 
@@ -655,11 +641,6 @@ pub extern "C" fn js_put_value_set_ic_miss(
         // The descriptor above already proves this stamp is live, so the
         // token comes from the header word rather than from a second full
         // lookup-and-copy of the same id (see `dyn_ic_try_store`).
-        // D3(b): a marked prototype's shape is never learned by a store cache,
-        // so every write to it reaches a funnel that bumps PERRY_PROTO_VALIDITY.
-        if !crate::object::proto_validity::store_cache_may_learn(obj) {
-            return result;
-        }
         let shape_token = crate::object::shapes::PIC_ID_TOKEN_BIT
             | crate::object::shapes::object_shape_stamp(obj) as u64;
 
@@ -1286,11 +1267,6 @@ pub extern "C" fn js_put_value_set_dyn_ic_miss(
         // The descriptor above already proves this stamp is live, so the
         // token comes from the header word rather than from a second full
         // lookup-and-copy of the same id (see `dyn_ic_try_store`).
-        // D3(b): a marked prototype's shape is never learned by a store cache,
-        // so every write to it reaches a funnel that bumps PERRY_PROTO_VALIDITY.
-        if !crate::object::proto_validity::store_cache_may_learn(obj) {
-            return result;
-        }
         let shape_token = crate::object::shapes::PIC_ID_TOKEN_BIT
             | crate::object::shapes::object_shape_stamp(obj) as u64;
         let key_bits = key.to_bits() as i64;

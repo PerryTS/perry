@@ -238,28 +238,6 @@ pub extern "C-unwind" fn js_object_get_field_ic_slow(
     cache_slot: *mut PicCacheSlot,
     packed: *const AtomicU64,
 ) -> f64 {
-    // First-read D3: the site asked its GC-leaf front
-    // (`read_confirm::js_object_get_field_ic_front`) first; what reaches this
-    // entry is what the front declined. A never-primed site asks the
-    // inherited-read cache (#10834/#10842) — the one edge an inherited read
-    // ever takes — and everything else runs the collecting body.
-    let addr = obj_handle as usize;
-    if !key.is_null()
-        && crate::value::addr_class::is_above_handle_band(addr)
-        // SAFETY: the site passes its own cache slot or null.
-        && unsafe { crate::object::pic_slot_peek(cache_slot) }.is_null()
-    {
-        // SAFETY: a POINTER-tagged payload above the handle band.
-        let v = unsafe {
-            crate::object::inherited_read_cache::js_inherited_read_cache_hit_f64(
-                addr as *const ObjectHeader,
-                key,
-            )
-        };
-        if v.to_bits() != crate::value::TAG_HOLE {
-            return v;
-        }
-    }
     ic_slow_body(obj_handle, key, cache_slot, packed)
 }
 

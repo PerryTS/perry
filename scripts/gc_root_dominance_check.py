@@ -466,10 +466,6 @@ NONCOLLECTING = {
     # `perry-codegen/src/gc_call_effects.rs` (`GcCallEffect::CannotCollect`).
     "js_write_barrier_root_nanbox", "perry_transition_cache_base",
     "js_transition_ic_note_hit",
-    # object/inherited_read_cache.rs `js_inherited_read_cache_hit_f64`: a
-    # per-thread table probe plus one load through the holder; no allocation,
-    # no user code, no chain walk (declines answer TAG_HOLE).
-    "js_inherited_read_cache_hit_f64",
     # S2 GC-leaf IC hits (`expr/ic_fast_split.rs`); audit in gc_call_effects.rs.
     "js_object_get_field_ic_fast",
     "js_class_field_get_ic_fast",
