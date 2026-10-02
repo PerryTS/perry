@@ -444,7 +444,14 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                     );
                     let _ = wrapper.create_block("entry");
                     let blk = wrapper.block_mut(0).unwrap();
-                    let value = blk.load(DOUBLE, &format!("@{global_name}"));
+                    let transfer = cross_module
+                        .module_global_transfers
+                        .values()
+                        .find(|transfer| transfer.canonical == *global_name);
+                    let value = match transfer {
+                        Some(transfer) => blk.call(DOUBLE, &transfer.accessor, &[]),
+                        None => blk.load(DOUBLE, &format!("@{global_name}")),
+                    };
                     blk.ret(DOUBLE, &value);
                     continue;
                 }

@@ -48,6 +48,10 @@ pub(crate) fn declare_third_party(module: &mut LlModule) {
     module.declare_function("js_thread_parallel_map", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_thread_parallel_filter", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_thread_spawn", DOUBLE, &[DOUBLE]);
+    // Immutable module-global leaves (codegen/global_transfer.rs): publication
+    // cell, current-agent cache and canonical slot addresses.
+    module.declare_function("js_thread_global_publish", VOID, &[I64, I64, I64]);
+    module.declare_function("js_thread_global_materialize", DOUBLE, &[I64, I64, I64]);
     // `perry/native` checked scalar conversions. Results remain ordinary
     // JavaScript-compatible numbers at the public boundary.
     module.declare_function("js_perry_native_i8", DOUBLE, &[DOUBLE]);
