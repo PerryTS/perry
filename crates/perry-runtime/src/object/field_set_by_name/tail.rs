@@ -569,12 +569,14 @@ pub(crate) fn set_field_by_name_object_tail(
                     super::prop_plan::receiver_proto_bits(obj),
                 );
             }
-            let lane_probe = transition_cache_lookup_for_value(
-                prev_shape_id,
-                interned_key,
-                Some(value.to_bits()),
-            );
-            if let Some((next_keys, slot_idx, target_shape_id)) = lane_probe {
+            let lane_probe = transition_cache_lookup(prev_shape_id, interned_key).and_then(|hit| {
+                super::constfn_key_add::admit_or_store(obj, prev_shape_id, hit, value.to_bits())
+            });
+            if let Some(edge) = lane_probe {
+                let Some((next_keys, slot_idx, target_shape_id)) = edge.transition() else {
+                    mirror_class_object_static_write(obj, key, value);
+                    return;
+                };
                 // Defensive: strip a raw-null POINTER_TAG value the same
                 // way the slow overflow path below does, so a bogus
                 // 0x7FFD_0000_0000_0000 store doesn't leak into an

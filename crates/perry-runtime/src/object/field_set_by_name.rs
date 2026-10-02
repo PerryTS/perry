@@ -213,13 +213,21 @@ pub extern "C" fn js_object_set_field_by_name(
                     {
                         let prev_shape_id = super::shapes::object_shape_stamp(o);
                         if prev_shape_id != 0 {
-                            if let Some((next_keys, slot_idx, target_shape_id)) =
-                                transition_cache_lookup_for_value(
-                                    prev_shape_id,
-                                    key,
-                                    Some(value.to_bits()),
-                                )
+                            if let Some(edge) = transition_cache_lookup(prev_shape_id, key)
+                                .and_then(|hit| {
+                                    super::constfn_key_add::admit_or_store(
+                                        o,
+                                        prev_shape_id,
+                                        hit,
+                                        value.to_bits(),
+                                    )
+                                })
                             {
+                                let Some((next_keys, slot_idx, target_shape_id)) =
+                                    edge.transition()
+                                else {
+                                    return;
+                                };
                                 // Same store semantics as the in-body fast
                                 // path: strip a raw-null POINTER_TAG value,
                                 // transition the keys array, note the dynamic
