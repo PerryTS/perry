@@ -202,12 +202,25 @@ fn test_array_mixed_bulk_producers_preserve_pointer_layout() {
     clear_marks();
     clear_mark_seeds();
 
-    let concatenated = crate::array::js_array_concat(crate::array::js_array_alloc(0), src);
+    // A roomy destination retains the append-time mask proof. Request that
+    // capacity explicitly instead of depending on the empty-array minimum.
+    let concatenated = crate::array::js_array_concat(crate::array::js_array_alloc(8), src);
     assert_eq!(
         test_layout_pointer_slot_count(concatenated as usize, 4),
         Some(1)
     );
     assert_array_root_trace_reads(concatenated, 1);
+    unsafe {
+        assert_ne!((*child_header).gc_flags & GC_FLAG_MARKED, 0);
+    }
+    clear_marks();
+    clear_mark_seeds();
+
+    // A small destination settles on the tag scan while its mixed prefix is
+    // built. It must still trace the pointer, even without a per-object mask.
+    let small = crate::array::js_array_concat(crate::array::js_array_alloc_literal(0), src);
+    assert_eq!(test_layout_pointer_slot_count(small as usize, 4), None);
+    assert_array_root_trace_reads(small, 4);
     unsafe {
         assert_ne!((*child_header).gc_flags & GC_FLAG_MARKED, 0);
     }

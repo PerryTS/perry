@@ -19,7 +19,9 @@ fn strict_dense_pointer_overwrite_lane_matches_the_general_path() {
                 crate::value::js_nanbox_pointer(obj as i64)
             })
             .collect();
-        let mut arr = js_array_alloc(4);
+        // This lane fixture needs five dense slots without relocation when
+        // length is extended below; request them rather than relying on slack.
+        let mut arr = js_array_alloc(5);
         for value in &objects[..3] {
             arr = js_array_push_f64(arr, *value);
         }
@@ -75,7 +77,9 @@ fn strict_dense_pointer_overwrite_lane_matches_the_general_path() {
 fn strict_dense_number_store_fast_lane_matches_the_general_path() {
     use super::indexing::test_strict_dense_number_store as lane;
     unsafe {
-        let mut arr = js_array_alloc(4);
+        // The two prototype-sensitive holes below must belong to this same
+        // resolved allocation, including with the smaller initial reserve.
+        let mut arr = js_array_alloc(6);
         for i in 0..3 {
             arr = js_array_push_f64(arr, i as f64);
         }

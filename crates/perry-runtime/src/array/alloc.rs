@@ -314,7 +314,7 @@ pub extern "C" fn js_array_alloc_with_length(capacity: u32) -> *mut ArrayHeader 
 /// Unlike [`js_array_alloc_with_length`], this does not add
 /// [`MIN_ARRAY_CAPACITY`] growth headroom. Callers must know their final width;
 /// the spill buffer used by JSON tape materialization does, and padding every
-/// parsed object to 16 side slots would otherwise dominate the object itself.
+/// parsed object to the minimum side slots could dominate the object itself.
 pub(crate) fn js_array_alloc_with_length_exact(capacity: u32) -> *mut ArrayHeader {
     let capacity = array_capacity_or_throw(capacity);
     let ptr = arena_alloc_gc(
@@ -660,10 +660,10 @@ pub(crate) unsafe fn js_array_from_string_codepoints(
 
 /// Exact-sized array allocation for array literals `[a, b, c, ...]`.
 ///
-/// Unlike `js_array_alloc`, this does NOT apply `MIN_ARRAY_CAPACITY=16` padding.
+/// Unlike `js_array_alloc`, this does NOT apply minimum-capacity padding.
 /// Every byte allocated is a byte the literal uses, which keeps tight-loop
-/// allocation pressure proportional to the literal size (a 3-element literal
-/// costs 32 bytes, not 136). `length` is pre-set to `capacity` so the codegen
+/// allocation pressure proportional to the literal size. `length` is pre-set
+/// to `capacity` so the codegen
 /// only needs to emit direct stores for each element; no per-element
 /// `js_array_push_f64` call with redundant capacity check.
 ///

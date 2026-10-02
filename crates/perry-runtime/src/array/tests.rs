@@ -620,8 +620,8 @@ fn stale_array_reference_survives_three_growths_and_forced_minor_gc() {
     let initial = js_array_alloc(0);
     let mut head = initial;
 
-    // Capacity progresses 16 -> 32 -> 64 -> 128. Keeping `initial` unchanged
-    // makes the first resolution exercise the complete three-stub chain; that
+    // Capacity doubles from MIN_ARRAY_CAPACITY past 65. Keeping `initial` unchanged
+    // makes the first resolution exercise the complete growth-stub chain; that
     // resolution then compresses `initial` directly to the current head.
     for i in 0..65u32 {
         head = js_array_push_f64(head, i as f64);

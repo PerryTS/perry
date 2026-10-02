@@ -48,6 +48,8 @@ mod reduce_right;
 mod search;
 #[cfg(test)]
 mod shift_queue_tests;
+#[cfg(test)]
+mod small_capacity_tests;
 mod sort;
 mod species;
 mod splice_slice;
