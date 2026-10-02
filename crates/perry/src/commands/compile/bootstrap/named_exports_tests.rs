@@ -248,3 +248,44 @@ fn javascript_importer_is_held_to_every_named_specifier() {
         .to_string()
         .contains("main.js"));
 }
+
+#[test]
+fn native_manifest_exports_reach_the_ffi_router() {
+    for name in ["doThing", "js_foo_do_thing"] {
+        let mut ctx = fixture("foo", name);
+        ctx.native_libraries
+            .push(super::super::types::NativeLibraryManifest {
+                module: "foo".into(),
+                package_dir: PathBuf::from("/repo/node_modules/foo"),
+                abi_version: None,
+                functions: vec![super::super::types::NativeFunctionDecl {
+                    name: "js_foo_do_thing".into(),
+                    params: vec![],
+                    returns: perry_api_manifest::NativeAbiType::I64,
+                }],
+                target_config: None,
+            });
+        enforce_static_import_exports(&mut ctx).unwrap();
+        let import = &mut ctx
+            .native_modules
+            .get_mut(Path::new("/repo/main.ts"))
+            .unwrap()
+            .imports[0];
+        import.specifiers = vec![ImportSpecifier::Named {
+            imported: "missing".into(),
+            local: "local_alias".into(),
+        }];
+        assert!(enforce_static_import_exports(&mut ctx).is_err());
+        let import = &mut ctx
+            .native_modules
+            .get_mut(Path::new("/repo/main.ts"))
+            .unwrap()
+            .imports[0];
+        import.source = "other".into();
+        import.specifiers = vec![ImportSpecifier::Named {
+            imported: name.into(),
+            local: "local_alias".into(),
+        }];
+        assert!(enforce_static_import_exports(&mut ctx).is_err());
+    }
+}
