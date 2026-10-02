@@ -433,29 +433,19 @@ pub(crate) fn execute_output(
     let stored = receiver.with_const_ptr::<RegExpHeader, _>(|r| unsafe {
         crate::value::JSValue::from_bits((*r).last_index)
     });
-    // ToLength still runs for non-numbers even when lastIndex will be
-    // ignored: it can invoke user code, recompile the receiver or throw.
     let last_index = if stored.is_number() {
-        None
+        stored
+            .as_number()
+            .max(0.0)
+            .floor()
+            .min(9_007_199_254_740_991.0) as usize
     } else {
-        Some(caught(|| {
-            receiver.with_const_ptr(|p| super::regex_last_index_offset(p))
-        })?)
+        caught(|| receiver.with_const_ptr(|p| super::regex_last_index_offset(p)))?
     };
     let (stateful, has_indices) = receiver.with_const_ptr::<RegExpHeader, _>(|r| unsafe {
         ((*r).global || (*r).sticky, (*r).has_indices)
     });
-    let start = if stateful {
-        last_index.unwrap_or_else(|| {
-            stored
-                .as_number()
-                .max(0.0)
-                .floor()
-                .min(9_007_199_254_740_991.0) as usize
-        })
-    } else {
-        0
-    };
+    let start = if stateful { last_index } else { 0 };
     let length = input.with_const_ptr::<StringHeader, _>(|s| unsafe { (*s).utf16_len as usize });
     if start > length {
         if stateful {
@@ -487,7 +477,7 @@ pub(crate) fn execute_output(
             // Only g/y searches can start away from zero. A non-stateful
             // call gains nothing from finding or recording a position, and
             // otherwise copies/scans the entire four-entry hint table twice.
-            cross_call = if stateful { identity } else { None };
+            cross_call = identity.filter(|_| stateful);
             &fresh_subject
         }
     };
