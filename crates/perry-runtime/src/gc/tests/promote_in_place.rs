@@ -1009,3 +1009,61 @@ fn another_agents_incremental_cycle_does_not_veto_this_threads_untraced_promotio
         "and the veto must lift when this thread's cycle ends"
     );
 }
+
+// ---------------------------------------------------------------------------
+// #11736: a promoting minor ages idle Eden blocks like a recycling one
+// ---------------------------------------------------------------------------
+
+/// ★ #11736: promotion takes Eden's occupied blocks and leaves the idle ones
+/// behind; those must be counted and released by the same rule as in every
+/// other collector, or a promoting minor re-arms the whole-arena trigger a
+/// block higher per idle block it kept.
+///
+/// Prologue: a moving minor empties ten blocks of garbage (all used, count 0),
+/// then a budgeted minor finds them idle (count 1). The promoting minor is the
+/// second idle collection. Fails on the defect: the promotion reset zeroed every
+/// count, so the idle blocks stayed mapped.
+#[test]
+fn a_promoting_minor_releases_eden_blocks_two_collections_found_idle() {
+    std::thread::spawn(|| {
+        let _guard = CopyingNurseryTestGuard::new(4);
+        let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|b| b.set(crate::arena::old_gen_in_use_bytes()));
+        GC_OLD_RECLAIM_PENDING.with(|p| p.set(false));
+
+        let target = crate::arena::arena_total_bytes() + 10 * crate::arena::BLOCK_SIZE;
+        while crate::arena::arena_total_bytes() < target {
+            let _ = young_leaf();
+        }
+        trigger_guard.make_arena_trigger_due();
+        assert!(super::super::gc_safepoint_moving_minor());
+        trigger_guard.make_arena_trigger_due();
+        let step = loop {
+            let step = gc_runtime_safepoint();
+            if step.status != JS_GC_STEP_STATUS_ACTIVE {
+                break step;
+            }
+        };
+        assert_eq!(step.status, JS_GC_STEP_STATUS_COMPLETED);
+        let before = crate::arena::arena_total_bytes();
+
+        let _promote = InPlacePromotionTestGuard::enabled(1000);
+        let child = young_leaf();
+        js_shadow_slot_set(0, ptr_bits(child));
+        let trace = collect_minor_trace(GcTriggerKind::Direct);
+
+        // ★ Live subject: the cycle took the promoting path.
+        assert!(
+            trace.copying_nursery.in_place_promotion
+                && trace.copying_nursery.in_place_promoted_blocks > 0,
+            "the cycle must have promoted in place"
+        );
+        assert!(
+            crate::arena::arena_total_bytes() + 4 * crate::arena::BLOCK_SIZE <= before,
+            "the promoting minor must release the idle Eden blocks (before={before} after={})",
+            crate::arena::arena_total_bytes()
+        );
+    })
+    .join()
+    .unwrap();
+}
