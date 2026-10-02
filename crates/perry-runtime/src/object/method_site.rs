@@ -645,6 +645,20 @@ unsafe fn prime(slot: *mut MethodSiteSlot, recv: f64, name: &[u8], argc: usize) 
             if body != Some(info as *const crate::closure::JsFunctionInfo as u64)
                 || slot_word & METHOD_SITE_SPILL != 0
             {
+                #[cfg(any(
+                    debug_assertions,
+                    feature = "field-rep-assert",
+                    feature = "gc-instruments"
+                ))]
+                if super::field_rep_store::field_rep_verify_enabled() {
+                    if let Some(record) =
+                        super::shapes::shape_record_by_id(super::shapes::object_shape_stamp(obj))
+                    {
+                        super::field_rep_store::assert_constfn_slot_body(
+                            obj, record, s as usize, value,
+                        );
+                    }
+                }
                 refuse(17);
                 return;
             }

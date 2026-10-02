@@ -219,7 +219,17 @@ fn moving_roundtrip(method_key: &str, expected_cached_stamps: u64) {
         shapes::test_reset_cached_transition_stamps();
         let before_receiver = second.get_raw_mut_ptr::<ObjectHeader>() as usize;
         let before_closure = slot(second.get_raw_mut_ptr()) as usize;
+        field_rep_store::assert_field_rep_lanes(
+            second.get_raw_mut_ptr(),
+            shapes::object_shape_record(second.get_raw_mut_ptr()),
+            1,
+        );
         gc::gc_collect_minor();
+        field_rep_store::assert_field_rep_lanes(
+            second.get_raw_mut_ptr(),
+            shapes::object_shape_record(second.get_raw_mut_ptr()),
+            1,
+        );
         assert_ne!(
             second.get_raw_mut_ptr::<ObjectHeader>() as usize,
             before_receiver,

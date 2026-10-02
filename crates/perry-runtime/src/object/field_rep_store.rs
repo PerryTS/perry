@@ -492,7 +492,7 @@ pub(crate) fn shape_slot_is_f64(id: u32, slot: u32) -> bool {
 }
 
 /// Does every trace of an object check the field-representation invariant
-/// ([`assert_f64_lanes_hold_numbers`])? Always in a debug build or with the
+/// ([`assert_field_rep_lanes`])? Always in a debug build or with the
 /// `field-rep-assert` feature; with `gc-instruments`, when
 /// `PERRY_FIELD_REPR_VERIFY=1` (DESIGN §3.1 verify mode). A binary built
 /// without either feature compiles no check, and the knob is one of
@@ -554,17 +554,16 @@ pub(crate) unsafe fn birth_fill_f64_lanes(obj: *mut ObjectHeader) {
     }
 }
 
-/// The field-representation invariant (charter step 5): inside the live
-/// bound, every slot under an `F64` (or deprecated) lane of the receiver's
-/// shape holds a canonical double. Run at every trace of an object when
-/// [`field_rep_verify_enabled`], so a writer that skips the store check trips
-/// it at the next collection.
+/// Verify all admitted field representations, including deprecated carriers:
+/// deprecation changes future admission, never an existing carrier's body fact.
+/// Collector traversal may precede closure-slot rewriting, so SPECIAL checks
+/// resolve validated forwarding before examining closure payload metadata.
 #[cfg(any(
     debug_assertions,
     feature = "field-rep-assert",
     feature = "gc-instruments"
 ))]
-pub(crate) unsafe fn assert_f64_lanes_hold_numbers(
+pub(crate) unsafe fn assert_field_rep_lanes(
     obj: *const ObjectHeader,
     record: Option<super::shapes::ShapeRecordRef>,
     live: usize,
@@ -578,19 +577,51 @@ pub(crate) unsafe fn assert_f64_lanes_hold_numbers(
     }
     let fields = (obj as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64;
     for slot in 0..live.min(REP_SLOTS as usize) {
-        if !matches!(
-            slot_rep(rep, slot as u32),
-            field_rep::REP_F64 | field_rep::REP_F64_DEPRECATED
-        ) {
-            continue;
-        }
         let bits = *fields.add(slot);
-        if field_rep::f64_slot_bits(bits) != Some(bits) {
-            panic!(
-                "field-rep invariant: slot {slot} of {obj:p} (shape {:#x}, rep {rep:#x}) holds {bits:#018x}, not a canonical double",
-                object_shape_stamp(obj)
-            );
+        match slot_rep(rep, slot as u32) {
+            field_rep::REP_F64 | field_rep::REP_F64_DEPRECATED => {
+                if field_rep::f64_slot_bits(bits) != Some(bits) {
+                    panic!(
+                        "field-rep invariant: slot {slot} of {obj:p} (shape {:#x}, rep {rep:#x}) holds {bits:#018x}, not a canonical double",
+                        object_shape_stamp(obj)
+                    );
+                }
+            }
+            field_rep::REP_SPECIAL if record.special_constfn_mask() & (1 << slot) != 0 => {
+                assert_constfn_slot_body(obj, record, slot, bits);
+            }
+            _ => {} // The reserved optional NoPointer producer remains disabled.
         }
+    }
+}
+
+/// Also used at the existing cold method-prime refusal: an unchecked store
+/// must be diagnosed even if no collection follows before generic dispatch.
+#[cfg(any(
+    debug_assertions,
+    feature = "field-rep-assert",
+    feature = "gc-instruments"
+))]
+#[cold]
+#[inline(never)]
+pub(crate) unsafe fn assert_constfn_slot_body(
+    obj: *const ObjectHeader,
+    record: super::shapes::ShapeRecordRef,
+    slot: usize,
+    bits: u64,
+) {
+    let expected = record.constfn_info(slot as u32);
+    let actual = if bits & !crate::value::POINTER_MASK == crate::value::POINTER_TAG {
+        crate::gc::field_rep_live_address((bits & crate::value::POINTER_MASK) as usize)
+            .and_then(|addr| constfn_store_info(crate::value::POINTER_TAG | addr as u64))
+    } else {
+        None
+    };
+    if expected.is_none() || actual != expected {
+        panic!(
+            "field-rep invariant: SPECIAL ConstFn slot {slot} of {obj:p} (shape {:#x}) holds {bits:#018x}, body {actual:?} disagrees with shape body {expected:?}",
+            object_shape_stamp(obj)
+        );
     }
 }
 
