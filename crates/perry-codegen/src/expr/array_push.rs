@@ -717,7 +717,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> 
         ..
     } = expr
     else {
-        return lower_inner(ctx, expr, value_discarded, false);
+        return lower_inner(ctx, expr, value_discarded);
     };
     // The head BEFORE the append, ROOTED across it. The push evaluates the
     // argument and can collect, so the compare below must see the head where
@@ -730,7 +730,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> 
     let before_box = lower_expr(ctx, &Expr::LocalGet(*array_id))?;
     rooting::with_rooted_group(ctx, 1, |ctx, group| {
         let before = group.adopt_emitted(ctx, Repr::Boxed, &before_box, true);
-        let result = lower_inner(ctx, expr, value_discarded, false)?;
+        let result = lower_inner(ctx, expr, value_discarded)?;
         emit_field_push_writeback(ctx, *array_id, field, group, before)?;
         Ok(result)
     })
@@ -841,31 +841,7 @@ fn emit_field_push_writeback(
     Ok(())
 }
 
-/// Reuse the existing guarded append tiers after a lookup-first builtin proof.
-/// The synthetic HIR receiver local cannot be rebound by the argument.
-pub(super) fn lower_known_builtin(
-    ctx: &mut FnCtx<'_>,
-    array_id: u32,
-    value: &Expr,
-) -> Result<String> {
-    lower_inner(
-        ctx,
-        &Expr::ArrayPush {
-            array_id,
-            value: Box::new(value.clone()),
-            field_writeback: None,
-        },
-        true,
-        true,
-    )
-}
-
-fn lower_inner(
-    ctx: &mut FnCtx<'_>,
-    expr: &Expr,
-    value_discarded: bool,
-    known_builtin: bool,
-) -> Result<String> {
+fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Result<String> {
     match expr {
         Expr::ArrayPush {
             array_id, value, ..
@@ -917,11 +893,7 @@ fn lower_inner(
             // shape, `out.push(f(x))` over a plain local — the historical
             // argument-then-receiver order names the same array and every tier
             // below keeps the IR it has always emitted.
-            // The field-push receiver is a private synthetic binding, even
-            // in module init. User code cannot rebind it, and its method was
-            // resolved before the argument; the ordinary spec-order fallback
-            // would incorrectly perform a second own-method lookup.
-            if !known_builtin && push_receiver_is_rebindable(ctx, *array_id, value) {
+            if push_receiver_is_rebindable(ctx, *array_id, value) {
                 return lower_array_push_spec_order(
                     ctx,
                     *array_id,
@@ -970,11 +942,7 @@ fn lower_inner(
                     );
                     // #11021: the fallback is where an own `push` lands (the
                     // guard rejects `OBJ_FLAG_ARRAY_DESCRIPTORS`), and exits here.
-                    let mut own = if known_builtin {
-                        OwnPushJoin::known_builtin(ctx)
-                    } else {
-                        OwnPushJoin::new(ctx)
-                    };
+                    let mut own = OwnPushJoin::new(ctx);
                     let fast_idx = ctx.new_block("apush.numeric_fast");
                     let fallback_idx = ctx.new_block("apush.numeric_fallback");
                     let merge_idx = ctx.new_block("apush.numeric_merge");
@@ -1181,11 +1149,7 @@ fn lower_inner(
                 // `push` lands — the admission mask below tests
                 // `OBJ_FLAG_ARRAY_DESCRIPTORS`, which every own-named-property
                 // install arms — and both exit here with the method's return.
-                let mut own = if known_builtin {
-                    OwnPushJoin::known_builtin(ctx)
-                } else {
-                    OwnPushJoin::new(ctx)
-                };
+                let mut own = OwnPushJoin::new(ctx);
                 let fwd_idx = ctx.new_block("apush.fwd");
                 // An elements-backed Array subclass (`ObjectMeta.elements`)
                 // appends to its store: the payload is resolved here and the
@@ -1538,11 +1502,7 @@ fn lower_inner(
             let arr_handle = unbox_to_i64(ctx.block(), &arr_box);
             // #11021: a boxed or captured receiver's every push is this call,
             // and an own `push` exits here with the method's return.
-            let mut own = if known_builtin {
-                OwnPushJoin::known_builtin(ctx)
-            } else {
-                OwnPushJoin::new(ctx)
-            };
+            let mut own = OwnPushJoin::new(ctx);
             let new_handle = own.emit_push(ctx, &arr_handle, &v);
             let new_box = nanbox_pointer_inline(ctx.block(), &new_handle);
             emit_push_writeback(ctx, *array_id, &new_box, "ArrayPush")?;

@@ -12,7 +12,7 @@ use crate::rooting::{self, Repr};
 use crate::types::{DOUBLE, I1, I16, I64, I8, PTR};
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, receiver: &Expr, value: &Expr) -> Result<String> {
-    let Expr::LocalGet(id) = receiver else {
+    let Expr::LocalGet(_) = receiver else {
         anyhow::bail!("push_field_single requires a bound receiver");
     };
     // #11394 supplies a whole-program proof, including imported modules. A
@@ -24,10 +24,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, receiver: &Expr, value: &Expr) -> Resul
     let hdr = ctx.new_block("fieldpush.header");
     let builtin = ctx.new_block("fieldpush.builtin");
     let lookup = ctx.new_block("fieldpush.lookup");
+    let argument = ctx.new_block("fieldpush.argument");
+    let append = ctx.new_block("fieldpush.append");
+    let call = ctx.new_block("fieldpush.call");
     let merge = ctx.new_block("fieldpush.merge");
     let hdr_label = ctx.block_label(hdr);
     let builtin_label = ctx.block_label(builtin);
     let lookup_label = ctx.block_label(lookup);
+    let argument_label = ctx.block_label(argument);
+    let append_label = ctx.block_label(append);
+    let call_label = ctx.block_label(call);
     let merge_label = ctx.block_label(merge);
     let handle = {
         let blk = ctx.block();
@@ -65,45 +71,80 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, receiver: &Expr, value: &Expr) -> Resul
         let ok = blk.and(I1, &plain, &method);
         blk.cond_br(&ok, &builtin_label, &lookup_label);
     }
+    // Resolve the method first, then merge BEFORE emitting the argument. In
+    // particular, a large argument must not be copied into two code paths.
     ctx.current_block = builtin;
-    let fast = super::array_push::lower_known_builtin(ctx, *id, value)?;
-    let fast_end = ctx.block().label.clone();
-    ctx.block().br(&merge_label);
+    ctx.block().br(&argument_label);
     ctx.current_block = lookup;
-    let slow = lower_lookup_first(ctx, receiver, value)?;
-    let slow_end = ctx.block().label.clone();
-    ctx.block().br(&merge_label);
-    ctx.current_block = merge;
-    Ok(ctx
+    let method = lookup_method(ctx, receiver)?;
+    let lookup_end = ctx.block().label.clone();
+    ctx.block().br(&argument_label);
+    ctx.current_block = argument;
+    let is_builtin = ctx
         .block()
-        .phi(DOUBLE, &[(&fast, &fast_end), (&slow, &slow_end)]))
+        .phi(I1, &[("true", &builtin_label), ("false", &lookup_end)]);
+    let method = ctx
+        .block()
+        .phi(DOUBLE, &[("0.0", &builtin_label), (&method, &lookup_end)]);
+    rooting::with_rooted_group(ctx, 1, |ctx, group| {
+        let method = group.adopt_emitted(ctx, Repr::Boxed, &method, true);
+        let value = lower_expr(ctx, value)?;
+        let recv = lower_expr(ctx, receiver)?;
+        let method = group.reread_emitted(ctx, method);
+        ctx.block().cond_br(&is_builtin, &append_label, &call_label);
+        ctx.current_block = append;
+        // One shared runtime implementation handles forwarding, capacity,
+        // descriptors, integrity and GC barriers. Expanding ArrayPush here
+        // multiplies that machinery at every unrolled/specialized call site.
+        // The captured builtin decision survives mutations in the argument.
+        let handle = super::unbox_to_i64(ctx.block(), &recv);
+        ctx.block().call(
+            I64,
+            "js_array_push_f64_spec",
+            &[(I64, &handle), (DOUBLE, &value)],
+        );
+        ctx.block().br(&merge_label);
+        ctx.current_block = call;
+        call_captured(ctx, &method, &recv, &value);
+        ctx.block().br(&merge_label);
+        ctx.current_block = merge;
+        // This lowering is only used for discarded-result statements.
+        Ok("0.0".into())
+    })
 }
 
-fn lower_lookup_first(ctx: &mut FnCtx<'_>, receiver: &Expr, value: &Expr) -> Result<String> {
-    let method = lower_expr(
+fn lookup_method(ctx: &mut FnCtx<'_>, receiver: &Expr) -> Result<String> {
+    lower_expr(
         ctx,
         &Expr::PropertyGet {
             object: Box::new(receiver.clone()),
             property: "push".into(),
             byte_offset: 0,
         },
-    )?;
+    )
+}
+
+fn lower_lookup_first(ctx: &mut FnCtx<'_>, receiver: &Expr, value: &Expr) -> Result<String> {
+    let method = lookup_method(ctx, receiver)?;
     rooting::with_rooted_group(ctx, 1, |ctx, group| {
         let method = group.adopt_emitted(ctx, Repr::Boxed, &method, true);
         let value = lower_expr(ctx, value)?;
         let recv = lower_expr(ctx, receiver)?;
         let method = group.reread_emitted(ctx, method);
-        // js_native_call_value accepts the captured JS method and preserves
-        // `this`; unlike name-based dispatch it cannot repeat the lookup.
-        let args = ctx.func.alloca_entry_array(DOUBLE, 1);
-        let blk = ctx.block();
-        let slot = blk.gep(DOUBLE, &args, &[(I64, "0")]);
-        blk.store(DOUBLE, &value, &slot);
-        let this = blk.bitcast_double_to_i64(&recv);
-        Ok(blk.call(
-            DOUBLE,
-            "js_native_call_value",
-            &[(DOUBLE, &method), (I64, &this), (PTR, &args), (I64, "1")],
-        ))
+        Ok(call_captured(ctx, &method, &recv, &value))
     })
+}
+
+fn call_captured(ctx: &mut FnCtx<'_>, method: &str, recv: &str, value: &str) -> String {
+    // An entry alloca cannot grow the stack on each loop iteration.
+    let args = ctx.func.alloca_entry_array(DOUBLE, 1);
+    let blk = ctx.block();
+    let slot = blk.gep(DOUBLE, &args, &[(I64, "0")]);
+    blk.store(DOUBLE, value, &slot);
+    let this = blk.bitcast_double_to_i64(recv);
+    blk.call(
+        DOUBLE,
+        "js_native_call_value",
+        &[(DOUBLE, method), (I64, &this), (PTR, &args), (I64, "1")],
+    )
 }

@@ -57,7 +57,6 @@ pub(super) struct OwnPushJoin {
     label: String,
     /// `(value, predecessor label)` for each own exit.
     incoming: Vec<(String, String)>,
-    builtin_already_resolved: bool,
 }
 
 impl OwnPushJoin {
@@ -68,15 +67,7 @@ impl OwnPushJoin {
             idx,
             label,
             incoming: Vec::new(),
-            builtin_already_resolved: false,
         }
-    }
-
-    /// The method was proven to be the builtin before argument evaluation.
-    pub(super) fn known_builtin(ctx: &mut FnCtx<'_>) -> Self {
-        let mut join = Self::new(ctx);
-        join.builtin_already_resolved = true;
-        join
     }
 
     /// Emit a slow arm's push of `v` onto `arr_handle`.
@@ -86,13 +77,6 @@ impl OwnPushJoin {
     /// `js_array_push_f64_spec`. The own exit is recorded here and branches to
     /// the join.
     pub(super) fn emit_push(&mut self, ctx: &mut FnCtx<'_>, arr_handle: &str, v: &str) -> String {
-        if self.builtin_already_resolved {
-            return ctx.block().call(
-                I64,
-                "js_array_push_f64_spec",
-                &[(I64, arr_handle), (DOUBLE, v)],
-            );
-        }
         // An entry-block alloca, never an in-block one: a slow arm inside a
         // loop would otherwise grow the stack every iteration (#10463).
         let own_slot = ctx.func.alloca_entry(I32);
