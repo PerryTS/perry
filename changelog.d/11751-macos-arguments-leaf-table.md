@@ -1,1 +1,0 @@
-Refresh the macOS GC call-effect classification of `js_arguments_object_map_index` from the actual release-archive classifier artifact. The preallocated mapped-arguments slot store is a leaf; retaining the conservative `Reenters` row caused the macOS classifier gate to fail with one safe drift. Runtime behavior and other-target tables are unchanged.
