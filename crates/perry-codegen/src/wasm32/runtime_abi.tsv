@@ -2053,6 +2053,7 @@ js_net_socket_address_new	i64	f64
 js_net_socket_address_parse	f64	i64
 js_net_socket_alloc	i64	
 js_net_socket_connect	i64	f64,f64,f64
+js_net_socket_cork	i64	i64
 js_net_socket_destroy	void	i64
 js_net_socket_end	void	i64,i64
 js_net_socket_event_names	ptr	i64
@@ -2076,6 +2077,7 @@ js_net_socket_get_remote_port	f64	i64
 js_net_socket_get_timeout	f64	i64
 js_net_socket_get_type_of_service	f64	i64
 js_net_socket_get_writable	f64	i64
+js_net_socket_get_writable_corked	f64	i64
 js_net_socket_get_writable_ended	f64	i64
 js_net_socket_get_writable_high_water_mark	f64	i64
 js_net_socket_get_writable_length	f64	i64
@@ -2100,6 +2102,7 @@ js_net_socket_set_encoding	i64	i64,i64
 js_net_socket_set_no_delay	i64	i64,i64
 js_net_socket_set_timeout	i64	i64,f64,i64
 js_net_socket_set_type_of_service	i64	i64,f64
+js_net_socket_uncork	i64	i64
 js_net_socket_unpipe	i64	i64,f64
 js_net_socket_unref	i64	i64
 js_net_socket_upgrade_tls	ptr	i64,i64,f64
