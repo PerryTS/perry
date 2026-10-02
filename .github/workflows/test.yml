@@ -928,6 +928,7 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           ./scripts/gc_repsel_matrix.sh --self-test-liveness-parser
+          ./scripts/gc_repsel_matrix.sh --self-test-fixture-env
           python3 scripts/gc_repsel_matrix_merge.py --self-test
           python3 scripts/gc_matrix_liveness_check.py --self-test
           python3 scripts/gc_matrix_liveness_check.py --check-registry
