@@ -1,0 +1,1 @@
+Link CoreFoundation and Foundation when building the macOS stdlib provider fixture with the runtime rlib, matching the existing runtime dylib build. This lets locale helpers resolve their framework and Objective-C dependencies before the provider GC gate executes. Linux and links without a runtime rlib retain their existing flags.
