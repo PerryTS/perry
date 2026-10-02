@@ -3,7 +3,7 @@
 use super::perex_api::{OUTPUT_BYTES, QUANTUM};
 use super::perex_owner::{GcProgram, HeapSubject};
 use super::perex_runtime::{self as host, EngineError, Match};
-use super::perex_strings::{copy_name, copy_span_near};
+use super::perex_strings::{copy_name, copy_span_value_near};
 use crate::array::ArrayHeader;
 use crate::gc::{RuntimeHandle, RuntimeHandleScope};
 use crate::object::ObjectHeader;
@@ -43,8 +43,8 @@ pub(super) fn materialize(
     });
     for (index, capture) in captures.iter().enumerate() {
         let value = if let Some(span) = capture {
-            let text = copy_span_near(subject, *span, near, budget, OUTPUT_BYTES, QUANTUM, poll)?;
-            crate::value::js_nanbox_string(text as i64).to_bits()
+            copy_span_value_near(subject, *span, near, budget, OUTPUT_BYTES, QUANTUM, poll)?
+                .to_bits()
         } else {
             crate::value::TAG_UNDEFINED
         };
