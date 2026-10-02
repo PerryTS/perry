@@ -6,3 +6,6 @@ parent method's old body after `Object.defineProperty` replaces it on the
 parent prototype.
 
 Callable proxies returned by a getter on the replacement super chain use the rooted proxy-call helper. Object-target proxies remain non-callable, and nested/revoked proxy calls and getter exceptions retain their normal behavior.
+
+Include the immutable thread-global IR suite in scoped test selection after
+integrating current main, so the complete suite map accepts this branch.
