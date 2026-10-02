@@ -12,6 +12,15 @@ unsafe extern "C" {
 #[used]
 static PIN_STDLIB: extern "C" fn() -> i32 = perry_stdlib::common::js_stdlib_process_pending;
 
+// Later-loaded apps register their generated feature installer and call the
+// compiled-feature entry point. Keep both available in the provider image.
+#[used]
+static PIN_STDLIB_INSTALL_COMPILED: extern "C" fn() =
+    perry_stdlib::common::feature_hooks::js_stdlib_install_compiled;
+#[used]
+static PIN_STDLIB_REGISTER_FEATURE_INSTALLER: extern "C" fn(extern "C" fn()) =
+    perry_stdlib::common::feature_hooks::js_stdlib_register_feature_installer;
+
 // A cdylib only retains Rust dependency code reachable from this wrapper.
 // Keep the exact Web Fetch/Streams surface used by #8038's later-loaded app;
 // otherwise the app links with dynamic lookups but dlopen fails on the first

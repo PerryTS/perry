@@ -419,25 +419,10 @@ jobs:
           for probe in benchmarks/gc_ratchet/probes/*.ts; do
             total=$((total+1))
             name=$(basename "$probe" .ts)
-            if [ "$RUNNER_OS" = "Windows" ] && [ "$name" = "09_try_catch_roots" ]; then
-              # #7354 measured negative, pinned as a REFUSAL: windows-msvc
-              # `try` lowers to WinEH funclet pads, which crash LLVM's
-              # rewrite-statepoints-for-gc outright (access violation on opt
-              # 22.1.3, reproducible from an eight-line module). Perry refuses
-              # the module before the pass runs; this arm pins that it STAYS a
-              # refusal — never a crash, never a silently rootless binary. It
-              # goes red the day the pass learns funclet EH, which is the
-              # prompt to fold 09 into this matrix.
-              if PERRY_RS4GC=1 ./target/perry-dev/perry "$probe" \
-                  -o "/tmp/rs4gc-$name" > "/tmp/rs4gc-$name.compile.log" 2>&1; then
-                echo "::error::$name compiled under RS4GC on Windows — the funclet refusal is gone: either rewrite-statepoints-for-gc learned funclet EH (fold 09 into the matrix) or the refusal was lost"
-                exit 1
-              fi
-              grep -q "funclet" "/tmp/rs4gc-$name.compile.log" \
-                || { echo "::error::$name failed for a reason other than the funclet refusal:"; cat "/tmp/rs4gc-$name.compile.log"; exit 1; }
-              pass=$((pass+1))
-              continue
-            fi
+            # #10385 replaced Windows funclets with Perry's landing-pad
+            # personality. Probe 09 must now execute with precise roots on
+            # Windows too. Actual funclet IR remains refused by linker.rs's
+            # rs4gc_funclet_refusal and its unit test (#7354).
             node --expose-gc --experimental-strip-types "$probe" > "/tmp/rs4gc-$name.oracle"
             PERRY_RS4GC=1 ./target/perry-dev/perry "$probe" -o "/tmp/rs4gc-$name"
             # perry appends the platform default extension to an -o with none.
@@ -461,11 +446,17 @@ jobs:
               readelf -S "$out" | grep -q "\.llvm_stackmaps" \
                 && { echo "::error::$name still carries .llvm_stackmaps — the compact rewrite did not run"; exit 1; }
             fi
+            PERRY_GC_DIAG=1 \
             PERRY_RS4GC=1 PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1 \
             PERRY_GC_HEAP_LIMIT=8 PERRY_GC_INCREMENTAL=0 PERRY_CONSERVATIVE_STACK_SCAN=off \
               "$out" > "/tmp/rs4gc-$name.out" 2> "/tmp/rs4gc-$name.err"
             diff "/tmp/rs4gc-$name.oracle" "/tmp/rs4gc-$name.out" \
               || { echo "::error::$name diverged from the pinned oracle under RS4GC"; exit 1; }
+            if [ "$name" = "09_try_catch_roots" ]; then
+              py=python3; command -v python3 >/dev/null 2>&1 || py=python
+              "$py" scripts/gc_evacuation_liveness_assert.py "/tmp/rs4gc-$name.err" \
+                --probe "$name ($RUNNER_OS RS4GC)"
+            fi
             errs="$errs /tmp/rs4gc-$name.err"
             pass=$((pass+1))
           done
@@ -485,14 +476,9 @@ jobs:
           # windows-latest exposes the toolcache python as `python`, not python3.
           py=python3; command -v python3 >/dev/null 2>&1 || py=python
 
-          # The PORTABLE assertion, on every arm. `11_collect_at_depth` is
-          # deliberate: it contains no `try`, so it compiles under RS4GC
-          # everywhere. `09_try_catch_roots` does NOT — RS4GC cannot rewrite
-          # WinEH funclet pads, so `linker.rs`'s `rs4gc_funclet_refusal` rejects
-          # it on windows-msvc, and the probe loop above only tolerates that
-          # because it greps the compile log for "funclet". A report assertion
-          # pinned to a probe that cannot compile on one arm is a gate that
-          # fails for a reason unrelated to its subject.
+          # The recursive-depth assertion, on every arm. This probe carries
+          # live roots across a deep stack; the separate try probe below
+          # covers roots across normal and unwinding exception edges.
           #
           # --only-backend proves the lowering ran on every function; the two
           # --require-positive checks prove it PRODUCED something. Those counts
@@ -510,19 +496,18 @@ jobs:
             --require-positive records \
             --require-positive roots
 
-          # The try-specific arm, everywhere RS4GC can compile a `try`. This is
+          # The try-specific arm on every target, including Windows since
+          # #10385 replaced funclets with Perry's landing-pad personality. This is
           # the coverage the probe above cannot give: 128 of 479 gap tests
           # contain `try {}`, and RS4GC being the only backend that handles them
           # is the reason the bridge could be deleted (#7339, #7348).
-          if [ "$RUNNER_OS" != "Windows" ]; then
-            PERRY_RS4GC=1 ./target/perry-dev/perry \
-              benchmarks/gc_ratchet/probes/09_try_catch_roots.ts \
-              -o /tmp/rs4gc-try-probe --statepoint-report=json 2> /tmp/rs4gc-try.json
-            "$py" scripts/statepoint_report_assert.py /tmp/rs4gc-try.json \
-              --only-backend rs4gc \
-              --require-positive records \
-              --require-positive roots
-          fi
+          PERRY_RS4GC=1 ./target/perry-dev/perry \
+            benchmarks/gc_ratchet/probes/09_try_catch_roots.ts \
+            -o /tmp/rs4gc-try-probe --statepoint-report=json 2> /tmp/rs4gc-try.json
+          "$py" scripts/statepoint_report_assert.py /tmp/rs4gc-try.json \
+            --only-backend rs4gc \
+            --require-positive records \
+            --require-positive roots
 
           # Walker liveness, on EVERY arm. A walker that visits zero frames
           # still lets most probes print the right answer, because other root
