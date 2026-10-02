@@ -31,7 +31,7 @@ THE THREE TIERS
          `await-tests` dispatches this and waits for the `full-suite-gate` job),
          and PRs carrying the `run-extended-tests` label. The sweep plus the
          slow/opt-in suites (parity, compile-smoke, doc-tests, package smokes,
-         the gap suite in its 12-shard auto-optimize mode).
+         the gap suite in its 24-shard auto-optimize mode).
 
 PR SCOPE
 --------
@@ -123,10 +123,11 @@ TIERS = ("pr", "sweep", "full")
 GAP_SUITE = {
     "pr": {"mode": "fast", "total": 6},
     "sweep": {"mode": "fast", "total": 3},
-    # Current 8-way full runs hit the 110-minute bound while still compiling
-    # (e.g. run36914319295, shard1 reached137/152). Preserve auto-optimize
-    # coverage and distribute the complete corpus across more workers.
-    "full": {"mode": "full", "total": 12},
+    # Twelve-way run 36967233926 still hit the 110-minute job bound:
+    # shard 3 completed only 79/102 fixtures and shard 4 only 82/102.
+    # Doubling the modulo partition halves each existing slice without
+    # dropping fixtures or changing auto-optimize and snapshot acceptance.
+    "full": {"mode": "full", "total": 24},
 }
 
 # Parity: full tier only, sharded. The unsharded job was killed by GitHub's
@@ -463,7 +464,7 @@ def _self_test() -> int:
             "shards": list(range(1, PERRY_INTEGRATION_SHARDS + 1)),
         },
     )
-    check("full: 12 auto-optimize gap shards", full["gap"] == {"mode": "full", "total": 12, "shards": list(range(1, 13)), "update_snapshot": False})
+    check("full: 24 auto-optimize gap shards", full["gap"] == {"mode": "full", "total": 24, "shards": list(range(1, 25)), "update_snapshot": False})
     check("full: parity sharded (6h-cap kill, 2026-08-16)", full["parity"]["total"] >= 2 and full["parity"]["shards"][0] == 1)
     check("full: full GC matrix has four shards", full["gc_stress"] == {"mode": "all", "total": 4, "shards": [1, 2, 3, 4]})
 
