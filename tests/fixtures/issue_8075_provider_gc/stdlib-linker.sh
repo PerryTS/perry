@@ -26,6 +26,8 @@ stdlib_provider_exports=(
   js_response_get_headers
   js_response_new
   js_stdlib_init_dispatch
+  js_stdlib_install_compiled
+  js_stdlib_register_feature_installer
   js_stream_unwrap_handle
 )
 

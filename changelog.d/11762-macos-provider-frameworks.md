@@ -1,1 +1,3 @@
 Link CoreFoundation and Foundation when building the macOS stdlib provider fixture with the runtime rlib, matching the existing runtime dylib build. This lets locale helpers resolve their framework and Objective-C dependencies before the provider GC gate executes. Linux and links without a runtime rlib retain their existing flags.
+
+Retain and export the stdlib feature-installation and registration entry points used by later-loaded apps. The macOS provider GC phase previously passed, but the following Response image failed to load because the compiled-feature installer was absent from the provider export list.
