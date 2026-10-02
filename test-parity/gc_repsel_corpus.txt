@@ -929,3 +929,7 @@ test_gap_gc_11559_spill_headroom_store
 # registration reading the retired closure. moment 2.31.0 module init under a
 # seeded schedule (#11635).
 test_gap_gc_11635_func_proto_register_across_call
+
+# #11743: a field receiver and captured method cross allocating arguments.
+# Recursive child pushes observe parent identity after relocation and growth.
+test_gap_11743_class_field_array_push
