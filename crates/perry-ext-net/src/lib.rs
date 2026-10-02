@@ -398,7 +398,12 @@ impl SocketState {
             self.cork.depth = 0;
             self.flush_cork(id)?;
         } else if matches!(cmd, SocketCommand::Destroy) {
-            self.cork = cork::CorkBuffer::default();
+            // Completion records stay rooted until Close dispatches them in
+            // token order, including writes already submitted to the transport.
+            self.bytes_queued = self
+                .bytes_queued
+                .saturating_sub(self.cork.bytes.len() as u64);
+            self.cork.discard();
         }
         self.command_transport(id, cmd)
     }
@@ -417,6 +422,11 @@ impl SocketState {
             // Configuration commands may precede connect(), but there is no
             // transport to accept writes until a connection is submitted.
             if self.awaiting_connect {
+                if matches!(cmd, SocketCommand::Destroy) {
+                    // No driver owns a never-connected socket, so it cannot
+                    // report Closed. Queue terminal cleanup ourselves.
+                    push_event(PendingNetEvent::Close(id));
+                }
                 return Ok(());
             }
             return Err("Socket write failed".to_string());

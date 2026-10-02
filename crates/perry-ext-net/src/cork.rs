@@ -18,6 +18,13 @@ impl CorkBuffer {
         }
     }
 
+    /// Release buffered bytes; callback custody is retired by Close.
+    pub(crate) fn discard(&mut self) {
+        self.bytes.clear();
+        self.completions.clear();
+        self.has_writes = false;
+    }
+
     fn take_write(&mut self) -> Option<SocketCommand> {
         if !std::mem::take(&mut self.has_writes) {
             return None;
@@ -164,5 +171,49 @@ mod tests {
         assert_eq!(socket.bytes_queued, 2);
         assert_eq!(socket.cork.bytes, [1, 2]);
         assert!(!socket.unconnected_write_failed);
+    }
+    #[test]
+    fn destroying_unopened_corked_socket_orders_and_retires_completions_once() {
+        let _lock = crate::tests::GC_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let id = unsafe { crate::js_net_socket_alloc() };
+        {
+            let mut sockets = statics::sockets().lock().unwrap();
+            let socket = sockets.get_mut(&id).unwrap();
+            socket.cork.depth = 1;
+            // Insert out of order so this verifies token ordering rather than
+            // HashMap insertion order. Empty callback vectors need no JS heap.
+            for token in [u64::MAX - 2, u64::MAX - 4, u64::MAX - 3] {
+                crate::lifecycle::socket_completions()
+                    .lock()
+                    .unwrap()
+                    .insert(token, (id, Vec::new()));
+                socket
+                    .command(id, SocketCommand::Write(vec![1], token))
+                    .unwrap();
+            }
+        }
+        crate::lifecycle::js_ext_net_destroy_socket(id);
+        crate::lifecycle::js_ext_net_destroy_socket(id);
+        assert_eq!(
+            crate::lifecycle::pending_socket_completions(id),
+            [u64::MAX - 4, u64::MAX - 3, u64::MAX - 2]
+        );
+        assert_eq!(statics::sockets().lock().unwrap()[&id].bytes_queued, 0);
+        assert_eq!(
+            statics::pending_events()
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|ev| matches!(ev, crate::PendingNetEvent::Close(h) if *h == id))
+                .count(),
+            1
+        );
+        unsafe {
+            crate::js_net_process_pending();
+        }
+        assert!(crate::lifecycle::pending_socket_completions(id).is_empty());
+        assert!(!statics::sockets().lock().unwrap().contains_key(&id));
     }
 }

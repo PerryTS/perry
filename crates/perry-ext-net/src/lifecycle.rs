@@ -110,14 +110,21 @@ pub(crate) unsafe fn dispatch_socket_completion(completion: u64, error: Option<S
     }
 }
 
-pub(crate) fn drop_socket_completions(socket_id: i64) {
-    let completions = socket_completions()
+/// Snapshot unfinished writes/end callbacks in their registration order.
+pub(crate) fn pending_socket_completions(socket_id: i64) -> Vec<u64> {
+    let mut completions = socket_completions()
         .lock()
         .unwrap()
         .iter()
         .filter_map(|(completion, (owner, _))| (*owner == socket_id).then_some(*completion))
         .collect::<Vec<_>>();
-    for completion in completions {
+    // Tokens are monotonically allocated; HashMap iteration is unordered.
+    completions.sort_unstable();
+    completions
+}
+
+pub(crate) fn drop_socket_completions(socket_id: i64) {
+    for completion in pending_socket_completions(socket_id) {
         unsafe {
             dispatch_socket_completion(completion, Some("Socket is closed".to_string()));
         }
@@ -869,6 +876,9 @@ pub unsafe extern "C" fn js_net_socket_destroy(handle: i64) {
 pub extern "C" fn js_ext_net_destroy_socket(handle: i64) {
     let mut sockets = statics::sockets().lock().unwrap();
     if let Some(s) = sockets.get_mut(&handle) {
+        if s.destroyed {
+            return;
+        }
         s.destroyed = true;
         s.is_open = false;
         let _ = s.command(handle, crate::SocketCommand::Destroy);
