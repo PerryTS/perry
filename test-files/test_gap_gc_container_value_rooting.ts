@@ -1,3 +1,4 @@
+// parity-env: PERRY_GC_MOVING_LOOP_POLLS=1 PERRY_GC_SCHEDULE_SEED=7949 PERRY_GC_SCHEDULE_RATE=1 PERRY_GC_SCHEDULE_ALLOC_KB=4 PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_VERIFY_EVACUATION=1
 // #7949: JS values retained in ordinary Rust containers across allocating calls.
 //
 // `Object.groupBy` / `Map.groupBy` accumulate every `(key, item)` pair into a

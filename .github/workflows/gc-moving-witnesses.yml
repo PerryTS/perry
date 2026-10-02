@@ -214,7 +214,7 @@ jobs:
           # The filter exists only to spare docs-only PRs a compiler build. If
           # the listing is empty or the API failed, `set -e` already aborted, so
           # the job cannot silently fall through to "not relevant".
-          if grep -qE '^(crates/|scripts/gc_repsel_matrix\.sh$|test-files/test_gap_gc_|test-parity/gc_repsel_|Cargo\.(toml|lock)$|\.node-version$|\.github/workflows/gc-moving-witnesses\.yml$)' changed.txt; then
+          if grep -qE '^(crates/|scripts/gc_repsel_matrix\.sh$|scripts/gc_matrix_fixture_env(_test)?\.py$|test-files/test_gap_gc_|test-parity/gc_repsel_|Cargo\.(toml|lock)$|\.node-version$|\.github/workflows/gc-moving-witnesses\.yml$)' changed.txt; then
             echo "run=true" >> "$GITHUB_OUTPUT"
             echo "Change touches collector-relevant paths; running the witnesses."
           else
@@ -252,6 +252,10 @@ jobs:
           # disagrees with the pin, because a test the oracle cannot run would
           # drop out of the gate silently.
           node-version-file: .node-version
+
+      - name: Check witness settings reach compilation and execution
+        if: steps.relevance.outputs.run == 'true'
+        run: bash scripts/gc_repsel_matrix.sh --self-test-fixture-env
 
       - name: Build perry and the runtime archives
         if: steps.relevance.outputs.run == 'true'
