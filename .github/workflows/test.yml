@@ -14,7 +14,7 @@ name: CI
 #                              + one pending, so a burst of merges is tested at
 #                              its tip). PR tier unscoped + medium-weight jobs.
 #   full   schedule / tags /   everything, incl. parity, compile-smoke,
-#          workflow_dispatch   doc-tests, package smokes, the 8-shard
+#          workflow_dispatch   doc-tests, package smokes, the 12-shard
 #          / label             auto-optimize gap suite. `full-suite-gate` is
 #                              what release-packages.yml waits for.
 #
@@ -3072,7 +3072,7 @@ jobs:
     # protection requires. 2026-08-16: in the harness's default (auto-optimize)
     # mode 96% of a shard's wall time was ~10 tests at ~200 s each -- the
     # feature-stripped runtime rebuild per distinct feature set, redone in
-    # every shard. That mode is now the full tier's 8-shard arm; PR and sweep
+    # every shard. That mode is now the full tier's 12-shard arm; PR and sweep
     # tiers use `fast` mode against one prebuilt release build (~1.5 s/test).
     strategy:
       fail-fast: false
