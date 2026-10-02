@@ -121,7 +121,10 @@ TIERS = ("pr", "sweep", "full")
 # it is ~28 min, level with gc-stress, for ~170 job-minutes -- against 480 for
 # the old 8 x auto-optimize shards.
 GAP_SUITE = {
-    "pr": {"mode": "fast", "total": 6},
+    # Fast PR shard 1 in run36981459549 exhausted its 110-minute bound.
+    # Twelve modulo slices halve each former six-way slice; the worker and
+    # no-new-untriaged snapshot gate retain the same complete corpus.
+    "pr": {"mode": "fast", "total": 12},
     "sweep": {"mode": "fast", "total": 3},
     # Twelve-way run 36967233926 still hit the 110-minute job bound:
     # shard 3 completed only 79/102 fixtures and shard 4 only 82/102.
@@ -421,7 +424,7 @@ def _self_test() -> int:
     check("core PR: windows off", not core["jobs"]["windows_build"])
     check("core PR: parity off", not core["jobs"]["parity"])
     check("core PR: security-audit off (no deps change)", not core["jobs"]["security_audit"])
-    check("core PR: 6 fast gap shards", core["gap"] == {"mode": "fast", "total": 6, "shards": [1, 2, 3, 4, 5, 6], "update_snapshot": False})
+    check("core PR: 12 fast gap shards", core["gap"] == {"mode": "fast", "total": 12, "shards": list(range(1, 13)), "update_snapshot": False})
     check("core PR: cargo-test scoped", core["cargo_test_scope"] == "pr")
 
     deps = plan("pull_request", "refs/pull/1/merge", changed=["Cargo.lock"])
