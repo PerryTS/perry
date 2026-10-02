@@ -486,8 +486,17 @@ fn fast_turn_polls_only_with_outstanding_loop_work() {
                 .unwrap()
         });
         assert_eq!(loop_deadline(), Some(deadline), "loop deadline not visible");
-        fast_turn();
-        assert_eq!(stats().turns, 1, "fast path ignored outstanding loop work");
+        // #10525: ready JS must get back to its callback without a timed
+        // reactor park, even when native handles keep the loop alive.
+        for _ in 0..100 {
+            fast_turn();
+        }
+        assert_eq!(
+            stats().turns,
+            100,
+            "fast path ignored outstanding loop work"
+        );
+        assert_eq!(stats().os_waits, 0, "ready JS paid a blocking poll");
         AGENT_LOOP.with(|slot| {
             let mut slot = slot.borrow_mut();
             let agent = slot.as_mut().unwrap();

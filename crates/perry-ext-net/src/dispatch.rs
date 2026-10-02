@@ -415,11 +415,11 @@ unsafe fn socket_method(handle: i64, method: &str, args: &[f64]) -> Option<f64> 
             crate::js_net_socket_set_no_delay(handle, arg.to_bits() as i64);
             nanbox_handle(handle)
         }
+        "cork" => nanbox_handle(crate::cork::js_net_socket_cork(handle)),
+        "uncork" => nanbox_handle(crate::cork::js_net_socket_uncork(handle)),
         "ref" => nanbox_handle(crate::js_net_socket_ref(handle)),
         "unref" => nanbox_handle(crate::js_net_socket_unref(handle)),
-        "setKeepAlive" | "pause" | "resume" | "cork" | "uncork" | "setDefaultEncoding" => {
-            nanbox_handle(handle)
-        }
+        "setKeepAlive" | "pause" | "resume" | "setDefaultEncoding" => nanbox_handle(handle),
         _ => undefined(),
     };
     Some(result)
@@ -656,12 +656,17 @@ pub unsafe extern "C" fn js_ext_net_handle_property_dispatch(
         })
     } else if matches!(
         prop,
-        "writableLength" | "writableHighWaterMark" | "writableNeedDrain" | "bufferSize"
+        "writableLength"
+            | "writableHighWaterMark"
+            | "writableNeedDrain"
+            | "writableCorked"
+            | "bufferSize"
     ) && crate::js_ext_net_is_socket_handle(handle) != 0
     {
         // #11111 — the write-queue surface a drain-aware writer reads next to
         // `write()`'s return value.
         Some(match prop {
+            "writableCorked" => crate::cork::js_net_socket_get_writable_corked(handle),
             "writableLength" => crate::js_net_socket_get_writable_length(handle),
             "writableHighWaterMark" => crate::js_net_socket_get_writable_high_water_mark(handle),
             "writableNeedDrain" => crate::js_net_socket_get_writable_need_drain(handle),

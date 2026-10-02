@@ -511,7 +511,7 @@ pub(crate) fn command_on_owner(id: i64, cmd: SocketCommand) -> Result<(), String
         if let Some(queued) = queued {
             if let Ok(mut sockets) = statics::sockets().lock() {
                 if let Some(socket) = sockets.get_mut(&id) {
-                    socket.bytes_queued = queued;
+                    socket.bytes_queued = queued.saturating_add(socket.cork.bytes.len() as u64);
                 }
             }
         }
@@ -804,7 +804,7 @@ fn replay_held_tls(id: i64) {
             Ok(queued) => {
                 if let Ok(mut sockets) = statics::sockets().lock() {
                     if let Some(s) = sockets.get_mut(&id) {
-                        s.bytes_queued = queued as u64;
+                        s.bytes_queued = queued as u64 + s.cork.bytes.len() as u64;
                     }
                 }
             }
@@ -966,7 +966,7 @@ fn on_wrote(id: i64, user: u64, len: usize, queued: usize) {
         let mut drain = false;
         if let Ok(mut sockets) = statics::sockets().lock() {
             if let Some(s) = sockets.get_mut(&id) {
-                s.bytes_queued = outstanding as u64;
+                s.bytes_queued = outstanding as u64 + s.cork.bytes.len() as u64;
                 for (_, plain_len) in &completed {
                     s.bytes_written += *plain_len as u64;
                 }
@@ -987,7 +987,7 @@ fn on_wrote(id: i64, user: u64, len: usize, queued: usize) {
     if let Ok(mut sockets) = statics::sockets().lock() {
         if let Some(s) = sockets.get_mut(&id) {
             s.bytes_written += len as u64;
-            s.bytes_queued = queued as u64;
+            s.bytes_queued = queued as u64 + s.cork.bytes.len() as u64;
             drain = crate::lifecycle::take_drain(s);
         }
     }

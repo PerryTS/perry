@@ -300,7 +300,7 @@ pub(crate) fn global_has_property(global: f64, name: &str) -> bool {
         global
     };
     let global_idx = root_push(global);
-    let key = make_string(name);
+    let key = crate::value::js_nanbox_string(super::env::key_string(name) as i64);
     let present = crate::object::js_object_has_property(root_get(global_idx), key);
     roots_truncate(global_idx);
     truthy(present)

@@ -43,7 +43,7 @@ thread_local! {
 /// thread's life.
 const ENV_KEY_CACHE_MAX: usize = 4096;
 
-fn key_string(name: &str) -> *const crate::string::StringHeader {
+pub(super) fn key_string(name: &str) -> *const crate::string::StringHeader {
     if let Some(ptr) = ENV_KEY_CACHE.with(|c| c.borrow().get(name).copied()) {
         return ptr;
     }
@@ -143,27 +143,29 @@ fn object_write_binding(bindings: f64, name: &str, value: f64, strict: bool) {
     crate::proxy::js_put_value_set(bindings, key, value, bindings, strict as i32);
 }
 
-fn env_parent(env: f64) -> Option<f64> {
-    let env_idx = root_push(env);
-    let key = key_string(PARENT_KEY);
-    let value = crate::object::js_object_get_field_by_name(env_object_ptr(root_get(env_idx)), key);
-    roots_truncate(env_idx);
-    let bits = value.bits();
-    let v = f64::from_bits(bits);
-    if crate::value::JSValue::from_bits(bits).is_undefined() {
-        None
-    } else {
-        Some(v)
+/// Scope objects are private null-prototype data objects. Their immutable
+/// key list resolves a name to a slot, including overflow slots; no generic
+/// property machinery, getters, or Function.prototype checks are needed.
+fn own_slot(env: f64, name: &str) -> Option<u32> {
+    let obj = env_object_ptr(env);
+    unsafe {
+        let keys = crate::object::object_keys(obj);
+        crate::object::keys_find_slot_by_bytes(keys.arr(), keys.count(), name.as_bytes())
     }
 }
 
+fn own_value(env: f64, name: &str) -> Option<f64> {
+    own_slot(env, name).map(|slot| {
+        f64::from_bits(crate::object::js_object_get_field(env_object_ptr(env), slot).bits())
+    })
+}
+
+fn env_parent(env: f64) -> Option<f64> {
+    own_value(env, PARENT_KEY)
+}
+
 fn env_has_own(env: f64, name: &str) -> bool {
-    let env_idx = root_push(env);
-    let key = key_string(name);
-    let key_value = crate::value::js_nanbox_string(key as i64);
-    let has = crate::object::js_object_has_own(root_get(env_idx), key_value);
-    roots_truncate(env_idx);
-    crate::value::js_is_truthy(has) != 0
+    own_slot(env, name).is_some()
 }
 
 pub(crate) fn variable_environment(env: f64) -> f64 {
@@ -203,16 +205,23 @@ pub(crate) fn ensure_var_binding(env: f64, name: &str) {
 }
 
 fn env_read(env: f64, name: &str) -> f64 {
-    let env_idx = root_push(env);
-    let key = key_string(name);
-    let value = crate::object::js_object_get_field_by_name(env_object_ptr(root_get(env_idx)), key);
-    roots_truncate(env_idx);
-    f64::from_bits(value.bits())
+    own_value(env, name).unwrap_or_else(super::bridge::undefined)
 }
 
 fn env_write(env: f64, name: &str, value: f64) {
     let env_idx = root_push(env);
     let value_idx = root_push(value);
+    if let Some(slot) = own_slot(root_get(env_idx), name) {
+        let obj = env_object_ptr(root_get(env_idx));
+        let value = crate::value::JSValue::from_bits(root_get(value_idx).to_bits());
+        if slot < unsafe { crate::object::object_live_slot_count(obj) } {
+            crate::object::js_object_set_field(obj, slot, value);
+        } else {
+            crate::object::overflow_set(obj as usize, slot as usize, value.bits());
+        }
+        roots_truncate(env_idx);
+        return;
+    }
     let key = key_string(name);
     crate::object::js_object_set_field_by_name(
         env_object_ptr(root_get(env_idx)),
@@ -227,127 +236,15 @@ pub(crate) fn define(env: f64, name: &str, value: f64) {
     env_write(env, name, value);
 }
 
-/// #6693 surgical prototype (gated by `PERRY_DYN_FAST_SCOPE`): a lean own-field
-/// probe for scope objects. Scopes are known-simple — null-proto,
-/// `GC_TYPE_OBJECT`, string keys, no accessors — so the general
-/// `js_object_get_field_by_name` slow path (proxy/handle/prototype/descriptor
-/// vets + key hashing + full keys scan) is pure overhead on the interpreter's
-/// hottest operation. This reuses the tested read-plan cache: after the first
-/// probe of a `(keys_array, key)` pair every later read is an O(1) index into
-/// the field slot (and same-shape sibling scopes share one keys_array via the
-/// transition cache, so the cache carries across calls). Like the codegen fast
-/// lane it accelerates HITS only and defers anything it can't prove to the
-/// authoritative slow path — a capped scan is never mistaken for absence.
-enum ScopeProbe {
-    /// Own binding found; carries its value bits.
-    Hit(f64),
-    /// Own binding provably absent (exhaustive scan of a dense keys array on a
-    /// null-proto object): the caller may walk to the parent with no slow vet.
-    Absent,
-    /// Undecided (no keys array / a truncated scan / an overflow slot): the
-    /// caller must fall back to the authoritative slow read.
-    Bail,
-}
-
-/// Probe a single scope for `key` without any allocation (so the raw object
-/// pointer stays valid for the whole call — no rooting needed inside).
-fn scope_probe(env: f64, key: *const crate::string::StringHeader) -> ScopeProbe {
-    let o = crate::value::js_nanbox_get_pointer(env) as *const crate::object::ObjectHeader;
-    if o.is_null() {
-        return ScopeProbe::Bail;
-    }
-    unsafe {
-        let keys_view = crate::object::object_keys(o);
-        let keys = keys_view.arr();
-        if keys.is_null() {
-            return ScopeProbe::Bail;
-        }
-        let alloc_limit = std::cmp::max(
-            crate::object::object_live_slot_count(o),
-            crate::object::INLINE_SLOT_FLOOR as u32,
-        );
-        if let Some(idx) = crate::object::prop_plan::read_plan_lookup(
-            keys as usize,
-            key as usize,
-            keys_view.count(),
-        ) {
-            if idx < alloc_limit {
-                let v = crate::object::js_object_get_field(o, idx);
-                return ScopeProbe::Hit(f64::from_bits(v.bits()));
-            }
-            return ScopeProbe::Bail;
-        }
-        let full = keys_view.count() as usize;
-        let n = keys_view.count() as usize;
-        for i in 0..n as u32 {
-            let kv = crate::array::js_array_get(keys, i);
-            if crate::string::js_string_key_matches(kv, key) {
-                crate::object::prop_plan::read_plan_record(keys as usize, key as usize, i);
-                if i < alloc_limit {
-                    let v = crate::object::js_object_get_field(o, i);
-                    return ScopeProbe::Hit(f64::from_bits(v.bits()));
-                }
-                return ScopeProbe::Bail;
-            }
-        }
-        if n == full {
-            ScopeProbe::Absent
-        } else {
-            ScopeProbe::Bail
-        }
-    }
-}
-
 /// Read `name`, walking the scope chain. `None` when no scope binds it (the
 /// caller then falls back to the real `globalThis`).
 ///
-/// The cursor lives in a rooted slot: `env_has_own` / `env_parent` allocate
-/// key strings, and a moving collection triggered by those allocations would
-/// otherwise leave a raw `f64` cursor stale.
-///
-/// #6693 hot path: this runs on EVERY identifier reference. With the fast
-/// scope accessor it resolves a hit via the read-plan cache; otherwise it reads
-/// the field FIRST and only falls back to `env_has_own` when the read yields
-/// `undefined` (a null-proto scope reads a missing key as exactly `undefined`,
-/// so the common non-`undefined` binding costs a SINGLE field-op, not the old
-/// `has_own` + `read` pair — the field-op, not the key allocation, dominates).
+/// Keep the cursor rooted while object-environment hooks can run user code.
+/// Private lexical scopes resolve reads and writes directly through slots.
 pub(crate) fn lookup(env: f64, name: &str) -> Option<f64> {
-    let fast = super::fast_scope_enabled();
     let cur_idx = root_push(env);
-    let key = if fast {
-        key_string(name)
-    } else {
-        std::ptr::null()
-    };
     loop {
-        if fast && env_object_bindings(root_get(cur_idx)).is_none() {
-            match scope_probe(root_get(cur_idx), key) {
-                ScopeProbe::Hit(v) => {
-                    roots_truncate(cur_idx);
-                    return Some(v);
-                }
-                ScopeProbe::Absent => match env_parent(root_get(cur_idx)) {
-                    Some(p) => {
-                        root_set(cur_idx, p);
-                        continue;
-                    }
-                    None => {
-                        roots_truncate(cur_idx);
-                        return None;
-                    }
-                },
-                ScopeProbe::Bail => {}
-            }
-        }
-        let value = env_read(root_get(cur_idx), name);
-        if value.to_bits() != crate::value::TAG_UNDEFINED {
-            roots_truncate(cur_idx);
-            return Some(value);
-        }
-        // Read was `undefined`: either this scope binds it to `undefined`, or
-        // the key is absent and we must keep walking. Disambiguate with the
-        // presence check (only reached in the uncommon undefined-value case).
-        if env_has_own(root_get(cur_idx), name) {
+        if let Some(value) = own_value(root_get(cur_idx), name) {
             roots_truncate(cur_idx);
             return Some(value);
         }
@@ -370,24 +267,9 @@ pub(crate) fn lookup(env: f64, name: &str) -> Option<f64> {
 
 /// Whether any scope in the chain binds `name`.
 pub(crate) fn is_bound(env: f64, name: &str) -> bool {
-    let fast = super::fast_scope_enabled();
     let cur_idx = root_push(env);
-    let key = if fast {
-        key_string(name)
-    } else {
-        std::ptr::null()
-    };
     loop {
-        let present = if fast && env_object_bindings(root_get(cur_idx)).is_none() {
-            match scope_probe(root_get(cur_idx), key) {
-                ScopeProbe::Hit(_) => Some(true),
-                ScopeProbe::Absent => Some(false),
-                ScopeProbe::Bail => None,
-            }
-        } else {
-            None
-        };
-        let present = present.unwrap_or_else(|| env_has_own(root_get(cur_idx), name));
+        let present = env_has_own(root_get(cur_idx), name);
         if present {
             roots_truncate(cur_idx);
             return true;
@@ -414,25 +296,10 @@ pub(crate) fn is_bound(env: f64, name: &str) -> bool {
 /// `value` never declared) — creates the binding on the chain's ROOT scope
 /// (the Function instance's private "global").
 pub(crate) fn assign(env: f64, name: &str, value: f64, strict: bool) {
-    let fast = super::fast_scope_enabled();
     let value_idx = root_push(value);
     let cur_idx = root_push(env);
-    let key = if fast {
-        key_string(name)
-    } else {
-        std::ptr::null()
-    };
     loop {
-        let present = if fast && env_object_bindings(root_get(cur_idx)).is_none() {
-            match scope_probe(root_get(cur_idx), key) {
-                ScopeProbe::Hit(_) => Some(true),
-                ScopeProbe::Absent => Some(false),
-                ScopeProbe::Bail => None,
-            }
-        } else {
-            None
-        };
-        let present = present.unwrap_or_else(|| env_has_own(root_get(cur_idx), name));
+        let present = env_has_own(root_get(cur_idx), name);
         if present {
             env_write(root_get(cur_idx), name, root_get(value_idx));
             roots_truncate(value_idx);
@@ -466,5 +333,41 @@ pub(crate) fn assign(env: f64, name: &str, value: f64, strict: bool) {
                 return;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn private_scope_slots_keep_undefined_shadowing_overflow_and_assignment() {
+        let roots = root_push(super::super::bridge::undefined());
+        let outer = root_push(env_new_root());
+        define(root_get(outer), "shadow", 42.0);
+        define(root_get(outer), "counter", 1.0);
+        let inner = root_push(env_new(root_get(outer)));
+        define(root_get(inner), "shadow", super::super::bridge::undefined());
+        for i in 0..64 {
+            define(root_get(inner), &format!("local{i}"), i as f64);
+        }
+        assert_eq!(
+            lookup(root_get(inner), "shadow").unwrap().to_bits(),
+            crate::value::TAG_UNDEFINED
+        );
+        assert_eq!(lookup(root_get(inner), "local63"), Some(63.0));
+        assert_eq!(lookup(root_get(inner), "local64"), None);
+        assign(root_get(inner), "counter", 2.0, false);
+        assign(root_get(inner), "local63", 99.0, false);
+        assert_eq!(lookup(root_get(outer), "counter"), Some(2.0));
+        assert_eq!(lookup(root_get(inner), "local63"), Some(99.0));
+        assert!(is_bound(root_get(inner), "shadow"));
+        // A sibling's shorter key list can share a backing with this scope.
+        // A binding from the long list must stay absent on the short one.
+        let short = root_push(env_new(root_get(outer)));
+        define(root_get(short), "shadow", 7.0);
+        assert_eq!(lookup(root_get(short), "local63"), None);
+        assert_eq!(lookup(root_get(short), "shadow"), Some(7.0));
+        roots_truncate(roots);
     }
 }
