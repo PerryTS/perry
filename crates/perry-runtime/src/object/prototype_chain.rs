@@ -554,6 +554,7 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, link_kind: 
                 // already observe the latch (see `USER_PROTO_OVERRIDE_EVER`).
                 USER_PROTO_OVERRIDE_EVER.store(true, Ordering::Release);
                 (*meta).flags |= crate::object::OBJECT_META_FLAG_USER_PROTO_OVERRIDE;
+                crate::object::class_registry::class_prototype_relinked(obj);
             }
             if link_kind == PrototypeLinkKind::ClassEvaluation {
                 (*meta).flags |= crate::object::OBJECT_META_FLAG_CLASS_EVALUATION_PROTO;

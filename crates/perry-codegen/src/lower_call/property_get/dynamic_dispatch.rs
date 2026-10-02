@@ -580,8 +580,22 @@ pub(crate) fn try_lower_instance_method_call(
                 // fallback instead of re-entering this hard-coded tower.
                 probed_cid
             } else {
-                ctx.block()
-                    .call(I32, "js_object_get_class_id", &[(I64, &recv_handle)])
+                // A tower too wide for the shape probe still hard-codes the
+                // body each class id inherits along the declared `extends`
+                // chain. Prototype surgery on that name (an assignment,
+                // delete or redefinition, or a relinked class prototype)
+                // retires the arms: class id 0 matches no case and takes the
+                // runtime default, as the shape probe's miss does.
+                let raw_cid =
+                    ctx.block()
+                        .call(I32, "js_object_get_class_id", &[(I64, &recv_handle)]);
+                let blk = ctx.block();
+                let prototype_ok =
+                    crate::lower_call::method_override::emit_prototype_method_guard_ok(
+                        blk,
+                        &method_guard_slot_str,
+                    );
+                blk.select(I1, &prototype_ok, I32, &raw_cid, "0")
             };
 
             for (i, (case_cid, _)) in implementors.iter().enumerate() {

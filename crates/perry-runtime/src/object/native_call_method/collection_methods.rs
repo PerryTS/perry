@@ -512,7 +512,9 @@ pub(super) unsafe fn dispatch_raw_pointer(
                                     ));
                                 }
                             }
-                            match get_parent_class_id(cur_cid) {
+                            match crate::object::class_registry::instance_chain_parent_class_id(
+                                cur_cid,
+                            ) {
                                 Some(pid) if pid != 0 => {
                                     cur_cid = pid;
                                     depth += 1;

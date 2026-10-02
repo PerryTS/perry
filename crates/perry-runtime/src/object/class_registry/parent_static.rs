@@ -1922,12 +1922,32 @@ pub fn lookup_class_method_in_chain(class_id: u32, name: &str) -> Option<(usize,
                 return Some(entry);
             }
         }
-        match get_parent_class_id(cur) {
-            Some(pid) if pid != 0 => cur = pid,
-            _ => return None,
+        match instance_chain_parent_class_id(cur) {
+            Some(pid) => cur = pid,
+            None => return None,
         }
     }
     None
+}
+
+/// The next class on an INSTANCE chain after `cid`: the declared parent,
+/// unless a user operation (`Object.setPrototypeOf(C.prototype, X)`,
+/// `C.prototype.__proto__ = X`) replaced the `[[Prototype]]` of `cid`'s
+/// prototype object. That prototype's recorded link is then the chain, and a
+/// walk over declared class members must stop at `cid`: the parent's methods,
+/// getters and setters are off the chain (the generic read continues on the
+/// recorded link). The static side (`C.__proto__`) is a different object and
+/// keeps the declared parent.
+///
+/// The relink check runs only when a declared parent exists, so a walk that
+/// answers from the receiver's own class, or reaches a root class, pays
+/// nothing for it.
+#[inline]
+pub(crate) fn instance_chain_parent_class_id(cid: u32) -> Option<u32> {
+    match get_parent_class_id(cid) {
+        Some(pid) if pid != 0 && !super::class_decl_prototype_relinked(cid) => Some(pid),
+        _ => None,
+    }
 }
 
 /// True when `ptr` is the prototype OBJECT of some registered class. Class
@@ -1959,9 +1979,9 @@ pub fn method_owner_class_id(class_id: u32, name: &str) -> Option<u32> {
                 return Some(cur);
             }
         }
-        match get_parent_class_id(cur) {
-            Some(pid) if pid != 0 => cur = pid,
-            _ => return None,
+        match instance_chain_parent_class_id(cur) {
+            Some(pid) => cur = pid,
+            None => return None,
         }
     }
     None

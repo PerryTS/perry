@@ -200,6 +200,66 @@ pub(crate) fn invalidate_class_prototype_fast_guards_for_method(name: &str) {
     retire_prototype_dependent_caches();
 }
 
+/// A user operation (`Object.setPrototypeOf(C.prototype, X)`,
+/// `C.prototype.__proto__ = X`) replaced the `[[Prototype]]` of `proto`.
+///
+/// When `proto` is a declared class's prototype object, every member that
+/// class's instances inherited from its DECLARED ancestors is off their chain
+/// from now on, and whatever `X` carries is on it. The runtime walks over
+/// declared members stop at the relinked class
+/// (`instance_chain_parent_class_id`); what remains are the resolutions made
+/// before the relink or ahead of time:
+///
+/// * compiler-emitted direct-method arms (the dispatch tower, `super.m()`)
+///   resolved an inherited name to an ancestor's body along the declared
+///   `extends` chain. They are guarded by the per-name invalidation bytes, so
+///   the relink retires the slot of every method, getter and setter name an
+///   ancestor declares — exactly the names whose resolution it can change. A
+///   name the class itself declares still resolves to its own body, and a
+///   name no declared class carries never had a direct arm;
+/// * the `(class_id, method name)` dispatch caches (`VTABLE_IC`,
+///   `OBJ_DISPATCH_IC`) are keyed on `VTABLE_GEN`, which the retirement bumps.
+///
+/// The receiver-word site memos need nothing: the relink restamps `proto`'s
+/// shape, which their hop facts compare.
+///
+/// # Safety
+/// `proto` must point to a live, meta-capable object.
+pub(crate) unsafe fn class_prototype_relinked(proto: *mut crate::object::ObjectHeader) {
+    let cid = (*proto).class_id;
+    if cid == 0 || super::class_decl_prototype_object(cid) != proto {
+        return;
+    }
+    let mut names: Vec<String> = Vec::new();
+    if let Ok(registry) = super::CLASS_VTABLE_REGISTRY.read() {
+        if let Some(reg) = registry.as_ref() {
+            let mut cur = cid;
+            for _ in 0..32 {
+                match super::get_parent_class_id(cur) {
+                    Some(pid) if pid != 0 && pid != cur => cur = pid,
+                    _ => break,
+                }
+                if let Some(vt) = reg.get(&cur) {
+                    names.extend(vt.methods.keys().cloned());
+                    names.extend(vt.accessors.keys().cloned());
+                }
+            }
+        }
+    }
+    for name in &names {
+        let slot = class_prototype_method_guard_slot(name) as usize;
+        #[cfg(not(test))]
+        PERRY_CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED_BY_METHOD[slot]
+            .store(1, std::sync::atomic::Ordering::Release);
+        #[cfg(test)]
+        CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED_BY_METHOD
+            .write()
+            .unwrap()
+            .insert(slot as u16);
+    }
+    retire_prototype_dependent_caches();
+}
+
 pub(crate) fn invalidate_class_prototype_fast_guards() {
     #[cfg(not(test))]
     PERRY_CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED.store(1, std::sync::atomic::Ordering::Release);

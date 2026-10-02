@@ -949,6 +949,22 @@ pub unsafe extern "C" fn js_super_method_call_dynamic(
             return result;
         }
     }
+    // `super` is the home object's CURRENT `[[Prototype]]`. Once a user
+    // relinked the home class's prototype (`Object.setPrototypeOf(C.prototype,
+    // X)`), that is the recorded link: the declared parent's members are off
+    // the chain, and a name the link does not carry is not callable.
+    if super::class_registry::class_decl_prototype_relinked(child_class_id) {
+        return super_call_on_relinked_chain(
+            name,
+            this_value,
+            args_ptr,
+            args_len,
+            |key, receiver| {
+                super::class_registry::relinked_class_prototype_read(child_class_id, key, receiver)
+                    .flatten()
+            },
+        );
+    }
     // `lookup_class_method_in_chain` resolves under the registry read lock and
     // DROPS it before returning — the invoked method body may take the registry
     // write lock (a lazy `require()` registering a module class), so we must not
@@ -984,12 +1000,104 @@ pub unsafe extern "C" fn js_super_method_call_dynamic(
             args_len,
         );
     }
+    // An ANCESTOR's prototype was relinked: the declared-member walks above
+    // stop there, and the rest of the chain is its recorded link, which the
+    // generic class-chain read follows.
+    if declared_chain_has_relinked_prototype(parent_cid) {
+        return super_call_on_relinked_chain(
+            name,
+            this_value,
+            args_ptr,
+            args_len,
+            |key, receiver| {
+                super::class_registry::resolve_proto_chain_field_with_receiver(
+                    parent_cid, key, receiver,
+                )
+            },
+        );
+    }
     // #6316: the parent chain is real (an intermediate user class) but bottoms
     // out in a NATIVE base whose surface perry stamps onto the instance —
     // `class Logged extends Bus`, `class Bus extends EventEmitter`. Neither the
     // vtable nor the prototype registry knows `emit`; the displaced base method
     // does. Runs LAST so a genuine user-class parent method always wins.
     call_displaced_native_base_method(this_value, name, args_ptr, args_len, undef)
+}
+
+/// Is the prototype of `cid` or of one of its declared ancestors relinked by a
+/// user operation? Asked only after the declared-member lookups missed.
+fn declared_chain_has_relinked_prototype(cid: u32) -> bool {
+    let mut cur = cid;
+    for _ in 0..32 {
+        if cur == 0 {
+            return false;
+        }
+        if super::class_registry::class_decl_prototype_relinked(cur) {
+            return true;
+        }
+        match crate::object::get_parent_class_id(cur) {
+            Some(p) if p != cur => cur = p,
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// `super.name(...args)` resolved by `read` on a relinked chain: call the value
+/// with `this_value` as receiver, or throw the TypeError a call of a
+/// non-callable `super.name` throws.
+///
+/// # Safety
+/// `args_ptr` must point to `args_len` valid `f64`s (or be null when
+/// `args_len == 0`).
+unsafe fn super_call_on_relinked_chain(
+    name: &str,
+    this_value: f64,
+    args_ptr: *const f64,
+    args_len: usize,
+    read: impl FnOnce(*const crate::StringHeader, f64) -> Option<crate::value::JSValue>,
+) -> f64 {
+    // The key allocation and the read (a getter on the new chain) can collect;
+    // the receiver and the arguments ride across them in handles.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let this_handle = scope.root_nanbox_f64(this_value);
+    let args: Vec<f64> = if args_len > 0 && !args_ptr.is_null() {
+        std::slice::from_raw_parts(args_ptr, args_len).to_vec()
+    } else {
+        Vec::new()
+    };
+    let arg_handles = scope.root_nanbox_f64_slice(&args);
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let value = if key.is_null() {
+        None
+    } else {
+        read(
+            key as *const crate::StringHeader,
+            this_handle.get_nanbox_f64(),
+        )
+    };
+    let callable = value.filter(|v| {
+        v.is_pointer()
+            && crate::closure::is_closure_ptr(crate::value::js_nanbox_get_pointer(f64::from_bits(
+                v.bits(),
+            )) as usize)
+    });
+    let Some(method) = callable else {
+        crate::error::js_throw_type_error_not_a_function(
+            std::ptr::null(),
+            0,
+            name.as_ptr(),
+            name.len(),
+        )
+    };
+    let method_handle = scope.root_nanbox_f64(f64::from_bits(method.bits()));
+    let args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
+    crate::closure::native_call_value_this(
+        method_handle.get_nanbox_f64(),
+        crate::closure::JsThis::from_f64(this_handle.get_nanbox_f64()),
+        args.as_ptr(),
+        args.len(),
+    )
 }
 
 /// Invoke the native base method a subclass override displaced (#6316), with
