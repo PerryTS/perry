@@ -433,19 +433,29 @@ pub(crate) fn execute_output(
     let stored = receiver.with_const_ptr::<RegExpHeader, _>(|r| unsafe {
         crate::value::JSValue::from_bits((*r).last_index)
     });
+    // ToLength still runs for non-numbers even when lastIndex will be
+    // ignored: it can invoke user code, recompile the receiver or throw.
     let last_index = if stored.is_number() {
-        stored
-            .as_number()
-            .max(0.0)
-            .floor()
-            .min(9_007_199_254_740_991.0) as usize
+        None
     } else {
-        caught(|| receiver.with_const_ptr(|p| super::regex_last_index_offset(p)))?
+        Some(caught(|| {
+            receiver.with_const_ptr(|p| super::regex_last_index_offset(p))
+        })?)
     };
     let (stateful, has_indices) = receiver.with_const_ptr::<RegExpHeader, _>(|r| unsafe {
         ((*r).global || (*r).sticky, (*r).has_indices)
     });
-    let start = if stateful { last_index } else { 0 };
+    let start = if stateful {
+        last_index.unwrap_or_else(|| {
+            stored
+                .as_number()
+                .max(0.0)
+                .floor()
+                .min(9_007_199_254_740_991.0) as usize
+        })
+    } else {
+        0
+    };
     let length = input.with_const_ptr::<StringHeader, _>(|s| unsafe { (*s).utf16_len as usize });
     if start > length {
         if stateful {
@@ -474,7 +484,10 @@ pub(crate) fn execute_output(
         None => {
             let (bound, identity) = bind_heap_subject_observed(input)?;
             fresh_subject = bound;
-            cross_call = identity;
+            // Only g/y searches can start away from zero. A non-stateful
+            // call gains nothing from finding or recording a position, and
+            // otherwise copies/scans the entire four-entry hint table twice.
+            cross_call = if stateful { identity } else { None };
             &fresh_subject
         }
     };

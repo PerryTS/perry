@@ -55,6 +55,37 @@ fn search_from(
 }
 
 #[test]
+fn nonstateful_searches_leave_position_hints_for_global_searches_untouched() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    super::perex_public::register_host_roots();
+    let scope = RuntimeHandleScope::new();
+    let input = text(&scope, "ä1 ö22".as_bytes());
+    let plain = regex(&scope, "ä", "u");
+    let global = regex(&scope, "ö", "gu");
+    hints::clear_for_test();
+    let identity = hints::identity_of(&input).unwrap();
+    assert_eq!(search_from(&plain, &input, 42), Some((0, 1)));
+    assert_eq!(
+        unsafe { (*receiver_ptr(&plain)).last_index },
+        42.0f64.to_bits()
+    );
+    assert!(
+        hints::lookup(identity).is_none(),
+        "a plain search must not record a hint"
+    );
+
+    assert_eq!(search_from(&global, &input, 0), Some((3, 4)));
+    let position = hints::lookup(identity).expect("a global search must retain its position");
+    assert_eq!(search_from(&plain, &input, usize::MAX), Some((0, 1)));
+    assert_eq!(
+        hints::lookup(identity),
+        Some(position),
+        "a plain search must not overwrite a global search's useful hint"
+    );
+}
+
+#[test]
 fn cross_call_positions_keep_a_js_level_non_ascii_loop_linear() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
