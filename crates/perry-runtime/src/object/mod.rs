@@ -89,6 +89,7 @@ mod class_gc_roots;
 mod class_handles;
 pub mod class_image;
 mod class_registry;
+mod class_super_chain;
 pub(crate) mod class_value;
 #[cfg(test)]
 mod zeroed_cache_tests;

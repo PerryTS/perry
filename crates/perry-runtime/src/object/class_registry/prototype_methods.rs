@@ -456,6 +456,27 @@ pub unsafe extern "C" fn js_register_prototype_method(
     if class_has_instance_getter(class_id, &name) {
         return;
     }
+    // `C.prototype.__proto__ = v` is not a method install: it is a `[[Set]]`
+    // that reaches `Object.prototype`'s `__proto__` accessor, whose setter
+    // relinks the prototype exactly like `Object.setPrototypeOf`.
+    if name == "__proto__" {
+        let proto = super::class_decl_prototype_value(class_id);
+        if crate::value::JSValue::from_bits(proto.to_bits()).is_pointer() {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let proto = scope.root_nanbox_f64(proto);
+            let value = scope.root_nanbox_f64(value);
+            let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            let key = f64::from_bits(crate::value::JSValue::string_ptr(key).bits());
+            crate::proxy::js_put_value_set(
+                proto.get_nanbox_f64(),
+                key,
+                value.get_nanbox_f64(),
+                proto.get_nanbox_f64(),
+                1,
+            );
+            return;
+        }
+    }
     class_prototype_method_root_store(class_id, name, value.to_bits());
     // Ensure the receiver class can be `typeof`-detected. Method-less
     // classes that only get extended via `Class.prototype.m = fn`
