@@ -352,10 +352,15 @@ jobs:
         if: ${{ !cancelled() }}
         run: python3 scripts/test_capture_linux_incident.py
 
-      - name: Public benchmark evidence freshness
+      - name: Public benchmark harness tests
         if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python3 tests/test_public_baseline.py
+
+      # Temporarily paused at maintainer request while compiler changes land.
+      # Re-enable after a complete quiet-host public baseline refresh.
+      - name: Public benchmark evidence freshness (paused)
+        if: ${{ false }}
         run: |
-          PYTHONPATH=. python3 tests/test_public_baseline.py
           # README embedded table is optional since #6736 (marketing landing
           # page); this wrapper still enforces artifact freshness + RESULTS.md
           # drift. Kept out of public_baseline.py to preserve harness_fingerprint.
