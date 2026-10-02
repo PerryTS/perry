@@ -1077,10 +1077,13 @@ unsafe fn super_call_on_relinked_chain(
         )
     };
     let callable = value.filter(|v| {
+        let boxed = f64::from_bits(v.bits());
         v.is_pointer()
-            && crate::closure::is_closure_ptr(crate::value::js_nanbox_get_pointer(f64::from_bits(
-                v.bits(),
-            )) as usize)
+            && ((crate::proxy::js_proxy_is_proxy(boxed) == 1
+                && crate::proxy::proxy_wraps_callable(boxed))
+                || crate::closure::is_closure_ptr(
+                    crate::value::js_nanbox_get_pointer(boxed) as usize
+                ))
     });
     let Some(method) = callable else {
         crate::error::js_throw_type_error_not_a_function(
@@ -1092,6 +1095,13 @@ unsafe fn super_call_on_relinked_chain(
     };
     let method_handle = scope.root_nanbox_f64(f64::from_bits(method.bits()));
     let args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
+    if crate::proxy::js_proxy_is_proxy(method_handle.get_nanbox_f64()) == 1 {
+        return crate::proxy::call_proxy_value_with_this(
+            method_handle.get_nanbox_f64(),
+            this_handle.get_nanbox_f64(),
+            &args,
+        );
+    }
     crate::closure::native_call_value_this(
         method_handle.get_nanbox_f64(),
         crate::closure::JsThis::from_f64(this_handle.get_nanbox_f64()),

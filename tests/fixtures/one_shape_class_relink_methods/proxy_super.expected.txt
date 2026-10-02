@@ -1,0 +1,8 @@
+proxy 17 1
+function 18
+noncallable true
+default-proxy 19
+nested-proxy 20 1
+object-proxy true 0
+revoked-proxy true
+getter-throw getter-sentinel

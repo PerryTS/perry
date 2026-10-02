@@ -140,3 +140,29 @@ fn wide_dispatch_tower_sees_a_redefined_parent_method() {
     let wrong = mismatches("a 1\nb 99 99\nc 2\nd true\n", &stdout);
     assert!(wrong.is_empty(), "{wrong:?}\n{stdout}");
 }
+
+/// A getter on the replacement super chain can return a Proxy with [[Call]].
+/// Object-target proxies stay non-callable even if they carry an apply trap.
+#[test]
+fn relinked_super_calls_callable_proxies() {
+    let source =
+        include_str!("../../../tests/fixtures/one_shape_class_relink_methods/proxy_super.ts");
+    let expected = include_str!(
+        "../../../tests/fixtures/one_shape_class_relink_methods/proxy_super.expected.txt"
+    );
+    let dir = tempfile::tempdir().expect("tempdir");
+    let output = compile(dir.path(), source);
+    let run = Command::new(&output)
+        .current_dir(dir.path())
+        .output()
+        .expect("run compiled proxy super fixture");
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(
+        run.status.success(),
+        "proxy super fixture failed ({:?})\n{stdout}\n{stderr}",
+        run.status
+    );
+    let wrong = mismatches(expected, &stdout);
+    assert!(wrong.is_empty(), "{wrong:?}\n{stdout}\n{stderr}");
+}
