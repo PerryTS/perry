@@ -1628,8 +1628,7 @@ jobs:
             cargo build --release -p perry -p perry-runtime -p perry-stdlib \
               -p perry-runtime-static -p perry-stdlib-static \
               -p perry-ext-events -p perry-ext-http -p perry-ext-net \
-              -p perry-ext-typescript -p perry-ext-ws -p perry-ext-zlib \
-              --features perry-stdlib/external-net-pump
+              -p perry-ext-typescript -p perry-ext-ws -p perry-ext-zlib
             export PERRY_TEST_RUNTIME_PREBUILT=1
           else
             cargo build --release -p perry-runtime -p perry-stdlib \
@@ -1827,8 +1826,7 @@ jobs:
               cargo build --release -p perry -p perry-runtime -p perry-stdlib \
                 -p perry-runtime-static -p perry-stdlib-static \
                 -p perry-ext-events -p perry-ext-http -p perry-ext-net \
-                -p perry-ext-typescript -p perry-ext-ws -p perry-ext-zlib \
-                --features perry-stdlib/external-net-pump
+                -p perry-ext-typescript -p perry-ext-ws -p perry-ext-zlib
               export PERRY_TEST_RUNTIME_PREBUILT=1
             else
               runtime_packages=(-p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static)
