@@ -381,6 +381,10 @@ pub(crate) struct FnCtx<'a> {
     /// collected from structural initializers with module-wide write
     /// invalidation; ordinary local type predicates do not consult them.
     pub module_global_proven_types: &'a std::collections::HashMap<u32, HirType>,
+    /// This module's immutable-global transfer plans by LocalId. Every read of
+    /// such a binding goes through `codegen::global_transfer::emit_read`.
+    pub module_global_transfers:
+        &'a std::collections::HashMap<u32, crate::codegen::global_transfer::GlobalTransfer>,
     /// Bindings assigned after declaration anywhere in this region.
     ///
     /// A TypeScript annotation describes the source-level contract, but an

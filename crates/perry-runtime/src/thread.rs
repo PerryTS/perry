@@ -1802,6 +1802,8 @@ unsafe fn spawn_impl(closure_val: f64) -> *mut crate::promise::Promise {
     promise
 }
 
+mod global_transfer;
+pub use global_transfer::{js_thread_global_materialize, js_thread_global_publish};
 mod pending_results;
 pub(crate) use pending_results::purge_agent_thread_results;
 use pending_results::queue_thread_result;

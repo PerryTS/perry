@@ -91,9 +91,10 @@ test('scoped CI prepares coherent providers for each standalone native consumer'
     for (const name of ['perry', 'perry-runtime', 'perry-stdlib', 'perry-runtime-static',
       'perry-stdlib-static', 'perry-ext-events', 'perry-ext-http', 'perry-ext-net',
       'perry-ext-typescript', 'perry-ext-ws', 'perry-ext-zlib']) {
-      assert(calls[0].includes(`-p ${name} `), name);
+      assert((calls[0] + " ").includes(`-p ${name} `), name);
     }
-    assert.match(calls[0], /--features perry-stdlib\/external-net-pump$/);
+    assert.doesNotMatch(calls[0], /--features(?:=| )/,
+      'shared prebuilt stdlib must retain the standalone require helper default feature graph');
   }
 });
 
@@ -144,7 +145,7 @@ printf 'prepared:%s\\nruntime:%s\\n' "\${PERRY_TEST_RUNTIME_PREBUILT-unset}" "\$
 test('full-tier shards prepare every bounded require consumer before executing fixtures', () => {
   for (const suite of ['bun_text_modules', 'bun_embedded_compression', 'import_meta_require_value',
     'minsize_inline_policy', 'child_output_late_iterator', 'async_resource_own_bind']) {
-    const result = shardSetup(['unrelated', suite]);
+    const result = shardSetup(['issue_10274_request_proxy_headers', suite]);
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /prepared:1\n/, suite);
     assert(result.stdout.includes(`runtime:${root}target/release\n`), result.stdout);
@@ -153,9 +154,10 @@ test('full-tier shards prepare every bounded require consumer before executing f
     for (const name of ['perry', 'perry-runtime', 'perry-stdlib', 'perry-runtime-static',
       'perry-stdlib-static', 'perry-ext-events', 'perry-ext-http', 'perry-ext-net',
       'perry-ext-typescript', 'perry-ext-ws', 'perry-ext-zlib']) {
-      assert(calls[0].includes(`-p ${name} `), name);
+      assert((calls[0] + " ").includes(`-p ${name} `), name);
     }
-    assert.match(calls[0], /--features perry-stdlib\/external-net-pump$/);
+    assert.doesNotMatch(calls[0], /--features(?:=| )/,
+      'shared prebuilt stdlib must retain the standalone require helper default feature graph');
   }
 });
 
