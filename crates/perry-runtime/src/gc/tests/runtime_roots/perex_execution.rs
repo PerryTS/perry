@@ -37,60 +37,6 @@ fn compile<'s>(
     BoundProgram::new(program, &mut budget).unwrap()
 }
 
-/// dotenv's line pattern: 42 match registers, over the 32 the lent cell held.
-const DOTENV_LINE: &str = r#"(?:^|^)\s*(?:export\s+)?([\w.-]+)(?:\s*=\s*?|:\s+?)(\s*'(?:\\'|[^'])*'|\s*"(?:\\"|[^"])*"|\s*`(?:\\`|[^`])*`|[^#\r\n]+)?\s*(?:#.*)?(?:$|$)"#;
-
-/// A program with more than 32 registers borrows the thread's lent scratch
-/// instead of building and freeing owned buffers on every search (#11549).
-///
-/// Sabotage: restoring the fixed 32-register cell sends every one of these
-/// searches down the owned path, and `owned` reads 64.
-#[test]
-fn a_search_over_thirty_two_registers_borrows_the_lent_scratch() {
-    use crate::regex::perex_runtime::OWNED_SEARCHES_RUN;
-
-    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    let scope = RuntimeHandleScope::new();
-    let program = compile(&scope, DOTENV_LINE, "m");
-    let registers = program
-        .with_view(|program| program.register_count())
-        .unwrap();
-    assert!(
-        registers > 32,
-        "fixture must need more registers than the old cell held, got {registers}"
-    );
-    let input = subject(&scope, b"KEY_1=value_1 # trailing comment\n");
-    let memory = MemoryBudget::new(1 << 20);
-    let search = || {
-        let mut budget = Budget::new(usize::MAX);
-        host::find(
-            &program,
-            &input,
-            0,
-            CaptureMode::All,
-            &mut budget,
-            &memory,
-            usize::MAX,
-            &mut host::poll,
-        )
-        .unwrap()
-        .expect("fixture: every search must match")
-        .full
-    };
-    // Warm-up sizes the cell. A search that outgrows its frames or undo
-    // entries grows them for the next call, which can take a few calls.
-    for _ in 0..8 {
-        search();
-    }
-    let before = OWNED_SEARCHES_RUN.with(std::cell::Cell::get);
-    for _ in 0..64 {
-        assert_eq!(search(), Span::new(0, 32).unwrap());
-    }
-    let owned = OWNED_SEARCHES_RUN.with(std::cell::Cell::get) - before;
-    assert_eq!(owned, 0, "no search may fall back to owned buffers");
-    assert_eq!(memory.live_bytes(), 0);
-}
-
 #[test]
 fn perex_host_buffers_account_overlap_failure_and_unwind() {
     let _guard = CopyingNurseryTestGuard::new(0);

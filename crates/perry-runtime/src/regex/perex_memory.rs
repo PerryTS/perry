@@ -1,5 +1,5 @@
 //! Operation-owned native scratch, charged to Perry's external-byte budget.
-//! No GC pointer may be stored in these buffers. `Reservation` accounting can
+//! No GC pointer may be stored in these buffers. Allocation/accounting can
 //! collect, so callers must release all program/subject views first.
 
 use std::cell::Cell;
@@ -97,10 +97,9 @@ impl Drop for Reservation<'_> {
     }
 }
 
-/// Stable initialized native allocation, freed by the operation that made it.
-/// Its bytes are live external bytes while it exists, but they are transient:
-/// they neither step the allocation-churn trigger nor count as released
-/// pressure when dropped (#11549), and noting them never collects.
+/// Stable initialized native allocation. Its accounting owner is established
+/// before notifying the collector, so a collecting/unwinding notification
+/// cannot strand a buffer or leave its bytes charged.
 pub(crate) struct Buffer<'a, T: Copy + Default> {
     data: Vec<T>,
     budget: &'a MemoryBudget,
@@ -129,9 +128,10 @@ impl<'a, T: Copy + Default> Buffer<'a, T> {
         };
         budget.live.set(live);
         budget.peak.set(budget.peak.get().max(live));
-        // Transient (#11549): the operation frees this before it returns and
-        // the collector can never reclaim it, so it must not pace collections.
-        crate::gc::gc_note_external_transient_alloc(bytes);
+        if bytes != 0 {
+            crate::exception::catch_js_throw(|| crate::gc::gc_note_external_side_alloc(bytes))
+                .map_err(|value| StorageError::Abrupt(value.to_bits()))?;
+        }
         Ok(owned)
     }
 }
@@ -152,6 +152,8 @@ impl<T: Copy + Default> DerefMut for Buffer<'_, T> {
 impl<T: Copy + Default> Drop for Buffer<'_, T> {
     fn drop(&mut self) {
         self.budget.live.set(self.budget.live.get() - self.bytes);
-        crate::gc::gc_note_external_transient_free(self.bytes);
+        if self.bytes != 0 {
+            crate::gc::gc_note_external_side_free(self.bytes);
+        }
     }
 }

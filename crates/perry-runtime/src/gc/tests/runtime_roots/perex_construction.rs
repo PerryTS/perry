@@ -70,37 +70,6 @@ fn the_pre_search_poll_runs_on_one_search_in_sixty_four() {
     );
 }
 
-/// Operation-owned regex scratch is transient: while it lives it counts as
-/// live external bytes, and releasing it adds nothing to the released-bytes
-/// pressure that schedules full collections (#11549).
-///
-/// Sabotage: noting a `Buffer` through `gc_note_external_side_alloc`/`_free`
-/// as before makes `drained` grow by the buffer's size.
-#[test]
-fn regex_scratch_buffers_do_not_count_as_released_external_pressure() {
-    use crate::gc::policy::GC_EXTERNAL_SIDE_DRAINED_SINCE_FULL;
-    use crate::regex::perex_memory::{Buffer, MemoryBudget};
-
-    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    let live = external_side_live_bytes();
-    let drained = GC_EXTERNAL_SIDE_DRAINED_SINCE_FULL.with(TriggerInput::get);
-    let memory = MemoryBudget::new(1 << 20);
-    {
-        let buffer = Buffer::<usize>::new(&memory, 1024).unwrap();
-        assert!(
-            external_side_live_bytes() >= live + 1024 * std::mem::size_of::<usize>(),
-            "a live buffer must still be visible as live external bytes"
-        );
-        drop(buffer);
-    }
-    assert_eq!(external_side_live_bytes(), live);
-    assert_eq!(
-        GC_EXTERNAL_SIDE_DRAINED_SINCE_FULL.with(TriggerInput::get),
-        drained,
-        "a freed scratch buffer must not count as released pressure"
-    );
-}
-
 fn construct<'s>(scope: &'s RuntimeHandleScope, pattern: &[u8], flags: &[u8]) -> RuntimeHandle<'s> {
     let p = text(scope, pattern);
     let f = text(scope, flags);

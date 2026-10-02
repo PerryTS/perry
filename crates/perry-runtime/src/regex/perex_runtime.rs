@@ -201,14 +201,10 @@ impl<T: Copy + Default, const N: usize> std::ops::DerefMut for Slots<'_, T, N> {
 /// fewer: `/^[a-z]+_[0-9]+$/` needs 2. Frames and undo entries start empty and
 /// only grow through `rebuffer`, so they are never inline.
 const INLINE_REGISTERS: usize = 8;
-/// Most registers the lent cell grows to. The cell is allocated once per
-/// thread, not per call, and keeps the size of the largest program it has
-/// served, so this caps that memory at 32 KiB per thread.
-///
-/// It was a fixed 32 (#11549). Every search of a larger program, such as
-/// dotenv's 42-register line pattern, then took the owned path and built and
-/// freed its buffers on every call. Real patterns stay well under this cap.
-const LENT_REGISTERS_MAX: usize = 4096;
+/// Registers the lent cell holds. This array is allocated once per thread, not
+/// per call, so it is sized for the programs a search may bring rather than
+/// for what is cheap to move.
+const LENT_REGISTERS: usize = 32;
 /// Capture spans an `exec` result can have and still be read without
 /// allocating.
 const INLINE_CAPTURES: usize = 16;
@@ -257,7 +253,7 @@ impl ScratchOwner for MatchBuffers<'_> {
 /// frames and undo entries are the engine's own opaque scratch, exactly as in
 /// the owned buffers this replaces (see this module's header).
 struct ScratchCell {
-    registers: Vec<usize>,
+    registers: [usize; LENT_REGISTERS],
     frames: Vec<Frame>,
     undo: Vec<Undo>,
 }
@@ -274,7 +270,7 @@ crate::perry_thread_local! {
     /// costing a `_tlv_get_addr` call — the opposite of what this change is for.
     static LENT_SCRATCH: std::cell::RefCell<ScratchCell> = const {
         std::cell::RefCell::new(ScratchCell {
-            registers: Vec::new(),
+            registers: [0; LENT_REGISTERS],
             frames: Vec::new(),
             undo: Vec::new(),
         })
@@ -307,14 +303,6 @@ crate::perry_thread_local! {
     /// Test-only: how many pre-search polls actually ran, so a test can assert
     /// the stride took the poll path rather than infer it from a timing.
     pub(crate) static PRE_SEARCH_POLLS_RUN: std::cell::Cell<usize> =
-        const { std::cell::Cell::new(0) };
-}
-
-#[cfg(test)]
-crate::perry_thread_local! {
-    /// Test-only: how many searches built their own `MatchBuffers` instead of
-    /// borrowing the lent cell, so a test can assert which path ran (#11549).
-    pub(crate) static OWNED_SEARCHES_RUN: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
 }
 
@@ -410,12 +398,6 @@ fn find_near_lent<'mem, S: ImmutableSubject<Error = OwnerError>>(
             return Ok(Lent::Fallback);
         };
         let cell = &mut *cell;
-        if cell.registers.len() < registers {
-            // Grows a handful of times per thread, then never again. The
-            // cell's memory is the thread's, like `frames` and `undo`, so it
-            // is not noted to the collector (#11549).
-            cell.registers.resize(registers.max(32), 0);
-        }
         // Charged exactly like the owner it replaces: the operation's limit
         // sees the slots a search may use, whether or not they were allocated
         // for it. The thread keeps the memory; the operation only borrows it.
@@ -556,7 +538,7 @@ pub(crate) fn find_near<'mem, S: ImmutableSubject<Error = OwnerError>>(
     // Lend the thread's scratch first: a search that fits it constructs and
     // moves nothing (#10166). Anything the cell cannot serve falls through to
     // the owned buffers below with the budget it entered on.
-    if registers <= LENT_REGISTERS_MAX {
+    if registers <= LENT_REGISTERS {
         let entry = *budget;
         match find_near_lent(
             &resources, registers, start, near, mode, budget, memory, quantum, poll,
@@ -566,8 +548,6 @@ pub(crate) fn find_near<'mem, S: ImmutableSubject<Error = OwnerError>>(
         }
     }
 
-    #[cfg(test)]
-    OWNED_SEARCHES_RUN.with(|n| n.set(n.get() + 1));
     poll()?;
     let buffers = MatchBuffers::new(memory, size)?;
     // A failed run reports the work it left (perex 0.1.10), so the budget
