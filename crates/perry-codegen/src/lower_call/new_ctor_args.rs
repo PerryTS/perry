@@ -18,6 +18,7 @@ use perry_hir::{Expr, Param};
 use super::new_helpers::effective_constructor_param_count;
 use crate::expr::{lower_expr, nanbox_pointer_inline, FnCtx};
 use crate::nanbox::double_literal;
+use crate::rooting::{AccArray, RootedGroup};
 use crate::types::{DOUBLE, I32, I64};
 
 pub(crate) struct InlineConstructorScope {
@@ -303,6 +304,36 @@ pub(super) fn lower_constructor_arg(ctx: &mut FnCtx<'_>, arg: &Expr) -> Result<S
     lowered
 }
 
+pub(super) enum ImportedCtorArg {
+    Value(String),
+    Array(AccArray),
+}
+
+impl ImportedCtorArg {
+    pub(super) fn reread(&self, ctx: &mut FnCtx<'_>, group: &RootedGroup<'_>) -> String {
+        match self {
+            Self::Value(value) => value.clone(),
+            Self::Array(acc) => {
+                let handle = group.read_array(ctx, *acc);
+                nanbox_pointer_inline(ctx.block(), &handle)
+            }
+        }
+    }
+}
+
+fn pack_imported_args_array(
+    ctx: &mut FnCtx<'_>,
+    group: &mut RootedGroup<'_>,
+    args: &[String],
+) -> AccArray {
+    let cap = args.len().to_string();
+    let acc = group.begin_array(ctx, &cap);
+    for value in args {
+        group.push_array(ctx, acc, value);
+    }
+    acc
+}
+
 /// Marshal the lowered `new`-site args into the value list a cross-module
 /// imported constructor symbol expects. The source module compiled the
 /// standalone `<class>_constructor(this, p0, …)` with `ctor.param_count`
@@ -312,40 +343,52 @@ pub(super) fn lower_constructor_arg(ctx: &mut FnCtx<'_>, arg: &Expr) -> Result<S
 /// `arguments` slot (`ctor.has_synthetic_arguments`, #10484) a packed array of
 /// EVERY arg. Mirrors the inline-ctor `inline_constructor_param_values`
 /// packing and the `method_has_rest` path for imported methods (#672). Returns
-/// exactly `ctor.param_count` value strings; missing fixed args are padded with
-/// `undefined`.
+/// exactly `ctor.param_count` operands; missing fixed args are padded with
+/// `undefined`. Packed arrays live in the caller's group from allocation
+/// through dispatch, including packing a second array and class-value lookup.
 pub(super) fn marshal_imported_ctor_args(
     ctx: &mut FnCtx<'_>,
     ctor: &crate::codegen::ImportedCtor,
     lowered_args: &[String],
-) -> Vec<String> {
+    group: &mut RootedGroup<'_>,
+) -> Vec<ImportedCtorArg> {
     let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
     let param_count = ctor.param_count;
     let trailing = usize::from(ctor.has_rest) + usize::from(ctor.has_synthetic_arguments);
     if trailing > 0 && param_count >= trailing {
         let n_positional = param_count - trailing;
-        let mut out: Vec<String> = Vec::with_capacity(param_count);
+        let mut out = Vec::with_capacity(param_count);
         for i in 0..n_positional {
-            out.push(
+            out.push(ImportedCtorArg::Value(
                 lowered_args
                     .get(i)
                     .cloned()
                     .unwrap_or_else(|| undef.clone()),
-            );
+            ));
         }
         if ctor.has_rest {
             let tail: Vec<String> = lowered_args.iter().skip(n_positional).cloned().collect();
-            out.push(pack_lowered_args_array(ctx, &tail));
+            out.push(ImportedCtorArg::Array(pack_imported_args_array(
+                ctx, group, &tail,
+            )));
         }
         if ctor.has_synthetic_arguments {
-            out.push(pack_lowered_args_array(ctx, lowered_args));
+            out.push(ImportedCtorArg::Array(pack_imported_args_array(
+                ctx,
+                group,
+                lowered_args,
+            )));
         }
         out
     } else {
         // No rest: positional, padded to `param_count` with `undefined`.
-        let mut out: Vec<String> = lowered_args.to_vec();
+        let mut out: Vec<_> = lowered_args
+            .iter()
+            .cloned()
+            .map(ImportedCtorArg::Value)
+            .collect();
         while out.len() < param_count {
-            out.push(undef.clone());
+            out.push(ImportedCtorArg::Value(undef.clone()));
         }
         // #6537 review: `param_count.max(out.len())` made this a no-op, so a
         // call site passing MORE args than the imported ctor's fixed arity

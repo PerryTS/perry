@@ -337,7 +337,7 @@ const CENSUS_NAMES: [&str; 48] = [
     "emit.elem.store.append_inline",
     "emit.elem.store.guard_miss",
     "emit.elem.store.fallback_call",
-    "emit.41",
+    "emit.elem.read.versioned_indexed",
     "emit.elem.store.f64_cold",
     "emit.43",
     "emit.44",
@@ -653,6 +653,13 @@ pub(crate) unsafe fn packed_add_prime(
         census(C_PRIME_UNVERIFIED);
         return;
     }
+    // The emitted add hit stamps the successor before its raw slot store.
+    // A SPECIAL append needs the checked slow path to prewrite the current
+    // closure under Any before publishing its body-specific shape.
+    if crate::object::field_rep::slot_rep(post_d.rep, n) == crate::object::field_rep::REP_SPECIAL {
+        census(C_PRIME_UNVERIFIED);
+        return;
+    }
     // A marked prototype or exotic read receiver is on a private shape lineage
     // (`proto_validity::ensure_meta_for_mark`); never learn one of its shapes,
     // so the emitted hit's pre-shape compare alone proves the receiver is
@@ -714,7 +721,7 @@ pub(crate) unsafe fn packed_add_prime(
     }
     let pre_word = if inline { pre } else { pre ^ SPILL_FLIP };
     let shapes = u64::from(pre_word) | (u64::from(post) << 32);
-    let f64_slot = if inline && !crate::object::field_rep_store::shape_slot_is_any(post, n) {
+    let f64_slot = if inline && crate::object::field_rep_store::shape_slot_is_f64(post, n) {
         ADD_F64_SLOT
     } else {
         0

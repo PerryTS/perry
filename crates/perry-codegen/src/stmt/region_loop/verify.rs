@@ -136,3 +136,96 @@ pub(super) fn verify(
     }
     true
 }
+
+/// Check the complete F path, including instructions after its last bare
+/// access. A JS-capable operation may reshape a receiver before the next
+/// iteration; it therefore needs an unconditional recheck, a dirty-flag
+/// store on that path, or an exit from the region. The earlier bare-access
+/// check alone cannot establish this back-edge obligation.
+pub(super) fn verify_exit_effects(
+    ctx: &FnCtx<'_>,
+    entry: usize,
+    scan_start: usize,
+    scan_end: usize,
+    recheck: Recheck,
+    dirty_slot: Option<&str>,
+    valid_slot: Option<&str>,
+) -> bool {
+    let Some(valid_slot) = valid_slot else {
+        return true; // A body region does not carry its facts to an iteration.
+    };
+    if recheck == Recheck::Always {
+        return true;
+    }
+    use crate::inst::LlInst;
+    const JS: u8 = 1;
+    const DIRTY: u8 = 2;
+    const LEFT: u8 = 4;
+    let blocks = ctx.func.blocks();
+    let in_f = |b: usize| b == entry || (scan_start..scan_end).contains(&b);
+    let mut by_label: HashMap<&str, usize> = HashMap::new();
+    for b in (scan_start..scan_end).chain(std::iter::once(entry)) {
+        by_label.insert(blocks[b].label.as_str(), b);
+    }
+    let mut state: HashMap<usize, u8> = HashMap::new();
+    let mut work = vec![(entry, 1u8)];
+    let mut exits = 0u8;
+    while let Some((b, incoming)) = work.pop() {
+        let previous = state.get(&b).copied().unwrap_or(0);
+        if previous | incoming == previous {
+            continue;
+        }
+        let mut mask = previous | incoming;
+        state.insert(b, mask);
+        for inst in blocks[b].insts() {
+            let mut next = 0u8;
+            for bits in 0..8u8 {
+                if mask & (1 << bits) == 0 {
+                    continue;
+                }
+                let mut bits = bits;
+                if inst_may_run_js(inst) {
+                    bits |= JS;
+                }
+                if let LlInst::Store { val, ptr, .. } = inst {
+                    if dirty_slot == Some(ptr.as_str()) {
+                        if val == "true" {
+                            bits |= DIRTY;
+                        } else if val == "false" {
+                            bits &= !DIRTY;
+                        } else {
+                            // An unknown write cannot prove coverage.
+                            bits &= !DIRTY;
+                        }
+                    }
+                    if ptr == valid_slot {
+                        if val == "false" {
+                            bits |= LEFT;
+                        } else {
+                            // Re-entering the region revokes the exit proof.
+                            bits &= !LEFT;
+                        }
+                    }
+                }
+                next |= 1 << bits;
+            }
+            mask = next;
+        }
+        let successors = successors(&blocks[b]);
+        if successors.is_empty() {
+            exits |= mask;
+        }
+        for succ in successors {
+            match by_label.get(succ.as_str()) {
+                Some(&next) if in_f(next) => work.push((next, mask)),
+                _ => exits |= mask,
+            }
+        }
+    }
+    (0..8u8).all(|bits| {
+        exits & (1 << bits) == 0
+            || bits & JS == 0
+            || bits & LEFT != 0
+            || (recheck == Recheck::Dirty && bits & DIRTY != 0)
+    })
+}

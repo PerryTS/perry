@@ -204,7 +204,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
             // Compute the closure function name BEFORE taking the
             // mutable block borrow.
-            let func_name = format!("perry_closure_{}__{}", ctx.strings.module_prefix(), func_id);
+            let func_name =
+                crate::fn_info::closure_body_symbol(ctx.strings.module_prefix(), *func_id);
 
             // Closures may reserve extra lexical slots after ordinary
             // captures. Keep `this` last because the runtime's

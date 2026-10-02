@@ -7,9 +7,9 @@ use crate::analysis::*;
 use crate::destructuring::*;
 use crate::ir::*;
 use crate::lower::{
-    collect_for_of_pattern_leaves, emit_for_of_pattern_binding, insert_iterator_close_on_abrupt,
-    labeled_body_targets_loop, lazy_iter_for_stmt, lazy_or_index_elem, lower_expr,
-    wrap_lazy_for_of_body_close_on_throw, LoweringContext,
+    collect_for_of_pattern_leaves, emit_for_of_pattern_binding, labeled_body_targets_loop,
+    lazy_iter_for_stmt, lazy_or_index_elem, lower_expr, wrap_lazy_for_of_body_close_on_throw,
+    LoweringContext,
 };
 use crate::lower_patterns::*;
 
@@ -713,7 +713,10 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                 });
                 return Ok(result);
             }
+            let label_scope = ctx.iterator_loop_labels.len();
+            crate::lower::record_iterator_loop_label(ctx, &labeled_stmt.body, &label);
             let inner = lower_body_stmt(ctx, &labeled_stmt.body)?;
+            ctx.iterator_loop_labels.truncate(label_scope);
             // If the body lowered to a single statement, wrap it directly.
             // Otherwise wrap the first statement (preserving any hoisted lets before it).
             if inner.len() == 1 {
@@ -2071,12 +2074,16 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
 
             // Lazy path: run IteratorClose on abrupt completions.
             if use_lazy_iter {
-                insert_iterator_close_on_abrupt(&mut loop_body, arr_id, 0, &[]);
                 // Wrap ONLY the user body so a throw escaping it runs
                 // IteratorClose; the element-`.value` read and binding stay
                 // outside (IteratorValue throwing does not close — spec
                 // `iterator-next-result-value-attr-error`).
-                let guarded_body = wrap_lazy_for_of_body_close_on_throw(ctx, arr_id, loop_body);
+                let guarded_body = wrap_lazy_for_of_body_close_on_throw(
+                    ctx,
+                    arr_id,
+                    for_of_stmt.span.lo.0,
+                    loop_body,
+                );
                 let mut full_body = binding_stmts;
                 full_body.push(guarded_body);
                 result.push(lazy_iter_for_stmt(arr_id, result_id, full_body));

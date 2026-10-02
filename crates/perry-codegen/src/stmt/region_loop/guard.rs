@@ -92,6 +92,7 @@ pub(super) fn emit_prime_call(
             (I32, &last),
             (I32, &rv.stored_mask.to_string()),
             (I32, &rv.boxed_mask.to_string()),
+            (I32, &rv.r_mask.to_string()),
         ],
     )
 }
@@ -117,6 +118,7 @@ pub(super) fn emit_body_guard_direct(
     rv: &Receiver,
     sites: &Sites,
     word: &str,
+    entry_tests: &[u32],
     inline_l: &str,
     spill_l: &str,
     fail_l: &str,
@@ -145,7 +147,11 @@ pub(super) fn emit_body_guard_direct(
     let handle = crate::expr::receiver_range::emit_handle(ctx.block(), &test.biased);
     let expected = ctx.block().trunc(I64, word, I32);
     let sid = field_i32(ctx, &handle, 4);
-    let eq = ctx.block().icmp_eq(I32, &sid, &expected);
+    let mut eq = ctx.block().icmp_eq(I32, &sid, &expected);
+    if !entry_tests.is_empty() {
+        let number_ok = emit_number_entry_tests(ctx, entry_tests)?;
+        eq = ctx.block().and(I1, &eq, &number_ok);
+    }
     let admit = if rv.has_store {
         Some(store_admission(ctx, &handle, true))
     } else {
@@ -193,7 +199,7 @@ pub(super) fn emit_body_guard_direct(
 /// ShapeId against the id, so a declared type (a parameter `p: C`, a
 /// reassigned binding) serves as well as a proven one — a receiver of any
 /// other shape misses into the learned supplier.
-fn static_region_word(ctx: &FnCtx<'_>, rv: &Receiver) -> Option<u64> {
+fn static_region_word(ctx: &FnCtx<'_>, rv: &Receiver) -> Option<(u64, u32)> {
     let class_name =
         crate::type_analysis::receiver_class_name(ctx, &rv.recv.expr()).or_else(|| {
             match rv.recv {
@@ -210,12 +216,13 @@ fn static_region_word(ctx: &FnCtx<'_>, rv: &Receiver) -> Option<u64> {
             }
         })?;
     let keys_global = ctx.class_keys_globals.get(&class_name)?;
-    let (id, slots) = crate::codegen::static_region_slots(keys_global, &rv.keys, rv.boxed_mask)?;
+    let (id, slots, r_mask) =
+        crate::codegen::static_region_slots(keys_global, &rv.keys, rv.boxed_mask)?;
     let mut word = u64::from(id);
     for (i, slot) in slots.iter().enumerate() {
         word |= u64::from(*slot) << (32 + SLOT_BITS * i as u32);
     }
-    Some(word)
+    Some((word, r_mask))
 }
 
 /// A guard whose receiver the compiler names (DESIGN §4.1, static-exclusive):
@@ -225,7 +232,7 @@ fn static_region_word(ctx: &FnCtx<'_>, rv: &Receiver) -> Option<u64> {
 /// no word load and no prime. Any miss selects the generic copy.
 fn emit_static_guard(
     ctx: &mut FnCtx<'_>,
-    rv: &Receiver,
+    rv: &mut Receiver,
     word: u64,
 ) -> Result<(String, String, String)> {
     note(ctx, Route::RloopGuard);
@@ -246,7 +253,17 @@ fn emit_static_guard(
     let handle = crate::expr::receiver_range::emit_handle(ctx.block(), &test.biased);
     let sid = field_i32(ctx, &handle, 4);
     let expected = (word as u32).to_string();
-    let eq = ctx.block().icmp_eq(I32, &sid, &expected);
+    // Region slots remain identical. Refuse a raw write to any CF lane;
+    // other completed shapes retain the same numeric/boxed slot facts.
+    let written_slots: Vec<u32> = if rv.has_store {
+        (0..rv.keys.len())
+            .map(|i| ((word >> (32 + SLOT_BITS * i as u32)) & ((1 << SLOT_BITS) - 1)) as u32)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let eq =
+        crate::typed_shape::emit_compatible_shape_eq(ctx.block(), &sid, &expected, &written_slots);
     let mut miss_edges = vec![entry_l];
     if rv.has_store {
         let admit = store_admission(ctx, &handle, true);
@@ -270,6 +287,12 @@ fn emit_static_guard(
     let mut edges: Vec<(&str, &str)> = miss_edges.iter().map(|l| ("false", l.as_str())).collect();
     edges.push(("true", hit_end.as_str()));
     let pass = ctx.block().phi(I1, &edges);
+    // Re-entry must compare the accepted header, which may be a compatible
+    // completed ConstFn shape. Keep the packed slot word constant so field
+    // displacements still fold; the extra value is a pointer-free ShapeId.
+    let mut shape_edges: Vec<(&str, &str)> = miss_edges.iter().map(|l| ("0", l.as_str())).collect();
+    shape_edges.push((sid.as_str(), hit_end.as_str()));
+    rv.expected_shape = Some(ctx.block().phi(I32, &shape_edges));
     Ok((word.to_string(), pass, "false".to_string()))
 }
 
@@ -279,7 +302,8 @@ pub(super) fn emit_guard(
 ) -> Result<(String, String, String)> {
     // A receiver whose class the compiler names takes its guard's ShapeId
     // from the driver's static id (DESIGN §4.1): no loaded supplier.
-    if let Some(w) = static_region_word(ctx, rv) {
+    if let Some((w, r_mask)) = static_region_word(ctx, rv) {
+        rv.r_mask = r_mask;
         return emit_static_guard(ctx, rv, w);
     }
     // A retired region (every bounded prime refused) is decided by the word

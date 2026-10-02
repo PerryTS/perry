@@ -128,6 +128,8 @@ pub(crate) struct MixinFn {
 }
 
 pub struct LoweringContext {
+    /// Labels and source spans of the for-of loops currently being lowered.
+    pub iterator_loop_labels: Vec<(u32, String)>,
     /// Counter for generating unique local IDs
     pub(crate) next_local_id: LocalId,
     /// User-visible declaration spans keyed by the `LocalId` allocated during

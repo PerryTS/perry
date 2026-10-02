@@ -1522,7 +1522,10 @@ pub(crate) fn lower_stmt(
                 });
                 return Ok(());
             }
+            let label_scope = ctx.iterator_loop_labels.len();
+            crate::lower::record_iterator_loop_label(ctx, &labeled_stmt.body, &label);
             let inner = lower_body_stmt(ctx, &labeled_stmt.body)?;
+            ctx.iterator_loop_labels.truncate(label_scope);
             if inner.len() == 1 {
                 let body = inner.into_iter().next().unwrap();
                 module.init.push(Stmt::Labeled {

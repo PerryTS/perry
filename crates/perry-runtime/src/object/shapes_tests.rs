@@ -1561,8 +1561,8 @@ mod field_rep_identity_tests {
     }
 
     #[test]
-    fn a_reserved_lane_is_refused() {
-        let reserved = with_slot_rep(0, 2, crate::object::field_rep::REP_RESERVED);
+    fn an_unbound_special_lane_is_refused() {
+        let reserved = with_slot_rep(0, 2, crate::object::field_rep::REP_SPECIAL);
         assert!(shape_descriptor_ensure_with_rep(
             std::ptr::null(),
             0,

@@ -122,3 +122,44 @@ fn an_unseeded_worker_mints_a_replayed_object_by_facts_and_never_aliases_the_sta
         "the static id exists in an agent that never seeded it — a compare could hit wrong facts"
     );
 }
+
+extern "C" fn worker_constfn_body(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
+    19.0
+}
+
+fn seed_constfn_here() -> (u32, u64) {
+    use crate::object::field_rep::{with_slot_rep, REP_SPECIAL};
+    let info =
+        crate::fn_info!(worker_constfn_body, 0; with_flags(crate::codegen_abi::FN_PERMANENT_IMAGE));
+    let entries = [crate::object::static_shapes::ConstFnStaticEntry { slot: 0, info }];
+    let packed = b"lt5w_method\0";
+    let id = crate::object::static_shapes::js_shape_seed_plain_constfn(
+        SHAPE_ID_BASE + 0x7862,
+        packed.as_ptr(),
+        packed.len() as u32,
+        1,
+        1,
+        with_slot_rep(0, 0, REP_SPECIAL),
+        entries.as_ptr(),
+        1,
+    );
+    let record = shape_descriptor_by_id(id).expect("agent-local ConstFn seed record");
+    (id, record.constfn_infos()[0].info)
+}
+
+#[test]
+fn constfn_static_seed_uses_same_image_body_in_each_agent() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let main = seed_constfn_here();
+    let worker = std::thread::spawn(seed_constfn_here)
+        .join()
+        .expect("worker ConstFn seed");
+    assert_eq!(main.0, SHAPE_ID_BASE + 0x7862);
+    assert_eq!(
+        worker, main,
+        "static id and body info must agree across agents"
+    );
+}

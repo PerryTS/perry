@@ -117,6 +117,10 @@ pub(crate) use proven_this::{
     tower_route_profitable as pshape_tower_route_profitable,
 };
 pub(crate) use ptr_numarray::{NumArrayDensity, NumArrayLocal};
+pub(crate) use ptr_shape::{
+    collect_numeric_by_construction_locals_in_region, region_number_flow_reads,
+    region_store_value_is_number, RegionNumberAssumptions,
+};
 pub(crate) use ptr_shape::{ptr_shape_locals_enabled, PtrShapeLocal};
 pub(crate) use ptr_shape_callbacks::collect_array_callback_shapes;
 pub(crate) use ptr_shape_returns::collect_exported_return_shapes;

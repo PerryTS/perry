@@ -486,6 +486,7 @@ mod tests {
                 &mut next_local_id,
                 None,
                 &HashMap::new(),
+                false,
             )
         };
 

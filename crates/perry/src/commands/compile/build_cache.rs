@@ -137,6 +137,8 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     // `PERRY_AGENT_PTR_ACCESS=call` forces the call-based agent block access;
     // both change the emitted IR.
     "PERRY_METHOD_SITE",
+    // Step 5C marks executable body infos for ConstFn shape admission.
+    "PERRY_CONSTFN_SHAPE",
     "PERRY_AGENT_PTR_ACCESS",
     // #8583: the relocation estimate above which a function spills its GC roots
     // to a shadow frame. It changes which functions carry statepoints, so it

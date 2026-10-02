@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use crate::block::LlBlock;
 use crate::module::LlModule;
 use crate::strings::StringPool;
-use crate::types::{DOUBLE, I32, I64, PTR, VOID};
+use crate::types::{DOUBLE, I32, I64, I8, PTR, VOID};
 
 use super::ctor_arity::constructor_layout_params;
 use super::helpers::{sanitize_member, scoped_static_method_name};
@@ -25,13 +25,21 @@ use super::spec_function_length;
 /// runtime registry; no SSA value flows between ops — so splitting at op
 /// boundaries is safe and order-preserving (chunks run in sequence, ops in order
 /// within a chunk).
+#[derive(Default)]
+struct InitChunks {
+    ops: usize,
+    current: Option<usize>,
+    names: Vec<String>,
+}
+
 struct InitChunker<'a> {
     llmod: &'a mut LlModule,
     base_name: String,
     ops_per_chunk: usize,
-    ops_in_current: usize,
-    cur_idx: usize,
-    chunk_names: Vec<String>,
+    // Literal infrastructure may run before cyclic dependencies. Declared
+    // class metadata retains its existing module-body initialization boundary.
+    literals: bool,
+    phases: [InitChunks; 2],
 }
 
 impl<'a> InitChunker<'a> {
@@ -40,65 +48,64 @@ impl<'a> InitChunker<'a> {
             llmod,
             base_name,
             ops_per_chunk: ops_per_chunk.max(1),
-            // Force a fresh chunk on the first op.
-            ops_in_current: usize::MAX,
-            cur_idx: 0,
-            chunk_names: Vec::new(),
+            literals: true,
+            phases: Default::default(),
         }
     }
 
-    /// Start a fresh chunk function if the current one is full. Call ONCE at the
-    /// top of each loop iteration (one independent init op), before
-    /// [`current_block`]. Closes the previous chunk with `ret void`.
-    /// The module, for a definition an init op registers (the chunk being
-    /// filled is addressed by index, so appending functions is fine).
     fn module(&mut self) -> &mut LlModule {
         self.llmod
     }
 
     fn roll_if_full(&mut self) {
-        if self.ops_in_current >= self.ops_per_chunk {
-            if !self.chunk_names.is_empty() {
+        let phase = usize::from(!self.literals);
+        let state = &mut self.phases[phase];
+        if state.current.is_none() || state.ops >= self.ops_per_chunk {
+            if let Some(current) = state.current {
                 self.llmod
-                    .function_mut(self.cur_idx)
+                    .function_mut(current)
                     .unwrap()
                     .block_mut(0)
                     .unwrap()
                     .ret_void();
             }
-            let name = format!("{}_chunk{}", self.base_name, self.chunk_names.len());
+            let name = format!(
+                "{}_{}_chunk{}",
+                self.base_name,
+                if self.literals { "literal" } else { "class" },
+                state.names.len()
+            );
             self.llmod
                 .define_function(&name, VOID, vec![])
                 .create_block("entry");
-            self.cur_idx = self.llmod.function_count() - 1;
-            self.chunk_names.push(name);
-            self.ops_in_current = 0;
+            state.current = Some(self.llmod.function_count() - 1);
+            state.names.push(name);
+            state.ops = 0;
         }
     }
 
-    /// The current chunk's entry block, for emitting one op's instructions.
-    /// Counts as one op (a logical init step may emit several instructions onto
-    /// it). Always preceded by [`roll_if_full`].
     fn current_block(&mut self) -> &mut LlBlock {
-        self.ops_in_current += 1;
+        let state = &mut self.phases[usize::from(!self.literals)];
+        state.ops += 1;
         self.llmod
-            .function_mut(self.cur_idx)
+            .function_mut(state.current.unwrap())
             .unwrap()
             .block_mut(0)
             .unwrap()
     }
 
-    /// Close the final chunk and return all chunk function names, in order.
-    fn finish(self) -> Vec<String> {
-        if !self.chunk_names.is_empty() {
-            self.llmod
-                .function_mut(self.cur_idx)
-                .unwrap()
-                .block_mut(0)
-                .unwrap()
-                .ret_void();
-        }
-        self.chunk_names
+    fn finish(self) -> [Vec<String>; 2] {
+        self.phases.map(|state| {
+            if let Some(current) = state.current {
+                self.llmod
+                    .function_mut(current)
+                    .unwrap()
+                    .block_mut(0)
+                    .unwrap()
+                    .ret_void();
+            }
+            state.names
+        })
     }
 }
 
@@ -120,6 +127,7 @@ pub(super) fn emit_string_pool(
     llmod: &mut LlModule,
     strings: &StringPool,
     module_prefix: &str,
+    agent_strings_tls: bool,
     // #9188 follow-up: which registration spelling the name/source loops below
     // may use. `_static` hands the registry the `@.str.N` constant itself
     // instead of a slice to copy, which is sound only while this image stays
@@ -244,9 +252,13 @@ pub(super) fn emit_string_pool(
                 entry.bytes_global
             ));
         }
-        // #10399: the string pool is populated by each module's init, which
-        // runs once per thread when the program has a Worker.
-        llmod.add_internal_module_state_global(&entry.handle_global, DOUBLE, "0.0");
+        // Worker module init and perry/thread's explicit string bootstrap each
+        // populate this slot in the allocating agent's own arena.
+        if agent_strings_tls {
+            llmod.add_internal_thread_local_global(&entry.handle_global, DOUBLE, "0.0");
+        } else {
+            llmod.add_internal_global(&entry.handle_global, DOUBLE, "0.0");
+        }
     }
 
     // Per-class packed-keys constants (rodata) — referenced by the
@@ -447,7 +459,7 @@ pub(super) fn emit_string_pool(
         .unwrap_or(4000);
     let mut chunker = InitChunker::new(
         llmod,
-        format!("__perry_init_strings_{}", module_prefix),
+        format!("__perry_agent_strings_{}", module_prefix),
         ops_per_chunk,
     );
 
@@ -495,6 +507,39 @@ pub(super) fn emit_string_pool(
         let addr_i64 = blk.ptrtoint(&handle_ref, I64);
         blk.call_void("js_gc_register_global_root", &[(I64, &addr_i64)]);
     }
+
+    let [string_chunks, no_class_chunks] = chunker.finish();
+    debug_assert!(no_class_chunks.is_empty());
+    let agent_strings_name = format!("__perry_prepare_agent_strings_{}", module_prefix);
+    let ready = format!("__perry_agent_strings_ready_{}", module_prefix);
+    if agent_strings_tls {
+        llmod.add_internal_thread_local_global(&ready, I8, "0");
+    } else {
+        llmod.add_internal_global(&ready, I8, "0");
+    }
+    let prepare_strings = llmod.define_function(&agent_strings_name, VOID, vec![]);
+    prepare_strings.create_block("entry");
+    prepare_strings.create_block("prepare");
+    prepare_strings.create_block("done");
+    let prepare_label = prepare_strings.block_mut(1).unwrap().label.clone();
+    let done_label = prepare_strings.block_mut(2).unwrap().label.clone();
+    let blk = prepare_strings.block_mut(0).unwrap();
+    let prepared = blk.load(I8, &format!("@{}", ready));
+    let prepared = blk.icmp_ne(I8, &prepared, "0");
+    blk.cond_br(&prepared, &done_label, &prepare_label);
+    let blk = prepare_strings.block_mut(1).unwrap();
+    for name in &string_chunks {
+        blk.call_void(name, &[]);
+    }
+    blk.store(I8, "1", &format!("@{}", ready));
+    blk.br(&done_label);
+    prepare_strings.block_mut(2).unwrap().ret_void();
+
+    let mut chunker = InitChunker::new(
+        llmod,
+        format!("__perry_init_strings_{}", module_prefix),
+        ops_per_chunk,
+    );
 
     // An image that can be UNLOADED cannot lend its rodata to a registry that
     // never drops entries. Perry compiles TypeScript to a dylib plugin as well
@@ -586,6 +631,7 @@ pub(super) fn emit_string_pool(
     // the user wrote. This is a distinct edge from the parent one on purpose:
     // `CLASS_REGISTRY`'s chain also resolves `super()`, static-method lookup
     // and vtable dispatch, so it must keep pointing at the real base.
+    chunker.literals = false;
     let mut origin_pairs: Vec<(u32, u32)> = Vec::new();
     for (name, &cid) in class_ids.iter() {
         let Some(class) = classes.get(name) else {
@@ -626,6 +672,7 @@ pub(super) fn emit_string_pool(
         }
         anon_shape_ids.sort_unstable();
         anon_shape_ids.dedup();
+        chunker.literals = true;
         for cid in anon_shape_ids {
             chunker.roll_if_full();
             let blk = chunker.current_block();
@@ -641,16 +688,14 @@ pub(super) fn emit_string_pool(
     // module init; every `new ClassName()` call from then on does a
     // single global load + inline allocator call (no SHAPE_CACHE
     // lookup, no js_build_class_keys_array overhead).
+    let literal_classes: std::collections::HashSet<_> = classes
+        .values()
+        .filter(|class| class.name.starts_with("__AnonShape_"))
+        .filter_map(|class| class_ids.get(&class.name).copied())
+        .collect();
     for (idx, (global_name, packed, field_count, _raw_mask_words, _pointer_mask_words)) in
         class_keys_init_data.iter().enumerate()
     {
-        chunker.roll_if_full();
-        let blk = chunker.current_block();
-        // The birth's class id, typed-ness and live bound come from the ONE
-        // derivation the driver's pre-pass also uses to name this birth's
-        // content (`static_shape_ids::class_birth`); `requested` is that
-        // content's static id — the definer's for a structural stub of the
-        // definer's facts — (0 = none).
         let birth = super::static_shape_ids::class_birth(
             module_prefix,
             &class_keys_init_data[idx],
@@ -658,6 +703,16 @@ pub(super) fn emit_string_pool(
             class_birth_reps,
             class_ids,
         );
+        // Only synthetic ordinary-object layouts are safe before dependency
+        // bodies. User-class keys, prototypes and methods stay in the late phase.
+        chunker.literals = literal_classes.contains(&birth.class_id);
+        chunker.roll_if_full();
+        let blk = chunker.current_block();
+        // The birth's class id, typed-ness and live bound come from the ONE
+        // derivation the driver's pre-pass also uses to name this birth's
+        // content (`static_shape_ids::class_birth`); `requested` is that
+        // content's static id — the definer's for a structural stub of the
+        // definer's facts — (0 = none).
         let class_id = birth.class_id;
         let requested = super::static_shape_ids::requested_shape_id_for_keys_global(global_name)
             .unwrap_or(0)
@@ -809,6 +864,7 @@ pub(super) fn emit_string_pool(
     // where `Square extends Rectangle extends Shape`) terminate
     // prematurely. We emit one call per inheriting class, sorted by
     // class id for deterministic ordering.
+    chunker.literals = false;
     let mut parent_pairs: Vec<(u32, u32)> = Vec::new();
     for (name, &cid) in class_ids.iter() {
         if let Some(class) = classes.get(name) {
@@ -1574,7 +1630,74 @@ pub(super) fn emit_string_pool(
         );
     }
 
-    let chunk_names = chunker.finish();
+    // Final class records follow all class/prototype registrations. They
+    // coexist with the ordinary allocation ids and never feed header images.
+    if super::static_constfn::has_final_shapes() {
+        let defined_classes: HashMap<_, _> = module_classes
+            .iter()
+            .filter_map(|class| class_ids.get(&class.name).map(|cid| (*cid, class)))
+            .collect();
+        for entry in class_keys_init_data {
+            let birth = super::static_shape_ids::class_birth(
+                module_prefix,
+                entry,
+                class_header_image_inits,
+                class_birth_reps,
+                class_ids,
+            );
+            let Some(ordinary) = birth.shape else {
+                continue;
+            };
+            let Some(class) = defined_classes.get(&birth.class_id).copied() else {
+                continue;
+            };
+            let Ok(shape) = super::static_constfn_class::class_final(
+                module_prefix,
+                class,
+                classes,
+                ordinary.rep,
+                birth.class_id,
+            ) else {
+                continue;
+            };
+            if shape.keys != ordinary.keys
+                || shape.live != ordinary.live
+                || shape.proto != ordinary.proto
+            {
+                continue;
+            }
+            let Some(id) = super::static_shape_ids::static_final_shape_id(&shape) else {
+                continue;
+            };
+            chunker.roll_if_full();
+            let blk = chunker.current_block();
+            // Registration calls above can collect; load the canonical keys
+            // afresh from their registered root immediately before the mint.
+            let keys = blk.load(I64, &format!("@{}", entry.0));
+            blk.call(
+                I32,
+                "js_object_final_shape_id_for_class_keys_static_constfn",
+                &[
+                    (I64, &keys),
+                    (I32, &shape.key_count.to_string()),
+                    (I32, &shape.live.to_string()),
+                    (I32, &birth.class_id.to_string()),
+                    (I32, &id.to_string()),
+                    (I64, &shape.rep.to_string()),
+                    (
+                        PTR,
+                        &format!(
+                            "@{}",
+                            super::static_constfn::entries_symbol(module_prefix, id)
+                        ),
+                    ),
+                    (I32, &shape.constfn.len().to_string()),
+                ],
+            );
+        }
+    }
+
+    let [literal_chunks, class_chunks] = chunker.finish();
     record_fn_info_facts(
         llmod,
         module_prefix,
@@ -1598,11 +1721,42 @@ pub(super) fn emit_string_pool(
             user_fn_wrapper_strict,
         },
     );
+    // A cyclic importer can call a hoisted factory before this module body.
+    // Prepare literal strings/function info/ordinary-object layouts first,
+    // once per arena. Workers can enter __init_body directly, so the body
+    // also reaches this guarded preparation without allocating a second pool.
+    let prepare_name = format!("__perry_prepare_literals_{}", module_prefix);
+    let prepared = format!("__perry_literals_ready_{}", module_prefix);
+    if super::program_has_worker() {
+        llmod.add_internal_thread_local_global(&prepared, I8, "0");
+    } else {
+        llmod.add_internal_global(&prepared, I8, "0");
+    }
+    let prepare_fn = llmod.define_function(&prepare_name, VOID, vec![]);
+    prepare_fn.create_block("entry");
+    prepare_fn.create_block("prepare");
+    prepare_fn.create_block("done");
+    let prepare_label = prepare_fn.block_mut(1).unwrap().label.clone();
+    let done_label = prepare_fn.block_mut(2).unwrap().label.clone();
+    let blk = prepare_fn.block_mut(0).unwrap();
+    let ready = blk.load(I8, &format!("@{}", prepared));
+    let ready = blk.icmp_ne(I8, &ready, "0");
+    blk.cond_br(&ready, &done_label, &prepare_label);
+    let blk = prepare_fn.block_mut(1).unwrap();
+    blk.call_void(&agent_strings_name, &[]);
+    for cname in &literal_chunks {
+        blk.call_void(cname, &[]);
+    }
+    blk.store(I8, "1", &format!("@{}", prepared));
+    blk.br(&done_label);
+    prepare_fn.block_mut(2).unwrap().ret_void();
+
     let init_name = format!("__perry_init_strings_{}", module_prefix);
     let init_fn = llmod.define_function(&init_name, VOID, vec![]);
-    let _ = init_fn.create_block("entry");
+    init_fn.create_block("entry");
     let blk = init_fn.block_mut(0).unwrap();
-    for cname in &chunk_names {
+    blk.call_void(&prepare_name, &[]);
+    for cname in &class_chunks {
         blk.call_void(cname, &[]);
     }
     blk.ret_void();

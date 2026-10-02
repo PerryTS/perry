@@ -2568,6 +2568,8 @@ js_object_delete_field	i32s	ptr,ptr
 js_object_delete_field_value	i32s	f64,ptr
 js_object_entries	ptr	ptr
 js_object_entries_value	ptr	f64
+js_object_final_shape_id_for_class_keys_static_constfn	i32u	i64,i32u,i32u,i32u,i32u,i64,ptr,i32u
+js_object_finalize_constfn_static	i64	i64,i32u,ptr,i32u,i32u,i32u,i32u,i64,ptr,i32u
 js_object_free	void	ptr
 js_object_freeze	f64	f64
 js_object_from_entries	f64	f64
@@ -3190,7 +3192,7 @@ js_regexp_to_string	ptr	ptr
 js_region_guard_pack	i64	i32u,i32u,i64,i64,i64,i64,i64
 js_region_guard_prime	i64	ptr,i32u,i32u,i64,i64,i64,i64,i64
 js_region_loop_pack	i64	i32u,i32u,i64,i64,i64,i64,i64,i32u,i32u
-js_region_loop_prime	i64	ptr,i32u,i32u,i64,i64,i64,i64,i64,i32u,i32u,i32u
+js_region_loop_prime	i64	ptr,i32u,i32u,i64,i64,i64,i64,i64,i32u,i32u,i32u,i32u
 js_register_anon_shape_class_id	void	i32u
 js_register_aux_has_active	void	ptr
 js_register_aux_pump	void	ptr
@@ -3455,6 +3457,7 @@ js_shape_ordinary_inline_slot_for_key	i32s	i32u,i64
 js_shape_register_static_seed	void	ptr
 js_shape_run_static_seed	void	
 js_shape_seed_plain	i32u	i32u,ptr,i32u,i32u,i32u,i64
+js_shape_seed_plain_constfn	i32u	i32u,ptr,i32u,i32u,i32u,i64,ptr,i32u
 js_shared_array_buffer_new	ptr	i32s
 js_shared_array_buffer_new_value	ptr	f64
 js_sharp_auto_orient	i64	i64
@@ -3718,9 +3721,12 @@ js_thread_global_materialize	f64	i64,i64,i64
 js_thread_global_publish	void	i64,i64,i64
 js_thread_has_pending	i32s	
 js_thread_parallel_filter	f64	f64,f64
+js_thread_parallel_filter_with_literals	f64	f64,f64,i64
 js_thread_parallel_map	f64	f64,f64
+js_thread_parallel_map_with_literals	f64	f64,f64,i64
 js_thread_process_pending	i32s	
 js_thread_spawn	f64	f64
+js_thread_spawn_with_literals	f64	f64,i64
 js_throw	void	f64
 js_throw_bigint_constructor_type_error	f64	
 js_throw_collection_receiver_type_error	void	f64,ptr,usize

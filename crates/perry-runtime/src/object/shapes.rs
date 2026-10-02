@@ -54,6 +54,7 @@ pub(crate) use shapes_slot_list::{
     shape_index_migrate_after_delete, shape_index_shift_in_place,
     try_update_stable_tombstone_shape, try_update_stable_tombstone_shape_cached, SlotIndex,
 };
+pub(crate) use shapes_store::ConstFnSlotInfo;
 pub(crate) use shapes_store::PERRY_EMPTY_SHAPE_DIR;
 use shapes_store::{
     IdList, ShapeRecord, ShapeSlab, RECORD_FLAG_BIRTH_OWNER, RECORD_FLAG_CACHE_CARRIER,
@@ -151,11 +152,43 @@ pub(crate) struct ShapeDescriptor {
     /// Charter step 5: the per-slot field representation (`field_rep`).
     /// Compared under [`field_rep::identity`](super::field_rep::identity).
     pub(crate) rep: u64,
+    /// For a `REP_SPECIAL` lane, one means ConstFn; zero reserves NoPointer.
+    pub(crate) special_constfn_mask: u32,
+    /// Borrowed record-owned extension; valid while this descriptor's ShapeId
+    /// remains live. Never an independent GC root or a lookup table.
+    pub(crate) extras: u64,
 }
 
 /// Shape identity is the FACTS, never the storage address. A descriptor value
 /// lifted out of the table compares equal to the record it came from.
 impl ShapeDescriptor {
+    #[inline]
+    pub(crate) fn constfn_infos(&self) -> &[shapes_store::ConstFnSlotInfo] {
+        if self.extras == 0 {
+            &[]
+        } else {
+            // SAFETY: the live slab record owns the extension; the descriptor
+            // is only used while its id is live, like its `record` pointer.
+            unsafe { &(*(self.extras as usize as *const shapes_store::ShapeExtras)).constfn_infos }
+        }
+    }
+
+    #[inline]
+    pub(crate) fn deprecation_targets(&self) -> (u32, u32) {
+        if self.extras == 0 {
+            (0, 0)
+        } else {
+            // SAFETY: a live descriptor borrows the record-owned extension.
+            let extras = unsafe { &*(self.extras as usize as *const shapes_store::ShapeExtras) };
+            (
+                extras
+                    .to_nopointer
+                    .load(std::sync::atomic::Ordering::Acquire),
+                extras.to_any.load(std::sync::atomic::Ordering::Acquire),
+            )
+        }
+    }
+
     /// This shape's ordered keys: the keys array and the shape's own count,
     /// which is the authority (the array can be a longer shared backing).
     #[inline]
@@ -245,6 +278,38 @@ impl ShapeRecordRef {
     #[inline]
     pub(crate) fn rep(self) -> u64 {
         self.rep_word().load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Which `REP_SPECIAL` lanes hold closure pointers, so the collector
+    /// still visits them. A zero bit reserves NoPointer for a later P5 mint.
+    #[inline]
+    pub(crate) fn special_constfn_mask(self) -> u32 {
+        // SAFETY: a live slab record (type docs); identity is immutable.
+        unsafe { (*self.0.as_ptr()).special_constfn_mask() }
+    }
+
+    #[inline]
+    pub(crate) fn constfn_info(self, slot: u32) -> Option<u64> {
+        // SAFETY: a live slab record (type docs).
+        unsafe {
+            (*self.0.as_ptr())
+                .constfn_infos()
+                .iter()
+                .find(|entry| u32::from(entry.slot) == slot)
+                .map(|entry| entry.info)
+        }
+    }
+
+    #[inline]
+    pub(crate) fn deprecate_special_to_any(self, slot: u32) -> bool {
+        // SAFETY: a live slab record (type docs), with an atomic learned bit.
+        unsafe { (*self.0.as_ptr()).deprecate_special_to_any(slot) }
+    }
+
+    #[inline]
+    pub(crate) fn has_special_deprecation(self) -> bool {
+        // SAFETY: a live slab record (type docs).
+        unsafe { (*self.0.as_ptr()).deprecation_targets().1 != 0 }
     }
 
     /// Mark `slot` deprecated (`F64` -> `10`, `field_rep`): the lineage has
@@ -577,7 +642,10 @@ impl PartialEq for ShapeDescriptor {
             && self.object_kind == other.object_kind
             && self.hole_count == other.hole_count
             && self.summary == other.summary
-            && super::field_rep::identity(self.rep) == super::field_rep::identity(other.rep)
+            && super::field_rep::identity_with_special(self.rep)
+                == super::field_rep::identity_with_special(other.rep)
+            && self.special_constfn_mask == other.special_constfn_mask
+            && self.constfn_infos() == other.constfn_infos()
     }
 }
 
@@ -914,7 +982,7 @@ pub(crate) struct ShapeTable {
 impl ShapeTable {
     pub(crate) fn new() -> Self {
         ShapeTable {
-            slab: std::cell::UnsafeCell::new(ShapeSlab::new()),
+            slab: std::cell::UnsafeCell::new(ShapeSlab::new_agent()),
             inner: RefCell::new(ShapeTableInner {
                 indices: crate::fast_hash::new_ptr_hash_map(),
                 by_facts: crate::fast_hash::new_ptr_hash_map(),
@@ -1427,6 +1495,88 @@ pub(crate) fn shape_descriptor_intern_with_rep(
     if !super::field_rep::is_valid(rep) {
         return Err(ShapeDescriptorError::InvalidFacts);
     }
+    shape_descriptor_intern_with_special(
+        keys,
+        logical_key_count,
+        live_inline_slot_count,
+        semantic_generation,
+        object_kind,
+        hole_count,
+        proto_id,
+        summary,
+        rep,
+        &[],
+        requested,
+    )
+}
+
+/// The exact shape mint for an optional set of static ConstFn body facts.
+/// Existing callers use the wrapper above and preserve their old identity.
+#[allow(clippy::too_many_arguments)]
+#[cfg_attr(feature = "shape-mint-diag", track_caller)]
+pub(crate) fn shape_descriptor_intern_with_special(
+    keys: *const ArrayHeader,
+    logical_key_count: u32,
+    live_inline_slot_count: u32,
+    semantic_generation: u64,
+    object_kind: ShapeObjectKind,
+    hole_count: u32,
+    proto_id: u64,
+    summary: u8,
+    rep: u64,
+    infos: &[shapes_store::ConstFnSlotInfo],
+    requested: Option<u32>,
+) -> Result<u32, ShapeDescriptorError> {
+    shape_descriptor_intern_with_special_mode(
+        keys,
+        logical_key_count,
+        live_inline_slot_count,
+        semantic_generation,
+        object_kind,
+        hole_count,
+        proto_id,
+        summary,
+        rep,
+        infos,
+        requested,
+        false,
+    )
+}
+
+/// Only a body-aware static birth/seed may admit a requested ConstFn id.
+/// The ordinary interner above keeps refusing it even if a caller passes a
+/// requested id. All other validation and by-facts interning is shared.
+#[allow(clippy::too_many_arguments)]
+#[cfg_attr(feature = "shape-mint-diag", track_caller)]
+fn shape_descriptor_intern_with_special_mode(
+    keys: *const ArrayHeader,
+    logical_key_count: u32,
+    live_inline_slot_count: u32,
+    semantic_generation: u64,
+    object_kind: ShapeObjectKind,
+    hole_count: u32,
+    proto_id: u64,
+    summary: u8,
+    rep: u64,
+    infos: &[shapes_store::ConstFnSlotInfo],
+    requested: Option<u32>,
+    static_constfn: bool,
+) -> Result<u32, ShapeDescriptorError> {
+    let Some(mask) = shapes_store::constfn_mask(infos) else {
+        return Err(ShapeDescriptorError::InvalidFacts);
+    };
+    if !super::field_rep::is_valid_with_special(rep, mask) {
+        return Err(ShapeDescriptorError::InvalidFacts);
+    }
+    // Every SPECIAL lane in Step 5C names a ConstFn body. P5's optional
+    // NoPointer producer needs its own mask and remains gated by census.
+    // A requested ConstFn id is only legal through the body-aware static
+    // birth/seed entry points; generic dynamic callers fail closed.
+    if mask != super::field_rep::special_lane_slots(rep)
+        || (requested.is_some() && mask != 0 && !static_constfn)
+    {
+        return Err(ShapeDescriptorError::InvalidFacts);
+    }
     let keys_id = keys as usize as u64;
     if keys_id == 0 && logical_key_count != 0 {
         return Err(ShapeDescriptorError::InvalidFacts);
@@ -1454,7 +1604,7 @@ pub(crate) fn shape_descriptor_intern_with_rep(
     } else {
         (0, "", 0)
     };
-    let facts = shapes_store::facts_key_proto(
+    let facts = shapes_store::facts_key_proto_with_special(
         keys_id,
         logical_key_count,
         live_inline_slot_count,
@@ -1464,6 +1614,7 @@ pub(crate) fn shape_descriptor_intern_with_rep(
         proto_id,
         summary,
         rep,
+        infos,
     );
     let table = &crate::state::state().shapes;
     let mut inner = table.inner.borrow_mut();
@@ -1477,7 +1628,7 @@ pub(crate) fn shape_descriptor_intern_with_rep(
             let record = unsafe { *record };
             // The bucket is a 64-bit fold: validate the facts on every hit.
             if record.has(RECORD_FLAG_FACTS_INDEXED)
-                && record.facts_match_proto(
+                && record.facts_match_proto_with_special(
                     keys_id,
                     logical_key_count,
                     live_inline_slot_count,
@@ -1487,6 +1638,7 @@ pub(crate) fn shape_descriptor_intern_with_rep(
                     proto_id,
                     summary,
                     rep,
+                    infos,
                 )
             {
                 #[cfg(feature = "shape-mint-diag")]
@@ -1561,7 +1713,7 @@ pub(crate) fn shape_descriptor_intern_with_rep(
     )
     .with_proto_id(proto_id)
     .with_summary(summary)
-    .with_rep(rep);
+    .with_special_facts(rep, infos);
     let mut record = record;
     if adopted.is_some() {
         record.set(RECORD_FLAG_EXTERNAL_CARRIER, true);
@@ -1695,8 +1847,8 @@ pub(crate) fn shape_id_for_keys_ensure(keys: *const ArrayHeader, key_count: u32)
 /// of it but `live_inline_slot_count`.
 #[inline]
 fn shape_descriptor_field_by_id<T>(shape_id: u32, read: impl Fn(&ShapeRecord) -> T) -> Option<T> {
-    let record = crate::state::state().shapes.slab().record_ptr(shape_id)?;
-    // SAFETY: `record_ptr` only returns a live slab record.
+    let record = ShapeSlab::agent_record_present(shape_id)?;
+    // SAFETY: `agent_record_present` only returns a live slab record.
     Some(read(unsafe { &*record }))
 }
 
@@ -1708,21 +1860,44 @@ pub(crate) fn shape_live_inline_slot_count_by_id(shape_id: u32) -> Option<u32> {
 /// The descriptor named by `shape_id`, or `None` when the id names no
 /// descriptor in this agent.
 ///
-/// #9706: a slab probe — range check, chunk index, record — with no hash,
-/// no `RefCell` borrow and no invalidation epoch. The direct-mapped way cache
+/// #9706: a slab probe — band select, page, chunk, record — with no hash,
+/// no `RefCell` borrow and no invalidation epoch; and no runtime-state fetch
+/// either: it reads this agent's published directory
+/// ([`ShapeSlab::agent_record`]). The direct-mapped way cache
 /// that used to front the hash map is gone because the slab IS that cache:
 /// a hit was "mask, compare, deref" and a probe is "shift, index, deref".
 #[inline]
 pub(crate) fn shape_descriptor_by_id(shape_id: u32) -> Option<ShapeDescriptor> {
-    crate::state::state().shapes.slab().lift(shape_id)
+    let record = ShapeSlab::agent_record_present(shape_id)?;
+    // SAFETY: `agent_record_present` only returns a live slab record.
+    Some(unsafe { (*record).lift(record) })
 }
 
 /// The record named by `shape_id`, borrowed in place: the same slab probe as
 /// [`shape_descriptor_by_id`], without lifting a copy (#10362).
 #[inline]
 pub(crate) fn shape_record_by_id(shape_id: u32) -> Option<ShapeRecordRef> {
-    let record = crate::state::state().shapes.slab().record_ptr(shape_id)?;
+    let record = ShapeSlab::agent_record_present(shape_id)?;
     std::ptr::NonNull::new(record).map(ShapeRecordRef)
+}
+
+/// The field-representation word (`field_rep`) of `shape_id` in this agent,
+/// deprecated lanes included. An id that names no record here reads the
+/// absent record's word, 0 — `Any` in every lane, which is exactly the
+/// answer for a receiver with no shape record — so there is no presence
+/// test: the step 5 store check asks this on every checked store.
+#[inline]
+pub(crate) fn shape_rep_by_id(shape_id: u32) -> u64 {
+    let record = ShapeSlab::agent_record(shape_id);
+    // SAFETY: `agent_record` never returns null; `rep` is an 8-aligned u64 of
+    // a `#[repr(C)]` record (asserted 8-aligned), read the way
+    // `ShapeRecordRef::rep` reads it because a published record's word is
+    // rewritten atomically (`deprecate_rep_slot`). The shared empty record
+    // is only ever read.
+    unsafe {
+        (*std::ptr::addr_of!((*record).rep).cast::<std::sync::atomic::AtomicU64>())
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
 }
 
 /// Immutable ordinary-vs-class fact with a pointer-free, per-agent direct
@@ -2016,6 +2191,46 @@ pub(crate) fn class_birth_shape_ensure(
     )
 }
 
+/// Body-aware final-shape mint. This mints facts only; callers must never
+/// stamp its result on an allocation with uninitialized closure slots.
+/// A seed and post-construction finalizer enter with identical facts.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn final_shape_ensure_constfn(
+    keys: *const ArrayHeader,
+    key_count: u32,
+    live: u32,
+    class_id: u32,
+    rep: u64,
+    infos: &[shapes_store::ConstFnSlotInfo],
+    requested: Option<u32>,
+) -> Result<u32, ShapeDescriptorError> {
+    let key_lanes = if key_count >= super::field_rep::REP_SLOTS {
+        u64::MAX
+    } else {
+        super::field_rep::lanes_below(key_count)
+    };
+    if infos.is_empty() || rep & !key_lanes != 0 || keys.is_null() || key_count == 0 {
+        return Err(ShapeDescriptorError::InvalidFacts);
+    }
+    // As in `shape_descriptor_ensure_with_rep`, derive the summary from the
+    // canonical keys rather than trusting a caller-supplied summary.
+    let summary = unsafe { crate::object::key_attrs::keys_summary_checked(keys, key_count) };
+    shape_descriptor_intern_with_special_mode(
+        keys,
+        key_count,
+        live.max(key_count),
+        0,
+        ShapeObjectKind::Ordinary,
+        0,
+        class_proto_id(class_id),
+        summary,
+        rep,
+        infos,
+        requested,
+        true,
+    )
+}
+
 /// #10123: the inline slot a PLAIN ordinary shape assigns to `key`, or `-1`.
 ///
 /// The element-shape loop clone's shape-keyed arm asks this once per tracked
@@ -2271,7 +2486,13 @@ static KEEP_JS_REGION_GUARD_PRIME: unsafe extern "C" fn(
 /// A key in `boxed_mask` is one a bare store may write a value the compiler
 /// did not prove a canonical double (charter step 5): the bare store runs no
 /// field-representation check, so its slot must be an `Any` lane of the
-/// shape. A proven canonical double is a valid value of every lane.
+/// shape. A proven canonical double is valid for `Any` and `F64` lanes.
+/// Any stored SPECIAL lane is refused: a ConstFn body change requires the
+/// checked slot funnel even when the new value is a canonical Number.
+/// A read-only numeric region may also use `OrdinaryUnmarked`: the missing
+/// birth mark withdraws store permission, not the own-data slot layout.
+/// Receivers with virtual read semantics remain refused by their prototype
+/// classification, and every covered key must be requested as inline F64.
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn js_region_loop_pack(
@@ -2285,8 +2506,15 @@ pub extern "C" fn js_region_loop_pack(
     stored_mask: u32,
     boxed_mask: u32,
 ) -> u64 {
-    region_loop_pack(shape_id, n, [k0, k1, k2, k3, k4], stored_mask, boxed_mask)
-        .unwrap_or(REGION_GUARD_WORD_EMPTY)
+    region_loop_pack(
+        shape_id,
+        n,
+        [k0, k1, k2, k3, k4],
+        stored_mask,
+        boxed_mask,
+        0,
+    )
+    .unwrap_or(REGION_GUARD_WORD_EMPTY)
 }
 
 /// Why [`js_region_loop_pack`] refused a shape — the route census's refusal
@@ -2297,7 +2525,7 @@ enum RegionRefusal {
     Band,
     /// A key is an accessor or not writable/enumerable/configurable data.
     Summary,
-    /// Not `Ordinary`, a non-zero semantic generation, or tombstones.
+    /// Ineligible receiver/read kind, non-zero semantic generation, or tombstones.
     Kind,
     /// A key is not in the shape at all (inherited, or absent).
     Absent,
@@ -2310,6 +2538,9 @@ enum RegionRefusal {
     Range,
     /// A key a bare store may write a non-double into is not an `Any` lane.
     F64Stored,
+    /// A requested Number read is not on an identity F64 lane, or a bare
+    /// store targets a SPECIAL lane that requires the checked slot funnel.
+    Rep,
 }
 
 fn region_loop_pack(
@@ -2318,6 +2549,7 @@ fn region_loop_pack(
     keys: [u64; 5],
     stored_mask: u32,
     boxed_mask: u32,
+    r_mask: u32,
 ) -> Result<u64, RegionRefusal> {
     use RegionRefusal::*;
     if !is_site_matchable_shape_id(shape_id) || n == 0 || n > REGION_GUARD_MAX_KEYS {
@@ -2331,7 +2563,12 @@ fn region_loop_pack(
     let Some(descriptor) = shape_descriptor_by_id(shape_id) else {
         return Err(Band);
     };
-    if descriptor.object_kind != ShapeObjectKind::Ordinary
+    let unmarked_numeric_read = descriptor.object_kind == ShapeObjectKind::OrdinaryUnmarked
+        && stored_mask == 0
+        && boxed_mask == 0
+        && r_mask == (1 << n) - 1;
+    if (descriptor.object_kind != ShapeObjectKind::Ordinary && !unmarked_numeric_read)
+        || descriptor.proto_id == PROTO_ID_PER_OBJECT
         || descriptor.semantic_generation != 0
         || descriptor.hole_count != 0
     {
@@ -2364,6 +2601,25 @@ fn region_loop_pack(
     };
     let mut word = u64::from(id);
     for (i, &(spilled, n_at)) in at.iter().enumerate().take(n as usize) {
+        // A canonical Number cannot preserve a ConstFn body identity. Every
+        // SPECIAL write must use the checked slot funnel before storing;
+        // numeric writes to other lanes and read-only SPECIAL keys are safe.
+        if !spilled
+            && stored_mask & (1 << i) != 0
+            && n_at < super::field_rep::REP_SLOTS as usize
+            && super::field_rep::slot_rep(descriptor.rep, n_at as u32)
+                == super::field_rep::REP_SPECIAL
+        {
+            return Err(Rep);
+        }
+        if r_mask & (1 << i) != 0
+            && (spilled
+                || n_at >= super::field_rep::REP_SLOTS as usize
+                || super::field_rep::slot_rep(descriptor.rep, n_at as u32)
+                    != super::field_rep::REP_F64)
+        {
+            return Err(Rep);
+        }
         if !spilled
             && boxed_mask & (1 << i) != 0
             && (n_at as u32) < super::field_rep::REP_SLOTS
@@ -2409,8 +2665,16 @@ pub unsafe extern "C" fn js_region_loop_prime(
     last: u32,
     stored_mask: u32,
     boxed_mask: u32,
+    r_mask: u32,
 ) -> u64 {
-    let verdict = region_loop_pack(shape_id, n, [k0, k1, k2, k3, k4], stored_mask, boxed_mask);
+    let verdict = region_loop_pack(
+        shape_id,
+        n,
+        [k0, k1, k2, k3, k4],
+        stored_mask,
+        boxed_mask,
+        r_mask,
+    );
     region_loop_prime_census(verdict);
     let packed = verdict.unwrap_or(REGION_GUARD_WORD_EMPTY);
     if word.is_null() {
@@ -2437,7 +2701,7 @@ fn region_loop_prime_census(verdict: Result<u64, RegionRefusal>) {
     use crate::hot_diag::{
         recv_route_note_runtime, RT_ROUTE_RLOOP_PRIME_OK, RT_ROUTE_RLOOP_REFUSE_ABSENT,
         RT_ROUTE_RLOOP_REFUSE_BAND, RT_ROUTE_RLOOP_REFUSE_F64_STORED, RT_ROUTE_RLOOP_REFUSE_KIND,
-        RT_ROUTE_RLOOP_REFUSE_RANGE, RT_ROUTE_RLOOP_REFUSE_SPILL_STORED,
+        RT_ROUTE_RLOOP_REFUSE_RANGE, RT_ROUTE_RLOOP_REFUSE_REP, RT_ROUTE_RLOOP_REFUSE_SPILL_STORED,
         RT_ROUTE_RLOOP_REFUSE_SPILL_UNSERVABLE, RT_ROUTE_RLOOP_REFUSE_SUMMARY,
     };
     let route = match verdict {
@@ -2450,6 +2714,7 @@ fn region_loop_prime_census(verdict: Result<u64, RegionRefusal>) {
         Err(RegionRefusal::SpillUnservable) => RT_ROUTE_RLOOP_REFUSE_SPILL_UNSERVABLE,
         Err(RegionRefusal::Range) => RT_ROUTE_RLOOP_REFUSE_RANGE,
         Err(RegionRefusal::F64Stored) => RT_ROUTE_RLOOP_REFUSE_F64_STORED,
+        Err(RegionRefusal::Rep) => RT_ROUTE_RLOOP_REFUSE_REP,
     };
     recv_route_note_runtime(route);
 }
@@ -2467,6 +2732,7 @@ static KEEP_JS_REGION_LOOP_PRIME: unsafe extern "C" fn(
     u64,
     u64,
     u64,
+    u32,
     u32,
     u32,
     u32,
@@ -2692,7 +2958,7 @@ pub(crate) unsafe fn stamp_object_shape(
     // lineage's field representation carries (normalized). Any other edge
     // publishes all-`Any`, which is always a valid claim.
     let rep = if lineage.keys == keys as u64 && lineage.logical_key_count == key_count {
-        super::field_rep::normalized(lineage.rep)
+        super::field_rep::normalized_without_special(lineage.rep)
     } else {
         super::field_rep::REP_ANY
     };
@@ -2780,7 +3046,7 @@ pub(crate) unsafe fn birth_stamp_object_shape(
     let supplied_id_is_local =
         (descriptor_matches_object(runtime_shape_id, obj, live_inline_slot_count)
             && shape_descriptor_field_by_id(runtime_shape_id, |d| {
-                super::field_rep::identity(d.rep) == rep
+                super::field_rep::identity_with_special(d.rep) == rep
             }) == Some(true))
             || shapes_slot_list::install_external_shape_id(
                 runtime_shape_id,
@@ -2938,7 +3204,7 @@ pub(crate) unsafe fn publish_object_live_slot_count_rep(
             current.keys_view(),
             live_inline_slot_count,
             rep.unwrap_or_else(|| {
-                super::field_rep::normalized(current.rep)
+                super::field_rep::normalized_without_special(current.rep)
                     & super::field_rep::lanes_below(live_inline_slot_count)
             }),
         ),
@@ -3452,6 +3718,20 @@ unsafe fn prototype_serial(bits: u64) -> u64 {
 /// # Safety
 /// `obj` is a live `ObjectHeader`.
 pub(crate) unsafe fn object_proto_id(obj: *const crate::object::ObjectHeader) -> u64 {
+    // A namespace's vtable/override registry can answer before its physical
+    // own slots. Project that read classification into the shape, as for
+    // process.env and arguments below; an own-slot region cannot admit it.
+    if (*obj).class_id == crate::object::NATIVE_MODULE_CLASS_ID {
+        return PROTO_ID_PER_OBJECT;
+    }
+    let meta = (*obj).meta;
+    // Read semantics take precedence over every prototype link, including
+    // null. Changing an exotic receiver's prototype cannot turn its virtual
+    // reads into physical own-slot reads.
+    if !meta.is_null() && (*meta).flags & crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER != 0
+    {
+        return PROTO_ID_PER_OBJECT;
+    }
     if let Some(header) = crate::value::addr_class::try_read_gc_header(obj as usize) {
         if header._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 {
             return PROTO_ID_NULL;
@@ -3459,14 +3739,6 @@ pub(crate) unsafe fn object_proto_id(obj: *const crate::object::ObjectHeader) ->
     }
     let class_id = (*obj).class_id;
     let class = vtable_class(class_id);
-    let meta = (*obj).meta;
-    // An exotic read receiver (`process.env`, `arguments`) is answered by no
-    // shape: its identity is its own, so every lineage it mints keeps it and
-    // no shape-keyed memo admits it (`proto_validity::mark_exotic_read_receiver`).
-    if !meta.is_null() && (*meta).flags & crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER != 0
-    {
-        return PROTO_ID_PER_OBJECT;
-    }
     if !meta.is_null() && (*meta).prototype != 0 {
         let bits = (*meta).prototype;
         if bits == crate::value::TAG_NULL {
@@ -3606,6 +3878,9 @@ fn remove_descriptor_indexed_under(inner: &mut ShapeTableInner, id: u32, indexed
         inner.facts_remove(record.facts_key_with_keys(indexed), id);
     }
     inner.family_remove(indexed, id);
+    // Unlike the two rekey paths, retirement does not transfer this record.
+    // SAFETY: slab removal returned the unique owner of the extension.
+    unsafe { record.release_extras() };
 }
 
 /// Exact-facts test for a candidate id against the receiver's authoritative
@@ -4445,6 +4720,10 @@ pub(crate) use shapes_test_support::*;
 #[cfg(test)]
 #[path = "shapes_tests.rs"]
 mod shapes_tests;
+
+#[cfg(test)]
+#[path = "region_numeric_read_tests.rs"]
+mod region_numeric_read_tests;
 
 /// #9612: release the capacity that pruning left behind.
 ///

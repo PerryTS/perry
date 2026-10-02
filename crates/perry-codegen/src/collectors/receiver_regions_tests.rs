@@ -990,19 +990,12 @@ fn inventory() -> Vec<TableRow> {
             unwind_safe_by: "body must be a single LocalSet, so no handler can exist in extent",
         },
         TableRow {
-            table: "class_field_loop_facts",
-            claim: ReceiverClaim::Address,
-            boundary: FactBoundary::ScopeId,
-            excludes_try: true,
-            unwind_safe_by: "single-statement body plus a post-hoc contains_gc_unsafe_call scan \
-                             that discards the clone if any call was emitted",
-        },
-        TableRow {
             table: "element_shape_loop_facts",
             claim: ReceiverClaim::Address,
             boundary: FactBoundary::ScopeId,
             excludes_try: true,
-            unwind_safe_by: "same double lock as class_field_loop_facts",
+            unwind_safe_by: "matcher rejects handlers; emitted clone is entered only after \
+                             contains_gc_unsafe_call proves every block call-free",
         },
         TableRow {
             table: "receiver_descriptors",
@@ -1211,8 +1204,12 @@ fn the_inventory_covers_every_claim_kind_and_every_boundary_mechanism() {
     }
     assert_eq!(
         rows.len(),
-        16,
+        15,
         "inventory size changed — see FnCtx declarations"
+    );
+    assert!(
+        !rows.iter().any(|r| r.table == "class_field_loop_facts"),
+        "the removed class-loop fact table must not remain an active mechanism"
     );
 }
 

@@ -23,6 +23,131 @@ fn seed_with_rep(requested: u32, names: &[&str], rep: u64) -> u32 {
     )
 }
 
+// Literal fixtures use the same premarking allocation entry as production
+// plain records. The legacy shape-cache allocator alone is classless but
+// OrdinaryUnmarked, so it cannot establish a ConstFn promotion premise.
+fn alloc_constfn_plain_fixture(names: &[&[u8]]) -> *mut crate::object::ObjectHeader {
+    let keys = unsafe { canonical_keys_for_names(names) };
+    let obj = crate::object::alloc_plain::alloc_plain_record_with_keys(names.len() as u32, keys);
+    let id = unsafe { shapes::object_shape_stamp(obj) };
+    let birth = shapes::shape_descriptor_by_id(id).expect("plain fixture birth descriptor");
+    assert_eq!(birth.object_kind, shapes::ShapeObjectKind::Ordinary);
+    assert_eq!(birth.proto_id, 0);
+    assert_eq!(birth.logical_key_count, names.len() as u32);
+    assert_eq!(birth.live_inline_slot_count, names.len() as u32);
+    assert_eq!(birth.rep, crate::object::field_rep::REP_ANY);
+    assert_eq!(birth.semantic_generation, 0);
+    assert_eq!(birth.hole_count, 0);
+    assert_eq!(birth.summary, 0);
+    assert_eq!(birth.special_constfn_mask, 0);
+    obj
+}
+
+extern "C" fn seeded_constfn_body_a(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
+    11.0
+}
+
+extern "C" fn seeded_constfn_body_b(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
+    22.0
+}
+
+/// The seed and module-init class mint must use exactly the same body-aware
+/// interner. Production literal finalization uses the same final facts.
+#[test]
+fn constfn_static_seed_and_module_init_mint_have_identical_facts() {
+    use crate::object::field_rep::{with_slot_rep, REP_SPECIAL};
+    let _lock = crate::gc::global_side_table_test_lock();
+    let info_a = crate::fn_info!(seeded_constfn_body_a, 0; with_flags(crate::codegen_abi::FN_PERMANENT_IMAGE));
+    let info_b = crate::fn_info!(seeded_constfn_body_b, 0; with_flags(crate::codegen_abi::FN_PERMANENT_IMAGE));
+    let a = [ConstFnStaticEntry {
+        slot: 0,
+        info: info_a,
+    }];
+    let b = [ConstFnStaticEntry {
+        slot: 0,
+        info: info_b,
+    }];
+    let rep = with_slot_rep(0, 0, REP_SPECIAL);
+    let packed = b"lt5cf_method\0";
+    let requested = SHAPE_ID_BASE + 0x7860;
+    let seeded = js_shape_seed_plain_constfn(
+        requested,
+        packed.as_ptr(),
+        packed.len() as u32,
+        1,
+        1,
+        rep,
+        a.as_ptr(),
+        1,
+    );
+    assert_eq!(seeded, requested);
+    let keys = unsafe { canonical_keys_for_names(&[b"lt5cf_method"]) };
+    assert_eq!(
+        js_object_final_shape_id_for_class_keys_static_constfn(
+            keys.arr() as usize as u64,
+            1,
+            1,
+            0,
+            requested,
+            rep,
+            a.as_ptr(),
+            1,
+        ),
+        seeded,
+        "literal seed and module init must find one shape"
+    );
+    let d = shapes::shape_descriptor_by_id(seeded).expect("seeded ConstFn shape");
+    assert_eq!(d.constfn_infos()[0].info, info_a as usize as u64);
+    assert_eq!(d.special_constfn_mask, 1);
+    assert!(is_carrier(seeded));
+    let other = js_object_final_shape_id_for_class_keys_static_constfn(
+        keys.arr() as usize as u64,
+        1,
+        1,
+        0,
+        SHAPE_ID_BASE + 0x7861,
+        rep,
+        b.as_ptr(),
+        1,
+    );
+    assert_ne!(other, seeded, "another body is another shape identity");
+}
+
+#[test]
+fn constfn_seed_entry_parser_rejects_transient_duplicate_and_unsorted_bodies() {
+    let permanent = crate::fn_info!(seeded_constfn_body_a, 0; with_flags(crate::codegen_abi::FN_PERMANENT_IMAGE));
+    let transient = crate::fn_info!(seeded_constfn_body_b, 0);
+    let good = [ConstFnStaticEntry {
+        slot: 0,
+        info: permanent,
+    }];
+    assert!(parse_constfn_static_entries(good.as_ptr(), 1).is_some());
+    let bad = [ConstFnStaticEntry {
+        slot: 0,
+        info: transient,
+    }];
+    assert!(parse_constfn_static_entries(bad.as_ptr(), 1).is_none());
+    let duplicate = [good[0], good[0]];
+    assert!(parse_constfn_static_entries(duplicate.as_ptr(), 2).is_none());
+    let unsorted = [
+        ConstFnStaticEntry {
+            slot: 1,
+            info: permanent,
+        },
+        good[0],
+    ];
+    let sorted = [good[0], unsorted[0]];
+    assert!(parse_constfn_static_entries(sorted.as_ptr(), 2).is_some());
+    assert!(parse_constfn_static_entries(unsorted.as_ptr(), 2).is_none());
+    assert!(parse_constfn_static_entries(std::ptr::null(), 0).is_none());
+}
+
 fn is_carrier(id: u32) -> bool {
     shapes::test_shape_record_is_carrier(id)
 }
@@ -342,4 +467,320 @@ fn a_class_registered_before_the_pools_answers_the_megamorphic_confirm() {
         "class `only_in_b` at 1: the megamorphic confirm must accept the key atom"
     );
     assert!(!unsafe { confirmed(id, x, 1) });
+}
+
+/// The finalizer sees a partly built object on Any, refuses an unwritten
+/// method, and only promotes after every store. Fresh captured closures share
+/// the seeded shape while preserving the receiver's current closure slot.
+#[test]
+fn constfn_finalizer_waits_for_stores_and_preserves_fresh_closures() {
+    use crate::object::shapes::object_shape_stamp;
+    let _lock = crate::gc::global_side_table_test_lock();
+    let info = crate::fn_info!(seeded_constfn_body_a, 0; with_flags(crate::codegen_abi::FN_PERMANENT_IMAGE));
+    let entries = [ConstFnStaticEntry { slot: 0, info }];
+    let packed = b"ltcf_final_m\0ltcf_final_x\0";
+    let requested = SHAPE_ID_BASE + 0x7870;
+    let final_id = js_shape_seed_plain_constfn(
+        requested,
+        packed.as_ptr(),
+        packed.len() as u32,
+        2,
+        2,
+        3,
+        entries.as_ptr(),
+        1,
+    );
+    assert_eq!(final_id, requested);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let finalize = |obj: u64| {
+        js_object_finalize_constfn_static(
+            obj,
+            requested,
+            packed.as_ptr(),
+            packed.len() as u32,
+            2,
+            2,
+            0,
+            3,
+            entries.as_ptr(),
+            1,
+        )
+    };
+    let mut objects = Vec::new();
+    let mut closures = Vec::new();
+    for capture in [11.0f64, 22.0] {
+        let raw = alloc_constfn_plain_fixture(&[b"ltcf_final_m", b"ltcf_final_x"]);
+        let object = scope.root_raw_mut_ptr(raw as usize as *mut crate::object::ObjectHeader);
+        let plain =
+            unsafe { object_shape_stamp(object.get_raw_mut_ptr::<crate::object::ObjectHeader>()) };
+        assert_ne!(plain, requested, "allocation must not carry SPECIAL");
+        assert_eq!(shapes::shape_descriptor_by_id(plain).unwrap().rep, 0);
+        assert_eq!(finalize(raw as usize as u64), raw as usize as u64);
+        assert_eq!(
+            unsafe { object_shape_stamp(object.get_raw_mut_ptr::<crate::object::ObjectHeader>()) },
+            plain,
+            "unwritten method must refuse"
+        );
+        let closure = crate::closure::js_closure_alloc(info, 1);
+        let closure = scope.root_raw_mut_ptr(closure);
+        unsafe {
+            crate::closure::js_closure_set_capture_bits(
+                closure.get_raw_mut_ptr::<crate::closure::ClosureHeader>(),
+                0,
+                capture.to_bits(),
+            );
+            let obj = object.get_raw_mut_ptr::<crate::object::ObjectHeader>();
+            crate::object::store_object_field_slot(
+                obj,
+                0,
+                crate::JSValue::object_ptr(
+                    closure.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as *mut u8,
+                )
+                .bits(),
+            );
+            crate::object::store_object_field_slot(obj, 1, 7.0f64.to_bits());
+        }
+        let obj = finalize(object.get_raw_mut_ptr::<crate::object::ObjectHeader>() as usize as u64);
+        assert_eq!(
+            unsafe { object_shape_stamp(obj as usize as *mut _) },
+            requested
+        );
+        objects.push(object);
+        closures.push(closure);
+    }
+    assert_ne!(
+        closures[0].get_raw_mut_ptr::<crate::closure::ClosureHeader>(),
+        closures[1].get_raw_mut_ptr::<crate::closure::ClosureHeader>()
+    );
+    for ((object, closure), capture) in objects.iter().zip(&closures).zip([11.0f64, 22.0]) {
+        let obj = object.get_raw_mut_ptr::<crate::object::ObjectHeader>();
+        let slot = crate::object::js_object_get_field(obj, 0);
+        assert_eq!(
+            slot.bits() & crate::value::POINTER_MASK,
+            closure.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as usize as u64
+        );
+        assert_eq!(
+            crate::closure::js_closure_get_capture_bits(
+                (slot.bits() & crate::value::POINTER_MASK) as usize as *const _,
+                0
+            ),
+            capture.to_bits(),
+            "current receiver closure must preserve its own capture"
+        );
+    }
+}
+
+#[test]
+fn constfn_finalizer_refuses_wrong_body_layout_and_rebindable_this() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let info = crate::fn_info!(seeded_constfn_body_a, 0; with_flags(crate::codegen_abi::FN_PERMANENT_IMAGE));
+    let other = crate::fn_info!(seeded_constfn_body_b, 0; with_flags(crate::codegen_abi::FN_PERMANENT_IMAGE));
+    let entries = [ConstFnStaticEntry { slot: 0, info }];
+    let packed = b"ltcf_refuse_m\0";
+    let scope = crate::gc::RuntimeHandleScope::new();
+    // Establish that these exact birth facts promote with the supported body.
+    // Otherwise every refusal below could be an unrelated kind/layout miss.
+    let control = scope.root_raw_mut_ptr(alloc_constfn_plain_fixture(&[b"ltcf_refuse_m"]));
+    let birth = unsafe { shapes::object_shape_stamp(control.get_raw_mut_ptr()) };
+    let closure = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(info, 0));
+    unsafe {
+        crate::object::store_object_field_slot(
+            control.get_raw_mut_ptr(),
+            0,
+            crate::JSValue::object_ptr(closure.get_raw_mut_ptr::<u8>()).bits(),
+        );
+    }
+    let promoted = js_object_finalize_constfn_static(
+        control.get_raw_mut_ptr::<crate::object::ObjectHeader>() as usize as u64,
+        SHAPE_ID_BASE + 0x7871,
+        packed.as_ptr(),
+        packed.len() as u32,
+        1,
+        1,
+        0,
+        3,
+        entries.as_ptr(),
+        1,
+    );
+    assert_eq!(
+        unsafe { shapes::object_shape_stamp(promoted as usize as *mut _) },
+        SHAPE_ID_BASE + 0x7871,
+        "the control must actually finalize before testing refusals"
+    );
+    assert_ne!(birth, SHAPE_ID_BASE + 0x7871);
+    for (case, body, caps, count, live, class_id, rep) in [
+        ("wrong body", other, 0, 1, 1, 0, 3),
+        (
+            "rebindable this",
+            info,
+            crate::closure::CAPTURES_THIS_FLAG | 1,
+            1,
+            1,
+            0,
+            3,
+        ),
+        ("wrong key count", info, 0, 2, 2, 0, 3),
+        ("wrong live bound", info, 0, 1, 2, 0, 3),
+        ("wrong prototype", info, 0, 1, 1, 0x7844, 3),
+        ("wrong representation", info, 0, 1, 1, 0, 7),
+    ] {
+        let raw = alloc_constfn_plain_fixture(&[b"ltcf_refuse_m"]);
+        let obj = scope.root_raw_mut_ptr(raw as usize as *mut crate::object::ObjectHeader);
+        let closure = crate::closure::js_closure_alloc(body, caps);
+        unsafe {
+            crate::object::store_object_field_slot(
+                obj.get_raw_mut_ptr::<crate::object::ObjectHeader>(),
+                0,
+                crate::JSValue::object_ptr(closure as *mut u8).bits(),
+            );
+        }
+        let before = unsafe {
+            shapes::object_shape_stamp(obj.get_raw_mut_ptr::<crate::object::ObjectHeader>())
+        };
+        assert_eq!(
+            before, birth,
+            "{case}: refusal must begin with the admitted control birth"
+        );
+        let raw = js_object_finalize_constfn_static(
+            obj.get_raw_mut_ptr::<crate::object::ObjectHeader>() as usize as u64,
+            SHAPE_ID_BASE + 0x7871,
+            packed.as_ptr(),
+            packed.len() as u32,
+            count,
+            live,
+            class_id,
+            rep,
+            entries.as_ptr(),
+            1,
+        );
+        assert_eq!(
+            unsafe { shapes::object_shape_stamp(raw as usize as *mut _) },
+            before,
+            "{case}: refusal must leave receiver unchanged"
+        );
+    }
+}
+
+extern "C" fn seeded_constfn_capture_body(
+    closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
+    f64::from_bits(crate::closure::js_closure_get_capture_bits(closure, 0))
+}
+
+#[test]
+fn declared_class_final_mint_keeps_birth_ordinary_and_uses_each_current_closure() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let cid = 0x16cfa011;
+    unsafe {
+        crate::object::js_register_class_id(cid);
+    }
+    let packed = b"ltcf_class_m\0ltcf_class_x\0";
+    let info = crate::fn_info!(seeded_constfn_capture_body, 0; with_flags(crate::codegen_abi::FN_PERMANENT_IMAGE));
+    let entries = [ConstFnStaticEntry { slot: 0, info }];
+    let keys =
+        crate::object::js_build_class_keys_array(cid, 2, packed.as_ptr(), packed.len() as u32, 0);
+    let keys = scope.root_raw_mut_ptr(keys as usize as *mut crate::array::ArrayHeader);
+    let ordinary = js_object_shape_id_for_class_keys_static(
+        keys.get_raw_mut_ptr::<crate::array::ArrayHeader>() as usize as u64,
+        2,
+        2,
+        cid,
+        SHAPE_ID_BASE + 0x7880,
+        0,
+    );
+    let final_id = js_object_final_shape_id_for_class_keys_static_constfn(
+        keys.get_raw_mut_ptr::<crate::array::ArrayHeader>() as usize as u64,
+        2,
+        2,
+        cid,
+        SHAPE_ID_BASE + 0x7881,
+        3,
+        entries.as_ptr(),
+        1,
+    );
+    assert_ne!(ordinary, final_id);
+    assert_eq!(shapes::shape_descriptor_by_id(ordinary).unwrap().rep, 0);
+    assert_eq!(shapes::shape_descriptor_by_id(final_id).unwrap().rep, 3);
+    let mut closure_roots = Vec::new();
+    for capture in [31.0f64, 47.0] {
+        let obj = crate::object::js_object_alloc_class_inline_keys_stamped(
+            cid,
+            0,
+            2,
+            keys.get_raw_mut_ptr::<crate::array::ArrayHeader>(),
+            ordinary,
+            0,
+        );
+        let object = scope.root_raw_mut_ptr(obj);
+        assert_eq!(
+            unsafe { shapes::object_shape_stamp(object.get_raw_mut_ptr()) },
+            ordinary
+        );
+        let closure = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(info, 1));
+        unsafe {
+            crate::closure::js_closure_set_capture_bits(
+                closure.get_raw_mut_ptr(),
+                0,
+                capture.to_bits(),
+            );
+            let object = object.get_raw_mut_ptr::<crate::object::ObjectHeader>();
+            crate::object::store_object_field_slot(
+                object,
+                0,
+                crate::JSValue::object_ptr(closure.get_raw_mut_ptr::<u8>()).bits(),
+            );
+            crate::object::store_object_field_slot(object, 1, capture.to_bits());
+        }
+        let premise = shapes::shape_descriptor_by_id(ordinary).unwrap();
+        assert_eq!(premise.object_kind, shapes::ShapeObjectKind::Ordinary);
+        assert_eq!(premise.proto_id, shapes::class_proto_id(cid));
+        let wrong_proto = js_object_finalize_constfn_static(
+            object.get_raw_mut_ptr::<crate::object::ObjectHeader>() as usize as u64,
+            final_id,
+            packed.as_ptr(),
+            packed.len() as u32,
+            2,
+            2,
+            cid + 1,
+            3,
+            entries.as_ptr(),
+            1,
+        );
+        assert_eq!(
+            unsafe { shapes::object_shape_stamp(wrong_proto as usize as *mut _) },
+            ordinary,
+            "a different class prototype must refuse without stamping"
+        );
+        let obj = js_object_finalize_constfn_static(
+            object.get_raw_mut_ptr::<crate::object::ObjectHeader>() as usize as u64,
+            final_id,
+            packed.as_ptr(),
+            packed.len() as u32,
+            2,
+            2,
+            cid,
+            3,
+            entries.as_ptr(),
+            1,
+        );
+        assert_eq!(
+            unsafe { shapes::object_shape_stamp(obj as usize as *mut _) },
+            final_id
+        );
+        let current = crate::object::js_object_get_field(obj as usize as *mut _, 0);
+        assert_eq!(
+            crate::closure::js_closure_call0(
+                (current.bits() & crate::value::POINTER_MASK) as usize as *const _,
+                crate::closure::JsThis::UNDEFINED,
+            ),
+            capture
+        );
+        closure_roots.push(closure);
+    }
+    assert_ne!(
+        closure_roots[0].get_raw_mut_ptr::<crate::closure::ClosureHeader>(),
+        closure_roots[1].get_raw_mut_ptr::<crate::closure::ClosureHeader>()
+    );
 }

@@ -17,6 +17,7 @@ mod exact_receivers;
 mod extern_imports;
 mod factory_specialize;
 mod imul;
+mod numeric_loop;
 mod substitute;
 mod super_detect;
 
@@ -703,6 +704,7 @@ fn inline_functions_inner(
             &mut next_local_id,
             None,
             &class_field_types,
+            false,
         );
     }
 
@@ -738,6 +740,7 @@ fn inline_functions_inner(
             &mut local_id,
             None,
             &class_field_types,
+            false,
         );
         next_module_id = local_id;
     }
@@ -787,6 +790,7 @@ fn inline_functions_inner(
                 &mut local_id,
                 Some(&class_name),
                 &class_field_types,
+                false,
             );
             next_module_id = local_id;
         }

@@ -4036,20 +4036,21 @@
   {
    "file": "crates/perry-runtime/src/object/shapes_store.rs",
    "names": [
-    "ORDINARY_DIR"
+    "AGENT_SHAPE_DIR"
    ],
    "verdict": "per_thread",
-   "why": "`#[thread_local]` static (not `thread_local!`, so the megamorphic read reaches it with one thread-pointer-relative load): each thread mirrors ITS OWN ShapeSlab page directory (a Rust-heap Vec pointer and length, never an arena address), republished on every change to `pages` and cleared by ShapeSlab::drop before the Vec is freed; const-initialised to (null, 0) with no drop glue."
+   "why": "`#[thread_local]` static (not `thread_local!`, so every by-id shape lookup reaches it with one thread-pointer-relative load and no runtime-state fetch): each thread mirrors ITS OWN agent ShapeSlab page directories (per band a Rust-heap Vec pointer and length, never an arena address), republished on every change to a band's page vector and reset to empty by ShapeSlab::drop before the Vecs are freed; const-initialised to (null, 0) per band with no drop glue."
   },
   {
    "file": "crates/perry-runtime/src/object/shapes_store.rs",
    "names": [
     "EMPTY_CHUNK",
     "EMPTY_PAGE",
+    "EMPTY_PAGE_ENTRY",
     "PERRY_EMPTY_SHAPE_DIR"
    ],
    "verdict": "no_heap_address",
-   "why": "Shared all-empty shape-slab structure (a chunk of EMPTY records, a page of pointers to that chunk, an empty page directory). Every pointer inside is the address of another immutable static in the program image, never an arena or heap address; nothing ever writes them, so an exited thread's Arena::drop cannot leave them dangling."
+   "why": "Shared all-empty shape-slab structure (a chunk of EMPTY records, a page of pointers to that chunk, a directory entry pointing at that page, an empty ordinary-band directory). Every pointer inside is the address of another immutable static in the program image, never an arena or heap address; nothing ever writes them, so an exited thread's Arena::drop cannot leave them dangling."
   },
   {
    "file": "crates/perry-runtime/src/object/static_shapes.rs",

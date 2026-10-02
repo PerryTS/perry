@@ -38,43 +38,50 @@ fn clean(cmd: &mut Command) -> &mut Command {
     cmd
 }
 
-/// Compile `files` (first is the entry) and return the stdout of each mode,
-/// after asserting every run exited 0 with no retired from-space report.
+/// Compile `files` (first is the entry) for each ConstFn arm and return the
+/// stdout of each mode, after asserting every run exited 0 with no retired
+/// from-space report.
 fn run_all_modes(files: &[(&str, &str)]) -> Vec<String> {
-    let dir = tempfile::tempdir().expect("tempdir");
-    for (name, source) in files {
-        std::fs::write(dir.path().join(name), source).unwrap();
+    let mut outputs = Vec::new();
+    for constfn in ["0", "1"] {
+        let dir = tempfile::tempdir().expect("tempdir");
+        for (name, source) in files {
+            std::fs::write(dir.path().join(name), source).unwrap();
+        }
+        let exe = dir.path().join("main_bin");
+        let compile = clean(&mut Command::new(perry_bin()))
+            .current_dir(dir.path())
+            .env("PERRY_GC_INSTRUMENTS", "1")
+            .env("PERRY_NO_CACHE", "1")
+            .env("PERRY_CONSTFN_SHAPE", constfn)
+            .arg("compile")
+            .arg(dir.path().join(files[0].0))
+            .arg("--no-auto-optimize")
+            .arg("-o")
+            .arg(&exe)
+            .output()
+            .expect("compile");
+        assert!(
+            compile.status.success(),
+            "compile failed (ConstFn {constfn})\n{}",
+            String::from_utf8_lossy(&compile.stderr)
+        );
+        for (mode, knobs) in [
+            ("ordinary", Vec::new()),
+            ("manual", MOVING.to_vec()),
+            ("seed1", MOVING.iter().chain(SEED.iter()).copied().collect()),
+        ] {
+            outputs.push(run_once(&exe, dir.path(), constfn, mode, &knobs));
+        }
     }
-    let exe = dir.path().join("main_bin");
-    let compile = clean(&mut Command::new(perry_bin()))
-        .current_dir(dir.path())
-        .env("PERRY_GC_INSTRUMENTS", "1")
-        .env("PERRY_NO_CACHE", "1")
-        .arg("compile")
-        .arg(dir.path().join(files[0].0))
-        .arg("--no-auto-optimize")
-        .arg("-o")
-        .arg(&exe)
-        .output()
-        .expect("compile");
-    assert!(
-        compile.status.success(),
-        "compile failed\n{}",
-        String::from_utf8_lossy(&compile.stderr)
-    );
-    [
-        ("ordinary", Vec::new()),
-        ("manual", MOVING.to_vec()),
-        ("seed1", MOVING.iter().chain(SEED.iter()).copied().collect()),
-    ]
-    .into_iter()
-    .map(|(mode, knobs)| run_once(&exe, dir.path(), mode, &knobs))
-    .collect()
+    outputs
 }
 
-fn run_once(exe: &Path, dir: &Path, mode: &str, knobs: &[(&str, &str)]) -> String {
+fn run_once(exe: &Path, dir: &Path, constfn: &str, mode: &str, knobs: &[(&str, &str)]) -> String {
     let mut cmd = Command::new(exe);
-    clean(&mut cmd).current_dir(dir);
+    clean(&mut cmd)
+        .current_dir(dir)
+        .env("PERRY_CONSTFN_SHAPE", constfn);
     for (key, value) in knobs {
         cmd.env(key, value);
     }
@@ -82,7 +89,7 @@ fn run_once(exe: &Path, dir: &Path, mode: &str, knobs: &[(&str, &str)]) -> Strin
     let stderr = String::from_utf8_lossy(&run.stderr);
     assert!(
         run.status.success() && !stderr.contains("RETIRED FROM-SPACE"),
-        "{mode}: status {:?}\nstdout:\n{}\nstderr:\n{stderr}",
+        "ConstFn {constfn} {mode}: status {:?}\nstdout:\n{}\nstderr:\n{stderr}",
         run.status,
         String::from_utf8_lossy(&run.stdout)
     );
@@ -373,5 +380,85 @@ console.log(await second);
     assert_every_mode(
         &[("main.ts", main), ("helper.ts", helper)],
         &format!("hop-module-once\n{line}\n{line}\n{line}\n"),
+    );
+}
+
+/// A worker that reads an eligible binding BEFORE its initializer ran sees the
+/// uninitialized `undefined`, and must observe the published value on a later
+/// read: a pending read is never cached as ready. Main runs the initializer
+/// only after the worker reported its early read, so the order is fixed.
+#[test]
+fn a_read_before_the_initializer_stays_pending_and_sees_the_later_publication() {
+    let main = r#"import { spawn } from "perry/thread";
+
+const shared = new SharedArrayBuffer(8);
+const view = new Int32Array(shared);
+// Hoisted reader of a binding whose initializer runs only after the worker read it once.
+function readLate(): bigint { return late; }
+const result = spawn((): string => {
+    const w = new Int32Array(shared);
+    const early = String(readLate());
+    Atomics.store(w, 0, 1);
+    Atomics.notify(w, 0);
+    while (Atomics.load(w, 1) === 0) {
+        if (Atomics.wait(w, 1, 0, 10000) === "timed-out") {
+            throw new Error("main did not initialize");
+        }
+    }
+    return early + "|" + String(readLate()) + "|" + String(readLate());
+});
+while (Atomics.load(view, 0) === 0) {
+    if (Atomics.wait(view, 0, 0, 10000) === "timed-out") {
+        throw new Error("worker did not read early");
+    }
+}
+export const late = 1234567890123456789012345678901234567890n + BigInt(Atomics.load(view, 1));
+Atomics.store(view, 1, 1);
+Atomics.notify(view, 1);
+console.log(await result);
+"#;
+    assert_every_mode(
+        &[("main.ts", main)],
+        "undefined|1234567890123456789012345678901234567890|1234567890123456789012345678901234567890\n",
+    );
+}
+
+/// The worker's own collection must move its replicas and the locals that
+/// retain them: the worker reads a computed String and BigInt, collects with
+/// both live, consumes the retained locals first (no re-read), then re-reads
+/// through the agent cache. The replicas are roots of the worker's heap, so a
+/// worker whose cache root is unregistered reads a retired object here. The
+/// harness asserts correct output and the absence of a retired from-space
+/// report; it cannot observe the motion itself.
+#[test]
+fn a_worker_collection_moves_its_replicas_and_retained_locals_without_a_stale_read() {
+    let helper = r#"// Computed (not foldable) leaves: the worker must materialize its own replicas.
+const zero = new Int32Array(new SharedArrayBuffer(4));
+console.log("wgc-module-once");
+export const s = "worker-local-gc-string-payload-longer-than-sixty-four-bytes-for-relocation-" + Atomics.load(zero, 0);
+export const big = 123456789012345678901234567890123n + BigInt(Atomics.load(zero, 0));
+export function readS(): string { return s; }
+export function readBig(): bigint { return big; }
+"#;
+    let main = r#"import { spawn } from "perry/thread";
+import { readS, readBig } from "./helper";
+
+declare function gc(): void;
+const result = spawn((): string => {
+    const a = readS();
+    const b = readBig();
+    // The worker collects while its TLS replicas and the retained locals a/b are live.
+    gc();
+    // Consume the retained locals first (no re-read), then re-read through the cache.
+    const last = a.charCodeAt(a.length - 1);
+    const sum = (b + 1n).toString();
+    const again = readS();
+    return last + "|" + sum + "|" + a.length + "|" + (again === a) + "|" + (readBig() === b);
+});
+console.log(await result);
+"#;
+    assert_every_mode(
+        &[("main.ts", main), ("helper.ts", helper)],
+        "wgc-module-once\n48|123456789012345678901234567890124|76|true|true\n",
     );
 }

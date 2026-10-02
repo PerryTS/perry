@@ -92,11 +92,11 @@ pub use codegen::{
     decode_static_seed, encode_static_seed, module_birth_shapes, namespace_member_class_key,
     namespace_member_func_key, namespace_member_var_key, resolve_target_triple,
     short_spread_method_capabilities, take_module_static_seeds, user_function_symbol, AppMetadata,
-    BirthProto, BirthShape, CompileOptions, ConstructorContracts, CtorAbi, DefinedClassShape,
-    ExportedObjectLiteralCapability, FpContractMode, ImportedClass, ImportedObjectLiteral,
-    ImportedObjectLiteralMethod, ModuleBirth, NamespaceEntry, NamespaceEntryKind,
-    ObjectLiteralMethodCandidate, ProgramClassShapeIds, ResolvedConstructorContracts,
-    ShortSpreadMethodCandidate, TypedMasks, STATIC_SEED_FORMAT,
+    BirthProto, BirthShape, CompileOptions, ConstFnBirth, ConstructorContracts, CtorAbi,
+    DefinedClassShape, ExportedObjectLiteralCapability, FpContractMode, ImportedClass,
+    ImportedObjectLiteral, ImportedObjectLiteralMethod, ModuleBirth, NamespaceEntry,
+    NamespaceEntryKind, ObjectLiteralMethodCandidate, ProgramClassShapeIds,
+    ResolvedConstructorContracts, ShortSpreadMethodCandidate, TypedMasks, STATIC_SEED_FORMAT,
 };
 // #10399: whole-program Worker flag, set by the driver before module codegen.
 pub use codegen::{

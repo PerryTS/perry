@@ -55,13 +55,14 @@
 //! it. Nested try-with-finally stack the inlined clones
 //! innermost→outermost.
 //!
-//! Limitations:
-//!   - Code after the abrupt completion becomes dead — fine.
-//!   - If `Y_clone` itself throws, the throw routes to the same try's
-//!     catch (if any) instead of propagating directly. Per spec the
-//!     throw should override the pending abrupt completion without
-//!     going through the catch. Rare; matters only when the finally
-//!     throws AND there's a same-level catch.
+//! Each try-with-finally owns a flag set BEFORE its finally runs. Clones
+//! and the preserved finally both consult that flag. An exception raised by
+//! a clone therefore cannot run the same finally again through the original
+//! handler. Its catch also consults the flag so an inlined finally exception
+//! bypasses the same-level catch, as it does when executing the normal finally.
+//! Catch-only try scopes also own an exit flag. Their stack entry marks exit
+//! before outer cleanup runs, without adding a finally or an EH handler.
+//! Catches declared inside cleanup retain their own unexited scope.
 //!
 //! Issue #536: `@perryts/mysql`'s `Pool.query` uses
 //! `try { return await conn.query(...) } finally { this.release(conn) }`
@@ -81,7 +82,7 @@ use perry_hir::{Expr, Module, Stmt};
 // (exhaustive-walker-backed) implementation in `generator::id_scan` instead.
 use crate::generator::compute_max_local_id;
 
-/// One open try-with-finally on the lowering stack. The cloned `body`
+/// One open semantic try boundary on the lowering stack. The cloned `body`
 /// gets inlined ahead of any abrupt completion (return/break/continue)
 /// that would escape this try frame. `loop_depth_at_push` is the value
 /// of the surrounding `loop_depth` counter at the moment this try was
@@ -92,6 +93,7 @@ use crate::generator::compute_max_local_id;
 struct EnclosingFinally {
     body: Vec<Stmt>,
     loop_depth_at_push: usize,
+    switch_depth_at_push: usize,
 }
 
 /// Run the pass over an entire HIR module.
@@ -103,6 +105,7 @@ pub fn inline_finally_into_returns(module: &mut Module) {
             &mut func.body,
             &[],
             0,
+            0,
             &mut label_depths,
             &mut next_local_id,
         );
@@ -113,6 +116,7 @@ pub fn inline_finally_into_returns(module: &mut Module) {
                 &mut method.body,
                 &[],
                 0,
+                0,
                 &mut label_depths,
                 &mut next_local_id,
             );
@@ -121,6 +125,7 @@ pub fn inline_finally_into_returns(module: &mut Module) {
             process_stmts(
                 &mut static_method.body,
                 &[],
+                0,
                 0,
                 &mut label_depths,
                 &mut next_local_id,
@@ -131,6 +136,7 @@ pub fn inline_finally_into_returns(module: &mut Module) {
                 &mut ctor.body,
                 &[],
                 0,
+                0,
                 &mut label_depths,
                 &mut next_local_id,
             );
@@ -140,6 +146,7 @@ pub fn inline_finally_into_returns(module: &mut Module) {
                 &mut getter.1.body,
                 &[],
                 0,
+                0,
                 &mut label_depths,
                 &mut next_local_id,
             );
@@ -148,6 +155,7 @@ pub fn inline_finally_into_returns(module: &mut Module) {
             process_stmts(
                 &mut setter.1.body,
                 &[],
+                0,
                 0,
                 &mut label_depths,
                 &mut next_local_id,
@@ -163,6 +171,7 @@ pub fn inline_finally_into_returns(module: &mut Module) {
                 &mut member.function.body,
                 &[],
                 0,
+                0,
                 &mut label_depths,
                 &mut next_local_id,
             );
@@ -170,7 +179,14 @@ pub fn inline_finally_into_returns(module: &mut Module) {
     }
     for stmt in module.init.iter_mut() {
         let mut single = vec![std::mem::replace(stmt, Stmt::Break)];
-        process_stmts(&mut single, &[], 0, &mut label_depths, &mut next_local_id);
+        process_stmts(
+            &mut single,
+            &[],
+            0,
+            0,
+            &mut label_depths,
+            &mut next_local_id,
+        );
         if let Some(s) = single.into_iter().next() {
             *stmt = s;
         }
@@ -197,6 +213,7 @@ fn process_stmts(
     stmts: &mut Vec<Stmt>,
     enclosing: &[EnclosingFinally],
     loop_depth: usize,
+    switch_depth: usize,
     label_depths: &mut HashMap<String, usize>,
     next_local_id: &mut LocalId,
 ) {
@@ -241,6 +258,7 @@ fn process_stmts(
                     enclosing,
                     enclosing.len(), // run all of them
                     loop_depth,
+                    switch_depth,
                     label_depths,
                     next_local_id,
                 );
@@ -251,6 +269,8 @@ fn process_stmts(
                     &mut out,
                     enclosing,
                     loop_depth,
+                    switch_depth,
+                    false,
                     label_depths,
                     next_local_id,
                 );
@@ -261,6 +281,8 @@ fn process_stmts(
                     &mut out,
                     enclosing,
                     loop_depth,
+                    switch_depth,
+                    true,
                     label_depths,
                     next_local_id,
                 );
@@ -271,6 +293,7 @@ fn process_stmts(
                     &mut out,
                     enclosing,
                     &label,
+                    switch_depth,
                     label_depths,
                     next_local_id,
                 );
@@ -281,6 +304,7 @@ fn process_stmts(
                     &mut out,
                     enclosing,
                     &label,
+                    switch_depth,
                     label_depths,
                     next_local_id,
                 );
@@ -289,19 +313,64 @@ fn process_stmts(
             Stmt::Try {
                 mut body,
                 mut catch,
-                finally,
+                mut finally,
             } => {
+                // Inlined outer finallies still sit inside inner try EH
+                // regions. Guard their preserved copies and catches so a
+                // clone exception crosses those regions without re-running
+                // cleanup or entering a catch it has already escaped.
+                let exit_id = (finally.is_some() || catch.is_some()).then(|| {
+                    let id = *next_local_id;
+                    *next_local_id += 1;
+                    id
+                });
+                if let Some(id) = exit_id {
+                    body.insert(
+                        0,
+                        Stmt::Let {
+                            id,
+                            name: format!("__finally_exited_{}", id),
+                            ty: Type::Boolean,
+                            mutable: true,
+                            init: Some(Expr::Bool(false)),
+                        },
+                    );
+                    if let Some(cleanup) = finally.take() {
+                        let mut once =
+                            vec![Stmt::Expr(Expr::LocalSet(id, Box::new(Expr::Bool(true))))];
+                        once.extend(cleanup);
+                        finally = Some(vec![Stmt::If {
+                            condition: Expr::Unary {
+                                op: perry_hir::UnaryOp::Not,
+                                operand: Box::new(Expr::LocalGet(id)),
+                            },
+                            then_branch: once,
+                            else_branch: None,
+                        }]);
+                    }
+                }
                 let mut extended: Vec<EnclosingFinally> = enclosing.to_vec();
                 if let Some(f) = &finally {
                     extended.push(EnclosingFinally {
                         body: f.clone(),
                         loop_depth_at_push: loop_depth,
+                        switch_depth_at_push: switch_depth,
+                    });
+                } else if let Some(id) = exit_id {
+                    // A catch-only Try owns no cleanup or additional handler.
+                    // Mark its semantic exit before cloning an outer cleanup,
+                    // so exceptions from that cleanup bypass this catch.
+                    extended.push(EnclosingFinally {
+                        body: vec![Stmt::Expr(Expr::LocalSet(id, Box::new(Expr::Bool(true))))],
+                        loop_depth_at_push: loop_depth,
+                        switch_depth_at_push: switch_depth,
                     });
                 }
                 process_stmts(
                     &mut body,
                     &extended,
                     loop_depth,
+                    switch_depth,
                     label_depths,
                     next_local_id,
                 );
@@ -310,12 +379,36 @@ fn process_stmts(
                         &mut c.body,
                         &extended,
                         loop_depth,
+                        switch_depth,
                         label_depths,
                         next_local_id,
                     );
+                    if let Some(id) = exit_id {
+                        let err_id = match &c.param {
+                            Some((err_id, _)) => *err_id,
+                            None => {
+                                let err_id = *next_local_id;
+                                *next_local_id += 1;
+                                c.param = Some((err_id, format!("__finally_error_{}", err_id)));
+                                err_id
+                            }
+                        };
+                        c.body = vec![Stmt::If {
+                            condition: Expr::LocalGet(id),
+                            then_branch: vec![Stmt::Throw(Expr::LocalGet(err_id))],
+                            else_branch: Some(std::mem::take(&mut c.body)),
+                        }];
+                    }
                 }
                 let new_finally = finally.map(|mut f| {
-                    process_stmts(&mut f, enclosing, loop_depth, label_depths, next_local_id);
+                    process_stmts(
+                        &mut f,
+                        enclosing,
+                        loop_depth,
+                        switch_depth,
+                        label_depths,
+                        next_local_id,
+                    );
                     f
                 });
                 out.push(Stmt::Try {
@@ -333,11 +426,19 @@ fn process_stmts(
                     &mut then_branch,
                     enclosing,
                     loop_depth,
+                    switch_depth,
                     label_depths,
                     next_local_id,
                 );
                 if let Some(eb) = &mut else_branch {
-                    process_stmts(eb, enclosing, loop_depth, label_depths, next_local_id);
+                    process_stmts(
+                        eb,
+                        enclosing,
+                        loop_depth,
+                        switch_depth,
+                        label_depths,
+                        next_local_id,
+                    );
                 }
                 out.push(Stmt::If {
                     condition,
@@ -353,6 +454,7 @@ fn process_stmts(
                     &mut body,
                     enclosing,
                     loop_depth + 1,
+                    switch_depth,
                     label_depths,
                     next_local_id,
                 );
@@ -366,6 +468,7 @@ fn process_stmts(
                     &mut body,
                     enclosing,
                     loop_depth + 1,
+                    switch_depth,
                     label_depths,
                     next_local_id,
                 );
@@ -383,6 +486,7 @@ fn process_stmts(
                         &mut single,
                         enclosing,
                         loop_depth,
+                        switch_depth,
                         label_depths,
                         next_local_id,
                     );
@@ -394,6 +498,7 @@ fn process_stmts(
                     &mut body,
                     enclosing,
                     loop_depth + 1,
+                    switch_depth,
                     label_depths,
                     next_local_id,
                 );
@@ -409,8 +514,13 @@ fn process_stmts(
                 // `break LABEL` filters finallies is the depth INSIDE
                 // the loop (loop_depth + 1). If it's a non-loop
                 // labeled block, the threshold is loop_depth itself.
+                // All labels in a chain target the same terminal loop.
+                let mut target = body.as_ref();
+                while let Stmt::Labeled { body, .. } = target {
+                    target = body.as_ref();
+                }
                 let is_loop = matches!(
-                    body.as_ref(),
+                    target,
                     Stmt::For { .. } | Stmt::While { .. } | Stmt::DoWhile { .. }
                 );
                 let label_threshold = if is_loop { loop_depth + 1 } else { loop_depth };
@@ -420,6 +530,7 @@ fn process_stmts(
                     &mut single,
                     enclosing,
                     loop_depth,
+                    switch_depth,
                     label_depths,
                     next_local_id,
                 );
@@ -445,6 +556,7 @@ fn process_stmts(
                         &mut case.body,
                         enclosing,
                         loop_depth,
+                        switch_depth + 1,
                         label_depths,
                         next_local_id,
                     );
@@ -468,6 +580,7 @@ fn inline_finallies(
     enclosing: &[EnclosingFinally],
     count: usize,
     loop_depth: usize,
+    switch_depth: usize,
     label_depths: &mut HashMap<String, usize>,
     next_local_id: &mut LocalId,
 ) {
@@ -488,6 +601,7 @@ fn inline_finallies(
             &mut cloned,
             outer_slice,
             loop_depth,
+            switch_depth,
             label_depths,
             next_local_id,
         );
@@ -503,13 +617,20 @@ fn inline_finallies_for_break(
     out: &mut Vec<Stmt>,
     enclosing: &[EnclosingFinally],
     loop_depth: usize,
+    switch_depth: usize,
+    is_continue: bool,
     label_depths: &mut HashMap<String, usize>,
     next_local_id: &mut LocalId,
 ) {
     let count = enclosing
         .iter()
         .rev()
-        .take_while(|f| f.loop_depth_at_push >= loop_depth)
+        .take_while(|f| {
+            f.loop_depth_at_push >= loop_depth
+                && (is_continue
+                    || f.loop_depth_at_push > loop_depth
+                    || f.switch_depth_at_push >= switch_depth)
+        })
         .count();
     if count > 0 {
         inline_finallies(
@@ -517,6 +638,7 @@ fn inline_finallies_for_break(
             enclosing,
             count,
             loop_depth,
+            switch_depth,
             label_depths,
             next_local_id,
         );
@@ -531,6 +653,7 @@ fn inline_finallies_for_labeled(
     out: &mut Vec<Stmt>,
     enclosing: &[EnclosingFinally],
     label: &str,
+    switch_depth: usize,
     label_depths: &mut HashMap<String, usize>,
     next_local_id: &mut LocalId,
 ) {
@@ -567,6 +690,7 @@ fn inline_finallies_for_labeled(
                 &mut cloned,
                 outer_slice,
                 inline_loop_depth,
+                switch_depth,
                 label_depths,
                 next_local_id,
             );
@@ -644,7 +768,7 @@ fn walk_stmt_exprs<F: FnMut(&mut Expr)>(stmt: &mut Stmt, f: &mut F) {
 fn process_expr_closure_bodies(expr: &mut Expr, next_local_id: &mut LocalId) {
     if let Expr::Closure { body, .. } = expr {
         let mut label_depths: HashMap<String, usize> = HashMap::new();
-        process_stmts(body, &[], 0, &mut label_depths, next_local_id);
+        process_stmts(body, &[], 0, 0, &mut label_depths, next_local_id);
     }
     perry_hir::walker::walk_expr_children_mut(expr, &mut |e| {
         process_expr_closure_bodies(e, next_local_id)

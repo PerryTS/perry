@@ -148,8 +148,7 @@ use perry_hir::Stmt;
 use super::loops::{
     emit_js_value_is_number, local_bound_is_loop_invariant, local_has_readable_slot,
     loop_counter_bounds_are_safe, loop_counter_entry_i32_range_is_safe, lower_for_after_init,
-    lower_for_after_init_with_i32_bound, CLASS_FIELD_LOOP_CLASS_DENYLIST,
-    CLASS_FIELD_LOOP_PROP_DENYLIST,
+    lower_for_after_init_with_i32_bound, ELEMENT_SHAPE_CLASS_DENYLIST, ELEMENT_SHAPE_PROP_DENYLIST,
 };
 use crate::expr::{lower_expr, FnCtx};
 use crate::types::{DOUBLE, I1, I32, I64};
@@ -1264,7 +1263,7 @@ fn match_element_shape_versioned_loop(
     // the spec, wherever those two differ.
     const SHAPE_PROP_DENYLIST: &[&str] = &["__proto__"];
     let denylist = match identity {
-        ElementShapeIdentity::Class { .. } => CLASS_FIELD_LOOP_PROP_DENYLIST,
+        ElementShapeIdentity::Class { .. } => ELEMENT_SHAPE_PROP_DENYLIST,
         ElementShapeIdentity::Shape => SHAPE_PROP_DENYLIST,
     };
     for prop in &facts.props {
@@ -1348,7 +1347,7 @@ fn match_class_identity(
     class_name: &str,
     props: &std::collections::BTreeSet<String>,
 ) -> Option<ElementShapeIdentity> {
-    if CLASS_FIELD_LOOP_CLASS_DENYLIST.contains(&class_name) {
+    if ELEMENT_SHAPE_CLASS_DENYLIST.contains(&class_name) {
         return None;
     }
     let class = ctx.classes.get(class_name)?;
@@ -1456,7 +1455,7 @@ fn materialize_loop_i32(
 }
 
 /// Lower the matched loop as a guarded fast clone plus the unchanged generic
-/// body, modeled on `lower_class_field_versioned_for`.
+/// body, with the guard and call-free clone sharing one dynamic extent.
 ///
 /// SAFETY (miscompile class — see the module docs): between the preheader's
 /// post-guard re-derivation of the elements base pointer and the end of the

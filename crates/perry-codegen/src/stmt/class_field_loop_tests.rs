@@ -1,29 +1,6 @@
-//! #7287: the #5093 class-field versioned loop must actually be REACHED.
-//!
-//! `lower_class_field_versioned_for` (`stmt/loops.rs`) hoists a monomorphic
-//! `this.field` shape check into a loop preheader and runs a guard-free,
-//! call-free fast clone. It was written for `benchmarks/suite/09_method_calls.ts`
-//! and it is worth ~9× on it. It also matched **nothing** for months, in either
-//! configuration, and nothing noticed:
-//!
-//! * with representation-selection Phase 1 on (the default), a proven-integer
-//!   loop counter's *only* storage is its canonical i32 slot — it has no
-//!   `ctx.locals` entry — and the matcher gated its counter and its bound on
-//!   `ctx.locals.contains_key(..)`;
-//! * with Phase 1 off, the counter regains its `ctx.locals` entry but a bare
-//!   `i++` counter never earns an i32 *shadow*, which the lowering separately
-//!   requires.
-//!
-//! Every existing signal scored it as working. The lowering compiles, the
-//! matcher is exercised by no test, `09_method_calls` still printed the right
-//! answer, and the emitted object still differed from an unoptimised build (by
-//! the *other* class-field lowerings). Only asserting that the versioned blocks
-//! appear in the emitted IR distinguishes "implemented" from "reached" — see
-//! CLAUDE.md, "a gate must assert its subject was live".
-//!
-//! So these tests assert on emitted block labels, and every one of them
-//! requires the fast clone AND its guard-free store together: a preheader that
-//! is emitted but branched around would still print `class_field.loop.*`.
+//! P8 replacement IR checks for the original literal/module-bound and strict
+//! class increment shapes. Runtime, hostile-value, and cost acceptance remains
+//! separate and must use the unchanged original TypeScript fixtures.
 
 use crate::{compile_module, AppMetadata, CompileOptions};
 use perry_hir::types::Type;
@@ -38,6 +15,7 @@ fn ir_opts() -> CompileOptions {
         target: None,
         is_entry_module: true,
         non_entry_module_prefixes: Vec::new(),
+        thread_literal_module_prefixes: Vec::new(),
         nextjs_path_init_modules: Vec::new(),
         import_function_prefixes: std::collections::HashMap::new(),
         import_function_ffi_aliases: std::collections::HashMap::new(),
@@ -248,79 +226,59 @@ fn emit(m: &Module) -> String {
     String::from_utf8(compile_module(m, ir_opts()).unwrap()).expect("LLVM IR should be UTF-8")
 }
 
-/// Both halves of the transform, asserted together.
-///
-/// `class_field.loop.fast.preheader` alone would pass on a lowering that emits
-/// the versioned skeleton and then unconditionally branches to the slow clone
-/// (which is exactly what `lower_class_field_versioned_for` does when the fast
-/// clone turns out not to be call-free). The guard-free store block is the part
-/// that only exists when the fast clone was really entered, and the hoisted
-/// preheader check is what makes it sound — so require all three.
+/// P8: a numeric class-field module loop must use the generic guarded F/G body.
+/// Runtime route/shape/store attribution is checked separately by the isolated
+/// executable. These IR assertions never certify retained-tier cost parity.
 fn assert_versioned_loop_lowered(ir: &str, what: &str) {
     for label in [
-        "class_field.loop.fast.preheader",
-        "class_field_loop.preheader.deref",
-        "class_field_loop_store.sloppy_fast",
+        "rloop.guard.",
+        "rloop.fast",
+        "rloop.join",
+        "rloop.version.plain",
     ] {
         assert!(
             ir.contains(label),
-            "{what}: expected the #5093 class-field versioned loop to be lowered, \
-             but `{label}` is absent from the emitted IR. The matcher in \
-             stmt/loops.rs declined — check that the loop counter and bound are \
-             still admitted through `local_has_readable_slot` (repsel Phase 1 \
-             stores a proven-integer local ONLY in its canonical i32 slot, with \
-             no `ctx.locals` entry). See #7287."
+            "{what}: missing generic replacement `{label}`"
         );
     }
-    // The slow clone must survive as the cold arm: it is what a receiver that
-    // fails the preheader check (frozen, descriptor-bearing, wrong class) and
-    // every mid-loop store side exit falls into.
+    for label in [
+        "class_field.loop.",
+        "class_field_loop.",
+        "class_field_loop_store.",
+        "for.class_field_fast",
+        "for.class_field_slow",
+    ] {
+        assert!(!ir.contains(label), "{what}: legacy tier remains `{label}`");
+    }
+    let fast = ir
+        .lines()
+        .skip_while(|line| !line.starts_with("rloop.fast"))
+        .take_while(|line| !line.starts_with("rloop.join"))
+        .collect::<Vec<_>>()
+        .join("\n");
     assert!(
-        ir.contains("for.class_field_slow.cond"),
-        "{what}: the versioned loop's SLOW clone is missing — a hoisted guard \
-         with no fallback arm is worse than no hoist at all"
-    );
-    // #7480 step 4: the clone must be ENTERED, not merely emitted. The lowering
-    // builds the fast clone first and proves it call-free second; on a failed
-    // proof it terminates the guard with an UNCONDITIONAL branch to the slow
-    // clone and leaves the fast blocks as unreachable code — a state in which
-    // every label assertion above still passes. The twin assertion on the
-    // element-shape clone caught exactly that: #7690's back-edge polls put a
-    // `js_gc_loop_safepoint()` inside the clone and silently deleted it.
-    assert!(
-        ir.contains("label %for.class_field_fast.cond")
-            || ir.contains("label %class_field.loop.fast.preheader"),
-        "{what}: the guard must branch INTO the fast clone. If it ends in an \
-         unconditional branch to the slow clone, the call-free proof failed and \
-         the clone is dead code that every label assertion above still accepts"
-    );
-    // The fast clone must be free of the per-access diamond it exists to
-    // replace: no volatile gate load between the fast preheader and the store.
-    let fast = fast_clone_slice(ir);
-    assert!(
-        !fast.contains("@PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED"),
-        "{what}: the fast clone still reads the per-access inline-guard gate; \
-         the whole point of the preheader check is that it does not"
+        fast.contains("load double")
+            && fast.contains("fadd double")
+            && fast.contains("store double")
+            && ir
+                .lines()
+                .any(|line| line.contains("br i1 ") && line.contains("label %rloop.version.split")),
+        "{what}: reachable generic F must read, add and commit the increment"
     );
     assert!(
-        !fast.contains("js_typed_feedback_class_field"),
-        "{what}: the fast clone still calls the class-field guard; it must be \
-         call-free (call-free ⇒ allocation-free ⇒ no GC ⇒ the preheader's \
-         cached object pointer stays valid)"
+        !fast.contains("@js_class_field_")
+            && !fast.contains("@js_object_get_field")
+            && !fast.contains("@js_number_coerce")
+            && !fast.contains("@js_dynamic_string_or_number_add")
+            && !fast.contains("@js_put_value"),
+        "{what}: typed class read must consume exact R, not its ordinary guard"
     );
-}
-
-/// The emitted text from the fast clone's condition block up to the slow
-/// clone's, i.e. exactly the blocks the fast copy owns.
-fn fast_clone_slice(ir: &str) -> &str {
-    let start = ir
-        .find("for.class_field_fast.cond")
-        .expect("fast clone cond block");
-    let end = ir[start..]
-        .find("for.class_field_slow.cond")
-        .map(|off| start + off)
-        .unwrap_or(ir.len());
-    &ir[start..end]
+    assert!(
+        ir.lines()
+            .any(|line| line.contains("call i64 @js_region_loop_prime(")
+                && line.contains("i32 1, i32 0, i32 1)")),
+        "{what}: increment must request stored=1, boxed=0 and R=1"
+    );
 }
 
 /// The exact `09_method_calls` shape: an integer-literal bound.
@@ -355,11 +313,9 @@ fn class_field_versioned_loop_fires_for_module_scope_counter() {
     assert_versioned_loop_lowered(&ir, "module-scope const bound");
 }
 
-/// STRICT module scope takes a different store lowering
-/// (`put_value_static_property_fast_path` → `property_set::lower`), which has
-/// carried its own loop-fact branch since #5093. Both arms must reach the fast
-/// clone, or an ESM/CJS difference silently changes which one a file gets —
-/// the same class of path-dependence #7288 was.
+/// STRICT module scope takes a different ordinary store lowering
+/// (`put_value_static_property_fast_path` → `property_set::lower`). Both modes
+/// must consume the same guarded region store proof in F.
 #[test]
 fn class_field_versioned_loop_fires_in_strict_mode() {
     let ir = emit(&method_calls_module(
@@ -367,18 +323,69 @@ fn class_field_versioned_loop_fires_in_strict_mode() {
         Vec::new(),
         true,
     ));
-    for label in [
-        "class_field.loop.fast.preheader",
-        "class_field_loop.preheader.deref",
-        "class_field_loop_store.fast",
-    ] {
-        assert!(
-            ir.contains(label),
-            "strict mode: expected `{label}` in the emitted IR (#7287)"
-        );
-    }
+    assert_versioned_loop_lowered(&ir, "strict mode");
+}
+
+/// Replacement's scoped suppression must not erase the pre-existing receiver
+/// proof after F/G joins. The subsequent read still uses a direct Ptr<Shape>
+/// load, but keeps the ordinary boxed-value/coercion check: R must not escape.
+#[test]
+fn class_loop_replacement_restores_straight_line_receiver_proof() {
+    let mut module = method_calls_module(Expr::Integer(200), Vec::new(), false);
+    module.init.push(Stmt::Expr(Expr::Binary {
+        op: BinaryOp::Mul,
+        left: Box::new(Expr::PropertyGet {
+            object: Box::new(Expr::LocalGet(1)),
+            property: "value".to_string(),
+            byte_offset: 0,
+        }),
+        right: Box::new(Expr::Integer(2)),
+    }));
+    let ir = emit(&module);
+    assert_versioned_loop_lowered(&ir, "subsequent read");
+    let post = ir
+        .lines()
+        .skip_while(|line| !line.starts_with("rloop.version.merge"))
+        .skip(1)
+        .take_while(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
     assert!(
-        !fast_clone_slice(&ir).contains("@PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED"),
-        "strict mode: the fast clone still reads the per-access gate"
+        post.contains("load double")
+            && post.contains("label %ptr_shape_get_number.coerce")
+            && !post.contains("@js_class_field_")
+            && !post.contains("class_field_inline"),
+        "post-loop shape proof must return without leaking Number R:\n{post}"
+    );
+}
+
+/// The removed twin admitted only a single expression. Region admission must
+/// come from its own effect and representation proof, without keeping that
+/// old syntactic matcher as a second authority.
+#[test]
+fn numeric_class_region_accepts_multiple_commits() {
+    let mut module = method_calls_module(Expr::Integer(200), Vec::new(), false);
+    let body = module
+        .init
+        .iter_mut()
+        .find_map(|stmt| match stmt {
+            Stmt::For { body, .. } => Some(body),
+            _ => None,
+        })
+        .expect("fixture must contain the original increment loop");
+    let increment = body[0].clone();
+    body.push(increment);
+    let ir = emit(&module);
+    assert_versioned_loop_lowered(&ir, "multiple numeric commits");
+    let fast = ir
+        .lines()
+        .skip_while(|line| !line.starts_with("rloop.fast"))
+        .take_while(|line| !line.starts_with("rloop.join"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(
+        fast.matches("fadd double").count(),
+        2,
+        "both increment expressions must consume the same guarded numeric lane"
     );
 }

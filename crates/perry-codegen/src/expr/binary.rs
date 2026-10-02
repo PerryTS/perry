@@ -23,7 +23,7 @@ use crate::type_analysis::{
 };
 use crate::types::{DOUBLE, I1, I128, I32, I64};
 
-use crate::rooting::with_operands_rooted;
+use crate::rooting::{self, with_operands_rooted, EmittedValue, Repr, RootedGroup};
 
 use super::{is_known_i32_range, lower_expr, FnCtx};
 
@@ -238,7 +238,7 @@ fn lower_guarded_numeric_add(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String>
         // `width` is provenance-proven — and the tripwire took whole
         // application builds down: pi's `graphemeWidth`, cc's cli bundle.)
         let Some(all_num) = cond else {
-            return Ok(rebuild_add_tree(ctx, expr, values, &mut 0, true));
+            return Ok(rebuild_numeric_add_tree(ctx, expr, values, &mut 0));
         };
 
         let fast_idx = ctx.new_block("guarded_add.numeric");
@@ -250,13 +250,27 @@ fn lower_guarded_numeric_add(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String>
         ctx.block().cond_br(&all_num, &fast_label, &slow_label);
 
         ctx.current_block = fast_idx;
-        let fast_val = rebuild_add_tree(ctx, expr, values, &mut 0, true);
+        let fast_val = rebuild_numeric_add_tree(ctx, expr, values, &mut 0);
         let fast_end = ctx.block().label.clone();
         ctx.block().br(&merge_label);
 
         ctx.current_block = slow_idx;
         crate::expr::emit_versioned_loop_callback_deopt(ctx);
-        let slow_val = rebuild_add_tree(ctx, expr, values, &mut 0, false);
+        let slow_val = rooting::with_rooted_group(ctx, values.len(), |ctx, group| {
+            // Capture the already-evaluated leaves, including global reads:
+            // coercion may both relocate them and overwrite their bindings.
+            // Leaves consumed by the first call have no preceding window;
+            // that helper protects its own inputs during the call.
+            let mut protect = Vec::with_capacity(values.len());
+            let _ = dynamic_add_leaf_windows(expr, &mut false, &mut protect);
+            let leaves: Vec<_> = values
+                .iter()
+                .zip(protect)
+                .map(|(value, protect)| group.adopt_emitted(ctx, Repr::Boxed, value, protect))
+                .collect();
+            let result = rebuild_rooted_dynamic_add_tree(ctx, expr, group, &leaves, &mut 0, false);
+            Ok(group.reread_emitted(ctx, result))
+        })?;
         let slow_end = ctx.block().label.clone();
         ctx.block().br(&merge_label);
 
@@ -539,7 +553,7 @@ fn dynamic_add_tree_benefits_shared_guard(expr: &Expr) -> bool {
 ///
 /// The fold departs from the specification only in WHEN it reads such a
 /// leaf. The conversions themselves still run in specification order: the
-/// cold arm (`rebuild_add_tree(.., fast = false)`) calls the spec-`+` helper
+/// cold arm (`rebuild_rooted_dynamic_add_tree`) calls the spec-`+` helper
 /// node for node over the lowered values. So a tree is faithful exactly when
 /// every leaf the specification reads after an earlier conversion is one
 /// whose read time cannot be observed (`add_leaf_is_evaluation_invariant`).
@@ -637,14 +651,12 @@ fn add_leaf_is_evaluation_invariant(ctx: &FnCtx<'_>, leaf: &Expr) -> bool {
 }
 
 /// Rebuild the `+` tree over already-lowered leaf values, node for node, so the
-/// original associativity survives. `fast` picks the inline `fadd`; otherwise
-/// every node goes through the spec-`+` helper.
-fn rebuild_add_tree(
+/// original associativity survives. This arm contains only inline `fadd`s.
+fn rebuild_numeric_add_tree(
     ctx: &mut FnCtx<'_>,
     expr: &Expr,
     values: &[String],
     next_leaf: &mut usize,
-    fast: bool,
 ) -> String {
     if let Expr::Binary {
         op: BinaryOp::Add,
@@ -652,21 +664,84 @@ fn rebuild_add_tree(
         right,
     } = expr
     {
-        let l = rebuild_add_tree(ctx, left, values, next_leaf, fast);
-        let r = rebuild_add_tree(ctx, right, values, next_leaf, fast);
-        return if fast {
-            ctx.block().fadd(&l, &r)
-        } else {
-            ctx.block().call(
-                DOUBLE,
-                "js_dynamic_string_or_number_add",
-                &[(DOUBLE, &l), (DOUBLE, &r)],
-            )
-        };
+        let l = rebuild_numeric_add_tree(ctx, left, values, next_leaf);
+        let r = rebuild_numeric_add_tree(ctx, right, values, next_leaf);
+        return ctx.block().fadd(&l, &r);
     }
     let value = values[*next_leaf].clone();
     *next_leaf += 1;
     value
+}
+
+/// Rebuild the original cold `+` tree through root handles. A left subtree's
+/// result needs its own root when computing the right subtree can collect;
+/// rooting the leaves alone cannot protect this newly-produced value.
+fn rebuild_rooted_dynamic_add_tree(
+    ctx: &mut FnCtx<'_>,
+    expr: &Expr,
+    group: &mut RootedGroup<'_>,
+    leaves: &[EmittedValue],
+    next_leaf: &mut usize,
+    protect_result: bool,
+) -> EmittedValue {
+    if let Expr::Binary {
+        op: BinaryOp::Add,
+        left,
+        right,
+    } = expr
+    {
+        let right_collects = matches!(
+            right.as_ref(),
+            Expr::Binary {
+                op: BinaryOp::Add,
+                ..
+            }
+        );
+        let l =
+            rebuild_rooted_dynamic_add_tree(ctx, left, group, leaves, next_leaf, right_collects);
+        let r = rebuild_rooted_dynamic_add_tree(ctx, right, group, leaves, next_leaf, false);
+        // No register snapshot crosses the recursive right-hand calls.
+        // The helper owns both inputs during this consuming call.
+        let l = group.reread_emitted(ctx, l);
+        let r = group.reread_emitted(ctx, r);
+        let result = ctx.block().call(
+            DOUBLE,
+            "js_dynamic_string_or_number_add",
+            &[(DOUBLE, &l), (DOUBLE, &r)],
+        );
+        return group.adopt_emitted(ctx, Repr::Boxed, &result, protect_result);
+    }
+    let leaf = leaves[*next_leaf];
+    *next_leaf += 1;
+    leaf
+}
+
+/// Which captured leaves are consumed after an earlier dynamic-add call?
+/// Follow the same left/right/postorder call order as the cold rebuild, so
+/// inputs used only by the first call need no extra roots. Intermediate
+/// results have separate windows, handled by `protect_result` above.
+fn dynamic_add_leaf_windows(
+    expr: &Expr,
+    called: &mut bool,
+    protect: &mut Vec<bool>,
+) -> Option<usize> {
+    if let Expr::Binary {
+        op: BinaryOp::Add,
+        left,
+        right,
+    } = expr
+    {
+        let l = dynamic_add_leaf_windows(left, called, protect);
+        let r = dynamic_add_leaf_windows(right, called, protect);
+        for leaf in [l, r].into_iter().flatten() {
+            protect[leaf] = *called;
+        }
+        *called = true;
+        return None;
+    }
+    let index = protect.len();
+    protect.push(false);
+    Some(index)
 }
 
 /// May the flattened `p1 + p2 + … + pN` chain be handed to

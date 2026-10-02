@@ -387,7 +387,9 @@ pub(crate) fn lower_object_literal(
                         );
                     }
                 }
-                Ok(nanbox_pointer_inline(ctx.block(), obj_handle))
+                let final_handle =
+                    crate::codegen::static_constfn::finalize_literal(ctx, props, 0, obj_handle);
+                Ok(nanbox_pointer_inline(ctx.block(), &final_handle))
             },
         );
     }

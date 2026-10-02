@@ -91,6 +91,7 @@ pub(crate) fn emit_method_site(
     let spill_offset = crate::runtime_abi::OBJECT_META_SPILL_OFFSET.to_string();
     let array_header = crate::runtime_abi::ARRAY_HEADER_SIZE.to_string();
     let index_mask = crate::runtime_abi::METHOD_SITE_INDEX_MASK.to_string();
+    let constfn_bit = crate::runtime_abi::METHOD_SITE_CONSTFN.to_string();
     let entry_size = crate::runtime_abi::METHOD_SITE_ENTRY_SIZE;
     let header = crate::target_layout::object_header_size_bytes(ctx.target_triple) as i64;
     // `ClosureHeader` (64-bit only here): the info pointer, and the GcHeader
@@ -112,6 +113,7 @@ pub(crate) fn emit_method_site(
     let kind_idx = ctx.new_block("msite.kind");
     let own_idx = ctx.new_block("msite.own");
     let own_fn_idx = ctx.new_block("msite.own_fn");
+    let constfn_idx = ctx.new_block("msite.constfn");
     let value_idx = ctx.new_block("msite.value");
     let inh_idx = ctx.new_block("msite.inherited");
     let inh_value_idx = ctx.new_block("msite.inherited_value");
@@ -122,6 +124,7 @@ pub(crate) fn emit_method_site(
     let kind_l = ctx.block_label(kind_idx);
     let own_l = ctx.block_label(own_idx);
     let own_fn_l = ctx.block_label(own_fn_idx);
+    let constfn_l = ctx.block_label(constfn_idx);
     let value_l = ctx.block_label(value_idx);
     let inh_l = ctx.block_label(inh_idx);
     let inh_value_l = ctx.block_label(inh_value_idx);
@@ -209,8 +212,8 @@ pub(crate) fn emit_method_site(
             ctx.current_block = idx;
         }
     }
-    // kind: an own inline slot (top two bits clear), else inherited (bit 63)
-    // or an own spill slot (bit 62).
+    // kind: an own inline slot when bits 59..63 are clear; otherwise route
+    // inherited, spill, function-bag and ConstFn tags explicitly.
     ctx.current_block = kind_idx;
     let entry = {
         let incoming: Vec<(&str, &str)> = found
@@ -222,6 +225,7 @@ pub(crate) fn emit_method_site(
     let other_idx = ctx.new_block("msite.other");
     let other2_idx = ctx.new_block("msite.other2");
     let other3_idx = ctx.new_block("msite.other3");
+    let other4_idx = ctx.new_block("msite.other4");
     let bag_idx = ctx.new_block("msite.fn_bag");
     let bag2_idx = ctx.new_block("msite.fn_bag_load");
     let spill_idx = ctx.new_block("msite.spill");
@@ -231,6 +235,7 @@ pub(crate) fn emit_method_site(
     let other_l = ctx.block_label(other_idx);
     let other2_l = ctx.block_label(other2_idx);
     let other3_l = ctx.block_label(other3_idx);
+    let other4_l = ctx.block_label(other4_idx);
     let bag_l = ctx.block_label(bag_idx);
     let bag2_l = ctx.block_label(bag2_idx);
     let spill_l = ctx.block_label(spill_idx);
@@ -241,13 +246,13 @@ pub(crate) fn emit_method_site(
         let blk = ctx.block();
         let sp = blk.gep(crate::types::I8, &entry, &[(I64, &abi_slot)]);
         let s = blk.load(I64, &sp);
-        let top = blk.lshr(I64, &s, "61");
+        let top = blk.lshr(I64, &s, "59");
         let tagged = blk.icmp_ne(I64, &top, "0");
         blk.cond_br(&tagged, &other_l, &own_l);
         s
     };
-    // other: inherited (bit 63), own spill (bit 62) or function bag (bit 61);
-    // any other kind bit is not one this site knows, and misses.
+    // other: inherited (bit 63), own spill (bit 62), function bag (bit 61)
+    // or ConstFn (bit 59). Bit 60 is reserved; unknown tags miss.
     ctx.current_block = other_idx;
     {
         let blk = ctx.block();
@@ -268,7 +273,16 @@ pub(crate) fn emit_method_site(
         let blk = ctx.block();
         let bag_bit = blk.lshr(I64, &slot, "61");
         let is_bag = blk.icmp_ne(I64, &bag_bit, "0");
-        blk.cond_br(&is_bag, &bag_l, &miss_l);
+        blk.cond_br(&is_bag, &bag_l, &other4_l);
+    }
+    ctx.current_block = other4_idx;
+    {
+        let blk = ctx.block();
+        // Admit exactly bit 59. Bit 60 is reserved and must never turn an
+        // unknown tagged entry into an unchecked ConstFn call.
+        let tag = blk.lshr(I64, &slot, "59");
+        let is_constfn = blk.icmp_eq(I64, &tag, "1");
+        blk.cond_br(&is_constfn, &own_l, &miss_l);
     }
     // function bag: the receiver's own-property object, then its inline slot.
     // The keyed Function ShapeId the word matched is canonical per that
@@ -298,11 +312,28 @@ pub(crate) fn emit_method_site(
     let (inline_v, inline_end) = {
         let blk = ctx.block();
         let base = emit_field_ptr(blk, &biased, header);
-        let vp = blk.gep(I64, &base, &[(I64, &slot)]);
+        let own_index = blk.and(I64, &slot, &index_mask);
+        let vp = blk.gep(I64, &base, &[(I64, &own_index)]);
         let v = blk.load(I64, &vp);
         let end = blk.label.clone();
-        blk.br(&value_l);
+        let bit = blk.and(I64, &slot, &constfn_bit);
+        let is_constfn = blk.icmp_ne(I64, &bit, "0");
+        blk.cond_br(&is_constfn, &constfn_l, &value_l);
         (v, end)
+    };
+    // ConstFn: the shape compare proves the current slot is a closure of this
+    // body's info. Load that closure for its captures; no heap-kind or info
+    // load occurs on this hit path.
+    ctx.current_block = constfn_idx;
+    let (constfn_handle, constfn_func, constfn_end) = {
+        let blk = ctx.block();
+        let ub = blk.sub(I64, &inline_v, &(RECEIVER_BIAS as i64).to_string());
+        let h = emit_handle(blk, &ub);
+        let fp = blk.gep(crate::types::I8, &entry, &[(I64, &abi_code)]);
+        let f = blk.load(I64, &fp);
+        let end = blk.label.clone();
+        blk.br(&call_l);
+        (h, f, end)
     };
     // own spill: meta -> spill buffer -> element, bounds-checked.
     ctx.current_block = spill_idx;
@@ -390,7 +421,7 @@ pub(crate) fn emit_method_site(
         u
     };
     ctx.current_block = own_fn_idx;
-    let (own_handle, own_func, _own_end) = {
+    let (own_handle, own_func, own_end) = {
         let blk = ctx.block();
         let kp = emit_field_ptr(blk, &own_ub, kind_offset);
         let kind = blk.load(crate::types::I16, &kp);
@@ -443,7 +474,14 @@ pub(crate) fn emit_method_site(
     };
     // call: the body directly, with the receiver as its `this` parameter.
     ctx.current_block = call_idx;
-    let fptr = ctx.block().inttoptr(I64, &own_func);
+    let handle = ctx.block().phi(
+        I64,
+        &[(&own_handle, &own_end), (&constfn_handle, &constfn_end)],
+    );
+    let func = ctx
+        .block()
+        .phi(I64, &[(&own_func, &own_end), (&constfn_func, &constfn_end)]);
+    let fptr = ctx.block().inttoptr(I64, &func);
     let mut call_args: Vec<String> = lowered_args.to_vec();
     // Pad with `undefined` up to the arity the prime admits, so a body that
     // declares a few more parameters than this call passes is entered
@@ -457,7 +495,7 @@ pub(crate) fn emit_method_site(
     let hit_value = crate::expr::body_call::emit_js_body_call(
         ctx.block(),
         crate::expr::body_call::JsBody::Pointer(&fptr),
-        &own_handle,
+        &handle,
         &recv_bits,
         &call_args,
     );

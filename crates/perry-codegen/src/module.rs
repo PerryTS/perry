@@ -323,12 +323,16 @@ impl LlModule {
         note(self.fn_infos.borrow_mut().facts_mut(body));
     }
 
+    pub(crate) fn request_static_seed_body(&mut self, body: &str) {
+        self.fn_infos.borrow_mut().request_static_seed_body(body);
+    }
+
     /// Emit the module's `JsFunctionInfo` globals (`crate::fn_info`): one
     /// definition per body this module defines that is allocated here, has
     /// recorded facts, or is an external-linkage value wrapper another module
     /// may allocate; an `external` declaration for every allocated body
     /// another module defines. Runs once, after every function exists.
-    pub(crate) fn emit_fn_infos(&mut self) {
+    pub(crate) fn emit_fn_infos(&mut self, permanent_image: bool) {
         let lines = {
             let functions = &self.functions;
             let by_name: std::collections::HashMap<&str, &LlFunction> =
@@ -348,6 +352,7 @@ impl LlModule {
                     })
                 },
                 exported,
+                permanent_image,
             )
         };
         self.globals.extend(lines);

@@ -26,8 +26,9 @@
 //! immutable; in-place append (`s += x`) is only taken on values codegen
 //! proves uniquely owned, which a handle read back from a table never is.
 //!
-//! Like module-global roots, a table is process-global while `GLOBAL_ROOTS`
-//! is per-thread; compiled module code runs on the thread that registers it.
+//! Codegen emits tables in TLS when the program can start workers. Each
+//! agent fills its own cells and registers their addresses with its own
+//! `GLOBAL_ROOTS`; retiring one worker cannot publish its heap to another.
 
 use super::concat::js_string_concat_value_box;
 use crate::string::StringHeader;
@@ -68,8 +69,9 @@ fn concat_site_slot(value: f64) -> Option<usize> {
 ///
 /// # Safety
 /// `table` must point at `CONCAT_SITE_SLOTS` writable `u64` words that live
-/// for the rest of the process — codegen emits a private global for each
-/// site, and a filled slot's address is handed to the GC as a root.
+/// for the current agent's lifetime — codegen emits a private TLS global
+/// for each site in worker programs (a private global for single-agent
+/// programs), and a filled slot's address is handed to that agent's GC.
 #[no_mangle]
 pub extern "C" fn js_string_concat_site_value(
     table: *mut u64,

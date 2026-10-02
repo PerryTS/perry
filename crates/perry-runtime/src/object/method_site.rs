@@ -100,6 +100,8 @@ pub const METHOD_SITE_SPILL: u64 = 1 << 62;
 /// (`ClosureHeader::props`, `closure/props.rs`). A keyed Function ShapeId is
 /// canonical per that object's key list, so the receiver word pins the slot.
 pub const METHOD_SITE_FUNCTION_BAG: u64 = crate::codegen_abi::METHOD_SITE_FUNCTION_BAG;
+/// An own inline method whose ShapeId owns the body's identity.
+pub const METHOD_SITE_CONSTFN: u64 = crate::codegen_abi::METHOD_SITE_CONSTFN;
 /// The index bits of an entry's `slot` word.
 pub const METHOD_SITE_INDEX_MASK: u64 = crate::codegen_abi::METHOD_SITE_INDEX_MASK;
 
@@ -110,7 +112,8 @@ pub const METHOD_SITE_INDEX_MASK: u64 = crate::codegen_abi::METHOD_SITE_INDEX_MA
 pub struct MethodEntry {
     /// The receiver's `(class_id | ShapeId << 32)` word.
     pub word: u64,
-    /// Own entry: the inline slot. Inherited entry: [`METHOD_SITE_INHERITED`].
+    /// Own entry: the inline slot, optionally tagged as ConstFn. Inherited
+    /// entry: [`METHOD_SITE_INHERITED`] plus the direct holder's slot index.
     pub slot: u64,
     /// The method body's `JsFunctionInfo` (the identity an own hit compares
     /// the slot closure's info word with).
@@ -272,6 +275,7 @@ per_test_global! {
     static HOLDER_REWRITES: AtomicU64 = AtomicU64::new(0);
     static MISSES: AtomicU64 = AtomicU64::new(0);
     static PRIMES_FUNCTION: AtomicU64 = AtomicU64::new(0);
+    static PRIMES_CONSTFN: AtomicU64 = AtomicU64::new(0);
 }
 
 /// Function-bag entries primed ([`METHOD_SITE_FUNCTION_BAG`]).
@@ -289,7 +293,7 @@ pub fn method_site_stats() -> (u64, u64, u64) {
 }
 
 /// `js_method_site_stats(which)`: 0 own primes, 1 inherited primes, 2 misses,
-/// 3 function-bag primes.
+/// 3 function-bag primes, 4 ConstFn own primes.
 /// Exposed so gap tests can prove a path ran.
 #[no_mangle]
 pub extern "C" fn js_method_site_stats(which: i32) -> f64 {
@@ -298,6 +302,7 @@ pub extern "C" fn js_method_site_stats(which: i32) -> f64 {
         0 => a,
         1 => b,
         3 => method_site_function_primes(),
+        4 => PRIMES_CONSTFN.load(Ordering::Relaxed),
         _ => c,
     }) as f64
 }
@@ -322,8 +327,9 @@ fn stats_report_enabled() -> bool {
                 let (ap, ah) = read_holder::read_accessor_stats();
                 let (cp, ch, cr) = read_holder::class_read_stats();
                 eprintln!(
-                    "[method-site] primes_own={a} primes_inherited={b} primes_function={} holder_rewrites={} misses={c} read_holder_primes={hd} read_absent_primes={ha} read_accessor_primes={ap} read_accessor_hits={ah} read_accessor_class_primes={} class_read_primes={cp} class_read_hits={ch} class_read_root_rewrites={cr} read_holder_rewrites={} read_accessor_rewrites={} read_accessor_same_shape_relinks={} read_holder_refused={hr}{refused}",
+                    "[method-site] primes_own={a} primes_inherited={b} primes_function={} primes_constfn={} holder_rewrites={} misses={c} read_holder_primes={hd} read_absent_primes={ha} read_accessor_primes={ap} read_accessor_hits={ah} read_accessor_class_primes={} class_read_primes={cp} class_read_hits={ch} class_read_root_rewrites={cr} read_holder_rewrites={} read_accessor_rewrites={} read_accessor_same_shape_relinks={} read_holder_refused={hr}{refused}",
                     method_site_function_primes(),
+                    PRIMES_CONSTFN.load(Ordering::Relaxed),
                     HOLDER_REWRITES.load(Ordering::Relaxed),
                     read_holder::read_accessor_class_primes(),
                     read_holder::read_holder_rewrites(),
@@ -625,6 +631,27 @@ unsafe fn prime(slot: *mut MethodSiteSlot, recv: f64, name: &[u8], argc: usize) 
             refuse(13);
             return;
         }
+        let slot_word = if s < crate::object::field_rep::REP_SLOTS
+            && shape.special_constfn_mask & (1 << s) != 0
+        {
+            // The shape, not this closure object, owns the body fact. A
+            // freshly allocated factory closure may have different captures;
+            // the hit must still load that receiver's current slot.
+            let body = shape
+                .constfn_infos()
+                .iter()
+                .find(|entry| u32::from(entry.slot) == s)
+                .map(|entry| entry.info);
+            if body != Some(info as *const crate::closure::JsFunctionInfo as u64)
+                || slot_word & METHOD_SITE_SPILL != 0
+            {
+                refuse(17);
+                return;
+            }
+            slot_word | METHOD_SITE_CONSTFN
+        } else {
+            slot_word
+        };
         let entry = MethodEntry {
             word,
             slot: slot_word,
@@ -635,6 +662,9 @@ unsafe fn prime(slot: *mut MethodSiteSlot, recv: f64, name: &[u8], argc: usize) 
         };
         if publish(slot, entry) {
             PRIMES_OWN.fetch_add(1, Ordering::Relaxed);
+            if slot_word & METHOD_SITE_CONSTFN != 0 {
+                PRIMES_CONSTFN.fetch_add(1, Ordering::Relaxed);
+            }
         }
         return;
     }
@@ -1038,6 +1068,153 @@ pub(crate) fn scan_method_site_roots_mut(visitor: &mut crate::gc::RuntimeRootVis
                     if visitor.visit_tagged_usize_slot(&mut e.closure, crate::value::POINTER_TAG) {
                         HOLDER_REWRITES.fetch_add(1, Ordering::Relaxed);
                     }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod constfn_tests {
+    use super::*;
+
+    extern "C" fn method(
+        _closure: *const crate::closure::ClosureHeader,
+        _this: crate::closure::JsThis,
+    ) -> f64 {
+        7.0
+    }
+
+    unsafe fn one_method(info: *const crate::closure::JsFunctionInfo) -> (*mut ObjectHeader, u32) {
+        let closure = crate::closure::js_closure_alloc(info, 0);
+        let obj = crate::object::js_object_alloc(0, 4);
+        let key = b"constfn_site_method";
+        let name = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+        crate::object::js_object_set_field_by_name(
+            obj,
+            name,
+            crate::value::js_nanbox_pointer(closure as i64),
+        );
+        (obj, super::super::shapes::object_shape_stamp(obj))
+    }
+
+    unsafe fn primed_slot(obj: *mut ObjectHeader) -> u64 {
+        let mut slot: MethodSiteSlot = std::ptr::null_mut();
+        prime(
+            &mut slot,
+            crate::value::js_nanbox_pointer(obj as i64),
+            b"constfn_site_method",
+            0,
+        );
+        assert!(!slot.is_null(), "eligible method site must prime");
+        let word = std::ptr::read(obj as *const u64);
+        (*slot)
+            .entries
+            .iter()
+            .find(|entry| entry.word == word)
+            .expect("site entry for receiver shape")
+            .slot
+    }
+
+    #[test]
+    fn constfn_site_uses_shape_body_fact_only_for_permanent_images() {
+        if !run_with_fresh_worker_gate(
+            "constfn_site_uses_shape_body_fact_only_for_permanent_images",
+        ) {
+            return;
+        }
+        let _lock = crate::gc::global_side_table_test_lock();
+        unsafe {
+            let _no_move = crate::gc::GcSuppressScope::new();
+            let permanent =
+                crate::fn_info!(method, 0; with_flags(crate::codegen_abi::FN_PERMANENT_IMAGE));
+            let (object, id) = one_method(permanent);
+            let d = super::super::shapes::shape_descriptor_by_id(id).expect("shape");
+            assert_eq!(d.special_constfn_mask, 1);
+            assert_eq!(primed_slot(object), METHOD_SITE_CONSTFN);
+
+            // An unloadable image has no ConstFn shape fact. It may still use
+            // the existing guarded own-method entry, which validates the
+            // closure's kind and body info on every hit.
+            let transient = crate::fn_info!(method, 0);
+            let (object, id) = one_method(transient);
+            let d = super::super::shapes::shape_descriptor_by_id(id).expect("shape");
+            assert_eq!(d.special_constfn_mask, 0);
+            assert_eq!(primed_slot(object), 0);
+        }
+    }
+
+    #[test]
+    fn constfn_static_captured_this_arrow_primes_and_rebinding_closure_refuses() {
+        if !run_with_fresh_worker_gate(
+            "constfn_static_captured_this_arrow_primes_and_rebinding_closure_refuses",
+        ) {
+            return;
+        }
+        let _lock = crate::gc::global_side_table_test_lock();
+        unsafe {
+            let _no_gc = crate::gc::GcSuppressScope::new();
+            let arrow = crate::fn_info!(method, 0; with_flags(
+                crate::codegen_abi::FN_PERMANENT_IMAGE | crate::closure::FN_ARROW
+            ));
+            let rebinding =
+                crate::fn_info!(method, 0; with_flags(crate::codegen_abi::FN_PERMANENT_IMAGE));
+            let packed = b"constfn_site_method\0";
+            let keys =
+                super::super::static_shapes::canonical_keys_for_names(&[b"constfn_site_method"]);
+            for (info, admitted) in [(arrow, true), (rebinding, false)] {
+                let obj = crate::object::alloc_plain::alloc_plain_record_inline_keys_stamped(
+                    1,
+                    keys.arr() as *mut _,
+                    0,
+                );
+                let base = super::super::shapes::object_shape_stamp(obj);
+                let birth = super::super::shapes::shape_descriptor_by_id(base).unwrap();
+                assert_eq!(
+                    birth.object_kind,
+                    super::super::shapes::ShapeObjectKind::Ordinary
+                );
+                assert_eq!(birth.special_constfn_mask, 0, "allocation must stay Any");
+                let c =
+                    crate::closure::js_closure_alloc(info, crate::closure::CAPTURES_THIS_FLAG | 1);
+                crate::closure::js_closure_set_capture_bits(
+                    c,
+                    0,
+                    crate::JSValue::object_ptr(obj.cast()).bits(),
+                );
+                crate::object::store_object_field_slot(
+                    obj,
+                    0,
+                    crate::JSValue::object_ptr(c.cast()).bits(),
+                );
+                let entries = [super::super::static_shapes::ConstFnStaticEntry { slot: 0, info }];
+                let finalized = super::super::static_shapes::js_object_finalize_constfn_static(
+                    obj as usize as u64,
+                    0,
+                    packed.as_ptr(),
+                    packed.len() as u32,
+                    1,
+                    1,
+                    0,
+                    super::super::field_rep::REP_SPECIAL,
+                    entries.as_ptr(),
+                    1,
+                ) as usize as *mut ObjectHeader;
+                let id = super::super::shapes::object_shape_stamp(finalized);
+                let d = super::super::shapes::shape_descriptor_by_id(id).unwrap();
+                assert_eq!(d.special_constfn_mask != 0, admitted);
+                if admitted {
+                    assert_ne!(base, id, "ordinary allocation must finalize after stores");
+                    assert!(super::super::field_rep_store::final_shape_matches_birth(
+                        id, base
+                    ));
+                    assert_eq!(primed_slot(finalized), METHOD_SITE_CONSTFN);
+                    assert_eq!(
+                        crate::closure::js_closure_get_capture_bits(c, 0),
+                        crate::JSValue::object_ptr(finalized.cast()).bits()
+                    );
+                } else {
+                    assert_eq!(id, base, "captured-this rebinding remains excluded");
                 }
             }
         }

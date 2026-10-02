@@ -166,21 +166,33 @@ pub(super) fn alloc_class_inline_keys_stamped_impl(
 }
 
 /// A class keys global's keys, with the count its module-init ShapeId names.
-/// A worker agent may not have installed that id yet, and an id that names a
-/// different array is not this global's; both fall back to the array itself,
-/// which module init built exact. So does an id whose count the array no
-/// longer holds: the id's facts diverged from the global beside it, and a
-/// count past the array's initialized slots would name keys that are not
-/// there. The fallback's count then differs from the id's, so the stamp
-/// declines it and publishes an exact descriptor.
+/// A worker installs that id with its own canonical backing, so a global
+/// owned by the spawning arena must resolve through the worker's descriptor.
+/// A different LOCAL array still takes the exact-array fallback: its facts
+/// can diverge from the id beside it, so the birth stamp must validate them.
 #[inline]
 fn preinstalled_class_keys(
     keys_array: *mut ArrayHeader,
     shape_id: u32,
 ) -> crate::object::ObjectKeys {
-    // SAFETY: a module keys global is a live keys array (or null).
+    let descriptor = crate::object::shapes::shape_descriptor_by_id(shape_id);
+    if let Some(descriptor) = descriptor {
+        if descriptor.keys != keys_array as u64
+            && !keys_array.is_null()
+            // The global can belong to the spawning arena. Check ownership
+            // before reading its header; the ShapeId already names this
+            // agent's canonical keys, copied by install_worker_shape_seed.
+            && unsafe {
+                crate::value::addr_class::try_read_tracked_gc_header(keys_array as usize)
+            }
+            .is_none()
+        {
+            return descriptor.keys_view();
+        }
+    }
+    // SAFETY: a local module keys global is a live keys array (or null).
     let owned = unsafe { crate::object::ObjectKeys::owned(keys_array) };
-    match crate::object::shapes::shape_descriptor_by_id(shape_id) {
+    match descriptor {
         Some(descriptor)
             if descriptor.keys == keys_array as u64
                 && descriptor.logical_key_count <= owned.count() =>

@@ -505,3 +505,45 @@ pub(crate) fn ensure_class_shape_slot(
         .insert(class_name.to_string(), slot.clone());
     slot
 }
+
+/// One receiver shape load admits ordinary construction and compatible completed
+/// facts. Each extra static final id adds one comparison and OR, no heap load.
+pub(crate) fn emit_compatible_shape_eq(
+    blk: &mut crate::block::LlBlock,
+    actual: &str,
+    expected: &str,
+    written_slots: &[u32],
+) -> String {
+    use crate::types::{I1, I32};
+    let mut ok = blk.icmp_eq(I32, actual, expected);
+    for id in crate::codegen::compatible_final_shape_ids(expected, written_slots) {
+        let compatible = blk.icmp_eq(I32, actual, &id.to_string());
+        ok = blk.or(I1, &ok, &compatible);
+    }
+    ok
+}
+
+/// Packed (class, shape) form of the same guard. A final shape preserves the
+/// allocation's numeric facts; class identity still licenses raw field access.
+pub(crate) fn emit_compatible_class_shape_eq(
+    blk: &mut crate::block::LlBlock,
+    actual: &str,
+    class_id: &str,
+    expected_shape: &str,
+    expected_packed: &str,
+    written_slots: &[u32],
+) -> String {
+    use crate::types::{I1, I32, I64};
+    let mut ok = blk.icmp_eq(I64, actual, expected_packed);
+    for id in crate::codegen::compatible_final_shape_ids(expected_shape, written_slots) {
+        let packed = if let Ok(cid) = class_id.parse::<u32>() {
+            ((u64::from(id) << 32) | u64::from(cid)).to_string()
+        } else {
+            let class_bits = blk.zext(I32, class_id, I64);
+            blk.or(I64, &class_bits, &(u64::from(id) << 32).to_string())
+        };
+        let compatible = blk.icmp_eq(I64, actual, &packed);
+        ok = blk.or(I1, &ok, &compatible);
+    }
+    ok
+}

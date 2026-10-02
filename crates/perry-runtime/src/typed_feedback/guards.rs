@@ -244,8 +244,9 @@ fn descriptor_blocks_class_field_get(obj_addr: usize, class_id: u32, key_name: &
 /// the receiver carries `expected_shape_id` and that `field_index` is in bounds.
 ///
 /// The shape is the authority (charter step 5): a receiver stamped with
-/// `expected_shape_id` holds a raw double in every slot whose lane in that
-/// shape is not `Any`, and a store that would break that generalizes the lane
+/// `expected_shape_id` holds a raw double only in an `F64` (or deprecated
+/// `F64`) lane; SPECIAL ConstFn lanes are pointer-bearing. A store that would
+/// break an F64 lane generalizes it
 /// and restamps the receiver first. So "slot K is raw-f64" is the lane of the
 /// expected shape at K; nothing per object is consulted.
 #[inline]
@@ -255,7 +256,7 @@ fn class_field_raw_f64_layout_contract(
     require_raw_f64: bool,
 ) -> bool {
     !require_raw_f64
-        || !crate::object::field_rep_store::shape_slot_is_any(expected_shape_id, field_index)
+        || crate::object::field_rep_store::shape_slot_is_f64(expected_shape_id, field_index)
 }
 
 fn class_field_get_contract(
@@ -301,7 +302,10 @@ fn class_field_get_contract(
         let keys = descriptor.keys as usize as *const ArrayHeader;
         let valid = crate::object::object_is_regular(obj)
             && class_id == expected_class_id
-            && shape_id == expected_shape_id
+            && crate::object::field_rep_store::final_shape_matches_birth(
+                shape_id,
+                expected_shape_id,
+            )
             && expected_field_index < descriptor.live_inline_slot_count
             && expected_field_index < descriptor.logical_key_count
             && plain_array_index_guard(keys, expected_field_index, true)
@@ -344,16 +348,13 @@ fn class_field_fast_contract(
         let obj = object_addr as *const ObjectHeader;
         let descriptor = crate::object::shapes::object_shape_descriptor(obj);
         let shape_id = crate::object::shapes::object_shape_stamp(obj);
-        // The ShapeId compare is the whole proof, the lane included: the
-        // expected id is the class's birth shape, whose rep is part of its
-        // identity, so a receiver that carries it carries its lanes. A lane
-        // that is not `Any` there sends the store through the checked
-        // funnel (charter step 5).
+        // Birth or a compatible completed shape proves the offsets and
+        // numeric lanes. The setter separately requires the live boxed lane
+        // to be Any before skipping the checked store funnel.
         let shape_ok = (*obj).class_id == expected_class_id
-            && shape_id == expected_shape_id
-            && crate::object::field_rep_store::shape_slot_is_any(
+            && crate::object::field_rep_store::final_shape_matches_birth(
+                shape_id,
                 expected_shape_id,
-                expected_field_index,
             )
             && descriptor.is_some_and(|facts| {
                 facts.object_kind.is_ordinary_layout()
@@ -444,6 +445,13 @@ fn class_field_set_fast_contract(
         return false;
     }
     unsafe {
+        let live_shape =
+            crate::object::shapes::object_shape_stamp(object_addr as *const ObjectHeader);
+        if !require_raw_f64
+            && !crate::object::field_rep_store::shape_slot_is_any(live_shape, expected_field_index)
+        {
+            return false;
+        }
         let Some(gc_header) = gc_header_for_user_addr(object_addr) else {
             return false;
         };

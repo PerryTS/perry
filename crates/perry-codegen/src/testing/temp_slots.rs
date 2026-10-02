@@ -477,6 +477,10 @@ pub fn temp_root_slots(fn_ir: &str) -> Vec<String> {
     let defs = defs(fn_ir);
     let undefined = undefined_literal();
     let seeded = zero_seeded_slots(fn_ir);
+    let entry_end = fn_ir
+        .lines()
+        .position(|line| line.trim().starts_with("br ") || line.trim().starts_with("ret "))
+        .unwrap_or(usize::MAX);
     let class_key_loads: Vec<&str> = defs
         .iter()
         .filter_map(|(&reg, def)| {
@@ -503,11 +507,14 @@ pub fn temp_root_slots(fn_ir: &str) -> Vec<String> {
         .filter(|(_, events)| events.iter().any(|e| matches!(e, SlotEvent::Store { .. })))
         .filter(|(_, events)| {
             !events.iter().any(|e| match e {
-                SlotEvent::Store { value, .. } => {
-                    value == &undefined
-                        || defs.get(value.as_str()).is_some_and(|def| {
-                            def.starts_with("bitcast double ") && def.contains(&undefined)
-                        })
+                // A scoped temp may legitimately hold undefined later.
+                // Only the named slot's hoisted entry seed distinguishes it.
+                SlotEvent::Store { value, line } => {
+                    *line < entry_end
+                        && (value == &undefined
+                            || defs.get(value.as_str()).is_some_and(|def| {
+                                def.starts_with("bitcast double ") && def.contains(&undefined)
+                            }))
                 }
                 _ => false,
             })

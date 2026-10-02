@@ -48,6 +48,7 @@ fn first_unsupported_transfer_type_finds_nested_markers() {
     assert_eq!(first_unsupported_transfer_type(&arr), Some("Set"));
     // Inside an object field, nested in an array.
     let obj = SerializedValue::Object {
+        final_constfn: None,
         class_id: 0,
         parent_class_id: 0,
         fields: vec![
@@ -72,6 +73,7 @@ fn transferable_trees_report_no_unsupported() {
         SerializedValue::Inline(0x4045_0000_0000_0000), // a plain f64
         SerializedValue::String(b"ok".to_vec()),
         SerializedValue::Object {
+            final_constfn: None,
             class_id: 3,
             parent_class_id: 0,
             fields: vec![

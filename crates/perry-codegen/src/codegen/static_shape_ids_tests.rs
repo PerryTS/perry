@@ -8,6 +8,7 @@ fn class(keys: &str, count: u32, cid: u32) -> BirthShape {
         proto: BirthProto::Class(cid),
         typed: None,
         rep: 0,
+        constfn: Vec::new(),
     }
 }
 
@@ -277,6 +278,61 @@ fn an_f64_birth_rep_is_content_and_a_stub_never_adopts_it() {
     assert!(lit.is_seedable());
 }
 
+#[test]
+fn constfn_body_symbols_are_seedable_final_static_content() {
+    let body = |symbol: &str| BirthShape {
+        proto: BirthProto::Literal,
+        rep: 0b11,
+        constfn: vec![ConstFnBirth {
+            slot: 0,
+            symbol: symbol.to_string(),
+        }],
+        ..class("method\0", 1, 0)
+    };
+    let first = body("perry_closure_m__first$info");
+    let second = body("perry_closure_m__second$info");
+    assert_ne!(first.content_hash(), second.content_hash());
+    assert_ne!(first.structure(), second.structure());
+    assert!(
+        first.is_seedable(),
+        "final literal shapes have a body-aware seed"
+    );
+    let line = encode_static_seed(0x1000_0099, &first);
+    assert_eq!(decode_static_seed(&line), Some((0x1000_0099, first)));
+    assert_eq!(decode_static_seed("268435609 1 1 6d6574686f6400 0x3"), None);
+    assert_eq!(
+        decode_static_seed("268435609 1 1 6d6574686f6400 0x0 0@61"),
+        None
+    );
+    assert_eq!(
+        decode_static_seed("268435609 1 1 6d6574686f6400 0x3 0@61,0@62"),
+        None
+    );
+}
+
+#[test]
+fn constfn_birth_cannot_publish_a_static_guard_or_seed() {
+    let shape = BirthShape {
+        proto: BirthProto::Literal,
+        rep: 0b11,
+        constfn: vec![ConstFnBirth {
+            slot: 0,
+            symbol: "perry_closure_m__method$info".to_string(),
+        }],
+        ..class("method\0", 1, 0)
+    };
+    let key = "perry_class_keys_m__method";
+    MODULE_STATIC_IDS.with(|m| {
+        m.borrow_mut().insert(key.to_string(), (0x1000_0099, shape));
+    });
+    MODULE_SEEDS.with(|s| s.borrow_mut().clear());
+    assert_eq!(static_shape_id_for_keys_global(key), None);
+    assert_eq!(requested_shape_id_for_keys_global(key), None);
+    assert_eq!(static_region_slots(key, &["method".into()], 0), None);
+    assert!(take_module_static_seeds().is_empty());
+    MODULE_STATIC_IDS.with(|m| m.borrow_mut().clear());
+}
+
 /// The seed sidecar carries the birth rep: a warm link replays exactly the
 /// facts a cold one seeded. A line without the rep (another format) is
 /// malformed, never an all-`Any` seed of the same keys.
@@ -367,4 +423,140 @@ fn class_birth_names_anon_shapes_as_literals_and_skips_class_zero() {
     let o = class_birth(prefix, &orphan, &images, &HashMap::new(), &class_ids);
     assert_eq!(o.class_id, 0);
     assert!(o.shape.is_none());
+}
+
+#[test]
+fn compatible_final_guards_preserve_allocation_identity_and_refuse_special_writes() {
+    let ordinary = BirthShape {
+        rep: 1 << 2,
+        ..class("m\0x\0", 2, 71)
+    };
+    let completed = BirthShape {
+        rep: 3 | (1 << 2),
+        constfn: vec![ConstFnBirth {
+            slot: 0,
+            symbol: "guard_body$info".into(),
+        }],
+        ..ordinary.clone()
+    };
+    let wrong_number = BirthShape {
+        rep: 3,
+        ..completed.clone()
+    };
+    let key = "perry_class_keys_guard__C".to_string();
+    MODULE_STATIC_IDS.with(|m| {
+        *m.borrow_mut() = [(key.clone(), (SHAPE_ID_BASE + 4, ordinary.clone()))]
+            .into_iter()
+            .collect();
+    });
+    MODULE_FINAL_IDS.with(|m| {
+        *m.borrow_mut() = [
+            (completed, SHAPE_ID_BASE + 5),
+            (wrong_number, SHAPE_ID_BASE + 6),
+        ]
+        .into_iter()
+        .collect();
+    });
+    let (region_id, slots, r_mask) = static_region_slots(&key, &["x".into(), "m".into()], 0)
+        .expect("ordinary birth supplies exact numeric slots");
+    assert_eq!(region_id, SHAPE_ID_BASE + 4);
+    assert_eq!(slots, vec![1, 0]);
+    assert_eq!(r_mask, 1, "the method lane never supplies a Number fact");
+    assert!(static_region_slots(&key, &["x".into()], 1).is_none());
+    assert_eq!(
+        requested_shape_id_for_keys_global(&key),
+        Some(SHAPE_ID_BASE + 4),
+        "allocation supplier cannot request final id"
+    );
+    assert_eq!(
+        compatible_final_shape_ids(&(SHAPE_ID_BASE + 4).to_string(), &[]),
+        vec![SHAPE_ID_BASE + 5]
+    );
+    assert_eq!(
+        compatible_final_shape_ids(&(SHAPE_ID_BASE + 4).to_string(), &[1]),
+        vec![SHAPE_ID_BASE + 5],
+        "numeric stores preserve completed facts"
+    );
+    assert!(
+        compatible_final_shape_ids(&(SHAPE_ID_BASE + 4).to_string(), &[0]).is_empty(),
+        "CF stores require checked deprecation before writing"
+    );
+    assert!(slot_may_be_constfn(&key, 0));
+    assert!(!slot_may_be_constfn(&key, 1));
+    MODULE_STATIC_IDS.with(|m| m.borrow_mut().clear());
+    MODULE_FINAL_IDS.with(|m| m.borrow_mut().clear());
+    MODULE_SEEDS.with(|m| m.borrow_mut().clear());
+}
+
+#[test]
+fn region_static_r_is_the_exact_birth_shapes_f64_key_mask() {
+    let shape = BirthShape {
+        rep: 0b01 | (0b01 << 4),
+        ..class("ra\0rb\0rc\0", 3, 0x517)
+    };
+    let global = "p7_region_keys".to_string();
+    MODULE_STATIC_IDS.with(|m| {
+        m.borrow_mut()
+            .insert(global.clone(), (SHAPE_ID_BASE + 917, shape));
+    });
+    let keys = vec!["rc".to_string(), "rb".to_string(), "ra".to_string()];
+    let (_, slots, r) = static_region_slots(&global, &keys, 0).expect("birth keys are inline");
+    assert_eq!(slots, vec![2, 1, 0]);
+    assert_eq!(r, 0b101, "R follows key order, not birth slot order");
+    assert!(
+        static_region_slots(&global, &keys, 0b001).is_none(),
+        "a boxed store to an F64 birth lane is refused"
+    );
+    MODULE_STATIC_IDS.with(|m| {
+        m.borrow_mut().remove(&global);
+    });
+    take_module_static_seeds();
+}
+
+#[test]
+fn literal_key_cache_mints_require_a_seed_even_without_a_guard() {
+    let literal = BirthShape {
+        proto: BirthProto::Literal,
+        ..class("x\0m\0", 2, 7)
+    };
+    let declared = class("x\0m\0", 2, 8);
+    let assigned = assign_static_shape_ids([&literal, &declared]);
+    let entries = vec![
+        (
+            "perry_class_keys_probe____AnonShape_a".into(),
+            "x\0m\0".into(),
+            2,
+            vec![],
+            vec![],
+        ),
+        (
+            "perry_class_keys_probe__Declared".into(),
+            "x\0m\0".into(),
+            2,
+            vec![],
+            vec![],
+        ),
+    ];
+    let classes = HashMap::from([("__AnonShape_a".into(), 7), ("Declared".into(), 8)]);
+    set_module_static_ids(
+        "probe",
+        &entries,
+        &HashMap::new(),
+        &HashMap::new(),
+        &classes,
+        &assigned.clone().into_iter().collect::<Vec<_>>(),
+        &ProgramClassShapeIds::default(),
+    );
+    assert_eq!(
+        requested_shape_id_for_keys_global(&entries[0].0),
+        Some(assigned[&literal])
+    );
+    assert_eq!(
+        requested_shape_id_for_keys_global(&entries[1].0),
+        Some(assigned[&declared])
+    );
+    assert_eq!(
+        take_module_static_seeds(),
+        vec![(assigned[&literal], literal)]
+    );
 }

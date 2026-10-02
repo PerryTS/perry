@@ -715,7 +715,13 @@ pub(crate) fn set_field_by_name_object_tail(
             // any other receiver.
             // #10868 step 2.5 stage 1: same un-latch hazard as the read
             // path's field-cache stamp — this publishes an explicit keys edge.
-            if !crate::object::dictionary::is_dictionary(obj) {
+            if !crate::object::dictionary::is_dictionary(obj)
+                && !super::shapes::shape_descriptor_by_id(super::shapes::object_shape_stamp(obj))
+                    .is_some_and(|d| d.special_constfn_mask != 0)
+            {
+                // `publish_key_add_edge` already minted the exact ConstFn
+                // successor after writing the closure. The legacy redundant
+                // birth stamp would conservatively erase that body fact.
                 super::shapes::stamp_object_shape(obj, new_keys.arr(), 1, 1);
             }
             return;

@@ -351,7 +351,6 @@ pub(in crate::codegen) fn compile_static_method(
         array_length_snapshots: HashMap::new(),
         string_window_array_facts: Vec::new(),
         suppressed_cleared_shadow_slots: std::collections::HashSet::new(),
-        class_field_loop_facts: Vec::new(),
         region_loops: Vec::new(),
         region_loop_facts: Vec::new(),
         element_shape_loop_facts: Vec::new(),

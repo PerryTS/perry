@@ -26,7 +26,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::runtime_abi::{
     FN_ARROW, FN_ASYNC, FN_ASYNC_GENERATOR, FN_GENERATOR, FN_HAS_DECLARED, FN_HAS_LENGTH,
-    FN_REST_SYNTHETIC_ARGUMENTS, FN_REST_USER, FN_REST_USER_AND_ARGUMENTS, FN_STRICT,
+    FN_PERMANENT_IMAGE, FN_REST_SYNTHETIC_ARGUMENTS, FN_REST_USER, FN_REST_USER_AND_ARGUMENTS,
+    FN_STRICT,
 };
 
 /// The LLVM type of a `JsFunctionInfo`, field for field (perry-abi's
@@ -38,6 +39,11 @@ pub(crate) const INFO_TYPE: &str =
 /// The info symbol of `body` (no `@`).
 pub(crate) fn info_symbol(body: &str) -> String {
     format!("{body}$info")
+}
+
+/// Shared by closure lowering and the static final-shape pre-pass.
+pub(crate) fn closure_body_symbol(module_prefix: &str, func_id: u32) -> String {
+    format!("perry_closure_{module_prefix}__{func_id}")
 }
 
 /// A compiler-private direct-call clone of a body.
@@ -133,6 +139,8 @@ pub(crate) struct DefinedBody {
 pub(crate) struct FnInfoState {
     requested: BTreeSet<String>,
     facts: BTreeMap<String, FnInfoFacts>,
+    /// Bodies whose info address a separate static-seed object will name.
+    static_seed_bodies: BTreeSet<String>,
 }
 
 impl FnInfoState {
@@ -143,6 +151,15 @@ impl FnInfoState {
             self.requested.insert(body.to_string());
         }
         format!("@{}", info_symbol(body))
+    }
+
+    /// Reserve a stable body-info symbol for a future static seed unit.
+    /// This also requests the info definition. The body remains local; only
+    /// its info becomes linkable when the definer renders this module.
+    /// No birth collector calls this until the seed ABI has module-init parity.
+    pub(crate) fn request_static_seed_body(&mut self, body: &str) -> String {
+        self.static_seed_bodies.insert(body.to_string());
+        self.request(body)
     }
 
     /// The facts of a body this module defines.
@@ -159,6 +176,7 @@ impl FnInfoState {
         &self,
         defined: impl Fn(&str) -> Option<DefinedBody>,
         exported: impl IntoIterator<Item = String>,
+        permanent_image: bool,
     ) -> Vec<String> {
         let mut bodies: BTreeSet<&str> = self.requested.iter().map(String::as_str).collect();
         bodies.extend(self.facts.keys().map(String::as_str));
@@ -171,6 +189,8 @@ impl FnInfoState {
                     body,
                     &def,
                     self.facts.get(body).cloned().unwrap_or_default(),
+                    permanent_image,
+                    self.static_seed_bodies.contains(body),
                 )),
                 None if self.requested.contains(body) => out.push(format!(
                     "@{} = external constant {}",
@@ -186,10 +206,20 @@ impl FnInfoState {
     }
 }
 
-fn render_definition(body: &str, def: &DefinedBody, facts: FnInfoFacts) -> String {
-    let linkage = match def.linkage.as_str() {
-        "" => String::new(),
-        other => format!("{other} "),
+fn render_definition(
+    body: &str,
+    def: &DefinedBody,
+    facts: FnInfoFacts,
+    permanent_image: bool,
+    static_seed: bool,
+) -> String {
+    let linkage = if static_seed {
+        "hidden ".to_string()
+    } else {
+        match def.linkage.as_str() {
+            "" => String::new(),
+            other => format!("{other} "),
+        }
     };
     let clone = |target: &Option<CloneTarget>| match target {
         Some(t) => (format!("@{}", t.symbol), t.captures, t.boxed_mask),
@@ -205,7 +235,12 @@ fn render_definition(body: &str, def: &DefinedBody, facts: FnInfoFacts) -> Strin
         ty = INFO_TYPE,
         params = saturate_u16(def.params as u64),
         rest = facts.rest_fixed,
-        flags = facts.flags,
+        flags = facts.flags
+            | if permanent_image {
+                FN_PERMANENT_IMAGE
+            } else {
+                0
+            },
         length = facts.length,
         tcap = trusted_captures,
         tcode = trusted_code,
@@ -246,6 +281,7 @@ mod tests {
                     .flatten()
             },
             [],
+            false,
         );
         assert_eq!(
             lines,
@@ -258,10 +294,57 @@ mod tests {
     }
 
     #[test]
+    fn only_a_permanent_image_marks_defined_body_infos() {
+        let mut state = FnInfoState::default();
+        state.request("perry_closure_m__3");
+        let transient = state.render_globals(|_| defined(0, "internal"), [], false);
+        let permanent = state.render_globals(|_| defined(0, "internal"), [], true);
+        assert!(transient[0].contains("i32 0, i32 0"));
+        assert!(permanent[0].contains(&format!("i32 {FN_PERMANENT_IMAGE}, i32 0")));
+    }
+
+    #[test]
+    fn seed_info_has_linkable_stable_symbol_but_body_keeps_local_linkage() {
+        let mut state = FnInfoState::default();
+        let body = "perry_closure_m__3";
+        assert_eq!(
+            state.request_static_seed_body(body),
+            format!("@{}", info_symbol(body))
+        );
+        assert_eq!(
+            state.request_static_seed_body(body),
+            format!("@{}", info_symbol(body))
+        );
+        let lines = state.render_globals(|_| defined(0, "internal"), [], true);
+        assert_eq!(
+            lines.len(),
+            1,
+            "one body has one info despite fresh closures"
+        );
+        assert!(lines[0].starts_with(&format!("@{} = hidden constant", info_symbol(body))));
+        assert!(lines[0].contains(&format!("ptr @{body}")));
+        assert!(lines[0].contains(&format!("i32 {FN_PERMANENT_IMAGE}")));
+    }
+
+    #[test]
+    fn foreign_seed_info_is_only_declared_by_importer() {
+        let mut state = FnInfoState::default();
+        let body = "perry_closure_other__3";
+        state.request_static_seed_body(body);
+        assert_eq!(
+            state.render_globals(|_| None, [], true),
+            vec![format!(
+                "@{} = external constant {INFO_TYPE}",
+                info_symbol(body)
+            )]
+        );
+    }
+
+    #[test]
     fn a_foreign_body_is_declared_never_copied() {
         let mut state = FnInfoState::default();
         state.request("__perry_wrap_perry_fn_other__f");
-        let lines = state.render_globals(|_| None, []);
+        let lines = state.render_globals(|_| None, [], false);
         assert_eq!(
             lines,
             vec![format!(
@@ -280,6 +363,7 @@ mod tests {
                     .flatten()
             },
             ["__perry_wrap_perry_fn_m__g".to_string()],
+            false,
         );
         assert_eq!(lines.len(), 1);
         assert!(lines[0].starts_with(&format!(
@@ -296,7 +380,7 @@ mod tests {
             captures: 2,
             boxed_mask: 0b10,
         });
-        let lines = state.render_globals(|_| defined(0, "internal"), []);
+        let lines = state.render_globals(|_| defined(0, "internal"), [], false);
         assert!(
             lines[0].contains("i32 2, ptr @perry_closure_m__9$trusted_boxes, i64 2, ptr null"),
             "{}",

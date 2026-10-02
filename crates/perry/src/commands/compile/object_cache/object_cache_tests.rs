@@ -16,6 +16,7 @@ fn empty_opts() -> CompileOptions {
         target: Some("aarch64-apple-darwin".to_string()),
         is_entry_module: false,
         non_entry_module_prefixes: Vec::new(),
+        thread_literal_module_prefixes: Vec::new(),
         nextjs_path_init_modules: Vec::new(),
         import_function_prefixes: std::collections::HashMap::new(),
         import_function_ffi_aliases: std::collections::HashMap::new(),
@@ -767,6 +768,7 @@ fn key_changes_with_codegen_env_vars() {
         "PERRY_FULL_OUTLINE_IC",
         "PERRY_FULL_OUTLINE_IC_MIN_FUNCS",
         "PERRY_OUTLINE_METHOD_DISPATCH",
+        "PERRY_CONSTFN_SHAPE",
         "PERRY_INLINE_NEW",
         "PERRY_INLINE_CTOR",
         "PERRY_STRING_INIT_CHUNK_SIZE",
@@ -899,6 +901,7 @@ fn static_seeds_round_trip_and_an_entry_without_them_misses() {
             proto: perry_codegen::BirthProto::Literal,
             typed: None,
             rep: 0b0101,
+            constfn: Vec::new(),
         },
     );
     cache.store_static_seeds(key, &[line.as_str()]);
@@ -909,6 +912,39 @@ fn static_seeds_round_trip_and_an_entry_without_them_misses() {
         (id, shape.keys.as_slice(), shape.key_count, shape.rep),
         (0x1000_0042, &b"u\0v\0"[..], 2, 0b0101)
     );
+}
+
+/// A cache entry's stable body symbol must survive the cold write and warm
+/// read byte for byte. This does not publish a ConstFn seed: emission remains
+/// gated until the runtime's body-aware seed mint matches module init.
+#[test]
+fn constfn_body_sidecar_survives_a_warm_cache_hit_without_publishing_it() {
+    let dir = tempdir().unwrap();
+    let cache = ObjectCache::new(dir.path(), "test-target", true);
+    let key = 0x1165_3002;
+    let shape = perry_codegen::BirthShape {
+        keys: b"method\0".to_vec(),
+        key_count: 1,
+        live: 1,
+        proto: perry_codegen::BirthProto::Literal,
+        typed: None,
+        rep: 0b11,
+        constfn: vec![perry_codegen::ConstFnBirth {
+            slot: 0,
+            symbol: "perry_closure_m__method$info".to_string(),
+        }],
+    };
+    let line = perry_codegen::encode_static_seed(0x1000_0044, &shape);
+    cache.store_ffi_manifest(key, &[]);
+    cache.store_static_seeds(key, &[line.as_str()]);
+    cache.store(key, b"object bytes");
+    let (_, _, warm_lines) = cache.lookup_path_with_ffi(key).expect("warm hit");
+    assert_eq!(warm_lines, vec![line]);
+    assert_eq!(
+        perry_codegen::decode_static_seed(&warm_lines[0]),
+        Some((0x1000_0044, shape))
+    );
+    assert_eq!(perry_codegen::STATIC_SEED_FORMAT, "3");
 }
 
 /// #6439 regression: an object written by a pre-manifest perry has no
@@ -1229,5 +1265,34 @@ fn key_changes_with_defining_constructor_contract() {
     assert_ne!(
         resolved,
         compute_object_cache_key(&opts, 123, "same-version")
+    );
+}
+
+#[test]
+fn thread_literal_graph_owner_order_changes_stable_module_key() {
+    let mut a = empty_opts();
+    a.thread_literal_module_prefixes = vec!["entry_ts".into(), "helper_ts".into()];
+    let mut b = empty_opts();
+    b.thread_literal_module_prefixes = vec!["helper_ts".into(), "entry_ts".into()];
+    // Stable module HIR/entry role; only the graph callback's symbol owner moves.
+    assert_ne!(
+        compute_object_cache_key(&a, 1, "0.5.156"),
+        compute_object_cache_key(&b, 1, "0.5.156")
+    );
+}
+
+#[test]
+fn thread_literal_graph_membership_changes_stable_module_key() {
+    let mut a = empty_opts();
+    a.thread_literal_module_prefixes = vec!["entry_ts".into(), "helper_ts".into()];
+    let mut b = empty_opts();
+    b.thread_literal_module_prefixes = vec![
+        "entry_ts".into(),
+        "helper_ts".into(),
+        "new_deferred_ts".into(),
+    ];
+    assert_ne!(
+        compute_object_cache_key(&a, 1, "0.5.156"),
+        compute_object_cache_key(&b, 1, "0.5.156")
     );
 }

@@ -191,7 +191,18 @@ pub fn run(
     // Retain parsed ASTs for the lifetime of this build so large source-first
     // graphs do not reread and reparse every module during that pass.
     let mut parse_cache = ParseCache::with_capacity(usize::MAX);
-    run_with_parse_cache(args, Some(&mut parse_cache), format, use_color, verbose)
+    let result = run_with_parse_cache(args, Some(&mut parse_cache), format, use_color, verbose)?;
+    // Batch builds retain a parse cache too. Report their object-cache
+    // statistics here, as dev does for its separate long-lived parse cache.
+    if std::env::var("PERRY_DEV_VERBOSE").ok().as_deref() == Some("1") {
+        if let Some((hits, misses, _, _)) = result.codegen_cache_stats {
+            let total = hits + misses;
+            if total > 0 {
+                eprintln!("  • codegen cache: {hits}/{total} hit ({misses} miss)");
+            }
+        }
+    }
+    Ok(result)
 }
 
 #[cfg(test)]

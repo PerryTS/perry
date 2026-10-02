@@ -385,6 +385,34 @@ fn verify_gate_instance(
 /// The uniform floor, over EVERY instance of the stem's gates in `ir`.
 /// `Err` is the red verdict; every message names what broke.
 pub(super) fn verify_stem_ir(ir: &str, stem: &str, kind: StemKind) -> Result<(), String> {
+    // Block labels and SSA registers are unique only inside their function.
+    // A specialized copy may reuse every label and register of its original.
+    let functions: Vec<_> = function_bodies(ir)
+        .filter(|f| {
+            ["barrier.", "barrier.maybe.", "gc_bookkeeping."]
+                .iter()
+                .any(|suffix| !all_numbered_labels(f, &format!("{stem}.{suffix}")).is_empty())
+        })
+        .collect();
+    if functions.is_empty() {
+        return Err(format!("no `{stem}.barrier.<n>` block in the emitted IR"));
+    }
+    for function in functions {
+        verify_stem_function(function, stem, kind)
+            .map_err(|e| format!("{}: {e}", function.lines().next().unwrap_or("function")))?;
+    }
+    Ok(())
+}
+
+/// Function bodies include the header and stop at the closing brace. No
+/// lookup below may resolve a label or SSA definition in another function.
+fn function_bodies(ir: &str) -> impl Iterator<Item = &str> {
+    ir.split("\ndefine ")
+        .skip(1)
+        .map(|f| f.split_once("\n}").map_or(f, |(body, _)| body))
+}
+
+fn verify_stem_function(ir: &str, stem: &str, kind: StemKind) -> Result<(), String> {
     let barrier_labels = all_numbered_labels(ir, &format!("{stem}.barrier."));
     if barrier_labels.is_empty() {
         return Err(format!(
@@ -448,6 +476,10 @@ const VAL_ID: u32 = 22;
 /// runtime-key fallback, and `v: Any` is what puts the store on the live-test
 /// tier at all (same fixture reasoning as `index_set_barrier_tests::setter`).
 fn idxset_inbounds_ir() -> String {
+    idxset_inbounds_ir_for_target(None)
+}
+
+fn idxset_inbounds_ir_for_target(target: Option<&str>) -> String {
     let mut m = Module::new("idxset_inbounds_census.ts");
     m.functions = vec![Function {
         id: 1,
@@ -507,7 +539,9 @@ fn idxset_inbounds_ir() -> String {
         was_unrolled: false,
     }];
     m.init_kind = ModuleInitKind::Eager;
-    String::from_utf8(compile_module(&m, ir_opts()).expect("module compiles"))
+    let mut opts = ir_opts();
+    opts.target = target.map(str::to_string);
+    String::from_utf8(compile_module(&m, opts).expect("module compiles"))
         .expect("LLVM IR should be UTF-8")
 }
 
@@ -924,19 +958,21 @@ fn sabotage_hardwiring_the_gate_goes_red_for_every_stem() {
     for &(stem, kind) in VERIFIED_BARRIER_STEMS {
         let ir = probe_ir(stem);
         verify_stem_ir(&ir, stem, kind).expect("pristine IR must verify first");
-        let label = all_numbered_labels(&ir, &format!("{stem}.barrier."))
-            .into_iter()
-            .next()
-            .expect("a gated barrier block exists");
-        let (branch, _) = branch_into_exact(&ir, &label).expect("gated branch exists");
-        let cond = live_branch_condition(&branch).expect("pristine branch is live");
-        let hardwired = branch.replacen(&cond, "true", 1);
-        let doctored = ir.replacen(&branch, &hardwired, 1);
-        let doctored = assert_changed(&ir, &doctored, "hardwire branch true");
-        assert!(
-            verify_stem_ir(&doctored, stem, kind).is_err(),
-            "stem {stem:?}: `br i1 true` with a dead predicate must be caught"
-        );
+        for function in function_bodies(&ir) {
+            for label in all_numbered_labels(function, &format!("{stem}.barrier.")) {
+                let (branch, _) = branch_into_exact(function, &label).expect("gated branch exists");
+                let cond = live_branch_condition(&branch).expect("pristine branch is live");
+                let hardwired = branch.replacen(&cond, "true", 1);
+                let changed_function = function.replacen(&branch, &hardwired, 1);
+                let doctored = ir.replacen(function, &changed_function, 1);
+                let doctored = assert_changed(&ir, &doctored, "hardwire branch true");
+                assert!(
+                    verify_stem_ir(&doctored, stem, kind).is_err(),
+                    "stem {stem:?} in {}: hardwired gate must be caught",
+                    function.lines().next().unwrap()
+                );
+            }
+        }
     }
 }
 
@@ -993,19 +1029,21 @@ fn sabotage_bypassing_the_gate_goes_red_for_every_stem() {
     for &(stem, kind) in VERIFIED_BARRIER_STEMS {
         let ir = probe_ir(stem);
         verify_stem_ir(&ir, stem, kind).expect("pristine IR must verify first");
-        let label = all_numbered_labels(&ir, &format!("{stem}.barrier."))
-            .into_iter()
-            .next()
-            .expect("a gated barrier block exists");
-        let (branch, _) = branch_into_exact(&ir, &label).expect("gated branch exists");
-        let false_target = operand(&branch, 2).expect("branch has a false target");
-        let bypass = format!("br label {false_target}");
-        let doctored = ir.replacen(branch.trim_start(), &bypass, 1);
-        let doctored = assert_changed(&ir, &doctored, "bypass gate");
-        assert!(
-            verify_stem_ir(&doctored, stem, kind).is_err(),
-            "stem {stem:?}: an unconditionally-bypassed gate must be caught"
-        );
+        for function in function_bodies(&ir) {
+            for label in all_numbered_labels(function, &format!("{stem}.barrier.")) {
+                let (branch, _) = branch_into_exact(function, &label).expect("gated branch exists");
+                let false_target = operand(&branch, 2).expect("branch has a false target");
+                let bypass = format!("br label {false_target}");
+                let changed_function = function.replacen(&branch, &bypass, 1);
+                let doctored = ir.replacen(function, &changed_function, 1);
+                let doctored = assert_changed(&ir, &doctored, "bypass gate");
+                assert!(
+                    verify_stem_ir(&doctored, stem, kind).is_err(),
+                    "stem {stem:?} in {}: bypassed gate must be caught",
+                    function.lines().next().unwrap()
+                );
+            }
+        }
     }
 }
 
@@ -1053,4 +1091,60 @@ fn sabotage_moving_the_store_into_the_guard_goes_red_for_the_store_ic() {
         verify_stem_ir(&doctored, stem, kind).is_err(),
         "a slot store that only the pointer arm performs must be caught"
     );
+}
+
+/// Repeated block labels AND SSA registers across function copies must never
+/// let an intact copy conceal a broken one, on any directory-lookup target.
+#[test]
+fn identical_labels_in_other_functions_cannot_validate_a_sabotaged_gate() {
+    assert_default_barrier_env_not_disabled();
+    let stem = "idxset.inbounds";
+    let kind = StemKind::ValueAndGenerationTested;
+    for target in [
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-gnu",
+        "x86_64-pc-windows-msvc",
+    ] {
+        let ir = idxset_inbounds_ir_for_target(Some(target));
+        verify_stem_ir(&ir, stem, kind).expect("pristine target IR must verify");
+        let function = function_bodies(&ir)
+            .find(|f| !all_numbered_labels(f, &format!("{stem}.barrier.")).is_empty())
+            .expect("fixture must reach the barrier in a function");
+        let start = function.find('@').unwrap();
+        let end = function[start..].find('(').unwrap() + start;
+        let mut clone = function.to_string();
+        clone.replace_range(start..end, "@barrier_contract_clone");
+        let repeated = format!("{ir}\ndefine {clone}\n}}\n");
+        verify_stem_ir(&repeated, stem, kind).expect("both intact copies must verify");
+        let label = all_numbered_labels(&clone, &format!("{stem}.barrier.")).remove(0);
+        let (branch, _) = branch_into_exact(&clone, &label).unwrap();
+        let cond = live_branch_condition(&branch).unwrap();
+        let call_body = block_body_exact(&clone, &label).unwrap();
+        let call = call_body
+            .lines()
+            .find(|l| l.contains(BARRIER_CALL))
+            .unwrap();
+        for (name, broken) in [
+            (
+                "bypass",
+                clone.replacen(
+                    &branch,
+                    &format!("br label {}", operand(&branch, 2).unwrap()),
+                    1,
+                ),
+            ),
+            (
+                "hardwire",
+                clone.replacen(&branch, &branch.replacen(&cond, "true", 1), 1),
+            ),
+            ("delete call", clone.replacen(call, "", 1)),
+        ] {
+            let doctored = repeated.replacen(&clone, &broken, 1);
+            assert_changed(&repeated, &doctored, name);
+            assert!(
+                verify_stem_ir(&doctored, stem, kind).is_err(),
+                "{target}: {name} hidden by another function"
+            );
+        }
+    }
 }

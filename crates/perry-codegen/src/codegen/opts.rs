@@ -136,6 +136,15 @@ pub struct CompileOptions {
     /// order matches Perry's existing topological sort (set up by the
     /// CLI driver in `crates/perry/src/commands/compile.rs`).
     pub non_entry_module_prefixes: Vec<String>,
+    /// Complete native module graph, supplied identically to every module when
+    /// perry/thread can launch agents. The first prefix owns the graph's single
+    /// preparation callback (the CLI chooses the actual entry module); remaining
+    /// prefixes are unique and sorted, excluding the owner. Owner order affects
+    /// symbols and object cache identity. Every compiled module must be included.
+    /// Empty permits a direct local launcher to prepare only its own pool.
+    /// String preparation has no module-evaluation effects; deferred bodies and
+    /// declared-class registration remain lazy.
+    pub thread_literal_module_prefixes: Vec<String>,
     /// For each imported function name in this module, the prefix of the
     /// source module that exports it. Used by `ExternFuncRef` lowering
     /// in `lower_call` to generate the correct cross-module call to

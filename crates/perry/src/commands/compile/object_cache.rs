@@ -325,6 +325,15 @@ fn compute_object_cache_key_with_env(
             "0"
         },
     );
+    // Both values change objects outside the module containing the launch.
+    h.field(
+        "thread_literal_tls",
+        if perry_codegen::program_has_thread_agents() {
+            "1"
+        } else {
+            "0"
+        },
+    );
     // Immutable-global transfer (perry-codegen codegen/global_transfer.rs)
     // changes every eligible binding's storage, reads and initializer in
     // modules that never launch a thread; versioned with its runtime ABI.
@@ -335,6 +344,14 @@ fn compute_object_cache_key_with_env(
         } else {
             "0"
         },
+    );
+    // First prefix is the callback owner, so order changes the launch symbol
+    // and which module defines the graph body even with unchanged membership.
+    // Module identity is already in the HIR hash; no additional owner flag is
+    // needed. Hash the full ordered vector for owner and graph invalidation.
+    h.field(
+        "thread_literal_modules",
+        &format!("{:?}", opts.thread_literal_module_prefixes),
     );
     // Design step 4 (DESIGN 7.2): the static ShapeIds this module's code
     // embeds as immediates. A cached object is reused exactly when every id
@@ -1236,6 +1253,10 @@ fn compute_object_cache_key_with_env(
     h.field(
         "env_method_site",
         env_var("PERRY_METHOD_SITE").as_deref().unwrap_or(""),
+    );
+    h.field(
+        "env_constfn_shape",
+        env_var("PERRY_CONSTFN_SHAPE").as_deref().unwrap_or(""),
     );
     h.field(
         "env_agent_ptr_access",

@@ -338,6 +338,9 @@ fn loop_invariant_seed_facts(
         .collect()
 }
 
+// The preservation policy belongs to the current traversal. Numeric field
+// loops enable it and recursive inlining carries it into newly spliced blocks.
+// A kept call retains the normal effect boundary and region recheck.
 pub fn inline_calls_in_stmts(
     stmts: &mut Vec<Stmt>,
     func_candidates: &HashMap<FuncId, Function>,
@@ -348,6 +351,7 @@ pub fn inline_calls_in_stmts(
     next_local_id: &mut LocalId,
     enclosing_class: Option<&str>,
     class_field_types: &HashMap<(String, String), String>,
+    preserve_loop_closures: bool,
 ) {
     // Same cap as `inline_calls_in_expr`, sharing one thread-local depth
     // budget: the two functions are mutually recursive, and a stmts-side
@@ -394,6 +398,7 @@ pub fn inline_calls_in_stmts(
                     next_local_id,
                     enclosing_class,
                     class_field_types,
+                    preserve_loop_closures,
                 )
                 .and_then(|(inlined_stmts, _result_expr)| discard_inlined_returns(inlined_stmts));
                 if inlined.is_some() {
@@ -408,6 +413,7 @@ pub fn inline_calls_in_stmts(
                         next_local_id,
                         enclosing_class,
                         class_field_types,
+                        preserve_loop_closures,
                     );
                     if !hoisted.is_empty() {
                         // Hoisted stmts from multi-stmt inlining inside expressions
@@ -495,6 +501,7 @@ pub fn inline_calls_in_stmts(
                         next_local_id,
                         enclosing_class,
                         class_field_types,
+                        preserve_loop_closures,
                     ) {
                         let has_nested_return = inlined_stmts
                             .iter()
@@ -559,6 +566,7 @@ pub fn inline_calls_in_stmts(
                             next_local_id,
                             enclosing_class,
                             class_field_types,
+                            preserve_loop_closures,
                         ),
                         _ => Vec::new(),
                     };
@@ -584,6 +592,7 @@ pub fn inline_calls_in_stmts(
                     next_local_id,
                     enclosing_class,
                     class_field_types,
+                    preserve_loop_closures,
                 );
                 if !hoisted.is_empty() {
                     let current = stmts.remove(i);
@@ -612,6 +621,7 @@ pub fn inline_calls_in_stmts(
                     next_local_id,
                     enclosing_class,
                     class_field_types,
+                    preserve_loop_closures,
                 );
                 if hoisted.is_empty() {
                     *condition = condition_candidate;
@@ -630,6 +640,7 @@ pub fn inline_calls_in_stmts(
                     next_local_id,
                     enclosing_class,
                     class_field_types,
+                    preserve_loop_closures,
                 );
                 let mut else_facts = after_condition_facts;
                 if let Some(else_b) = else_branch {
@@ -643,6 +654,7 @@ pub fn inline_calls_in_stmts(
                         next_local_id,
                         enclosing_class,
                         class_field_types,
+                        preserve_loop_closures,
                     );
                 }
                 *exact_receiver_facts = intersect_exact_receiver_facts(&then_facts, &else_facts);
@@ -660,12 +672,15 @@ pub fn inline_calls_in_stmts(
                     next_local_id,
                     enclosing_class,
                     class_field_types,
+                    preserve_loop_closures,
                 );
                 if hoisted.is_empty() {
                     *condition = condition_candidate;
                 }
                 let mut body_facts =
                     loop_invariant_seed_facts(exact_receiver_facts, body, &[&*condition]);
+                let loop_preserve_closures =
+                    preserve_loop_closures || super::numeric_loop::contains_field_arithmetic(body);
                 inline_calls_in_stmts(
                     body,
                     func_candidates,
@@ -676,6 +691,7 @@ pub fn inline_calls_in_stmts(
                     next_local_id,
                     enclosing_class,
                     class_field_types,
+                    loop_preserve_closures,
                 );
                 exact_receiver_facts.clear();
                 exact_effect_handled = true;
@@ -683,6 +699,8 @@ pub fn inline_calls_in_stmts(
             Stmt::DoWhile { body, condition } => {
                 let mut body_facts =
                     loop_invariant_seed_facts(exact_receiver_facts, body, &[&*condition]);
+                let loop_preserve_closures =
+                    preserve_loop_closures || super::numeric_loop::contains_field_arithmetic(body);
                 inline_calls_in_stmts(
                     body,
                     func_candidates,
@@ -693,6 +711,7 @@ pub fn inline_calls_in_stmts(
                     next_local_id,
                     enclosing_class,
                     class_field_types,
+                    loop_preserve_closures,
                 );
                 let mut empty_facts = ExactReceiverFacts::new();
                 let mut condition_candidate = condition.clone();
@@ -705,6 +724,7 @@ pub fn inline_calls_in_stmts(
                     next_local_id,
                     enclosing_class,
                     class_field_types,
+                    preserve_loop_closures,
                 );
                 if hoisted.is_empty() {
                     *condition = condition_candidate;
@@ -731,6 +751,7 @@ pub fn inline_calls_in_stmts(
                         next_local_id,
                         enclosing_class,
                         class_field_types,
+                        preserve_loop_closures,
                     );
                     if init_stmts.len() == 1 {
                         **init_stmt = init_stmts.remove(0);
@@ -748,6 +769,7 @@ pub fn inline_calls_in_stmts(
                         next_local_id,
                         enclosing_class,
                         class_field_types,
+                        preserve_loop_closures,
                     );
                     if hoisted.is_empty() {
                         *cond = condition_candidate;
@@ -764,6 +786,7 @@ pub fn inline_calls_in_stmts(
                         next_local_id,
                         enclosing_class,
                         class_field_types,
+                        preserve_loop_closures,
                     );
                 }
                 let mut for_extra: Vec<&Expr> = Vec::new();
@@ -789,6 +812,8 @@ pub fn inline_calls_in_stmts(
                     );
                     body_facts.retain(|id, _| !init_mutated.contains(id));
                 }
+                let loop_preserve_closures =
+                    preserve_loop_closures || super::numeric_loop::contains_field_arithmetic(body);
                 inline_calls_in_stmts(
                     body,
                     func_candidates,
@@ -799,6 +824,7 @@ pub fn inline_calls_in_stmts(
                     next_local_id,
                     enclosing_class,
                     class_field_types,
+                    loop_preserve_closures,
                 );
                 exact_receiver_facts.clear();
                 exact_effect_handled = true;
@@ -833,6 +859,7 @@ pub fn inline_calls_in_stmts(
                 next_local_id,
                 enclosing_class,
                 class_field_types,
+                preserve_loop_closures,
             );
             stmts.remove(i);
             let inlined_len = inlined.len();
@@ -860,6 +887,7 @@ pub fn inline_calls_in_expr(
     next_local_id: &mut LocalId,
     enclosing_class: Option<&str>,
     class_field_types: &HashMap<(String, String), String>,
+    preserve_loop_closures: bool,
 ) -> Vec<Stmt> {
     let Some(_recursion_guard) = enter_inline_expr_recursion() else {
         // The inliner is an optimization pass. Very deeply nested generated
@@ -881,6 +909,7 @@ pub fn inline_calls_in_expr(
         next_local_id,
         enclosing_class,
         class_field_types,
+        preserve_loop_closures,
     ) {
         apply_exact_receiver_stmt_effects(&stmts, exact_receiver_facts);
         let inner = inline_calls_in_expr(
@@ -892,6 +921,7 @@ pub fn inline_calls_in_expr(
             next_local_id,
             enclosing_class,
             class_field_types,
+            preserve_loop_closures,
         );
         *expr = result;
         let mut all = stmts;
@@ -912,6 +942,7 @@ pub fn inline_calls_in_expr(
                 next_local_id,
                 enclosing_class,
                 class_field_types,
+                preserve_loop_closures,
             ));
             hoisted.extend(inline_calls_in_expr(
                 right,
@@ -922,6 +953,7 @@ pub fn inline_calls_in_expr(
                 next_local_id,
                 enclosing_class,
                 class_field_types,
+                preserve_loop_closures,
             ));
         }
         Expr::Logical { left, right, .. } => {
@@ -934,6 +966,7 @@ pub fn inline_calls_in_expr(
                 next_local_id,
                 enclosing_class,
                 class_field_types,
+                preserve_loop_closures,
             ));
 
             let after_left_facts = exact_receiver_facts.clone();
@@ -948,6 +981,7 @@ pub fn inline_calls_in_expr(
                 next_local_id,
                 enclosing_class,
                 class_field_types,
+                preserve_loop_closures,
             );
             if right_hoisted.is_empty() {
                 **right = right_candidate;
@@ -968,6 +1002,7 @@ pub fn inline_calls_in_expr(
                 next_local_id,
                 enclosing_class,
                 class_field_types,
+                preserve_loop_closures,
             ));
         }
         Expr::Conditional {
@@ -984,6 +1019,7 @@ pub fn inline_calls_in_expr(
                 next_local_id,
                 enclosing_class,
                 class_field_types,
+                preserve_loop_closures,
             ));
 
             let after_condition_facts = exact_receiver_facts.clone();
@@ -999,6 +1035,7 @@ pub fn inline_calls_in_expr(
                 next_local_id,
                 enclosing_class,
                 class_field_types,
+                preserve_loop_closures,
             );
             if then_hoisted.is_empty() {
                 **then_expr = then_candidate;
@@ -1018,6 +1055,7 @@ pub fn inline_calls_in_expr(
                 next_local_id,
                 enclosing_class,
                 class_field_types,
+                preserve_loop_closures,
             );
             if else_hoisted.is_empty() {
                 **else_expr = else_candidate;
@@ -1039,6 +1077,7 @@ pub fn inline_calls_in_expr(
                 next_local_id,
                 enclosing_class,
                 class_field_types,
+                preserve_loop_closures,
             ));
             for arg in args.iter_mut() {
                 hoisted.extend(inline_calls_in_expr(
@@ -1050,6 +1089,7 @@ pub fn inline_calls_in_expr(
                     next_local_id,
                     enclosing_class,
                     class_field_types,
+                    preserve_loop_closures,
                 ));
             }
             exact_receiver_facts.clear();
@@ -1065,6 +1105,7 @@ pub fn inline_calls_in_expr(
                     next_local_id,
                     enclosing_class,
                     class_field_types,
+                    preserve_loop_closures,
                 ));
                 kill_referenced_exact_receivers(elem, exact_receiver_facts);
             }
@@ -1080,6 +1121,7 @@ pub fn inline_calls_in_expr(
                     next_local_id,
                     enclosing_class,
                     class_field_types,
+                    preserve_loop_closures,
                 ));
                 kill_referenced_exact_receivers(v, exact_receiver_facts);
             }
@@ -1095,6 +1137,7 @@ pub fn inline_calls_in_expr(
                     next_local_id,
                     enclosing_class,
                     class_field_types,
+                    preserve_loop_closures,
                 ));
                 kill_referenced_exact_receivers(v, exact_receiver_facts);
             }
@@ -1112,6 +1155,7 @@ pub fn inline_calls_in_expr(
                             next_local_id,
                             enclosing_class,
                             class_field_types,
+                            preserve_loop_closures,
                         ));
                         kill_referenced_exact_receivers(e, exact_receiver_facts);
                     }
@@ -1129,6 +1173,7 @@ pub fn inline_calls_in_expr(
                 next_local_id,
                 enclosing_class,
                 class_field_types,
+                preserve_loop_closures,
             ));
             for arg in args.iter_mut() {
                 match arg {
@@ -1142,6 +1187,7 @@ pub fn inline_calls_in_expr(
                             next_local_id,
                             enclosing_class,
                             class_field_types,
+                            preserve_loop_closures,
                         ));
                     }
                 }
@@ -1158,6 +1204,7 @@ pub fn inline_calls_in_expr(
                 next_local_id,
                 enclosing_class,
                 class_field_types,
+                preserve_loop_closures,
             ));
             hoisted.extend(inline_calls_in_expr(
                 index,
@@ -1168,6 +1215,7 @@ pub fn inline_calls_in_expr(
                 next_local_id,
                 enclosing_class,
                 class_field_types,
+                preserve_loop_closures,
             ));
         }
         Expr::IndexSet {
@@ -1184,6 +1232,7 @@ pub fn inline_calls_in_expr(
                 next_local_id,
                 enclosing_class,
                 class_field_types,
+                preserve_loop_closures,
             ));
             hoisted.extend(inline_calls_in_expr(
                 index,
@@ -1194,6 +1243,7 @@ pub fn inline_calls_in_expr(
                 next_local_id,
                 enclosing_class,
                 class_field_types,
+                preserve_loop_closures,
             ));
             hoisted.extend(inline_calls_in_expr(
                 value,
@@ -1204,6 +1254,7 @@ pub fn inline_calls_in_expr(
                 next_local_id,
                 enclosing_class,
                 class_field_types,
+                preserve_loop_closures,
             ));
             exact_receiver_facts.clear();
         }
@@ -1228,6 +1279,7 @@ pub fn inline_calls_in_expr(
                     next_local_id,
                     enclosing_class,
                     class_field_types,
+                    preserve_loop_closures,
                 ));
             }
             exact_receiver_facts.clear();
@@ -1242,6 +1294,7 @@ pub fn inline_calls_in_expr(
                 next_local_id,
                 enclosing_class,
                 class_field_types,
+                preserve_loop_closures,
             ));
         }
         Expr::PropertySet { object, value, .. } => {
@@ -1254,6 +1307,7 @@ pub fn inline_calls_in_expr(
                 next_local_id,
                 enclosing_class,
                 class_field_types,
+                preserve_loop_closures,
             ));
             hoisted.extend(inline_calls_in_expr(
                 value,
@@ -1264,6 +1318,7 @@ pub fn inline_calls_in_expr(
                 next_local_id,
                 enclosing_class,
                 class_field_types,
+                preserve_loop_closures,
             ));
             exact_receiver_facts.clear();
         }
@@ -1277,6 +1332,7 @@ pub fn inline_calls_in_expr(
                 next_local_id,
                 enclosing_class,
                 class_field_types,
+                preserve_loop_closures,
             ));
             exact_receiver_facts.remove(id);
             kill_referenced_exact_receivers(value.as_ref(), exact_receiver_facts);
@@ -1292,6 +1348,7 @@ pub fn inline_calls_in_expr(
                     next_local_id,
                     enclosing_class,
                     class_field_types,
+                    preserve_loop_closures,
                 ));
             }
             for arg in args.iter_mut() {
@@ -1304,6 +1361,7 @@ pub fn inline_calls_in_expr(
                     next_local_id,
                     enclosing_class,
                     class_field_types,
+                    preserve_loop_closures,
                 ));
             }
             exact_receiver_facts.clear();
@@ -1320,6 +1378,7 @@ pub fn inline_calls_in_expr(
                 next_local_id,
                 enclosing_class,
                 class_field_types,
+                preserve_loop_closures,
             ));
             hoisted.extend(inline_calls_in_expr(
                 index,
@@ -1330,6 +1389,7 @@ pub fn inline_calls_in_expr(
                 next_local_id,
                 enclosing_class,
                 class_field_types,
+                preserve_loop_closures,
             ));
         }
         Expr::Uint8ArraySet {
@@ -1346,6 +1406,7 @@ pub fn inline_calls_in_expr(
                 next_local_id,
                 enclosing_class,
                 class_field_types,
+                preserve_loop_closures,
             ));
             hoisted.extend(inline_calls_in_expr(
                 index,
@@ -1356,6 +1417,7 @@ pub fn inline_calls_in_expr(
                 next_local_id,
                 enclosing_class,
                 class_field_types,
+                preserve_loop_closures,
             ));
             hoisted.extend(inline_calls_in_expr(
                 value,
@@ -1366,6 +1428,7 @@ pub fn inline_calls_in_expr(
                 next_local_id,
                 enclosing_class,
                 class_field_types,
+                preserve_loop_closures,
             ));
             kill_referenced_exact_receivers(array.as_ref(), exact_receiver_facts);
             kill_referenced_exact_receivers(index.as_ref(), exact_receiver_facts);
@@ -1381,6 +1444,7 @@ pub fn inline_calls_in_expr(
                 next_local_id,
                 enclosing_class,
                 class_field_types,
+                preserve_loop_closures,
             ));
         }
         Expr::Uint8ArrayNew(Some(arg)) => {
@@ -1393,6 +1457,7 @@ pub fn inline_calls_in_expr(
                 next_local_id,
                 enclosing_class,
                 class_field_types,
+                preserve_loop_closures,
             ));
         }
         Expr::Sequence(exprs) => {
@@ -1426,6 +1491,7 @@ pub fn inline_calls_in_expr(
                         next_local_id,
                         enclosing_class,
                         class_field_types,
+                        preserve_loop_closures,
                     ));
                     continue;
                 }
@@ -1441,6 +1507,7 @@ pub fn inline_calls_in_expr(
                     next_local_id,
                     enclosing_class,
                     class_field_types,
+                    preserve_loop_closures,
                 );
                 if item_hoisted.is_empty() {
                     *item = candidate;
@@ -1495,6 +1562,7 @@ pub fn inline_calls_in_expr(
                 next_local_id,
                 closure_enclosing.as_deref(),
                 class_field_types,
+                preserve_loop_closures,
             );
             for id in captures.iter().chain(mutable_captures.iter()) {
                 exact_receiver_facts.remove(id);
@@ -1606,11 +1674,15 @@ pub fn try_inline_simple_call(
     next_local_id: &mut LocalId,
     _enclosing_class: Option<&str>,
     class_field_types: &HashMap<(String, String), String>,
+    preserve_loop_closures: bool,
 ) -> Option<(Vec<Stmt>, Expr)> {
     if let Expr::Call { callee, args, .. } = expr {
         // Check for regular function call
         if let Expr::FuncRef(func_id) = callee.as_ref() {
             if let Some(func) = func_candidates.get(func_id) {
+                if preserve_loop_closures && super::numeric_loop::introduces_closure(func) {
+                    return None;
+                }
                 // Loop-bearing candidates are admitted only for the dedicated
                 // fixed-aggregate path in `try_inline_call`. Expression-level
                 // inlining has nowhere to place their control flow.
@@ -1763,6 +1835,11 @@ pub fn try_inline_simple_call(
                 if let Some(method_candidate) =
                     method_candidates.get(&(class_name, method_name.clone()))
                 {
+                    if preserve_loop_closures
+                        && super::numeric_loop::introduces_closure(&method_candidate.func)
+                    {
+                        return None;
+                    }
                     // Preserve normal `obj.method` lookup and argument
                     // evaluation. Direct substitution would bypass
                     // own-property/accessor shadows and zip() would drop
@@ -2052,11 +2129,15 @@ pub fn try_inline_call(
     next_local_id: &mut LocalId,
     _enclosing_class: Option<&str>,
     class_field_types: &HashMap<(String, String), String>,
+    preserve_loop_closures: bool,
 ) -> Option<(Vec<Stmt>, Option<Expr>)> {
     if let Expr::Call { callee, args, .. } = expr {
         // Handle regular function calls
         if let Expr::FuncRef(func_id) = callee.as_ref() {
             if let Some(func) = func_candidates.get(func_id) {
+                if preserve_loop_closures && super::numeric_loop::introduces_closure(func) {
+                    return None;
+                }
                 let scalar_aggregate = if has_simple_control_flow(&func.body) {
                     None
                 } else {
@@ -2197,6 +2278,11 @@ pub fn try_inline_call(
                 if let Some(method_candidate) =
                     method_candidates.get(&(class_name, method_name.clone()))
                 {
+                    if preserve_loop_closures
+                        && super::numeric_loop::introduces_closure(&method_candidate.func)
+                    {
+                        return None;
+                    }
                     // Preserve normal `obj.method` lookup and argument
                     // evaluation. Direct substitution would bypass
                     // own-property/accessor shadows and zip() would drop
@@ -2365,6 +2451,7 @@ mod tests {
                     &mut next_local_id,
                     None,
                     &HashMap::new(),
+                    false,
                 );
 
                 assert!(hoisted.is_empty());
@@ -2424,6 +2511,7 @@ mod tests {
                     &mut next_local_id,
                     None,
                     &HashMap::new(),
+                    false,
                 );
 
                 assert_eq!(stmts.len(), 1);

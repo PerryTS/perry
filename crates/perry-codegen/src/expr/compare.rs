@@ -1165,6 +1165,9 @@ fn lower_typeof_literal_inline(
 }
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
+    if let Some(value) = crate::stmt::region_loop::try_lower_numeric_compare(ctx, expr, lower)? {
+        return Ok(value);
+    }
     match expr {
         Expr::Compare { op, left, right } => {
             // `typeof` always yields a string, so loose and strict equality

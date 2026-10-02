@@ -763,14 +763,13 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     # ShapeId @4. Guards have no reason to address anything at or past 8.
     #
     # #8113 also fixed this arm's VACUITY. It used to match only
-    # `add(..., "N")`, while all four functions below emit
+    # `add(..., "N")`, while these guard functions emit
     # `gep(I8, &p, &[(I64, "N")])` — so planting a keys-offset read left it
     # green. Both spellings are matched now, and each function must be shown to
     # read the ShapeId at all, so a guard that stops reading the header
     # entirely cannot pass by emitting nothing.
     for source, names in (
         (raw_class_guard, (
-            "emit_class_field_loop_preheader_check",
             "emit_proven_shape_recheck",
             "emit_class_field_inline_precheck",
         )),
