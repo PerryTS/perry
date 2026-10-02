@@ -259,6 +259,27 @@ impl LoweringContext {
         self.classes_index.get(name).map(|&idx| self.classes[idx].1)
     }
 
+    /// Is the heritage identifier `name` a lexical LOCAL binding (the heritage
+    /// value must then be read from that binding at runtime), rather than a
+    /// statically resolvable class?
+    ///
+    /// A scope-renamed class (`class_renames`) normally resolves statically,
+    /// even though a same-named local may also be in scope. The exception is a
+    /// class lowered per evaluation (`per_evaluation_class_decls`): its
+    /// declared name IS a local bound to the evaluated class object, and a
+    /// static `extends` would instead reach the shared template, so the
+    /// subclass's [[Prototype]] and the instance chains of two evaluations
+    /// would be the template's instead of the evaluation's own.
+    pub(crate) fn heritage_ident_is_lexical_local(&self, name: &str) -> bool {
+        if self.locals.lookup(name).is_none() {
+            return false;
+        }
+        !self.class_renames.contains_key(name)
+            || self
+                .per_evaluation_class_decls
+                .contains(&self.resolve_class_name(name))
+    }
+
     /// Apply any active scope-local class-name alias (see `class_renames`).
     /// Identity for non-aliased names, so non-colliding classes are unaffected.
     pub(crate) fn resolve_class_name(&self, name: &str) -> String {
