@@ -99,6 +99,33 @@ mod tests {
     }
 
     #[test]
+    fn queued_destruction_waits_until_nested_execution_scopes_finish() {
+        reset_for_tests();
+        let outer = init_resource("outer", TAG_UNDEFINED_F64, true);
+        before(outer.async_id, outer.trigger_async_id);
+        let inner = init_resource("inner", TAG_UNDEFINED_F64, true);
+        before(inner.async_id, inner.trigger_async_id);
+        enqueue_gc_destroy(outer.async_id);
+        enqueue_gc_destroy(inner.async_id);
+        assert_eq!(drain_gc_destroy_queue(), 0);
+        assert_eq!(GC_DESTROY_QUEUE.lock().unwrap().len(), 2);
+        assert!(RESOURCES.lock().unwrap().contains_key(&outer.async_id));
+        assert!(RESOURCES.lock().unwrap().contains_key(&inner.async_id));
+        after(inner.async_id);
+        assert_eq!(execution_async_id_u64(), outer.async_id);
+        assert_eq!(drain_gc_destroy_queue(), 0);
+        assert_eq!(GC_DESTROY_QUEUE.lock().unwrap().len(), 2);
+        after(outer.async_id);
+        assert_eq!(execution_async_id_u64(), 0);
+        assert_eq!(drain_gc_destroy_queue(), 2);
+        assert!(GC_DESTROY_QUEUE.lock().unwrap().is_empty());
+        assert!(!RESOURCES.lock().unwrap().contains_key(&outer.async_id));
+        assert!(!RESOURCES.lock().unwrap().contains_key(&inner.async_id));
+        assert_eq!(drain_gc_destroy_queue(), 0);
+        reset_for_tests();
+    }
+
+    #[test]
     fn before_after_restore_execution_ids() {
         reset_for_tests();
         let ids = init_resource("A", TAG_UNDEFINED_F64, true);
