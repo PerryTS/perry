@@ -76,7 +76,7 @@ use self::bare::note;
 pub(crate) use self::bare::{try_lower_bare_get, try_lower_bare_put, try_lower_fact_add_tree};
 use self::guard::{
     decode_slots, emit_body_guard_direct, emit_guard, emit_guard_word, field_i32, handle_of,
-    lower_recv, store_admission,
+    has_static_supplier, lower_recv, store_admission,
 };
 pub(crate) use self::numeric_expression::try_lower_numeric_compare;
 use self::plan::{
@@ -1020,10 +1020,13 @@ pub(crate) fn lower_split(
                 decide = (rc_idx, ok);
             }
         }
-        None if receivers.len() == 1 => {
-            // Body region, one receiver: load the word now (F-body decodes
-            // it); the rest of the guard is emitted at the end, as branches
-            // straight into whichever F copies verified.
+        None if receivers.len() == 1 && !has_static_supplier(ctx, &receivers[0]) => {
+            // Body region, one receiver with no static supplier: load the
+            // learned word now (F-body decodes it); the rest of the guard is
+            // emitted at the end, as branches straight into whichever F
+            // copies verified. A receiver whose class names a static id takes
+            // the full guard below: the static supplier is exclusive (DESIGN
+            // §4.1), so a learned word must not replace it here.
             let (sites, word) = emit_guard_word(ctx, &mut receivers[0]);
             receivers[0].word = word.clone();
             direct = Some((sites, word));

@@ -300,6 +300,13 @@ fn emit_static_guard(
     Ok((word.to_string(), pass, "false".to_string()))
 }
 
+/// Whether `rv`'s guard takes the static supplier (DESIGN §4.1). Every guard
+/// construction must ask this first: the static supplier is exclusive, so a
+/// guard that names a class must never fall back to a learned word.
+pub(super) fn has_static_supplier(ctx: &FnCtx<'_>, rv: &Receiver) -> bool {
+    static_region_word(ctx, rv).is_some()
+}
+
 pub(super) fn emit_guard(
     ctx: &mut FnCtx<'_>,
     rv: &mut Receiver,
