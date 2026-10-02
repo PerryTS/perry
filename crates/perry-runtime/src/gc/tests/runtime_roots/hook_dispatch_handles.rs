@@ -434,6 +434,11 @@ fn test_map_from_array_runtime_handles_survive_copied_minor_gc() {
 fn test_structured_clone_map_runtime_handles_survive_nested_copied_minor_gc() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    // Two copying minors may recycle the original address with a different
+    // allocation layout. Quarantine it so the address-change assertions below
+    // prove relocation rather than depending on backing-store sizes.
+    let _protect =
+        crate::arena::ProtectionModeGuard::set(crate::arena::FromSpaceProtection::PoisonOnly);
     register_runtime_handle_root_scanner_for_tests();
     // The harness clears MUTABLE_ROOT_SCANNERS so a collection sees exactly the
     // roots the test installs. structuredClone's source->clone memo is one of
