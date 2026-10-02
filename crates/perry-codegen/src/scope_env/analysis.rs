@@ -5,7 +5,12 @@
 //! reference inside a closure counts at the statement that creates the
 //! closure). A statement list's subtree occupies a contiguous number range, so
 //! "every reference sits in the home statement or in a later sibling of it" is
-//! the interval test `home.num <= ref <= end(home list)`.
+//! the interval test `home.num <= ref < end(home list)`, where `end` is one
+//! past the list's last statement number. That bound is the NEXT statement's
+//! number: after a switch case it is the first statement of the following
+//! case, which shares the binding's scope but not the home's activation, so an
+//! inclusive test grouped a binding that case reads before its `let` ever ran
+//! (#11771).
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -47,6 +52,7 @@ pub(super) struct BodyFacts {
     pub decls: HashMap<u32, Vec<Decl>>,
     /// Lowest and highest statement number referencing the id.
     pub refs: HashMap<u32, (u32, u32)>,
+    /// One past the highest statement number in each list (exclusive).
     pub list_end: HashMap<u32, u32>,
     pub preallocs: Vec<PreallocStmt>,
 }
@@ -62,11 +68,11 @@ impl BodyFacts {
         }
         let pos = home.pos?;
         let end = *self.list_end.get(&pos.token)?;
-        if decls.iter().any(|d| d.num < home.num || d.num > end) {
+        if decls.iter().any(|d| d.num < home.num || d.num >= end) {
             return None;
         }
         if let Some(&(lo, hi)) = self.refs.get(&id) {
-            if lo < home.num || hi > end {
+            if lo < home.num || hi >= end {
                 return None;
             }
         }
