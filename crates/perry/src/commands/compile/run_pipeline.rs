@@ -5720,7 +5720,7 @@ pub fn run_with_parse_cache(
             ctx.native_modules
                 .par_iter()
                 .map(|(path, hir_module)| -> Result<_, String> {
-                    if std::env::var("PERRY_CONSTFN_SHAPE").as_deref() != Ok("1")
+                    if std::env::var("PERRY_CONSTFN_SHAPE").as_deref() == Ok("0")
                         && hir_module.classes.is_empty()
                         && prepare_module(path, hir_module, true)?
                             .imported_classes

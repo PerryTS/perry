@@ -1,10 +1,12 @@
 //! Static ConstFn describes a completed object. Allocation ids remain Any/F64.
-use super::{BirthProto, BirthShape, CompileOptions, ConstFnBirth, ModuleBirth};
+use super::{BirthProto, BirthShape, ConstFnBirth, ModuleBirth};
 use perry_hir::{Class, Expr, Module, Stmt};
 use std::collections::{BTreeSet, HashMap};
 
-pub(crate) fn enabled(opts: &CompileOptions) -> bool {
-    opts.output_type == "executable" && std::env::var("PERRY_CONSTFN_SHAPE").as_deref() == Ok("1")
+/// Executables build ConstFn lanes unless `PERRY_CONSTFN_SHAPE=0`; a dylib
+/// never does.
+pub(crate) fn enabled(output_type: &str) -> bool {
+    output_type == "executable" && std::env::var("PERRY_CONSTFN_SHAPE").as_deref() != Ok("0")
 }
 
 pub(crate) fn literal_final(

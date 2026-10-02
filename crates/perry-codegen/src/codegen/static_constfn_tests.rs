@@ -1,3 +1,4 @@
+use super::super::CompileOptions;
 use super::*;
 use perry_hir::types::Type;
 use perry_hir::{Function, Param};
@@ -43,6 +44,45 @@ fn opts(output: &str) -> CompileOptions {
         emit_ir_only: true,
         output_type: output.into(),
         ..Default::default()
+    }
+}
+
+#[test]
+fn default_and_explicit_constfn_modes_discover_and_emit_only_executable_final_shapes() {
+    let _lock = ENV.lock().unwrap_or_else(|e| e.into_inner());
+    let _pin = Pin(std::env::var_os("PERRY_CONSTFN_SHAPE"));
+    let module = fixture();
+    assert!(
+        module.classes.is_empty(),
+        "exercise a classless literal module"
+    );
+    for setting in [None, Some("1"), Some("0")] {
+        match setting {
+            Some(value) => std::env::set_var("PERRY_CONSTFN_SHAPE", value),
+            None => std::env::remove_var("PERRY_CONSTFN_SHAPE"),
+        }
+        for output in ["executable", "dylib"] {
+            let admitted = output == "executable" && setting != Some("0");
+            let births = crate::module_birth_shapes(&module, opts(output)).unwrap();
+            assert_eq!(births.len(), usize::from(admitted), "{setting:?}/{output}");
+            let mut options = opts(output);
+            options.static_shape_ids = super::super::static_shape_ids::assign_static_shape_ids(
+                births.iter().map(|birth| &birth.shape),
+            )
+            .into_iter()
+            .collect();
+            let ir = String::from_utf8(crate::compile_module(&module, options).unwrap()).unwrap();
+            assert_eq!(
+                ir.contains("call i64 @js_object_finalize_constfn_static"),
+                admitted,
+                "{setting:?}/{output}"
+            );
+            assert_eq!(
+                !super::super::static_shape_ids::take_module_static_seeds().is_empty(),
+                admitted,
+                "{setting:?}/{output}"
+            );
+        }
     }
 }
 
