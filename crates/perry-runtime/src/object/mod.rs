@@ -367,6 +367,7 @@ pub(crate) use descriptor_state::{
 };
 pub(crate) use field_get_set::FieldLookupCaches;
 pub(crate) use field_get_set::{
+    class_object_registry_serves_static, class_object_static_method_call,
     private_evaluation_brand_value, private_lexical_brand_pop, private_lexical_brand_push,
     private_lexical_brand_stack_restore, private_lexical_brand_stack_savepoint,
     private_member_access_hints_restore, private_member_access_hints_savepoint,

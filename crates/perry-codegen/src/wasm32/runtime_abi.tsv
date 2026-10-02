@@ -602,7 +602,7 @@ js_class_lexical_binding_set	f64	f64,f64
 js_class_method_bind	f64	f64,ptr,usize
 js_class_method_bind_by_id	f64	f64,i64
 js_class_method_snapshot_bind	f64	f64,ptr,usize
-js_class_object_pin_parent	void	i64,i32u
+js_class_object_pin_parent	void	i64,i32u,i32u
 js_class_object_refresh_capture_values	void	f64,i64,f64
 js_class_prototype_method_value	f64	f64,f64
 js_class_register_capture_values	void	i32u,ptr,usize

@@ -305,9 +305,21 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
             if h.obj_type == crate::gc::GC_TYPE_OBJECT
                 && super::super::exotic_expando::exotic_expando_kind(addr).is_none()
             {
-                return unsafe {
+                let present = unsafe {
                     object_string_key_has_property(addr as *const ObjectHeader, key, key_val)
                 };
+                // A class object owns `prototype` without storing it. Only a
+                // miss on that one 9-byte key looks at the receiver's kind.
+                if present.to_bits() == nanbox_false.to_bits() {
+                    let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+                    if unsafe { crate::string::js_string_key_bytes(key_val, &mut sso) }
+                        .is_some_and(super::class_object_has_prototype_property)
+                        && super::super::class_registry::is_class_object_ptr(addr as *const u8)
+                    {
+                        return nanbox_true;
+                    }
+                }
+                return present;
             }
         }
     }

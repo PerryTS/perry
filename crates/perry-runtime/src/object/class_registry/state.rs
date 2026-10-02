@@ -684,6 +684,17 @@ pub(crate) fn class_object_value_root_store(class_id: u32, obj_ptr: *mut ObjectH
     crate::gc::runtime_write_barrier_root_raw_ptr(obj_ptr);
 }
 
+/// Has a class object of template `class_id` been created? The answer is the
+/// template's own entry in `CLASS_OBJECT_VALUES`, stored with its first class
+/// object, not a copy of it: the answer stays `true` only while no writer
+/// removes an entry. A program with no per-evaluation class pays one relaxed
+/// load.
+#[inline]
+pub(crate) fn template_has_class_objects(class_id: u32) -> bool {
+    CLASS_OBJECT_EVER.load(std::sync::atomic::Ordering::Relaxed)
+        && class_object_value_for_cid(class_id).is_some()
+}
+
 /// Read back the class object registered for `class_id`, or `None` when the
 /// class never materialized as a per-evaluation object (ordinary
 /// ClassRef-valued classes).

@@ -99,7 +99,7 @@ pub(crate) use state::{
     class_static_prototype_root_store, class_static_set_defined_attrs, decl_prototype_identity_id,
     global_object_prototype_bits, is_bound_native_constructor_closure_value,
     is_non_constructable_builtin_function_value, parent_closure_in_chain,
-    throw_non_constructable_builtin_function, CLASS_OBJECT_EVER,
+    template_has_class_objects, throw_non_constructable_builtin_function, CLASS_OBJECT_EVER,
 };
 pub use state::{
     AccessorDecl, ClassVTable, VTableMethodEntry, CLASS_DECL_PROTOTYPE_OBJECTS,
@@ -230,11 +230,12 @@ pub(crate) use parent_static::{
     class_has_own_static_method, class_has_own_symbol_member, class_has_symbol_member_in_chain,
     class_instance_setter_apply, class_method_bind_length, class_object_own_field_bytes,
     class_object_pinned_parent, class_own_static_method_code, class_own_static_method_entry,
-    class_own_symbol_accessor_ptrs, class_own_symbol_member_keys, class_own_symbol_method,
-    class_private_instance_getter_value, class_private_instance_setter_apply,
-    class_static_accessor_getter_value, class_static_accessor_setter_apply,
-    class_symbol_getter_value, class_symbol_setter_apply, dynamic_value_class_id,
-    get_parent_class_id, instance_chain_parent_class_id, lookup_class_symbol_method_in_chain,
+    class_own_static_method_name_bytes, class_own_symbol_accessor_ptrs,
+    class_own_symbol_member_keys, class_own_symbol_method, class_private_instance_getter_value,
+    class_private_instance_setter_apply, class_static_accessor_getter_value,
+    class_static_accessor_setter_apply, class_symbol_getter_value, class_symbol_setter_apply,
+    dynamic_value_class_id, get_parent_class_id, instance_chain_parent_class_id,
+    lookup_class_symbol_method_in_chain,
     lookup_static_method_in_chain, lookup_static_method_owner, register_class,
     register_class_dynamic_static_accessor, static_accessor_in_chain,
 };

@@ -204,6 +204,195 @@ unsafe fn class_evaluation_prototype_value(obj: *const ObjectHeader) -> f64 {
     proto.with_mut_ptr::<ObjectHeader, _>(|proto| crate::value::js_nanbox_pointer(proto as i64))
 }
 
+/// What a fresh class object owns from the moment it is created, the way a
+/// class's function object owns them (`class_value_mint`): `length` and `name`
+/// (ClassDefinitionEvaluation's SetFunctionLength / SetFunctionName, `{ !w, !e,
+/// c }`), then every ClassBody static method as a data property `{ w, !e, c }`
+/// whose value is that declaration bound to this object. They are real
+/// properties of THIS object, so `getOwnPropertyNames` lists them, `delete`
+/// removes them, and a deleted one stays gone: the object's own keys are the
+/// authority, not the template's registry (which every evaluation of the class
+/// shares).
+///
+/// `prototype` is not stored here: it is `{ !w, !e, !c }`, so it is present on
+/// every class object for its whole life ([`class_object_has_prototype_property`])
+/// and has no state to keep. It is built at its first read, which must follow
+/// the class definition (computed members register while it evaluates).
+///
+/// A static field of the same name (`static_field_mask`: bit 0 `length`, bit 1
+/// `name`) is stored over `length` / `name` right after, so its slot is created
+/// in this position with the field's ordinary attributes.
+pub(crate) unsafe fn define_class_object_own_properties(
+    obj: *mut ObjectHeader,
+    static_field_mask: u32,
+) {
+    use super::super::class_value::{
+        intrinsic_own_data_value, static_member_owns, INTRINSIC_ATTRS,
+    };
+    let class_id = (*obj).class_id;
+    if class_id == 0 {
+        return;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let class = scope.root_raw_mut_ptr(obj);
+    let define = |name: &str, value: f64, attrs: (bool, bool, bool)| {
+        let value = scope.root_nanbox_f64(value);
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        let key = scope.root_string_ptr(key);
+        class.with_mut_ptr::<ObjectHeader, _>(|class| {
+            key.with_const_ptr::<crate::StringHeader, _>(|key| {
+                define_builtin_data_property(
+                    class,
+                    key,
+                    value.get_nanbox_f64(),
+                    name.to_string(),
+                    PropertyAttrs::new(attrs.0, attrs.1, attrs.2),
+                )
+            })
+        });
+    };
+    for (bit, key) in [(1, "length"), (2, "name")] {
+        // A static method of this name replaces the value (and the attributes)
+        // in the same position, below; a static accessor leaves nothing here.
+        let method_replaces =
+            super::super::class_registry::class_has_own_static_method(class_id, key);
+        if static_member_owns(class_id, key) && !method_replaces {
+            continue;
+        }
+        if static_field_mask & bit != 0 {
+            // The class body's static field of this name stores over it next:
+            // it keeps this position, and takes the field's ordinary attributes.
+            define(
+                key,
+                f64::from_bits(crate::value::TAG_UNDEFINED),
+                (true, true, true),
+            );
+        } else if let Some(value) = intrinsic_own_data_value(class_id, key) {
+            define(key, value, INTRINSIC_ATTRS);
+        }
+    }
+    for name in super::super::class_registry::class_own_string_member_names(class_id, true) {
+        // The method value is bound to THIS class object, as a read of the
+        // static through the evaluation has always produced it: its call runs
+        // in this evaluation (its environment and self-binding), whatever
+        // `this` is. The bound closure keeps the name's address for its whole
+        // life, so the name is the declaration's own: the bytes of the
+        // template's record for this method (none for an accessor).
+        let Some((name_ptr, name_len)) =
+            super::super::class_registry::class_own_static_method_name_bytes(class_id, &name)
+        else {
+            continue;
+        };
+        let class_value = class
+            .with_mut_ptr::<ObjectHeader, _>(|class| crate::value::js_nanbox_pointer(class as i64));
+        let f = super::super::native_module::build_bound_method_closure(
+            class_value,
+            name_ptr,
+            name_len,
+        );
+        define(&name, f, (true, false, true));
+    }
+}
+
+/// Is `value` the method value `define_class_object_own_properties` stored for
+/// static `name` on class object `holder`: a bound method closure naming this
+/// method, bound to this object? Anything else in that slot is the program's.
+unsafe fn is_declared_static_method_value(
+    value: f64,
+    holder: *const ObjectHeader,
+    name: &str,
+) -> bool {
+    let value = JSValue::from_bits(value.to_bits());
+    if !value.is_pointer() {
+        return false;
+    }
+    let closure = value.as_pointer::<crate::closure::ClosureHeader>();
+    if !crate::closure::is_closure_ptr(closure as usize)
+        || !std::ptr::eq((*closure).info, &crate::closure::BOUND_METHOD_INFO)
+    {
+        return false;
+    }
+    let receiver = crate::closure::js_closure_get_capture_f64(closure, 0);
+    let name_ptr = crate::closure::js_closure_get_capture_ptr(closure, 1) as *const u8;
+    let name_len = crate::closure::js_closure_get_capture_ptr(closure, 2) as usize;
+    receiver.to_bits() == crate::value::js_nanbox_pointer(holder as i64).to_bits()
+        && !name_ptr.is_null()
+        && std::slice::from_raw_parts(name_ptr, name_len) == name.as_bytes()
+}
+
+/// May a call `C.name(..)` on class object `object` run the registered static
+/// method (with `this` = `object`)? The evaluation that declares `name` keeps
+/// it as an own property of its class object: when that object still holds the
+/// declaration the registry runs it; when it no longer does (deleted, or the
+/// program stored something else) the property decides, not the registry. A
+/// declaration of a shared class (no class object) is the registry's.
+pub(crate) unsafe fn class_object_registry_serves_static(
+    object: *const ObjectHeader,
+    name: &str,
+) -> bool {
+    let Some((owner, _)) =
+        super::super::class_registry::lookup_static_method_owner((*object).class_id, name)
+    else {
+        return false;
+    };
+    if !super::super::class_registry::template_has_class_objects(owner) {
+        return true;
+    }
+    let mut holder = object;
+    for _ in 0..32 {
+        if (*holder).class_id == owner {
+            return super::super::class_registry::class_object_own_field_bytes(
+                holder,
+                name.as_bytes(),
+            )
+            .is_some_and(|v| is_declared_static_method_value(v, holder, name));
+        }
+        let Some(parent) = super::super::class_registry::class_object_pinned_parent(holder) else {
+            break;
+        };
+        let parent = JSValue::from_bits(parent.to_bits());
+        if !parent.is_pointer()
+            || !super::super::class_registry::is_class_object_ptr(parent.as_pointer::<u8>())
+        {
+            break;
+        }
+        holder = parent.as_pointer::<ObjectHeader>();
+    }
+    // No evaluation of the declaring template is in this object's chain.
+    true
+}
+
+/// Run static method `name` for a bound method value whose receiver is class
+/// object `receiver` (see [`define_class_object_own_properties`]). `None` when
+/// `receiver` is not a class object or the registry has no such declaration.
+pub(crate) unsafe fn class_object_static_method_call(
+    receiver: f64,
+    name_ptr: *const u8,
+    name_len: usize,
+    args: &[f64],
+) -> Option<f64> {
+    if !super::super::class_registry::is_class_object_value(receiver) {
+        return None;
+    }
+    let obj = JSValue::from_bits(receiver.to_bits()).as_pointer::<ObjectHeader>();
+    let name = std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len)).ok()?;
+    super::super::class_registry::lookup_static_method_in_chain((*obj).class_id, name)?;
+    Some(super::super::class_registry::js_class_static_method_call(
+        receiver,
+        name_ptr,
+        name_len,
+        args.as_ptr(),
+        args.len(),
+    ))
+}
+
+/// Does `obj` (a class object) own `key` without storing it? Only `prototype`:
+/// `{ !w, !e, !c }`, created with the class, so it is there until the object
+/// is gone and no `delete` or `defineProperty` can change that.
+pub(crate) fn class_object_has_prototype_property(key: &[u8]) -> bool {
+    key == b"prototype"
+}
+
 /// #4949: heap class-expression values (`ClassExprFresh`) are real
 /// OBJECT_TYPE_CLASS objects, not INT32 class refs. Their `.prototype`
 /// read must still expose the live declared-class prototype object so
@@ -235,25 +424,16 @@ pub(crate) fn class_object_materialized_prototype(
     (!proto.is_null()).then_some(proto)
 }
 
-/// Resolve `.name` for an `OBJECT_TYPE_CLASS` heap object. An explicit
-/// `static name` member (an own field on the class object) wins; a deleted
-/// key still reads `undefined` (returns `None`).
+/// Resolve `.name` for an `OBJECT_TYPE_CLASS` heap object: the object's OWN
+/// `name` (`define_class_object_own_properties` creates it with the object, a
+/// `static name` member or `defineProperty` replaces it), else nothing. A
+/// `delete C.name` removes the property for this object only, and it stays gone
+/// (`None`): the template's registered name is not a second source for it.
 pub(super) unsafe fn class_object_name_value(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
 ) -> Option<JSValue> {
-    if let Some(v) = own_data_field_by_name(obj, key) {
-        return Some(v);
-    }
-    let class_id = (*obj).class_id;
-    if super::super::class_registry::class_static_key_deleted(class_id, "name") {
-        return None;
-    }
-    let cname = super::super::class_registry::class_name_for_id(class_id)?;
-    let s = crate::string::js_string_from_bytes(cname.as_ptr(), cname.len() as u32);
-    Some(JSValue::from_bits(
-        crate::js_nanbox_string(s as i64).to_bits(),
-    ))
+    own_data_field_by_name(obj, key)
 }
 
 /// #6530 (size-gate split from `get_field_by_name_tail.rs` — pure

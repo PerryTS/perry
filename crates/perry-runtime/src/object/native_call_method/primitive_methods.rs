@@ -402,8 +402,12 @@ pub(super) unsafe fn dispatch_primitive(
     if crate::object::class_registry::is_class_object_value(object) {
         let class_id = crate::object::js_object_get_class_id(jsval.as_pointer::<ObjectHeader>());
         if class_id != 0
-            && crate::object::class_registry::lookup_static_method_in_chain(class_id, method_name)
-                .is_some()
+            && unsafe {
+                crate::object::class_object_registry_serves_static(
+                    jsval.as_pointer::<ObjectHeader>(),
+                    method_name,
+                )
+            }
         {
             let args = refreshed_args();
             return Some(crate::object::class_registry::js_class_static_method_call(
