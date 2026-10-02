@@ -769,6 +769,21 @@ pub fn program_has_worker() -> bool {
     PROGRAM_HAS_WORKER.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Whether any module of this program launches a perry/thread agent
+/// (`spawn`, `parallelMap`, `parallelFilter`). Separate from Worker
+/// module evaluation: perry/thread agents share user-module globals but each
+/// agent owns a separate moving heap. The driver sets it before module codegen.
+static PROGRAM_HAS_THREAD_AGENTS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_program_has_thread_agents(value: bool) {
+    PROGRAM_HAS_THREAD_AGENTS.store(value, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn program_has_thread_agents() -> bool {
+    PROGRAM_HAS_THREAD_AGENTS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 pub(crate) fn write_barriers_enabled() -> bool {
     use std::sync::OnceLock;
     static CACHED: OnceLock<bool> = OnceLock::new();
@@ -1937,8 +1952,7 @@ pub(super) fn emit_callee_binding_resolutions(
                 ctx.block().bitcast_i64_to_double(&bits)
             }
         } else if let Some(global_name) = ctx.module_globals.get(&id).cloned() {
-            let g_ref = format!("@{global_name}");
-            ctx.block().load(DOUBLE, &g_ref)
+            crate::codegen::global_transfer::load_module_global(ctx, id, &global_name)
         } else if let Some(slot) = ctx.locals.get(&id).cloned() {
             if ctx.boxed_vars.contains(&id) {
                 continue;

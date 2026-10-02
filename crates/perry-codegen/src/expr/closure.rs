@@ -185,8 +185,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         captured_value_bits.push(box_ptr);
                     } else if let Some(global_name) = ctx.module_globals.get(cap_id).cloned() {
                         // Global boxed var (rare).
-                        let g_ref = format!("@{}", global_name);
-                        let v = ctx.block().load(DOUBLE, &g_ref);
+                        let v = crate::codegen::global_transfer::load_module_global(
+                            ctx,
+                            *cap_id,
+                            &global_name,
+                        );
                         let v_bits = ctx.block().bitcast_double_to_i64(&v);
                         captured_value_bits.push(v_bits);
                     } else {

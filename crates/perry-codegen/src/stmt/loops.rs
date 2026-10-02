@@ -892,6 +892,12 @@ fn create_poll_refreshed_receiver_cache(
     let source_ref = if let Some(slot) = ctx.locals.get(&arr_id) {
         slot.clone()
     } else {
+        // The descriptor re-reads `source_ref` after polls. An immutable-leaf
+        // transfer binding has no single agent-correct address to re-read, so
+        // it keeps the ordinary (unhoisted) route.
+        if ctx.module_global_transfers.contains_key(&arr_id) {
+            return None;
+        }
         format!("@{}", ctx.module_globals.get(&arr_id)?)
     };
     let current = ctx.block().load(DOUBLE, &source_ref);
@@ -3501,7 +3507,6 @@ fn lower_packed_f64_range_versioned_for(
             continue;
         };
         let slot = ctx.func.alloca_entry(DOUBLE);
-        let g_ref = format!("@{global_name}");
         // #11590: the cache is a COPY of a GC root, so it must be a root too.
         // Both clones' entry guards are runtime calls, and the SLOW clone
         // polls on its back-edge and reaches `js_dyn_index_set_strict` (which
@@ -3522,7 +3527,7 @@ fn lower_packed_f64_range_versioned_for(
                 crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             ctx.func.entry_allocas_push_store(DOUBLE, &undefined, &slot);
         }
-        let val = ctx.block().load(DOUBLE, &g_ref);
+        let val = crate::codegen::global_transfer::load_module_global(ctx, gid, &global_name);
         ctx.block().store(DOUBLE, &val, &slot);
         if may_hold_pointer {
             crate::expr::root_entry_alloca(ctx, &slot);
