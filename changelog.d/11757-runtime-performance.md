@@ -2,3 +2,4 @@
 - Resolve private interpreter scope bindings directly through their data slots, including undefined bindings and overflow storage. Retain dynamic object-environment behavior for VM contexts, and reuse rooted key strings for global presence checks.
 - Avoid scanning discarded tails for limited literal string splits and reuse the receiver when the separator does not match.
 - Add Node parity coverage for deferred socket writes, nested corking and unopened corked sockets, plus checksum-checked reproductions of #10519, #10525, #10526 and #10528.
+- Classify the cork and uncork providers as registry-handle results in the checked native-result ledger.
