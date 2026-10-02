@@ -245,6 +245,26 @@ pub(super) fn enforce(ctx: &mut CompilationContext) -> Result<()> {
     for (importer, source, target, name, local) in edges {
         if availability(ctx, Path::new(&target), &name, &mut HashSet::new()) == Availability::Absent
         {
+            // Ambient native-library declarations have no executable HIR export.
+            // The later import router binds manifest symbols (including ergonomic
+            // aliases), rejects ambiguous aliases, and prefers real TS wrappers.
+            // Let that router validate only names actually backed by this import's
+            // manifest; unrelated missing exports must still fail here.
+            let manifest_backed = ctx.native_libraries.iter().any(|library| {
+                library.module == source
+                    && library.functions.iter().any(|function| {
+                        function.name == name
+                            || super::super::resolve::ergonomic_export_alias(
+                                &library.module,
+                                &function.name,
+                            )
+                            .as_deref()
+                                == Some(name.as_str())
+                    })
+            });
+            if manifest_backed {
+                continue;
+            }
             bail!(
                 "The requested module '{}' does not provide an export named '{}' \
                  (imported as '{}' in {}). Resolved module: {}. \
