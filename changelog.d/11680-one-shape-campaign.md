@@ -36,3 +36,9 @@ ordinary barrier before publishing its body-specific shape, using one existing
 cache probe. Missing intermediates, deprecated facts and unsupported targets
 retain the rooted slow publication path. Regressions cover distinct captures,
 actual moving collections, pointer-key fallback and publication ordering.
+
+Extend the existing field-representation verifier to check SPECIAL ConstFn
+slots against their shape-owned body identity, including deprecated carriers.
+Resolve validated forwarding before reading closure metadata during collection,
+and diagnose stale body facts at the existing cold method-prime refusal. Add
+valid, stale, deprecated, revoked and moving-collection regression coverage.
