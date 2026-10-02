@@ -83,7 +83,6 @@ pub unsafe extern "C" fn js_object_literal_set_computed(
         if key_str.is_null() {
             return value;
         }
-        mark_object_dynamic_shape_unknown(obj);
         js_object_set_field_by_name(obj, key_str, value);
         return value;
     }
@@ -102,7 +101,6 @@ pub unsafe extern "C" fn js_object_literal_set_computed(
     let key_handle = scope.root_string_ptr(key_str);
     let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
     let value = value_handle.get_nanbox_f64();
-    mark_object_dynamic_shape_unknown(obj);
     js_object_set_field_by_name(
         obj,
         key_handle.get_raw_const_ptr::<crate::StringHeader>(),
@@ -176,7 +174,6 @@ pub extern "C" fn js_object_define_accessor(
         }
         let key_handle = scope.root_string_ptr(key_str);
         let obj = extract_obj_ptr(f64::from_bits(obj_value_handle.get_heap_word_u64()));
-        mark_object_dynamic_shape_unknown(obj);
         let key_rust: Option<String> = {
             let key_str = key_handle.get_raw_const_ptr::<crate::StringHeader>();
             let name_ptr = (key_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());

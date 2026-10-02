@@ -1185,3 +1185,133 @@ fn run_script_and_uv_loop_fail_explicitly() {
     );
     assert!(loop_pointer.is_null());
 }
+
+#[test]
+fn external_buffer_finalizer_runs_once_after_the_owner_dies() {
+    unsafe extern "C" fn release(_env: NapiEnv, data: *mut c_void, hint: *mut c_void) {
+        drop(Box::from_raw(data as *mut [u8; 3]));
+        (*(hint as *const AtomicUsize)).fetch_add(1, Ordering::SeqCst);
+    }
+    let env = test_env();
+    let releases = AtomicUsize::new(0);
+    let data = Box::into_raw(Box::new([65u8, 66, 67]));
+    let mut scope = std::ptr::null_mut();
+    assert_eq!(
+        unsafe { napi_open_handle_scope(env, &mut scope) },
+        NapiStatus::Ok
+    );
+    let mut value = std::ptr::null_mut();
+    assert_eq!(
+        unsafe {
+            napi_create_external_buffer(
+                env,
+                3,
+                data.cast(),
+                Some(release),
+                (&releases as *const AtomicUsize).cast_mut().cast(),
+                &mut value,
+            )
+        },
+        NapiStatus::Ok
+    );
+    let owner = (value_bits(env, value).unwrap() & crate::value::POINTER_MASK) as usize;
+    assert!(crate::buffer::is_foreign_backed_buffer(owner));
+    crate::gc::js_gc_collect();
+    super::metadata::drain_pending_finalizers();
+    assert_eq!(
+        releases.load(Ordering::SeqCst),
+        0,
+        "live owner must retain bytes"
+    );
+    assert_eq!(
+        unsafe { napi_close_handle_scope(env, scope) },
+        NapiStatus::Ok
+    );
+    crate::gc::js_gc_collect();
+    super::metadata::drain_pending_finalizers();
+    assert_eq!(
+        releases.load(Ordering::SeqCst),
+        1,
+        "dead owner's native resource must be released"
+    );
+    crate::gc::js_gc_collect();
+    super::metadata::drain_pending_finalizers();
+    assert_eq!(
+        releases.load(Ordering::SeqCst),
+        1,
+        "finalizer entry must be removed"
+    );
+    let live_data = Box::into_raw(Box::new([68u8, 69, 70]));
+    assert_eq!(
+        unsafe {
+            napi_create_external_buffer(
+                env,
+                3,
+                live_data.cast(),
+                Some(release),
+                (&releases as *const AtomicUsize).cast_mut().cast(),
+                &mut value,
+            )
+        },
+        NapiStatus::Ok
+    );
+    super::shutdown_current_env();
+    super::shutdown_current_env();
+    assert_eq!(
+        releases.load(Ordering::SeqCst),
+        2,
+        "shutdown must release a still-live native buffer exactly once"
+    );
+}
+
+#[test]
+fn external_buffer_arraybuffer_released_on_worker_retirement() {
+    unsafe extern "C" fn release(_env: NapiEnv, data: *mut c_void, hint: *mut c_void) {
+        drop(Box::from_raw(data as *mut [u8; 3]));
+        (*(hint as *const AtomicUsize)).fetch_add(1, Ordering::SeqCst);
+    }
+    let releases = std::sync::Arc::new(AtomicUsize::new(0));
+    let worker_releases = releases.clone();
+    std::thread::spawn(move || {
+        let agent = crate::agent::enter_worker_agent();
+        let env = current_env();
+        let bytes = Box::into_raw(Box::new([11u8, 22, 33]));
+        let mut value = std::ptr::null_mut();
+        assert_eq!(
+            unsafe {
+                napi_create_external_arraybuffer(
+                    env,
+                    bytes.cast(),
+                    3,
+                    Some(release),
+                    std::sync::Arc::as_ptr(&worker_releases).cast_mut().cast(),
+                    &mut value,
+                )
+            },
+            NapiStatus::Ok
+        );
+        let owner = (value_bits(env, value).unwrap() & crate::value::POINTER_MASK) as usize;
+        assert!(crate::buffer::is_foreign_backed_buffer(owner));
+        assert!(crate::buffer::is_array_buffer(owner));
+        let mut data = std::ptr::null_mut();
+        let mut length = 0;
+        assert_eq!(
+            unsafe { napi_get_arraybuffer_info(env, value, &mut data, &mut length) },
+            NapiStatus::Ok
+        );
+        assert_eq!(data, bytes.cast());
+        assert_eq!(length, 3);
+        assert_eq!(worker_releases.load(Ordering::SeqCst), 0);
+        crate::agent::retire_agent(agent);
+        assert_eq!(
+            worker_releases.load(Ordering::SeqCst),
+            1,
+            "retiring the owning agent must finalize native bytes"
+        );
+        crate::agent::retire_agent(agent);
+        assert_eq!(worker_releases.load(Ordering::SeqCst), 1);
+    })
+    .join()
+    .unwrap();
+    assert_eq!(releases.load(Ordering::SeqCst), 1);
+}

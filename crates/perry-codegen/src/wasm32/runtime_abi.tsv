@@ -440,7 +440,6 @@ js_buffer_read_uint32_le	f64	f64,i32s
 js_buffer_read_uint8	f64	f64,i32s
 js_buffer_read_uint_be	f64	f64,i32s,i32s
 js_buffer_read_uint_le	f64	f64,i32s,i32s
-js_buffer_register_external	void	usize
 js_buffer_resolve_object_url	f64	f64
 js_buffer_set	void	ptr,i32s,i32s
 js_buffer_set_from	void	ptr,ptr,i32s
@@ -480,7 +479,7 @@ js_buffer_write_uint32_le	void	f64,f64,i32s
 js_buffer_write_uint8	void	f64,f64,i32s
 js_buffer_write_uint_be	void	f64,f64,i32s,i32s
 js_buffer_write_uint_le	void	f64,f64,i32s,i32s
-js_build_class_keys_array	ptr	i32u,i32u,ptr,i32u
+js_build_class_keys_array	ptr	i32u,i32u,ptr,i32u,i64
 js_builtin_prototype_method_value	f64	ptr,usize,ptr,usize
 js_builtin_subclass_construct	f64	i32u,ptr,usize,ptr,usize
 js_bun_ant_get_peer_pid	f64	f64
@@ -1163,6 +1162,7 @@ js_event_target_new	ptr
 js_event_target_remove_event_listener	void	ptr,ptr,i64
 js_event_target_remove_event_listener_with_options	void	ptr,ptr,i64,f64
 js_event_target_set_max_listeners	i32s	ptr,f64
+js_event_target_subclass_init	f64	f64,i32u
 js_events_add_abort_listener	i64	f64,f64
 js_events_get_event_listeners	ptr	f64,ptr
 js_events_get_max_listeners	f64	f64
@@ -1467,13 +1467,10 @@ js_function_bind	f64	f64,ptr,usize
 js_function_ctor_from_strings	f64	ptr,usize
 js_function_prototype_value_for_read	f64	f64
 js_gc_collect	void	
-js_gc_declare_typed_shape_layout	void	i64,i32u,ptr,i32u,ptr,i32u
 js_gc_enter_unsafe_zone	void	
 js_gc_exit_unsafe_zone	void	
 js_gc_forget_object_layout	void	i64
 js_gc_init	void	
-js_gc_init_typed_shape_layout	void	i64,i32u,ptr,i32u,ptr,i32u
-js_gc_key_add_layout_unknown	void	i64
 js_gc_loop_safepoint	void	
 js_gc_memory_pressure	i32u	i32u
 js_gc_module_collect	f64	
@@ -1494,7 +1491,6 @@ js_gc_temp_root_get	i64	i32u
 js_gc_temp_root_push	i32u	i64
 js_gc_temp_root_set	void	i32u,i64
 js_gc_temp_root_truncate	void	i32u
-js_gc_typed_shape_id_for_keys	i32u	i32u,i64,i32u,ptr,i32u,ptr,i32u,i32u
 js_gc_write_barriers_emitted	void	i32u
 js_ge	i64	i64,i64
 js_generator_attach_closure_prototype	f64	f64,ptr
@@ -1680,8 +1676,6 @@ js_import_meta_resolve	f64	f64,f64,f64
 js_import_meta_resolve_value	f64	f64
 js_in_operator	f64	f64,f64
 js_in_operator_presence_ic	f64	f64,f64,ptr
-js_inherited_read_cache_hit_f64	f64	ptr,ptr
-js_inherited_read_cache_stats	f64	i32s
 js_inline_arena_slow_alloc	ptr	ptr,usize,usize
 js_inline_arena_state	ptr	
 js_install_global_value_surfaces	void	
@@ -2017,8 +2011,7 @@ js_net_block_list_new	i64
 js_net_block_list_rules	ptr	i64
 js_net_block_list_to_json	f64	i64
 js_net_callback_ptr	i64	f64
-js_net_create_connection	f64	i32s,ptr,ptr
-js_net_create_server	f64	ptr,ptr
+js_net_create_server	i64	i64,i64
 js_net_create_server_handle_stub	f64	f64,f64,f64,f64,f64
 js_net_get_default_auto_select_family	f64	
 js_net_get_default_auto_select_family_attempt_timeout	f64	
@@ -2028,14 +2021,14 @@ js_net_is_ipv4	f64	i64
 js_net_is_ipv6	f64	i64
 js_net_normalize_args	f64	f64
 js_net_process_pending	i32s	
-js_net_server_address	ptr	f64
-js_net_server_close	i32s	f64
+js_net_server_address	ptr	i64
+js_net_server_close	void	i64,i64
 js_net_server_event_names	ptr	i64
 js_net_server_get_connections	f64	i64
 js_net_server_get_drop_max_connection	f64	i64
 js_net_server_get_listening	f64	i64
 js_net_server_get_max_connections	f64	i64
-js_net_server_listen	i32s	f64,i32s,ptr,ptr
+js_net_server_listen	void	i64,f64,f64,f64
 js_net_server_listener_count	f64	i64,i64
 js_net_server_listeners	i64	i64,i64
 js_net_server_listening	i32s	i64
@@ -2060,8 +2053,8 @@ js_net_socket_address_new	i64	f64
 js_net_socket_address_parse	f64	i64
 js_net_socket_alloc	i64	
 js_net_socket_connect	i64	f64,f64,f64
-js_net_socket_destroy	i32s	f64
-js_net_socket_end	i32s	f64
+js_net_socket_destroy	void	i64
+js_net_socket_end	void	i64,i64
 js_net_socket_event_names	ptr	i64
 js_net_socket_get_auto_select_family_attempted_addresses	f64	i64
 js_net_socket_get_buffer_size	f64	i64
@@ -2098,10 +2091,8 @@ js_net_socket_pipe	f64	i64,f64,f64
 js_net_socket_prepend_listener	i64	i64,i64,i64
 js_net_socket_prepend_once_listener	i64	i64,i64,i64
 js_net_socket_raw_listeners	i64	i64,i64
-js_net_socket_read	ptr	f64,i32s
+js_net_socket_read	f64	i64,f64
 js_net_socket_ref	i64	i64
-js_net_socket_remote_address	ptr	f64
-js_net_socket_remote_port	i32s	f64
 js_net_socket_remove_all_listeners	i64	i64,i64
 js_net_socket_remove_listener	i64	i64,i64,i64
 js_net_socket_reset_and_destroy	i64	i64
@@ -2112,7 +2103,7 @@ js_net_socket_set_type_of_service	i64	i64,f64
 js_net_socket_unpipe	i64	i64,f64
 js_net_socket_unref	i64	i64
 js_net_socket_upgrade_tls	ptr	i64,i64,f64
-js_net_socket_write	i32s	f64,ptr
+js_net_socket_write	void	i64,i64
 js_net_throw_invalid_address	void	
 js_net_validate_block_list_prefix	i32s	f64,f64
 js_net_validate_connect_port	void	f64
@@ -2547,7 +2538,7 @@ js_numeric_step	f64	f64,i32s
 js_object_alloc	ptr	i32u,i32u
 js_object_alloc_class_dynamic_parent	ptr	i32u,i32u,ptr,i32u
 js_object_alloc_class_inline_keys	ptr	i32u,i32u,i32u,ptr
-js_object_alloc_class_inline_keys_stamped	ptr	i32u,i32u,i32u,ptr,i32u
+js_object_alloc_class_inline_keys_stamped	ptr	i32u,i32u,i32u,ptr,i32u,i64
 js_object_alloc_class_with_keys	ptr	i32u,i32u,i32u,ptr,i32u
 js_object_alloc_fast	ptr	i32u,i32u
 js_object_alloc_fast_with_parent	ptr	i32u,i32u,i32u
@@ -2646,9 +2637,9 @@ js_object_set_property_key_method	f64	f64,f64,f64
 js_object_set_prototype_of	f64	f64,f64
 js_object_set_symbol_method	f64	f64,f64,f64
 js_object_set_symbol_property	f64	f64,f64,f64
-js_object_shape_id_for_class_keys	i32u	i64,i32u,i32u
-js_object_shape_id_for_class_keys_live	i32u	i64,i32u,i32u,i32u
-js_object_shape_id_for_class_keys_static	i32u	i64,i32u,i32u,i32u,i32u
+js_object_shape_id_for_class_keys	i32u	i64,i32u,i32u,i64
+js_object_shape_id_for_class_keys_live	i32u	i64,i32u,i32u,i32u,i64
+js_object_shape_id_for_class_keys_static	i32u	i64,i32u,i32u,i32u,i32u,i64
 js_object_shape_id_for_keys	i32u	i64,i32u
 js_object_super_call	f64	f64,f64,f64,ptr,usize
 js_object_super_get	f64	f64,f64,f64
@@ -3108,6 +3099,7 @@ js_readable_stream_new_from_source_object	f64	f64,f64
 js_readable_stream_new_with_source_type	f64	f64,f64,f64,f64,f64
 js_readable_stream_new_with_strategy_and_source_type	f64	f64,f64,f64,f64,f64
 js_readable_stream_pipe_through	f64	f64,f64,f64
+js_readable_stream_pipe_through_pair	f64	f64,f64,f64
 js_readable_stream_pipe_through_validate	f64	f64,f64,f64,f64
 js_readable_stream_pipe_to	ptr	f64,f64,f64
 js_readable_stream_subclass_init	f64	f64,f64,f64,f64,f64
@@ -3197,8 +3189,8 @@ js_regexp_test	i32s	ptr,ptr
 js_regexp_to_string	ptr	ptr
 js_region_guard_pack	i64	i32u,i32u,i64,i64,i64,i64,i64
 js_region_guard_prime	i64	ptr,i32u,i32u,i64,i64,i64,i64,i64
-js_region_loop_pack	i64	i32u,i32u,i64,i64,i64,i64,i64,i32u
-js_region_loop_prime	i64	ptr,i32u,i32u,i64,i64,i64,i64,i64,i32u,i32u
+js_region_loop_pack	i64	i32u,i32u,i64,i64,i64,i64,i64,i32u,i32u
+js_region_loop_prime	i64	ptr,i32u,i32u,i64,i64,i64,i64,i64,i32u,i32u,i32u
 js_register_anon_shape_class_id	void	i32u
 js_register_aux_has_active	void	ptr
 js_register_aux_pump	void	ptr
@@ -3355,6 +3347,9 @@ js_runtime_init	void
 js_runtime_validate_crypto_key_arg	void	f64,ptr,i32u
 js_runtime_validate_integer_arg	void	f64,ptr,i32u,f64,f64
 js_runtime_validate_string_arg	void	f64,ptr,i32u
+js_scope_alloc	i64	i32s,i64
+js_scope_capture_base	i64	i64
+js_scope_set	void	i64,i32s,i64
 js_sea_get_asset	f64	f64,f64
 js_sea_get_asset_as_blob	f64	f64,f64
 js_sea_get_asset_keys	f64	
@@ -3459,7 +3454,7 @@ js_shadow_state_addr	ptr
 js_shape_ordinary_inline_slot_for_key	i32s	i32u,i64
 js_shape_register_static_seed	void	ptr
 js_shape_run_static_seed	void	
-js_shape_seed_plain	i32u	i32u,ptr,i32u,i32u,i32u
+js_shape_seed_plain	i32u	i32u,ptr,i32u,i32u,i32u,i64
 js_shared_array_buffer_new	ptr	i32s
 js_shared_array_buffer_new_value	ptr	f64
 js_sharp_auto_orient	i64	i64

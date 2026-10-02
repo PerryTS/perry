@@ -241,27 +241,21 @@ fn descriptor_blocks_class_field_get(obj_addr: usize, class_id: u32, key_name: &
 }
 
 /// Decide the raw-f64 half of a class-field guard after the caller has proven
-/// the receiver's exact class/keys pair and that `field_index` is in bounds.
+/// the receiver carries `expected_shape_id` and that `field_index` is in bounds.
 ///
-/// That shape proof ties the slot to the compile-time mask which made
-/// `require_raw_f64` true. The per-object INTACT bit is therefore the complete
-/// production answer: it is cleared before any representation downgrade and
-/// is the same O(1) fact the codegen-inlined guard already trusts. Keep the
-/// descriptor lookup only in `PERRY_VERIFY_TYPED_INTACT` mode, where doing the
-/// expensive independent check is the feature's purpose.
+/// The shape is the authority (charter step 5): a receiver stamped with
+/// `expected_shape_id` holds a raw double in every slot whose lane in that
+/// shape is not `Any`, and a store that would break that generalizes the lane
+/// and restamps the receiver first. So "slot K is raw-f64" is the lane of the
+/// expected shape at K; nothing per object is consulted.
 #[inline]
 fn class_field_raw_f64_layout_contract(
-    object_addr: usize,
+    expected_shape_id: u32,
     field_index: u32,
     require_raw_f64: bool,
 ) -> bool {
-    if !require_raw_f64 {
-        return true;
-    }
-    if verify_typed_intact_enabled() {
-        return crate::gc::layout_typed_raw_f64_slot_for_user(object_addr, field_index as usize);
-    }
-    crate::gc::layout_typed_intact_for_user(object_addr)
+    !require_raw_f64
+        || !crate::object::field_rep_store::shape_slot_is_any(expected_shape_id, field_index)
 }
 
 fn class_field_get_contract(
@@ -313,7 +307,7 @@ fn class_field_get_contract(
             && plain_array_index_guard(keys, expected_field_index, true)
             && object_key_matches_field(obj, key, expected_field_index)
             && class_field_raw_f64_layout_contract(
-                object_addr,
+                expected_shape_id,
                 expected_field_index,
                 require_raw_f64,
             )
@@ -350,67 +344,28 @@ fn class_field_fast_contract(
         let obj = object_addr as *const ObjectHeader;
         let descriptor = crate::object::shapes::object_shape_descriptor(obj);
         let shape_id = crate::object::shapes::object_shape_stamp(obj);
+        // The ShapeId compare is the whole proof, the lane included: the
+        // expected id is the class's birth shape, whose rep is part of its
+        // identity, so a receiver that carries it carries its lanes. A lane
+        // that is not `Any` there sends the store through the checked
+        // funnel (charter step 5).
         let shape_ok = (*obj).class_id == expected_class_id
             && shape_id == expected_shape_id
+            && crate::object::field_rep_store::shape_slot_is_any(
+                expected_shape_id,
+                expected_field_index,
+            )
             && descriptor.is_some_and(|facts| {
                 facts.object_kind.is_ordinary_layout()
                     && expected_field_index < facts.live_inline_slot_count
             });
-        let layout_ok = shape_ok
+        shape_ok
             && class_field_raw_f64_layout_contract(
-                object_addr,
+                expected_shape_id,
                 expected_field_index,
                 require_raw_f64,
-            );
-        // #5093 self-check: the codegen-inlined fast path concludes "slot K is
-        // raw-f64" purely from the per-object intact bit (plus a class_id/keys
-        // match). Under PERRY_VERIFY_TYPED_INTACT=1, assert that whenever this
-        // contract sees a shape match for a raw-f64 candidate field with the
-        // intact bit set, the side table actually agrees the slot is raw-f64 —
-        // i.e. the inline path could never read a NaN-boxed value as a raw
-        // double. Any drift aborts loudly during the test sweep.
-        if require_raw_f64 && shape_ok && verify_typed_intact_enabled() {
-            let intact = crate::gc::layout_typed_intact_for_user(object_addr);
-            if intact && !layout_ok {
-                eprintln!(
-                    "PERRY_VERIFY_TYPED_INTACT: intact bit set on class {} but slot {} is not raw-f64 in the side table (inline fast path would corrupt)",
-                    expected_class_id, expected_field_index
-                );
-                std::process::abort();
-            }
-        }
-        layout_ok
+            )
     }
-}
-
-#[cfg(not(test))]
-fn verify_typed_intact_enabled() -> bool {
-    use std::sync::atomic::{AtomicU8, Ordering};
-    static STATE: AtomicU8 = AtomicU8::new(0);
-    match STATE.load(Ordering::Relaxed) {
-        0 => {
-            // Parse by value so `=0`/`=false`/`=off` don't enable the verifier,
-            // matching `env_flag_enabled` in `gc/mod.rs` (which also disables the
-            // inline fast path when this is on, so the verifier sees every access).
-            let on = std::env::var("PERRY_VERIFY_TYPED_INTACT")
-                .map(|v| {
-                    matches!(
-                        v.trim().to_ascii_lowercase().as_str(),
-                        "1" | "true" | "on" | "yes"
-                    )
-                })
-                .unwrap_or(false);
-            STATE.store(if on { 2 } else { 1 }, Ordering::Relaxed);
-            on
-        }
-        2 => true,
-        _ => false,
-    }
-}
-
-#[cfg(test)]
-fn verify_typed_intact_enabled() -> bool {
-    false
 }
 
 #[no_mangle]
@@ -463,6 +418,13 @@ pub extern "C" fn js_typed_feedback_class_field_get_guard(
     }
 }
 
+#[inline]
+fn receiver_has_numeric_proof_shape(obj: *const ObjectHeader) -> bool {
+    crate::object::shapes::shape_object_kind_by_id(unsafe {
+        crate::object::shapes::object_shape_stamp(obj)
+    }) == Some(crate::object::shapes::ShapeObjectKind::OrdinaryNumericProof)
+}
+
 fn class_field_set_fast_contract(
     receiver: f64,
     expected_class_id: u32,
@@ -485,10 +447,7 @@ fn class_field_set_fast_contract(
         let Some(gc_header) = gc_header_for_user_addr(object_addr) else {
             return false;
         };
-        if (*gc_header)._reserved
-            & (crate::gc::OBJ_FLAG_FROZEN | crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF)
-            != 0
-        {
+        if (*gc_header)._reserved & crate::gc::OBJ_FLAG_FROZEN != 0 {
             return false;
         }
     }
@@ -560,9 +519,7 @@ fn class_field_set_contract(
             return (0, 0, gc_type, false);
         }
         if (*gc_header)._reserved
-            & (crate::gc::OBJ_FLAG_FROZEN
-                | crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF
-                | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES)
+            & (crate::gc::OBJ_FLAG_FROZEN | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES)
             != 0
         {
             let obj = object_addr as *mut ObjectHeader;
@@ -578,6 +535,9 @@ fn class_field_set_contract(
         let class_id = (*obj).class_id;
         let shape_id = crate::object::shapes::object_shape_id(obj);
         let shape_addr = shape_id as usize;
+        if receiver_has_numeric_proof_shape(obj) {
+            return (shape_addr, class_id, gc_type, false);
+        }
         let Some(descriptor) = crate::object::shapes::shape_descriptor_by_id(shape_id) else {
             return (shape_addr, class_id, gc_type, false);
         };
@@ -596,7 +556,7 @@ fn class_field_set_contract(
             && (!require_raw_f64
                 || (is_plain_number_bits(value_bits)
                     && class_field_raw_f64_layout_contract(
-                        object_addr,
+                        expected_shape_id,
                         expected_field_index,
                         true,
                     )))
@@ -885,7 +845,7 @@ fn class_field_get_one_path(
     }
     let key = (key as u64 & crate::value::POINTER_MASK) as *const crate::StringHeader;
     if probe_mru {
-        if let Some(value) = unsafe { class_field_get_from_shape(bits, key, cache_slot, false) } {
+        if let Some(value) = unsafe { class_field_get_from_shape(bits, cache_slot) } {
             return value;
         }
     }
@@ -901,24 +861,14 @@ fn class_field_get_one_path(
 
 /// The answers the receiver's shape gives without the ladder, in the order
 /// the emitted generic read asks them: the site's own word, the site's holder
-/// entry, then (on its declined edge) the inherited-read cache. `None` for
-/// everything else.
-///
-/// `leaf`: the caller is the S2 GC-leaf entry, so an inherited ACCESSOR entry
-/// (which runs a getter) is declined, as `js_inherited_read_cache_hit_f64`
-/// declines it for the emitted read. Otherwise the cache is asked once, as
-/// the ladder's own first question (`get_field_ic_miss_impl`'s hook A) asks
-/// it, getter included.
+/// entry. `None` for everything else.
 ///
 /// # Safety
-/// `cache_slot` is null or the site's live read cache; `key` is the interned
-/// key with its tag masked off.
+/// `cache_slot` is null or the site's live read cache.
 #[inline(always)]
 unsafe fn class_field_get_from_shape(
     bits: u64,
-    key: *const crate::StringHeader,
     cache_slot: *mut crate::object::PicCacheSlot,
-    leaf: bool,
 ) -> Option<f64> {
     // POINTER tag above the handle band: the receiver test every emitted
     // generic read makes before either lookup.
@@ -940,22 +890,7 @@ unsafe fn class_field_get_from_shape(
         crate::hot_diag::recv_route_note_runtime(crate::hot_diag::RT_ROUTE_CLASS_MISS_SHAPE);
         return Some(value);
     }
-    let value = if leaf {
-        let value =
-            crate::object::inherited_read_cache::js_inherited_read_cache_hit_f64(handle, key);
-        (value.to_bits() != crate::value::TAG_HOLE).then_some(value)
-    } else {
-        match crate::object::inherited_read_cache::inherited_read_cache_lookup(handle, key) {
-            crate::object::inherited_read_cache::Lookup::Hit(value) => {
-                Some(f64::from_bits(value.bits()))
-            }
-            _ => None,
-        }
-    };
-    if value.is_some() {
-        crate::hot_diag::recv_route_note_runtime(crate::hot_diag::RT_ROUTE_CLASS_MISS_SHAPE);
-    }
-    value
+    None
 }
 
 /// `js_class_field_get_ic`'s guard-FAIL arm with typed feedback on.
@@ -1090,9 +1025,8 @@ pub extern "C" fn js_class_field_get_ic_fast(
         if !typed_feedback_enabled()
             && !crate::value::JSValue::from_bits(key as u64).is_short_string()
         {
-            let key = (key as u64 & crate::value::POINTER_MASK) as *const crate::StringHeader;
             if let Some(value) =
-                unsafe { class_field_get_from_shape(receiver.to_bits(), key, cache_slot, true) }
+                unsafe { class_field_get_from_shape(receiver.to_bits(), cache_slot) }
             {
                 return value;
             }
@@ -1123,6 +1057,8 @@ pub extern "C" fn js_class_field_get_ic_fast_miss(
     require_raw_f64: i32,
     cache_slot: *mut crate::object::PicCacheSlot,
 ) -> f64 {
+    // Charter step 5: migrate-on-miss (DESIGN §1.5 step 4).
+    crate::object::field_rep_store::migrate_on_miss_value(receiver.to_bits());
     if typed_feedback_enabled() {
         return js_class_field_get_ic(
             site_id,
@@ -1185,13 +1121,9 @@ pub extern "C" fn js_class_field_set_ic_fast(
             return CLASS_FIELD_SET_FAST_STORE_SLOW;
         }
         // `js_object_set_field`'s store for an in-bound index and a value that
-        // is not a null POINTER (both established above).
-        crate::gc::runtime_store_jsvalue_slot(
-            object_addr,
-            slot as usize,
-            expected_field_index as usize,
-            vbits,
-        );
+        // is not a null POINTER (both established above), through the checked
+        // funnel (charter step 5).
+        crate::object::store_object_field_slot(obj, expected_field_index as usize, vbits);
     }
     CLASS_FIELD_SET_FAST_DONE
 }
@@ -1211,6 +1143,8 @@ pub extern "C" fn js_class_field_set_ic_fast_miss(
     value: f64,
     require_raw_f64: i32,
 ) {
+    // Charter step 5: migrate-on-miss (DESIGN §1.5 step 4).
+    crate::object::field_rep_store::migrate_on_miss_value(receiver.to_bits());
     match status {
         CLASS_FIELD_SET_FAST_GUARD_FAILED => {
             let key_raw = key as u64 & crate::value::POINTER_MASK;
@@ -1459,9 +1393,7 @@ pub unsafe extern "C" fn js_method_direct_shape_class(
     if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT
         || (*gc_header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || (*gc_header)._reserved
-            & (crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
-                | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES
-                | crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF)
+            & (crate::gc::OBJ_FLAG_HAS_DESCRIPTORS | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES)
             != 0
         || crate::object::class_prototype_fast_guard_invalidated_for_method(method_guard_slot)
     {
@@ -1480,7 +1412,7 @@ pub unsafe extern "C" fn js_method_direct_shape_class(
     // alias an ordinary instance's expected id: the class-kind transition
     // mints its own semantic successor ShapeId.
     let shape_id = crate::object::shapes::object_shape_stamp(obj);
-    if shape_id == 0 {
+    if shape_id == 0 || receiver_has_numeric_proof_shape(obj) {
         return 0;
     }
     if !out_shape_id.is_null() {
@@ -1654,15 +1586,16 @@ pub unsafe extern "C" fn js_object_own_method_cache_miss(
     if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT
         || (*gc_header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || (*gc_header)._reserved
-            & (crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
-                | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES
-                | crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF)
+            & (crate::gc::OBJ_FLAG_HAS_DESCRIPTORS | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES)
             != 0
     {
         return 0;
     }
     let object = object_addr as *const ObjectHeader;
-    if !crate::object::object_is_regular(object) || (*object).class_id != expected_class_id {
+    if !crate::object::object_is_regular(object)
+        || (*object).class_id != expected_class_id
+        || receiver_has_numeric_proof_shape(object)
+    {
         return 0;
     }
     let meta = (*object).meta;

@@ -9,7 +9,7 @@ use crate::rooting::{any_operand_may_collect, open_rooted_group, Repr};
 use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 
 const POINTER_TAG_HI16: &str = "32765"; // 0x7FFD
-const GC_OBJECT_METHOD_GUARD_MASK_I32: &str = "142639359"; // 0x0880_80ff
+const GC_OBJECT_METHOD_GUARD_MASK_I32: &str = "134250751"; // 0x0800_80ff
 const GC_TYPE_OBJECT: &str = "2";
 
 fn receiver_binding(ctx: &FnCtx<'_>, object: &Expr) -> Option<String> {

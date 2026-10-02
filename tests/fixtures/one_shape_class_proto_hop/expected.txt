@@ -1,0 +1,6 @@
+hop 7500 75000 -1500
+instance 7500 -1500
+holder-store 9000 9000
+own-shadow 79500
+class-proto-add 13500 13500
+class-proto-delete 9000 9000

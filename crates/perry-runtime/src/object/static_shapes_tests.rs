@@ -5,6 +5,10 @@ use super::*;
 use crate::object::shapes::{is_shape_id, SHAPE_ID_BASE, STATIC_SHAPE_ID_END};
 
 fn seed(requested: u32, names: &[&str]) -> u32 {
+    seed_with_rep(requested, names, 0)
+}
+
+fn seed_with_rep(requested: u32, names: &[&str], rep: u64) -> u32 {
     let packed: Vec<u8> = names
         .iter()
         .flat_map(|n| n.bytes().chain(std::iter::once(0)))
@@ -15,6 +19,7 @@ fn seed(requested: u32, names: &[&str]) -> u32 {
         packed.len() as u32,
         names.len() as u32,
         names.len() as u32,
+        rep,
     )
 }
 
@@ -44,6 +49,100 @@ fn a_seed_mints_the_requested_id_and_every_later_mint_of_those_facts_resolves_to
         shapes::shape_descriptor_by_id(SHAPE_ID_BASE + 0x1235).is_none(),
         "a by-facts hit must not mint the second requested id"
     );
+}
+
+/// Charter step 5 x step 4: a literal born with `F64` lanes is seeded with
+/// its birth rep, so the seeded id is the shape every lazy mint of the same
+/// (keys, live, rep) reaches: the literal's own class-keys mint (module init
+/// of its anonymous class) and a chain of Number key-adds. A Number stored
+/// into an `F64` lane of the seeded shape keeps the shape (the store check's
+/// fast outcome: no generalization, the canonical double in the slot).
+/// Sabotage: a seed that drops its rep mints the all-`Any` facts under the
+/// static id, and the seeded record no longer carries the birth rep (nor
+/// would the lazy mint below reach it).
+#[test]
+fn a_rep_literal_seed_is_the_shape_its_lazy_mints_reach_and_keeps_its_f64_lanes() {
+    use crate::object::field_rep::{slot_rep, with_slot_rep, REP_F64};
+    use crate::object::shapes::object_shape_stamp;
+    let _lock = crate::gc::global_side_table_test_lock();
+    const REP_SEED_ANON_CLASS_ID: u32 = 0x0075_5eed;
+    let rep = with_slot_rep(with_slot_rep(0, 0, REP_F64), 1, REP_F64);
+    let requested = SHAPE_ID_BASE + 0x5678;
+    let id = seed_with_rep(requested, &["lt5s_a", "lt5s_b"], rep);
+    assert_eq!(id, requested, "the seed must mint the requested static id");
+    let record = shapes::shape_descriptor_by_id(id).expect("seeded record");
+    assert_eq!(record.rep, rep, "the seeded shape must carry the birth rep");
+    assert_eq!(record.proto_id, shapes::PROTO_ID_DEFAULT);
+
+    // The literal's module-init mint WITHOUT a static id (a module whose
+    // guards embed none): the lazy mint of the same facts is the seeded id.
+    unsafe { crate::object::js_register_anon_shape_class_id(REP_SEED_ANON_CLASS_ID) };
+    let packed = b"lt5s_a\0lt5s_b\0";
+    let keys = crate::object::js_build_class_keys_array(
+        REP_SEED_ANON_CLASS_ID,
+        2,
+        packed.as_ptr(),
+        packed.len() as u32,
+        0,
+    ) as u64;
+    assert_eq!(
+        shapes::js_object_shape_id_for_class_keys(keys, 2, REP_SEED_ANON_CLASS_ID, rep),
+        requested,
+        "the literal's lazy mint must resolve to the seeded id"
+    );
+    // ...and its static request (module init with the id) hits.
+    assert_eq!(
+        js_object_shape_id_for_class_keys_static(
+            keys,
+            2,
+            2,
+            REP_SEED_ANON_CLASS_ID,
+            requested,
+            rep
+        ),
+        requested
+    );
+    // The all-`Any` sibling is other facts: never the static id.
+    let any = shapes::js_object_shape_id_for_class_keys(keys, 2, REP_SEED_ANON_CLASS_ID, 0);
+    assert_ne!(
+        any, requested,
+        "the rep is identity: Any lanes are another shape"
+    );
+
+    unsafe {
+        // Number key-adds on a plain `{}` earn F64 lanes and reach the seed.
+        let obj = crate::object::js_object_alloc_with_parent(0, 0, 2);
+        crate::object::shapes::store_kind::premark_plain_ordinary(obj);
+        for (name, v) in [("lt5s_a", 1.5f64), ("lt5s_b", 2.5)] {
+            let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            crate::object::js_object_set_field_by_name(obj, key, v);
+        }
+        assert_eq!(
+            object_shape_stamp(obj),
+            requested,
+            "a Number key-add chain of these keys must reach the seeded id"
+        );
+        // An F64-lane store of a Number stays on the shape.
+        crate::object::store_object_field_slot(obj, 1, crate::value::INT32_TAG | 7);
+        assert_eq!(
+            object_shape_stamp(obj),
+            requested,
+            "a Number store never transitions"
+        );
+        let fields =
+            (obj as *mut u8).add(std::mem::size_of::<crate::object::ObjectHeader>()) as *const u64;
+        assert_eq!(
+            *fields.add(1),
+            7.0f64.to_bits(),
+            "the lane holds the canonical double"
+        );
+        let record = shapes::shape_descriptor_by_id(requested).expect("seeded record");
+        assert_eq!(
+            slot_rep(record.rep, 1),
+            REP_F64,
+            "the lane is still F64 (not deprecated)"
+        );
+    }
 }
 
 /// Run `name` in a child test process with `SABOTAGE_ENV` set and require it
@@ -130,15 +229,15 @@ fn a_class_seed_takes_the_class_prototype_identity() {
     const SEEDED_CLASS_ID: u32 = 0x0074_1c11;
     let packed = b"lt4k_a\0lt4k_b\0";
     let keys =
-        crate::object::js_build_class_keys_array(SEEDED_CLASS_ID, 2, packed.as_ptr(), 14) as u64;
+        crate::object::js_build_class_keys_array(SEEDED_CLASS_ID, 2, packed.as_ptr(), 14, 0) as u64;
     let requested = SHAPE_ID_BASE + 0x3456;
-    let id = js_object_shape_id_for_class_keys_static(keys, 2, 2, SEEDED_CLASS_ID, requested);
+    let id = js_object_shape_id_for_class_keys_static(keys, 2, 2, SEEDED_CLASS_ID, requested, 0);
     let record = shapes::shape_descriptor_by_id(id).expect("seeded record");
     assert_eq!(record.proto_id, shapes::class_proto_id(SEEDED_CLASS_ID));
     // Registration is idempotent: a second registration (another module
     // importing the class) resolves to the same id.
     assert_eq!(
-        js_object_shape_id_for_class_keys_static(keys, 2, 2, SEEDED_CLASS_ID, requested),
+        js_object_shape_id_for_class_keys_static(keys, 2, 2, SEEDED_CLASS_ID, requested, 0),
         id
     );
     assert!(is_carrier(id));
@@ -222,12 +321,16 @@ fn a_seeded_literal_shape_answers_the_megamorphic_confirm_like_a_minted_one() {
 /// class's confirms fail.
 #[test]
 fn a_class_registered_before_the_pools_answers_the_megamorphic_confirm() {
-    const CLASS_ID: u32 = 0x0074_1c77;
+    const LATE_POOL_CLASS_ID: u32 = 0x0074_1c77;
     let packed = b"ltca_x\0ltca_only_in_b\0";
-    let keys =
-        crate::object::js_build_class_keys_array(CLASS_ID, 2, packed.as_ptr(), packed.len() as u32)
-            as u64;
-    let id = shapes::js_object_shape_id_for_class_keys(keys, 2, CLASS_ID);
+    let keys = crate::object::js_build_class_keys_array(
+        LATE_POOL_CLASS_ID,
+        2,
+        packed.as_ptr(),
+        packed.len() as u32,
+        0,
+    ) as u64;
+    let id = shapes::js_object_shape_id_for_class_keys(keys, 2, LATE_POOL_CLASS_ID, 0);
     // Module B's pool runs afterwards and mints its key literals.
     let (x, b) = (pool_atom("ltca_x"), pool_atom("ltca_only_in_b"));
     assert!(

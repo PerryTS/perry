@@ -3546,17 +3546,39 @@ mod tests {
 
     #[test]
     fn ordered_delete_repairs_mixed_side_indexes_and_preserves_order() {
-        let map = js_map_alloc(32);
         let scope = crate::gc::RuntimeHandleScope::new();
-        let string_keys = (0..12)
-            .map(|i| {
-                let bytes = format!("key-{i:02}").into_bytes();
-                scope.root_nanbox_f64(boxed_heap_string_key(js_string_from_bytes(
-                    bytes.as_ptr(),
-                    bytes.len() as u32,
-                )))
-            })
+        let map_handle = scope.root_raw_mut_ptr(js_map_alloc(32));
+        // String and object allocation may move the Map and earlier keys.
+        // Root every key immediately, then reload all addresses after the
+        // allocating phase. Pointer keys must have genuine GC headers: key
+        // classification reads them and cannot accept arbitrary Rust boxes.
+        let ((string_keys, pointer_keys), map) = map_handle.across_mut::<MapHeader, _>(|| {
+            let string_keys = (0..12)
+                .map(|i| {
+                    let bytes = format!("key-{i:02}").into_bytes();
+                    scope.root_nanbox_f64(boxed_heap_string_key(js_string_from_bytes(
+                        bytes.as_ptr(),
+                        bytes.len() as u32,
+                    )))
+                })
+                .collect::<Vec<_>>();
+            let pointer_keys = (0..4)
+                .map(|_| {
+                    scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+                        crate::object::js_object_alloc(0, 0) as i64,
+                    ))
+                })
+                .collect::<Vec<_>>();
+            (string_keys, pointer_keys)
+        });
+        let pointer_keys = pointer_keys
+            .iter()
+            .map(|key| key.get_nanbox_f64())
             .collect::<Vec<_>>();
+        // The setters below append 28 entries, delete three, then append
+        // three more: raw extent 31 < capacity 32. Their ensure_capacity
+        // therefore returns before its GC-triggering external-allocation path.
+        assert_eq!(unsafe { (*map).capacity }, 32);
 
         let string_key_ptr = |i: usize| {
             (string_keys[i].get_nanbox_f64().to_bits() & crate::value::POINTER_MASK)
@@ -3569,20 +3591,6 @@ mod tests {
                 as *const StringHeader;
             js_map_set_string_number(map, string_key, (i * 10 + 1) as f64);
         }
-        // Keep the backing allocations alive while using their tagged
-        // addresses as identity keys. They deliberately are not GC objects:
-        // this exercises the pointer-key index without introducing an
-        // allocation/collection point into the ordered-delete fixture.
-        let pointer_owners = (0..4).map(Box::new).collect::<Vec<_>>();
-        let pointer_keys = pointer_owners
-            .iter()
-            .map(|owner| {
-                f64::from_bits(
-                    crate::value::POINTER_TAG
-                        | ((owner.as_ref() as *const i32 as u64) & crate::value::POINTER_MASK),
-                )
-            })
-            .collect::<Vec<_>>();
         for (i, key) in pointer_keys.iter().copied().enumerate() {
             js_map_set(map, key, (1_000 + i) as f64);
         }

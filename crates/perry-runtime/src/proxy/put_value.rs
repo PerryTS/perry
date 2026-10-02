@@ -179,21 +179,6 @@ pub extern "C" fn js_put_value_set(
         if unsafe { crate::object::try_existing_own_data_overwrite(obj, key_ptr, value) } {
             return value;
         }
-        // Charter step 3: a key this receiver shape inherits as an accessor
-        // runs its setter from the inherited-access table.
-        if crate::value::addr_class::is_above_handle_band(obj as usize) {
-            if let Some(interned) = unsafe {
-                crate::object::chain_store::interned_key_for_store(f64::from_bits(key_bits))
-            } {
-                if unsafe {
-                    crate::object::inherited_read_cache::inherited_write_through(
-                        obj, interned, value,
-                    )
-                } {
-                    return value;
-                }
-            }
-        }
     }
 
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -415,6 +400,10 @@ mod packed_add;
 mod packed_set;
 pub(crate) use packed_add::note_packed_add_carriers;
 pub use packed_add::PackedSetSite;
+pub(crate) use packed_add::{
+    census as store_census, C_REP_CONVERGE, C_REP_MIGRATE, C_REP_VALIDITY_BUMP,
+};
+pub(crate) use packed_set::scan_setter_site_roots_mut;
 pub use packed_set::{js_put_value_set_packed_miss, PACKED_SET_EMPTY};
 pub(crate) use packed_set::{packed_set_cache_resolve, PackedSetWaysSlot, PACKED_SET_CHAIN_WORD};
 
@@ -468,6 +457,8 @@ pub extern "C" fn js_put_value_set_ic_miss(
     cache_slot: *mut WritePicCacheSlot,
     way: i32,
 ) -> f64 {
+    // Charter step 5: migrate-on-miss (DESIGN §1.5 step 4).
+    crate::object::field_rep_store::migrate_on_miss_value(target.to_bits());
     // Inherited-access lane: a key-adding store on a class instance whose
     // chain this site has already proved clear takes the transition append
     // (`object::chain_store`). Before any scope: the try allocates nothing on
@@ -552,11 +543,7 @@ pub extern "C" fn js_put_value_set_ic_miss(
         // attribute entry, `key_attrs.rs`), checked per key below before
         // anything is primed; every attribute or integrity change moves the
         // ShapeId, so the primed token pins it.
-        const BLOCKING_FLAGS: u16 = crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
-            // A generated hit cannot update/downgrade a typed layout without
-            // calling the runtime. The miss store clears this bit; prime only
-            // once that per-object downgrade is visible.
-            | crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT;
+        const BLOCKING_FLAGS: u16 = crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
         if gc_header.obj_type != crate::gc::GC_TYPE_OBJECT
             || gc_header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
             || gc_header._reserved & BLOCKING_FLAGS != 0
@@ -581,6 +568,13 @@ pub extern "C" fn js_put_value_set_ic_miss(
             return result;
         }
 
+        // A numeric-proof sibling must never enter an own-slot write cache:
+        // a hit would bypass the owner store that retires the proof.
+        if !crate::object::shapes::store_kind::shape_admits_plain_store(
+            crate::object::shapes::object_shape_stamp(obj),
+        ) {
+            return result;
+        }
         let Some(shape) = crate::object::shapes::object_shape_descriptor(obj) else {
             return result;
         };
@@ -647,11 +641,6 @@ pub extern "C" fn js_put_value_set_ic_miss(
         // The descriptor above already proves this stamp is live, so the
         // token comes from the header word rather than from a second full
         // lookup-and-copy of the same id (see `dyn_ic_try_store`).
-        // D3(b): a marked prototype's shape is never learned by a store cache,
-        // so every write to it reaches a funnel that bumps PERRY_PROTO_VALIDITY.
-        if !crate::object::proto_validity::store_cache_may_learn(obj) {
-            return result;
-        }
         let shape_token = crate::object::shapes::PIC_ID_TOKEN_BIT
             | crate::object::shapes::object_shape_stamp(obj) as u64;
 
@@ -924,8 +913,7 @@ unsafe fn dyn_ic_try_store(target: f64, token: u64, slot: u32, value: f64) -> Op
         | crate::gc::OBJ_FLAG_SEALED
         | crate::gc::OBJ_FLAG_NO_EXTEND
         | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
-        | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
-        | crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT;
+        | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
     if gc_header.obj_type != crate::gc::GC_TYPE_OBJECT
         || gc_header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || gc_header._reserved & BLOCKING_FLAGS != 0
@@ -1017,7 +1005,6 @@ pub extern "C" fn js_transition_ic_spill_append(
             | crate::gc::OBJ_FLAG_NO_EXTEND
             | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
             | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
-            | crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT
             | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES;
         if gc_header.obj_type != crate::gc::GC_TYPE_OBJECT
             || gc_header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
@@ -1074,6 +1061,8 @@ pub extern "C" fn js_put_value_set_dyn_ic_miss(
     value: f64,
     strict: i32,
 ) -> f64 {
+    // Charter step 5: migrate-on-miss (DESIGN §1.5 step 4).
+    crate::object::field_rep_store::migrate_on_miss_value(target.to_bits());
     // The slot is read once here; a null cache means the site has never
     // primed, which the stub probe below treats as "no site token" exactly as
     // it treated an all-zero global (#9708).
@@ -1225,8 +1214,7 @@ pub extern "C" fn js_put_value_set_dyn_ic_miss(
             | crate::gc::OBJ_FLAG_SEALED
             | crate::gc::OBJ_FLAG_NO_EXTEND
             | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
-            | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
-            | crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT;
+            | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
         if gc_header.obj_type != crate::gc::GC_TYPE_OBJECT
             || gc_header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
             || gc_header._reserved & BLOCKING_FLAGS != 0
@@ -1238,6 +1226,13 @@ pub extern "C" fn js_put_value_set_dyn_ic_miss(
             || !write_fast_path_receiver_kind_ok(obj, gc_header._reserved)
             || crate::array::object_prototype_addr_matches(obj_addr)
         {
+            return result;
+        }
+        // A numeric-proof sibling must never enter an own-slot write cache:
+        // a hit would bypass the owner store that retires the proof.
+        if !crate::object::shapes::store_kind::shape_admits_plain_store(
+            crate::object::shapes::object_shape_stamp(obj),
+        ) {
             return result;
         }
         let Some(shape) = crate::object::shapes::object_shape_descriptor(obj) else {
@@ -1272,11 +1267,6 @@ pub extern "C" fn js_put_value_set_dyn_ic_miss(
         // The descriptor above already proves this stamp is live, so the
         // token comes from the header word rather than from a second full
         // lookup-and-copy of the same id (see `dyn_ic_try_store`).
-        // D3(b): a marked prototype's shape is never learned by a store cache,
-        // so every write to it reaches a funnel that bumps PERRY_PROTO_VALIDITY.
-        if !crate::object::proto_validity::store_cache_may_learn(obj) {
-            return result;
-        }
         let shape_token = crate::object::shapes::PIC_ID_TOKEN_BIT
             | crate::object::shapes::object_shape_stamp(obj) as u64;
         let key_bits = key.to_bits() as i64;
@@ -1568,7 +1558,6 @@ fn object_array_numeric_write_slots(
         *mut crate::array::ArrayHeader,
         u32,
         u32,
-        u16,
     )> {
         if (bits & !POINTER_MASK) != POINTER_TAG {
             return None;
@@ -1606,7 +1595,6 @@ fn object_array_numeric_write_slots(
             keys,
             shape.logical_key_count,
             shape.live_inline_slot_count,
-            gc._reserved,
         ))
     }
 
@@ -1632,7 +1620,7 @@ fn object_array_numeric_write_slots(
         trace_object_array_numeric_write_rejection("first receiver is a hole");
         return None;
     }
-    let (first, shared_shape_id, shared_keys, shared_key_count, first_limit, first_flags) =
+    let (first, shared_shape_id, shared_keys, shared_key_count, first_limit) =
         trace_object_array_numeric_write_stage(
             unsafe { validated_object(first_bits) },
             "first receiver is not an eligible regular shared-shape object",
@@ -1697,28 +1685,6 @@ fn object_array_numeric_write_slots(
             lane_spill[index] = true;
         }
     }
-    if first_flags & crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT != 0 {
-        // Typed-intact receivers keep raw-f64 inline invariants; a spill
-        // lane on one is unexpected — reject conservatively rather than
-        // reason about typed descriptors for out-of-line slots.
-        if lane_spill[..keys.len()].iter().any(|s| *s) {
-            trace_object_array_numeric_write_rejection(
-                "first receiver typed descriptor does not contain every target slot",
-            );
-            return None;
-        }
-        if slots[..keys.len()].iter().any(|slot| {
-            !crate::gc::layout_typed_accepts_finite_number_slot_for_user(
-                first as usize,
-                usize::from(*slot),
-            )
-        }) {
-            trace_object_array_numeric_write_rejection(
-                "first receiver typed descriptor does not contain every target slot",
-            );
-            return None;
-        }
-    }
 
     for i in (receiver_start as usize + 1)..receiver_end as usize {
         let bits = unsafe { (*elements.add(i)).to_bits() };
@@ -1726,7 +1692,7 @@ fn object_array_numeric_write_slots(
             trace_object_array_numeric_write_rejection("receiver prefix contains a hole");
             return None;
         }
-        let (obj, receiver_shape_id, _object_keys, _object_key_count, limit, flags) =
+        let (obj, receiver_shape_id, _object_keys, _object_key_count, limit) =
             trace_object_array_numeric_write_stage(
                 unsafe { validated_object(bits) },
                 "receiver prefix contains an ineligible object",
@@ -1752,25 +1718,6 @@ fn object_array_numeric_write_slots(
             } else if slot >= limit {
                 trace_object_array_numeric_write_rejection(
                     "receiver prefix contains an out-of-bounds target slot",
-                );
-                return None;
-            }
-        }
-        if flags & crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT != 0 {
-            if lane_spill[..keys.len()].iter().any(|s| *s) {
-                trace_object_array_numeric_write_rejection(
-                    "receiver typed descriptor does not contain every target slot",
-                );
-                return None;
-            }
-            if slots[..keys.len()].iter().any(|slot| {
-                !crate::gc::layout_typed_accepts_finite_number_slot_for_user(
-                    obj as usize,
-                    usize::from(*slot),
-                )
-            }) {
-                trace_object_array_numeric_write_rejection(
-                    "receiver typed descriptor does not contain every target slot",
                 );
                 return None;
             }
@@ -1864,7 +1811,9 @@ pub extern "C" fn js_object_array_keytable_write_guard(
 /// stores, whose bits are valid in both raw-f64 and ordinary numeric JSValue
 /// fields, until both loops finish. That call-free interval is load-bearing:
 /// no GC can move the array, its elements, their shared keys array, or their
-/// typed-layout records after this function validates them.
+/// shapes after this function validates them. A finite double is a canonical
+/// value for an `F64` lane and an ordinary Number for an `Any` lane, so no
+/// lane of the receivers' shapes can reject these stores.
 #[no_mangle]
 pub extern "C" fn js_object_array_numeric_write_guard(
     array: f64,

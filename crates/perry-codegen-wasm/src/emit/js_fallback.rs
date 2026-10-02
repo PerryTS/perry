@@ -19,6 +19,13 @@ impl WasmModuleEmitter {
         let params_str = params.join(", ");
 
         let mut body = String::new();
+        let scoped_names = scoped_js::scoped_js_names(&func.body);
+        if !scoped_names.is_empty() {
+            body.push_str(&format!(
+                "    let {};\n",
+                scoped_names.into_iter().collect::<Vec<_>>().join(", ")
+            ));
+        }
         // Map param names to local IDs for the JS emitter
         let mut local_names: BTreeMap<u32, String> = BTreeMap::new();
         for (i, param) in func.params.iter().enumerate() {
@@ -225,6 +232,21 @@ impl WasmModuleEmitter {
                     .replace('\n', "\\n")
                     .replace('\r', "\\r");
                 format!("fromJsValue(\"{}\")", escaped)
+            }
+            Expr::ScopedTemp { id, value, body } => {
+                let prefix = format!("__scoped_v_{id}_");
+                let depth = locals
+                    .get(id)
+                    .and_then(|name| name.strip_prefix(&prefix))
+                    .and_then(|depth| depth.parse::<u32>().ok())
+                    .map_or(0, |depth| depth + 1);
+                let value_name = format!("{prefix}{depth}");
+                let result_name = format!("__scoped_r_{id}_{depth}");
+                let init = self.emit_js_expr(value, locals);
+                let mut inner = locals.clone();
+                inner.insert(*id, value_name.clone());
+                let body = self.emit_js_expr(body, &inner);
+                format!("({value_name} = {init}, {result_name} = {body}, {value_name} = undefined, {result_name})")
             }
             Expr::LocalGet(id) => locals
                 .get(id)

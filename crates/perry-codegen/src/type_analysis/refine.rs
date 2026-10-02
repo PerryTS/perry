@@ -305,6 +305,17 @@ pub(crate) fn proven_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
             is_async: *is_async,
             is_generator: *is_generator,
         })),
+        // The unshadowed global TransformStream constructor installs a native
+        // registry handle. Match lower_new's builtin ownership gate rather than
+        // deriving this identity from an erased declaration or a user class.
+        Expr::New { class_name, .. }
+            if class_name == "TransformStream"
+                && !ctx.classes.contains_key(class_name)
+                && !(ctx.import_function_prefixes.contains_key(class_name)
+                    && !ctx.import_function_v8_specifiers.contains_key(class_name)) =>
+        {
+            Some(HirType::Named(class_name.clone()))
+        }
         // #8222: native constructors have a compiler-owned runtime contract,
         // so their result keeps its canonical class identity. This matters for
         // aliased named imports (`Socket as Sk`): HIR canonicalizes `new Sk()`
@@ -979,7 +990,7 @@ pub(crate) fn compute_auto_captures(
     body: &[perry_hir::Stmt],
     explicit: &[u32],
 ) -> Vec<u32> {
-    compute_auto_captures_with_globals(params, body, explicit, ctx.module_globals)
+    compute_auto_captures_with_globals(params, body, explicit, ctx.module_globals, ctx.scope_map)
 }
 
 /// Context-free half of [`compute_auto_captures`]. Closure body emission and
@@ -990,6 +1001,7 @@ pub(crate) fn compute_auto_captures_with_globals(
     body: &[perry_hir::Stmt],
     explicit: &[u32],
     module_globals: &std::collections::HashMap<u32, String>,
+    scope_map: &crate::scope_env::ScopeMap,
 ) -> Vec<u32> {
     // Exclude module globals from the explicit captures list. perry-hir
     // sometimes lists block-scoped top-level lets (those whose
@@ -1026,5 +1038,6 @@ pub(crate) fn compute_auto_captures_with_globals(
             out.push(id);
         }
     }
-    out
+    // A scope group is one capture slot, keyed by its representative.
+    scope_map.collapse_captures(out)
 }

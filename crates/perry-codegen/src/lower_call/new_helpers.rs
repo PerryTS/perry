@@ -83,6 +83,9 @@ pub(crate) enum NativeInstanceBase {
     Set,
     WeakMap,
     WeakSet,
+    EventTarget,
+    AbortController,
+    AbortSignal,
     Event,
     CustomEvent,
     DomException,
@@ -108,6 +111,9 @@ pub(crate) fn native_instance_base(name: &str) -> Option<NativeInstanceBase> {
         "Set" => Some(NativeInstanceBase::Set),
         "WeakMap" => Some(NativeInstanceBase::WeakMap),
         "WeakSet" => Some(NativeInstanceBase::WeakSet),
+        "EventTarget" => Some(NativeInstanceBase::EventTarget),
+        "AbortController" => Some(NativeInstanceBase::AbortController),
+        "AbortSignal" => Some(NativeInstanceBase::AbortSignal),
         "Event" => Some(NativeInstanceBase::Event),
         "CustomEvent" => Some(NativeInstanceBase::CustomEvent),
         "DOMException" => Some(NativeInstanceBase::DomException),
@@ -318,6 +324,20 @@ pub(crate) fn emit_native_instance_base_init(
                     (I32, &kind.to_string()),
                     (DOUBLE, &iterable),
                 ],
+            );
+        }
+        NativeInstanceBase::EventTarget
+        | NativeInstanceBase::AbortController
+        | NativeInstanceBase::AbortSignal => {
+            let kind = match base {
+                NativeInstanceBase::EventTarget => "0",
+                NativeInstanceBase::AbortController => "1",
+                _ => "2",
+            };
+            ctx.block().call(
+                DOUBLE,
+                "js_event_target_subclass_init",
+                &[(DOUBLE, this_box), (I32, kind)],
             );
         }
         NativeInstanceBase::Event | NativeInstanceBase::CustomEvent => {

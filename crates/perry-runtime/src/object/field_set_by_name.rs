@@ -214,7 +214,11 @@ pub extern "C" fn js_object_set_field_by_name(
                         let prev_shape_id = super::shapes::object_shape_stamp(o);
                         if prev_shape_id != 0 {
                             if let Some((next_keys, slot_idx, target_shape_id)) =
-                                transition_cache_lookup(prev_shape_id, key)
+                                transition_cache_lookup_for_value(
+                                    prev_shape_id,
+                                    key,
+                                    Some(value.to_bits()),
+                                )
                             {
                                 // Same store semantics as the in-body fast
                                 // path: strip a raw-null POINTER_TAG value,
@@ -243,17 +247,12 @@ pub extern "C" fn js_object_set_field_by_name(
                                     crate::object::INLINE_SLOT_FLOOR as u32,
                                 ) as usize;
                                 if (slot_idx as usize) < alloc_limit {
-                                    let fields_ptr = (o as *mut u8)
-                                        .add(std::mem::size_of::<ObjectHeader>())
-                                        as *mut JSValue;
-                                    let slot = fields_ptr.add(slot_idx as usize);
                                     if slot_idx >= live_slots {
                                         set_object_live_slot_count(o, slot_idx + 1);
                                     }
-                                    crate::object::proto_validity::note_marked_value_write(o);
-                                    crate::gc::runtime_store_jsvalue_slot(
-                                        o as usize,
-                                        slot as usize,
+                                    // The funnel (charter step 5 store check).
+                                    crate::object::store_object_field_slot(
+                                        o,
                                         slot_idx as usize,
                                         vbits,
                                     );

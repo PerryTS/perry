@@ -630,6 +630,87 @@ unsafe fn evaluated_parent_instance_field(
     None
 }
 
+/// Has a user operation (`Object.setPrototypeOf(C.prototype, X)`,
+/// `C.prototype.__proto__ = X`) replaced the `[[Prototype]]` of class
+/// `cid`'s declared prototype? Then `get_parent_class_id(cid)` no longer
+/// names the next hop of an instance chain, and walks over the class
+/// registry must stop at `cid` (the recorded link continues the chain).
+pub(crate) fn class_decl_prototype_relinked(cid: u32) -> bool {
+    let decl_proto = class_decl_prototype_object(cid);
+    !decl_proto.is_null()
+        && super::super::prototype_chain::object_has_user_prototype_override(decl_proto as usize)
+}
+
+/// What the rest of a declared prototype's chain answers once a user
+/// operation replaced that prototype's `[[Prototype]]`.
+enum RelinkedRead {
+    /// The declared prototype still stands on its class default; the parent
+    /// class id names its next hop.
+    NotRelinked,
+    Answered(JSValue),
+    /// The recorded chain was read in full (or ends in `null`) and lacks the key.
+    Missed,
+}
+
+/// `C.prototype`'s own properties have been consulted; continue on its
+/// RECORDED `[[Prototype]]` with the instance as receiver.
+///
+/// The class-id walk follows `get_parent_class_id`, which is fixed at
+/// declaration. After `Object.setPrototypeOf(C.prototype, X)` that edge is no
+/// longer on the chain, and reading the parent class's prototype answered a
+/// property `C` instances no longer inherit. The relink is a shape fact of the
+/// declared prototype (its ShapeId names the new prototype), so the holder
+/// facts a read site validates decline on their own; this is the generic read
+/// those sites fall back to and confirm their prime against.
+unsafe fn relinked_decl_prototype_field(
+    decl_proto: *mut ObjectHeader,
+    key: *const crate::StringHeader,
+    receiver: f64,
+) -> RelinkedRead {
+    if key.is_null()
+        || !super::super::prototype_chain::object_has_user_prototype_override(decl_proto as usize)
+    {
+        return RelinkedRead::NotRelinked;
+    }
+    // A link recorded as the class default (or never recorded) keeps the
+    // parent class id authoritative; only a user relink replaces it.
+    let Some(bits) = super::super::prototype_chain::object_static_prototype(decl_proto as usize)
+    else {
+        return RelinkedRead::NotRelinked;
+    };
+    if bits == crate::value::TAG_NULL {
+        return RelinkedRead::Missed;
+    }
+    let link = f64::from_bits(bits);
+    if crate::proxy::js_proxy_is_proxy(link) != 0 {
+        let key_val = f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
+        let v = crate::proxy::proxy_get_with_receiver(link, key_val, receiver);
+        return RelinkedRead::Answered(JSValue::from_bits(v.to_bits()));
+    }
+    let addr = match bits >> 48 {
+        0x7FFD => (bits & crate::value::POINTER_MASK) as usize,
+        0 if crate::value::addr_class::is_above_handle_band(bits as usize) => bits as usize,
+        _ => return RelinkedRead::Missed,
+    };
+    if addr == decl_proto as usize || !super::super::is_valid_obj_ptr(addr as *const u8) {
+        return RelinkedRead::Missed;
+    }
+    // The recursive read re-derives the accessor receiver from the prototype;
+    // stash the instance so an inherited getter binds `this` to it.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let prev = super::super::field_get_set::accessor_receiver_override_begin(receiver);
+    let prev = prev.map(|value| scope.root_nanbox_f64(value));
+    let value = js_object_get_field_by_name(addr as *const ObjectHeader, key);
+    super::super::field_get_set::accessor_receiver_override_end(
+        prev.map(|handle| handle.get_nanbox_f64()),
+    );
+    if value.is_undefined() {
+        RelinkedRead::Missed
+    } else {
+        RelinkedRead::Answered(value)
+    }
+}
+
 /// `constructor_side`: this walk serves a read on the class CONSTRUCTOR, so a
 /// name that is a declared INSTANCE member must not resolve through it.
 ///
@@ -824,6 +905,16 @@ unsafe fn resolve_proto_chain_field_inner(
                 }
             }
         }
+        // `Object.setPrototypeOf(C.prototype, X)` relinks the declared
+        // prototype. The registered parent class id no longer names the next
+        // hop: the recorded link does, and the rest of the chain is X's.
+        if let (false, Some(receiver)) = (decl_proto.is_null(), receiver) {
+            match relinked_decl_prototype_field(decl_proto, key, receiver) {
+                RelinkedRead::NotRelinked => {}
+                RelinkedRead::Answered(value) => return Some(value),
+                RelinkedRead::Missed => return None,
+            }
+        }
         let mut proto_obj = class_prototype_object(cid);
         if let Some(receiver) = receiver {
             if let Some(parent_class) = declared_parent_class_object(cid, proto_obj) {
@@ -888,6 +979,17 @@ unsafe fn resolve_proto_chain_field_inner(
                 break;
             }
         }
+    }
+    // A native parent is represented by its actual prototype rather than a
+    // synthetic class-registry entry. Finish the declared prototype's real
+    // chain using own descriptors; recursively entering the generic getter
+    // can revisit this same class walk and mistake that recursion for a miss.
+    if let Some(receiver) = receiver {
+        return evaluated_parent_instance_field(
+            class_decl_prototype_object(class_id),
+            key,
+            receiver,
+        );
     }
     None
 }

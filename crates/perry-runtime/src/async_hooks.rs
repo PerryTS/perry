@@ -187,8 +187,8 @@ pub(crate) const ASYNC_RESOURCE_EVENT_EMITTER_KEY: &[u8] = b"__perryAsyncResourc
 /// Live `AsyncResource` handles. Handles are raw `Box::into_raw` pointers
 /// (never freed → membership is monotonic), NaN-boxed with POINTER_TAG like
 /// heap objects — so the dynamic method path needs this registry to recognize
-/// one BEFORE dereferencing it as an ObjectHeader (#789, mirrors the
-/// BOX_REGISTRY pattern from #4898).
+/// one BEFORE dereferencing it as an ObjectHeader (#789; modelled on the
+/// since-removed capture-box registry from #4898).
 static ASYNC_RESOURCE_HANDLES: LazyLock<Mutex<HashSet<i64>>> =
     LazyLock::new(|| Mutex::new(HashSet::new()));
 static ASYNC_RESOURCE_HANDLE_COUNT: AtomicUsize = AtomicUsize::new(0);

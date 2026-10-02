@@ -1,29 +1,18 @@
 //! `AbortController` / `AbortSignal` runtime implementation.
 
 use super::*;
+use crate::event_target::state::{
+    get_slot as get_abort_slot, set_slot as set_abort_slot, SIGNAL_ABORTED, SIGNAL_REASON,
+};
 
 // =========================================================================
 // AbortController implementation
 // =========================================================================
 
-/// AbortController object structure (matches ObjectHeader layout)
-/// Field 0: signal (object-ptr NaN-boxed)
-/// Field 1: aborted flag (NaN-boxed bool)
-/// Field 2: abort method (closure)
+// State is held by ordinary symbol-keyed own properties.
 pub(crate) const ABORT_CONTROLLER_CLASS_ID: u32 = crate::native_class_ids::ABORT_CONTROLLER;
 pub(crate) const ABORT_SIGNAL_CLASS_ID: u32 = crate::native_class_ids::ABORT_SIGNAL;
-const ABORT_CONTROLLER_FIELD_COUNT: u32 = 3;
-const ABORT_SIGNAL_FIELD: u32 = 0;
-const ABORT_ABORTED_FIELD: u32 = 1;
-const ABORT_METHOD_FIELD: u32 = 2;
-
-// AbortSignal object layout (all fields NaN-boxed):
-//   field 0: aborted (bool)
-//   field 1: reason (any)
-//   field 2: listeners (array of closure f64 values; may be null/undefined if empty)
-//   field 3: addEventListener method
-//   field 4: removeEventListener method
-const ABORT_SIGNAL_FIELD_COUNT: u32 = 5;
+const ABORT_SIGNAL_FIELD: u32 = crate::event_target::state::CONTROLLER_SIGNAL;
 
 const TAG_UNDEFINED_AC: u64 = 0x7FFC_0000_0000_0001;
 const TAG_TRUE_AC: u64 = 0x7FFC_0000_0000_0004;
@@ -43,110 +32,39 @@ fn nanbox_pointer_ac(ptr: *mut ObjectHeader) -> f64 {
 fn unbox_pointer_ac(v: f64) -> *mut ObjectHeader {
     let bits = v.to_bits();
     if (bits & 0xFFFF_0000_0000_0000) != POINTER_TAG_AC {
-        // Fallback: legacy raw bitcast path
-        return (v.to_bits() as usize) as *mut ObjectHeader;
+        return std::ptr::null_mut();
     }
     (bits & 0x0000_FFFF_FFFF_FFFF) as *mut ObjectHeader
 }
 
 fn alloc_abort_signal() -> *mut ObjectHeader {
-    let signal = js_object_alloc(ABORT_SIGNAL_CLASS_ID, ABORT_SIGNAL_FIELD_COUNT);
-    let mut signal_keys = js_array_alloc(ABORT_SIGNAL_FIELD_COUNT);
-    signal_keys = js_array_push_f64(signal_keys, create_string_f64("aborted"));
-    signal_keys = js_array_push_f64(signal_keys, create_string_f64("reason"));
-    signal_keys = js_array_push_f64(signal_keys, create_string_f64("_listeners"));
-    signal_keys = js_array_push_f64(signal_keys, create_string_f64("addEventListener"));
-    signal_keys = js_array_push_f64(signal_keys, create_string_f64("removeEventListener"));
-    js_object_set_keys(signal, signal_keys);
-    js_object_set_field_f64(signal, 0, f64::from_bits(TAG_FALSE_AC));
-    js_object_set_field_f64(signal, 1, f64::from_bits(TAG_UNDEFINED_AC));
-    js_object_set_field_f64(signal, 2, f64::from_bits(TAG_UNDEFINED_AC));
-    js_object_set_field_f64(signal, 3, abort_signal_listener_method_value(signal, true));
-    js_object_set_field_f64(signal, 4, abort_signal_listener_method_value(signal, false));
+    let _gc = crate::gc::GcSuppressScope::new();
+    crate::event_target::note_constructed();
+    let signal = js_object_alloc(ABORT_SIGNAL_CLASS_ID, 0);
+    crate::event_target::state::link(signal, "AbortSignal");
+    crate::event_target::state::initialize_target(signal, true);
+    set_abort_slot(signal, SIGNAL_ABORTED, f64::from_bits(TAG_FALSE_AC));
+    set_abort_slot(signal, SIGNAL_REASON, f64::from_bits(TAG_UNDEFINED_AC));
+    set_abort_slot(
+        signal,
+        crate::event_target::state::COMPOSITE,
+        f64::from_bits(TAG_FALSE_AC),
+    );
     signal
-}
-
-extern "C" fn abort_signal_add_event_listener_method(
-    closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
-    event_type: f64,
-    listener: f64,
-) -> f64 {
-    let signal = crate::closure::js_closure_get_capture_ptr(closure, 0) as *mut ObjectHeader;
-    js_abort_signal_add_listener(signal, event_type, listener);
-    f64::from_bits(crate::value::TAG_UNDEFINED)
-}
-
-extern "C" fn abort_signal_remove_event_listener_method(
-    closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
-    event_type: f64,
-    listener: f64,
-) -> f64 {
-    let signal = crate::closure::js_closure_get_capture_ptr(closure, 0) as *mut ObjectHeader;
-    js_abort_signal_remove_listener(signal, event_type, listener);
-    f64::from_bits(crate::value::TAG_UNDEFINED)
-}
-
-fn abort_signal_listener_method_value(signal: *mut ObjectHeader, add: bool) -> f64 {
-    let func = if add {
-        crate::fn_info!(abort_signal_add_event_listener_method, 2; with_declared(2))
-    } else {
-        crate::fn_info!(abort_signal_remove_event_listener_method, 2; with_declared(2))
-    };
-    let closure = crate::closure::js_closure_alloc(func, 1);
-    crate::closure::js_closure_set_capture_ptr(closure, 0, signal as i64);
-    crate::value::js_nanbox_pointer(closure as i64)
-}
-
-extern "C" fn abort_controller_abort_method(
-    closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
-    reason: f64,
-) -> f64 {
-    let controller_bits = crate::closure::js_closure_get_capture_ptr(closure, 0) as u64;
-    let controller_value = f64::from_bits(controller_bits);
-    let controller = crate::value::js_nanbox_get_pointer(controller_value) as *mut ObjectHeader;
-    js_abort_controller_abort_reason(controller, reason);
-    f64::from_bits(crate::value::TAG_UNDEFINED)
-}
-
-fn abort_controller_abort_value(controller: *mut ObjectHeader) -> f64 {
-    let func = crate::fn_info!(abort_controller_abort_method, 1; with_declared(1));
-    let closure = crate::closure::js_closure_alloc(func, 1);
-    let controller_value = crate::value::js_nanbox_pointer(controller as i64);
-    crate::closure::js_closure_set_capture_ptr(closure, 0, controller_value.to_bits() as i64);
-    crate::value::js_nanbox_pointer(closure as i64)
 }
 
 /// Create a new AbortController
 #[no_mangle]
 pub extern "C" fn js_abort_controller_new() -> *mut ObjectHeader {
-    // Allocate the AbortController object
-    let controller = js_object_alloc(ABORT_CONTROLLER_CLASS_ID, ABORT_CONTROLLER_FIELD_COUNT);
-
-    let signal = alloc_abort_signal();
-
-    // Set up controller keys
-    let mut keys = js_array_alloc(ABORT_CONTROLLER_FIELD_COUNT);
-    keys = js_array_push_f64(keys, create_string_f64("signal"));
-    keys = js_array_push_f64(keys, create_string_f64("aborted"));
-    keys = js_array_push_f64(keys, create_string_f64("abort"));
-    js_object_set_keys(controller, keys);
-
-    // Store signal in controller (NaN-boxed with POINTER_TAG)
-    js_object_set_field_f64(controller, ABORT_SIGNAL_FIELD, nanbox_pointer_ac(signal));
-    js_object_set_field_f64(
+    let _gc = crate::gc::GcSuppressScope::new();
+    crate::event_target::note_constructed();
+    let controller = js_object_alloc(ABORT_CONTROLLER_CLASS_ID, 0);
+    crate::event_target::state::link(controller, "AbortController");
+    crate::event_target::state::set_slot(
         controller,
-        ABORT_ABORTED_FIELD,
-        f64::from_bits(TAG_FALSE_AC),
+        ABORT_SIGNAL_FIELD,
+        f64::from_bits(TAG_UNDEFINED_AC),
     );
-    js_object_set_field_f64(
-        controller,
-        ABORT_METHOD_FIELD,
-        abort_controller_abort_value(controller),
-    );
-
     controller
 }
 
@@ -156,52 +74,45 @@ pub extern "C" fn js_abort_controller_signal(controller: *mut ObjectHeader) -> *
     if controller.is_null() {
         return std::ptr::null_mut();
     }
-    let signal_val = crate::object::js_object_get_field_f64(controller, ABORT_SIGNAL_FIELD);
-    unbox_pointer_ac(signal_val)
+    let signal_val = crate::event_target::state::get_slot(controller, ABORT_SIGNAL_FIELD);
+    if signal_val.to_bits() == TAG_UNDEFINED_AC {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let controller = scope.root_raw_mut_ptr(controller);
+        let signal = scope.root_raw_mut_ptr(alloc_abort_signal());
+        let ((), result) = signal.across_mut(|| {
+            controller.with_mut_ptr(|controller| {
+                signal.with_mut_ptr(|signal| {
+                    crate::event_target::state::set_slot(
+                        controller,
+                        ABORT_SIGNAL_FIELD,
+                        nanbox_pointer_ac(signal),
+                    )
+                });
+            });
+        });
+        result
+    } else {
+        unbox_pointer_ac(signal_val)
+    }
 }
 
 fn fire_abort_listeners(signal: *mut ObjectHeader) {
     if signal.is_null() {
         return;
     }
-    // Wake any in-flight `fetch` bound to this signal so it rejects with an
-    // AbortError. Done here — before the JS-listener early return below — so the
-    // fetch is cancelled even when the signal carries no JS `abort` listener
-    // (the common `fetch(url, { signal })` case registers none). This replaces a
-    // per-fetch JS listener, so reused signals don't accumulate stale closures.
-    notify_fetch_abort(signal as i64);
-    let listeners_val = crate::object::js_object_get_field_f64(signal, 2);
-    let bits = listeners_val.to_bits();
-    if bits == TAG_UNDEFINED_AC || bits == TAG_FALSE_AC {
-        return;
-    }
-    // Extract array pointer (NaN-boxed POINTER_TAG).
-    let arr_ptr = if (bits & 0xFFFF_0000_0000_0000) == POINTER_TAG_AC {
-        (bits & 0x0000_FFFF_FFFF_FFFF) as *mut crate::array::ArrayHeader
-    } else {
-        return;
-    };
-    if arr_ptr.is_null() {
-        return;
-    }
-    let len = crate::array::js_array_length(arr_ptr) as usize;
-    let mut callbacks = Vec::with_capacity(len);
-    for i in 0..len {
-        callbacks.push(crate::array::js_array_get_f64(arr_ptr, i as u32));
-    }
-    for cb_val in callbacks {
-        let cb_bits = cb_val.to_bits();
-        // Try to extract closure pointer (may be POINTER_TAG or raw bitcast).
-        let cb_ptr = if (cb_bits & 0xFFFF_0000_0000_0000) == POINTER_TAG_AC {
-            (cb_bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::closure::ClosureHeader
-        } else if cb_bits > 0x10000 && (cb_bits >> 48) == 0 {
-            cb_bits as *const crate::closure::ClosureHeader
-        } else {
-            continue;
-        };
-        if !cb_ptr.is_null() {
-            crate::closure::js_closure_call0(cb_ptr, crate::closure::plain_call_receiver());
-        }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let signal = scope.root_raw_mut_ptr(signal);
+    signal.with_mut_ptr::<ObjectHeader, _>(|ptr| notify_fetch_abort(ptr as i64));
+    let event = crate::event_target::js_event_new(
+        create_string_f64("abort"),
+        f64::from_bits(TAG_UNDEFINED_AC),
+        1,
+    );
+    let event = scope.root_nanbox_f64(nanbox_pointer_ac(event));
+    unsafe {
+        signal.with_mut_ptr(|ptr| {
+            crate::event_target::js_event_target_dispatch_event(ptr, event.get_nanbox_f64())
+        });
     }
 }
 
@@ -209,7 +120,7 @@ fn abort_signal_is_aborted(signal: *mut ObjectHeader) -> bool {
     if signal.is_null() {
         return false;
     }
-    crate::object::js_object_get_field_f64(signal, 0).to_bits() == TAG_TRUE_AC
+    crate::value::js_is_truthy(get_abort_slot(signal, SIGNAL_ABORTED)) != 0
 }
 
 /// Return true if the given AbortSignal has already been aborted.
@@ -230,7 +141,11 @@ pub(crate) fn abort_signal_ptr_from_value(value: f64) -> Option<*mut ObjectHeade
     if crate::value::addr_class::is_handle_band(ptr as usize) {
         return None;
     }
-    let is_signal = unsafe { (*ptr).class_id == ABORT_SIGNAL_CLASS_ID };
+    let is_signal = unsafe {
+        crate::value::addr_class::try_read_tracked_gc_header(ptr as usize)
+            .is_some_and(|h| h.as_ref().obj_type == crate::gc::GC_TYPE_OBJECT)
+            && (*ptr).class_id == ABORT_SIGNAL_CLASS_ID
+    };
     is_signal.then_some(ptr)
 }
 
@@ -315,229 +230,82 @@ pub extern "C" fn js_abort_controller_abort_reason(controller: *mut ObjectHeader
     if controller.is_null() {
         return;
     }
-    let signal_val = crate::object::js_object_get_field_f64(controller, ABORT_SIGNAL_FIELD);
-    let signal = unbox_pointer_ac(signal_val);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let reason = scope.root_nanbox_f64(reason);
+    let signal = js_abort_controller_signal(controller);
 
     if !signal.is_null() {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let rooted_signal = scope.root_raw_mut_ptr(signal);
         if abort_signal_is_aborted(signal) {
-            js_object_set_field_f64(controller, ABORT_ABORTED_FIELD, f64::from_bits(TAG_TRUE_AC));
             return;
         }
         // Set aborted = true on signal
-        js_object_set_field_f64(signal, 0, f64::from_bits(TAG_TRUE_AC));
+        set_abort_slot(signal, SIGNAL_ABORTED, f64::from_bits(TAG_TRUE_AC));
         // Node defaults omitted/undefined reasons to a DOMException AbortError.
-        let effective = if reason.to_bits() == TAG_UNDEFINED_AC {
+        let effective = if reason.get_nanbox_u64() == TAG_UNDEFINED_AC {
             crate::event_target::abort_dom_exception_value()
         } else {
-            reason
+            reason.get_nanbox_f64()
         };
-        js_object_set_field_f64(signal, 1, effective);
+        rooted_signal.with_mut_ptr(|ptr| set_abort_slot(ptr, SIGNAL_REASON, effective));
         // Fire listeners
-        fire_abort_listeners(signal);
+        rooted_signal.with_mut_ptr(fire_abort_listeners);
     }
-
-    // Also set aborted on controller
-    js_object_set_field_f64(controller, ABORT_ABORTED_FIELD, f64::from_bits(TAG_TRUE_AC));
 }
 
-/// Register an "abort" event listener on a signal. `event_type` is the NaN-boxed
-/// string name (we only act on "abort"); `listener` is a NaN-boxed closure f64.
+/// Register a listener through the shared EventTarget state.
 #[no_mangle]
 pub extern "C" fn js_abort_signal_add_listener(
     signal: *mut ObjectHeader,
     event_type: f64,
     listener: f64,
 ) {
-    if signal.is_null() {
-        return;
-    }
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let signal = scope.root_raw_mut_ptr(signal);
-    let event_type = scope.root_nanbox_f64(event_type);
-    let listener = scope.root_nanbox_f64(listener);
-    // Only handle "abort" events — ignore everything else.
-    let type_str = get_string_content(event_type.get_nanbox_f64());
-    if type_str != "abort" {
-        return;
-    }
-    let listeners_val =
-        signal.with_mut_ptr(|signal| crate::object::js_object_get_field_f64(signal, 2));
-    let bits = listeners_val.to_bits();
-    let arr_ptr: *mut crate::array::ArrayHeader = if (bits & 0xFFFF_0000_0000_0000)
-        == POINTER_TAG_AC
-    {
-        (bits & 0x0000_FFFF_FFFF_FFFF) as *mut crate::array::ArrayHeader
-    } else {
-        // Lazily allocate the listeners array.
-        let new_arr = js_array_alloc(0);
-        let new_bits = POINTER_TAG_AC | ((new_arr as u64) & 0x0000_FFFF_FFFF_FFFF);
-        signal.with_mut_ptr(|signal| js_object_set_field_f64(signal, 2, f64::from_bits(new_bits)));
-        new_arr
-    };
-    if !arr_ptr.is_null() {
-        js_array_push_f64(arr_ptr, listener.get_nanbox_f64());
+    let _gc = crate::gc::GcSuppressScope::new();
+    let name = crate::builtins::js_string_coerce(event_type);
+    if crate::value::JSValue::from_bits(listener.to_bits()).is_pointer() {
+        unsafe {
+            crate::event_target::js_event_target_add_event_listener(
+                signal,
+                name,
+                crate::value::js_nanbox_get_pointer(listener),
+            );
+        }
     }
 }
 
-/// Remove one matching "abort" listener from a signal.
 #[no_mangle]
 pub extern "C" fn js_abort_signal_remove_listener(
     signal: *mut ObjectHeader,
     event_type: f64,
     listener: f64,
 ) {
-    if signal.is_null() {
-        return;
-    }
-    let type_str = get_string_content(event_type);
-    if type_str != "abort" {
-        return;
-    }
-    let listeners_val = crate::object::js_object_get_field_f64(signal, 2);
-    let bits = listeners_val.to_bits();
-    if (bits & 0xFFFF_0000_0000_0000) != POINTER_TAG_AC {
-        return;
-    }
-    let arr_ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as *mut crate::array::ArrayHeader;
-    if arr_ptr.is_null() {
-        return;
-    }
-    let len = crate::array::js_array_length(arr_ptr);
-    for i in 0..len {
-        let current = crate::array::js_array_get_f64(arr_ptr, i);
-        if current.to_bits() != listener.to_bits() {
-            continue;
+    let _gc = crate::gc::GcSuppressScope::new();
+    let name = crate::builtins::js_string_coerce(event_type);
+    if crate::value::JSValue::from_bits(listener.to_bits()).is_pointer() {
+        unsafe {
+            crate::event_target::js_event_target_remove_event_listener(
+                signal,
+                name,
+                crate::value::js_nanbox_get_pointer(listener),
+            );
         }
-        for j in (i + 1)..len {
-            let next = crate::array::js_array_get_f64(arr_ptr, j);
-            crate::array::js_array_set_f64_unchecked(arr_ptr, j - 1, next);
-        }
-        crate::array::js_array_set_length(arr_ptr, (len - 1) as f64);
-        break;
     }
 }
 
-/// Bound-method thunk: `signal.addEventListener(type, listener[, options])`
-/// reached through DYNAMIC property dispatch (receiver of unknown static
-/// type). `options` is accepted and ignored — a signal only ever fires
-/// "abort" once, so Node's `{ once: true }` is behaviorally implied.
-extern "C" fn abort_signal_add_event_listener_thunk(
-    closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
-    event_type: f64,
-    listener: f64,
-    _options: f64,
-) -> f64 {
-    let signal_bits = crate::closure::js_closure_get_capture_ptr(closure, 0) as u64;
-    let signal =
-        crate::value::js_nanbox_get_pointer(f64::from_bits(signal_bits)) as *mut ObjectHeader;
-    js_abort_signal_add_listener(signal, event_type, listener);
-    f64::from_bits(TAG_UNDEFINED_AC)
-}
-
-/// Bound-method thunk: `signal.removeEventListener(type, listener[, options])`.
-extern "C" fn abort_signal_remove_event_listener_thunk(
-    closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
-    event_type: f64,
-    listener: f64,
-    _options: f64,
-) -> f64 {
-    let signal_bits = crate::closure::js_closure_get_capture_ptr(closure, 0) as u64;
-    let signal =
-        crate::value::js_nanbox_get_pointer(f64::from_bits(signal_bits)) as *mut ObjectHeader;
-    js_abort_signal_remove_listener(signal, event_type, listener);
-    f64::from_bits(TAG_UNDEFINED_AC)
-}
-
-/// Bound-method thunk: `signal.throwIfAborted()`.
-extern "C" fn abort_signal_throw_if_aborted_thunk(
-    closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
-) -> f64 {
-    let signal_bits = crate::closure::js_closure_get_capture_ptr(closure, 0) as u64;
-    let signal =
-        crate::value::js_nanbox_get_pointer(f64::from_bits(signal_bits)) as *mut ObjectHeader;
-    js_abort_signal_throw_if_aborted(signal)
-}
-
-/// Dynamic method dispatch for AbortSignal instances (issue class of #5964's
-/// URLSearchParams wall): a DIRECT `signal.addEventListener(...)` on a
-/// statically-known receiver lowers to the native call, but the same method
-/// read through a dynamically-typed receiver (`const s: any = c.signal;
-/// s.addEventListener(...)` — the shape minified SDK code takes) fell through
-/// to the generic property-bag walk, returned `undefined`, and the call threw
-/// `addEventListener is not a function`. Returns a bound-method closure for
-/// the known method names, `None` for everything else. The signal is captured
-/// as its NaN-boxed bits (the `aborted_resolve_listener` idiom) so the GC's
-/// closure scan keeps it alive and relocates it.
-pub(crate) fn abort_signal_method_bind(signal: *mut ObjectHeader, name: &[u8]) -> Option<f64> {
-    let fp = match name {
-        b"addEventListener" => {
-            crate::fn_info!(abort_signal_add_event_listener_thunk, 3; with_declared(3))
-        }
-        b"removeEventListener" => {
-            crate::fn_info!(abort_signal_remove_event_listener_thunk, 3; with_declared(3))
-        }
-        b"throwIfAborted" => {
-            crate::fn_info!(abort_signal_throw_if_aborted_thunk, 0; with_declared(0))
-        }
-        _ => return None,
-    };
-    let closure = crate::closure::js_closure_alloc(fp, 1);
-    let signal_f64 = f64::from_bits(crate::value::js_nanbox_pointer(signal as i64).to_bits());
-    crate::closure::js_closure_set_capture_ptr(closure, 0, signal_f64.to_bits() as i64);
-    Some(f64::from_bits(
-        crate::value::js_nanbox_pointer(closure as i64).to_bits(),
-    ))
-}
-
-/// The signal's lazily-allocated "abort"-listener array (field 2), or `None`
-/// when no listener was ever registered.
-fn abort_listeners_array(signal: *mut ObjectHeader) -> Option<*mut crate::array::ArrayHeader> {
-    if signal.is_null() {
-        return None;
-    }
-    let bits = crate::object::js_object_get_field_f64(signal, 2).to_bits();
-    if (bits & 0xFFFF_0000_0000_0000) != POINTER_TAG_AC {
-        return None;
-    }
-    let arr = (bits & 0x0000_FFFF_FFFF_FFFF) as *mut crate::array::ArrayHeader;
-    (!arr.is_null()).then_some(arr)
-}
-
-/// Number of registered "abort" listeners on `signal` (`0` when none,
-/// including the lazily-unallocated state). `events.listenerCount(signal,
-/// "abort")` parity — a signal only ever tracks "abort" listeners.
 #[no_mangle]
 pub extern "C" fn js_abort_signal_listener_count(signal: *mut ObjectHeader) -> f64 {
-    abort_listeners_array(signal).map_or(0.0, |arr| crate::array::js_array_length(arr) as f64)
+    let _gc = crate::gc::GcSuppressScope::new();
+    crate::array::js_array_length(js_abort_signal_listeners_copy(signal)) as f64
 }
 
-/// Fresh array holding `signal`'s registered "abort" listeners (empty when
-/// none). `events.getEventListeners(signal, "abort")` parity — a copy, so the
-/// caller can't mutate the internal listener list through the return value.
 #[no_mangle]
 pub extern "C" fn js_abort_signal_listeners_copy(
     signal: *mut ObjectHeader,
 ) -> *mut crate::array::ArrayHeader {
-    let Some(src) = abort_listeners_array(signal) else {
-        let empty = crate::array::js_array_alloc(0);
-        unsafe {
-            (*empty).length = 0;
-        }
-        return empty;
-    };
-    let len = crate::array::js_array_length(src);
-    let dst = crate::array::js_array_alloc(len);
-    unsafe {
-        (*dst).length = len;
-    }
-    for i in 0..len {
-        let v = crate::array::js_array_get_f64(src, i);
-        crate::array::js_array_set_f64_unchecked(dst, i, v);
-    }
-    dst
+    let _gc = crate::gc::GcSuppressScope::new();
+    let name = js_string_from_bytes(b"abort".as_ptr(), 5);
+    unsafe { crate::event_target::js_event_target_get_event_listeners(signal, name) }
 }
 
 /// Build the `TimeoutError` DOMException that `AbortSignal.timeout(ms)` aborts
@@ -564,7 +332,10 @@ extern "C" fn abort_signal_timeout_fire(
     let signal =
         crate::value::js_nanbox_get_pointer(f64::from_bits(signal_bits)) as *mut ObjectHeader;
     if !signal.is_null() {
-        abort_signal_set_aborted(signal, timeout_dom_exception_value());
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let signal = scope.root_raw_mut_ptr(signal);
+        let reason = timeout_dom_exception_value();
+        signal.with_mut_ptr(|ptr| abort_signal_set_aborted(ptr, reason));
     }
     f64::from_bits(TAG_UNDEFINED_AC)
 }
@@ -581,6 +352,7 @@ extern "C" fn abort_signal_timeout_fire(
 /// slow/held response instead of timing out.
 #[no_mangle]
 pub extern "C" fn js_abort_signal_timeout(ms: f64) -> *mut ObjectHeader {
+    let _gc = crate::gc::GcSuppressScope::new();
     let signal = alloc_abort_signal();
     let func = crate::fn_info!(abort_signal_timeout_fire, 0; with_declared(0));
     let closure = crate::closure::js_closure_alloc(func, 1);
@@ -598,8 +370,8 @@ fn abort_signal_set_aborted(signal: *mut ObjectHeader, reason: f64) {
     if signal.is_null() || abort_signal_is_aborted(signal) {
         return;
     }
-    js_object_set_field_f64(signal, 0, f64::from_bits(TAG_TRUE_AC));
-    js_object_set_field_f64(signal, 1, reason);
+    set_abort_slot(signal, SIGNAL_ABORTED, f64::from_bits(TAG_TRUE_AC));
+    set_abort_slot(signal, SIGNAL_REASON, reason);
     fire_abort_listeners(signal);
 }
 
@@ -607,6 +379,7 @@ fn abort_signal_set_aborted(signal: *mut ObjectHeader, reason: f64) {
 /// `.reason` is `reason` (or an `AbortError` when omitted, matching Node).
 #[no_mangle]
 pub extern "C" fn js_abort_signal_abort(reason: f64) -> *mut ObjectHeader {
+    let _gc = crate::gc::GcSuppressScope::new();
     let signal = alloc_abort_signal();
     let reason_bits = reason.to_bits();
     // Node defaults the reason to an AbortError when none is supplied.
@@ -615,8 +388,8 @@ pub extern "C" fn js_abort_signal_abort(reason: f64) -> *mut ObjectHeader {
     } else {
         reason
     };
-    js_object_set_field_f64(signal, 0, f64::from_bits(TAG_TRUE_AC));
-    js_object_set_field_f64(signal, 1, effective);
+    set_abort_slot(signal, SIGNAL_ABORTED, f64::from_bits(TAG_TRUE_AC));
+    set_abort_slot(signal, SIGNAL_REASON, effective);
     signal
 }
 
@@ -625,7 +398,7 @@ pub extern "C" fn js_abort_signal_abort(reason: f64) -> *mut ObjectHeader {
 #[no_mangle]
 pub extern "C" fn js_abort_signal_throw_if_aborted(signal: *mut ObjectHeader) -> f64 {
     if abort_signal_is_aborted(signal) {
-        let reason = crate::object::js_object_get_field_f64(signal, 1);
+        let reason = get_abort_slot(signal, SIGNAL_REASON);
         // Node throws the stored reason verbatim (which is the AbortError
         // default when none was provided).
         crate::exception::js_throw(reason);
@@ -648,7 +421,7 @@ extern "C" fn abort_any_propagate_thunk(
     let reason = if source.is_null() {
         f64::from_bits(TAG_UNDEFINED_AC)
     } else {
-        crate::object::js_object_get_field_f64(source, 1)
+        get_abort_slot(source, SIGNAL_REASON)
     };
     abort_signal_set_aborted(combined, reason);
     f64::from_bits(TAG_UNDEFINED_AC)
@@ -664,34 +437,53 @@ extern "C" fn abort_any_propagate_thunk(
 pub extern "C" fn js_abort_signal_any(
     signals_arr: *mut crate::array::ArrayHeader,
 ) -> *mut ObjectHeader {
-    let combined = alloc_abort_signal();
     if signals_arr.is_null() {
-        return combined;
+        return alloc_abort_signal();
     }
-    let len = crate::array::js_array_length(signals_arr);
-    let combined_box = crate::value::js_nanbox_pointer(combined as i64);
-    for i in 0..len {
-        let elem = crate::array::js_array_get_f64(signals_arr, i);
-        let Some(source) = abort_signal_ptr_from_value(elem) else {
-            continue;
-        };
-        if abort_signal_is_aborted(source) {
-            // Adopt the first already-aborted source's reason immediately.
-            let reason = crate::object::js_object_get_field_f64(source, 1);
-            abort_signal_set_aborted(combined, reason);
-            return combined;
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let sources = scope.root_raw_mut_ptr(signals_arr);
+    let combined = scope.root_raw_mut_ptr(alloc_abort_signal());
+    let (_, result) = combined.across_mut(|| {
+        let len = sources.with_const_ptr(|ptr| crate::array::js_array_length(ptr));
+        for i in 0..len {
+            let elem = scope.root_nanbox_f64(
+                sources.with_const_ptr(|ptr| crate::array::js_array_get_f64(ptr, i)),
+            );
+            let Some(source) = abort_signal_ptr_from_value(elem.get_nanbox_f64()) else {
+                continue;
+            };
+            if abort_signal_is_aborted(source) {
+                let reason = get_abort_slot(source, SIGNAL_REASON);
+                combined.with_mut_ptr(|ptr| abort_signal_set_aborted(ptr, reason));
+                break;
+            }
+            let closure = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
+                crate::fn_info!(abort_any_propagate_thunk, 1; with_declared(1)),
+                2,
+            ));
+            closure.with_mut_ptr(|closure| {
+                combined.with_mut_ptr(|ptr| {
+                    crate::closure::js_closure_set_capture_ptr(
+                        closure,
+                        0,
+                        nanbox_pointer_ac(ptr).to_bits() as i64,
+                    );
+                });
+                crate::closure::js_closure_set_capture_ptr(
+                    closure,
+                    1,
+                    elem.get_nanbox_f64().to_bits() as i64,
+                );
+            });
+            let abort_evt = create_string_f64("abort");
+            let listener = closure.with_mut_ptr::<crate::closure::ClosureHeader, _>(|ptr| {
+                crate::value::js_nanbox_pointer(ptr as i64)
+            });
+            let source = abort_signal_ptr_from_value(elem.get_nanbox_f64()).unwrap();
+            js_abort_signal_add_listener(source, abort_evt, listener);
         }
-        // Register a propagation listener that adopts this source's reason
-        // when it later aborts.
-        let func = crate::fn_info!(abort_any_propagate_thunk, 1; with_declared(1));
-        let closure = crate::closure::js_closure_alloc(func, 2);
-        crate::closure::js_closure_set_capture_ptr(closure, 0, combined_box.to_bits() as i64);
-        crate::closure::js_closure_set_capture_ptr(closure, 1, elem.to_bits() as i64);
-        let listener = crate::value::js_nanbox_pointer(closure as i64);
-        let abort_evt = create_string_f64("abort");
-        js_abort_signal_add_listener(source, abort_evt, listener);
-    }
-    combined
+    });
+    result
 }
 
 // #2582: keepalive anchors so the auto-optimize whole-program LLVM bitcode

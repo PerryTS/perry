@@ -13,7 +13,7 @@
 //!
 //! Adoption is the runtime's: module init hands the id to the ordinary mint
 //! as `requested` (`js_object_shape_id_for_class_keys_static`,
-//! `js_gc_typed_shape_id_for_keys`), which mints it on a by-facts miss and
+//! `js_object_shape_id_for_class_keys`), which mints it on a by-facts miss and
 //! otherwise returns the existing id; a refused id aborts (ids are by
 //! content, so a refusal is an invariant violation). Births stamp what the
 //! mint RETURNED; only guards compare against the static id as an immediate.
@@ -54,20 +54,29 @@ pub struct BirthShape {
     pub live: u32,
     pub proto: BirthProto,
     pub typed: Option<TypedMasks>,
+    /// The birth representation word (charter step 5, T1;
+    /// `typed_shape::class_birth_rep_in`): `F64` lanes are shape identity at
+    /// runtime, so they are content here. A class born with an `F64` lane and
+    /// an importer's all-`Any` stub of the same keys are two contents, and
+    /// the stub never adopts the definer's id.
+    pub rep: u64,
 }
 
 impl BirthShape {
     /// A literal content without a typed layout: the runtime seed mints it
-    /// from its key names alone (`js_shape_seed_plain`). Class contents are
-    /// seeded by their class registration, typed ones by their typed install.
+    /// from its key names and its birth rep (`js_shape_seed_plain`), the
+    /// same facts the literal's own mint names, so the seed and a lazy mint
+    /// are one ShapeId. Class contents are seeded by their class
+    /// registration, typed ones by their typed install.
     pub fn is_seedable(&self) -> bool {
         self.proto == BirthProto::Literal && self.typed.is_none()
     }
 
     /// The facts the runtime mints for this content, without the masks: a
-    /// typed layout and a structural mint of the same class share them.
-    pub(crate) fn structure(&self) -> (&[u8], u32, u32, &BirthProto) {
-        (&self.keys, self.key_count, self.live, &self.proto)
+    /// typed layout and a structural mint of the same class share them. The
+    /// rep is a runtime fact, so it is part of them.
+    pub(crate) fn structure(&self) -> (&[u8], u32, u32, &BirthProto, u64) {
+        (&self.keys, self.key_count, self.live, &self.proto, self.rep)
     }
 
     /// A stable 64-bit FNV-1a over the content (never `RandomState`: the id
@@ -99,6 +108,12 @@ impl BirthShape {
                     eat(&w.to_le_bytes());
                 }
             }
+        }
+        // An all-`Any` rep adds nothing, so contents without an `F64` lane
+        // keep the ids they had before the rep was content.
+        if self.rep != 0 {
+            eat(&[3]);
+            eat(&self.rep.to_le_bytes());
         }
         h
     }
@@ -280,8 +295,6 @@ impl ProgramClassShapeIds {
 pub(crate) struct ClassBirth {
     /// The class id the mint names (0 = none; such a birth has no content).
     pub class_id: u32,
-    /// The class has a typed layout (#8405): `js_gc_typed_shape_id_for_keys`.
-    pub typed: bool,
     /// Live inline bound when the class is born wide, else 0.
     pub wide_live: u32,
     /// Its content, when it is nameable.
@@ -298,9 +311,10 @@ pub(crate) fn class_birth(
     module_prefix: &str,
     entry: &ClassKeysInit,
     class_header_image_inits: &HashMap<String, (u32, u64, u32)>,
+    class_birth_reps: &HashMap<String, u64>,
     class_ids: &HashMap<String, u32>,
 ) -> ClassBirth {
-    let (global_name, packed, field_count, raw_mask_words, pointer_mask_words) = entry;
+    let (global_name, packed, field_count, _raw_mask_words, _pointer_mask_words) = entry;
     // The global is `perry_class_keys_<modprefix>__<sanitized class>`. Several
     // names can sanitize alike; take the smallest name so the choice is
     // deterministic (the pre-pass and codegen must agree).
@@ -312,14 +326,9 @@ pub(crate) fn class_birth(
         .min_by(|a, b| a.0.cmp(b.0))
         .map(|(_, &v)| v)
         .unwrap_or(0);
-    const GC_LAYOUT_AND_INTACT_MASK: u64 = 0xD000;
-    const GC_SIDE_MASK_AND_INTACT: u64 = 0x9000;
     let image = class_header_image_inits.get(global_name);
-    let typed = image.is_some_and(|&(_, packed, _)| {
-        ((packed >> 16) & GC_LAYOUT_AND_INTACT_MASK) == GC_SIDE_MASK_AND_INTACT
-    });
     let wide_live = match image {
-        Some(&(_, _, birth_live)) if !typed && birth_live > *field_count => birth_live,
+        Some(&(_, _, birth_live)) if birth_live > *field_count => birth_live,
         _ => 0,
     };
     // An empty literal names the runtime's own empty shape, which the runtime
@@ -340,14 +349,11 @@ pub(crate) fn class_birth(
         } else {
             BirthProto::Class(class_id)
         },
-        typed: typed.then(|| TypedMasks {
-            raw_f64_words: raw_mask_words.clone(),
-            pointer_words: pointer_mask_words.clone(),
-        }),
+        typed: None,
+        rep: class_birth_reps.get(global_name).copied().unwrap_or(0),
     });
     ClassBirth {
         class_id,
-        typed,
         wide_live,
         shape,
     }
@@ -378,6 +384,7 @@ pub(crate) fn set_module_static_ids(
     module_prefix: &str,
     class_keys_init_data: &[ClassKeysInit],
     class_header_image_inits: &HashMap<String, (u32, u64, u32)>,
+    class_birth_reps: &HashMap<String, u64>,
     class_ids: &HashMap<String, u32>,
     assigned: &[(BirthShape, u32)],
     program: &ProgramClassShapeIds,
@@ -389,7 +396,13 @@ pub(crate) fn set_module_static_ids(
         class_keys_init_data
             .iter()
             .filter_map(|entry| {
-                let birth = class_birth(module_prefix, entry, class_header_image_inits, class_ids);
+                let birth = class_birth(
+                    module_prefix,
+                    entry,
+                    class_header_image_inits,
+                    class_birth_reps,
+                    class_ids,
+                );
                 let shape = birth.shape.as_ref()?;
                 let own = *by_content.get(shape)?;
                 let id = program.resolved_id(&entry.0, birth.class_id, shape, own);
@@ -420,21 +433,34 @@ pub fn take_module_static_seeds() -> Vec<(u32, BirthShape)> {
     MODULE_SEEDS.with(|s| std::mem::take(&mut *s.borrow_mut()).into_iter().collect())
 }
 
+/// The version of the seed sidecar's line format ([`encode_static_seed`]),
+/// part of the object-cache key: an entry written in another format is a
+/// miss, never a line this decoder reads as other facts (a pinned
+/// `PERRY_OBJECT_CACHE_BUILD_ID` keeps the build id across compilers).
+pub const STATIC_SEED_FORMAT: &str = "2";
+
 /// One seed as a line of the object cache's seed sidecar:
-/// `<id> <key_count> <live> <hex of the NUL-terminated key names>`.
+/// `<id> <key_count> <live> <hex of the NUL-terminated key names> <rep>`,
+/// the rep as `0x`-prefixed hex. Every field the seed mints from is in the
+/// line: a warm link seeds exactly the facts the cold one did.
 pub fn encode_static_seed(id: u32, shape: &BirthShape) -> String {
     let hex: String = shape.keys.iter().map(|b| format!("{b:02x}")).collect();
-    format!("{id} {} {} {hex}", shape.key_count, shape.live)
+    format!(
+        "{id} {} {} {hex} {:#x}",
+        shape.key_count, shape.live, shape.rep
+    )
 }
 
-/// The inverse of [`encode_static_seed`]; `None` for a malformed line.
+/// The inverse of [`encode_static_seed`]; `None` for a malformed line
+/// (including a line of another format, which lacks the rep field).
 pub fn decode_static_seed(line: &str) -> Option<(u32, BirthShape)> {
     let mut it = line.split_ascii_whitespace();
     let id = it.next()?.parse().ok()?;
     let key_count = it.next()?.parse().ok()?;
     let live = it.next()?.parse().ok()?;
-    let hex = it.next().unwrap_or("");
-    if it.next().is_some() || hex.len() % 2 != 0 {
+    let hex = it.next()?;
+    let rep = u64::from_str_radix(it.next()?.strip_prefix("0x")?, 16).ok()?;
+    if it.next().is_some() || hex.is_empty() || hex.len() % 2 != 0 {
         return None;
     }
     let keys = (0..hex.len())
@@ -449,6 +475,7 @@ pub fn decode_static_seed(line: &str) -> Option<(u32, BirthShape)> {
             live,
             proto: BirthProto::Literal,
             typed: None,
+            rep,
         },
     ))
 }
@@ -474,9 +501,16 @@ pub(crate) fn static_shape_id_for_keys_global(keys_global: &str) -> Option<u32> 
 /// data summary, no holes and generation 0, so the slots follow from the
 /// keys alone and this is the word the runtime would publish for the id.
 /// `None` (the region keeps its learned supplier alone) when a key is not an
-/// inline key of the birth shape. A returned id is a guard immediate: it
-/// joins the module's seed set like any other.
-pub(crate) fn static_region_slots(keys_global: &str, keys: &[String]) -> Option<(u32, Vec<u32>)> {
+/// inline key of the birth shape, or when a key in `boxed_mask` (a bare
+/// store of a value not proven a canonical double) sits on a non-`Any` lane
+/// of the birth rep: the runtime's pack refuses that word too (charter step
+/// 5). A returned id is a guard immediate: it joins the module's seed set
+/// like any other.
+pub(crate) fn static_region_slots(
+    keys_global: &str,
+    keys: &[String],
+    boxed_mask: u32,
+) -> Option<(u32, Vec<u32>)> {
     MODULE_STATIC_IDS.with(|m| {
         let m = m.borrow();
         let (id, shape) = m.get(keys_global)?;
@@ -496,6 +530,14 @@ pub(crate) fn static_region_slots(keys_global: &str, keys: &[String]) -> Option<
                 (at < 32).then_some(at as u32)
             })
             .collect::<Option<Vec<u32>>>()?;
+        let lane_is_any = |slot: u32| (shape.rep >> (2 * slot)) & 0b11 == 0;
+        if slots
+            .iter()
+            .enumerate()
+            .any(|(i, &slot)| boxed_mask & (1 << i) != 0 && !lane_is_any(slot))
+        {
+            return None;
+        }
         note_guard_id(*id, Some(shape));
         Some((*id, slots))
     })
@@ -535,13 +577,20 @@ pub(crate) fn module_births(
     class_keys_init_data: &[ClassKeysInit],
     defined_len: usize,
     class_header_image_inits: &HashMap<String, (u32, u64, u32)>,
+    class_birth_reps: &HashMap<String, u64>,
     class_ids: &HashMap<String, u32>,
 ) -> Vec<ModuleBirth> {
     class_keys_init_data
         .iter()
         .enumerate()
         .filter_map(|(i, entry)| {
-            let birth = class_birth(module_prefix, entry, class_header_image_inits, class_ids);
+            let birth = class_birth(
+                module_prefix,
+                entry,
+                class_header_image_inits,
+                class_birth_reps,
+                class_ids,
+            );
             Some(ModuleBirth {
                 keys_global: entry.0.clone(),
                 class_id: birth.class_id,

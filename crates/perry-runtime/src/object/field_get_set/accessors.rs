@@ -371,19 +371,24 @@ pub(crate) unsafe fn ordinary_object_prototype_property_value(
         // Object.prototype, so a user-selected parent on the declaration
         // prototype was skipped. Walk the materialized declaration prototype
         // on a vtable miss, preserving the instance as the accessor receiver.
-        let decl_proto = super::super::class_decl_prototype_object(class_id);
-        if !decl_proto.is_null()
-            && super::super::prototype_chain::object_has_user_prototype_override(
-                decl_proto as usize,
-            )
-        {
-            let _guard = object_prototype_lookup_guard()?;
-            if let Some(value) =
-                prototype_property_value_with_guard(decl_proto as usize, obj as usize, key)
-            {
+        let _guard = object_prototype_lookup_guard()?;
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let receiver = scope.root_raw_mut_ptr(obj as *mut ObjectHeader);
+        let key = scope.root_string_ptr(key);
+        let decl_proto = super::super::class_decl_prototype_value(class_id);
+        if crate::value::JSValue::from_bits(decl_proto.to_bits()).is_pointer() {
+            let addr = crate::value::js_nanbox_get_pointer(decl_proto) as usize;
+            if let Some(value) = receiver.with_mut_ptr::<ObjectHeader, _>(|ptr| {
+                key.with_const_ptr(|key| {
+                    prototype_property_value_with_guard(addr, ptr as usize, key)
+                })
+            }) {
                 return Some(value);
             }
         }
+        return receiver.with_mut_ptr::<ObjectHeader, _>(|ptr| {
+            key.with_const_ptr(|key| default_object_prototype_property_value(ptr as usize, key))
+        });
     }
     default_object_prototype_property_value(obj as usize, key)
 }
@@ -441,16 +446,12 @@ pub(crate) fn accessor_receiver_override_take() -> Option<f64> {
     ACCESSOR_RECEIVER_OVERRIDE.with(|c| c.take())
 }
 
-pub(crate) fn accessor_receiver_override_end(prev: Option<f64>) {
-    ACCESSOR_RECEIVER_OVERRIDE.with(|c| c.set(prev));
-}
-
-/// Whether an inherited walk has armed a receiver that the next class getter
-/// would take as `this` (#10498: the class-accessor cache neither records nor
-/// serves under one).
-#[inline]
 pub(crate) fn accessor_receiver_override_armed() -> bool {
     ACCESSOR_RECEIVER_OVERRIDE.with(|c| c.get().is_some())
+}
+
+pub(crate) fn accessor_receiver_override_end(prev: Option<f64>) {
+    ACCESSOR_RECEIVER_OVERRIDE.with(|c| c.set(prev));
 }
 
 /// `this` to pass to a class getter (vtable `getters`) found while resolving a

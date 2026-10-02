@@ -124,14 +124,9 @@ mod layout_tables;
 // The immortal-object construction window and the table-occupancy readout, both
 // consumed from OUTSIDE `gc`: `object::global_this` opens the window around the
 // `globalThis` bootstrap and prints the residue under `PERRY_GC_DIAG`.
+pub use layout::*;
 pub(crate) use layout_tables::per_object_layout_table_sizes;
 pub use layout_tables::ImmortalLayoutScope;
-/// #7510 item 1: the construction-side memo that turns an already-installed
-/// typed shape into two header bit-writes instead of a descriptor build plus a
-/// `SHAPE_LAYOUTS` round-trip.
-mod shape_install;
-pub use layout::*;
-pub(crate) use shape_install::shape_install_memo_hot_addr;
 mod trace;
 pub(crate) use trace::*;
 mod barrier;
@@ -168,6 +163,7 @@ pub(crate) mod prefetch;
 
 mod copying;
 mod copying_first_cycle;
+mod copying_object_scan;
 mod copying_parent_facts;
 mod copying_phase;
 mod copying_pointer_set;
@@ -1071,17 +1067,12 @@ pub fn gc_init() {
     // or Proxy trap can re-enter after moving GC. Rewrite that temporary
     // identity so malformed prototype cycles remain bounded.
     reg_scanner!(crate::object::prototype_chain::scan_prototype_resolution_stack_roots_mut,);
-    // Lane 3: the inherited-read cache records a holder ADDRESS per entry and
-    // a hit LOADS through it, so the slots are STRONG roots: marked, so the
-    // address cannot be recycled under the entry, and rewritten, so a
-    // compacting or copying pass leaves it pointing at the same object.
-    reg_scanner!(crate::object::inherited_read_cache::scan_inherited_read_cache_roots_mut);
-    // Inherited-access lane: a store site's chain verdict names its interned
+    // A store site's chain verdict names its interned
     // key and the receiver's recorded prototype, and compares them on every
     // use, so both are STRONG roots (`object::chain_store`).
     reg_scanner!(crate::object::chain_store::scan_chain_store_roots_mut);
-    // Method-calls lane: an inherited method-site entry holds the method
-    // closure it calls, so the closure is a STRONG root (`object::method_site`).
+    reg_scanner!(crate::proxy::scan_setter_site_roots_mut);
+    // An inherited method-site entry roots its direct prototype holder.
     reg_scanner!(crate::object::method_site::scan_method_site_roots_mut);
     // A read site's holder entry names the object that holds the answer (and
     // the hops to it); the emitted hit loads through it, so each is a STRONG
@@ -1208,10 +1199,6 @@ pub fn gc_init() {
     reg_scanner!(crate::node_submodules::scan_node_submodule_singleton_roots_mut,);
     #[cfg(feature = "mod-node-test")]
     reg_scanner!(crate::node_submodules::test::runner::scan_node_test_runner_roots_mut,);
-    // Box-capture root scanner (mutable closure captures, esp. the
-    // generator state-machine's `__iter` and `__step` boxes that hold
-    // the iter object + step closure across awaits).
-    reg_scanner!(crate::r#box::scan_box_roots_mut);
     // Iter-result scratch slot — the async-step fast path stows the
     // generator's most recent yield value here; it stays live until
     // the step driver reads it back.
@@ -1400,14 +1387,10 @@ pub extern "C" fn js_gc_init() {
     // #5093: force every class-field access back through the full guard call —
     // i.e. disable the codegen-inlined fast path — when:
     //   - typed-feedback tracing is on (the guard observes every access), or
-    //   - the intact-bit verifier is on (`PERRY_VERIFY_TYPED_INTACT`): the
-    //     verifier lives in the guard's fast contract, so inline hits would skip
-    //     it; disabling the inline path routes every access through it, or
     //   - the explicit escape hatch `PERRY_DISABLE_CLASS_FIELD_INLINE` is set to
     //     a truthy value (perf bisection / A-B measurement). `=0`/`=false`/`=off`
     //     leave the fast path enabled.
     if crate::typed_feedback::typed_feedback_active()
-        || env_flag_enabled("PERRY_VERIFY_TYPED_INTACT")
         || env_flag_enabled("PERRY_DISABLE_CLASS_FIELD_INLINE")
     {
         crate::object::disable_class_field_inline_guard();
@@ -1442,7 +1425,6 @@ pub extern "C" fn js_gc_release_current_thread_collection_side_allocations() {
     // turnloop P0: destroy this thread's agent loop and print the
     // `PERRY_LOOP_STATS=1` line on the same all-exits funnel.
     crate::event_pump::shutdown_wait_driver();
-    crate::r#box::report_box_stats_at_exit();
     crate::arena::alloc_sample::report("exit");
     diag_sites::report_charges("exit");
     diag_sites::report_primitive_dispatch("exit");

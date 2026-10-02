@@ -157,6 +157,7 @@ fn no_published_canonical_list_names_a_key_at_its_pre_move_address() {
             3,
             packed.as_ptr(),
             packed.len() as u32,
+            0,
         ));
         // Whole-list canonicalization of a caller-built list of young keys.
         let scratch = crate::array::js_array_alloc_with_length(2);
@@ -279,6 +280,7 @@ fn class_inline_keys_birth_follows_the_move(stamped: bool) {
             2,
             packed.as_ptr(),
             packed.len() as u32,
+            0,
         ));
         let before = addr_of(&keys) as *mut ArrayHeader;
         assert!(
@@ -290,7 +292,7 @@ fn class_inline_keys_birth_follows_the_move(stamped: bool) {
         arm_collection_on_next_block(&trigger);
         let obj = if stamped {
             crate::object::js_object_alloc_class_inline_keys_stamped(
-                class_id, 0, 2, before, shape_id,
+                class_id, 0, 2, before, shape_id, 0,
             )
         } else {
             crate::object::js_object_alloc_class_inline_keys(class_id, 0, 2, before)
@@ -355,6 +357,7 @@ fn dynamic_parent_birth_installs_the_live_merged_keys_when_its_allocation_collec
                 2,
                 parent_packed.as_ptr(),
                 parent_packed.len() as u32,
+                0,
             ));
             crate::object::register_class(child_cid, parent_cid);
             let own_packed = format!("{}\0", names[2]);
@@ -430,6 +433,7 @@ fn class_keys_memo_belongs_to_the_agent_that_built_it() {
         2,
         packed.as_ptr(),
         packed.len() as u32,
+        0,
     ));
     let current = || addr_of(&mine);
     let registered = || {
@@ -452,6 +456,7 @@ fn class_keys_memo_belongs_to_the_agent_that_built_it() {
             2,
             packed.as_ptr(),
             packed.len() as u32,
+            0,
         ) as usize;
         let seen = crate::object::registered_class_keys_array(AGENT_MEMO_CLASS_ID)
             .map(|(a, _)| a.arr() as usize);

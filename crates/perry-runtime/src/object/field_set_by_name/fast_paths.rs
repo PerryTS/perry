@@ -153,17 +153,16 @@ pub(crate) unsafe fn try_existing_own_data_overwrite(
     let alloc_limit = std::cmp::max(live_slots, crate::object::INLINE_SLOT_FLOOR as u32) as usize;
     if idx < live_slots {
         // An overwrite of a key the shape already places in a live inline
-        // slot changes no fact the layout records: the keys, the slot and the
-        // shape stay. What the VALUE may change (a pointer into a slot the
-        // pointer mask does not cover, a non-number into a raw-f64 slot of a
-        // typed descriptor) is decided per slot by `layout_note_slot`, which
-        // `store_object_field_slot` runs: the same funnel the emitted store
-        // hit and `js_object_set_field` use. Declaring the object's whole
-        // layout unknown here instead dropped `GC_OBJ_TYPED_LAYOUT_INTACT` on
-        // the first by-name store of ANY value, and every class-field read
-        // guard on the object missed from then on (a method body's `this.a`,
-        // ~1,300 instructions per call through a parameter receiver).
-        if crate::hot_diag::recv_routes_armed() && crate::gc::layout_has_typed_descriptor(obj_addr)
+        // slot keeps the receiver's ShapeId, the layout a class-field read
+        // guard compares. What the VALUE may change (a non-Number into an
+        // `F64` lane) is decided per slot by the store check that
+        // `store_object_field_slot` runs, which generalizes that lane and
+        // restamps; the owner store funnel likewise retires a numeric-proof
+        // ShapeId before publishing the new value.
+        if crate::hot_diag::recv_routes_armed()
+            && crate::object::field_rep::f64_lane_slots(crate::object::field_rep_store::shape_rep(
+                crate::object::shapes::object_shape_stamp(obj),
+            )) != 0
         {
             crate::hot_diag::recv_route_note_runtime(
                 crate::hot_diag::RT_ROUTE_OVERWRITE_KEPT_TYPED,
@@ -171,12 +170,10 @@ pub(crate) unsafe fn try_existing_own_data_overwrite(
         }
         store_object_field_slot(obj, idx as usize, vbits);
     } else if (idx as usize) < alloc_limit {
-        // The store widens the live bound, which the layout records.
-        super::mark_object_dynamic_shape_unknown(obj);
+        // The store widens the shape-visible live bound.
         set_object_live_slot_count(obj, idx + 1);
         store_object_field_slot(obj, idx as usize, vbits);
     } else {
-        super::mark_object_dynamic_shape_unknown(obj);
         overflow_set(obj_addr, idx as usize, vbits);
     }
     true
@@ -299,8 +296,7 @@ pub(crate) fn try_readd_stable_tombstone(
             | crate::gc::OBJ_FLAG_SEALED
             | crate::gc::OBJ_FLAG_NO_EXTEND
             | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
-            | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
-            | crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT;
+            | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
         let eligible = obj_handle.with_mut_ptr(|obj: *mut ObjectHeader| {
             let gc = crate::value::addr_class::try_read_gc_header(obj as usize)?;
             Some(
@@ -358,7 +354,6 @@ pub(crate) fn try_readd_stable_tombstone(
         // The stable-tombstone list is private (not shape-shared, checked
         // above), so its header length is its count.
         set_object_keys(obj, crate::object::ObjectKeys::owned(new_keys));
-        super::mark_object_dynamic_shape_unknown(obj);
         if old_keys != new_keys {
             super::shapes::shape_keys_grown(old_keys as usize, new_keys);
         }
@@ -394,8 +389,7 @@ unsafe fn try_readd_stable_tombstone_sso_no_grow(
         | crate::gc::OBJ_FLAG_SEALED
         | crate::gc::OBJ_FLAG_NO_EXTEND
         | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
-        | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
-        | crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT;
+        | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
     // Stable-tombstone admission already excludes real class/prototype
     // receivers; only class-less and registered anonymous-shape ordinary
     // objects can carry the flag into this append lane.
@@ -485,7 +479,6 @@ unsafe fn try_readd_stable_tombstone_sso_no_grow(
         return None;
     }
 
-    super::mark_object_dynamic_shape_unknown(obj);
     let mut value_bits = value.to_bits();
     if (value_bits >> 48) == 0x7FFD && (value_bits & 0x0000_FFFF_FFFF_FFFF) == 0 {
         value_bits = crate::value::TAG_UNDEFINED;
@@ -684,7 +677,7 @@ fn object_set_field_by_name_transition_fast_impl_value(
 
         let prev_shape_id = super::shapes::object_shape_stamp(obj);
         let Some((next_keys, slot_idx, target_shape_id)) =
-            transition_cache_lookup(prev_shape_id, interned_key)
+            transition_cache_lookup_for_value(prev_shape_id, interned_key, Some(value.to_bits()))
         else {
             return None;
         };

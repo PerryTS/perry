@@ -621,9 +621,7 @@ pub(crate) struct LayoutResidueHistogram {
 #[derive(Default)]
 pub struct LayoutDiag {
     prunes: u64,
-    typed_len: usize,
     masks_len: usize,
-    typed_max: usize,
     masks_max: usize,
     /// Set bits in the address filter, and its capacity in bits.
     filter_bits_set: usize,
@@ -660,7 +658,6 @@ pub(crate) fn layout_note_mask_insert(site: LayoutMaskInsertSite) {
 /// prune rebuilt the address filter from its survivors, or found the tables
 /// too full for a 4,096-bit sketch to discriminate and saturated it instead.
 pub(crate) fn layout_note_prune(
-    typed_len: usize,
     masks_len: usize,
     filter_bits_set: usize,
     filter_bits_total: usize,
@@ -671,9 +668,7 @@ pub(crate) fn layout_note_prune(
     LAYOUT_DIAG.with(|d| {
         let mut d = d.borrow_mut();
         d.prunes += 1;
-        d.typed_len = typed_len;
         d.masks_len = masks_len;
-        d.typed_max = d.typed_max.max(typed_len);
         d.masks_max = d.masks_max.max(masks_len);
         d.filter_bits_set = filter_bits_set;
         d.filter_bits_total = filter_bits_total;
@@ -682,7 +677,7 @@ pub(crate) fn layout_note_prune(
         d.residue = residue;
         if rebuilt_filter {
             d.rebuilt += 1;
-            d.rebuilt_keys += (typed_len + masks_len) as u64;
+            d.rebuilt_keys += masks_len as u64;
         } else {
             d.outgrown += 1;
         }
@@ -710,18 +705,10 @@ impl LayoutDiag {
                 100.0 * n as f64 / d as f64
             }
         };
-        let keys = self.typed_len + self.masks_len;
         let _ = writeln!(
             out,
-            "[layout-diag] prunes={} keys_now={} (typed={} masks={}) keys_max={} \
-             (typed={} masks={})",
-            self.prunes,
-            keys,
-            self.typed_len,
-            self.masks_len,
-            self.typed_max + self.masks_max,
-            self.typed_max,
-            self.masks_max
+            "[layout-diag] prunes={} keys_now={} keys_max={}",
+            self.prunes, self.masks_len, self.masks_max
         );
         let _ = writeln!(
             out,
@@ -734,7 +721,7 @@ impl LayoutDiag {
             self.filter_bits_total,
             pct(self.filter_bits_set_max, self.filter_bits_total),
             self.useful_keys,
-            if keys > self.useful_keys {
+            if self.masks_len > self.useful_keys {
                 "OUTGROWN it -- every probe answers `may hold`"
             } else {
                 "within it"
@@ -1182,22 +1169,6 @@ impl IcDiag {
                 self.prime_way_encoded_slot
             );
         }
-        // Lane 3's inherited-read cache, on the SAME arming rather than an
-        // env var of its own. A cache that primes and then declines every
-        // lookup returns exactly the values the chain walk would and is
-        // invisible in a program's output; this row is what tells a real
-        // program's run apart from that.
-        let inh_hits = crate::object::inherited_read_cache::inherited_read_cache_hits();
-        let inh_primes = crate::object::inherited_read_cache::inherited_read_cache_primes();
-        let inh_declines = crate::object::inherited_read_cache::inherited_read_cache_declines();
-        let inh_neg = crate::object::inherited_read_cache::inherited_read_cache_neg_served();
-        if (inh_hits | inh_primes | inh_declines | inh_neg) != 0 {
-            let _ = writeln!(
-                out,
-                "  inherited: hits={inh_hits} primes={inh_primes} \
-                 declines={inh_declines} declines_cached={inh_neg}"
-            );
-        }
         let mut rows: Vec<&SiteStat> = self.sites.values().collect();
         crate::cold_sort::sort_by_key(&mut rows, |s| std::cmp::Reverse(s.misses));
         let _ = writeln!(
@@ -1553,7 +1524,7 @@ fn buffer_dump() {
 
 /// Receiver-route admission census names, indexed by the route number the
 /// emitted call passes. **Must match `receiver_range::Route` in perry-codegen.**
-const RECV_ROUTE_NAMES: [&str; 32] = [
+const RECV_ROUTE_NAMES: [&str; 33] = [
     "generic",
     "generic_mru_hit",
     "generic_way_hit",
@@ -1595,14 +1566,18 @@ const RECV_ROUTE_NAMES: [&str; 32] = [
     // supplier matched (`Route::RloopStatic`).
     "rloop_static",
     // Runtime-counted: a class-field read whose inline guard missed, answered
-    // from the receiver's shape (the site's word or the inherited cache)...
+    // from the receiver's shape (the site's word or holder fact)...
     "rt_class_miss_shape",
-    // ...or by the generic read ladder behind it (own miss, inherited cache,
-    // priming), where it used to take the site-less by-name walk.
+    // ...or by the generic read ladder behind it, where it used to take the
+    // site-less by-name walk.
     "rt_class_miss_ladder",
     // Runtime-counted: a by-name overwrite of a live inline slot on an object
-    // holding a typed layout, which keeps it (it used to declare it unknown).
+    // whose ShapeId carries an `F64` lane, which keeps that ShapeId (it used
+    // to declare the object's layout unknown).
     "rt_overwrite_kept_typed",
+    // Runtime-counted by `js_region_loop_prime`: refused because a key a bare
+    // store may write a non-double into is not an `Any` lane (charter step 5).
+    "rt_rloop_refuse_f64_stored",
 ];
 
 /// The runtime-counted routes: see [`RECV_ROUTE_NAMES`].
@@ -1620,9 +1595,10 @@ pub(crate) const RT_ROUTE_RLOOP_REFUSE_SPILL_STORED: u32 = 24;
 pub(crate) const RT_ROUTE_RLOOP_REFUSE_SPILL_UNSERVABLE: u32 = 25;
 pub(crate) const RT_ROUTE_RLOOP_REFUSE_RANGE: u32 = 26;
 pub(crate) const RT_ROUTE_RLOOP_RETIRE: u32 = 27;
+pub(crate) const RT_ROUTE_RLOOP_REFUSE_F64_STORED: u32 = 32;
 
-static RECV_ROUTES: [std::sync::atomic::AtomicU64; 32] =
-    [const { std::sync::atomic::AtomicU64::new(0) }; 32];
+static RECV_ROUTES: [std::sync::atomic::AtomicU64; 33] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; 33];
 static RECV_ROUTES_REPORT: std::sync::Once = std::sync::Once::new();
 /// Set by the first emitted `js_recv_route_note`, i.e. only in a binary
 /// compiled with `PERRY_RECV_ROUTE_COUNT=1`; the runtime-counted routes are a

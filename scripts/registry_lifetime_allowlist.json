@@ -173,24 +173,11 @@
       "why": "Primitive-method fallback histogram, written only when gc_diag_enabled() (PERRY_GC_DIAG) and printed at exit"
     },
     {
-      "file": "crates/perry-runtime/src/gc/layout.rs",
-      "name": "SHAPE_LAYOUTS",
-      "verdict": "bounded_by_program",
-      "why": "Keyed by ShapeId, one entry per distinct shape shared by all its objects; never removed by design (O(shapes), not O(objects))"
-    },
-    {
       "file": "crates/perry-runtime/src/gc/layout_tables.rs",
       "name": "LAYOUT_SLOT_MASKS",
       "verdict": "removed_elsewhere",
       "site": "crates/perry-runtime/src/gc/layout_tables.rs::slot_masks_remove",
       "why": "Per-object masks are removed through the hot-TLS raw pointer (hot_layout_slot_masks), which the name walk cannot follow; also pruned per GC"
-    },
-    {
-      "file": "crates/perry-runtime/src/gc/layout_tables.rs",
-      "name": "TYPED_LAYOUTS",
-      "verdict": "removed_elsewhere",
-      "site": "crates/perry-runtime/src/gc/layout_tables.rs::typed_layouts_remove",
-      "why": "Per-object descriptors are removed through the hot-TLS raw pointer (hot_typed_layouts), which the name walk cannot follow; also pruned per GC"
     },
     {
       "file": "crates/perry-runtime/src/module_require.rs",

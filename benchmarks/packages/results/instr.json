@@ -1,5 +1,5 @@
 {
- "finished": "2026-09-27T02:30:10+0000",
+ "finished": "2026-09-30T20:09:03+0000",
  "host": "ideal-mastodon",
  "load_threshold": 8.0,
  "machine": "x86_64",
@@ -8,10 +8,9 @@
   "rss"
  ],
  "ncpu": 16,
- "perry_bin_dir": "/root/claude-pkg-bench-out/linux",
- "perry_commit": "36420d2e56",
+ "perry_bin_dir": "/root/claude-matrix-rerun-out/linux",
+ "perry_commit": "9e29f59d43",
  "platform": "Linux-6.17.0-23-generic-x86_64-with-glibc2.39",
- "resumed_from": "2026-09-26T23:58:12+0000",
  "schema": 1,
  "servers": {
   "http": "ok",
@@ -20,7 +19,7 @@
   "pg": "ok",
   "redis": "ok"
  },
- "started": "2026-09-27T02:25:18+0000",
+ "started": "2026-09-30T19:32:51+0000",
  "toolchain": {
   "bun": "/root/claude-pkg-bench-tools/bun-linux-x64/bun",
   "bun_version": "1.3.14",
@@ -35,66 +34,69 @@
      "correctness_output": "axios/get_json axios@1.20.0 n=500 warm=200\nchecksum 87650556",
      "instr": {
       "n1": [
-       1984601152,
-       1968386655,
-       1848123604
+       1795285931,
+       1713372765,
+       1703738640
       ],
       "n2": [
-       3675945483,
-       4011355332,
-       3711688822
+       3431695457,
+       3426963169,
+       3419556434
       ],
-      "per_iter": 1162201.4446666667
+      "per_iter": 1142393.6026666667
      },
-     "load_flagged": true,
-     "load_max": 50.25,
-     "load_mean": 50.11,
-     "peak_rss_kb": 102084,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.61,
+     "load_mean": 1.61,
+     "peak_rss_kb": 121040,
+     "status": "OK",
+     "timeout_s": 120
     },
     "node": {
      "correctness_output": "axios/get_json axios@1.20.0 n=500 warm=200\nchecksum 87650556",
      "instr": {
       "n1": [
-       2148395705,
-       2141122875,
-       2147834746
+       2160099166,
+       2151404206,
+       2150069966
       ],
       "n2": [
-       4047111934,
-       4047594464,
-       4021888225
+       4025743911,
+       4021398292,
+       4014716482
       ],
-      "per_iter": 1266184.792
+      "per_iter": 1246662.724
      },
-     "load_flagged": true,
-     "load_max": 51.49,
-     "load_mean": 51.14,
-     "peak_rss_kb": 173120,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.61,
+     "load_mean": 1.61,
+     "peak_rss_kb": 177220,
+     "status": "OK",
+     "timeout_s": 120
     },
     "perry": {
-     "compile_s": 586.97,
+     "compile_s": 3.3,
      "correctness_output": "axios/get_json axios@1.20.0 n=500 warm=200\nchecksum 87650556",
      "instr": {
       "n1": [
-       20601478953,
-       20606119595,
-       20623103863
+       9531733832,
+       9545272615,
+       9559969157
       ],
       "n2": [
-       66011733725,
-       66013321662,
-       66015394279
+       29954997179,
+       30027798257,
+       25171158331
       ],
-      "per_iter": 30271468.044666667
+      "per_iter": 13606483.042666666
      },
-     "load_flagged": true,
-     "load_max": 53.06,
-     "load_mean": 51.26,
-     "peak_rss_kb": 164060,
-     "size_bytes": 30759888,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.56,
+     "load_mean": 1.55,
+     "peak_rss_kb": 136328,
+     "size_bytes": 31617880,
+     "status": "OK",
+     "timeout_s": 120
     }
    },
    "n1": 500,
@@ -107,66 +109,69 @@
      "correctness_output": "axios/post_json axios@1.20.0 n=500 warm=200\nchecksum 8f00a73e",
      "instr": {
       "n1": [
-       2084135647,
-       2142100762,
-       2092202767
+       1689168634,
+       1704249116,
+       1705908276
       ],
       "n2": [
-       4389846348,
-       4009015099,
-       3752724136
+       3469400456,
+       3550891156,
+       3567269117
       ],
-      "per_iter": 1277874.888
+      "per_iter": 1231094.6933333334
      },
-     "load_flagged": true,
-     "load_max": 60.04,
-     "load_mean": 59.65,
-     "peak_rss_kb": 109444,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.75,
+     "load_mean": 1.75,
+     "peak_rss_kb": 117124,
+     "status": "OK",
+     "timeout_s": 120
     },
     "node": {
      "correctness_output": "axios/post_json axios@1.20.0 n=500 warm=200\nchecksum 8f00a73e",
      "instr": {
       "n1": [
-       2200293048,
-       2191747708,
-       2181273747
+       2190738695,
+       2188035037,
+       2187877590
       ],
       "n2": [
-       4223255548,
-       4228906696,
-       4204720859
+       4173296565,
+       4173602071,
+       4171351894
       ],
-      "per_iter": 1354338.56
+      "per_iter": 1323507.6853333334
      },
-     "load_flagged": true,
-     "load_max": 58.58,
-     "load_mean": 58.51,
-     "peak_rss_kb": 176116,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.75,
+     "load_mean": 1.67,
+     "peak_rss_kb": 176384,
+     "status": "OK",
+     "timeout_s": 120
     },
     "perry": {
-     "compile_s": 80.94,
+     "compile_s": 3.26,
      "correctness_output": "axios/post_json axios@1.20.0 n=500 warm=200\nchecksum 8f00a73e",
      "instr": {
       "n1": [
-       21146733913,
-       21147673497,
-       21145615939
+       10131827514,
+       10081464609,
+       10098216821
       ],
       "n2": [
-       68273569997,
-       68228172560,
-       68286723276
+       31853146538,
+       26156234290,
+       31919899828
       ],
-      "per_iter": 31417890.722666666
+      "per_iter": 14503286.478
      },
-     "load_flagged": true,
-     "load_max": 62.89,
-     "load_mean": 60.05,
-     "peak_rss_kb": 154392,
-     "size_bytes": 30759880,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.78,
+     "load_mean": 1.76,
+     "peak_rss_kb": 137660,
+     "size_bytes": 31621976,
+     "status": "OK",
+     "timeout_s": 120
     }
    },
    "n1": 500,
@@ -179,66 +184,69 @@
      "correctness_output": "big.js/arith_chain big.js@7.0.1 n=5000 warm=1000\nchecksum e69800a7",
      "instr": {
       "n1": [
-       52185990334,
-       51320771392,
-       55839365659
+       52129619736,
+       52123974508,
+       52123741395
       ],
       "n2": [
-       181785390049,
-       178463245310,
-       194210614874
+       181067483584,
+       181144515881,
+       181086541126
       ],
-      "per_iter": 8639959.981
+      "per_iter": 8597504.4412
      },
-     "load_flagged": true,
-     "load_max": 57.83,
-     "load_mean": 56.44,
-     "peak_rss_kb": 95544,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 2.31,
+     "load_mean": 1.82,
+     "peak_rss_kb": 97664,
+     "status": "OK",
+     "timeout_s": 120
     },
     "node": {
      "correctness_output": "big.js/arith_chain big.js@7.0.1 n=5000 warm=1000\nchecksum e69800a7",
      "instr": {
       "n1": [
-       59361329276,
-       59307255626,
-       59332724369
+       59317989174,
+       59324254794,
+       59347819744
       ],
       "n2": [
-       205481365754,
-       205479761609,
-       205382471050
+       205478729157,
+       205500619544,
+       205495997142
       ],
-      "per_iter": 9743135.816
+      "per_iter": 9744782.8232
      },
-     "load_flagged": true,
-     "load_max": 54.79,
-     "load_mean": 54.34,
-     "peak_rss_kb": 91368,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.53,
+     "load_mean": 1.47,
+     "peak_rss_kb": 90128,
+     "status": "OK",
+     "timeout_s": 120
     },
     "perry": {
-     "compile_s": 4.45,
+     "compile_s": 0.73,
      "correctness_output": "big.js/arith_chain big.js@7.0.1 n=5000 warm=1000\nchecksum e69800a7",
      "instr": {
       "n1": [
-       1308136756639,
-       1308100239600,
-       1308203101826
+       815024823199,
+       815016577127,
+       815017625383
       ],
       "n2": [
-       4583975647401,
-       4584279796444,
-       4584260315150
+       2855844668931,
+       2855836931606,
+       2855835018076
       ],
-      "per_iter": 218408237.23406667
+      "per_iter": 136054620.41486666
      },
-     "load_flagged": true,
-     "load_max": 55.47,
-     "load_mean": 42.94,
-     "peak_rss_kb": 36776,
-     "size_bytes": 8500048,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 2.94,
+     "load_mean": 2.62,
+     "peak_rss_kb": 51628,
+     "size_bytes": 8681000,
+     "status": "OK",
+     "timeout_s": 752.4
     }
    },
    "n1": 5000,
@@ -251,66 +259,69 @@
      "correctness_output": "bignumber.js/arith_chain bignumber.js@11.1.5 n=5000 warm=1000\nchecksum e20a89b7",
      "instr": {
       "n1": [
-       5062273131,
-       4933591077,
-       4947525761
+       5058388242,
+       5021190940,
+       4931430983
       ],
       "n2": [
-       14063524494,
-       14116993891,
-       14114459664
+       14296646247,
+       14325569800,
+       14126874774
       ],
-      "per_iter": 611128.9268666666
+      "per_iter": 618363.6871333333
      },
-     "load_flagged": true,
-     "load_max": 48.11,
-     "load_mean": 47.51,
-     "peak_rss_kb": 105540,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.62,
+     "load_mean": 1.59,
+     "peak_rss_kb": 111232,
+     "status": "OK",
+     "timeout_s": 120
     },
     "node": {
      "correctness_output": "bignumber.js/arith_chain bignumber.js@11.1.5 n=5000 warm=1000\nchecksum e20a89b7",
      "instr": {
       "n1": [
-       2956057301,
-       2981719937,
-       2962042748
+       2960106921,
+       2970666709,
+       2958089529
       ],
       "n2": [
-       8455031997,
-       8463201792,
-       8462275042
+       8448640409,
+       8467716432,
+       8458235812
       ],
-      "per_iter": 366682.15293333336
+      "per_iter": 366541.92606666667
      },
-     "load_flagged": true,
-     "load_max": 48.48,
-     "load_mean": 48.24,
-     "peak_rss_kb": 91572,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.55,
+     "load_mean": 1.55,
+     "peak_rss_kb": 97408,
+     "status": "OK",
+     "timeout_s": 120
     },
     "perry": {
-     "compile_s": 10.49,
+     "compile_s": 1.13,
      "correctness_output": "bignumber.js/arith_chain bignumber.js@11.1.5 n=5000 warm=1000\nchecksum e20a89b7",
      "instr": {
       "n1": [
-       33238478996,
-       33225513946,
-       33221138250
+       25655045912,
+       25654711005,
+       25657557894
       ],
       "n2": [
-       116253230964,
-       116287538696,
-       116308590327
+       89834423446,
+       89816401818,
+       89818369704
       ],
-      "per_iter": 5537468.316666666
+      "per_iter": 4277554.919466667
      },
-     "load_flagged": true,
-     "load_max": 45.88,
-     "load_mean": 44.49,
-     "peak_rss_kb": 34180,
-     "size_bytes": 11398056,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.73,
+     "load_mean": 1.65,
+     "peak_rss_kb": 48948,
+     "size_bytes": 11708208,
+     "status": "OK",
+     "timeout_s": 120
     }
    },
    "n1": 5000,
@@ -323,66 +334,69 @@
      "correctness_output": "commander/parse_argv commander@15.0.0 n=1250 warm=200\nchecksum 7f21dc21",
      "instr": {
       "n1": [
-       522212444,
-       500357668,
-       534502192
+       516937729,
+       533376466,
+       503715560
       ],
       "n2": [
-       1532304106,
-       1551651769,
-       1567594717
+       1533831830,
+       1541591301,
+       1529130704
       ],
-      "per_iter": 274517.1533333333
+      "per_iter": 271171.76026666665
      },
-     "load_flagged": true,
-     "load_max": 29.49,
-     "load_mean": 29.29,
-     "peak_rss_kb": 109528,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.21,
+     "load_mean": 1.21,
+     "peak_rss_kb": 109000,
+     "status": "OK",
+     "timeout_s": 120
     },
     "node": {
      "correctness_output": "commander/parse_argv commander@15.0.0 n=1250 warm=200\nchecksum 7f21dc21",
      "instr": {
       "n1": [
-       711737234,
-       709841528,
-       707559212
+       706449629,
+       702810740,
+       701068774
       ],
       "n2": [
-       1431728447,
-       1433499402,
-       1429877308
+       1433366066,
+       1429177792,
+       1438742225
       ],
-      "per_iter": 192503.1784
+      "per_iter": 194814.7536
      },
-     "load_flagged": true,
-     "load_max": 29.19,
-     "load_mean": 29.19,
-     "peak_rss_kb": 87936,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.21,
+     "load_mean": 1.21,
+     "peak_rss_kb": 86660,
+     "status": "OK",
+     "timeout_s": 120
     },
     "perry": {
-     "compile_s": 468.47,
+     "compile_s": 1.35,
      "correctness_output": "commander/parse_argv commander@15.0.0 n=1250 warm=200\nchecksum 7f21dc21",
      "instr": {
       "n1": [
-       5614929577,
-       5613683036,
-       5615848950
+       5165576275,
+       5165786582,
+       5165178157
       ],
       "n2": [
-       19983488323,
-       19983955280,
-       19984661826
+       18264457304,
+       18265945020,
+       18265380015
       ],
-      "per_iter": 3831740.1874666666
+      "per_iter": 3493280.9973333334
      },
-     "load_flagged": true,
-     "load_max": 29.49,
-     "load_mean": 29.4,
-     "peak_rss_kb": 206808,
-     "size_bytes": 10993248,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.27,
+     "load_mean": 1.22,
+     "peak_rss_kb": 53204,
+     "size_bytes": 10993056,
+     "status": "OK",
+     "timeout_s": 120
     }
    },
    "n1": 1250,
@@ -395,66 +409,69 @@
      "correctness_output": "control/bare_loop @- n=2000000 warm=1000\nchecksum 84a22c45",
      "instr": {
       "n1": [
-       272081872,
-       327343963,
-       328806988
+       266858756,
+       332258242,
+       331851767
       ],
       "n2": [
-       644984874,
-       940298179,
-       943787689
+       648129314,
+       649811088,
+       652837300
       ],
-      "per_iter": 102.159036
+      "per_iter": 52.99322016666667
      },
-     "load_flagged": true,
-     "load_max": 18.64,
-     "load_mean": 18.64,
-     "peak_rss_kb": 47636,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.55,
+     "load_mean": 1.55,
+     "peak_rss_kb": 47920,
+     "status": "OK",
+     "timeout_s": 120
     },
     "node": {
      "correctness_output": "control/bare_loop @- n=2000000 warm=1000\nchecksum 84a22c45",
      "instr": {
       "n1": [
-       494821842,
-       505227274,
-       494564340
+       492235325,
+       495543357,
+       499279829
       ],
       "n2": [
-       837902022,
-       832998855,
-       830767665
+       840962267,
+       840547392,
+       833200922
       ],
-      "per_iter": 56.3628355
+      "per_iter": 57.5006725
      },
-     "load_flagged": true,
-     "load_max": 18.64,
-     "load_mean": 18.64,
-     "peak_rss_kb": 74264,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.55,
+     "load_mean": 1.55,
+     "peak_rss_kb": 73468,
+     "status": "OK",
+     "timeout_s": 120
     },
     "perry": {
-     "compile_s": 1000.57,
+     "compile_s": 0.76,
      "correctness_output": "control/bare_loop @- n=2000000 warm=1000\nchecksum 84a22c45",
      "instr": {
       "n1": [
-       53002656,
-       53001779,
-       53001969
+       53091783,
+       53089035,
+       53092110
       ],
       "n2": [
-       209002376,
-       209001803,
-       209002006
+       209091794,
+       209092800,
+       209091712
       ],
-      "per_iter": 26.000006166666665
+      "per_iter": 26.000001833333332
      },
-     "load_flagged": true,
-     "load_max": 18.64,
-     "load_mean": 18.64,
-     "peak_rss_kb": 28048,
-     "size_bytes": 7425656,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.55,
+     "load_mean": 1.55,
+     "peak_rss_kb": 28476,
+     "size_bytes": 7496808,
+     "status": "OK",
+     "timeout_s": 120
     }
    },
    "n1": 2000000,
@@ -467,21 +484,21 @@
      "correctness_output": "control/prop_read @- n=500000 warm=1000\nchecksum d9dbf305",
      "instr": {
       "n1": [
-       207510675,
-       166917180,
-       200232955
+       188170122,
+       195856039,
+       194056947
       ],
       "n2": [
-       285792480,
-       301743280,
-       287763882
+       280653813,
+       348812090,
+       340205485
       ],
-      "per_iter": 58.353951333333335
+      "per_iter": 97.43235866666667
      },
-     "load_flagged": true,
-     "load_max": 47.73,
-     "load_mean": 47.73,
-     "peak_rss_kb": 47864,
+     "load_flagged": false,
+     "load_max": 1.55,
+     "load_mean": 1.55,
+     "peak_rss_kb": 47768,
      "status": "OK",
      "timeout_s": 120
     },
@@ -489,45 +506,45 @@
      "correctness_output": "control/prop_read @- n=500000 warm=1000\nchecksum d9dbf305",
      "instr": {
       "n1": [
-       438843122,
-       424206192,
-       418780074
+       413200738,
+       438104867,
+       421449958
       ],
       "n2": [
-       511852341,
-       498628856,
-       495235611
+       502313162,
+       503762854,
+       511365417
       ],
-      "per_iter": 49.615109333333336
+      "per_iter": 54.875264
      },
-     "load_flagged": true,
-     "load_max": 47.73,
-     "load_mean": 47.73,
-     "peak_rss_kb": 73500,
+     "load_flagged": false,
+     "load_max": 1.55,
+     "load_mean": 1.55,
+     "peak_rss_kb": 73680,
      "status": "OK",
      "timeout_s": 120
     },
     "perry": {
-     "compile_s": 18.66,
+     "compile_s": 0.78,
      "correctness_output": "control/prop_read @- n=500000 warm=1000\nchecksum d9dbf305",
      "instr": {
       "n1": [
-       60627195,
-       60626861,
-       60628354
+       66228871,
+       66225883,
+       66232147
       ],
       "n2": [
-       239127850,
-       239127378,
-       239127345
+       261229114,
+       261228135,
+       261228296
       ],
-      "per_iter": 119.000122
+      "per_iter": 129.99961666666667
      },
-     "load_flagged": true,
-     "load_max": 47.73,
-     "load_mean": 47.59,
-     "peak_rss_kb": 27732,
-     "size_bytes": 7425872,
+     "load_flagged": false,
+     "load_max": 1.55,
+     "load_mean": 1.55,
+     "peak_rss_kb": 28420,
+     "size_bytes": 7500904,
      "status": "OK",
      "timeout_s": 120
     }
@@ -542,66 +559,69 @@
      "correctness_output": "cron/next_dates cron@4.4.0 n=1250 warm=200\nchecksum 8578fa7b",
      "instr": {
       "n1": [
-       5272156237,
-       5263464305,
-       5204222743
+       5210932397,
+       5228338144,
+       5215081907
       ],
       "n2": [
-       14340056399,
-       14592091167,
-       14397953244
+       14602229120,
+       14594381612,
+       14642571391
       ],
-      "per_iter": 2435863.7170666666
+      "per_iter": 2503239.2568
      },
-     "load_flagged": true,
-     "load_max": 36.44,
-     "load_mean": 35.76,
-     "peak_rss_kb": 136116,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 2.22,
+     "load_mean": 2.14,
+     "peak_rss_kb": 151772,
+     "status": "OK",
+     "timeout_s": 120
     },
     "node": {
      "correctness_output": "cron/next_dates cron@4.4.0 n=1250 warm=200\nchecksum 8578fa7b",
      "instr": {
       "n1": [
-       5895427781,
-       5904281712,
-       5890365908
+       5886917650,
+       5900023189,
+       5897608463
       ],
       "n2": [
-       17002776468,
-       17011308285,
-       17010543439
+       16990568406,
+       17011247500,
+       17020922664
       ],
-      "per_iter": 2964030.8421333334
+      "per_iter": 2963637.0765333334
      },
-     "load_flagged": true,
-     "load_max": 33.65,
-     "load_mean": 33.29,
-     "peak_rss_kb": 102948,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 2.07,
+     "load_mean": 2.07,
+     "peak_rss_kb": 102592,
+     "status": "OK",
+     "timeout_s": 120
     },
     "perry": {
-     "compile_s": 603.03,
+     "compile_s": 2.35,
      "correctness_output": "cron/next_dates cron@4.4.0 n=1250 warm=200\nchecksum 8578fa7b",
      "instr": {
       "n1": [
-       668744163588,
-       669125785108,
-       668943694654
+       623518917930,
+       624317841296,
+       617911680462
       ],
       "n2": [
-       2438033045567,
-       2438666508889,
-       2439526587748
+       2249929588692,
+       2235469817512,
+       2220929556057
       ],
-      "per_iter": 471926083.796
+      "per_iter": 429853573.22186667
      },
-     "load_flagged": true,
-     "load_max": 99.48,
-     "load_mean": 53.95,
-     "peak_rss_kb": 101216,
-     "size_bytes": 19742296,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 2.37,
+     "load_mean": 1.98,
+     "peak_rss_kb": 67716,
+     "size_bytes": 20163768,
+     "status": "OK",
+     "timeout_s": 694.5
     }
    },
    "n1": 1250,
@@ -614,66 +634,69 @@
      "correctness_output": "date-fns/diff_interval date-fns@4.4.0 n=2500 warm=500\nchecksum af916ff1",
      "instr": {
       "n1": [
-       591702203,
-       595903314,
-       588596684
+       585482025,
+       586722079,
+       584221382
       ],
       "n2": [
-       1449184337,
-       1398285939,
-       1402100386
+       1385000147,
+       1384441033,
+       1381565536
       ],
-      "per_iter": 108053.09106666666
+      "per_iter": 106527.86773333333
      },
-     "load_flagged": true,
-     "load_max": 47.63,
-     "load_mean": 47.63,
-     "peak_rss_kb": 116524,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 2.17,
+     "load_mean": 2.17,
+     "peak_rss_kb": 120228,
+     "status": "OK",
+     "timeout_s": 120
     },
     "node": {
      "correctness_output": "date-fns/diff_interval date-fns@4.4.0 n=2500 warm=500\nchecksum af916ff1",
      "instr": {
       "n1": [
-       9247632920,
-       9264086808,
-       9149956892
+       9095978245,
+       9169013068,
+       9183719933
       ],
       "n2": [
-       9955643718,
-       9880560407,
-       9783300319
+       9778471238,
+       9826431670,
+       9924411111
       ],
-      "per_iter": 84390.3316
+      "per_iter": 87655.8136
      },
-     "load_flagged": true,
-     "load_max": 49.35,
-     "load_mean": 48.53,
-     "peak_rss_kb": 362572,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 2.19,
+     "load_mean": 2.18,
+     "peak_rss_kb": 333276,
+     "status": "OK",
+     "timeout_s": 120
     },
     "perry": {
-     "compile_s": 2.98,
+     "compile_s": 1.09,
      "correctness_output": "date-fns/diff_interval date-fns@4.4.0 n=2500 warm=500\nchecksum af916ff1",
      "instr": {
       "n1": [
-       2070184255,
-       2071095241,
-       2070295487
+       2200285835,
+       2200224381,
+       2200685553
       ],
       "n2": [
-       7051413705,
-       7041618228,
-       7044560186
+       7534416571,
+       7534319715,
+       7534301770
       ],
-      "per_iter": 663235.2932
+      "per_iter": 711204.5173333334
      },
-     "load_flagged": true,
-     "load_max": 47.63,
-     "load_mean": 47.24,
-     "peak_rss_kb": 35720,
-     "size_bytes": 7649664,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 2.17,
+     "load_mean": 2.17,
+     "peak_rss_kb": 46652,
+     "size_bytes": 7698536,
+     "status": "OK",
+     "timeout_s": 120
     }
    },
    "n1": 2500,
@@ -686,66 +709,69 @@
      "correctness_output": "date-fns/format_add date-fns@4.4.0 n=5000 warm=1000\nchecksum 3a4fd306",
      "instr": {
       "n1": [
-       898032554,
-       916995985,
-       895283837
+       926581280,
+       926984015,
+       899615203
       ],
       "n2": [
-       2684516022,
-       2525700396,
-       2514716002
+       2683845783,
+       2537633601,
+       2682537925
       ],
-      "per_iter": 108511.18946666666
+      "per_iter": 117063.77633333333
      },
-     "load_flagged": true,
-     "load_max": 52.55,
-     "load_mean": 52.55,
-     "peak_rss_kb": 130044,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 2.22,
+     "load_mean": 2.22,
+     "peak_rss_kb": 130900,
+     "status": "OK",
+     "timeout_s": 120
     },
     "node": {
      "correctness_output": "date-fns/format_add date-fns@4.4.0 n=5000 warm=1000\nchecksum 3a4fd306",
      "instr": {
       "n1": [
-       9501047700,
-       9497255301,
-       9482735616
+       9539416191,
+       9557350691,
+       9392543374
       ],
       "n2": [
-       10812230381,
-       10826420985,
-       10976364717
+       10837718962,
+       10875167807,
+       10732308067
       ],
-      "per_iter": 88611.0456
+      "per_iter": 86553.51806666667
      },
-     "load_flagged": true,
-     "load_max": 54.31,
-     "load_mean": 53.54,
-     "peak_rss_kb": 390812,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 2.22,
+     "load_mean": 2.22,
+     "peak_rss_kb": 389584,
+     "status": "OK",
+     "timeout_s": 120
     },
     "perry": {
-     "compile_s": 6.98,
+     "compile_s": 1.19,
      "correctness_output": "date-fns/format_add date-fns@4.4.0 n=5000 warm=1000\nchecksum 3a4fd306",
      "instr": {
       "n1": [
-       6760308079,
-       6759466727,
-       6760515571
+       5338997146,
+       5338549981,
+       5338716531
       ],
       "n2": [
-       23428026648,
-       23429321779,
-       23428367708
+       18484842051,
+       18487101402,
+       18486098828
       ],
-      "per_iter": 1111203.9752666666
+      "per_iter": 876492.1531333333
      },
-     "load_flagged": true,
-     "load_max": 52.55,
-     "load_mean": 51.84,
-     "peak_rss_kb": 33432,
-     "size_bytes": 8998456,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 2.2,
+     "load_mean": 2.2,
+     "peak_rss_kb": 49724,
+     "size_bytes": 9062056,
+     "status": "OK",
+     "timeout_s": 120
     }
    },
    "n1": 5000,
@@ -758,66 +784,69 @@
      "correctness_output": "dayjs/diff_startof dayjs@1.11.23 n=5000 warm=1000\nchecksum 0da1c497",
      "instr": {
       "n1": [
-       1515374705,
-       1476289755,
-       1522910850
+       1495015909,
+       1494077218,
+       1496372346
       ],
       "n2": [
-       2918543805,
-       3232981998,
-       3309096401
+       3332256469,
+       3237281241,
+       3220689700
       ],
-      "per_iter": 114507.15286666667
+      "per_iter": 116151.02213333333
      },
-     "load_flagged": true,
-     "load_max": 47.86,
-     "load_mean": 45.89,
-     "peak_rss_kb": 108220,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.72,
+     "load_mean": 1.72,
+     "peak_rss_kb": 111612,
+     "status": "OK",
+     "timeout_s": 120
     },
     "node": {
      "correctness_output": "dayjs/diff_startof dayjs@1.11.23 n=5000 warm=1000\nchecksum 0da1c497",
      "instr": {
       "n1": [
-       1742107250,
-       1713881864,
-       1766212682
+       1739317033,
+       1741612845,
+       1734449529
       ],
       "n2": [
-       4545077813,
-       4610132352,
-       4449092149
+       4553644074,
+       4549855509,
+       4554434147
       ],
-      "per_iter": 186864.7042
+      "per_iter": 187621.80273333334
      },
-     "load_flagged": true,
-     "load_max": 45.49,
-     "load_mean": 42.97,
-     "peak_rss_kb": 82228,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.72,
+     "load_mean": 1.72,
+     "peak_rss_kb": 82784,
+     "status": "OK",
+     "timeout_s": 120
     },
     "perry": {
-     "compile_s": 3.88,
+     "compile_s": 0.87,
      "correctness_output": "dayjs/diff_startof dayjs@1.11.23 n=5000 warm=1000\nchecksum 0da1c497",
      "instr": {
       "n1": [
-       55976526411,
-       55974644482,
-       55967575623
+       29693324375,
+       29765611788,
+       29896249239
       ],
       "n2": [
-       195891327459,
-       195839637249,
-       195828658615
+       104509225622,
+       107702939577,
+       103853409247
       ],
-      "per_iter": 9324332.851133334
+      "per_iter": 4982907.588933334
      },
-     "load_flagged": true,
-     "load_max": 71.07,
-     "load_mean": 57.0,
-     "peak_rss_kb": 202360,
-     "size_bytes": 11403512,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 2.29,
+     "load_mean": 2.0,
+     "peak_rss_kb": 214304,
+     "size_bytes": 11650808,
+     "status": "OK",
+     "timeout_s": 120
     }
    },
    "n1": 5000,
@@ -830,66 +859,69 @@
      "correctness_output": "dayjs/parse_format dayjs@1.11.23 n=5000 warm=1000\nchecksum acfe606e",
      "instr": {
       "n1": [
-       616467207,
-       752575377,
-       668381742
+       625954829,
+       651992908,
+       663911132
       ],
       "n2": [
-       1605884291,
-       1626278268,
-       1604048649
+       1627051766,
+       1611372843,
+       1602771214
       ],
-      "per_iter": 62500.16993333333
+      "per_iter": 63958.662333333334
      },
-     "load_flagged": true,
-     "load_max": 31.97,
-     "load_mean": 31.97,
-     "peak_rss_kb": 111272,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.59,
+     "load_mean": 1.59,
+     "peak_rss_kb": 112276,
+     "status": "OK",
+     "timeout_s": 120
     },
     "node": {
      "correctness_output": "dayjs/parse_format dayjs@1.11.23 n=5000 warm=1000\nchecksum acfe606e",
      "instr": {
       "n1": [
-       914903349,
-       922927050,
-       914163855
+       923425415,
+       920065800,
+       914671893
       ],
       "n2": [
-       1895615775,
-       1900240391,
-       1893641077
+       1910406919,
+       1912625691,
+       1900078440
       ],
-      "per_iter": 65380.8284
+      "per_iter": 66022.74126666666
      },
-     "load_flagged": true,
-     "load_max": 31.96,
-     "load_mean": 31.96,
-     "peak_rss_kb": 85036,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.59,
+     "load_mean": 1.59,
+     "peak_rss_kb": 83580,
+     "status": "OK",
+     "timeout_s": 120
     },
     "perry": {
-     "compile_s": 3.47,
+     "compile_s": 0.83,
      "correctness_output": "dayjs/parse_format dayjs@1.11.23 n=5000 warm=1000\nchecksum acfe606e",
      "instr": {
       "n1": [
-       12555687624,
-       12550730364,
-       12557373813
+       6582460246,
+       6721484483,
+       6555807835
       ],
       "n2": [
-       43340987657,
-       43344161657,
-       43400742650
+       22884151645,
+       22881244521,
+       22735781436
       ],
-      "per_iter": 2052564.9355333333
+      "per_iter": 1086585.6183333334
      },
-     "load_flagged": true,
-     "load_max": 31.97,
-     "load_mean": 31.49,
-     "peak_rss_kb": 211548,
-     "size_bytes": 11403120,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.7,
+     "load_mean": 1.62,
+     "peak_rss_kb": 89224,
+     "size_bytes": 11646712,
+     "status": "OK",
+     "timeout_s": 120
     }
    },
    "n1": 5000,
@@ -902,66 +934,69 @@
      "correctness_output": "decimal.js/arith_chain decimal.js@10.6.0 n=5000 warm=1000\nchecksum 51f5e73f",
      "instr": {
       "n1": [
-       3357979262,
-       3243441463,
-       3233892565
+       3157060213,
+       3216531298,
+       3137228372
       ],
       "n2": [
-       9331954337,
-       9172282879,
-       9119184374
+       9284378275,
+       9057055423,
+       9236722234
       ],
-      "per_iter": 395256.0944
+      "per_iter": 405310.8014
      },
-     "load_flagged": true,
-     "load_max": 42.89,
-     "load_mean": 42.54,
-     "peak_rss_kb": 102660,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.44,
+     "load_mean": 1.43,
+     "peak_rss_kb": 101500,
+     "status": "OK",
+     "timeout_s": 120
     },
     "node": {
      "correctness_output": "decimal.js/arith_chain decimal.js@10.6.0 n=5000 warm=1000\nchecksum 51f5e73f",
      "instr": {
       "n1": [
-       2194699852,
-       2179456513,
-       2182961950
+       2198160053,
+       2186645587,
+       2184342252
       ],
       "n2": [
-       5773230974,
-       5773512909,
-       5817423859
+       5787189320,
+       5781730912,
+       5807251653
       ],
-      "per_iter": 239370.06393333332
+      "per_iter": 240036.24886666666
      },
-     "load_flagged": true,
-     "load_max": 42.09,
-     "load_mean": 42.03,
-     "peak_rss_kb": 102352,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.44,
+     "load_mean": 1.44,
+     "peak_rss_kb": 102784,
+     "status": "OK",
+     "timeout_s": 120
     },
     "perry": {
-     "compile_s": 16.25,
+     "compile_s": 1.12,
      "correctness_output": "decimal.js/arith_chain decimal.js@10.6.0 n=5000 warm=1000\nchecksum 51f5e73f",
      "instr": {
       "n1": [
-       26255167200,
-       26230151509,
-       26219090989
+       21375773422,
+       21369239599,
+       21371241679
       ],
       "n2": [
-       91553838492,
-       91522512593,
-       91547971637
+       74627793326,
+       74630987643,
+       74611799235
       ],
-      "per_iter": 4354521.341866666
+      "per_iter": 3550436.7764666667
      },
-     "load_flagged": true,
-     "load_max": 42.74,
-     "load_mean": 40.66,
-     "peak_rss_kb": 49368,
-     "size_bytes": 11734992,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.4,
+     "load_mean": 1.37,
+     "peak_rss_kb": 51164,
+     "size_bytes": 12100720,
+     "status": "OK",
+     "timeout_s": 120
     }
    },
    "n1": 5000,
@@ -974,66 +1009,69 @@
      "correctness_output": "decimal.js/parse_sum decimal.js@10.6.0 n=500 warm=100\nlast 97703360.84/989155.82/488516.8042",
      "instr": {
       "n1": [
-       1284001058,
-       1287845105,
-       1284931060
+       1261918809,
+       1265299783,
+       1264195072
       ],
       "n2": [
-       3211339150,
-       3207125008,
-       3185692614
+       3207580683,
+       3205234727,
+       3204152706
       ],
-      "per_iter": 1281462.632
+      "per_iter": 1294026.4366666668
      },
-     "load_flagged": true,
-     "load_max": 85.19,
-     "load_mean": 85.19,
-     "peak_rss_kb": 96476,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.32,
+     "load_mean": 1.27,
+     "peak_rss_kb": 96956,
+     "status": "OK",
+     "timeout_s": 120
     },
     "node": {
      "correctness_output": "decimal.js/parse_sum decimal.js@10.6.0 n=500 warm=100\nlast 97703360.84/989155.82/488516.8042",
      "instr": {
       "n1": [
-       1602163780,
-       1578401804,
-       1619236867
+       1608618393,
+       1606987784,
+       1591232480
       ],
       "n2": [
-       4232319164,
-       4176512850,
-       4097461910
+       4226972673,
+       4306427030,
+       4114167398
       ],
-      "per_iter": 1716232.7133333334
+      "per_iter": 1746656.5926666667
      },
-     "load_flagged": true,
-     "load_max": 85.19,
-     "load_mean": 76.72,
-     "peak_rss_kb": 80144,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.27,
+     "load_mean": 1.27,
+     "peak_rss_kb": 81512,
+     "status": "OK",
+     "timeout_s": 120
     },
     "perry": {
-     "compile_s": 14.02,
+     "compile_s": 1.1,
      "correctness_output": "decimal.js/parse_sum decimal.js@10.6.0 n=500 warm=100\nlast 97703360.84/989155.82/488516.8042",
      "instr": {
       "n1": [
-       24601090273,
-       24576402123,
-       24567464716
+       21549781033,
+       21546628705,
+       21546285511
       ],
       "n2": [
-       85771708733,
-       85674634636,
-       85748410775
+       75222852480,
+       75222071256,
+       75230889182
       ],
-      "per_iter": 40781339.101333335
+      "per_iter": 35784149.18333333
      },
-     "load_flagged": true,
-     "load_max": 105.45,
-     "load_mean": 95.13,
-     "peak_rss_kb": 61508,
-     "size_bytes": 11735376,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.51,
+     "load_mean": 1.35,
+     "peak_rss_kb": 50824,
+     "size_bytes": 12096624,
+     "status": "OK",
+     "timeout_s": 120
     }
    },
    "n1": 500,
@@ -1046,66 +1084,69 @@
      "correctness_output": "dotenv/parse dotenv@18.0.1 n=2500 warm=500\nchecksum 902be63f",
      "instr": {
       "n1": [
-       627300823,
-       623636920,
-       629565932
+       624377780,
+       623414960,
+       623054631
       ],
       "n2": [
-       1910799500,
-       1889276322,
-       1881787412
+       1882927934,
+       1881772997,
+       1881409922
       ],
-      "per_iter": 168263.39986666667
+      "per_iter": 167781.0716
      },
-     "load_flagged": true,
-     "load_max": 29.36,
-     "load_mean": 29.34,
-     "peak_rss_kb": 99072,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.25,
+     "load_mean": 1.24,
+     "peak_rss_kb": 97884,
+     "status": "OK",
+     "timeout_s": 120
     },
     "node": {
      "correctness_output": "dotenv/parse dotenv@18.0.1 n=2500 warm=500\nchecksum 902be63f",
      "instr": {
       "n1": [
-       1019906676,
-       1028582661,
-       1019697762
+       1025511748,
+       1022805989,
+       1027102885
       ],
       "n2": [
-       2560026327,
-       2558207773,
-       2555156621
+       2552978150,
+       2562416371,
+       2549233236
       ],
-      "per_iter": 205106.81293333333
+      "per_iter": 203662.18693333335
      },
-     "load_flagged": true,
-     "load_max": 29.36,
-     "load_mean": 29.36,
-     "peak_rss_kb": 79940,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.25,
+     "load_mean": 1.25,
+     "peak_rss_kb": 79280,
+     "status": "OK",
+     "timeout_s": 120
     },
     "perry": {
-     "compile_s": 658.24,
+     "compile_s": 0.88,
      "correctness_output": "dotenv/parse dotenv@18.0.1 n=2500 warm=500\nchecksum 902be63f",
      "instr": {
       "n1": [
-       8294489418,
-       8294493085,
-       8294719504
+       5644575951,
+       5644577644,
+       5644580303
       ],
       "n2": [
-       29058944110,
-       29053752040,
-       29057552689
+       19592730325,
+       19592603774,
+       19592539140
       ],
-      "per_iter": 2768407.9472
+      "per_iter": 1859736.8173333334
      },
-     "load_flagged": true,
-     "load_max": 29.38,
-     "load_mean": 29.26,
-     "peak_rss_kb": 51984,
-     "size_bytes": 11837896,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.23,
+     "load_mean": 1.23,
+     "peak_rss_kb": 49784,
+     "size_bytes": 12092216,
+     "status": "OK",
+     "timeout_s": 120
     }
    },
    "n1": 2500,
@@ -1118,66 +1159,69 @@
      "correctness_output": "exponential-backoff/retry exponential-backoff@3.1.3 n=500 warm=100\nattempts 2000 retries 1500 total 249500",
      "instr": {
       "n1": [
-       678660140,
-       708658057,
-       585564706
+       524676065,
+       524900015,
+       524465751
       ],
       "n2": [
-       1881088226,
-       1923495361,
-       2014071314
+       1458281130,
+       1463709149,
+       1467304926
       ],
-      "per_iter": 829890.1473333334
+      "per_iter": 626022.056
      },
-     "load_flagged": true,
-     "load_max": 46.15,
-     "load_mean": 44.42,
-     "peak_rss_kb": 57340,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.53,
+     "load_mean": 1.2,
+     "peak_rss_kb": 55796,
+     "status": "OK",
+     "timeout_s": 120
     },
     "node": {
      "correctness_output": "exponential-backoff/retry exponential-backoff@3.1.3 n=500 warm=100\nattempts 2000 retries 1500 total 249500",
      "instr": {
       "n1": [
-       698070052,
-       701320232,
-       696186626
+       698442256,
+       697150178,
+       695874987
       ],
       "n2": [
-       1239475843,
-       1237445547,
-       1238587365
+       1305194290,
+       1299098197,
+       1304907498
       ],
-      "per_iter": 360344.87533333333
+      "per_iter": 405171.5466666667
      },
-     "load_flagged": true,
-     "load_max": 51.41,
-     "load_mean": 49.91,
-     "peak_rss_kb": 94408,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.9,
+     "load_mean": 1.69,
+     "peak_rss_kb": 94276,
+     "status": "OK",
+     "timeout_s": 120
     },
     "perry": {
-     "compile_s": 1.86,
+     "compile_s": 0.68,
      "correctness_output": "exponential-backoff/retry exponential-backoff@3.1.3 n=500 warm=100\nattempts 2000 retries 1500 total 249500",
      "instr": {
       "n1": [
-       339911815,
-       339951653,
-       339722404
+       283943071,
+       284075273,
+       285288081
       ],
       "n2": [
-       1124980182,
-       1124585186,
-       1124454571
+       913501245,
+       910520848,
+       911075449
       ],
-      "per_iter": 523115.5806666667
+      "per_iter": 418000.11733333336
      },
-     "load_flagged": true,
-     "load_max": 40.28,
-     "load_mean": 40.28,
-     "peak_rss_kb": 42820,
-     "size_bytes": 7980056,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.3,
+     "load_mean": 1.3,
+     "peak_rss_kb": 54936,
+     "size_bytes": 7693800,
+     "status": "OK",
+     "timeout_s": 120
     }
    },
    "n1": 500,
@@ -1190,50 +1234,53 @@
      "correctness_output": "fastify/inject fastify@5.12.5 n=1250 warm=300\nchecksum fc0a5e23",
      "instr": {
       "n1": [
-       1705098264,
-       1715949723,
-       1666616656
+       1594620105,
+       1588118645,
+       1599411978
       ],
       "n2": [
-       3315825988,
-       3255196406,
-       3579817605
+       3136497605,
+       3137049391,
+       3132976372
       ],
-      "per_iter": 429527.3930666667
+      "per_iter": 411167.3333333333
      },
-     "load_flagged": true,
-     "load_max": 57.77,
-     "load_mean": 57.68,
-     "peak_rss_kb": 100396,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.61,
+     "load_mean": 1.61,
+     "peak_rss_kb": 118024,
+     "status": "OK",
+     "timeout_s": 120
     },
     "node": {
      "correctness_output": "fastify/inject fastify@5.12.5 n=1250 warm=300\nchecksum fc0a5e23",
      "instr": {
       "n1": [
-       2209162373,
-       2215082134,
-       2184311340
+       2210306612,
+       2701351897,
+       2205516521
       ],
       "n2": [
-       4255643308,
-       4477749849,
-       4258739676
+       4270746213,
+       4259528778,
+       4285844887
       ],
-      "per_iter": 546553.9474666667
+      "per_iter": 549450.5602666667
      },
-     "load_flagged": true,
-     "load_max": 57.77,
-     "load_mean": 57.33,
-     "peak_rss_kb": 190836,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.61,
+     "load_mean": 1.61,
+     "peak_rss_kb": 199944,
+     "status": "OK",
+     "timeout_s": 120
     },
     "perry": {
-     "compile_s": 465.57,
-     "correctness_output": "fastify/inject fastify@5.12.5 n=1250 warm=300\nERROR setHeader is not a function",
-     "reason": "exit 1: fastify/inject fastify@5.12.5 n=1250 warm=300\nERROR setHeader is not a function",
-     "size_bytes": 59723304,
-     "status": "FAIL"
+     "compile_s": 8.61,
+     "correctness_output": "fastify/inject fastify@5.12.5 n=1250 warm=300\nERROR Cannot read properties of undefined (reading 'once')",
+     "reason": "exit 1: fastify/inject fastify@5.12.5 n=1250 warm=300\nERROR Cannot read properties of undefined (reading 'once')",
+     "size_bytes": 61850896,
+     "status": "FAIL",
+     "timeout_s": 120
     }
    },
    "n1": 1250,
@@ -1246,66 +1293,69 @@
      "correctness_output": "fastify/listen_fetch fastify@5.12.5 n=500 warm=200\nchecksum ee9de733",
      "instr": {
       "n1": [
-       1126907188,
-       1057895109,
-       1050059387
+       1019394753,
+       1019954420,
+       1019512218
       ],
       "n2": [
-       1540375012,
-       1509066040,
-       1494337294
+       1461218285,
+       1381819424,
+       1460313158
       ],
-      "per_iter": 300780.62066666665
+      "per_iter": 293867.29333333333
      },
-     "load_flagged": true,
-     "load_max": 55.82,
-     "load_mean": 55.74,
-     "peak_rss_kb": 87868,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.72,
+     "load_mean": 1.72,
+     "peak_rss_kb": 91664,
+     "status": "OK",
+     "timeout_s": 120
     },
     "node": {
      "correctness_output": "fastify/listen_fetch fastify@5.12.5 n=500 warm=200\nchecksum ee9de733",
      "instr": {
       "n1": [
-       2362648174,
-       2377142721,
-       2358567891
+       2400371142,
+       2398873743,
+       2380812320
       ],
       "n2": [
-       3671690175,
-       3672445262,
-       3671581698
+       3549645565,
+       3552528556,
+       3562183969
       ],
-      "per_iter": 872694.6673333333
+      "per_iter": 769103.2086666666
      },
-     "load_flagged": true,
-     "load_max": 57.26,
-     "load_mean": 56.84,
-     "peak_rss_kb": 194912,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.72,
+     "load_mean": 1.7,
+     "peak_rss_kb": 194656,
+     "status": "OK",
+     "timeout_s": 120
     },
     "perry": {
-     "compile_s": 185.13,
+     "compile_s": 8.64,
      "correctness_output": "fastify/listen_fetch fastify@5.12.5 n=500 warm=200\nchecksum ee9de733",
      "instr": {
       "n1": [
-       1414588539,
-       1413646182,
-       1414466524
+       1405580506,
+       1407120905,
+       1405498860
       ],
       "n2": [
-       4076901572,
-       4070487304,
-       4076735128
+       3372632526,
+       3385396996,
+       3369447182
       ],
-      "per_iter": 1774845.736
+      "per_iter": 1311368.0133333334
      },
-     "load_flagged": true,
-     "load_max": 55.35,
-     "load_mean": 55.23,
-     "peak_rss_kb": 119144,
-     "size_bytes": 59714584,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.72,
+     "load_mean": 1.72,
+     "peak_rss_kb": 121772,
+     "size_bytes": 61842640,
+     "status": "OK",
+     "timeout_s": 120
     }
    },
    "n1": 500,
@@ -1318,21 +1368,21 @@
      "correctness_output": "ioredis/pipeline ioredis@5.11.1 n=125 warm=50\nchecksum 05ec482e",
      "instr": {
       "n1": [
-       588696326,
-       556969715,
-       561666803
+       525831283,
+       528550220,
+       525557553
       ],
       "n2": [
-       1045872911,
-       1080515046,
-       1078435071
+       1013042330,
+       1033896726,
+       1035496954
       ],
-      "per_iter": 1378048.7146666667
+      "per_iter": 1354841.1813333333
      },
-     "load_flagged": true,
-     "load_max": 47.55,
-     "load_mean": 47.53,
-     "peak_rss_kb": 76912,
+     "load_flagged": false,
+     "load_max": 1.1,
+     "load_mean": 1.07,
+     "peak_rss_kb": 87552,
      "status": "OK",
      "timeout_s": 120
     },
@@ -1340,45 +1390,45 @@
      "correctness_output": "ioredis/pipeline ioredis@5.11.1 n=125 warm=50\nchecksum 05ec482e",
      "instr": {
       "n1": [
-       831632269,
-       833628120,
-       831669032
+       844005756,
+       836724121,
+       844176247
       ],
       "n2": [
-       1117314938,
-       1121349444,
-       1117121877
+       1122137772,
+       1116562791,
+       1119245315
       ],
-      "per_iter": 761722.416
+      "per_iter": 733972.1573333333
      },
-     "load_flagged": true,
-     "load_max": 47.55,
-     "load_mean": 47.55,
-     "peak_rss_kb": 109008,
+     "load_flagged": false,
+     "load_max": 1.02,
+     "load_mean": 1.02,
+     "peak_rss_kb": 107960,
      "status": "OK",
      "timeout_s": 120
     },
     "perry": {
-     "compile_s": 49.14,
+     "compile_s": 3.0,
      "correctness_output": "ioredis/pipeline ioredis@5.11.1 n=125 warm=50\nchecksum 05ec482e",
      "instr": {
       "n1": [
-       2341574449,
-       2339702322,
-       2340462324
+       1688676664,
+       1692306290,
+       1691088721
       ],
       "n2": [
-       7148185232,
-       7153101699,
-       7144677985
+       4820734383,
+       4821433607,
+       4820339173
       ],
-      "per_iter": 12820594.421333333
+      "per_iter": 8345721.765333333
      },
-     "load_flagged": true,
-     "load_max": 47.42,
-     "load_mean": 47.42,
-     "peak_rss_kb": 115128,
-     "size_bytes": 24238984,
+     "load_flagged": false,
+     "load_max": 1.1,
+     "load_mean": 1.1,
+     "peak_rss_kb": 74892,
+     "size_bytes": 24875936,
      "status": "OK",
      "timeout_s": 120
     }
@@ -1393,21 +1443,21 @@
      "correctness_output": "ioredis/set_get ioredis@5.11.1 n=500 warm=200\nchecksum 98b09153 ctr 700",
      "instr": {
       "n1": [
-       567977862,
-       558238496,
-       559734293
+       533024404,
+       532471740,
+       532299135
       ],
       "n2": [
-       1014372526,
-       960625585,
-       994962536
+       873295460,
+       876508031,
+       873687295
       ],
-      "per_iter": 290152.162
+      "per_iter": 227477.03666666665
      },
-     "load_flagged": true,
-     "load_max": 48.35,
-     "load_mean": 48.35,
-     "peak_rss_kb": 68832,
+     "load_flagged": false,
+     "load_max": 1.02,
+     "load_mean": 1.02,
+     "peak_rss_kb": 72584,
      "status": "OK",
      "timeout_s": 120
     },
@@ -1415,45 +1465,45 @@
      "correctness_output": "ioredis/set_get ioredis@5.11.1 n=500 warm=200\nchecksum 98b09153 ctr 700",
      "instr": {
       "n1": [
-       877301390,
-       880625296,
-       881590269
+       886136474,
+       884026320,
+       882043784
       ],
       "n2": [
-       1178626398,
-       1172258177,
-       1183980199
+       1190262290,
+       1183721025,
+       1189554383
       ],
-      "per_iter": 198667.40133333334
+      "per_iter": 203685.37533333333
      },
-     "load_flagged": true,
-     "load_max": 48.73,
-     "load_mean": 48.67,
-     "peak_rss_kb": 98224,
+     "load_flagged": false,
+     "load_max": 1.02,
+     "load_mean": 0.88,
+     "peak_rss_kb": 99332,
      "status": "OK",
      "timeout_s": 120
     },
     "perry": {
-     "compile_s": 52.81,
+     "compile_s": 3.03,
      "correctness_output": "ioredis/set_get ioredis@5.11.1 n=500 warm=200\nchecksum 98b09153 ctr 700",
      "instr": {
       "n1": [
-       1260288419,
-       1261288495,
-       1260779996
+       998887699,
+       998783326,
+       998959702
       ],
       "n2": [
-       3735724772,
-       3734937252,
-       3734903473
+       2824658908,
+       2823298594,
+       2824614421
       ],
-      "per_iter": 1649438.1706666667
+      "per_iter": 1217151.148
      },
-     "load_flagged": true,
-     "load_max": 48.0,
-     "load_mean": 47.95,
-     "peak_rss_kb": 84604,
-     "size_bytes": 24230504,
+     "load_flagged": false,
+     "load_max": 1.02,
+     "load_mean": 1.02,
+     "peak_rss_kb": 74324,
+     "size_bytes": 24867680,
      "status": "OK",
      "timeout_s": 120
     }
@@ -1468,66 +1518,69 @@
      "correctness_output": "jsonwebtoken/decode jsonwebtoken@9.0.3 n=5000 warm=1000\nchecksum e80c8d59",
      "instr": {
       "n1": [
-       444271800,
-       445370126,
-       443253624
+       445769496,
+       444870802,
+       444408089
       ],
       "n2": [
-       1073602670,
-       1069522557,
-       1074901039
+       1074363291,
+       1071210079,
+       1072736317
       ],
-      "per_iter": 41955.39133333333
+      "per_iter": 41857.701
      },
-     "load_flagged": true,
-     "load_max": 17.54,
-     "load_mean": 17.19,
-     "peak_rss_kb": 103836,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.54,
+     "load_mean": 1.54,
+     "peak_rss_kb": 104556,
+     "status": "OK",
+     "timeout_s": 120
     },
     "node": {
      "correctness_output": "jsonwebtoken/decode jsonwebtoken@9.0.3 n=5000 warm=1000\nchecksum e80c8d59",
      "instr": {
       "n1": [
-       763842863,
-       742943817,
-       747560094
+       756232617,
+       752091056,
+       752011276
       ],
       "n2": [
-       1278407123,
-       1262099215,
-       1275354384
+       1265462642,
+       1269731733,
+       1259151384
       ],
-      "per_iter": 35186.286
+      "per_iter": 34224.7724
      },
-     "load_flagged": true,
-     "load_max": 17.54,
-     "load_mean": 17.54,
-     "peak_rss_kb": 82004,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.54,
+     "load_mean": 1.54,
+     "peak_rss_kb": 81144,
+     "status": "OK",
+     "timeout_s": 120
     },
     "perry": {
-     "compile_s": 173.36,
+     "compile_s": 2.27,
      "correctness_output": "jsonwebtoken/decode jsonwebtoken@9.0.3 n=5000 warm=1000\nchecksum e80c8d59",
      "instr": {
       "n1": [
-       1417641060,
-       1417716546,
-       1417894318
+       549227705,
+       550345699,
+       549214372
       ],
       "n2": [
-       4772513893,
-       4772937934,
-       4772452458
+       1528914891,
+       1528936880,
+       1528813240
       ],
-      "per_iter": 223653.15646666667
+      "per_iter": 65312.47906666667
      },
-     "load_flagged": true,
-     "load_max": 17.02,
-     "load_mean": 17.02,
-     "peak_rss_kb": 87588,
-     "size_bytes": 19913424,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.54,
+     "load_mean": 1.54,
+     "peak_rss_kb": 67624,
+     "size_bytes": 20526960,
+     "status": "OK",
+     "timeout_s": 120
     }
    },
    "n1": 5000,
@@ -1540,66 +1593,69 @@
      "correctness_output": "jsonwebtoken/hs256 jsonwebtoken@9.0.3 n=500 warm=200\nchecksum 48d5f64b",
      "instr": {
       "n1": [
-       409936927,
-       408712940,
-       410939770
+       413591891,
+       413419395,
+       412981668
       ],
       "n2": [
-       708756484,
-       704587041,
-       708316575
+       711080513,
+       708402040,
+       709910437
       ],
-      "per_iter": 198919.76533333334
+      "per_iter": 197660.69466666668
      },
-     "load_flagged": true,
-     "load_max": 18.11,
-     "load_mean": 18.11,
-     "peak_rss_kb": 97740,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.55,
+     "load_mean": 1.55,
+     "peak_rss_kb": 97176,
+     "status": "OK",
+     "timeout_s": 120
     },
     "node": {
      "correctness_output": "jsonwebtoken/hs256 jsonwebtoken@9.0.3 n=500 warm=200\nchecksum 48d5f64b",
      "instr": {
       "n1": [
-       899970443,
-       912479531,
-       905019807
+       906094070,
+       898826485,
+       897459307
       ],
       "n2": [
-       1572652782,
-       1583369879,
-       1580971007
+       1578950900,
+       1580800213,
+       1582514824
       ],
-      "per_iter": 450634.13333333336
+      "per_iter": 454649.152
      },
-     "load_flagged": true,
-     "load_max": 18.64,
-     "load_mean": 18.29,
-     "peak_rss_kb": 84140,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.55,
+     "load_mean": 1.55,
+     "peak_rss_kb": 84248,
+     "status": "OK",
+     "timeout_s": 120
     },
     "perry": {
-     "compile_s": 1132.41,
+     "compile_s": 2.35,
      "correctness_output": "jsonwebtoken/hs256 jsonwebtoken@9.0.3 n=500 warm=200\nchecksum 48d5f64b",
      "instr": {
       "n1": [
-       1137996294,
-       1138924022,
-       1138291207
+       839254769,
+       839493567,
+       842661058
       ],
       "n2": [
-       3758338285,
-       3757822625,
-       3755979430
+       2390508802,
+       2389834844,
+       2398697752
       ],
-      "per_iter": 1746354.2786666667
+      "per_iter": 1034010.1566666666
      },
-     "load_flagged": true,
-     "load_max": 18.11,
-     "load_mean": 18.11,
-     "peak_rss_kb": 98092,
-     "size_bytes": 19909136,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.59,
+     "load_mean": 1.57,
+     "peak_rss_kb": 61004,
+     "size_bytes": 20522800,
+     "status": "OK",
+     "timeout_s": 120
     }
    },
    "n1": 500,
@@ -1612,50 +1668,69 @@
      "correctness_output": "jsonwebtoken/rs256 jsonwebtoken@9.0.3 n=50 warm=20\nchecksum c40f0120",
      "instr": {
       "n1": [
-       792346712,
-       792319288,
-       792294272
+       792395367,
+       791742962,
+       792543026
       ],
       "n2": [
-       2020438004,
-       2020426414,
-       2020532861
+       2019647703,
+       2019684011,
+       2020596960
       ],
-      "per_iter": 8187458.106666666
+      "per_iter": 8181924.293333333
      },
-     "load_flagged": true,
-     "load_max": 17.54,
-     "load_mean": 17.54,
-     "peak_rss_kb": 63148,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.59,
+     "load_mean": 1.59,
+     "peak_rss_kb": 62304,
+     "status": "OK",
+     "timeout_s": 120
     },
     "node": {
      "correctness_output": "jsonwebtoken/rs256 jsonwebtoken@9.0.3 n=50 warm=20\nchecksum c40f0120",
      "instr": {
       "n1": [
-       1312901052,
-       1309795318,
-       1316523613
+       1297365489,
+       1297551949,
+       1301512220
       ],
       "n2": [
-       2967695573,
-       2991953779,
-       2977431731
+       2969537383,
+       2965811357,
+       2964478224
       ],
-      "per_iter": 11096871.193333333
+      "per_iter": 11121729.386666667
      },
-     "load_flagged": true,
-     "load_max": 17.54,
-     "load_mean": 17.54,
-     "peak_rss_kb": 81372,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.59,
+     "load_mean": 1.59,
+     "peak_rss_kb": 80100,
+     "status": "OK",
+     "timeout_s": 120
     },
     "perry": {
-     "compile_s": 116.57,
-     "correctness_output": "jsonwebtoken/rs256 jsonwebtoken@9.0.3 n=50 warm=20",
-     "reason": "exit 1: jsonwebtoken/rs256 jsonwebtoken@9.0.3 n=50 warm=20\n\nTypeError: Cannot read properties of undefined (reading 'update')\n    at <anonymous>",
-     "size_bytes": 19913544,
-     "status": "FAIL"
+     "compile_s": 2.21,
+     "correctness_output": "jsonwebtoken/rs256 jsonwebtoken@9.0.3 n=50 warm=20\nchecksum c40f0120",
+     "instr": {
+      "n1": [
+       5537571922,
+       5537533989,
+       5537538619
+      ],
+      "n2": [
+       17291191575,
+       17290877339,
+       17291157977
+      ],
+      "per_iter": 78357462.38666667
+     },
+     "load_flagged": false,
+     "load_max": 1.59,
+     "load_mean": 1.58,
+     "peak_rss_kb": 58560,
+     "size_bytes": 20530992,
+     "status": "OK",
+     "timeout_s": 120
     }
    },
    "n1": 50,
@@ -1668,66 +1743,69 @@
      "correctness_output": "lru-cache/churn lru-cache@11.5.3 n=125000 warm=10000\nhits 25024 misses 99976 sum 553916467 size 1000",
      "instr": {
       "n1": [
-       570280508,
-       558870888,
-       564499798
+       559090101,
+       562123939,
+       558429681
       ],
       "n2": [
-       1768910754,
-       1646221556,
-       1526364778
+       1585911882,
+       1598585993,
+       1589623925
       ],
-      "per_iter": 2884.5913546666666
+      "per_iter": 2748.0901973333334
      },
-     "load_flagged": true,
-     "load_max": 29.92,
-     "load_mean": 29.92,
-     "peak_rss_kb": 265412,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.41,
+     "load_mean": 1.41,
+     "peak_rss_kb": 146120,
+     "status": "OK",
+     "timeout_s": 120
     },
     "node": {
      "correctness_output": "lru-cache/churn lru-cache@11.5.3 n=125000 warm=10000\nhits 25024 misses 99976 sum 553916467 size 1000",
      "instr": {
       "n1": [
-       672277221,
-       665888748,
-       669291024
+       652213385,
+       654441477,
+       652554357
       ],
       "n2": [
-       982614076,
-       992542199,
-       982618315
+       974727699,
+       982699052,
+       982115063
       ],
-      "per_iter": 835.5394426666667
+      "per_iter": 878.8285493333333
      },
-     "load_flagged": true,
-     "load_max": 29.92,
-     "load_mean": 29.92,
-     "peak_rss_kb": 80196,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.41,
+     "load_mean": 1.32,
+     "peak_rss_kb": 79812,
+     "status": "OK",
+     "timeout_s": 120
     },
     "perry": {
-     "compile_s": 630.2,
+     "compile_s": 0.75,
      "correctness_output": "lru-cache/churn lru-cache@11.5.3 n=125000 warm=10000\nhits 25024 misses 99976 sum 553916467 size 1000",
      "instr": {
       "n1": [
-       28810406231,
-       28810595167,
-       28902760740
+       16971667051,
+       16967574525,
+       16968767122
       ],
       "n2": [
-       109076332974,
-       109074033381,
-       109225976822
+       64067145445,
+       64067154176,
+       64067038556
       ],
-      "per_iter": 214041.96748533333
+      "per_iter": 125595.675528
      },
-     "load_flagged": true,
-     "load_max": 29.92,
-     "load_mean": 28.98,
-     "peak_rss_kb": 57948,
-     "size_bytes": 9159352,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.46,
+     "load_mean": 1.43,
+     "peak_rss_kb": 49556,
+     "size_bytes": 9027832,
+     "status": "OK",
+     "timeout_s": 120
     }
    },
    "n1": 125000,
@@ -1740,66 +1818,69 @@
      "correctness_output": "lru-cache/ttl_mixed lru-cache@11.5.3 n=75000 warm=10000\nhas 9281 peekLen 119673 dels 9256 size 1455 calc 18947",
      "instr": {
       "n1": [
-       419323309,
-       380896890,
-       409789667
+       398079864,
+       394833594,
+       398774013
       ],
       "n2": [
-       1139442787,
-       1110771029,
-       1120254500
+       1097907909,
+       1112425522,
+       1055810285
       ],
-      "per_iter": 3157.62148
+      "per_iter": 3110.3468666666668
      },
-     "load_flagged": true,
-     "load_max": 29.72,
-     "load_mean": 29.72,
-     "peak_rss_kb": 122164,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.55,
+     "load_mean": 1.55,
+     "peak_rss_kb": 120736,
+     "status": "OK",
+     "timeout_s": 120
     },
     "node": {
      "correctness_output": "lru-cache/ttl_mixed lru-cache@11.5.3 n=75000 warm=10000\nhas 9281 peekLen 119673 dels 9256 size 1455 calc 18947",
      "instr": {
       "n1": [
-       620802805,
-       579188835,
-       580501229
+       602310842,
+       603681226,
+       601755979
       ],
       "n2": [
-       857624736,
-       859025036,
-       874470469
+       866318034,
+       852312372,
+       863310322
       ],
-      "per_iter": 1237.8835866666666
+      "per_iter": 1159.997688888889
      },
-     "load_flagged": true,
-     "load_max": 29.72,
-     "load_mean": 29.72,
-     "peak_rss_kb": 84540,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.55,
+     "load_mean": 1.55,
+     "peak_rss_kb": 84212,
+     "status": "OK",
+     "timeout_s": 120
     },
     "perry": {
-     "compile_s": 13.53,
+     "compile_s": 0.78,
      "correctness_output": "lru-cache/ttl_mixed lru-cache@11.5.3 n=75000 warm=10000\nhas 9281 peekLen 119673 dels 9256 size 1455 calc 18947",
      "instr": {
       "n1": [
-       6155855074,
-       6155410064,
-       6155142360
+       3957542290,
+       3957841929,
+       3956723414
       ],
       "n2": [
-       22384483575,
-       22449860794,
-       22385673786
+       14336427718,
+       14335074877,
+       14313690258
       ],
-      "per_iter": 72134.50543111112
+      "per_iter": 46122.367053333335
      },
-     "load_flagged": true,
-     "load_max": 30.83,
-     "load_mean": 30.28,
-     "peak_rss_kb": 53108,
-     "size_bytes": 9163632,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.55,
+     "load_mean": 1.55,
+     "peak_rss_kb": 49932,
+     "size_bytes": 9031928,
+     "status": "OK",
+     "timeout_s": 120
     }
    },
    "n1": 75000,
@@ -1812,66 +1893,69 @@
      "correctness_output": "moment/diff_duration moment@2.31.0 n=2500 warm=500\nchecksum 03357cef",
      "instr": {
       "n1": [
-       644916521,
-       617634570,
-       618284697
+       619962516,
+       620234608,
+       627139090
       ],
       "n2": [
-       1352747831,
-       1521114785,
-       1401593347
+       1288077767,
+       1288741209,
+       1285154334
       ],
-      "per_iter": 104441.15333333334
+      "per_iter": 89045.75453333334
      },
-     "load_flagged": true,
-     "load_max": 50.69,
-     "load_mean": 50.49,
-     "peak_rss_kb": 104576,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 2.14,
+     "load_mean": 2.14,
+     "peak_rss_kb": 118856,
+     "status": "OK",
+     "timeout_s": 120
     },
     "node": {
      "correctness_output": "moment/diff_duration moment@2.31.0 n=2500 warm=500\nchecksum 03357cef",
      "instr": {
       "n1": [
-       770840515,
-       772838922,
-       752157292
+       761654260,
+       758696751,
+       764538564
       ],
       "n2": [
-       1436748011,
-       1457375326,
-       1447578285
+       1479360283,
+       1487354293,
+       1483370932
       ],
-      "per_iter": 90231.70266666666
+      "per_iter": 96228.8896
      },
-     "load_flagged": true,
-     "load_max": 50.69,
-     "load_mean": 50.69,
-     "peak_rss_kb": 85268,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 2.14,
+     "load_mean": 2.14,
+     "peak_rss_kb": 85100,
+     "status": "OK",
+     "timeout_s": 120
     },
     "perry": {
-     "compile_s": 111.34,
+     "compile_s": 1.07,
      "correctness_output": "moment/diff_duration moment@2.31.0 n=2500 warm=500\nchecksum 03357cef",
      "instr": {
       "n1": [
-       10591194369,
-       10585225937,
-       10599196545
+       4748352646,
+       4730607849,
+       4720356962
       ],
       "n2": [
-       36692956611,
-       36788466744,
-       36683919880
+       16274873463,
+       16261928181,
+       16258541427
       ],
-      "per_iter": 3480234.9656
+      "per_iter": 1537509.3776
      },
-     "load_flagged": true,
-     "load_max": 50.39,
-     "load_mean": 48.73,
-     "peak_rss_kb": 38436,
-     "size_bytes": 13635720,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 2.14,
+     "load_mean": 2.14,
+     "peak_rss_kb": 51608,
+     "size_bytes": 14220600,
+     "status": "OK",
+     "timeout_s": 120
     }
    },
    "n1": 2500,
@@ -1884,66 +1968,69 @@
      "correctness_output": "moment/parse_format moment@2.31.0 n=2500 warm=500\nchecksum 97f26a47",
      "instr": {
       "n1": [
-       763519644,
-       859361348,
-       762680701
+       752605680,
+       761202961,
+       755518089
       ],
       "n2": [
-       1770533113,
-       2133323568,
-       2065258851
+       2008438222,
+       2035258305,
+       2029698322
       ],
-      "per_iter": 173565.2276
+      "per_iter": 169890.69773333333
      },
-     "load_flagged": true,
-     "load_max": 46.66,
-     "load_mean": 46.51,
-     "peak_rss_kb": 114624,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 2.16,
+     "load_mean": 2.16,
+     "peak_rss_kb": 115596,
+     "status": "OK",
+     "timeout_s": 120
     },
     "node": {
      "correctness_output": "moment/parse_format moment@2.31.0 n=2500 warm=500\nchecksum 97f26a47",
      "instr": {
       "n1": [
-       837933513,
-       842567682,
-       840042764
+       841667273,
+       841957359,
+       841134374
       ],
       "n2": [
-       1731370332,
-       1709864206,
-       1682369655
+       1705176179,
+       1708150052,
+       1715197151
       ],
-      "per_iter": 115976.19226666667
+      "per_iter": 115531.0372
      },
-     "load_flagged": true,
-     "load_max": 45.76,
-     "load_mean": 45.76,
-     "peak_rss_kb": 84396,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 2.16,
+     "load_mean": 2.16,
+     "peak_rss_kb": 85140,
+     "status": "OK",
+     "timeout_s": 120
     },
     "perry": {
-     "compile_s": 563.81,
+     "compile_s": 1.1,
      "correctness_output": "moment/parse_format moment@2.31.0 n=2500 warm=500\nchecksum 97f26a47",
      "instr": {
       "n1": [
-       10431014771,
-       10438275707,
-       10223204849
+       5235290744,
+       5209595273,
+       5209790970
       ],
       "n2": [
-       36961732053,
-       36961148128,
-       37457238625
+       17960686363,
+       18057423635,
+       17960328676
       ],
-      "per_iter": 3537428.9709333335
+      "per_iter": 1700119.3857333334
      },
-     "load_flagged": true,
-     "load_max": 50.1,
-     "load_mean": 47.91,
-     "peak_rss_kb": 65412,
-     "size_bytes": 13635288,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 2.16,
+     "load_mean": 2.16,
+     "peak_rss_kb": 72308,
+     "size_bytes": 14216504,
+     "status": "OK",
+     "timeout_s": 120
     }
    },
    "n1": 2500,
@@ -1954,7 +2041,7 @@
    "arms": {
     "bun": {
      "correctness_output": "",
-     "reason": "exit 1: s/packages/node_modules/bson/lib/bson.cjs:2607:1)\n      at <anonymous> (/root/claude-pkg-bench-main/benchmarks/packages/node_modules/mongodb/lib/bson.js:9:7)\n      at <anonymous> (/root/claude-pkg-bench-main/benchmarks/packages/node_modules/mongodb/lib/admin.js:4:7)\n      at <anonymous> (/root/claude-pkg-bench-main/benchmarks/packages/node_modules/mongodb/lib/index.js:6:7)\n\nBun v1.3.14 (Linux x64)",
+     "reason": "exit 1: chmarks/packages/node_modules/bson/lib/bson.cjs:2607:1)\n      at <anonymous> (/root/claude-matrix-rerun/benchmarks/packages/node_modules/mongodb/lib/bson.js:9:7)\n      at <anonymous> (/root/claude-matrix-rerun/benchmarks/packages/node_modules/mongodb/lib/admin.js:4:7)\n      at <anonymous> (/root/claude-matrix-rerun/benchmarks/packages/node_modules/mongodb/lib/index.js:6:7)\n\nBun v1.3.14 (Linux x64)",
      "status": "FAIL",
      "timeout_s": 120
     },
@@ -1962,47 +2049,47 @@
      "correctness_output": "mongodb/batch_query mongodb@7.6.0 n=125 warm=50\nchecksum 98345e44",
      "instr": {
       "n1": [
-       1705900183,
-       1632681610,
-       1639912478
+       1704924920,
+       1699813118,
+       1705629238
       ],
       "n2": [
-       2593676919,
-       2582256493,
-       2600286981
+       2687392151,
+       2684944445,
+       2688325189
       ],
-      "per_iter": 2543371.8426666665
+      "per_iter": 2619912.616
      },
-     "load_flagged": true,
-     "load_max": 46.58,
-     "load_mean": 46.37,
-     "peak_rss_kb": 114056,
+     "load_flagged": false,
+     "load_max": 1.57,
+     "load_mean": 1.54,
+     "peak_rss_kb": 114544,
      "status": "OK",
      "timeout_s": 120
     },
     "perry": {
-     "compile_s": 124.35,
+     "compile_s": 5.78,
      "correctness_output": "mongodb/batch_query mongodb@7.6.0 n=125 warm=50\nchecksum 98345e44",
      "instr": {
       "n1": [
-       21078215239,
-       21100972124,
-       21098531526
+       15258616817,
+       15269693103,
+       15267055166
       ],
       "n2": [
-       101057978387,
-       100941754560,
-       106600240412
+       72087178203,
+       72065223090,
+       72048634857
       ],
-      "per_iter": 213225191.62933335
+      "per_iter": 151461781.13066667
      },
-     "load_flagged": true,
-     "load_max": 45.19,
-     "load_mean": 42.29,
-     "peak_rss_kb": 399020,
-     "size_bytes": 47418152,
+     "load_flagged": false,
+     "load_max": 1.57,
+     "load_mean": 1.54,
+     "peak_rss_kb": 407520,
+     "size_bytes": 46065048,
      "status": "OK",
-     "timeout_s": 175.6
+     "timeout_s": 120
     }
    },
    "n1": 125,
@@ -2012,20 +2099,61 @@
   "mongodb/insert_find": {
    "arms": {
     "bun": {
-     "reason": "workload skipped (perry arm is a known hang)",
-     "status": "SKIP"
+     "correctness_output": "",
+     "reason": "exit 1: chmarks/packages/node_modules/bson/lib/bson.cjs:2607:1)\n      at <anonymous> (/root/claude-matrix-rerun/benchmarks/packages/node_modules/mongodb/lib/bson.js:9:7)\n      at <anonymous> (/root/claude-matrix-rerun/benchmarks/packages/node_modules/mongodb/lib/admin.js:4:7)\n      at <anonymous> (/root/claude-matrix-rerun/benchmarks/packages/node_modules/mongodb/lib/index.js:6:7)\n\nBun v1.3.14 (Linux x64)",
+     "status": "FAIL",
+     "timeout_s": 120
     },
     "node": {
-     "reason": "workload skipped (perry arm is a known hang)",
-     "status": "SKIP"
+     "correctness_output": "mongodb/insert_find mongodb@7.6.0 n=500 warm=200\nchecksum 57050a96",
+     "instr": {
+      "n1": [
+       1944950200,
+       1942174128,
+       1943678164
+      ],
+      "n2": [
+       3114674874,
+       3146341664,
+       3125095505
+      ],
+      "per_iter": 787611.5606666667
+     },
+     "load_flagged": false,
+     "load_max": 2.5,
+     "load_mean": 2.42,
+     "peak_rss_kb": 117796,
+     "status": "OK",
+     "timeout_s": 120
     },
     "perry": {
-     "reason": "known hang, skipped: perry: 'Cannot read properties of undefined (reading state)' then hangs (seen 2febf4214e and 36420d2e56)",
-     "status": "FAIL"
+     "compile_s": 8.81,
+     "correctness_output": "mongodb/insert_find mongodb@7.6.0 n=500 warm=200\nchecksum 57050a96",
+     "instr": {
+      "n1": [
+       46001856465,
+       46036064748,
+       45994845014
+      ],
+      "n2": [
+       302705965166,
+       308485998384,
+       342544429955
+      ],
+      "per_iter": 174989427.946
+     },
+     "load_flagged": false,
+     "load_max": 2.57,
+     "load_mean": 2.44,
+     "peak_rss_kb": 1213328,
+     "size_bytes": 46056856,
+     "status": "OK",
+     "timeout_s": 120
     }
    },
    "n1": 500,
    "n2": 2000,
+   "note_rerun": "known_hang in manifest (#11460); run separately with --include-known-hangs at the same commit, merged in",
    "warm": 200
   },
   "mysql2/insert_batch": {
@@ -2034,66 +2162,69 @@
      "correctness_output": "mysql2/insert_batch mysql2@3.24.4 n=500 warm=200\nchecksum 2b4a0224",
      "instr": {
       "n1": [
-       682093595,
-       671939551,
-       664368823
+       623309531,
+       625815976,
+       623136446
       ],
       "n2": [
-       987986347,
-       955778665,
-       987598678
+       884179656,
+       884473764,
+       889988096
       ],
-      "per_iter": 210439.418
+      "per_iter": 174109.48866666667
      },
-     "load_flagged": true,
-     "load_max": 66.0,
-     "load_mean": 66.0,
-     "peak_rss_kb": 73960,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.57,
+     "load_mean": 1.57,
+     "peak_rss_kb": 78644,
+     "status": "OK",
+     "timeout_s": 120
     },
     "node": {
      "correctness_output": "mysql2/insert_batch mysql2@3.24.4 n=500 warm=200\nchecksum 2b4a0224",
      "instr": {
       "n1": [
-       972360348,
-       960301972,
-       970347941
+       964377445,
+       964623298,
+       964314108
       ],
       "n2": [
-       1165381389,
-       1170211616,
-       1175453102
+       1171622968,
+       1177151006,
+       1169978517
       ],
-      "per_iter": 133242.45
+      "per_iter": 138163.682
      },
-     "load_flagged": true,
-     "load_max": 67.3,
-     "load_mean": 67.3,
-     "peak_rss_kb": 91868,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.57,
+     "load_mean": 1.57,
+     "peak_rss_kb": 93176,
+     "status": "OK",
+     "timeout_s": 120
     },
     "perry": {
-     "compile_s": 83.44,
+     "compile_s": 5.91,
      "correctness_output": "mysql2/insert_batch mysql2@3.24.4 n=500 warm=200\nchecksum 2b4a0224",
      "instr": {
       "n1": [
-       2828245557,
-       2826946500,
-       2828282103
+       2398531778,
+       2399043233,
+       2398263979
       ],
       "n2": [
-       8976430099,
-       8971686056,
-       8973478540
+       6889357136,
+       6882752531,
+       6883530191
       ],
-      "per_iter": 4096821.9886666667
+      "per_iter": 2989998.942
      },
-     "load_flagged": true,
-     "load_max": 66.0,
-     "load_mean": 65.38,
-     "peak_rss_kb": 119652,
-     "size_bytes": 38141360,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.57,
+     "load_mean": 1.57,
+     "peak_rss_kb": 109788,
+     "size_bytes": 39784008,
+     "status": "OK",
+     "timeout_s": 120
     }
    },
    "n1": 500,
@@ -2106,66 +2237,69 @@
      "correctness_output": "mysql2/select mysql2@3.24.4 n=500 warm=200\nchecksum 03f854ac",
      "instr": {
       "n1": [
-       734748258,
-       750411839,
-       743758250
+       712320733,
+       715042315,
+       712068476
       ],
       "n2": [
-       1092066043,
-       1073589807,
-       1093081240
+       1006107511,
+       994982361,
+       1001798944
       ],
-      "per_iter": 232205.19533333334
+      "per_iter": 192985.474
      },
-     "load_flagged": true,
-     "load_max": 66.03,
-     "load_mean": 66.03,
-     "peak_rss_kb": 76272,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.68,
+     "load_mean": 1.68,
+     "peak_rss_kb": 83032,
+     "status": "OK",
+     "timeout_s": 120
     },
     "node": {
      "correctness_output": "mysql2/select mysql2@3.24.4 n=500 warm=200\nchecksum 03f854ac",
      "instr": {
       "n1": [
-       1020988885,
-       1026134958,
-       1026303310
+       1030486328,
+       1022952715,
+       1040958341
       ],
       "n2": [
-       1290742212,
-       1288023759,
-       1286798941
+       1298354129,
+       1316822340,
+       1296258378
       ],
-      "per_iter": 174592.534
+      "per_iter": 178578.534
      },
-     "load_flagged": true,
-     "load_max": 66.03,
-     "load_mean": 65.46,
-     "peak_rss_kb": 94440,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.68,
+     "load_mean": 1.68,
+     "peak_rss_kb": 95296,
+     "status": "OK",
+     "timeout_s": 120
     },
     "perry": {
-     "compile_s": 479.34,
+     "compile_s": 5.89,
      "correctness_output": "mysql2/select mysql2@3.24.4 n=500 warm=200\nchecksum 03f854ac",
      "instr": {
       "n1": [
-       4802533377,
-       4801837723,
-       4804297994
+       3729271374,
+       3729005653,
+       3729742873
       ],
       "n2": [
-       14597552385,
-       14601648261,
-       14592074353
+       10996622280,
+       10996541868,
+       10996199628
       ],
-      "per_iter": 6530012.672
+      "per_iter": 4844846.996
      },
-     "load_flagged": true,
-     "load_max": 68.94,
-     "load_mean": 67.81,
-     "peak_rss_kb": 150468,
-     "size_bytes": 38123904,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.68,
+     "load_mean": 1.64,
+     "peak_rss_kb": 117444,
+     "size_bytes": 39771656,
+     "status": "OK",
+     "timeout_s": 120
     }
    },
    "n1": 500,
@@ -2178,66 +2312,69 @@
      "correctness_output": "nanoid/generate nanoid@6.0.1 n=50000 warm=5000\nok 100000",
      "instr": {
       "n1": [
-       305593464,
-       308191013,
-       308565325
+       318274958,
+       311991098,
+       314692164
       ],
       "n2": [
-       679645068,
-       678834351,
-       686671225
+       684708648,
+       683645085,
+       684544092
       ],
-      "per_iter": 2476.360366666667
+      "per_iter": 2465.67952
      },
-     "load_flagged": true,
-     "load_max": 15.0,
-     "load_mean": 15.0,
-     "peak_rss_kb": 79464,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.5,
+     "load_mean": 1.49,
+     "peak_rss_kb": 80664,
+     "status": "OK",
+     "timeout_s": 120
     },
     "node": {
      "correctness_output": "nanoid/generate nanoid@6.0.1 n=50000 warm=5000\nok 100000",
      "instr": {
       "n1": [
-       630976617,
-       627947335,
-       622111700
+       626548798,
+       640590207,
+       624971869
       ],
       "n2": [
-       1056530153,
-       1066338140,
-       1057694707
+       1063289374,
+       1061353572,
+       1058639371
       ],
-      "per_iter": 2864.98248
+      "per_iter": 2898.6984933333333
      },
-     "load_flagged": true,
-     "load_max": 15.0,
-     "load_mean": 15.0,
-     "peak_rss_kb": 79200,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.5,
+     "load_mean": 1.5,
+     "peak_rss_kb": 78920,
+     "status": "OK",
+     "timeout_s": 120
     },
     "perry": {
-     "compile_s": 492.29,
+     "compile_s": 0.71,
      "correctness_output": "nanoid/generate nanoid@6.0.1 n=50000 warm=5000\nok 100000",
      "instr": {
       "n1": [
-       3432414547,
-       3433782198,
-       3433005077
+       1638141466,
+       1638002401,
+       1641264397
       ],
       "n2": [
-       12667921983,
-       12664345372,
-       12671315033
+       5909337269,
+       5920746685,
+       5920450078
       ],
-      "per_iter": 61566.11270666667
+      "per_iter": 28548.72408
      },
-     "load_flagged": true,
-     "load_max": 15.0,
-     "load_mean": 15.0,
-     "peak_rss_kb": 72868,
-     "size_bytes": 8128168,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.46,
+     "load_mean": 1.46,
+     "peak_rss_kb": 69080,
+     "size_bytes": 8201768,
+     "status": "OK",
+     "timeout_s": 120
     }
    },
    "n1": 50000,
@@ -2250,50 +2387,69 @@
      "correctness_output": "node-cron/match node-cron@4.6.0 n=12500 warm=2000\nchecksum 76b74a7f",
      "instr": {
       "n1": [
-       3150614330,
-       3076264333,
-       3118623785
+       3114741551,
+       3100745022,
+       3084729020
       ],
       "n2": [
-       9957624555,
-       9960209814,
-       9950030665
+       10004000041,
+       9966357255,
+       9932326782
       ],
-      "per_iter": 182373.35386666667
+      "per_iter": 183082.99288
      },
-     "load_flagged": true,
-     "load_max": 53.11,
-     "load_mean": 53.11,
-     "peak_rss_kb": 110288,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 2.65,
+     "load_mean": 2.63,
+     "peak_rss_kb": 110640,
+     "status": "OK",
+     "timeout_s": 120
     },
     "node": {
      "correctness_output": "node-cron/match node-cron@4.6.0 n=12500 warm=2000\nchecksum 76b74a7f",
      "instr": {
       "n1": [
-       5434168752,
-       5453814904,
-       5430449875
+       5443142910,
+       5456942140,
+       5428312800
       ],
       "n2": [
-       17370037814,
-       17288932597,
-       17399710071
+       17392247376,
+       17397874708,
+       17407286238
       ],
-      "per_iter": 318289.84165333334
+      "per_iter": 318792.84794666665
      },
-     "load_flagged": true,
-     "load_max": 54.78,
-     "load_mean": 54.53,
-     "peak_rss_kb": 178144,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 2.62,
+     "load_mean": 2.62,
+     "peak_rss_kb": 178592,
+     "status": "OK",
+     "timeout_s": 120
     },
     "perry": {
-     "compile_s": 8.25,
-     "correctness_output": "node-cron/match node-cron@4.6.0 n=12500 warm=2000\nchecksum 00000000",
-     "reason": "line 2: node='checksum 76b74a7f' arm='checksum 00000000'",
-     "size_bytes": 16452136,
-     "status": "MISMATCH"
+     "compile_s": 1.53,
+     "correctness_output": "node-cron/match node-cron@4.6.0 n=12500 warm=2000\nchecksum 76b74a7f",
+     "instr": {
+      "n1": [
+       41796493534,
+       41796118805,
+       41796794982
+      ],
+      "n2": [
+       148016545495,
+       148016194103,
+       148022390482
+      ],
+      "per_iter": 2832534.71896
+     },
+     "load_flagged": false,
+     "load_max": 2.65,
+     "load_mean": 2.54,
+     "peak_rss_kb": 53096,
+     "size_bytes": 16539192,
+     "status": "OK",
+     "timeout_s": 120
     }
    },
    "n1": 12500,
@@ -2306,66 +2462,69 @@
      "correctness_output": "node-cron/validate_parse node-cron@4.6.0 n=2500 warm=500\nchecksum d7b27158",
      "instr": {
       "n1": [
-       1536347066,
-       1493548828,
-       1467279531
+       1538555494,
+       1540307181,
+       1530255574
       ],
       "n2": [
-       4371027731,
-       4419178040,
-       4234569031
+       4318328090,
+       4428924990,
+       4527687482
       ],
-      "per_iter": 383663.85373333335
+      "per_iter": 385382.5994666667
      },
-     "load_flagged": true,
-     "load_max": 51.85,
-     "load_mean": 51.79,
-     "peak_rss_kb": 115632,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 2.46,
+     "load_mean": 2.46,
+     "peak_rss_kb": 115444,
+     "status": "OK",
+     "timeout_s": 120
     },
     "node": {
      "correctness_output": "node-cron/validate_parse node-cron@4.6.0 n=2500 warm=500\nchecksum d7b27158",
      "instr": {
       "n1": [
-       1784978346,
-       1782745005,
-       1778813367
+       1780427454,
+       1781125229,
+       1788255004
       ],
       "n2": [
-       4983663298,
-       4990222620,
-       4985777519
+       4995889439,
+       4994682088,
+       5015604034
       ],
-      "per_iter": 427071.00186666666
+      "per_iter": 428635.228
      },
-     "load_flagged": true,
-     "load_max": 51.75,
-     "load_mean": 51.75,
-     "peak_rss_kb": 83484,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 2.46,
+     "load_mean": 2.46,
+     "peak_rss_kb": 83676,
+     "status": "OK",
+     "timeout_s": 120
     },
     "perry": {
-     "compile_s": 514.5,
+     "compile_s": 1.53,
      "correctness_output": "node-cron/validate_parse node-cron@4.6.0 n=2500 warm=500\nchecksum d7b27158",
      "instr": {
       "n1": [
-       12473489204,
-       12464268769,
-       12460366733
+       11821802930,
+       11818781598,
+       11823296067
       ],
       "n2": [
-       43319742914,
-       43334898484,
-       43332709006
+       41217491584,
+       41208921546,
+       41209367908
       ],
-      "per_iter": 4115792.0316
+      "per_iter": 3918341.997066667
      },
-     "load_flagged": true,
-     "load_max": 52.4,
-     "load_mean": 52.04,
-     "peak_rss_kb": 77180,
-     "size_bytes": 16460688,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 2.55,
+     "load_mean": 2.46,
+     "peak_rss_kb": 24660,
+     "size_bytes": 16547448,
+     "status": "OK",
+     "timeout_s": 120
     }
    },
    "n1": 2500,
@@ -2378,49 +2537,69 @@
      "correctness_output": "node-forge/aes_cbc node-forge@1.4.0 n=1250 warm=200\nchecksum 5b2e00e5",
      "instr": {
       "n1": [
-       2129214736,
-       2123663780,
-       2127910120
+       2122622772,
+       2112921226,
+       2111599526
       ],
       "n2": [
-       6166998550,
-       6192243952,
-       6167474045
+       6166243071,
+       6164462569,
+       6164590707
       ],
-      "per_iter": 1077217.0466666666
+      "per_iter": 1080445.1949333334
      },
-     "load_flagged": true,
-     "load_max": 56.53,
-     "load_mean": 56.11,
-     "peak_rss_kb": 100188,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 2.11,
+     "load_mean": 2.11,
+     "peak_rss_kb": 102812,
+     "status": "OK",
+     "timeout_s": 120
     },
     "node": {
      "correctness_output": "node-forge/aes_cbc node-forge@1.4.0 n=1250 warm=200\nchecksum 5b2e00e5",
      "instr": {
       "n1": [
-       2290618070,
-       2298336986,
-       2290223793
+       2306508640,
+       2306604651,
+       2306889983
       ],
       "n2": [
-       6217574450,
-       6246271190,
-       6217359305
+       6229378465,
+       6230128264,
+       6224983921
       ],
-      "per_iter": 1047188.368
+      "per_iter": 1046073.0170666666
      },
-     "load_flagged": true,
-     "load_max": 55.7,
-     "load_mean": 55.52,
-     "peak_rss_kb": 90644,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 2.11,
+     "load_mean": 2.11,
+     "peak_rss_kb": 90212,
+     "status": "OK",
+     "timeout_s": 120
     },
     "perry": {
-     "compile_s": 94.11,
-     "reason": "perry compile failed (exit 1): ns \u2014 so the\nbuild fails here rather than emitting a misleading COMPILE_EXIT=0.\n\nFix the codegen errors above (search for `Error compiling module`),\nor set `PERRY_ALLOW_PARTIAL_CODEGEN=1` to link empty `<prefix>__init`\nstubs for the failed modules and surface deeper errors during\niterative debugging (the resulting binary is inert/unsafe in those\nmodules and may crash at runtime).\n\nError: 1 module(s) failed to compile (see errors above); set PERRY_ALLOW_PARTIAL_CODEGEN=1 to link empty stubs anyway",
-     "size_bytes": null,
-     "status": "FAIL"
+     "compile_s": 3.43,
+     "correctness_output": "node-forge/aes_cbc node-forge@1.4.0 n=1250 warm=200\nchecksum 5b2e00e5",
+     "instr": {
+      "n1": [
+       33334639861,
+       33334397466,
+       33337904597
+      ],
+      "n2": [
+       119118363834,
+       119112554761,
+       119125581608
+      ],
+      "per_iter": 22875659.72613333
+     },
+     "load_flagged": false,
+     "load_max": 2.1,
+     "load_mean": 2.0,
+     "peak_rss_kb": 69756,
+     "size_bytes": 33065360,
+     "status": "OK",
+     "timeout_s": 120
     }
    },
    "n1": 1250,
@@ -2433,49 +2612,69 @@
      "correctness_output": "node-forge/hmac node-forge@1.4.0 n=5000 warm=1000\nchecksum 66aed9bf",
      "instr": {
       "n1": [
-       1644545134,
-       1665679995,
-       1768359837
+       1662980307,
+       1665903760,
+       1669754820
       ],
       "n2": [
-       3841431850,
-       3923070090,
-       3853510296
+       3842321081,
+       3850383424,
+       3848775421
       ],
-      "per_iter": 145855.3534
+      "per_iter": 145524.7774
      },
-     "load_flagged": true,
-     "load_max": 52.98,
-     "load_mean": 52.98,
-     "peak_rss_kb": 111496,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.94,
+     "load_mean": 1.89,
+     "peak_rss_kb": 109784,
+     "status": "OK",
+     "timeout_s": 120
     },
     "node": {
      "correctness_output": "node-forge/hmac node-forge@1.4.0 n=5000 warm=1000\nchecksum 66aed9bf",
      "instr": {
       "n1": [
-       1473563433,
-       1504200809,
-       1499409182
+       1605489633,
+       1531203644,
+       1530846681
       ],
       "n2": [
-       3346018732,
-       3333444959,
-       3329753963
+       3438175090,
+       3435111490,
+       3435713394
       ],
-      "per_iter": 122269.0518
+      "per_iter": 126967.31666666667
      },
-     "load_flagged": true,
-     "load_max": 52.98,
-     "load_mean": 52.77,
-     "peak_rss_kb": 170612,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.85,
+     "load_mean": 1.85,
+     "peak_rss_kb": 170600,
+     "status": "OK",
+     "timeout_s": 120
     },
     "perry": {
-     "compile_s": 94.16,
-     "reason": "perry compile failed (exit 1): ns \u2014 so the\nbuild fails here rather than emitting a misleading COMPILE_EXIT=0.\n\nFix the codegen errors above (search for `Error compiling module`),\nor set `PERRY_ALLOW_PARTIAL_CODEGEN=1` to link empty `<prefix>__init`\nstubs for the failed modules and surface deeper errors during\niterative debugging (the resulting binary is inert/unsafe in those\nmodules and may crash at runtime).\n\nError: 1 module(s) failed to compile (see errors above); set PERRY_ALLOW_PARTIAL_CODEGEN=1 to link empty stubs anyway",
-     "size_bytes": null,
-     "status": "FAIL"
+     "compile_s": 3.34,
+     "correctness_output": "node-forge/hmac node-forge@1.4.0 n=5000 warm=1000\nchecksum 66aed9bf",
+     "instr": {
+      "n1": [
+       28268738176,
+       28268773965,
+       28269191356
+      ],
+      "n2": [
+       98543310141,
+       98542368668,
+       98547707023
+      ],
+      "per_iter": 4684969.0784
+     },
+     "load_flagged": false,
+     "load_max": 1.95,
+     "load_mean": 1.95,
+     "peak_rss_kb": 71476,
+     "size_bytes": 33048848,
+     "status": "OK",
+     "timeout_s": 120
     }
    },
    "n1": 5000,
@@ -2488,49 +2687,53 @@
      "correctness_output": "node-forge/rsa_sign node-forge@1.4.0 n=12 warm=5\nchecksum efbf96af",
      "instr": {
       "n1": [
-       12388160995,
-       12433860592,
-       12437079446
+       12475969926,
+       12392126809,
+       12428356497
       ],
       "n2": [
-       38528960449,
-       38300537036,
-       38443869355
+       38438698544,
+       38316246188,
+       38334482241
       ],
-      "per_iter": 684473914.8157895
+      "per_iter": 681740151.1578947
      },
-     "load_flagged": true,
-     "load_max": 55.12,
-     "load_mean": 54.12,
-     "peak_rss_kb": 97956,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 2.12,
+     "load_mean": 2.05,
+     "peak_rss_kb": 99772,
+     "status": "OK",
+     "timeout_s": 120
     },
     "node": {
      "correctness_output": "node-forge/rsa_sign node-forge@1.4.0 n=12 warm=5\nchecksum efbf96af",
      "instr": {
       "n1": [
-       7151333450,
-       7274696255,
-       7219987689
+       7318563960,
+       7281891400,
+       7331607158
       ],
       "n2": [
-       20999998721,
-       21054849490,
-       20935066564
+       21110359663,
+       21128158884,
+       20867198025
       ],
-      "per_iter": 362631869.2631579
+      "per_iter": 362941992.18421054
      },
-     "load_flagged": true,
-     "load_max": 53.52,
-     "load_mean": 53.32,
-     "peak_rss_kb": 90568,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 2.05,
+     "load_mean": 2.05,
+     "peak_rss_kb": 91624,
+     "status": "OK",
+     "timeout_s": 120
     },
     "perry": {
-     "compile_s": 79.69,
-     "reason": "perry compile failed (exit 1): ns \u2014 so the\nbuild fails here rather than emitting a misleading COMPILE_EXIT=0.\n\nFix the codegen errors above (search for `Error compiling module`),\nor set `PERRY_ALLOW_PARTIAL_CODEGEN=1` to link empty `<prefix>__init`\nstubs for the failed modules and surface deeper errors during\niterative debugging (the resulting binary is inert/unsafe in those\nmodules and may crash at runtime).\n\nError: 1 module(s) failed to compile (see errors above); set PERRY_ALLOW_PARTIAL_CODEGEN=1 to link empty stubs anyway",
-     "size_bytes": null,
-     "status": "FAIL"
+     "compile_s": 3.37,
+     "correctness_output": "node-forge/rsa_sign node-forge@1.4.0 n=12 warm=5",
+     "reason": "exit 1: node-forge/rsa_sign node-forge@1.4.0 n=12 warm=5\n\nTypeError: Cannot read properties of undefined (reading 'data')\n    at <anonymous>",
+     "size_bytes": 33061264,
+     "status": "FAIL",
+     "timeout_s": 120
     }
    },
    "n1": 12,
@@ -2543,49 +2746,69 @@
      "correctness_output": "node-forge/sha256 node-forge@1.4.0 n=2500 warm=500\nchecksum abf6ac0a",
      "instr": {
       "n1": [
-       3581205871,
-       5616399800,
-       2629914682
+       3607347542,
+       5585255155,
+       5586887400
       ],
       "n2": [
-       7167956474,
-       7150631062,
-       7065333272
+       7146637336,
+       7147556417,
+       9091995385
       ],
-      "per_iter": 475923.3588
+      "per_iter": 208306.83493333333
      },
-     "load_flagged": true,
-     "load_max": 52.37,
-     "load_mean": 52.1,
-     "peak_rss_kb": 99044,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.8,
+     "load_mean": 1.8,
+     "peak_rss_kb": 102016,
+     "status": "OK",
+     "timeout_s": 120
     },
     "node": {
      "correctness_output": "node-forge/sha256 node-forge@1.4.0 n=2500 warm=500\nchecksum abf6ac0a",
      "instr": {
       "n1": [
-       1812676190,
-       1800397940,
-       1815167732
+       1817160207,
+       1808198892,
+       1812572489
       ],
       "n2": [
-       4744063505,
-       4736849457,
-       4738469409
+       4739841704,
+       4756400007,
+       4742436133
       ],
-      "per_iter": 390105.7625333333
+      "per_iter": 390648.48586666666
      },
-     "load_flagged": true,
-     "load_max": 51.96,
-     "load_mean": 51.96,
-     "peak_rss_kb": 120692,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.79,
+     "load_mean": 1.79,
+     "peak_rss_kb": 120808,
+     "status": "OK",
+     "timeout_s": 120
     },
     "perry": {
-     "compile_s": 82.72,
-     "reason": "perry compile failed (exit 1): ns \u2014 so the\nbuild fails here rather than emitting a misleading COMPILE_EXIT=0.\n\nFix the codegen errors above (search for `Error compiling module`),\nor set `PERRY_ALLOW_PARTIAL_CODEGEN=1` to link empty `<prefix>__init`\nstubs for the failed modules and surface deeper errors during\niterative debugging (the resulting binary is inert/unsafe in those\nmodules and may crash at runtime).\n\nError: 1 module(s) failed to compile (see errors above); set PERRY_ALLOW_PARTIAL_CODEGEN=1 to link empty stubs anyway",
-     "size_bytes": null,
-     "status": "FAIL"
+     "compile_s": 3.42,
+     "correctness_output": "node-forge/sha256 node-forge@1.4.0 n=2500 warm=500\nchecksum abf6ac0a",
+     "instr": {
+      "n1": [
+       15174809950,
+       15175516764,
+       15176462934
+      ],
+      "n2": [
+       52716404376,
+       52716856014,
+       52719981117
+      ],
+      "per_iter": 5005511.9
+     },
+     "load_flagged": false,
+     "load_max": 1.83,
+     "load_mean": 1.81,
+     "peak_rss_kb": 69576,
+     "size_bytes": 33048912,
+     "status": "OK",
+     "timeout_s": 120
     }
    },
    "n1": 2500,
@@ -2598,50 +2821,69 @@
      "correctness_output": "pg/insert_batch pg@8.23.0 n=500 warm=200\nchecksum 2b4a0224",
      "instr": {
       "n1": [
-       487012411,
-       505432438,
-       492417328
+       437385741,
+       436960508,
+       436871330
       ],
       "n2": [
-       850986156,
-       834381424,
-       834878300
+       747820819,
+       747786423,
+       749990187
       ],
-      "per_iter": 228307.31466666667
+      "per_iter": 207240.20733333332
      },
-     "load_flagged": true,
-     "load_max": 63.35,
-     "load_mean": 63.35,
-     "peak_rss_kb": 65656,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.74,
+     "load_mean": 1.74,
+     "peak_rss_kb": 68520,
+     "status": "OK",
+     "timeout_s": 120
     },
     "node": {
      "correctness_output": "pg/insert_batch pg@8.23.0 n=500 warm=200\nchecksum 2b4a0224",
      "instr": {
       "n1": [
-       718919867,
-       713113797,
-       725772590
+       725219922,
+       724686856,
+       734457988
       ],
       "n2": [
-       889799687,
-       902764990,
-       901107349
+       894760104,
+       916040267,
+       907875310
       ],
-      "per_iter": 121458.32133333334
+      "per_iter": 121770.25866666666
      },
-     "load_flagged": true,
-     "load_max": 63.35,
-     "load_mean": 62.73,
-     "peak_rss_kb": 85444,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.74,
+     "load_mean": 1.74,
+     "peak_rss_kb": 89612,
+     "status": "OK",
+     "timeout_s": 120
     },
     "perry": {
-     "compile_s": 40.68,
-     "correctness_output": "pg/insert_batch pg@8.23.0 n=500 warm=200",
-     "reason": "exit -11: pg/insert_batch pg@8.23.0 n=500 warm=200",
-     "size_bytes": 22057888,
-     "status": "FAIL"
+     "compile_s": 2.48,
+     "correctness_output": "pg/insert_batch pg@8.23.0 n=500 warm=200\nchecksum 2b4a0224",
+     "instr": {
+      "n1": [
+       1963555768,
+       1966164569,
+       1963359013
+      ],
+      "n2": [
+       5998595672,
+       6000003962,
+       6015831665
+      ],
+      "per_iter": 2690965.4626666666
+     },
+     "load_flagged": false,
+     "load_max": 1.74,
+     "load_mean": 1.73,
+     "peak_rss_kb": 68848,
+     "size_bytes": 22642144,
+     "status": "OK",
+     "timeout_s": 120
     }
    },
    "n1": 500,
@@ -2654,50 +2896,69 @@
      "correctness_output": "pg/select pg@8.23.0 n=500 warm=200\nchecksum 87057a40",
      "instr": {
       "n1": [
-       492019770,
-       482103868,
-       494511201
+       455458775,
+       455619327,
+       457931396
       ],
       "n2": [
-       781967356,
-       806017542,
-       820970834
+       753464548,
+       756138266,
+       752983844
       ],
-      "per_iter": 209331.848
+      "per_iter": 198563.48066666667
      },
-     "load_flagged": true,
-     "load_max": 63.52,
-     "load_mean": 63.37,
-     "peak_rss_kb": 67784,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.8,
+     "load_mean": 1.8,
+     "peak_rss_kb": 72224,
+     "status": "OK",
+     "timeout_s": 120
     },
     "node": {
      "correctness_output": "pg/select pg@8.23.0 n=500 warm=200\nchecksum 87057a40",
      "instr": {
       "n1": [
-       728543065,
-       739171986,
-       730156016
+       734699188,
+       741403077,
+       733307433
       ],
       "n2": [
-       935575616,
-       930993824,
-       928292928
+       940897868,
+       931833279,
+       935716200
       ],
-      "per_iter": 133891.872
+      "per_iter": 134011.34133333334
      },
-     "load_flagged": true,
-     "load_max": 63.52,
-     "load_mean": 63.52,
-     "peak_rss_kb": 92476,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.8,
+     "load_mean": 1.8,
+     "peak_rss_kb": 90452,
+     "status": "OK",
+     "timeout_s": 120
     },
     "perry": {
-     "compile_s": 427.15,
-     "correctness_output": "pg/select pg@8.23.0 n=500 warm=200",
-     "reason": "exit -11: pg/select pg@8.23.0 n=500 warm=200",
-     "size_bytes": 22048848,
-     "status": "FAIL"
+     "compile_s": 2.49,
+     "correctness_output": "pg/select pg@8.23.0 n=500 warm=200\nchecksum 87057a40",
+     "instr": {
+      "n1": [
+       1934961545,
+       1951302427,
+       1935075677
+      ],
+      "n2": [
+       5889573924,
+       5944018830,
+       5894936973
+      ],
+      "per_iter": 2639907.5306666666
+     },
+     "load_flagged": false,
+     "load_max": 1.8,
+     "load_mean": 1.79,
+     "peak_rss_kb": 68904,
+     "size_bytes": 22625696,
+     "status": "OK",
+     "timeout_s": 120
     }
    },
    "n1": 500,
@@ -2710,66 +2971,69 @@
      "correctness_output": "qs/parse_nested qs@6.16.0 n=5000 warm=1000\nchecksum 5b0c9a2b",
      "instr": {
       "n1": [
-       1494447482,
-       1494185835,
-       1536945576
+       1494151756,
+       1490393763,
+       1492062382
       ],
       "n2": [
-       3891847200,
-       3895220862,
-       3890159562
+       3925238150,
+       3882086440,
+       3877606072
       ],
-      "per_iter": 159826.64786666667
+      "per_iter": 159334.9372
      },
-     "load_flagged": true,
-     "load_max": 18.48,
-     "load_mean": 18.48,
-     "peak_rss_kb": 114128,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.45,
+     "load_mean": 1.45,
+     "peak_rss_kb": 114900,
+     "status": "OK",
+     "timeout_s": 120
     },
     "node": {
      "correctness_output": "qs/parse_nested qs@6.16.0 n=5000 warm=1000\nchecksum 5b0c9a2b",
      "instr": {
       "n1": [
-       1780731484,
-       1774193306,
-       1791391183
+       1792881060,
+       1780144014,
+       1780757049
       ],
       "n2": [
-       4202165257,
-       4195480234,
-       4229209112
+       4238860859,
+       4237675309,
+       4250331495
       ],
-      "per_iter": 161428.9182
+      "per_iter": 163873.58733333333
      },
-     "load_flagged": true,
-     "load_max": 18.44,
-     "load_mean": 18.44,
-     "peak_rss_kb": 85076,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.45,
+     "load_mean": 1.45,
+     "peak_rss_kb": 83544,
+     "status": "OK",
+     "timeout_s": 120
     },
     "perry": {
-     "compile_s": 1157.41,
+     "compile_s": 1.53,
      "correctness_output": "qs/parse_nested qs@6.16.0 n=5000 warm=1000\nchecksum 5b0c9a2b",
      "instr": {
       "n1": [
-       22383016439,
-       22378730858,
-       22387879761
+       9795215113,
+       9798648680,
+       9794652074
       ],
       "n2": [
-       79767562879,
-       79782982432,
-       79864920559
+       33984645229,
+       34016667926,
+       34046852722
       ],
-      "per_iter": 3826664.3995333333
+      "per_iter": 1614763.5208666667
      },
-     "load_flagged": true,
-     "load_max": 19.02,
-     "load_mean": 18.41,
-     "peak_rss_kb": 157144,
-     "size_bytes": 16545696,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.45,
+     "load_mean": 1.44,
+     "peak_rss_kb": 58136,
+     "size_bytes": 17055288,
+     "status": "OK",
+     "timeout_s": 120
     }
    },
    "n1": 5000,
@@ -2782,66 +3046,69 @@
      "correctness_output": "qs/stringify_nested qs@6.16.0 n=5000 warm=1000\nchecksum 9ce21e1b",
      "instr": {
       "n1": [
-       2645353946,
-       2588385739,
-       2571584433
+       2611722985,
+       2597148723,
+       2613297890
       ],
       "n2": [
-       7036503082,
-       7020297768,
-       7039027644
+       7028645372,
+       7030751984,
+       7054254664
       ],
-      "per_iter": 296541.1562
+      "per_iter": 294601.93326666666
      },
-     "load_flagged": true,
-     "load_max": 29.76,
-     "load_mean": 29.45,
-     "peak_rss_kb": 115016,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.35,
+     "load_mean": 1.35,
+     "peak_rss_kb": 117040,
+     "status": "OK",
+     "timeout_s": 120
     },
     "node": {
      "correctness_output": "qs/stringify_nested qs@6.16.0 n=5000 warm=1000\nchecksum 9ce21e1b",
      "instr": {
       "n1": [
-       2130615094,
-       2131334170,
-       2136774974
+       2135406984,
+       2127240245,
+       2131366855
       ],
       "n2": [
-       5620123219,
-       5600480025,
-       5593235564
+       5615391030,
+       5612310206,
+       5616545561
       ],
-      "per_iter": 231276.39033333334
+      "per_iter": 232268.27833333332
      },
-     "load_flagged": true,
-     "load_max": 27.91,
-     "load_mean": 27.91,
-     "peak_rss_kb": 89516,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.35,
+     "load_mean": 1.35,
+     "peak_rss_kb": 88732,
+     "status": "OK",
+     "timeout_s": 120
     },
     "perry": {
-     "compile_s": 33.0,
+     "compile_s": 2.45,
      "correctness_output": "qs/stringify_nested qs@6.16.0 n=5000 warm=1000\nchecksum 9ce21e1b",
      "instr": {
       "n1": [
-       96176096849,
-       96254938484,
-       96169332201
+       19866223727,
+       19859608924,
+       19967475484
       ],
       "n2": [
-       336192886846,
-       335949586068,
-       336159732527
+       69515343054,
+       69191594773,
+       69175735181
       ],
-      "per_iter": 15998909.0452
+      "per_iter": 3288358.0697333333
      },
-     "load_flagged": true,
-     "load_max": 29.76,
-     "load_mean": 25.31,
-     "peak_rss_kb": 327516,
-     "size_bytes": 16558144,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.35,
+     "load_mean": 1.31,
+     "peak_rss_kb": 68208,
+     "size_bytes": 17063288,
+     "status": "OK",
+     "timeout_s": 120
     }
    },
    "n1": 5000,
@@ -2854,53 +3121,69 @@
      "correctness_output": "rate-limiter-flexible/consume rate-limiter-flexible@11.2.1 n=5000 warm=1000\nok 5000 rejected 0 remaining 152500",
      "instr": {
       "n1": [
-       234262548,
-       240079218,
-       218946551
+       220323622,
+       219529251,
+       220456545
       ],
       "n2": [
-       340422958,
-       342166568,
-       345799922
+       350952566,
+       351140837,
+       351793129
       ],
-      "per_iter": 7193.601333333333
+      "per_iter": 8721.147666666666
      },
-     "load_flagged": true,
-     "load_max": 53.59,
-     "load_mean": 53.59,
-     "peak_rss_kb": 75244,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.67,
+     "load_mean": 1.67,
+     "peak_rss_kb": 76764,
+     "status": "OK",
+     "timeout_s": 120
     },
     "node": {
      "correctness_output": "rate-limiter-flexible/consume rate-limiter-flexible@11.2.1 n=5000 warm=1000\nok 5000 rejected 0 remaining 152500",
      "instr": {
       "n1": [
-       492965530,
-       501768793,
-       487816463
+       491328997,
+       488484910,
+       492332514
       ],
       "n2": [
-       716547675,
-       719834516,
-       711926452
+       706948017,
+       715321626,
+       709842123
       ],
-      "per_iter": 14905.476333333334
+      "per_iter": 14567.541733333333
      },
-     "load_flagged": true,
-     "load_max": 54.6,
-     "load_mean": 53.76,
-     "peak_rss_kb": 81908,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.67,
+     "load_mean": 1.67,
+     "peak_rss_kb": 81304,
+     "status": "OK",
+     "timeout_s": 120
     },
     "perry": {
-     "compile_s": 212.92,
+     "compile_s": 1.81,
      "correctness_output": "rate-limiter-flexible/consume rate-limiter-flexible@11.2.1 n=5000 warm=1000\nok 5000 rejected 0 remaining 152500",
-     "load_flagged": true,
-     "load_max": 53.59,
-     "load_mean": 53.59,
-     "reason": "perf run exit 1: ",
-     "size_bytes": 17782456,
-     "status": "FAIL"
+     "instr": {
+      "n1": [
+       587591833,
+       586686939,
+       587646936
+      ],
+      "n2": [
+       1577262139,
+       1574438988,
+       1572959955
+      ],
+      "per_iter": 65789.81033333333
+     },
+     "load_flagged": false,
+     "load_max": 1.67,
+     "load_mean": 1.67,
+     "peak_rss_kb": 76916,
+     "size_bytes": 18130416,
+     "status": "OK",
+     "timeout_s": 120
     }
    },
    "n1": 5000,
@@ -2913,66 +3196,69 @@
      "correctness_output": "rate-limiter-flexible/get_penalty rate-limiter-flexible@11.2.1 n=5000 warm=1000\nseen 0 consumed 0 dels 12",
      "instr": {
       "n1": [
-       223717121,
-       223433479,
-       231338071
+       230094655,
+       230056836,
+       230935914
       ],
       "n2": [
-       293821689,
-       309393949,
-       317547781
+       296300451,
+       317352463,
+       309989361
       ],
-      "per_iter": 5711.788533333333
+      "per_iter": 5326.313733333333
      },
-     "load_flagged": true,
-     "load_max": 52.66,
-     "load_mean": 52.66,
-     "peak_rss_kb": 66468,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.67,
+     "load_mean": 1.67,
+     "peak_rss_kb": 68056,
+     "status": "OK",
+     "timeout_s": 120
     },
     "node": {
      "correctness_output": "rate-limiter-flexible/get_penalty rate-limiter-flexible@11.2.1 n=5000 warm=1000\nseen 0 consumed 0 dels 12",
      "instr": {
       "n1": [
-       489502917,
-       487595038,
-       494727026
+       484912792,
+       494362354,
+       495250206
       ],
       "n2": [
-       548943873,
-       556092796,
-       545901259
+       547602627,
+       551357171,
+       551156813
       ],
-      "per_iter": 3962.7304
+      "per_iter": 3786.2972666666665
      },
-     "load_flagged": true,
-     "load_max": 53.59,
-     "load_mean": 52.97,
-     "peak_rss_kb": 79340,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.67,
+     "load_mean": 1.67,
+     "peak_rss_kb": 79884,
+     "status": "OK",
+     "timeout_s": 120
     },
     "perry": {
-     "compile_s": 41.45,
+     "compile_s": 1.87,
      "correctness_output": "rate-limiter-flexible/get_penalty rate-limiter-flexible@11.2.1 n=5000 warm=1000\nseen 0 consumed 0 dels 12",
      "instr": {
       "n1": [
-       642581444,
-       642621762,
-       642773451
+       488084912,
+       485467457,
+       485467813
       ],
       "n2": [
-       2276243466,
-       2273712378,
-       2273675393
+       1530925579,
+       1532936424,
+       1530964950
       ],
-      "per_iter": 108739.3744
+      "per_iter": 69699.80913333333
      },
-     "load_flagged": true,
-     "load_max": 52.66,
-     "load_mean": 52.66,
-     "peak_rss_kb": 87928,
-     "size_bytes": 17791112,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.67,
+     "load_mean": 1.67,
+     "peak_rss_kb": 72672,
+     "size_bytes": 18138608,
+     "status": "OK",
+     "timeout_s": 120
     }
    },
    "n1": 5000,
@@ -2985,21 +3271,21 @@
      "correctness_output": "redis/pipeline redis@6.2.1 n=125 warm=50\nchecksum 05ec482e",
      "instr": {
       "n1": [
-       952689346,
-       952296874,
-       969905001
+       929559254,
+       928682372,
+       929390740
       ],
       "n2": [
-       1425369376,
-       1409160302,
-       1415051335
+       1325023946,
+       1376193806,
+       1376749382
       ],
-      "per_iter": 1232965.304
+      "per_iter": 1191474.8426666667
      },
-     "load_flagged": true,
-     "load_max": 50.48,
-     "load_mean": 50.48,
-     "peak_rss_kb": 88340,
+     "load_flagged": false,
+     "load_max": 0.83,
+     "load_mean": 0.83,
+     "peak_rss_kb": 96696,
      "status": "OK",
      "timeout_s": 120
     },
@@ -3007,45 +3293,45 @@
      "correctness_output": "redis/pipeline redis@6.2.1 n=125 warm=50\nchecksum 05ec482e",
      "instr": {
       "n1": [
-       1464831218,
-       1458103248,
-       1451727267
+       1459978656,
+       1457035417,
+       1469995653
       ],
       "n2": [
-       1691334015,
-       1701063390,
-       1697313627
+       1706522831,
+       1695485068,
+       1696462096
       ],
-      "per_iter": 637894.344
+      "per_iter": 630622.5066666667
      },
-     "load_flagged": true,
-     "load_max": 50.48,
-     "load_mean": 49.94,
-     "peak_rss_kb": 144440,
+     "load_flagged": false,
+     "load_max": 0.83,
+     "load_mean": 0.83,
+     "peak_rss_kb": 145612,
      "status": "OK",
      "timeout_s": 120
     },
     "perry": {
-     "compile_s": 284.25,
+     "compile_s": 16.21,
      "correctness_output": "redis/pipeline redis@6.2.1 n=125 warm=50\nchecksum 05ec482e",
      "instr": {
       "n1": [
-       6949203035,
-       6950343471,
-       6948157395
+       6302399094,
+       6296207745,
+       6297020254
       ],
       "n2": [
-       20744410123,
-       20747971917,
-       20730219025
+       18662614466,
+       18647554982,
+       18691883252
       ],
-      "per_iter": 36787218.90133333
+      "per_iter": 32974917.898666665
      },
-     "load_flagged": true,
-     "load_max": 50.93,
-     "load_mean": 50.62,
-     "peak_rss_kb": 149956,
-     "size_bytes": 73768240,
+     "load_flagged": false,
+     "load_max": 0.85,
+     "load_mean": 0.84,
+     "peak_rss_kb": 144264,
+     "size_bytes": 75821600,
      "status": "OK",
      "timeout_s": 120
     }
@@ -3060,21 +3346,21 @@
      "correctness_output": "redis/set_get redis@6.2.1 n=500 warm=200\nchecksum 98b09153 ctr 700",
      "instr": {
       "n1": [
-       993631595,
-       1005992857,
-       1002282154
+       966167978,
+       962852767,
+       963573353
       ],
       "n2": [
-       1642173500,
-       1550382760,
-       1703218838
+       1524070724,
+       1534035059,
+       1531327136
       ],
-      "per_iter": 426594.23066666664
+      "per_iter": 378502.522
      },
-     "load_flagged": true,
-     "load_max": 42.4,
-     "load_mean": 42.34,
-     "peak_rss_kb": 83548,
+     "load_flagged": false,
+     "load_max": 1.34,
+     "load_mean": 1.32,
+     "peak_rss_kb": 88368,
      "status": "OK",
      "timeout_s": 120
     },
@@ -3082,47 +3368,47 @@
      "correctness_output": "redis/set_get redis@6.2.1 n=500 warm=200\nchecksum 98b09153 ctr 700",
      "instr": {
       "n1": [
-       1574058312,
-       1577482951,
-       1581361591
+       1567409767,
+       1571802517,
+       1570189642
       ],
       "n2": [
-       1901141009,
-       2004709953,
-       1952885242
+       1892217886,
+       1899988908,
+       1900933680
       ],
-      "per_iter": 250268.194
+      "per_iter": 219866.17733333333
      },
-     "load_flagged": true,
-     "load_max": 42.08,
-     "load_mean": 42.08,
-     "peak_rss_kb": 151360,
+     "load_flagged": false,
+     "load_max": 1.29,
+     "load_mean": 1.29,
+     "peak_rss_kb": 160764,
      "status": "OK",
      "timeout_s": 120
     },
     "perry": {
-     "compile_s": 537.45,
+     "compile_s": 16.27,
      "correctness_output": "redis/set_get redis@6.2.1 n=500 warm=200\nchecksum 98b09153 ctr 700",
      "instr": {
       "n1": [
-       5818956736,
-       5818866879,
-       5817865610
+       6107364429,
+       6097690782,
+       6107033174
       ],
       "n2": [
-       16225704281,
-       16214500567,
-       16240909083
+       16915797033,
+       16942282933,
+       16914340558
       ],
-      "per_iter": 6937891.601333333
+      "per_iter": 7205842.5726666665
      },
-     "load_flagged": true,
-     "load_max": 45.15,
-     "load_mean": 43.46,
-     "peak_rss_kb": 167296,
-     "size_bytes": 73763776,
+     "load_flagged": false,
+     "load_max": 1.34,
+     "load_mean": 1.12,
+     "peak_rss_kb": 172908,
+     "size_bytes": 75813344,
      "status": "OK",
-     "timeout_s": 130.9
+     "timeout_s": 120
     }
    },
    "n1": 500,
@@ -3135,66 +3421,69 @@
      "correctness_output": "uuid/v4 uuid@14.0.2 n=50000 warm=5000\nvalid 50000 totalLen 1800000",
      "instr": {
       "n1": [
-       255289357,
-       255316578,
-       254729024
+       258023116,
+       257797590,
+       257950843
       ],
       "n2": [
-       637726797,
-       635404341,
-       634434580
+       637157406,
+       637014580,
+       641148672
       ],
-      "per_iter": 2534.0998933333335
+      "per_iter": 2528.0437533333334
      },
-     "load_flagged": true,
-     "load_max": 17.02,
-     "load_mean": 17.02,
-     "peak_rss_kb": 73752,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.5,
+     "load_mean": 1.5,
+     "peak_rss_kb": 73144,
+     "status": "OK",
+     "timeout_s": 120
     },
     "node": {
      "correctness_output": "uuid/v4 uuid@14.0.2 n=50000 warm=5000\nvalid 50000 totalLen 1800000",
      "instr": {
       "n1": [
-       853296284,
-       854893587,
-       860170427
+       848487647,
+       858066241,
+       852371235
       ],
       "n2": [
-       1840674853,
-       1845605136,
-       1888965235
+       1846951347,
+       1846462903,
+       1846225433
       ],
-      "per_iter": 6604.74366
+      "per_iter": 6627.2777866666665
      },
-     "load_flagged": true,
-     "load_max": 17.02,
-     "load_mean": 17.02,
-     "peak_rss_kb": 80840,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.54,
+     "load_mean": 1.51,
+     "peak_rss_kb": 80124,
+     "status": "OK",
+     "timeout_s": 120
     },
     "perry": {
-     "compile_s": 790.07,
+     "compile_s": 1.08,
      "correctness_output": "uuid/v4 uuid@14.0.2 n=50000 warm=5000\nvalid 50000 totalLen 1800000",
      "instr": {
       "n1": [
-       3282515706,
-       3282563909,
-       3282608430
+       1777831274,
+       1777801715,
+       1777797474
       ],
       "n2": [
-       12217438698,
-       12217424638,
-       12217629893
+       6503456660,
+       6503439248,
+       6503428305
       ],
-      "per_iter": 59565.831926666666
+      "per_iter": 31504.25022
      },
-     "load_flagged": true,
-     "load_max": 17.02,
-     "load_mean": 16.69,
-     "peak_rss_kb": 53056,
-     "size_bytes": 10728696,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.5,
+     "load_mean": 1.5,
+     "peak_rss_kb": 45236,
+     "size_bytes": 10918512,
+     "status": "OK",
+     "timeout_s": 120
     }
    },
    "n1": 50000,
@@ -3207,66 +3496,69 @@
      "correctness_output": "uuid/v5_parse uuid@14.0.2 n=12500 warm=2000\nchecksum 1e7c66ee",
      "instr": {
       "n1": [
-       881445619,
-       872044471,
-       876278353
+       878569848,
+       877677373,
+       881155108
       ],
       "n2": [
-       2050480419,
-       2054134455,
-       2054239932
+       2053111334,
+       2053230333,
+       2057552504
       ],
-      "per_iter": 31409.496053333332
+      "per_iter": 31324.2796
      },
-     "load_flagged": true,
-     "load_max": 15.56,
-     "load_mean": 15.56,
-     "peak_rss_kb": 112344,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.5,
+     "load_mean": 1.5,
+     "peak_rss_kb": 111892,
+     "status": "OK",
+     "timeout_s": 120
     },
     "node": {
      "correctness_output": "uuid/v5_parse uuid@14.0.2 n=12500 warm=2000\nchecksum 1e7c66ee",
      "instr": {
       "n1": [
-       1233876245,
-       1247528107,
-       1242982070
+       1244596395,
+       1239609806,
+       1231273824
       ],
       "n2": [
-       3044562287,
-       3046803279,
-       3051364149
+       3055791072,
+       3042899794,
+       3048228062
       ],
-      "per_iter": 48101.89890666667
+      "per_iter": 48229.82016
      },
-     "load_flagged": true,
-     "load_max": 15.56,
-     "load_mean": 15.56,
-     "peak_rss_kb": 83160,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.5,
+     "load_mean": 1.48,
+     "peak_rss_kb": 80916,
+     "status": "OK",
+     "timeout_s": 120
     },
     "perry": {
-     "compile_s": 4.41,
+     "compile_s": 1.08,
      "correctness_output": "uuid/v5_parse uuid@14.0.2 n=12500 warm=2000\nchecksum 1e7c66ee",
      "instr": {
       "n1": [
-       3490306267,
-       3490259259,
-       3489180608
+       2157909449,
+       2158248230,
+       2157825851
       ],
       "n2": [
-       12276709462,
-       12278243460,
-       12280212622
+       7573124305,
+       7582758921,
+       7575647507
       ],
-      "per_iter": 234346.24536
+      "per_iter": 144473.01488
      },
-     "load_flagged": true,
-     "load_max": 15.56,
-     "load_mean": 15.5,
-     "peak_rss_kb": 123548,
-     "size_bytes": 10727968,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.5,
+     "load_mean": 1.5,
+     "peak_rss_kb": 82720,
+     "size_bytes": 10906160,
+     "status": "OK",
+     "timeout_s": 120
     }
    },
    "n1": 12500,
@@ -3279,66 +3571,69 @@
      "correctness_output": "uuid/v7 uuid@14.0.2 n=50000 warm=5000\nvalid 50000 increasing 50000",
      "instr": {
       "n1": [
-       532515184,
-       532866301,
-       534682050
+       535621897,
+       537299018,
+       537052989
       ],
       "n2": [
-       1736824347,
-       1738564712,
-       1740327378
+       1736832965,
+       1735227079,
+       1730434517
       ],
-      "per_iter": 8037.989406666667
+      "per_iter": 7987.827266666666
      },
-     "load_flagged": true,
-     "load_max": 16.01,
-     "load_mean": 16.01,
-     "peak_rss_kb": 107512,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.46,
+     "load_mean": 1.46,
+     "peak_rss_kb": 109760,
+     "status": "OK",
+     "timeout_s": 120
     },
     "node": {
      "correctness_output": "uuid/v7 uuid@14.0.2 n=50000 warm=5000\nvalid 50000 increasing 50000",
      "instr": {
       "n1": [
-       1555816660,
-       1552834792,
-       1550396349
+       1552501958,
+       1548870679,
+       1554061037
       ],
       "n2": [
-       4305084379,
-       4314609122,
-       4299717885
+       4301751645,
+       4315680391,
+       4302217149
       ],
-      "per_iter": 18348.33058
+      "per_iter": 18331.434606666666
      },
-     "load_flagged": true,
-     "load_max": 16.53,
-     "load_mean": 16.1,
-     "peak_rss_kb": 81284,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.5,
+     "load_mean": 1.5,
+     "peak_rss_kb": 80784,
+     "status": "OK",
+     "timeout_s": 120
     },
     "perry": {
-     "compile_s": 6.23,
+     "compile_s": 1.11,
      "correctness_output": "uuid/v7 uuid@14.0.2 n=50000 warm=5000\nvalid 50000 increasing 50000",
      "instr": {
       "n1": [
-       5282107139,
-       5279921948,
-       5275531363
+       3030306155,
+       3030872680,
+       3032249142
       ],
       "n2": [
-       19469553202,
-       19457542814,
-       19419388372
+       11133663811,
+       11120934206,
+       11120037414
       ],
-      "per_iter": 94517.47244
+      "per_iter": 53933.743506666666
      },
-     "load_flagged": true,
-     "load_max": 16.01,
-     "load_mean": 15.88,
-     "peak_rss_kb": 73368,
-     "size_bytes": 10750352,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.46,
+     "load_mean": 1.46,
+     "peak_rss_kb": 65928,
+     "size_bytes": 10931056,
+     "status": "OK",
+     "timeout_s": 120
     }
    },
    "n1": 50000,
@@ -3351,66 +3646,69 @@
      "correctness_output": "validator/batch validator@13.15.35 n=1250 warm=200\nchecksum c4e841b8",
      "instr": {
       "n1": [
-       2167572499,
-       2283315578,
-       2231121186
+       2223688876,
+       2224278497,
+       2223146979
       ],
       "n2": [
-       5784316256,
-       5831654051,
-       5835185991
+       5780266870,
+       5776726681,
+       5780758394
       ],
-      "per_iter": 960142.0973333333
+      "per_iter": 948420.7984
      },
-     "load_flagged": true,
-     "load_max": 15.92,
-     "load_mean": 15.92,
-     "peak_rss_kb": 130540,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.42,
+     "load_mean": 1.42,
+     "peak_rss_kb": 126076,
+     "status": "OK",
+     "timeout_s": 120
     },
     "node": {
      "correctness_output": "validator/batch validator@13.15.35 n=1250 warm=200\nchecksum c4e841b8",
      "instr": {
       "n1": [
-       2179609584,
-       2191426592,
-       2183147561
+       2181690192,
+       2178793200,
+       2164693204
       ],
       "n2": [
-       5771522463,
-       5752381134,
-       5699789212
+       5765187528,
+       5704672780,
+       5736309667
       ],
-      "per_iter": 951795.6194666667
+      "per_iter": 948671.0578666667
      },
-     "load_flagged": true,
-     "load_max": 15.74,
-     "load_mean": 15.74,
-     "peak_rss_kb": 84256,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.46,
+     "load_mean": 1.46,
+     "peak_rss_kb": 84836,
+     "status": "OK",
+     "timeout_s": 120
     },
     "perry": {
-     "compile_s": 584.62,
+     "compile_s": 2.74,
      "correctness_output": "validator/batch validator@13.15.35 n=1250 warm=200\nchecksum c4e841b8",
      "instr": {
       "n1": [
-       39866650451,
-       39851418642,
-       39855171803
+       25496805699,
+       24691740732,
+       25896069989
       ],
       "n2": [
-       142618390691,
-       142618930753,
-       142620913477
+       93228811996,
+       89998999022,
+       88964980385
       ],
-      "per_iter": 27403669.053333335
+      "per_iter": 17200584.88613333
      },
-     "load_flagged": true,
-     "load_max": 19.17,
-     "load_mean": 15.98,
-     "peak_rss_kb": 84040,
-     "size_bytes": 21998688,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.42,
+     "load_mean": 1.38,
+     "peak_rss_kb": 64444,
+     "size_bytes": 22894328,
+     "status": "OK",
+     "timeout_s": 120
     }
    },
    "n1": 1250,
@@ -3423,66 +3721,69 @@
      "correctness_output": "validator/sanitize validator@13.15.35 n=5000 warm=1000\nchecksum cfdbbbc5",
      "instr": {
       "n1": [
-       453195740,
-       457595027,
-       450284457
+       437841390,
+       433115291,
+       434047374
       ],
       "n2": [
-       893389350,
-       921213089,
-       895569955
+       891069856,
+       896127774,
+       886731928
       ],
-      "per_iter": 29491.614333333335
+      "per_iter": 30468.165466666665
      },
-     "load_flagged": true,
-     "load_max": 18.8,
-     "load_mean": 18.79,
-     "peak_rss_kb": 89808,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.4,
+     "load_mean": 1.4,
+     "peak_rss_kb": 92072,
+     "status": "OK",
+     "timeout_s": 120
     },
     "node": {
      "correctness_output": "validator/sanitize validator@13.15.35 n=5000 warm=1000\nchecksum cfdbbbc5",
      "instr": {
       "n1": [
-       717993646,
-       722156447,
-       734947279
+       716164004,
+       712777431,
+       723057617
       ],
       "n2": [
-       1204815454,
-       1216487345,
-       1206406509
+       1203725581,
+       1212045549,
+       1209003172
       ],
-      "per_iter": 32283.337466666668
+      "per_iter": 32855.944533333335
      },
-     "load_flagged": true,
-     "load_max": 18.78,
-     "load_mean": 18.78,
-     "peak_rss_kb": 81244,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.4,
+     "load_mean": 1.4,
+     "peak_rss_kb": 80548,
+     "status": "OK",
+     "timeout_s": 120
     },
     "perry": {
-     "compile_s": 232.72,
+     "compile_s": 2.6,
      "correctness_output": "validator/sanitize validator@13.15.35 n=5000 warm=1000\nchecksum cfdbbbc5",
      "instr": {
       "n1": [
-       3592385267,
-       3591554820,
-       3591734646
+       2553207422,
+       2654597338,
+       2454605932
       ],
       "n2": [
-       12188650646,
-       12190836871,
-       12189559440
+       8064520249,
+       8086880363,
+       8277408709
       ],
-      "per_iter": 573188.3196
+      "per_iter": 368911.5294
      },
-     "load_flagged": true,
-     "load_max": 18.8,
-     "load_mean": 18.77,
-     "peak_rss_kb": 88028,
-     "size_bytes": 21990744,
-     "status": "OK"
+     "load_flagged": false,
+     "load_max": 1.4,
+     "load_mean": 1.4,
+     "peak_rss_kb": 66560,
+     "size_bytes": 22890232,
+     "status": "OK",
+     "timeout_s": 120
     }
    },
    "n1": 5000,
