@@ -511,36 +511,45 @@ fn constfn_finalizer_waits_for_stores_and_preserves_fresh_closures() {
     for capture in [11.0f64, 22.0] {
         let raw = alloc_constfn_plain_fixture(&[b"ltcf_final_m", b"ltcf_final_x"]);
         let object = scope.root_raw_mut_ptr(raw as usize as *mut crate::object::ObjectHeader);
-        let plain =
-            unsafe { object_shape_stamp(object.get_raw_mut_ptr::<crate::object::ObjectHeader>()) };
+        let plain = unsafe {
+            object.with_mut_ptr::<crate::object::ObjectHeader, _>(|object_ptr| {
+                object_shape_stamp(object_ptr)
+            })
+        };
         assert_ne!(plain, requested, "allocation must not carry SPECIAL");
         assert_eq!(shapes::shape_descriptor_by_id(plain).unwrap().rep, 0);
         assert_eq!(finalize(raw as usize as u64), raw as usize as u64);
         assert_eq!(
-            unsafe { object_shape_stamp(object.get_raw_mut_ptr::<crate::object::ObjectHeader>()) },
+            unsafe {
+                object.with_mut_ptr::<crate::object::ObjectHeader, _>(|object_ptr| {
+                    object_shape_stamp(object_ptr)
+                })
+            },
             plain,
             "unwritten method must refuse"
         );
         let closure = crate::closure::js_closure_alloc(info, 1);
         let closure = scope.root_raw_mut_ptr(closure);
         unsafe {
-            crate::closure::js_closure_set_capture_bits(
-                closure.get_raw_mut_ptr::<crate::closure::ClosureHeader>(),
-                0,
-                capture.to_bits(),
-            );
-            let obj = object.get_raw_mut_ptr::<crate::object::ObjectHeader>();
-            crate::object::store_object_field_slot(
-                obj,
-                0,
-                crate::JSValue::object_ptr(
-                    closure.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as *mut u8,
-                )
-                .bits(),
-            );
-            crate::object::store_object_field_slot(obj, 1, 7.0f64.to_bits());
+            closure.with_mut_ptr::<crate::closure::ClosureHeader, _>(|closure_ptr| {
+                crate::closure::js_closure_set_capture_bits(closure_ptr, 0, capture.to_bits())
+            });
+            object.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj| {
+                crate::object::store_object_field_slot(
+                    obj,
+                    0,
+                    closure
+                        .with_mut_ptr::<crate::closure::ClosureHeader, _>(|closure_ptr| {
+                            crate::JSValue::object_ptr(closure_ptr as *mut u8)
+                        })
+                        .bits(),
+                );
+                crate::object::store_object_field_slot(obj, 1, 7.0f64.to_bits());
+            });
         }
-        let obj = finalize(object.get_raw_mut_ptr::<crate::object::ObjectHeader>() as usize as u64);
+        let obj = object.with_mut_ptr::<crate::object::ObjectHeader, _>(|object_ptr| {
+            finalize(object_ptr as usize as u64)
+        });
         assert_eq!(
             unsafe { object_shape_stamp(obj as usize as *mut _) },
             requested
@@ -548,17 +557,19 @@ fn constfn_finalizer_waits_for_stores_and_preserves_fresh_closures() {
         objects.push(object);
         closures.push(closure);
     }
-    assert_ne!(
-        closures[0].get_raw_mut_ptr::<crate::closure::ClosureHeader>(),
-        closures[1].get_raw_mut_ptr::<crate::closure::ClosureHeader>()
-    );
+    closures[0].with_mut_ptr::<crate::closure::ClosureHeader, _>(|closures_0_ptr| {
+        closures[1].with_mut_ptr::<crate::closure::ClosureHeader, _>(|closures_1_ptr| {
+            assert_ne!(closures_0_ptr, closures_1_ptr)
+        })
+    });
     for ((object, closure), capture) in objects.iter().zip(&closures).zip([11.0f64, 22.0]) {
-        let obj = object.get_raw_mut_ptr::<crate::object::ObjectHeader>();
-        let slot = crate::object::js_object_get_field(obj, 0);
-        assert_eq!(
-            slot.bits() & crate::value::POINTER_MASK,
-            closure.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as usize as u64
-        );
+        let slot = object.with_mut_ptr(|obj| crate::object::js_object_get_field(obj, 0));
+        closure.with_mut_ptr::<crate::closure::ClosureHeader, _>(|closure_ptr| {
+            assert_eq!(
+                slot.bits() & crate::value::POINTER_MASK,
+                closure_ptr as usize as u64
+            )
+        });
         assert_eq!(
             crate::closure::js_closure_get_capture_bits(
                 (slot.bits() & crate::value::POINTER_MASK) as usize as *const _,
@@ -581,27 +592,34 @@ fn constfn_finalizer_refuses_wrong_body_layout_and_rebindable_this() {
     // Establish that these exact birth facts promote with the supported body.
     // Otherwise every refusal below could be an unrelated kind/layout miss.
     let control = scope.root_raw_mut_ptr(alloc_constfn_plain_fixture(&[b"ltcf_refuse_m"]));
-    let birth = unsafe { shapes::object_shape_stamp(control.get_raw_mut_ptr()) };
+    let birth =
+        unsafe { control.with_mut_ptr(|control_ptr| shapes::object_shape_stamp(control_ptr)) };
     let closure = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(info, 0));
     unsafe {
-        crate::object::store_object_field_slot(
-            control.get_raw_mut_ptr(),
-            0,
-            crate::JSValue::object_ptr(closure.get_raw_mut_ptr::<u8>()).bits(),
-        );
+        control.with_mut_ptr(|control_ptr| {
+            crate::object::store_object_field_slot(
+                control_ptr,
+                0,
+                closure
+                    .with_mut_ptr::<u8, _>(|closure_ptr| crate::JSValue::object_ptr(closure_ptr))
+                    .bits(),
+            )
+        });
     }
-    let promoted = js_object_finalize_constfn_static(
-        control.get_raw_mut_ptr::<crate::object::ObjectHeader>() as usize as u64,
-        SHAPE_ID_BASE + 0x7871,
-        packed.as_ptr(),
-        packed.len() as u32,
-        1,
-        1,
-        0,
-        3,
-        entries.as_ptr(),
-        1,
-    );
+    let promoted = control.with_mut_ptr::<crate::object::ObjectHeader, _>(|control_ptr| {
+        js_object_finalize_constfn_static(
+            control_ptr as usize as u64,
+            SHAPE_ID_BASE + 0x7871,
+            packed.as_ptr(),
+            packed.len() as u32,
+            1,
+            1,
+            0,
+            3,
+            entries.as_ptr(),
+            1,
+        )
+    });
     assert_eq!(
         unsafe { shapes::object_shape_stamp(promoted as usize as *mut _) },
         SHAPE_ID_BASE + 0x7871,
@@ -628,31 +646,37 @@ fn constfn_finalizer_refuses_wrong_body_layout_and_rebindable_this() {
         let obj = scope.root_raw_mut_ptr(raw as usize as *mut crate::object::ObjectHeader);
         let closure = crate::closure::js_closure_alloc(body, caps);
         unsafe {
-            crate::object::store_object_field_slot(
-                obj.get_raw_mut_ptr::<crate::object::ObjectHeader>(),
-                0,
-                crate::JSValue::object_ptr(closure as *mut u8).bits(),
-            );
+            obj.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj_ptr| {
+                crate::object::store_object_field_slot(
+                    obj_ptr,
+                    0,
+                    crate::JSValue::object_ptr(closure as *mut u8).bits(),
+                )
+            });
         }
         let before = unsafe {
-            shapes::object_shape_stamp(obj.get_raw_mut_ptr::<crate::object::ObjectHeader>())
+            obj.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj_ptr| {
+                shapes::object_shape_stamp(obj_ptr)
+            })
         };
         assert_eq!(
             before, birth,
             "{case}: refusal must begin with the admitted control birth"
         );
-        let raw = js_object_finalize_constfn_static(
-            obj.get_raw_mut_ptr::<crate::object::ObjectHeader>() as usize as u64,
-            SHAPE_ID_BASE + 0x7871,
-            packed.as_ptr(),
-            packed.len() as u32,
-            count,
-            live,
-            class_id,
-            rep,
-            entries.as_ptr(),
-            1,
-        );
+        let raw = obj.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj_ptr| {
+            js_object_finalize_constfn_static(
+                obj_ptr as usize as u64,
+                SHAPE_ID_BASE + 0x7871,
+                packed.as_ptr(),
+                packed.len() as u32,
+                count,
+                live,
+                class_id,
+                rep,
+                entries.as_ptr(),
+                1,
+            )
+        });
         assert_eq!(
             unsafe { shapes::object_shape_stamp(raw as usize as *mut _) },
             before,
@@ -682,89 +706,97 @@ fn declared_class_final_mint_keeps_birth_ordinary_and_uses_each_current_closure(
     let keys =
         crate::object::js_build_class_keys_array(cid, 2, packed.as_ptr(), packed.len() as u32, 0);
     let keys = scope.root_raw_mut_ptr(keys as usize as *mut crate::array::ArrayHeader);
-    let ordinary = js_object_shape_id_for_class_keys_static(
-        keys.get_raw_mut_ptr::<crate::array::ArrayHeader>() as usize as u64,
-        2,
-        2,
-        cid,
-        SHAPE_ID_BASE + 0x7880,
-        0,
-    );
-    let final_id = js_object_final_shape_id_for_class_keys_static_constfn(
-        keys.get_raw_mut_ptr::<crate::array::ArrayHeader>() as usize as u64,
-        2,
-        2,
-        cid,
-        SHAPE_ID_BASE + 0x7881,
-        3,
-        entries.as_ptr(),
-        1,
-    );
+    let ordinary = keys.with_mut_ptr::<crate::array::ArrayHeader, _>(|keys_ptr| {
+        js_object_shape_id_for_class_keys_static(
+            keys_ptr as usize as u64,
+            2,
+            2,
+            cid,
+            SHAPE_ID_BASE + 0x7880,
+            0,
+        )
+    });
+    let final_id = keys.with_mut_ptr::<crate::array::ArrayHeader, _>(|keys_ptr| {
+        js_object_final_shape_id_for_class_keys_static_constfn(
+            keys_ptr as usize as u64,
+            2,
+            2,
+            cid,
+            SHAPE_ID_BASE + 0x7881,
+            3,
+            entries.as_ptr(),
+            1,
+        )
+    });
     assert_ne!(ordinary, final_id);
     assert_eq!(shapes::shape_descriptor_by_id(ordinary).unwrap().rep, 0);
     assert_eq!(shapes::shape_descriptor_by_id(final_id).unwrap().rep, 3);
     let mut closure_roots = Vec::new();
     for capture in [31.0f64, 47.0] {
-        let obj = crate::object::js_object_alloc_class_inline_keys_stamped(
-            cid,
-            0,
-            2,
-            keys.get_raw_mut_ptr::<crate::array::ArrayHeader>(),
-            ordinary,
-            0,
-        );
+        let obj = keys.with_mut_ptr::<crate::array::ArrayHeader, _>(|keys_ptr| {
+            crate::object::js_object_alloc_class_inline_keys_stamped(
+                cid, 0, 2, keys_ptr, ordinary, 0,
+            )
+        });
         let object = scope.root_raw_mut_ptr(obj);
         assert_eq!(
-            unsafe { shapes::object_shape_stamp(object.get_raw_mut_ptr()) },
+            unsafe { object.with_mut_ptr(|object_ptr| shapes::object_shape_stamp(object_ptr)) },
             ordinary
         );
         let closure = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(info, 1));
         unsafe {
-            crate::closure::js_closure_set_capture_bits(
-                closure.get_raw_mut_ptr(),
-                0,
-                capture.to_bits(),
-            );
-            let object = object.get_raw_mut_ptr::<crate::object::ObjectHeader>();
-            crate::object::store_object_field_slot(
-                object,
-                0,
-                crate::JSValue::object_ptr(closure.get_raw_mut_ptr::<u8>()).bits(),
-            );
-            crate::object::store_object_field_slot(object, 1, capture.to_bits());
+            closure.with_mut_ptr(|closure_ptr| {
+                crate::closure::js_closure_set_capture_bits(closure_ptr, 0, capture.to_bits())
+            });
+            object.with_mut_ptr::<crate::object::ObjectHeader, _>(|object| {
+                crate::object::store_object_field_slot(
+                    object,
+                    0,
+                    closure
+                        .with_mut_ptr::<u8, _>(|closure_ptr| {
+                            crate::JSValue::object_ptr(closure_ptr)
+                        })
+                        .bits(),
+                );
+                crate::object::store_object_field_slot(object, 1, capture.to_bits());
+            });
         }
         let premise = shapes::shape_descriptor_by_id(ordinary).unwrap();
         assert_eq!(premise.object_kind, shapes::ShapeObjectKind::Ordinary);
         assert_eq!(premise.proto_id, shapes::class_proto_id(cid));
-        let wrong_proto = js_object_finalize_constfn_static(
-            object.get_raw_mut_ptr::<crate::object::ObjectHeader>() as usize as u64,
-            final_id,
-            packed.as_ptr(),
-            packed.len() as u32,
-            2,
-            2,
-            cid + 1,
-            3,
-            entries.as_ptr(),
-            1,
-        );
+        let wrong_proto = object.with_mut_ptr::<crate::object::ObjectHeader, _>(|object_ptr| {
+            js_object_finalize_constfn_static(
+                object_ptr as usize as u64,
+                final_id,
+                packed.as_ptr(),
+                packed.len() as u32,
+                2,
+                2,
+                cid + 1,
+                3,
+                entries.as_ptr(),
+                1,
+            )
+        });
         assert_eq!(
             unsafe { shapes::object_shape_stamp(wrong_proto as usize as *mut _) },
             ordinary,
             "a different class prototype must refuse without stamping"
         );
-        let obj = js_object_finalize_constfn_static(
-            object.get_raw_mut_ptr::<crate::object::ObjectHeader>() as usize as u64,
-            final_id,
-            packed.as_ptr(),
-            packed.len() as u32,
-            2,
-            2,
-            cid,
-            3,
-            entries.as_ptr(),
-            1,
-        );
+        let obj = object.with_mut_ptr::<crate::object::ObjectHeader, _>(|object_ptr| {
+            js_object_finalize_constfn_static(
+                object_ptr as usize as u64,
+                final_id,
+                packed.as_ptr(),
+                packed.len() as u32,
+                2,
+                2,
+                cid,
+                3,
+                entries.as_ptr(),
+                1,
+            )
+        });
         assert_eq!(
             unsafe { shapes::object_shape_stamp(obj as usize as *mut _) },
             final_id
@@ -779,8 +811,9 @@ fn declared_class_final_mint_keeps_birth_ordinary_and_uses_each_current_closure(
         );
         closure_roots.push(closure);
     }
-    assert_ne!(
-        closure_roots[0].get_raw_mut_ptr::<crate::closure::ClosureHeader>(),
-        closure_roots[1].get_raw_mut_ptr::<crate::closure::ClosureHeader>()
-    );
+    closure_roots[0].with_mut_ptr::<crate::closure::ClosureHeader, _>(|closure_roots_0_ptr| {
+        closure_roots[1].with_mut_ptr::<crate::closure::ClosureHeader, _>(|closure_roots_1_ptr| {
+            assert_ne!(closure_roots_0_ptr, closure_roots_1_ptr)
+        })
+    });
 }

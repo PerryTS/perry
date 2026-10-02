@@ -50,15 +50,15 @@ unsafe fn wire() -> SerializedValue {
     let keys = scope.root_raw_mut_ptr(keys.arr() as *mut crate::array::ArrayHeader);
     let mut objects = Vec::new();
     for n in [17.0f64, 29.0] {
-        let object = crate::object::alloc_plain::alloc_plain_record_inline_keys_stamped(
-            2,
-            keys.get_raw_mut_ptr(),
-            BASE,
-        );
+        let object = keys.with_mut_ptr(|keys_ptr| {
+            crate::object::alloc_plain::alloc_plain_record_inline_keys_stamped(2, keys_ptr, BASE)
+        });
         let object = scope.root_raw_mut_ptr(object);
-        let birth = shapes::object_shape_descriptor(object.get_raw_mut_ptr()).unwrap();
+        let birth = object
+            .with_mut_ptr(|object_ptr| shapes::object_shape_descriptor(object_ptr))
+            .unwrap();
         assert_eq!(
-            shapes::object_shape_stamp(object.get_raw_mut_ptr()),
+            object.with_mut_ptr(|object_ptr| shapes::object_shape_stamp(object_ptr)),
             BASE,
             "plain birth must use the installed carrier"
         );
@@ -69,29 +69,36 @@ unsafe fn wire() -> SerializedValue {
             "allocation must stay Any/F64"
         );
         let c = scope.root_raw_mut_ptr(closure::js_closure_alloc(info(), 1));
-        closure::js_closure_set_capture_bits(c.get_raw_mut_ptr(), 0, n.to_bits());
-        crate::object::store_object_field_slot(
-            object.get_raw_mut_ptr(),
-            0,
-            JSValue::object_ptr(c.get_raw_mut_ptr::<u8>()).bits(),
-        );
-        crate::object::store_object_field_slot(object.get_raw_mut_ptr(), 1, n.to_bits());
+        c.with_mut_ptr(|c_ptr| closure::js_closure_set_capture_bits(c_ptr, 0, n.to_bits()));
+        object.with_mut_ptr(|object_ptr| {
+            crate::object::store_object_field_slot(
+                object_ptr,
+                0,
+                c.with_mut_ptr::<u8, _>(|c_ptr| JSValue::object_ptr(c_ptr))
+                    .bits(),
+            )
+        });
+        object.with_mut_ptr(|object_ptr| {
+            crate::object::store_object_field_slot(object_ptr, 1, n.to_bits())
+        });
         let entries = [static_shapes::ConstFnStaticEntry {
             slot: 0,
             info: info(),
         }];
-        let obj = static_shapes::js_object_finalize_constfn_static(
-            object.get_raw_mut_ptr::<crate::object::ObjectHeader>() as usize as u64,
-            FINAL,
-            PACKED.as_ptr(),
-            PACKED.len() as u32,
-            2,
-            2,
-            0,
-            REP,
-            entries.as_ptr(),
-            1,
-        ) as usize as *mut crate::object::ObjectHeader;
+        let obj = object.with_mut_ptr::<crate::object::ObjectHeader, _>(|object_ptr| {
+            static_shapes::js_object_finalize_constfn_static(
+                object_ptr as usize as u64,
+                FINAL,
+                PACKED.as_ptr(),
+                PACKED.len() as u32,
+                2,
+                2,
+                0,
+                REP,
+                entries.as_ptr(),
+                1,
+            )
+        }) as usize as *mut crate::object::ObjectHeader;
         assert_eq!(
             shapes::object_shape_stamp(obj),
             FINAL,
@@ -131,7 +138,11 @@ fn replay(seed_first: bool, production_seed: bool) {
         let mut cells = Vec::new();
         for (slot, expected) in [17.0, 29.0].into_iter().enumerate() {
             let object = JSValue::from_bits(
-                crate::array::js_array_get_f64(array.get_raw_mut_ptr(), slot as u32).to_bits(),
+                array
+                    .with_mut_ptr(|array_ptr| {
+                        crate::array::js_array_get_f64(array_ptr, slot as u32)
+                    })
+                    .to_bits(),
             )
             .as_pointer::<crate::object::ObjectHeader>();
             let id = shapes::object_shape_stamp(object);
@@ -249,7 +260,9 @@ fn constfn_transfer_final_slots_rewrite_the_actual_closures_on_moving_gc() {
             (0..2)
                 .map(|i| {
                     let obj = JSValue::from_bits(
-                        crate::array::js_array_get_f64(array.get_raw_mut_ptr(), i).to_bits(),
+                        array
+                            .with_mut_ptr(|array_ptr| crate::array::js_array_get_f64(array_ptr, i))
+                            .to_bits(),
                     )
                     .as_pointer::<crate::object::ObjectHeader>();
                     let method = crate::object::js_object_get_field(obj as *mut _, 0).bits();
@@ -291,10 +304,12 @@ fn constfn_transfer_does_not_resurrect_a_deprecated_final_body_fact() {
             JSValue::from_bits(bits).as_pointer::<crate::array::ArrayHeader>()
                 as *mut crate::array::ArrayHeader,
         );
-        let obj =
-            JSValue::from_bits(crate::array::js_array_get_f64(arr.get_raw_mut_ptr(), 0).to_bits())
-                .as_pointer::<crate::object::ObjectHeader>()
-                as *mut crate::object::ObjectHeader;
+        let obj = JSValue::from_bits(
+            arr.with_mut_ptr(|arr_ptr| crate::array::js_array_get_f64(arr_ptr, 0))
+                .to_bits(),
+        )
+        .as_pointer::<crate::object::ObjectHeader>()
+            as *mut crate::object::ObjectHeader;
         assert_eq!(shapes::object_shape_stamp(obj), FINAL);
         crate::object::store_object_field_slot(obj, 0, TAG_TRUE);
         assert_eq!(
@@ -389,72 +404,86 @@ fn constfn_worker_seed_owns_names_across_source_key_relocation() {
     unsafe {
         let keys = scope.root_raw_mut_ptr(crate::array::js_array_alloc_key_list(2, true));
         let long = crate::string::js_string_from_bytes(LONG.as_ptr(), LONG.len() as u32);
-        store_thread_array_slot(keys.get_raw_mut_ptr(), 0, JSValue::string_ptr(long).bits());
-        store_thread_array_slot(
-            keys.get_raw_mut_ptr(),
-            1,
-            JSValue::try_short_string(SHORT)
-                .expect("short-key premise")
-                .bits(),
-        );
+        keys.with_mut_ptr(|keys_ptr| {
+            store_thread_array_slot(keys_ptr, 0, JSValue::string_ptr(long).bits())
+        });
+        keys.with_mut_ptr(|keys_ptr| {
+            store_thread_array_slot(
+                keys_ptr,
+                1,
+                JSValue::try_short_string(SHORT)
+                    .expect("short-key premise")
+                    .bits(),
+            )
+        });
         assert_eq!(
-            static_shapes::js_object_shape_id_for_class_keys_static(
-                keys.get_raw_mut_ptr::<crate::array::ArrayHeader>() as usize as u64,
-                2,
-                2,
-                CLASS,
-                BASE_ID,
-                NUMBER_REP,
-            ),
+            keys.with_mut_ptr::<crate::array::ArrayHeader, _>(|keys_ptr| {
+                static_shapes::js_object_shape_id_for_class_keys_static(
+                    keys_ptr as usize as u64,
+                    2,
+                    2,
+                    CLASS,
+                    BASE_ID,
+                    NUMBER_REP,
+                )
+            }),
             BASE_ID
         );
-        let object =
-            scope.root_raw_mut_ptr(crate::object::js_object_alloc_class_inline_keys_stamped(
-                CLASS,
-                0,
-                2,
-                keys.get_raw_mut_ptr(),
-                BASE_ID,
-                NUMBER_REP,
-            ));
+        let object = scope.root_raw_mut_ptr(keys.with_mut_ptr(|keys_ptr| {
+            crate::object::js_object_alloc_class_inline_keys_stamped(
+                CLASS, 0, 2, keys_ptr, BASE_ID, NUMBER_REP,
+            )
+        }));
         let closure = scope.root_raw_mut_ptr(closure::js_closure_alloc(info(), 1));
-        closure::js_closure_set_capture_bits(closure.get_raw_mut_ptr(), 0, 37.0f64.to_bits());
-        crate::object::store_object_field_slot(
-            object.get_raw_mut_ptr(),
-            0,
-            JSValue::object_ptr(closure.get_raw_mut_ptr::<u8>()).bits(),
-        );
-        crate::object::store_object_field_slot(object.get_raw_mut_ptr(), 1, 29.0f64.to_bits());
+        closure.with_mut_ptr(|closure_ptr| {
+            closure::js_closure_set_capture_bits(closure_ptr, 0, 37.0f64.to_bits())
+        });
+        object.with_mut_ptr(|object_ptr| {
+            crate::object::store_object_field_slot(
+                object_ptr,
+                0,
+                closure
+                    .with_mut_ptr::<u8, _>(|closure_ptr| JSValue::object_ptr(closure_ptr))
+                    .bits(),
+            )
+        });
+        object.with_mut_ptr(|object_ptr| {
+            crate::object::store_object_field_slot(object_ptr, 1, 29.0f64.to_bits())
+        });
         let entries = [static_shapes::ConstFnStaticEntry {
             slot: 0,
             info: info(),
         }];
         assert_eq!(
-            static_shapes::js_object_final_shape_id_for_class_keys_static_constfn(
-                keys.get_raw_mut_ptr::<crate::array::ArrayHeader>() as usize as u64,
-                2,
-                2,
-                CLASS,
-                FINAL_ID,
-                REP,
-                entries.as_ptr(),
-                1,
-            ),
+            keys.with_mut_ptr::<crate::array::ArrayHeader, _>(|keys_ptr| {
+                static_shapes::js_object_final_shape_id_for_class_keys_static_constfn(
+                    keys_ptr as usize as u64,
+                    2,
+                    2,
+                    CLASS,
+                    FINAL_ID,
+                    REP,
+                    entries.as_ptr(),
+                    1,
+                )
+            }),
             FINAL_ID,
             "production mint must publish the real external final carrier"
         );
-        let finalized = static_shapes::js_object_finalize_constfn_static(
-            object.get_raw_mut_ptr::<crate::object::ObjectHeader>() as usize as u64,
-            FINAL_ID,
-            NAMES.as_ptr(),
-            NAMES.len() as u32,
-            2,
-            2,
-            CLASS,
-            REP,
-            entries.as_ptr(),
-            1,
-        ) as usize as *const crate::object::ObjectHeader;
+        let finalized = object.with_mut_ptr::<crate::object::ObjectHeader, _>(|object_ptr| {
+            static_shapes::js_object_finalize_constfn_static(
+                object_ptr as usize as u64,
+                FINAL_ID,
+                NAMES.as_ptr(),
+                NAMES.len() as u32,
+                2,
+                2,
+                CLASS,
+                REP,
+                entries.as_ptr(),
+                1,
+            )
+        }) as usize as *const crate::object::ObjectHeader;
         assert_eq!(shapes::object_shape_stamp(finalized), FINAL_ID);
         let before = shapes::shape_descriptor_by_id(FINAL_ID).unwrap();
         let before_heap_key = heap_key_at(before.keys);
@@ -499,10 +528,9 @@ fn constfn_worker_seed_owns_names_across_source_key_relocation() {
             before_heap_key,
             "heap key bytes did not actually relocate"
         );
-        assert_eq!(
-            after.keys,
-            keys.get_raw_mut_ptr::<crate::array::ArrayHeader>() as usize as u64
-        );
+        keys.with_mut_ptr::<crate::array::ArrayHeader, _>(|keys_ptr| {
+            assert_eq!(after.keys, keys_ptr as usize as u64)
+        });
         assert_eq!(names_at(after.keys), vec![LONG.to_vec(), SHORT.to_vec()]);
         assert_eq!(
             shapes::final_shape_ensure_constfn(
@@ -629,35 +657,45 @@ fn constfn_transfer_compiled_anon_header_preserves_actual_worker_wire() {
         let keys = scope.root_raw_mut_ptr(keys);
         let mut objects = Vec::new();
         for number in [17.0f64, 29.0] {
-            let object =
-                scope.root_raw_mut_ptr(crate::object::js_object_alloc_class_inline_keys_stamped(
+            let object = scope.root_raw_mut_ptr(keys.with_mut_ptr(|keys_ptr| {
+                crate::object::js_object_alloc_class_inline_keys_stamped(
                     ANON,
                     0,
                     2,
-                    keys.get_raw_mut_ptr(),
+                    keys_ptr,
                     ANON_BASE,
                     field_rep::REP_F64,
-                ));
+                )
+            }));
             let cell = scope.root_raw_mut_ptr(closure::js_closure_alloc(arrow_info(), 1));
-            closure::js_closure_set_capture_bits(cell.get_raw_mut_ptr(), 0, number.to_bits());
-            crate::object::store_object_field_slot(object.get_raw_mut_ptr(), 0, number.to_bits());
-            crate::object::store_object_field_slot(
-                object.get_raw_mut_ptr(),
-                1,
-                JSValue::pointer(cell.get_raw_mut_ptr::<u8>()).bits(),
-            );
-            let object = static_shapes::js_object_finalize_constfn_static(
-                object.get_raw_mut_ptr::<crate::object::ObjectHeader>() as usize as u64,
-                ANON_FINAL,
-                NAMES.as_ptr(),
-                NAMES.len() as u32,
-                2,
-                2,
-                0,
-                ANON_REP,
-                entries.as_ptr(),
-                1,
-            ) as usize as *mut crate::object::ObjectHeader;
+            cell.with_mut_ptr(|cell_ptr| {
+                closure::js_closure_set_capture_bits(cell_ptr, 0, number.to_bits())
+            });
+            object.with_mut_ptr(|object_ptr| {
+                crate::object::store_object_field_slot(object_ptr, 0, number.to_bits())
+            });
+            object.with_mut_ptr(|object_ptr| {
+                crate::object::store_object_field_slot(
+                    object_ptr,
+                    1,
+                    cell.with_mut_ptr::<u8, _>(|cell_ptr| JSValue::pointer(cell_ptr))
+                        .bits(),
+                )
+            });
+            let object = object.with_mut_ptr::<crate::object::ObjectHeader, _>(|object_ptr| {
+                static_shapes::js_object_finalize_constfn_static(
+                    object_ptr as usize as u64,
+                    ANON_FINAL,
+                    NAMES.as_ptr(),
+                    NAMES.len() as u32,
+                    2,
+                    2,
+                    0,
+                    ANON_REP,
+                    entries.as_ptr(),
+                    1,
+                )
+            }) as usize as *mut crate::object::ObjectHeader;
             assert_eq!(
                 (*object).class_id,
                 ANON,
@@ -693,30 +731,31 @@ fn constfn_transfer_compiled_anon_header_preserves_actual_worker_wire() {
                     JSValue::from_bits(bits).as_pointer::<crate::object::ObjectHeader>()
                         as *mut crate::object::ObjectHeader,
                 );
-                let object = object.get_raw_mut_ptr::<crate::object::ObjectHeader>();
-                assert_eq!((*object).class_id, ANON);
-                assert_eq!(
-                    shapes::object_shape_stamp(object),
-                    ANON_FINAL,
-                    "worker must republish actual final facts after validating current slots"
-                );
-                let d = shapes::object_shape_descriptor(object).unwrap();
-                assert_eq!(d.rep, ANON_REP);
-                assert_eq!(d.special_constfn_mask, 2);
-                assert_eq!(
-                    d.constfn_infos(),
-                    &[shapes::ConstFnSlotInfo {
-                        slot: 1,
-                        info: arrow_info() as usize as u64,
-                    }]
-                );
-                let fields = (object as *const u8)
-                    .add(std::mem::size_of::<crate::object::ObjectHeader>())
-                    as *const u64;
-                assert_eq!(f64::from_bits(*fields), expected);
-                let cell = JSValue::from_bits(*fields.add(1)).as_pointer::<ClosureHeader>();
-                assert_eq!(capture_body(cell, closure::JsThis::UNDEFINED), expected);
-                cells.push(cell as usize);
+                object.with_mut_ptr::<crate::object::ObjectHeader, _>(|object| {
+                    assert_eq!((*object).class_id, ANON);
+                    assert_eq!(
+                        shapes::object_shape_stamp(object),
+                        ANON_FINAL,
+                        "worker must republish actual final facts after validating current slots"
+                    );
+                    let d = shapes::object_shape_descriptor(object).unwrap();
+                    assert_eq!(d.rep, ANON_REP);
+                    assert_eq!(d.special_constfn_mask, 2);
+                    assert_eq!(
+                        d.constfn_infos(),
+                        &[shapes::ConstFnSlotInfo {
+                            slot: 1,
+                            info: arrow_info() as usize as u64,
+                        }]
+                    );
+                    let fields = (object as *const u8)
+                        .add(std::mem::size_of::<crate::object::ObjectHeader>())
+                        as *const u64;
+                    assert_eq!(f64::from_bits(*fields), expected);
+                    let cell = JSValue::from_bits(*fields.add(1)).as_pointer::<ClosureHeader>();
+                    assert_eq!(capture_body(cell, closure::JsThis::UNDEFINED), expected);
+                    cells.push(cell as usize);
+                });
             }
             assert_ne!(cells[0], cells[1], "same body keeps distinct captures");
             let mut contradiction = objects.remove(0);

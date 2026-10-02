@@ -1,4 +1,7 @@
 //! Positive cache reuse and refusals for ordered ConstFn key-add publication.
+//! Scoped reads/capture stores are leaf operations. The property setter roots
+//! receiver, key, and value before its allocating tail; no borrowed pointer is
+//! used after that call. Movement observations retain only old integer addresses.
 use super::*;
 use crate::{closure, gc, object, value};
 
@@ -30,15 +33,19 @@ fn cached_constfn_key_add_uses_current_factory_captures() {
         let key = scope.root_raw_mut_ptr(key("cached_cf_factory_method"));
         let a = scope.root_raw_mut_ptr(closure::js_closure_alloc(info(), 1));
         let b = scope.root_raw_mut_ptr(closure::js_closure_alloc(info(), 1));
-        closure::js_closure_set_capture_f64(a.get_raw_mut_ptr(), 0, 31.0);
-        closure::js_closure_set_capture_f64(b.get_raw_mut_ptr(), 0, 47.0);
+        a.with_mut_ptr(|a_ptr| closure::js_closure_set_capture_f64(a_ptr, 0, 31.0));
+        b.with_mut_ptr(|b_ptr| closure::js_closure_set_capture_f64(b_ptr, 0, 47.0));
         let first = scope.root_raw_mut_ptr(object::js_object_alloc(0, 4));
-        object::js_object_set_field_by_name(
-            first.get_raw_mut_ptr(),
-            key.get_raw_mut_ptr(),
-            f64::from_bits(bits(a.get_raw_mut_ptr())),
-        );
-        let target = shapes::object_shape_stamp(first.get_raw_mut_ptr());
+        first.with_mut_ptr(|first_ptr| {
+            key.with_mut_ptr(|key_ptr| {
+                object::js_object_set_field_by_name(
+                    first_ptr,
+                    key_ptr,
+                    f64::from_bits(a.with_mut_ptr(|a_ptr| bits(a_ptr))),
+                )
+            })
+        });
+        let target = first.with_mut_ptr(|first_ptr| shapes::object_shape_stamp(first_ptr));
         assert_eq!(
             shapes::shape_descriptor_by_id(target)
                 .unwrap()
@@ -46,28 +53,43 @@ fn cached_constfn_key_add_uses_current_factory_captures() {
             1
         );
         let second = scope.root_raw_mut_ptr(object::js_object_alloc(0, 4));
-        shapes::test_watch_cached_transition_stamps(
-            second.get_raw_mut_ptr::<ObjectHeader>() as usize
-        );
-        object::js_object_set_field_by_name(
-            second.get_raw_mut_ptr(),
-            key.get_raw_mut_ptr(),
-            f64::from_bits(bits(b.get_raw_mut_ptr())),
-        );
+        second.with_mut_ptr::<ObjectHeader, _>(|second_ptr| {
+            shapes::test_watch_cached_transition_stamps(second_ptr as usize)
+        });
+        second.with_mut_ptr(|second_ptr| {
+            key.with_mut_ptr(|key_ptr| {
+                object::js_object_set_field_by_name(
+                    second_ptr,
+                    key_ptr,
+                    f64::from_bits(b.with_mut_ptr(|b_ptr| bits(b_ptr))),
+                )
+            })
+        });
         assert_eq!(
             shapes::test_cached_transition_stamps(),
             1,
             "must install cached Any intermediate"
         );
         shapes::test_reset_cached_transition_stamps();
-        assert_eq!(shapes::object_shape_stamp(second.get_raw_mut_ptr()), target);
-        assert_eq!(slot(second.get_raw_mut_ptr()), b.get_raw_mut_ptr());
         assert_eq!(
-            capture_body(slot(first.get_raw_mut_ptr()), closure::JsThis::UNDEFINED),
+            second.with_mut_ptr(|second_ptr| shapes::object_shape_stamp(second_ptr)),
+            target
+        );
+        b.with_mut_ptr(|b_ptr| {
+            assert_eq!(second.with_mut_ptr(|second_ptr| slot(second_ptr)), b_ptr)
+        });
+        assert_eq!(
+            capture_body(
+                first.with_mut_ptr(|first_ptr| slot(first_ptr)),
+                closure::JsThis::UNDEFINED
+            ),
             31.0
         );
         assert_eq!(
-            capture_body(slot(second.get_raw_mut_ptr()), closure::JsThis::UNDEFINED),
+            capture_body(
+                second.with_mut_ptr(|second_ptr| slot(second_ptr)),
+                closure::JsThis::UNDEFINED
+            ),
             47.0
         );
     }
@@ -82,16 +104,24 @@ fn cached_constfn_key_add_refuses_wrong_body_unsafe_this_and_deprecation() {
         let key = scope.root_raw_mut_ptr(key("cached_cf_refused_method"));
         let closure = scope.root_raw_mut_ptr(closure::js_closure_alloc(info(), 1));
         let first = scope.root_raw_mut_ptr(object::js_object_alloc(0, 4));
-        let pred = shapes::object_shape_stamp(first.get_raw_mut_ptr());
-        object::js_object_set_field_by_name(
-            first.get_raw_mut_ptr(),
-            key.get_raw_mut_ptr(),
-            f64::from_bits(bits(closure.get_raw_mut_ptr())),
-        );
-        let hit =
-            object::transition_cache_lookup(pred, key.get_raw_mut_ptr()).expect("cached body edge");
+        let pred = first.with_mut_ptr(|first_ptr| shapes::object_shape_stamp(first_ptr));
+        first.with_mut_ptr(|first_ptr| {
+            key.with_mut_ptr(|key_ptr| {
+                object::js_object_set_field_by_name(
+                    first_ptr,
+                    key_ptr,
+                    f64::from_bits(closure.with_mut_ptr(|closure_ptr| bits(closure_ptr))),
+                )
+            })
+        });
+        let hit = key
+            .with_mut_ptr(|key_ptr| object::transition_cache_lookup(pred, key_ptr))
+            .expect("cached body edge");
         let receiver = scope.root_raw_mut_ptr(object::js_object_alloc(0, 4));
-        assert_eq!(shapes::object_shape_stamp(receiver.get_raw_mut_ptr()), pred);
+        assert_eq!(
+            receiver.with_mut_ptr(|receiver_ptr| shapes::object_shape_stamp(receiver_ptr)),
+            pred
+        );
         let wrong = scope.root_raw_mut_ptr(closure::js_closure_alloc(
             crate::fn_info!(other_body, 0; with_flags(crate::codegen_abi::FN_PERMANENT_IMAGE)),
             0,
@@ -105,32 +135,45 @@ fn cached_constfn_key_add_refuses_wrong_body_unsafe_this_and_deprecation() {
             1,
         ));
         for value in [
-            bits(wrong.get_raw_mut_ptr()),
-            bits(unsafe_this.get_raw_mut_ptr()),
-            bits(unloadable.get_raw_mut_ptr()),
+            wrong.with_mut_ptr(|wrong_ptr| bits(wrong_ptr)),
+            unsafe_this.with_mut_ptr(|unsafe_this_ptr| bits(unsafe_this_ptr)),
+            unloadable.with_mut_ptr(|unloadable_ptr| bits(unloadable_ptr)),
             9.0f64.to_bits(),
             value::TAG_UNDEFINED,
         ] {
-            assert!(admit_or_store(receiver.get_raw_mut_ptr(), pred, hit, value).is_none());
-            assert_eq!(shapes::object_shape_stamp(receiver.get_raw_mut_ptr()), pred);
+            assert!(receiver
+                .with_mut_ptr(|receiver_ptr| admit_or_store(receiver_ptr, pred, hit, value))
+                .is_none());
             assert_eq!(
-                object::js_object_get_field(receiver.get_raw_mut_ptr(), 0).bits(),
+                receiver.with_mut_ptr(|receiver_ptr| shapes::object_shape_stamp(receiver_ptr)),
+                pred
+            );
+            assert_eq!(
+                receiver
+                    .with_mut_ptr(|receiver_ptr| object::js_object_get_field(receiver_ptr, 0))
+                    .bits(),
                 value::TAG_UNDEFINED
             );
         }
         assert!(shapes::shape_record_by_id(hit.2)
             .unwrap()
             .deprecate_special_to_any(hit.1));
-        assert!(admit_or_store(
-            receiver.get_raw_mut_ptr(),
-            pred,
-            hit,
-            bits(closure.get_raw_mut_ptr())
-        )
-        .is_none());
-        assert_eq!(shapes::object_shape_stamp(receiver.get_raw_mut_ptr()), pred);
+        assert!(receiver
+            .with_mut_ptr(|receiver_ptr| admit_or_store(
+                receiver_ptr,
+                pred,
+                hit,
+                closure.with_mut_ptr(|closure_ptr| bits(closure_ptr))
+            ))
+            .is_none());
         assert_eq!(
-            object::js_object_get_field(receiver.get_raw_mut_ptr(), 0).bits(),
+            receiver.with_mut_ptr(|receiver_ptr| shapes::object_shape_stamp(receiver_ptr)),
+            pred
+        );
+        assert_eq!(
+            receiver
+                .with_mut_ptr(|receiver_ptr| object::js_object_get_field(receiver_ptr, 0))
+                .bits(),
             value::TAG_UNDEFINED
         );
     }
@@ -170,83 +213,105 @@ fn moving_roundtrip(method_key: &str, expected_cached_stamps: u64) {
         let key = scope.root_raw_mut_ptr(key(method_key));
         let a = scope.root_raw_mut_ptr(closure::js_closure_alloc(info(), 1));
         let b = scope.root_raw_mut_ptr(closure::js_closure_alloc(info(), 1));
-        closure::js_closure_set_capture_f64(a.get_raw_mut_ptr(), 0, 17.0);
-        closure::js_closure_set_capture_f64(b.get_raw_mut_ptr(), 0, 29.0);
+        a.with_mut_ptr(|a_ptr| closure::js_closure_set_capture_f64(a_ptr, 0, 17.0));
+        b.with_mut_ptr(|b_ptr| closure::js_closure_set_capture_f64(b_ptr, 0, 29.0));
         let first = scope.root_raw_mut_ptr(object::js_object_alloc(0, 4));
-        object::js_object_set_field_by_name(
-            first.get_raw_mut_ptr(),
-            key.get_raw_mut_ptr(),
-            f64::from_bits(bits(a.get_raw_mut_ptr())),
-        );
-        let target = shapes::object_shape_stamp(first.get_raw_mut_ptr());
+        first.with_mut_ptr(|first_ptr| {
+            key.with_mut_ptr(|key_ptr| {
+                object::js_object_set_field_by_name(
+                    first_ptr,
+                    key_ptr,
+                    f64::from_bits(a.with_mut_ptr(|a_ptr| bits(a_ptr))),
+                )
+            })
+        });
+        let target = first.with_mut_ptr(|first_ptr| shapes::object_shape_stamp(first_ptr));
         let second = scope.root_raw_mut_ptr(object::js_object_alloc(0, 4));
-        let original_receiver = second.get_raw_mut_ptr::<ObjectHeader>() as usize;
-        let original_closure = b.get_raw_mut_ptr::<closure::ClosureHeader>() as usize;
+        let original_receiver = second.with_mut_ptr::<ObjectHeader, _>(|obj| obj as usize);
+        let original_closure = b.with_mut_ptr::<closure::ClosureHeader, _>(|c| c as usize);
         assert!(crate::arena::pointer_in_nursery(original_receiver));
         assert!(crate::arena::pointer_in_nursery(original_closure));
-        gc::gc_collect_minor();
+        // Only scalar old-address observations cross collection. Both handles
+        // reload after the same real copying minor, before any dereference.
+        let ((_, moved_closure), moved_receiver) = second.across_mut::<ObjectHeader, _>(|| {
+            b.across_mut::<closure::ClosureHeader, _>(|| gc::gc_collect_minor())
+        });
         assert_ne!(
-            second.get_raw_mut_ptr::<ObjectHeader>() as usize,
-            original_receiver,
+            moved_receiver as usize, original_receiver,
             "pre-store receiver must move"
         );
         assert_ne!(
-            b.get_raw_mut_ptr::<closure::ClosureHeader>() as usize,
-            original_closure,
+            moved_closure as usize, original_closure,
             "incoming closure root must refresh"
         );
         assert_eq!(
-            field_rep_store::object_slot_rep(second.get_raw_mut_ptr(), 0),
+            second.with_mut_ptr(|second_ptr| field_rep_store::object_slot_rep(second_ptr, 0)),
             field_rep::REP_ANY
         );
         assert_eq!(
-            object::js_object_get_field(second.get_raw_mut_ptr(), 0).bits(),
+            second
+                .with_mut_ptr(|second_ptr| object::js_object_get_field(second_ptr, 0))
+                .bits(),
             value::TAG_UNDEFINED
         );
-        shapes::test_watch_cached_transition_stamps(
-            second.get_raw_mut_ptr::<ObjectHeader>() as usize
-        );
-        object::js_object_set_field_by_name(
-            second.get_raw_mut_ptr(),
-            key.get_raw_mut_ptr(),
-            f64::from_bits(bits(b.get_raw_mut_ptr())),
-        );
+        second.with_mut_ptr::<ObjectHeader, _>(|second_ptr| {
+            shapes::test_watch_cached_transition_stamps(second_ptr as usize)
+        });
+        second.with_mut_ptr(|second_ptr| {
+            key.with_mut_ptr(|key_ptr| {
+                object::js_object_set_field_by_name(
+                    second_ptr,
+                    key_ptr,
+                    f64::from_bits(b.with_mut_ptr(|b_ptr| bits(b_ptr))),
+                )
+            })
+        });
         assert_eq!(
             shapes::test_cached_transition_stamps(),
             expected_cached_stamps,
             "content keys reuse the cache; relocated pointer keys safely miss"
         );
         shapes::test_reset_cached_transition_stamps();
-        let before_receiver = second.get_raw_mut_ptr::<ObjectHeader>() as usize;
-        let before_closure = slot(second.get_raw_mut_ptr()) as usize;
+        let before_receiver = second.with_mut_ptr::<ObjectHeader, _>(|obj| obj as usize);
+        let before_closure = second.with_mut_ptr(|second_ptr| slot(second_ptr)) as usize;
+        second.with_mut_ptr(|second_ptr| {
+            field_rep_store::assert_field_rep_lanes(
+                second_ptr,
+                shapes::object_shape_record(second_ptr),
+                1,
+            )
+        });
+        let (_, moved_receiver) = second.across_mut::<ObjectHeader, _>(|| gc::gc_collect_minor());
         field_rep_store::assert_field_rep_lanes(
-            second.get_raw_mut_ptr(),
-            shapes::object_shape_record(second.get_raw_mut_ptr()),
-            1,
-        );
-        gc::gc_collect_minor();
-        field_rep_store::assert_field_rep_lanes(
-            second.get_raw_mut_ptr(),
-            shapes::object_shape_record(second.get_raw_mut_ptr()),
+            moved_receiver,
+            shapes::object_shape_record(moved_receiver),
             1,
         );
         assert_ne!(
-            second.get_raw_mut_ptr::<ObjectHeader>() as usize,
-            before_receiver,
+            moved_receiver as usize, before_receiver,
             "post-store receiver must move"
         );
         assert_ne!(
-            slot(second.get_raw_mut_ptr()) as usize,
+            slot(moved_receiver) as usize,
             before_closure,
             "SPECIAL current closure slot must rewrite"
         );
-        assert_eq!(shapes::object_shape_stamp(second.get_raw_mut_ptr()), target);
         assert_eq!(
-            capture_body(slot(first.get_raw_mut_ptr()), closure::JsThis::UNDEFINED),
+            second.with_mut_ptr(|second_ptr| shapes::object_shape_stamp(second_ptr)),
+            target
+        );
+        assert_eq!(
+            capture_body(
+                first.with_mut_ptr(|first_ptr| slot(first_ptr)),
+                closure::JsThis::UNDEFINED
+            ),
             17.0
         );
         assert_eq!(
-            capture_body(slot(second.get_raw_mut_ptr()), closure::JsThis::UNDEFINED),
+            capture_body(
+                second.with_mut_ptr(|second_ptr| slot(second_ptr)),
+                closure::JsThis::UNDEFINED
+            ),
             29.0
         );
     }
@@ -262,20 +327,24 @@ fn cached_constfn_key_add_preserves_preceding_f64_lane() {
         let method_key = scope.root_raw_mut_ptr(key("cfmethod"));
         let a = scope.root_raw_mut_ptr(closure::js_closure_alloc(info(), 1));
         let b = scope.root_raw_mut_ptr(closure::js_closure_alloc(info(), 1));
-        closure::js_closure_set_capture_f64(a.get_raw_mut_ptr(), 0, 41.0);
-        closure::js_closure_set_capture_f64(b.get_raw_mut_ptr(), 0, 43.0);
+        a.with_mut_ptr(|a_ptr| closure::js_closure_set_capture_f64(a_ptr, 0, 41.0));
+        b.with_mut_ptr(|b_ptr| closure::js_closure_set_capture_f64(b_ptr, 0, 43.0));
         let first = scope.root_raw_mut_ptr(object::js_object_alloc(0, 4));
-        object::js_object_set_field_by_name(
-            first.get_raw_mut_ptr(),
-            number_key.get_raw_mut_ptr(),
-            3.0,
-        );
-        object::js_object_set_field_by_name(
-            first.get_raw_mut_ptr(),
-            method_key.get_raw_mut_ptr(),
-            f64::from_bits(bits(a.get_raw_mut_ptr())),
-        );
-        let target = shapes::object_shape_stamp(first.get_raw_mut_ptr());
+        first.with_mut_ptr(|first_ptr| {
+            number_key.with_mut_ptr(|number_key_ptr| {
+                object::js_object_set_field_by_name(first_ptr, number_key_ptr, 3.0)
+            })
+        });
+        first.with_mut_ptr(|first_ptr| {
+            method_key.with_mut_ptr(|method_key_ptr| {
+                object::js_object_set_field_by_name(
+                    first_ptr,
+                    method_key_ptr,
+                    f64::from_bits(a.with_mut_ptr(|a_ptr| bits(a_ptr))),
+                )
+            })
+        });
+        let target = first.with_mut_ptr(|first_ptr| shapes::object_shape_stamp(first_ptr));
         assert_eq!(
             shapes::shape_descriptor_by_id(target)
                 .unwrap()
@@ -283,33 +352,43 @@ fn cached_constfn_key_add_preserves_preceding_f64_lane() {
             2
         );
         let second = scope.root_raw_mut_ptr(object::js_object_alloc(0, 4));
-        object::js_object_set_field_by_name(
-            second.get_raw_mut_ptr(),
-            number_key.get_raw_mut_ptr(),
-            7.0,
-        );
-        shapes::test_watch_cached_transition_stamps(
-            second.get_raw_mut_ptr::<ObjectHeader>() as usize
-        );
-        object::js_object_set_field_by_name(
-            second.get_raw_mut_ptr(),
-            method_key.get_raw_mut_ptr(),
-            f64::from_bits(bits(b.get_raw_mut_ptr())),
-        );
+        second.with_mut_ptr(|second_ptr| {
+            number_key.with_mut_ptr(|number_key_ptr| {
+                object::js_object_set_field_by_name(second_ptr, number_key_ptr, 7.0)
+            })
+        });
+        second.with_mut_ptr::<ObjectHeader, _>(|second_ptr| {
+            shapes::test_watch_cached_transition_stamps(second_ptr as usize)
+        });
+        second.with_mut_ptr(|second_ptr| {
+            method_key.with_mut_ptr(|method_key_ptr| {
+                object::js_object_set_field_by_name(
+                    second_ptr,
+                    method_key_ptr,
+                    f64::from_bits(b.with_mut_ptr(|b_ptr| bits(b_ptr))),
+                )
+            })
+        });
         assert_eq!(shapes::test_cached_transition_stamps(), 1);
         shapes::test_reset_cached_transition_stamps();
-        assert_eq!(shapes::object_shape_stamp(second.get_raw_mut_ptr()), target);
         assert_eq!(
-            field_rep_store::object_slot_rep(second.get_raw_mut_ptr(), 0),
+            second.with_mut_ptr(|second_ptr| shapes::object_shape_stamp(second_ptr)),
+            target
+        );
+        assert_eq!(
+            second.with_mut_ptr(|second_ptr| field_rep_store::object_slot_rep(second_ptr, 0)),
             field_rep::REP_F64
         );
         assert_eq!(
-            object::js_object_get_field(second.get_raw_mut_ptr(), 0).bits(),
+            second
+                .with_mut_ptr(|second_ptr| object::js_object_get_field(second_ptr, 0))
+                .bits(),
             7.0f64.to_bits()
         );
-        let current = object::js_object_get_field(second.get_raw_mut_ptr(), 1)
+        let current = second
+            .with_mut_ptr(|second_ptr| object::js_object_get_field(second_ptr, 1))
             .as_pointer::<closure::ClosureHeader>();
-        assert_eq!(current, b.get_raw_mut_ptr());
+        b.with_mut_ptr(|b_ptr| assert_eq!(current, b_ptr));
         assert_eq!(capture_body(current, closure::JsThis::UNDEFINED), 43.0);
     }
 }

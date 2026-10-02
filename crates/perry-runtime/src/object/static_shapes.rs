@@ -239,18 +239,18 @@ pub(crate) fn finalize_constfn_static(
     let scope = crate::gc::RuntimeHandleScope::new();
     let root = scope.root_raw_mut_ptr(object as usize as *mut super::ObjectHeader);
     let Some(infos) = parse_constfn_static_entries(entries, entry_count) else {
-        return root.get_raw_mut_ptr::<super::ObjectHeader>() as usize as u64;
+        return object;
     };
     if packed.is_null() || packed_len == 0 || count == 0 || live < count {
-        return root.get_raw_mut_ptr::<super::ObjectHeader>() as usize as u64;
+        return object;
     }
     // SAFETY: compiler-owned bytes for this call, containing exact key names.
     let packed = unsafe { std::slice::from_raw_parts(packed, packed_len as usize) };
-    let obj = root.get_raw_mut_ptr::<super::ObjectHeader>();
-    let Some(current) = (unsafe {
+    let Some(current) = root.with_mut_ptr::<super::ObjectHeader, _>(|obj| unsafe {
         finalized_constfn_facts(obj, packed, count, live, class_id, rep, &infos, rebuilt)
     }) else {
-        return obj as usize as u64;
+        // Validation only reads inline data and Rust-owned metadata; it cannot collect.
+        return object;
     };
     // This mint does not canonicalize/allocate GC keys or enter JS. Its
     // summary/hash/slab path allocates only Rust-owned Box/Vec storage and
@@ -258,16 +258,17 @@ pub(crate) fn finalize_constfn_static(
     // is therefore consumed without collection; the rooted object owns its
     // keys throughout. A collecting interner must root/reload the argument
     // inside the mint, not rely on the validation below.
-    let minted = shapes::final_shape_ensure_constfn(
-        current.keys as usize as *const ArrayHeader,
-        count,
-        live,
-        class_id,
-        rep,
-        &infos,
-        Some(requested).filter(|&id| id != 0),
-    );
-    let obj = root.get_raw_mut_ptr::<super::ObjectHeader>();
+    let (minted, obj) = root.across_mut::<super::ObjectHeader, _>(|| {
+        shapes::final_shape_ensure_constfn(
+            current.keys as usize as *const ArrayHeader,
+            count,
+            live,
+            class_id,
+            rep,
+            &infos,
+            Some(requested).filter(|&id| id != 0),
+        )
+    });
     // Reload and revalidate after the mint; no closure address spans it.
     if let Some(current) =
         unsafe { finalized_constfn_facts(obj, packed, count, live, class_id, rep, &infos, rebuilt) }

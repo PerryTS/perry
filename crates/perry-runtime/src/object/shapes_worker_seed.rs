@@ -197,21 +197,25 @@ mod tests {
                 );
                 let object = handles.root_raw_mut_ptr(object);
                 assert_eq!(
-                    unsafe { crate::object::shapes::object_shape_stamp(object.get_raw_mut_ptr()) },
+                    unsafe {
+                        object.with_mut_ptr(|object_ptr| {
+                            crate::object::shapes::object_shape_stamp(object_ptr)
+                        })
+                    },
                     id,
                     "the first outlined birth must retain the seeded id"
                 );
-                crate::object::js_object_set_field_by_name(
-                    object.get_raw_mut_ptr(),
-                    key.get_raw_const_ptr(),
-                    4.0,
-                );
+                object.with_mut_ptr(|object_ptr| {
+                    key.with_const_ptr(|key_ptr| {
+                        crate::object::js_object_set_field_by_name(object_ptr, key_ptr, 4.0)
+                    })
+                });
                 assert_eq!(
-                    crate::object::js_object_get_field_by_name(
-                        object.get_raw_const_ptr(),
-                        key.get_raw_const_ptr(),
-                    )
-                    .as_number(),
+                    object
+                        .with_const_ptr(|object_ptr| key.with_const_ptr(|key_ptr| {
+                            crate::object::js_object_get_field_by_name(object_ptr, key_ptr)
+                        }))
+                        .as_number(),
                     4.0
                 );
                 assert_eq!(shape_descriptor_by_id(id).expect("birth shape").rep, rep);
