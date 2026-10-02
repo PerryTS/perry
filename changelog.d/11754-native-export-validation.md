@@ -1,0 +1,1 @@
+Allow manifest-backed exact and ergonomic native-library exports through early named-import validation so ambient TypeScript declarations reach the FFI router. Preserve missing-export errors, package matching, real wrapper precedence and ambiguity handling.
