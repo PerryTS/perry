@@ -1149,6 +1149,22 @@ pub fn run_with_parse_cache(
         found
     });
     perry_codegen::set_program_has_worker(program_has_worker);
+    // Immutable module-global leaves (perry-codegen codegen/global_transfer.rs)
+    // must be published by producer modules that never launch an agent
+    // themselves, so the decision is whole-program, like the Worker flag.
+    let program_has_thread_agents = ctx.native_modules.values().any(|module| {
+        let mut found = false;
+        perry_hir::for_each_module_expr(module, &mut |expr| {
+            if matches!(expr, perry_hir::Expr::NativeMethodCall { module, method, .. }
+                if module == "perry/thread"
+                    && matches!(method.as_str(), "spawn" | "parallelMap" | "parallelFilter"))
+            {
+                found = true;
+            }
+        });
+        found
+    });
+    perry_codegen::set_program_has_thread_agents(program_has_thread_agents);
     // #11394: every method name the program writes onto a builtin prototype;
     // codegen routes those calls through a lookup-first runtime entry.
     perry_codegen::set_program_patched_proto_methods(perry_hir::patched_prototype_methods(

@@ -3714,6 +3714,8 @@ js_text_encoder_new	i64
 js_text_encoder_stream_new	f64	
 js_text_encoding_stream_new	f64	
 js_this_coerce_sloppy	f64	f64
+js_thread_global_materialize	f64	i64,i64,i64
+js_thread_global_publish	void	i64,i64,i64
 js_thread_has_pending	i32s	
 js_thread_parallel_filter	f64	f64,f64
 js_thread_parallel_map	f64	f64,f64

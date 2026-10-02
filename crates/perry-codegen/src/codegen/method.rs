@@ -556,6 +556,7 @@ pub(super) fn compile_method(
         proven_local_types: guarded_param_proofs,
         guarded_discriminant_aliases: std::collections::HashMap::new(),
         module_global_proven_types: &cross_module.module_global_proven_types,
+        module_global_transfers: &cross_module.module_global_transfers,
         reassigned_locals,
         const_string_locals: std::collections::HashMap::new(),
         const_number_locals: std::collections::HashMap::new(),

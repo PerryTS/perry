@@ -873,6 +873,10 @@ pub(crate) struct CrossModuleCtx {
     /// invalidated by any module-wide write. Used by the worker-thread safety
     /// check; declared module types are intentionally excluded (#7846).
     pub module_global_proven_types: std::collections::HashMap<u32, perry_hir::types::Type>,
+    /// Immutable String/BigInt candidates read through per-agent replicas
+    /// (`codegen/global_transfer.rs`). Empty unless perry/thread agents exist.
+    pub module_global_transfers:
+        std::collections::HashMap<u32, super::global_transfer::GlobalTransfer>,
     /// FuncIds of locally-defined plain functions whose body reads the
     /// dynamic `this` binding (directly or via a this-capturing arrow).
     /// Bare `f()` call sites to these must reset the runtime IMPLICIT_THIS

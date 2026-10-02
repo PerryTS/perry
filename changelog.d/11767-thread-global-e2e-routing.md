@@ -1,0 +1,1 @@
+Register the immutable thread-global codegen IR suite in the CI source-to-suite map. This removes the unclassified-suite planner failure introduced when the suite landed and runs its three tests on codegen source changes, preserving mapped-suite timeouts and coverage independent of the named-suite cap.
