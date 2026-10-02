@@ -356,15 +356,10 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python3 tests/test_public_baseline.py
 
-      # Temporarily paused at maintainer request while compiler changes land.
-      # Re-enable after a complete quiet-host public baseline refresh.
-      - name: Public benchmark evidence freshness (paused)
-        if: ${{ false }}
-        run: |
-          # README embedded table is optional since #6736 (marketing landing
-          # page); this wrapper still enforces artifact freshness + RESULTS.md
-          # drift. Kept out of public_baseline.py to preserve harness_fingerprint.
-          python3 benchmarks/ci_public_baseline_check.py
+      # Public benchmark evidence freshness is temporarily paused at
+      # maintainer request while compiler changes land. After a complete
+      # quiet-host baseline refresh, restore a step that runs:
+      # python3 benchmarks/ci_public_baseline_check.py
 
       # File-size gate (v0.5.1019): fails the PR if any tracked source
       # file exceeds the LOC threshold (5000 initially; eventual target
