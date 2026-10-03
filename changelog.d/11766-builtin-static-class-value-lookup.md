@@ -1,0 +1,1 @@
+Avoid a native assertion failure when builtin static calls such as `Array.from` pass through compiled-class property lookup. Read-only static data, accessor and constructor-prototype lookups now treat builtin and synthetic class IDs as misses rather than minting compiled-class function objects for them. The class-value ID assertion remains intact.

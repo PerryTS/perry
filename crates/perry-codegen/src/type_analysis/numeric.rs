@@ -351,6 +351,9 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         Expr::PropertyGet {
             object, property, ..
         } => {
+            if crate::stmt::region_loop::is_f64_read(ctx, e) {
+                return true;
+            }
             if matches!(
                 crate::lower_call::guarded_path_type(ctx, e),
                 Some(HirType::Number | HirType::Int32)
@@ -699,6 +702,9 @@ pub(crate) fn expr_produces_canonical_raw_f64(ctx: &FnCtx<'_>, e: &Expr) -> bool
         Expr::PropertyGet {
             object, property, ..
         } => {
+            if crate::stmt::region_loop::is_f64_read(ctx, e) {
+                return true;
+            }
             let Some(fact) = ctx.ptr_shape_receiver_fact(object.as_ref()) else {
                 return false;
             };

@@ -1968,6 +1968,10 @@ mod numeric;
 use numeric::{
     collect_numeric_by_construction_locals, prove_group_numeric_fields, prove_numeric_fields,
 };
+pub(crate) use numeric::{
+    collect_numeric_by_construction_locals_in_region, region_number_flow_reads,
+    region_store_value_is_number, RegionNumberAssumptions,
+};
 // #8105: the same locals fixpoint, consumed outside the `Ptr<Shape>` pass by
 // `collectors/number_by_construction.rs`.
 pub(in crate::collectors) use numeric::collect_numeric_by_construction_locals as collect_numeric_by_construction_locals_for_type_analysis;
