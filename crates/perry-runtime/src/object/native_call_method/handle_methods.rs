@@ -947,48 +947,46 @@ pub(super) unsafe fn dispatch_handle(
                 if (keys_ptr as u64) >> 48 == 0 && keys_ptr >= 0x10000 {
                     let key_count = keys_view.count() as usize;
                     if key_count <= 65536 {
-                        let method_bytes = method_name.as_bytes();
-                        for i in 0..key_count {
-                            let key_val = crate::array::js_array_get(keys, i as u32);
-                            if crate::string::js_string_key_matches_bytes(key_val, method_bytes) {
-                                let field_val = js_object_get_field(obj as *mut _, i as u32);
-                                // Always try the field as a callable —
-                                // `js_native_call_value` validates
-                                // CLOSURE_MAGIC internally and safely
-                                // returns undefined for non-callables.
-                                // The previous `is_pointer()` gate bailed
-                                // on raw-pointer-bit values (e.g. the
-                                // Promise executor's resolve/reject
-                                // closures — stored as
-                                // `transmute(ptr → f64)` without a
-                                // POINTER_TAG). That turned
-                                // `box.resolve(val)` into a no-op that
-                                // returned the raw pointer bits instead
-                                // of invoking `js_promise_resolve`, so
-                                // the outer `await` hung forever
-                                // (issue #87).
-                                //
-                                // Issue #519: bind `this` to the receiver
-                                // for the call. Non-arrow function bodies
-                                // read `this` from their `this` argument
-                                // (codegen Expr::This fallback when
-                                // this_stack is empty); without passing
-                                // the receiver, the body sees `this = undefined` and any
-                                // `this.foo()` call falls through to the
-                                // issue #510 catch-all "(undefined).foo
-                                // is not a function" TypeError. Hono's
-                                // RegExpRouter.match (imported function
-                                // assigned as a class field) hit this.
-                                let result = crate::closure::native_call_value_this(
-                                    f64::from_bits(field_val.bits()),
-                                    crate::closure::JsThis::from_f64(
-                                        object_handle.get_nanbox_f64(),
-                                    ),
-                                    args_ptr,
-                                    args_len,
-                                );
-                                return Some(result);
-                            }
+                        if let Some(slot) = super::own_slot::find_method_slot(
+                            keys,
+                            key_count as u32,
+                            method_name.as_bytes(),
+                        ) {
+                            let field_val = js_object_get_field(obj as *mut _, slot);
+                            // Always try the field as a callable —
+                            // `js_native_call_value` validates
+                            // CLOSURE_MAGIC internally and safely
+                            // returns undefined for non-callables.
+                            // The previous `is_pointer()` gate bailed
+                            // on raw-pointer-bit values (e.g. the
+                            // Promise executor's resolve/reject
+                            // closures — stored as
+                            // `transmute(ptr → f64)` without a
+                            // POINTER_TAG). That turned
+                            // `box.resolve(val)` into a no-op that
+                            // returned the raw pointer bits instead
+                            // of invoking `js_promise_resolve`, so
+                            // the outer `await` hung forever
+                            // (issue #87).
+                            //
+                            // Issue #519: bind `this` to the receiver
+                            // for the call. Non-arrow function bodies
+                            // read `this` from their `this` argument
+                            // (codegen Expr::This fallback when
+                            // this_stack is empty); without passing
+                            // the receiver, the body sees `this = undefined` and any
+                            // `this.foo()` call falls through to the
+                            // issue #510 catch-all "(undefined).foo
+                            // is not a function" TypeError. Hono's
+                            // RegExpRouter.match (imported function
+                            // assigned as a class field) hit this.
+                            let result = crate::closure::native_call_value_this(
+                                f64::from_bits(field_val.bits()),
+                                crate::closure::JsThis::from_f64(object_handle.get_nanbox_f64()),
+                                args_ptr,
+                                args_len,
+                            );
+                            return Some(result);
                         }
                     }
                 }

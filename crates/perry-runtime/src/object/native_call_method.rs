@@ -17,6 +17,7 @@ mod function_shape;
 mod handle_methods;
 mod namespace_override;
 mod object_proto;
+mod own_slot;
 mod patched_proto;
 mod primitive_methods;
 mod proto_dispatch;
@@ -92,8 +93,8 @@ pub(super) use typed_array::dispatch_typed_array_method;
 /// * `meta` is null, so the object carries no `Object.setPrototypeOf` override,
 ///   no per-key descriptor state, and no exotic-kind tag — this is *stricter*
 ///   than the tower, which tolerates a meta record and resolves through it;
-/// * no OWN key equals the method name, using the same byte comparison the
-///   tower's field scan uses (an own field shadows the vtable);
+/// * no OWN key equals the method name, through the shared content-validated
+///   key index (an own field shadows the vtable);
 /// * no static prototype is recorded for the address, so the tower's
 ///   `resolve_inherited_field` probe would have found nothing to shadow with.
 ///
@@ -121,7 +122,7 @@ pub(super) use typed_array::dispatch_typed_array_method;
 ///   state, no exotic-kind tag. STRICTER than the tower, which resolves
 ///   through a meta record;
 /// * no OWN key equal to the method name (an own field shadows the vtable),
-///   using the tower's own byte comparison;
+///   using the shared content-validated key index;
 /// * no recorded static prototype for the address, so the tower's
 ///   `resolve_inherited_field` probe had nothing to shadow with.
 #[inline]
@@ -139,7 +140,7 @@ unsafe fn class_vtable_fast_guard(object: f64, method_bytes: &[u8]) -> Option<(u
 /// fresh-evaluation private brand. Overflow (`spill`) storage holds VALUES of
 /// keys the shape's key list already names, and descriptor state lives with
 /// the keys (an accessor or attribute for `method_bytes` is a key of that
-/// name), so the own-key scan below still answers. An instance with more
+/// name), so the indexed own-key lookup below still answers. An instance with more
 /// fields than its inline slots (an `EventEmitter` subclass, a wide
 /// constructor) carries exactly that. Only the learned site words use this
 /// form: they are facts of one ShapeId, which every descriptor install
@@ -202,7 +203,7 @@ unsafe fn class_vtable_receiver_guard<const META_STORAGE_OK: bool>(
         return None;
     }
 
-    // Own fields shadow vtable methods — same scan, same comparison, as the
+    // Own fields shadow vtable methods — the same indexed lookup as the
     // tower's field lookup. ShapeId supplies both the moving root and its exact
     // logical length; the ObjectHeader mirrors are compatibility scratch only.
     let descriptor = crate::object::shapes::object_shape_descriptor(obj)?;
@@ -226,21 +227,10 @@ unsafe fn class_vtable_receiver_guard<const META_STORAGE_OK: bool>(
         if key_count > 65536 {
             return None;
         }
-        // #10724: read the RAW dense slots, not `js_array_get` per key. That
-        // accessor re-runs the whole JS-facing element gauntlet (lazy-array
-        // strip, Map/Set/typed-array/subclass arms, `clean_arr_ptr`, descriptor
-        // gate, hole → prototype chain) on every key of every guarded call, and
-        // this loop was 75% of all `js_array_get_f64` calls on a natively
-        // compiled `tsc --noEmit` (26.4 M reads). `keys` came straight out of the
-        // live `descriptor` above with no allocation since, which is exactly the
-        // `_resolved` accessor's contract. A keys array is dense and holds only
-        // strings, so a hole or non-string slot simply fails the byte compare.
-        let (slots, slot_len) = crate::object::keys_array_dense_slots_resolved(keys);
-        for i in 0..key_count.min(slot_len) {
-            let key_val = crate::JSValue::from_bits((*slots.add(i)).to_bits());
-            if crate::string::js_string_key_matches_bytes(key_val, method_bytes) {
-                return None;
-            }
+        // #10502: the shared shape index proves presence AND absence after
+        // its first build. Do not re-scan every field on a vtable cache hit.
+        if own_slot::find_method_slot(keys, key_count as u32, method_bytes).is_some() {
+            return None;
         }
     }
 
@@ -2267,46 +2257,38 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
             if key_count > 65536 {
                 return crate::object::null_stub_value();
             }
-            // Compare method_name bytes directly against each stored key
-            // instead of allocating a transient StringHeader via
-            // js_string_from_bytes — that allocation showed up as ~10% of
-            // perf-comprehensive's hot-path samples (one alloc per
-            // dynamic-dispatch method call × N keys-array lookups).
-            let method_bytes = method_name.as_bytes();
-            for i in 0..key_count {
-                let key_val = crate::array::js_array_get(keys, i as u32);
-                if crate::string::js_string_key_matches_bytes(key_val, method_bytes) {
-                    // Found the method — delegate to `js_native_call_value`
-                    // which handles both NaN-boxed pointers (POINTER_TAG)
-                    // and raw-pointer-bits (e.g. the resolve/reject
-                    // closures from `js_promise_new_with_executor`,
-                    // transmuted `i64 → f64` so their bits live outside
-                    // the NaN range). The earlier `is_pointer()` gate
-                    // bailed on the raw-pointer case: `{ resolve }` on a
-                    // plain object caused `box.resolve(x)` to land here,
-                    // the tag check failed, we fell through to vtable
-                    // lookup, and returned NULL_OBJECT_BYTES without
-                    // invoking `js_promise_resolve` → the awaiter hung
-                    // forever (issue #87). `js_native_call_value`
-                    // validates CLOSURE_MAGIC before calling the func
-                    // pointer, so non-callable field values (numbers,
-                    // strings, booleans) safely return undefined.
-                    // An accessor key's slot holds its accessor pair, never a
-                    // callable (`accessor_pair.rs`).
-                    let field_val =
-                        crate::object::key_attrs::object_slot_data(obj as *const _, i as u32);
-                    let bound = crate::closure::clone_closure_rebind_this(
-                        field_val.bits(),
-                        f64::from_bits(jsval().bits()),
-                    );
-                    let result = crate::closure::native_call_value_this(
-                        f64::from_bits(bound),
-                        crate::closure::JsThis::from_f64(object()),
-                        args_ptr,
-                        args_len,
-                    );
-                    return result;
-                }
+            if let Some(slot) =
+                own_slot::find_method_slot(keys, key_count as u32, method_name.as_bytes())
+            {
+                // Found the method — delegate to `js_native_call_value`
+                // which handles both NaN-boxed pointers (POINTER_TAG)
+                // and raw-pointer-bits (e.g. the resolve/reject
+                // closures from `js_promise_new_with_executor`,
+                // transmuted `i64 → f64` so their bits live outside
+                // the NaN range). The earlier `is_pointer()` gate
+                // bailed on the raw-pointer case: `{ resolve }` on a
+                // plain object caused `box.resolve(x)` to land here,
+                // the tag check failed, we fell through to vtable
+                // lookup, and returned NULL_OBJECT_BYTES without
+                // invoking `js_promise_resolve` → the awaiter hung
+                // forever (issue #87). `js_native_call_value`
+                // validates CLOSURE_MAGIC before calling the func
+                // pointer, so non-callable field values (numbers,
+                // strings, booleans) safely return undefined.
+                // An accessor key's slot holds its accessor pair, never a
+                // callable (`accessor_pair.rs`).
+                let field_val = crate::object::key_attrs::object_slot_data(obj as *const _, slot);
+                let bound = crate::closure::clone_closure_rebind_this(
+                    field_val.bits(),
+                    f64::from_bits(jsval().bits()),
+                );
+                let result = crate::closure::native_call_value_this(
+                    f64::from_bits(bound),
+                    crate::closure::JsThis::from_f64(object()),
+                    args_ptr,
+                    args_len,
+                );
+                return result;
             }
         }
 
