@@ -837,3 +837,21 @@ feature rlib callback counts are 125 -> 124; the usual tagged-pointer comparison
 is 8 -> 7 static instructions. No x86 linked instruction/cycle/RSS benefit has
 been measured, so the patch remains a review artifact and is unapplied to
 production source. See tag-word-v13-validation.json and the patch/assembly.
+
+LATEST FETCH / REBASE: main 0ed699b9f2
+The fresh e532 request normal-auto build fails on pristine baseline: validator/
+isTaxID.js reads an undeclared PERRY_TA_VIEW_GUARD. The full failed IR and error
+are preserved; partial linking was not enabled. Newly fetched main already has
+#11817 (1fe7fe898e), the hidden-global declaration fix across codegen units.
+It also has #11815 (263c6f5507), the campaign's prototype-in-shape migration.
+Rebased the GC proposal without conflicts onto 0ed699b9f2; no independently
+authored codegen/shape/header/ABI changes. The new Mac runtime passes 4,872/0/5.
+New source archives and 22-path GC overlay are bound by hash. Both production
+builds and Linux suites are running in new own qb6 directories, using only our
+completed old build caches and refreshing ALL workspace inputs. e532 evidence
+remains valid only for its frozen source; it does not validate new main.
+The new prototype ownership can reduce ordinary ObjectMeta allocations, so
+current owner/shape/canonical attribution must precede any proposed metadata
+split. The original-host e532 no-auto measurement is queued behind foreign
+benchmark-lock owners; those processes are untouched. Latest-main performance
+acceptance and the 17-case final matrix remain open.
