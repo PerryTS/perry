@@ -393,3 +393,25 @@ linked fixtures passed in default and moving modes; copied-object counts were
 12,442 / 5,689 / 63,625, with protected from-space. Compact observations are in
 pool-retry-linux-validation.json. The guarded normal-auto matrix is now running;
 RSS/instruction/fault tradeoffs remain unmeasured for this repaired revision.
+
+NEXT INSTRUCTION ATTRIBUTION (queued; no result claimed)
+After the full repaired pipeline succeeds, gc-final-instruction-profile.py
+samples user instructions in the exact verified normal-auto symbol builds:
+main69 baseline/candidate for TS, Zod and string-building, plus the older v2
+baseline/candidate string case with its observed +0.53% instruction cost.
+Two repeats per subject (16 runs), reversed order on repeat two. Source,
+plain/symbol binary hashes and matching .text are checked against build records;
+each input must have six correct matrix cells. Profile output must match Node.
+Lost samples or missing attribution fail the report parser. These are self
+samples, not elapsed time, peak RSS or exact per-function instruction deltas.
+Inlining can move attribution between symbols, so compare the machine code
+and aggregate collector work before inferring a regression's cause.
+
+The parser was exercised on the actual 64,885-sample baseline TS report
+(47,835 GC self samples, 3,111 arena self samples) and rejects lost samples,
+empty attribution and missing event counts. This only validates report reading;
+it does not establish that the queued final profiles have run. See
+instruction-profile-plan.json for the pinned host harness dependencies.
+Independent serialized follow-up: gc-final-instruction-profile-run.sh;
+receipt gc-final-instruction-profile-v1.exit. It requires the whole preceding
+pipeline to succeed and cannot silently profile a partial/failed build.
