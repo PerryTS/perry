@@ -1,0 +1,7 @@
+{
+  "verified_records": 8,
+  "all_correct": true,
+  "lost_samples": 0,
+  "reports_parsed_and_hashed_independently": true,
+  "scope": "User instruction self sampling, not exact function deltas. Zod has only 2207\u20133683 samples and cannot resolve a 0.63% change by function."
+}
