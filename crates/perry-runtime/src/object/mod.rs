@@ -102,6 +102,7 @@ pub(crate) mod accessor_pair;
 pub(crate) mod attr_census;
 pub(crate) mod canonical_keys;
 mod census;
+mod constfn_key_add;
 pub(crate) mod field_rep;
 pub(crate) mod field_rep_store;
 pub(crate) mod key_attrs;

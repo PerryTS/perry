@@ -330,7 +330,14 @@ pub(super) fn emit_guarded_nonnegative_index(
             let expected_shape_i64 = blk.zext(I32, &expected_shape, I64);
             let expected_shape_high = blk.shl(I64, &expected_shape_i64, "32");
             let expected = blk.or(I64, &expected_shape_high, &expected_class_id.to_string());
-            let shape_matches = blk.icmp_eq(I64, &class_shape, &expected);
+            let shape_matches = crate::typed_shape::emit_compatible_class_shape_eq(
+                blk,
+                &class_shape,
+                &expected_class_id.to_string(),
+                &expected_shape,
+                &expected,
+                &[],
+            );
             let shape_rel = blk.add(I32, &expected_shape, "-2147483648");
             let shape_valid = blk.icmp_ult(I32, &shape_rel, "1073741824");
             let exact_layout = blk.and(I1, &gc_ok, &shape_matches);

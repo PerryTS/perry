@@ -1264,6 +1264,14 @@ pub extern "C" fn js_put_value_set_dyn_ic_miss(
         let Some(idx) = own_idx else {
             return result;
         };
+        // Generated own-slot hits write raw bits. A ConstFn target must
+        // keep using the checked store funnel so an incompatible overwrite
+        // invalidates its body fact before changing the slot.
+        if crate::object::field_rep::slot_rep(shape.rep, idx)
+            == crate::object::field_rep::REP_SPECIAL
+        {
+            return result;
+        }
         // The descriptor above already proves this stamp is live, so the
         // token comes from the header word rather than from a second full
         // lookup-and-copy of the same id (see `dyn_ic_try_store`).
@@ -1625,6 +1633,7 @@ fn object_array_numeric_write_slots(
             unsafe { validated_object(first_bits) },
             "first receiver is not an eligible regular shared-shape object",
         )?;
+    let shared_rep = crate::object::field_rep_store::shape_rep(shared_shape_id);
     let mut slots = [0u16; 4];
     for index in 0..keys.len() {
         // `find_slot` caps the shared keys array at 4096 entries, so every
@@ -1633,6 +1642,15 @@ fn object_array_numeric_write_slots(
             unsafe { find_slot(shared_keys, shared_key_count, decoded_keys[index]) },
             "target key is absent from the shared shape",
         )?;
+        // A finite Number preserves Any/F64, but contradicts a ConstFn body
+        // fact. The clone writes without the checked slot funnel, so SPECIAL
+        // targets must take the ordinary loop before any slot is published.
+        if crate::object::field_rep::slot_rep(shared_rep, slot)
+            == crate::object::field_rep::REP_SPECIAL
+        {
+            trace_object_array_numeric_write_rejection("target slot carries a SPECIAL fact");
+            return None;
+        }
         slots[index] = trace_object_array_numeric_write_stage(
             u16::try_from(slot).ok(),
             "target slot cannot be encoded",
@@ -1892,3 +1910,7 @@ pub extern "C" fn js_object_array_numeric_write2_guard(
     };
     (u64::from(slots[1]) + 1) << 32 | (u64::from(slots[0]) + 1)
 }
+
+#[cfg(test)]
+#[path = "put_value/numeric_write_constfn_tests.rs"]
+mod numeric_write_constfn_tests;

@@ -3,14 +3,15 @@
 //!
 //! # Why this exists
 //!
-//! Phase 1 found sixteen separate receiver-keyed fact mechanisms on `FnCtx`.
+//! Phase 1 found sixteen separate receiver-keyed fact mechanisms on `FnCtx`;
+//! P8 removed the class-field-loop twin, leaving fifteen in the active inventory.
 //! The original issue singled out six (`cached_lengths`,
 //! `bounded_index_pairs`, `packed_f64_loop_facts`,
 //! `masked_window_array_facts`, `buffer_view_slots`, and the
 //! `packed_receiver_*` trio); Phase 4 has now moved all six into this table.
 //! The expanded audit also records `int_range_facts`,
 //! `bounded_buffer_index_pairs`, `guarded_buffer_index_pairs`,
-//! `element_shape_loop_facts`, `class_field_loop_facts`,
+//! `element_shape_loop_facts`,
 //! `versioned_indexed_loop_facts`, `stable_packed_loop_facts`,
 //! `string_window_array_facts`, `buffer_data_slots`, and `class_keys_slots`.
 //! Historically, each answered the same two questions

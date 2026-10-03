@@ -454,7 +454,12 @@ pub(crate) fn try_lower_instance_method_call(
                         .unwrap_or_else(|| ctx.block_label(own_idx));
                     let blk = ctx.block();
                     let cid_ok = blk.icmp_eq(I32, &cid, &class_id.to_string());
-                    let shape_ok = blk.icmp_eq(I32, &shape_id, expected_shape);
+                    let shape_ok = crate::typed_shape::emit_compatible_shape_eq(
+                        blk,
+                        &shape_id,
+                        expected_shape,
+                        &[],
+                    );
                     let exact = blk.and(I1, &cid_ok, &shape_ok);
                     blk.cond_br(&exact, &probe_dispatch_label, &miss_label);
                 }

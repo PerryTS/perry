@@ -236,6 +236,8 @@ pub enum SerializedValue {
     /// An object: (class_id, parent_class_id, fields, optional keys).
     /// Keys are present only for plain objects (not class instances).
     Object {
+        /// Optional immutable body/rep facts; never a source ShapeId or closure.
+        final_constfn: Option<constfn_transfer::ConstFnTransferFacts>,
         class_id: u32,
         parent_class_id: u32,
         fields: Vec<SerializedValue>,
@@ -663,6 +665,7 @@ unsafe fn serialize_array(arr: *const crate::array::ArrayHeader) -> SerializedVa
 unsafe fn serialize_object(obj: *const crate::object::ObjectHeader) -> SerializedValue {
     if obj.is_null() || (obj as usize) < 0x1000 {
         return SerializedValue::Object {
+            final_constfn: None,
             class_id: 0,
             parent_class_id: 0,
             fields: Vec::new(),
@@ -753,20 +756,11 @@ unsafe fn serialize_object(obj: *const crate::object::ObjectHeader) -> Serialize
                 // Paired with the `hole_at` skip in the fields loop above.
                 continue;
             }
-            let key_tag = key_bits & TAG_MASK;
-            if key_tag == STRING_TAG {
-                let str_ptr = (key_bits & POINTER_MASK) as *const crate::string::StringHeader;
-                if !str_ptr.is_null() && (str_ptr as usize) >= 0x1000 {
-                    let len = (*str_ptr).byte_len as usize;
-                    let data = (str_ptr as *const u8)
-                        .add(std::mem::size_of::<crate::string::StringHeader>());
-                    key_strings.push(std::slice::from_raw_parts(data, len).to_vec());
-                } else {
-                    key_strings.push(Vec::new());
-                }
-            } else {
-                key_strings.push(Vec::new());
-            }
+            let mut short = [0; crate::value::SHORT_STRING_MAX_LEN];
+            key_strings.push(
+                crate::string::js_string_key_bytes(JSValue::from_bits(key_bits), &mut short)
+                    .map_or_else(Vec::new, <[u8]>::to_vec),
+            );
         }
         Some(key_strings)
     } else {
@@ -774,6 +768,7 @@ unsafe fn serialize_object(obj: *const crate::object::ObjectHeader) -> Serialize
     };
 
     SerializedValue::Object {
+        final_constfn: constfn_transfer::snapshot(obj, keys.as_deref(), fields.len()),
         class_id,
         parent_class_id,
         fields,
@@ -884,6 +879,7 @@ pub unsafe fn deserialize_nanbox_on_current_thread(sv: &SerializedValue) -> u64 
         }
 
         SerializedValue::Object {
+            final_constfn,
             class_id,
             parent_class_id,
             fields,
@@ -940,6 +936,11 @@ pub unsafe fn deserialize_nanbox_on_current_thread(sv: &SerializedValue) -> u64 
             }
 
             let obj = obj_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
+            let obj = if let (Some(facts), Some(names)) = (final_constfn, keys) {
+                constfn_transfer::restore(obj, *class_id, fields.len(), names, facts)
+            } else {
+                obj
+            };
             JSValue::pointer(obj as *const u8).bits()
         }
 
@@ -1056,6 +1057,16 @@ pub(crate) unsafe fn test_deserialize_bigint_limbs(limbs: [u64; BIGINT_LIMBS]) -
     deserialize_nanbox_on_current_thread(&SerializedValue::BigInt(limbs))
 }
 
+/// Run image-local, string-only initialization on the current worker. This
+/// callback has no user code and no heap captures; earlier strings are already
+/// registered as roots before the next allocation in preparation can collect.
+unsafe fn prepare_worker_literals(code: i64) {
+    if code != 0 {
+        let prepare: unsafe extern "C" fn() = std::mem::transmute(code as usize);
+        prepare();
+    }
+}
+
 // ============================================================================
 // parallelMap — data-parallel array processing
 // ============================================================================
@@ -1098,12 +1109,23 @@ type ClosureCallFn = crate::closure::body_call::js_body_fn_ty!(argument);
 /// Returns a POINTER_TAG'd ArrayHeader pointer to the result array.
 #[no_mangle]
 pub extern "C" fn js_thread_parallel_map(array_val: f64, closure_val: f64) -> f64 {
-    let result_ptr = unsafe { parallel_map_impl(array_val, closure_val) };
+    let result_ptr = unsafe { parallel_map_impl(array_val, closure_val, 0) };
     // NaN-box the result array pointer with POINTER_TAG
     f64::from_bits(POINTER_TAG | (result_ptr as u64 & POINTER_MASK))
 }
 
-unsafe fn parallel_map_impl(array_val: f64, closure_val: f64) -> i64 {
+/// Compiler-only launch ABI: preparation is a code address in the spawning image.
+#[no_mangle]
+pub extern "C" fn js_thread_parallel_map_with_literals(
+    array_val: f64,
+    closure_val: f64,
+    literal_prepare: i64,
+) -> f64 {
+    let result_ptr = unsafe { parallel_map_impl(array_val, closure_val, literal_prepare) };
+    f64::from_bits(POINTER_TAG | (result_ptr as u64 & POINTER_MASK))
+}
+
+unsafe fn parallel_map_impl(array_val: f64, closure_val: f64, literal_prepare: i64) -> i64 {
     // ── 1. Extract closure pointer and code, and root the closure ─
     // The closure is validated and rooted BEFORE `clean_arr_ptr`: resolving
     // the array can force-materialize a lazy array — a GC point — and a
@@ -1249,6 +1271,7 @@ unsafe fn parallel_map_impl(array_val: f64, closure_val: f64) -> i64 {
                 // and sweeps everything it just deserialized.
                 crate::gc::ensure_gc_initialized();
                 crate::object::shapes::install_worker_shape_seed(&shape_seed);
+                unsafe { prepare_worker_literals(literal_prepare) };
                 let mut results = Vec::with_capacity(chunk.len());
 
                 // Reconstruct closure on this thread's arena, rooted for the
@@ -1392,11 +1415,22 @@ unsafe fn single_thread_map(
 /// the predicate returned a truthy value.
 #[no_mangle]
 pub extern "C" fn js_thread_parallel_filter(array_val: f64, closure_val: f64) -> f64 {
-    let result_ptr = unsafe { parallel_filter_impl(array_val, closure_val) };
+    let result_ptr = unsafe { parallel_filter_impl(array_val, closure_val, 0) };
     f64::from_bits(POINTER_TAG | (result_ptr as u64 & POINTER_MASK))
 }
 
-unsafe fn parallel_filter_impl(array_val: f64, closure_val: f64) -> i64 {
+/// Compiler-only launch ABI: preparation is a code address in the spawning image.
+#[no_mangle]
+pub extern "C" fn js_thread_parallel_filter_with_literals(
+    array_val: f64,
+    closure_val: f64,
+    literal_prepare: i64,
+) -> f64 {
+    let result_ptr = unsafe { parallel_filter_impl(array_val, closure_val, literal_prepare) };
+    f64::from_bits(POINTER_TAG | (result_ptr as u64 & POINTER_MASK))
+}
+
+unsafe fn parallel_filter_impl(array_val: f64, closure_val: f64, literal_prepare: i64) -> i64 {
     // Closure validated and rooted BEFORE `clean_arr_ptr` — same GC-point
     // ordering as `parallel_map_impl` above (#6521 review follow-up).
     let closure_bits = closure_val.to_bits();
@@ -1511,6 +1545,7 @@ unsafe fn parallel_filter_impl(array_val: f64, closure_val: f64) -> i64 {
                 let worker_agent = crate::agent::enter_worker_agent();
                 crate::gc::ensure_gc_initialized();
                 crate::object::shapes::install_worker_shape_seed(&shape_seed);
+                unsafe { prepare_worker_literals(literal_prepare) };
                 let mut kept = Vec::new();
 
                 let gc_scope = crate::gc::RuntimeHandleScope::new();
@@ -1652,13 +1687,20 @@ type ClosureCall0Fn = crate::closure::body_call::js_body_fn_ty!();
 /// Returns a NaN-boxed f64 Promise pointer (POINTER_TAG).
 #[no_mangle]
 pub extern "C" fn js_thread_spawn(closure_val: f64) -> f64 {
-    let promise = unsafe { spawn_impl(closure_val) };
+    let promise = unsafe { spawn_impl(closure_val, 0) };
     // NaN-box the promise pointer with POINTER_TAG
     f64::from_bits(POINTER_TAG | (promise as u64 & POINTER_MASK))
 }
 
+/// Compiler-only launch ABI: preparation is a code address in the spawning image.
+#[no_mangle]
+pub extern "C" fn js_thread_spawn_with_literals(closure_val: f64, literal_prepare: i64) -> f64 {
+    let promise = unsafe { spawn_impl(closure_val, literal_prepare) };
+    f64::from_bits(POINTER_TAG | (promise as u64 & POINTER_MASK))
+}
+
 #[cfg_attr(target_os = "wasi", allow(unreachable_code, unused_variables))]
-unsafe fn spawn_impl(closure_val: f64) -> *mut crate::promise::Promise {
+unsafe fn spawn_impl(closure_val: f64, literal_prepare: i64) -> *mut crate::promise::Promise {
     // WASI preview 2 has no threads (#11377). Running the worker body inline
     // is not faithful — it claims and retires its own agent — so until a
     // main-thread `spawn` lands with the WASI event loop, reject clearly
@@ -1738,6 +1780,7 @@ unsafe fn spawn_impl(closure_val: f64) -> *mut crate::promise::Promise {
         // cross a GC trigger (see the parallel_map worker for rationale).
         crate::gc::ensure_gc_initialized();
         crate::object::shapes::install_worker_shape_seed(&shape_seed);
+        unsafe { prepare_worker_literals(literal_prepare) };
         // Reconstruct closure in this thread's arena, rooted across the
         // capture-deserialization allocations.
         let gc_scope = crate::gc::RuntimeHandleScope::new();
@@ -1822,3 +1865,14 @@ mod static_shape_replay_tests;
 #[cfg(test)]
 #[path = "thread_transfer_guard_tests.rs"]
 mod transfer_guard_tests;
+
+#[path = "thread_constfn_transfer.rs"]
+mod constfn_transfer;
+
+#[cfg(test)]
+#[path = "thread_constfn_transfer_tests.rs"]
+mod constfn_transfer_tests;
+
+#[cfg(all(test, not(target_os = "wasi")))]
+#[path = "thread_literal_launch_tests.rs"]
+mod literal_launch_tests;
