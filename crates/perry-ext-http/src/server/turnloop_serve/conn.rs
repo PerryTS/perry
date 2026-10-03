@@ -182,7 +182,7 @@ fn closed_sockets() -> &'static Mutex<Vec<(u64, i64)>> {
     CLOSED.get_or_init(|| Mutex::new(Vec::new()))
 }
 
-fn note_closed_socket(socket_handle: i64) {
+pub(crate) fn note_closed_socket(socket_handle: i64) {
     closed_sockets()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -385,6 +385,7 @@ pub(crate) fn adopt_alpn_http1(
     server_handle: i64,
     peer_address: String,
     peer_port: u16,
+    socket_handle: i64,
     leftover: Vec<u8>,
 ) -> bool {
     // `id` is a connection, not a listener, so the idle deadline comes from the
@@ -395,11 +396,7 @@ pub(crate) fn adopt_alpn_http1(
         with_base_server(server_handle, |s| s.keep_alive_timeout).unwrap_or(5_000.0);
     let mut input = Vec::with_capacity(8 * 1024);
     input.extend_from_slice(&leftover);
-    // Pre-existing gap, not this fix's scope: this ALPN handoff never queued
-    // `'connection'` (no `queue_turnloop_connection_event` call below) even
-    // before connection sockets existed. `req.socket` on it is still wired so a
-    // request landing here is consistent with the ordinary accept path.
-    let socket_handle = alloc_connection_socket(peer_address.clone(), peer_port);
+    // Keep the connection socket already announced by HTTP/2 admission.
     conns().lock().unwrap_or_else(|e| e.into_inner()).insert(
         id,
         Conn {

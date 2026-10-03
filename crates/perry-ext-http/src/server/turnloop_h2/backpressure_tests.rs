@@ -71,7 +71,7 @@ impl Fixture {
             unreleased: 0,
             withheld: 0,
         });
-        insert(connection);
+        insert(connection, 0);
         let mut response = response::ServerResponse::new();
         response.turnloop = Some((conn, 1));
         response.turnloop_streaming = true;

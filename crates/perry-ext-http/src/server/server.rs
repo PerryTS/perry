@@ -1142,15 +1142,10 @@ pub extern "C" fn js_node_http_server_process_pending() -> i32 {
         })
         .unwrap_or_default();
     for (server_handle, socket_handle) in connection_events {
-        // The handle may back an HttpServer or an HttpsServer (whose
-        // accept loop pushes here too since #4971) — probe both.
-        let listeners = get_handle_mut::<HttpServer>(server_handle)
-            .map(|server| take_server_event_listeners(server, "connection"))
-            .or_else(|| {
-                get_handle_mut::<crate::server::https_server::HttpsServer>(server_handle)
-                    .map(|server| take_server_event_listeners(&mut server.base, "connection"))
-            })
-            .unwrap_or_default();
+        let listeners = with_base_server_mut(server_handle, |server| {
+            take_server_event_listeners(server, "connection")
+        })
+        .unwrap_or_default();
         if listeners.is_empty() {
             continue;
         }
