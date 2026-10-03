@@ -1,3 +1,4 @@
+// parity-env: PERRY_GC_MOVING_LOOP_POLLS=1 PERRY_GC_SCHEDULE_SEED=11590 PERRY_GC_SCHEDULE_RATE=1 PERRY_GC_SCHEDULE_ALLOC_KB=4 PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_VERIFY_EVACUATION=1
 // #11590: a packed-f64 range loop at module scope caches every loop-invariant
 // module global it reads in an entry alloca, for both loop clones. When the
 // global holds a heap receiver — here an array grown from `[]` by `d[j] = v`,

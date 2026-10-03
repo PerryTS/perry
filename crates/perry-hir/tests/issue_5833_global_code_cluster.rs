@@ -140,6 +140,28 @@ fn restricted_global_check_only_applies_to_the_entry_script() {
 
 #[test]
 fn reflected_script_var_gets_an_early_nonconfigurable_global_slot() {
+    // #11591 makes Script reflection an explicit opt-in. The HIR flag is
+    // process-cached, so isolate this fixture from sibling tests that lower
+    // ordinary modules before enabling it.
+    if std::env::var("PERRY_GLOBAL_SCRIPT_THIS").as_deref() != Ok("1") {
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "reflected_script_var_gets_an_early_nonconfigurable_global_slot",
+                "--nocapture",
+            ])
+            .env("PERRY_GLOBAL_SCRIPT_THIS", "1")
+            .output()
+            .expect("run the Script fixture with its opt-in set before lowering");
+        assert!(
+            child.status.success(),
+            "Script fixture failed: {:?}\n{}\n{}",
+            child.status,
+            String::from_utf8_lossy(&child.stdout),
+            String::from_utf8_lossy(&child.stderr)
+        );
+        return;
+    }
     // The later HIR mirror uses an ordinary property write. Seed the Script
     // binding first so that write preserves GlobalDeclarationInstantiation's
     // configurable=false descriptor (#5841 / #5903).

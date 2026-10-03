@@ -1,0 +1,6 @@
+all-absent 0
+own-shadow 275
+terminal-add 3740
+terminal-value 4730
+terminal-delete 275
+different-terminal 3575

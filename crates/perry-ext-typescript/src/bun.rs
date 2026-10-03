@@ -1398,6 +1398,96 @@ mod tests {
     use super::*;
 
     #[test]
+    fn bundles_typescript_dependency_with_loader_resolution() {
+        struct FixtureLoader(Lrc<SourceMap>);
+        impl Load for FixtureLoader {
+            fn load(&self, file: &FileName) -> Result<ModuleData, Error> {
+                let FileName::Custom(name) = file else {
+                    return Err(anyhow!("unexpected fixture file: {file:?}"));
+                };
+                let source = match name.as_str() {
+                    "entry.ts" => {
+                        "import { increment } from './dep'; export const result: number = increment(41);"
+                    }
+                    "dep.ts" => "export function increment(n: number): number { return n + 1; }",
+                    _ => return Err(anyhow!("unexpected fixture module: {name}")),
+                };
+                let comments = SingleThreadedComments::default();
+                let (fm, module) = parse_bun_module(
+                    &self.0,
+                    file.clone(),
+                    name,
+                    source,
+                    BunLoader::Ts,
+                    false,
+                    Some(&comments),
+                )?;
+                Ok(ModuleData {
+                    fm,
+                    module: lower_bun_syntax(&self.0, &comments, module, BunLoader::Ts),
+                    helpers: Helpers::new(false),
+                })
+            }
+        }
+        struct FixtureResolver;
+        impl Resolve for FixtureResolver {
+            fn resolve(&self, base: &FileName, specifier: &str) -> Result<Resolution, Error> {
+                assert_eq!(base, &FileName::Custom("entry.ts".into()));
+                assert_eq!(specifier, "./dep");
+                Ok(Resolution {
+                    filename: FileName::Custom("dep.ts".into()),
+                    slug: None,
+                })
+            }
+        }
+
+        let globals = Globals::new();
+        let cm: Lrc<SourceMap> = Default::default();
+        let output = GLOBALS.set(&globals, || {
+            let mut bundler = Bundler::new(
+                &globals,
+                cm.clone(),
+                FixtureLoader(cm.clone()),
+                FixtureResolver,
+                BundleConfig {
+                    require: true,
+                    disable_inliner: false,
+                    disable_hygiene: false,
+                    disable_fixer: false,
+                    disable_dce: false,
+                    external_modules: Vec::new(),
+                    module: ModuleType::Es,
+                },
+                Box::new(BunBundlerHook),
+            );
+            let bundles = bundler
+                .bundle(HashMap::from([(
+                    "entry".into(),
+                    FileName::Custom("entry.ts".into()),
+                )]))
+                .expect("bundle the entry and its TypeScript dependency");
+            assert_eq!(bundles.len(), 1);
+            emit_module(cm.clone(), None, &bundles[0].module, false).expect("emit bundle")
+        });
+        let scan = scan_bun_source(&output, "bundle.js", BunLoader::Js, false)
+            .expect("the bundle is valid JavaScript");
+        assert!(
+            scan.imports.is_empty(),
+            "dependency must be bundled: {output}"
+        );
+        assert_eq!(scan.exports, vec!["result"]);
+        assert!(output.contains("41"), "entry must survive: {output}");
+        assert!(
+            output.contains("+ 1"),
+            "dependency body must survive: {output}"
+        );
+        assert!(
+            !output.contains(": number"),
+            "types must be erased: {output}"
+        );
+    }
+
+    #[test]
     fn transpiler_erases_types() {
         let output = transform_bun_source(
             "const n: number = 1; export { n }",

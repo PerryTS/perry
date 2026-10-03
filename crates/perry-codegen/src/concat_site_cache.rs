@@ -48,7 +48,9 @@
 //! an unproven operand keeps the plain fused call and the process-wide memo.
 //!
 //! The table is emitted through `typed_parse_rodata`, the per-function
-//! deferred raw-global sink every lowering context already drains.
+//! deferred raw-global sink every lowering context already drains. Worker
+//! programs emit the table in TLS: its heap strings and registered root-cell
+//! addresses belong to the current agent, including the empty-slot state.
 //! `PERRY_CONCAT_SITE_CACHE=0` removes the lane at build time.
 
 use anyhow::Result;
@@ -175,8 +177,17 @@ pub(crate) fn try_lower_concat_site_cached(
     let site_id = ctx.ic_site_counter;
     ctx.ic_site_counter += 1;
     let table_name = concat_site_global_name(ctx, site_id);
+    // Both cached strings and their root registration belong to one agent.
+    // A process-global hit can otherwise reuse a retired worker's heap, and
+    // simultaneous workers can race to fill/register the same cell.
+    let tls = if crate::codegen::program_has_worker() || crate::codegen::program_has_thread_agents()
+    {
+        "thread_local "
+    } else {
+        ""
+    };
     ctx.typed_parse_rodata.push(format!(
-        "@{table_name} = private global {CONCAT_SITE_TABLE_TY} zeroinitializer"
+        "@{table_name} = private {tls}global {CONCAT_SITE_TABLE_TY} zeroinitializer"
     ));
     let table_ref = format!("@{table_name}");
 

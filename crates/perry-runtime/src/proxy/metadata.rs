@@ -331,6 +331,7 @@ mod tests {
                 .get_or_insert_with(Default::default)
                 .insert(cid, fake_proto_ptr);
         });
+        crate::object::class_lookup_surface_gen_bump();
         let target = f64::from_bits(POINTER_TAG | (fake_proto_ptr as u64 & POINTER_MASK));
         assert_eq!(
             normalize_target_bits(target),

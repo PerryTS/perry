@@ -76,6 +76,10 @@ pub struct StringPool {
     /// names match what `emit_string_pool` generates and the codegen
     /// use sites can reference them directly.
     module_prefix: String,
+    /// Immutable graph callback owner, set once before lowering. Launch sites
+    /// share the symbol even when their local string pool belongs to another
+    /// module. Defaults to this module for graph-free direct codegen callers.
+    thread_literal_callback_prefix: String,
     /// `value → interned index`. Identical literals share an entry.
     interned: HashMap<String, u32>,
     /// Ordered list of unique entries; the index in this Vec is the
@@ -141,6 +145,7 @@ impl StringPool {
     /// without colliding on `.str.0.handle` etc.
     pub fn with_prefix(module_prefix: String) -> Self {
         Self {
+            thread_literal_callback_prefix: module_prefix.clone(),
             module_prefix,
             interned: HashMap::new(),
             entries: Vec::new(),
@@ -153,6 +158,14 @@ impl StringPool {
 
     pub fn module_prefix(&self) -> &str {
         &self.module_prefix
+    }
+
+    pub(crate) fn set_thread_literal_callback_prefix(&mut self, prefix: String) {
+        self.thread_literal_callback_prefix = prefix;
+    }
+
+    pub(crate) fn thread_literal_callback_prefix(&self) -> &str {
+        &self.thread_literal_callback_prefix
     }
 
     /// #5247: install the per-module source-location context (file path +
