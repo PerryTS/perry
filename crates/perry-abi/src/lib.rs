@@ -348,6 +348,13 @@ pub const FN_HAS_DECLARED: u32 = 1 << 11;
 /// Dylib bodies omit this bit: a shape must not retain their info address
 /// beyond `dlclose` or mistake a reused address for the same body.
 pub const FN_PERMANENT_IMAGE: u32 = 1 << 12;
+/// The compiler emitted this body from JavaScript source (every info
+/// `perry-codegen` renders carries it; no runtime-native info does). A
+/// function object on such a body is never a built-in, bound, native-module
+/// or class constructor, so its `[[Construct]]` and `instanceof` are the
+/// ordinary ones: the runtime decides that from this bit, once per body,
+/// instead of probing the callee against every built-in on each use.
+pub const FN_COMPILED_BODY: u32 = 1 << 13;
 
 /// Byte offsets of the fields codegen emits and emitted code reads.
 pub const JS_FUNCTION_INFO_CODE_OFFSET: usize = 0;

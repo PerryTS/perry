@@ -61,12 +61,12 @@ pub(crate) use registry::{
     info_versioned_loop_direct,
 };
 
-pub(crate) use dispatch::native_call_value_this;
 pub(crate) use dispatch::{
     bound_function_lazy_name, bound_function_length, bound_method_source_func_ptr,
     coerce_call_this, rebind_explicit_this, rebind_explicit_this_allocates,
     reify_function_method_value, reset_throw_not_callable_counter,
 };
+pub(crate) use dispatch::{call_compiled_closure_this, native_call_value_this};
 pub use dispatch::{
     clean_closure_ptr, dispatch_bound_function, dispatch_bound_method, get_valid_func_ptr,
     get_valid_info, js_closure_call0, js_closure_call1, js_closure_call10, js_closure_call11,
