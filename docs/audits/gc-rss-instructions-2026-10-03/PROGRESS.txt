@@ -1122,3 +1122,10 @@ perturb residency; this is diagnosis, not peak-RSS/perf acceptance. Zod may
 have zero natural full cycles; that is recorded without forcing a cycle.
 Rental data/export/hash proofs were safe before18:00Z; all current jobs are
 on the durable original measurement host. No other lane's files were touched.
+
+PRIVATE ELF MOVING ACCEPTANCE QUEUED
+Owned wrapper4161247 queues44linked default/moving executions, fresh full
+runtime control/ELF archives and the same11currentc170fixtures. Moving cases
+must show copied_objects>0 and protected retired from-space, not just exit0.
+All source/compiler/runtime/binary hashes and Node26.5.1outputs are retained.
+No production source adoption occurs merely because these jobs were queued.
