@@ -381,8 +381,20 @@ mod tests {
         }
         crate::object::class_decl_prototype_object_root_store(CID, b);
         assert_eq!(unsafe { answer(&entry, recv) }, None);
+        // The displaced holder's ShapeId was retired: an entry naming it can
+        // never answer again, whatever the registry says later.
+        assert_ne!(unsafe { object_shape_stamp(a) }, proto_shape);
 
         crate::object::class_decl_prototype_object_root_store(CID, a);
+        assert_eq!(unsafe { answer(&entry, recv) }, None);
+        let entry = Entry {
+            holder_shape: unsafe { object_shape_stamp(a) },
+            ..entry
+        };
+        assert_eq!(
+            unsafe { answer(&entry, recv) },
+            Some(crate::value::TAG_UNDEFINED)
+        );
         let record = Box::into_raw(Box::new(Site {
             entries: [entry; WAYS],
             next: 0,

@@ -538,6 +538,36 @@ pub const PIC_HOLDER_RECV_WORD: usize = 12;
 pub const PIC_HOLDER_OBJ_WORD: usize = 13;
 pub const PIC_HOLDER_SHAPE_WORD: usize = 14;
 pub const PIC_HOLDER_KIND_WORD: usize = 15;
+/// A class-accessor entry (#10498): its kind word carries
+/// [`PIC_HOLDER_ACCESSOR_BIT`] over the holder's inline slot (low 32 bits);
+/// [`PIC_HOLDER_PAIR_WORD`] holds the raw address of the accessor pair that
+/// slot held when the site primed (a strong root the collector rewrites), and
+/// [`PIC_HOLDER_GETTER_WORD`] the compiled getter that pair names
+/// (`double get(double this)`; 0 for a setter-only pair). A hit is the
+/// receiver token, the holder's ShapeId and the slot's value equal to the
+/// pair: then the getter is called with the receiver as `this`.
+pub const PIC_HOLDER_ACCESSOR_BIT: i64 = 1 << 61;
+pub const PIC_HOLDER_PAIR_WORD: usize = 16;
+pub const PIC_HOLDER_GETTER_WORD: usize = 19;
+
+/// `proxy::put_value::setter_site` (#10498): the word of a static-key store
+/// site's ways cache that names the site's compiled-setter entry, as
+/// [`SETTER_SITE_TAG`] over the entry's address ([`SETTER_SITE_ADDRESS_MASK`]).
+/// The entry is a `#[repr(C)]` record the emitted store tower reads
+/// (`perry-codegen/src/expr/put_value_store_ic/setter_arm.rs`): the receiver
+/// ShapeId and the holder ShapeId (u32 each), the holder's raw address, the
+/// holder's inline slot (u32), the raw address of the accessor pair that slot
+/// held at prime time, and the compiled setter it names
+/// (`double set(double this, double v)`).
+pub const PACKED_SET_SETTER_WORD: usize = 9;
+pub const SETTER_SITE_TAG: u64 = 0xA2C2_0000_0000_0000;
+pub const SETTER_SITE_ADDRESS_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+pub const SETTER_SITE_RECV_SHAPE_OFFSET: usize = 0;
+pub const SETTER_SITE_HOLDER_SHAPE_OFFSET: usize = 4;
+pub const SETTER_SITE_HOLDER_OFFSET: usize = 8;
+pub const SETTER_SITE_SLOT_OFFSET: usize = 16;
+pub const SETTER_SITE_PAIR_OFFSET: usize = 24;
+pub const SETTER_SITE_CODE_OFFSET: usize = 32;
 /// The site's holder state word, and its bit for a LATCHED site: one that
 /// refused, or whose non-own receivers took several shapes. Its misses ask the
 /// inherited-read hook, as a never-primed site's do.

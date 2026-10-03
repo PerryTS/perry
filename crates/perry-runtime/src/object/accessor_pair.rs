@@ -192,10 +192,12 @@ pub(crate) unsafe fn pair_of_value(value: u64) -> Option<Accessor> {
 }
 
 /// The compiled INSTANCE getter at an already-proved accessor slot, or
-/// `Some(0)` for a setter-only pair (whose read is `undefined`). A class
-/// accessor site's hit needs neither closure nor static-entry decoding.
-/// The pair's tag, GC kind and length are still checked on every hit because
-/// the slot's value may be replaced without a holder ShapeId transition.
+/// `Some(0)` for a setter-only pair (whose read is `undefined`): what a class
+/// accessor read site may call with the receiver as `this`. Asked when the
+/// site primes. A pair is immutable once published, so the site keeps the
+/// answer with the pair it came from, and each hit compares the slot's value
+/// with that pair (the value may be replaced without a holder ShapeId
+/// transition).
 ///
 /// # Safety
 /// `value` is the slot value of a key proved to carry `ENTRY_ACCESSOR`.

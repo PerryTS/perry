@@ -261,6 +261,23 @@ fn ic_slow_body(
         unsafe {
             let header = &*((addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader);
             if header.obj_type == crate::gc::GC_TYPE_OBJECT {
+                // --- 1. the site's class-accessor entry ---------------------
+                // An inherited compiled getter: the emitted compare and the
+                // leaf front both miss on it by construction (the key is not
+                // own, and a getter can collect). Its hit is two ShapeId
+                // compares and one lane load (`read_holder`), so it is asked
+                // before anything else this entry would re-derive. An
+                // explicit-this native alias (#11725) keeps the miss
+                // handler's order: its alias read comes first.
+                if !crate::object::native_this_alias::alias_active() {
+                    if let Some(value) =
+                        crate::object::method_site::read_holder::try_cached_class_accessor(
+                            obj, cache_slot,
+                        )
+                    {
+                        return f64::from_bits(value.bits());
+                    }
+                }
                 let plain = header._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS == 0;
                 // --- 2. the MRU token hit the emitted hit path declined -----
                 if plain && !packed.is_null() {

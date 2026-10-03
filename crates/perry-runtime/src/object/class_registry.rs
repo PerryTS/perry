@@ -80,6 +80,7 @@ pub(crate) use crate::object::class_value::CLASS_ACCESSOR_DEFAULT_ATTRS;
 pub(crate) use state::async_resource_prototype_value;
 #[cfg(test)]
 pub(crate) use state::class_decl_prototype_object_root_store;
+pub(crate) use state::retire_displaced_decl_prototype;
 pub(crate) use state::{
     builtin_parent_ctor_in_chain, class_decl_prototype_method_names, class_decl_prototype_object,
     class_decl_prototype_value, class_decl_prototype_value_for_instance_class,
