@@ -6885,6 +6885,38 @@ pub(crate) fn lower_for(
         return Ok(());
     }
 
+    // Element receivers (`const o = xs[i]` read and written by static key):
+    // a region proves `o`'s shape at its load and splits the body, which the
+    // call-free clones below cannot do. When it forms, its plain copy (a
+    // failed guard) is the rest of this chain.
+    // Planning sees the context the region path plans in (as below).
+    let saved_ptr_shape_context = ctx.repsel_context_allows_ptr_shape;
+    ctx.repsel_context_allows_ptr_shape = false;
+    let element_region = super::region_loop::begin_for_elements(ctx, condition, body, update);
+    ctx.repsel_context_allows_ptr_shape = saved_ptr_shape_context;
+    if let Some(region) = element_region? {
+        return lower_for_in_region(
+            ctx,
+            Some(region),
+            init,
+            condition,
+            update,
+            body,
+            &mut |ctx| lower_for_after_element_region(ctx, init, condition, update, body),
+        );
+    }
+    lower_for_after_element_region(ctx, init, condition, update, body)
+}
+
+/// `lower_for` from the element-shape tier on: today's chain for a loop the
+/// element region did not take, and the plain copy of one it did.
+fn lower_for_after_element_region(
+    ctx: &mut FnCtx<'_>,
+    init: Option<&Stmt>,
+    condition: Option<&perry_hir::Expr>,
+    update: Option<&perry_hir::Expr>,
+    body: &[Stmt],
+) -> Result<()> {
     // repsel #7480 / #5093: `sum += arr[i].field` over an array carrying the
     // homogeneous element-shape invariant. Tried last, so every array-shaped
     // matcher above keeps precedence on the loops it already owns.
@@ -6916,27 +6948,65 @@ pub(crate) fn lower_for(
     // Named class-field loops use the same fresh shape/representation proof
     // as other receiver loops. Straight-line Ptr<Shape> facts stay recorded,
     // but must not bypass the region's exact R/store admission. All specialized
-    // array/storage tiers above retain first refusal. Restore the previous
-    // context both when planning declines and when lowering fails.
+    // array/storage tiers above retain first refusal (element receivers
+    // excepted, see `lower_for`).
+    let saved_ptr_shape_context = ctx.repsel_context_allows_ptr_shape;
+    ctx.repsel_context_allows_ptr_shape = false;
+    let region = match super::region_loop::begin(ctx, condition, body, update) {
+        Ok(r) => r,
+        Err(e) => {
+            ctx.repsel_context_allows_ptr_shape = saved_ptr_shape_context;
+            return Err(e);
+        }
+    };
+    ctx.repsel_context_allows_ptr_shape = saved_ptr_shape_context;
+    lower_for_in_region(ctx, region, init, condition, update, body, &mut |ctx| {
+        if i32_counter::lower(ctx, init, condition, update, body)? {
+            Ok(())
+        } else {
+            lower_for_after_init(ctx, init, condition, update, body, "for")
+        }
+    })
+}
+
+/// Lower a `for` (after its init) under the region `region` from
+/// `region_loop::begin*`: its split copy is the counter tier / plain loop
+/// with the body split, its plain copy (a failed guard) is `plain`. With no
+/// region, `plain` alone. Restores the Ptr<Shape> context both when
+/// lowering succeeds and when it fails.
+fn lower_for_in_region(
+    ctx: &mut FnCtx<'_>,
+    region: Option<u64>,
+    init: Option<&Stmt>,
+    condition: Option<&perry_hir::Expr>,
+    update: Option<&perry_hir::Expr>,
+    body: &[Stmt],
+    plain: &mut dyn FnMut(&mut FnCtx<'_>) -> Result<()>,
+) -> Result<()> {
     let saved_ptr_shape_context = ctx.repsel_context_allows_ptr_shape;
     let saved_ptr_shape_denial = ctx.repsel_ptr_shape_context_denial;
-    ctx.repsel_context_allows_ptr_shape = false;
     let lowered = (|| -> Result<()> {
-        let region = super::region_loop::begin(ctx, condition, body, update)?;
         // With no region there is no F/G extent: ordinary loop lowering can
         // consume its pre-existing straight-line receiver facts as before.
-        if region.is_none() {
-            ctx.repsel_context_allows_ptr_shape = saved_ptr_shape_context;
-        } else if saved_ptr_shape_context {
-            // Planning alone is not a refusal. Only an admitted region owns
-            // the accesses lowered below, and its handoff must be visible.
-            ctx.repsel_ptr_shape_context_denial = Some(crate::expr::PTR_SHAPE_REGION_AUTHORITY);
+        if region.is_some() {
+            ctx.repsel_context_allows_ptr_shape = false;
+            if saved_ptr_shape_context {
+                // Planning alone is not a refusal. Only an admitted region
+                // owns the accesses lowered below, and its handoff must be
+                // visible.
+                ctx.repsel_ptr_shape_context_denial = Some(crate::expr::PTR_SHAPE_REGION_AUTHORITY);
+            }
         }
         let lowered = super::region_loop::lower_loop(ctx, region, &mut |ctx| {
-            if i32_counter::lower(ctx, init, condition, update, body)? {
-                Ok(())
+            // The split copy: the region is registered while it lowers.
+            if region.is_some_and(|t| super::region_loop::is_registered(ctx, t)) {
+                if i32_counter::lower(ctx, init, condition, update, body)? {
+                    Ok(())
+                } else {
+                    lower_for_after_init(ctx, init, condition, update, body, "for")
+                }
             } else {
-                lower_for_after_init(ctx, init, condition, update, body, "for")
+                plain(ctx)
             }
         });
         super::region_loop::end(ctx, region);

@@ -279,7 +279,13 @@ fn static_region_word(ctx: &FnCtx<'_>, rv: &Receiver) -> Option<(u64, Vec<u32>, 
     if tested != 0 {
         word |= VALUE_TEST_BIT;
     }
-    Some((word, slots, f64_lanes | tested, tested, proven_class.is_some()))
+    Some((
+        word,
+        slots,
+        f64_lanes | tested,
+        tested,
+        proven_class.is_some(),
+    ))
 }
 
 /// Key `i`'s slot (`i64`): a static receiver's constant, or decoded from

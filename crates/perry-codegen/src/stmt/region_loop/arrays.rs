@@ -430,9 +430,6 @@ pub(super) fn candidates(
 ) -> HashMap<Recv, ArrayUse> {
     let mut out: HashMap<Recv, ArrayUse> = HashMap::new();
     if cond.is_some_and(|c| !quiet(ctx, c)) || update.is_some_and(|u| !quiet(ctx, u)) {
-        if std::env::var("PERRY_REGION_DIAG").as_deref() == Ok("6") {
-            eprintln!("[perry region] array candidates: loop control not quiet in {}", ctx.func.name);
-        }
         return out;
     }
     // (binding, static max or counter, store, a Number operand)
@@ -515,12 +512,6 @@ pub(super) fn candidates(
         let r = Recv::Local(id);
         // `dense`: the access asks for dense facts (not an element-only load).
         let dense = ix.is_some() || store || numeric;
-        if std::env::var("PERRY_REGION_DIAG").as_deref() == Ok("6") {
-            eprintln!(
-                "[perry region] array use id={id} ix={ix:?} dense={dense} served={} written={} keyed={} eligible={}",
-                served.contains(&id), written.contains(&id), keyed.contains(&r), receiver_eligible(ctx, r)
-            );
-        }
         if !served.contains(&id)
             || written.contains(&id)
             || keyed.contains(&r)
