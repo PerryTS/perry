@@ -147,8 +147,9 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
     if is_class_object_value(type_ref) {
         // Static/forward `new C()` sites can still construct by template id
         // without attaching an evaluated prototype. Retain that representation's
-        // class-id check; recorded individual chains are authoritative.
-        if !super::prototype_chain::object_has_prototype_divergence(value_addr(value)) {
+        // class-id check; a recorded prototype (a fact of the receiver's
+        // shape) is authoritative.
+        if super::prototype_chain::object_static_prototype(value_addr(value)).is_none() {
             let obj = crate::JSValue::from_bits(bits).as_pointer::<ObjectHeader>();
             return js_instanceof(value, js_object_get_class_id(obj));
         }

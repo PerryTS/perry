@@ -84,3 +84,34 @@ fn a_null_prototype_is_a_shape_fact() {
     // one keeps the same word there (the cheaper read).
     assert_eq!(unsafe { (*(*obj).meta).prototype }, crate::value::TAG_NULL);
 }
+
+/// How the prototype was linked (`new F()` vs `Object.create(F.prototype)`)
+/// is not observable in JS, so the two receivers must share one shape: the
+/// identity names the same prototype, and nothing else about the link may
+/// split them.
+#[test]
+fn new_f_and_object_create_of_its_prototype_share_a_shape() {
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let proto = js_object_alloc(0, 0);
+    let created = crate::object::js_object_create(f64::from_bits(bits(proto)));
+    let created = crate::value::JSValue::from_bits(created.to_bits()).as_pointer::<ObjectHeader>()
+        as *mut ObjectHeader;
+    let width = crate::object::shapes::shape_live_inline_slot_count_by_id(unsafe {
+        super::super::object_shape_stamp(created)
+    })
+    .unwrap();
+    let constructed = js_object_alloc(crate::object::shapes::SYNTHETIC_CLASS_ID_BASE + 0x53, width);
+    object_link_class_default_prototype(constructed as usize, bits(proto));
+    let (a, b) = unsafe {
+        (
+            super::super::object_shape_stamp(created),
+            super::super::object_shape_stamp(constructed),
+        )
+    };
+    assert_eq!(object_static_prototype(created as usize), Some(bits(proto)));
+    assert_eq!(
+        object_static_prototype(constructed as usize),
+        Some(bits(proto))
+    );
+    assert_eq!(a, b, "one prototype, one empty layout: one ShapeId");
+}
