@@ -1,0 +1,26 @@
+{
+  "time_utc": "2026-10-03T07:49:58.266492+00:00",
+  "base": "f6c873d99622d1bb751f198cfbd6cf3475251935",
+  "previous_candidate": "provenance-gc-runtime-scan-v2.json",
+  "files": {
+    "crates/perry-runtime/src/arena/walk.rs": "140f556601614921992d5d8fdd3b427d06ff4366145cc26fe5a12686eb167682",
+    "crates/perry-runtime/src/gc/layout_slot_visit.rs": "3d867bf35a0a0dbeb948cc1240183c8d257e914e7eda2e46e5190638a0c4311b",
+    "crates/perry-runtime/src/gc/malloc.rs": "2eec963d62c7af5d7a21ce00d1cc98bb2f34b6daf84afd5a310937c99d215233",
+    "crates/perry-runtime/src/gc/tests/alloc.rs": "b1aecc30fdfffd7f9336d0f7b7a08168deed189c8d47c2b5f0051459ce084edf",
+    "crates/perry-runtime/src/gc/tests/full_rebuild_skip.rs": "665bbb157c621dd5dd1b80913de079c7ed3b5cac02aa67909a4f548da99bf078",
+    "crates/perry-runtime/src/gc/verify.rs": "3dd3c7326dd5d1d159dd9d21d58968e5f55ec608cf38b30af33895bd2465145b",
+    "crates/perry-runtime/src/arena/block.rs": "9311ddd5ad773f44d16fa3970c8d75570e1d45efdfd13874dc6c34ee4b80a7b3",
+    "crates/perry-runtime/src/arena/block/decommit.rs": "373112473c98732dd1e9e5b513de2f994f70ca7e0d19416ea3401d4e53062fa3"
+  },
+  "scope": "v2 plus page-aligned pool release; DONTNEED for empty interior Linux pages, FREE for other Unix",
+  "validation": "macOS 4835 passed / 0 failed / 5 ignored; isolated Linux kernel helper 3 passed; whole Linux/app A/B pending",
+  "validation_logs": {
+    "logs/gc-runtime-pool-v3-full.log": "65e1f68861851be9b7cbfbca3e52bba238ff64a130829beb4d2fef6c3a42c465",
+    "gc-pool-kernel-probe-cargo.log": "65c191b0fa3bcd40e94ce445b35eb1d7b21aba018b98eecb71a919b2e1d5c029"
+  },
+  "linux_scan_v2_status": {
+    "exit": 101,
+    "test": "turnloop_pool::tests::a_full_pool_queue_refuses_rather_than_growing_without_bound",
+    "result": "SIGABRT after saturation assertion and destructor panic; cause under investigation; no current full Linux pass"
+  }
+}

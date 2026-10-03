@@ -33,6 +33,15 @@ Implemented in this draft
    carrier note only when both epoch flags already make that note a no-op.
    Continue enumerating the shape's keys edge and all other child slots.
 
+4. Release complete interior pages of empty pooled blocks. The original
+   madvise used a pointer guaranteed only 16-byte alignment and ignored errors.
+   An isolated Linux probe demonstrates EINVAL and unchanged residency.
+   Cache page size; preserve both boundary pages; use MADV_DONTNEED on Linux
+   and aligned MADV_FREE elsewhere on Unix. Keep the allocation for reuse.
+   The kernel test confirms three interior pages become nonresident, both
+   neighbors retain sentinel data, and the mapping remains writable.
+   Application RSS, page-fault and instruction tradeoffs still need measurement.
+
 Validation so far
 Current six-file runtime/test patch: 4,834 passed, 0 failed, 5 ignored on
 macOS arm64, serial perry-runtime unit suite. Source hashes and log digest
@@ -40,7 +49,17 @@ are in source-and-validation.json. This includes the promotion-window test.
 Earlier lazy-registry-only revision: Linux runtime 4,813 passed / 5 ignored;
 FFI with runtime-link 75 passed; events 15 passed; compiler and both static
 wrappers built together successfully. Those Linux results do not validate
-the two subsequent scan optimizations. Their Linux run is queued.
+the two subsequent scan optimizations. The scan revision's Linux suite aborted (exit 101) at
+turnloop_pool::tests::a_full_pool_queue_refuses_rather_than_growing_without_bound:
+"a saturated pool must refuse and fall back", then a destructor panic.
+A queue saturation race is suspected but not yet established against baseline.
+Do not count this run as a Linux pass. Linked checks and application A/B did
+not run because the driver stopped at this failure.
+
+Current eight-file revision, including pool release: macOS 4,835 passed,
+0 failed, 5 ignored; isolated Linux kernel helper 3 passed. Hashes and log
+receipts are in pool-source-and-validation.json. Whole Linux validation of
+this revision is pending. Earlier six-file hashes remain separately recorded.
 
 Current measurements
 Clean-main TypeScript, three fresh plain processes, full runtime/no auto:
@@ -54,22 +73,48 @@ so raising thresholds to suppress them is not an established improvement.
 Main costs: slot visitors/marking, retained-edge rebuild, pointer validation,
 shape carrier notes, valid-pointer-set construction and sweep.
 
-Heap attribution requested by the shape campaign
-Observers now read shape slabs/directories/extras/ConstFn lists and distinct
-ObjectMeta allocations, then reconcile type counts/bytes with runtime census.
-The synthetic observer preflight passes: 11 shape records, 2 extras and
-2 ConstFn entries; 80 requested bytes omitted by the stock shape counter.
-The four per-object accessor/descriptor summary fields reserve 32 bytes per
-ObjectMeta. Exact TS/Zod totals remain pending; do not extrapolate the probe.
-The first TS census attempted full #80 from a plain trace. Under GDB the
-program reached only 77 fulls; the hook never armed. The successful stdout
-was NOT a successful census. Failed evidence is preserved. The replacement
-uses the third natural synchronous full (or an earlier one for a shorter
-workload), clearly separate from peak RSS. Each snapshot owns its counts;
-debugger/native fallback can affect liveness and collection counts.
-Native ownership observation separately reconciles resident anonymous pages
-to smaps and splits canonical-key indices by actual allocation stack. Mixed
-pages remain unassigned; requested/usable/resident bytes remain separate.
+Heap attribution requested by the shape campaign — completed
+campaign-attribution.json contains both repeated observations and hashes of
+the raw reports on the build host. Requested/usable/resident bytes are kept
+separate. These snapshots are NOT peak RSS and must not be added together.
+
+TypeScript: third natural synchronous full, two matching census observations.
+Live GC payload: 28.03 MiB; ObjectMeta: 64,734 records x 160 bytes = 9.88 MiB.
+64,217 ordinary owners carry only common prototype/brand/flag facts. Their
+observed facts form 117 groups and require no additional grouping beyond
+existing shapes in this snapshot. This is evidence for the campaign's planned
+migration, not proof of zero replacement storage or an achieved RSS saving.
+Four accessor/descriptor summary fields reserve 32 bytes per meta: 1.98 MiB
+across all records, but only 94 ordinary owners have any nonzero summary.
+Only 17 records (2,720 gross bytes) exist solely for those summaries.
+
+Shape storage: 6,849 records, 541 chunks, four directory pages, 355 extras,
+945 ConstFn entries. Slabs plus extras request 1,164,656 bytes (1.11 MiB).
+Empty record slots occupy 669,632 bytes. At the same chunk count, the 56->64
+byte record growth costs 138,496 requested bytes; this is not an RSS delta.
+Stock shape census omits 23,640 requested bytes of extras/ConstFn lists.
+Native usable allocation: canonical indices 2.50 MiB, arena page tables
+5 MiB, per-object slot-map 2.25 MiB, arena backing 108.375 MiB. Some capacity
+is nonresident. Anonymous resident totals reconcile to smaps: 143.38/142.88
+MiB in the separate native observations. Mixed-owner/free pages stay unassigned.
+
+Zod: original 200-iteration workload has four minors and no natural full;
+plain peak RSS is 30,330,880 / 30,474,240 / 30,400,512 bytes. Even a separate
+2,000-iteration diagnostic reached no full. Therefore a distinct census-only
+source calls gc() at iteration 100 BEFORE safeParse, keeping the schema live.
+The original benchmark and primary measurements remain unchanged. Both
+forced-census repeats match the original Node output. This boundary cannot
+be interpreted as the original workload's natural GC behavior or peak RSS.
+Live GC payload: 602,360 bytes; 277 ObjectMeta records: 44,320 bytes;
+summary fields: 8,864 reserved bytes, three summary-only records: 480 bytes.
+3,249 shapes plus directories/extras request 389,920 bytes. Canonical indices
+use 0.375 MiB allocator capacity; native anonymous resident total is 12.6875
+MiB in each diagnostic repeat. See the JSON for full ownership categories.
+
+Failed measurement history remains available: the first TS hook at full #80
+was never reached under GDB (77 fulls); successful stdout was not a census.
+The original Zod natural-full driver exited 1 because no full existed; the
+explicit diagnostic boundary is documented instead of silently relabeled.
 
 Earlier experiments still relevant, held separately
 The larger rss-header-20261002 experimental tree contains cold metadata,
@@ -88,39 +133,45 @@ later with coordinated codegen/ABI offsets. The campaign owns prototype,
 brand/flag placement; accessors and descriptor summaries (#10498/#10871);
 function descriptors (#10507); array named props/layout; closure/ConstFn
 layout; canonical-key/reverse indices (#10753); and shape record layout.
-This draft changes GC traversal/control only and adds no side table or shape
-format. Residual exotic/symbol/prototype table restructuring still requires
+This draft changes GC bookkeeping, traversal and empty-page release; it adds
+no side table or shape format. Residual exotic/symbol/prototype table restructuring still requires
 a concrete coordination proposal before implementation. No such rewrite is
 underway. The existing exact shape no-op predicate is reused unchanged.
 
 Queued work and remaining acceptance
-- Linux current-candidate runtime/FFI/events plus coherent static build.
+- Triage Linux queue-test abort, then runtime/FFI/events and coherent build.
+- Validate pooled-page release end to end, including page-fault/CPU tradeoffs.
 - Three compiled rooting/old-to-young fixtures on baseline and candidate,
   default and stress modes. Stress must match Node output, copy objects and
   report protected retired from-space. A zero-moving run is not a pass.
 - Normal-auto 17-case A/B, 3 RSS/CPU and 3 instruction/cycle measurements per
   case/arm (204 executions), exact complete stdout against Node 26.5.1.
-- Finish TS/Zod census and native ownership attribution; inspect remaining
-  allocation amplification and expensive GC callbacks for further changes.
+- Use completed TS/Zod attribution to coordinate representation changes;
+  inspect remaining allocation amplification and expensive GC callbacks.
 - Competitors: latest npm ScriptC 0.2.1, Porffor alpha15 (72d048d73d49), and
   Static Hermes static_h ade4a2b20246 pinned. Porffor/Hermes refreshed runs
-  complete; ScriptC's initial attempts could not find unversioned clang.
-  A retry uses installed LLVM 22. Genuine language/output failures stay
-  visible and are not ranked as low-RSS wins. Final Perry comparison pending.
+  complete. ScriptC retry with installed LLVM 22 is complete: six cases match
+  Node in all three runs; JSON fails compilation with SC1043. Initial clang
+  failures are retained. Competitor versions and per-case RSS/CPU medians are
+  included beside this report. Final normal-auto Perry comparison pending.
 - Preserve the strongest validated memory changes while measuring each
   instruction optimization. Review real-app tradeoffs and run CI gates
   before this draft is ready to merge. No merge is requested now.
 
 Where Claude can inspect running evidence
 Build host: perrymaster.skelpo.net, /root/rss-header-20261002.
-Current source: perry-gc-runtime-main (updated by the queued v2 build).
+Remote source: perry-gc-runtime-main (six-file v2 at the failed Linux run).
+Current draft also includes the two-file pool revision; see its source manifest.
 Frozen earlier products: gc-runtime-main; next products: gc-runtime-scan-main.
 Drivers: campaign-v2-run.sh, comparator-scriptc-retry.sh,
 gc-runtime-scan-v2-run.sh. They serialize on /root/.perry-heavy.lock.
-The scan driver runs build -> linked moving checks -> normal-auto matrix.
+The scan driver stopped at Linux tests; no v2 frozen products or A/B exist.
+The pool driver is queued behind the shared lock but requires the absent v2
+success receipt. It cannot provide validation until prerequisites are repaired.
+Do not interpret its queued process as progress past the failed v2 tests.
 State files: campaign-main-v2.exit, campaign-main-native-v2.exit,
 comparator-scriptc-retry.exit, gc-runtime-scan-v2-build.exit,
 gc-runtime-scan-v2-linked.exit, gc-runtime-scan-v2-auto.exit.
 Absent exit files are not proof that a process is alive: inspect its PID.
 The raw logs, source/binary hashes, harnesses and frozen experimental reports
-are retained there; current PR source hashes must match the v2 manifest.
+are retained there; current PR source hashes match pool-source-and-validation.json.
