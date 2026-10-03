@@ -442,7 +442,6 @@ pub(crate) fn object_link_created_prototype(obj_ptr: usize, proto_bits: u64) {
 }
 
 fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, link_kind: PrototypeLinkKind) {
-    let prototype_diverged = link_kind != PrototypeLinkKind::ClassDefault;
     let user_override = matches!(
         link_kind,
         PrototypeLinkKind::UserOverride | PrototypeLinkKind::FreshObject
@@ -560,9 +559,6 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, link_kind: 
             let per_object = proto_id == crate::object::shapes::PROTO_ID_PER_OBJECT
                 || !crate::object::shapes::shape_word_is_writable(obj);
             let mut link_flags = 0u64;
-            if prototype_diverged {
-                link_flags |= crate::object::OBJECT_META_FLAG_PROTO_DIVERGED;
-            }
             if user_override {
                 link_flags |= crate::object::OBJECT_META_FLAG_USER_PROTO_OVERRIDE;
             }
@@ -612,7 +608,7 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, link_kind: 
             }
             let proto_bits = proto_handle.get_heap_word_u64();
             #[cfg(feature = "shape-mint-diag")]
-            if prototype_diverged {
+            if link_kind != PrototypeLinkKind::ClassDefault {
                 crate::object::shape_mint_census::note_proto_divergence(
                     crate::object::shapes::object_shape_stamp(obj),
                     proto_bits,
@@ -864,10 +860,6 @@ unsafe fn cell_is_born_null_proto(obj_ptr: usize) -> bool {
     };
     header.obj_type == crate::gc::GC_TYPE_OBJECT
         && header._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0
-}
-
-pub(crate) fn object_has_prototype_divergence(obj_ptr: usize) -> bool {
-    object_has_prototype_flag(obj_ptr, crate::object::OBJECT_META_FLAG_PROTO_DIVERGED)
 }
 
 /// True only when a user-facing operation selected this receiver's prototype.
@@ -1253,14 +1245,11 @@ mod tests {
 
         let runtime_wired = crate::object::js_object_alloc(0, 0);
         object_set_static_prototype(runtime_wired as usize, crate::value::TAG_NULL);
-        let runtime_meta = unsafe { (*runtime_wired).meta };
-        assert!(!runtime_meta.is_null());
-        assert_ne!(
-            unsafe { (*runtime_meta).flags } & crate::object::OBJECT_META_FLAG_PROTO_DIVERGED,
-            0,
-            "the loud runtime setter must retain its conservative divergence signal"
+        // A diverged prototype is a different shape, not a flag.
+        assert_eq!(
+            object_static_prototype(runtime_wired as usize),
+            Some(crate::value::TAG_NULL)
         );
-        assert!(object_has_prototype_divergence(runtime_wired as usize));
         assert!(
             !object_has_user_prototype_override(runtime_wired as usize),
             "runtime prototype wiring must not masquerade as a user override"
@@ -1274,20 +1263,17 @@ mod tests {
         assert!(
             class_default_meta.is_null()
                 || unsafe { (*class_default_meta).flags }
-                    & (crate::object::OBJECT_META_FLAG_PROTO_DIVERGED
-                        | crate::object::OBJECT_META_FLAG_USER_PROTO_OVERRIDE)
+                    & crate::object::OBJECT_META_FLAG_USER_PROTO_OVERRIDE
                     == 0,
-            "class-default links must publish neither divergence signal"
+            "class-default links must not publish the user-override signal"
         );
         assert_eq!(
             object_static_prototype(class_default as usize),
             Some(crate::value::TAG_NULL)
         );
-        assert!(!object_has_prototype_divergence(class_default as usize));
 
         let evaluated = crate::object::js_object_alloc(0, 0);
         object_link_class_evaluation_prototype(evaluated as usize, crate::value::TAG_NULL);
-        assert!(object_has_prototype_divergence(evaluated as usize));
         assert!(object_has_individual_class_prototype(evaluated as usize));
         assert!(!object_has_user_prototype_override(evaluated as usize));
         assert!(!object_has_individual_class_prototype(
@@ -1299,13 +1285,6 @@ mod tests {
 
         let user_overridden = crate::object::js_object_alloc(0, 0);
         object_set_user_prototype(user_overridden as usize, crate::value::TAG_NULL);
-        let user_meta = unsafe { (*user_overridden).meta };
-        assert!(!user_meta.is_null());
-        assert_ne!(
-            unsafe { (*user_meta).flags } & crate::object::OBJECT_META_FLAG_PROTO_DIVERGED,
-            0
-        );
-        assert!(object_has_prototype_divergence(user_overridden as usize));
         assert!(object_has_user_prototype_override(user_overridden as usize));
     }
 

@@ -110,19 +110,6 @@ pub(super) struct ValidatedObjectReceiver {
     pub(super) object_flags: u16,
 }
 
-/// Read the per-instance prototype-divergence bit after the caller has already
-/// proved a live, non-forwarded `GC_TYPE_OBJECT` receiver.
-///
-/// The public prototype-chain predicate accepts arbitrary addresses and must
-/// re-run buffer/heap/header classification before touching `ObjectHeader`.
-/// Dense Array-subclass paths have just completed that proof, so repeating it
-/// ahead of every receiver-local layout-cache hit is both redundant and hot.
-#[inline(always)]
-unsafe fn validated_object_has_prototype_divergence(obj: *const ObjectHeader) -> bool {
-    let meta = (*obj).meta;
-    !meta.is_null() && (*meta).flags & crate::object::OBJECT_META_FLAG_PROTO_DIVERGED != 0
-}
-
 #[inline(always)]
 fn dense_cache_key(class_id: u32, shape_id: u32) -> u64 {
     ((class_id as u64) << 32) | shape_id as u64
@@ -251,10 +238,9 @@ fn decimal_u32<'a>(mut value: u32, buf: &'a mut [u8; 10]) -> &'a [u8] {
 /// allocates nothing and keeps no address into the moving heap.
 unsafe fn build_dense_layout(obj: *const ObjectHeader) -> Option<DenseSubclassLayout> {
     let class_id = (*obj).class_id;
-    if class_id == 0
-        || !is_array_subclass_class_id(class_id)
-        || validated_object_has_prototype_divergence(obj)
-    {
+    // A receiver moved to another prototype is on another ShapeId (the
+    // prototype identity is a shape fact), so it cannot meet this layout.
+    if class_id == 0 || !is_array_subclass_class_id(class_id) {
         return None;
     }
     let shape = crate::object::shapes::object_shape_descriptor(obj)?;
@@ -366,11 +352,9 @@ fn validated_object_receiver_for_value(value: f64) -> Option<ValidatedObjectRece
 /// descriptor, hole, or prototype case returns `None`.
 #[inline]
 fn dense_layout_for_validated_object(obj: *const ObjectHeader) -> Option<DenseSubclassLayout> {
-    // This is per receiver, not per ShapeId. A cached layout built before
-    // Object.setPrototypeOf must not let this object borrow the old proof.
-    if unsafe { validated_object_has_prototype_divergence(obj) } {
-        return None;
-    }
+    // `Object.setPrototypeOf` moves the receiver to another ShapeId, so a
+    // layout cached for the old one (owner word or `(class, ShapeId)` key)
+    // cannot be borrowed afterwards.
     if let Some(layout) = unsafe { owner_cached_dense_layout(obj) } {
         return Some(layout);
     }

@@ -290,8 +290,10 @@ pub(crate) fn set_field_by_name_object_tail(
                 || crate::object::own_descriptors_skip_key(
                     obj as usize,
                     f64::from_bits(JSValue::string_ptr(key as *mut _).bits()),
-                ))
-            && !super::prototype_chain::object_has_prototype_divergence(obj as usize);
+                ));
+        // No per-receiver prototype gate: the plan key carries the receiver's
+        // prototype (`receiver_proto_bits`, a fact of its shape), so a
+        // receiver on another chain can only meet another plan.
         let plan_fast = plan_eligible
             && super::prop_plan::store_plan_check(
                 obj_class_id,
@@ -560,8 +562,7 @@ pub(crate) fn set_field_by_name_object_tail(
                 && obj_flags & PLAN_BLOCKING_FLAGS == 0
                 // `desc_gate_ok` above already proved this key is uncovered on
                 // this receiver, which is the per-key half of the old flag.
-                && desc_gate_ok
-                && !super::prototype_chain::object_has_prototype_divergence(obj as usize);
+                && desc_gate_ok;
             if !plan_fast && record_plan_eligible {
                 super::prop_plan::store_plan_record(
                     obj_class_id,

@@ -251,7 +251,7 @@ fn dense_array_subclass_reads_slots_until_its_shape_changes() {
 }
 
 #[test]
-fn dense_array_subclass_cache_declines_a_per_instance_prototype_override() {
+fn dense_array_subclass_layout_follows_the_shape_across_a_prototype_override() {
     // Pins the shape-carried representation: the elements store is the
     // default, and this test is about the property-shape machinery.
     let _representation =
@@ -265,11 +265,21 @@ fn dense_array_subclass_cache_declines_a_per_instance_prototype_override() {
     crate::object::js_object_set_index_polymorphic(obj as i64, 0.0, 11.0);
 
     assert_eq!(array_subclass_fast_index_get(receiver, 0), Some(11.0));
+    let before = unsafe { (*obj).parent_class_id };
     crate::object::prototype_chain::object_set_user_prototype(obj as usize, crate::value::TAG_NULL);
+    // The prototype is a fact of the shape: the receiver moved to another
+    // ShapeId, so no layout cached for the old one (owner word or
+    // `(class, ShapeId)` key) can answer for it. What the new shape's layout
+    // answers is the receiver's OWN element, which no prototype affects.
+    assert_ne!(
+        unsafe { (*obj).parent_class_id },
+        before,
+        "a prototype change must move the receiver to another ShapeId"
+    );
     assert_eq!(
         array_subclass_fast_index_get(receiver, 0),
-        None,
-        "a receiver-local dense-layout record must not survive prototype divergence"
+        Some(11.0),
+        "an own dense element reads the same on any prototype"
     );
 }
 

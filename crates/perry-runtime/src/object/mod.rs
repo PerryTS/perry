@@ -1790,8 +1790,7 @@ pub(crate) unsafe fn object_keys_and_live_slots(
 pub(crate) mod meta_flags;
 pub(crate) use meta_flags::{
     OBJECT_META_FLAG_CLASS_EVALUATION_PROTO, OBJECT_META_FLAG_EXOTIC_READ_RECEIVER,
-    OBJECT_META_FLAG_IS_PROTOTYPE, OBJECT_META_FLAG_PROTO_DIVERGED,
-    OBJECT_META_FLAG_USER_PROTO_OVERRIDE,
+    OBJECT_META_FLAG_IS_PROTOTYPE, OBJECT_META_FLAG_USER_PROTO_OVERRIDE,
 };
 
 pub(crate) mod meta_record;

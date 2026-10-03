@@ -542,11 +542,6 @@ unsafe fn define_append_transition_eligible(
         crate::object::shape_mint_census::note_define_outcome("ineligible: exotic expando");
         return false;
     }
-    if crate::object::prototype_chain::object_has_prototype_divergence(obj as usize) {
-        #[cfg(feature = "shape-mint-diag")]
-        crate::object::shape_mint_census::note_define_outcome("ineligible: prototype divergence");
-        return false;
-    }
     let verdict = match super::super::shapes::object_shape_descriptor(obj) {
         // A keyless receiver has no descriptor yet on some paths; the tail
         // learns its keyless→one-key edge from the same stamp.

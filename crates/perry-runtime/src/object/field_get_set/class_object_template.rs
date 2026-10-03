@@ -715,8 +715,7 @@ pub(crate) unsafe fn prototype_from_template(
         owner.to_bits(),
     );
     (*meta).prototype = parent_bits;
-    (*meta).flags |= crate::object::OBJECT_META_FLAG_PROTO_DIVERGED
-        | crate::object::OBJECT_META_FLAG_CLASS_EVALUATION_PROTO;
+    (*meta).flags |= crate::object::OBJECT_META_FLAG_CLASS_EVALUATION_PROTO;
     crate::gc::runtime_write_barrier_slot(
         meta as usize,
         &(*meta).prototype as *const u64 as usize,
@@ -785,10 +784,7 @@ pub(crate) unsafe fn record_prototype_template(
         || meta.is_null()
         || (*meta).prototype != parent_proto
         || (*meta).private_evaluation_brand != owner
-        || (*meta).flags
-            & !(crate::object::OBJECT_META_FLAG_PROTO_DIVERGED
-                | crate::object::OBJECT_META_FLAG_CLASS_EVALUATION_PROTO)
-            != 0
+        || (*meta).flags & !crate::object::OBJECT_META_FLAG_CLASS_EVALUATION_PROTO != 0
         || (*meta).spill != 0
         || u32::try_from(count).is_err()
         || cell.proto_fills_base() + 2 * count > cell.len()
