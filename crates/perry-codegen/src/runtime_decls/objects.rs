@@ -71,6 +71,10 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // The key-add hit's chain-verdict generation and the store census
     // (expr/put_value_store_ic.rs, expr/store_census.rs).
     module.add_external_global("PERRY_PROTO_VALIDITY", I64);
+    // Sticky worker-start gate for process-global method sites. After it
+    // becomes nonzero, emitted sites use ordinary dispatch without touching
+    // primary-heap holder entries.
+    module.add_external_global("PERRY_METHOD_SITE_WORKERS_PRESENT", I8);
     module.add_external_global("PERRY_STORE_CENSUS", I64);
     // #10943: has ANY named property ever been installed on a non-ordinary
     // cell in this process? Zero is the own-override guard's own proof that a
@@ -632,12 +636,6 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     );
     module.declare_function("perry_transition_cache_base", PTR, &[]);
     module.declare_function("js_transition_ic_note_hit", VOID, &[]);
-    // #10834/#10842: the inherited-read cache hit, asked on the generic
-    // property read's declined-guard edge (`expr/property_get/
-    // generic_dispatch.rs`): masked receiver + interned key -> NaN-boxed
-    // value, or `TAG_HOLE` for a decline. A pure state read (see
-    // `gc_call_effects.rs`).
-    module.declare_function("js_inherited_read_cache_hit_f64", DOUBLE, &[PTR, PTR]);
     // The per-agent pointer block (`expr/agent_ptr.rs`), read inline on ELF
     // executables through the initial-exec TLS model; its slot-1 accessor,
     // and the method-call site's miss entry (`expr/method_site.rs`).

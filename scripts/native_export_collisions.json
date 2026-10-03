@@ -1,0 +1,867 @@
+{
+  "scope": "Production runtime, stdlib, ffi and perry-ext-* source exports across all features/targets. Existing feature-gated alternate providers and fallback stubs; #10678. New symbols/providers and stale records fail; baseline cannot rise against PR base.",
+  "duplicates": {
+    "js_argon2_hash": [
+      "crates/perry-ext-argon2/src/lib.rs",
+      "crates/perry-stdlib/src/argon2.rs"
+    ],
+    "js_argon2_hash_sync": [
+      "crates/perry-ext-argon2/src/lib.rs",
+      "crates/perry-stdlib/src/argon2.rs"
+    ],
+    "js_argon2_needs_rehash": [
+      "crates/perry-ext-argon2/src/lib.rs",
+      "crates/perry-stdlib/src/argon2.rs"
+    ],
+    "js_argon2_verify": [
+      "crates/perry-ext-argon2/src/lib.rs",
+      "crates/perry-stdlib/src/argon2.rs"
+    ],
+    "js_argon2_verify_sync": [
+      "crates/perry-ext-argon2/src/lib.rs",
+      "crates/perry-stdlib/src/argon2.rs"
+    ],
+    "js_bcrypt_compare": [
+      "crates/perry-ext-bcrypt/src/lib.rs",
+      "crates/perry-stdlib/src/bcrypt.rs"
+    ],
+    "js_bcrypt_compare_sync": [
+      "crates/perry-ext-bcrypt/src/lib.rs",
+      "crates/perry-stdlib/src/bcrypt.rs"
+    ],
+    "js_bcrypt_gen_salt": [
+      "crates/perry-ext-bcrypt/src/lib.rs",
+      "crates/perry-stdlib/src/bcrypt.rs"
+    ],
+    "js_bcrypt_hash": [
+      "crates/perry-ext-bcrypt/src/lib.rs",
+      "crates/perry-stdlib/src/bcrypt.rs"
+    ],
+    "js_bcrypt_hash_sync": [
+      "crates/perry-ext-bcrypt/src/lib.rs",
+      "crates/perry-stdlib/src/bcrypt.rs"
+    ],
+    "js_blob_new": [
+      "crates/perry-runtime/src/stdlib_stubs.rs",
+      "crates/perry-stdlib/src/fetch_blob.rs"
+    ],
+    "js_cheerio_load": [
+      "crates/perry-ext-cheerio/src/lib.rs",
+      "crates/perry-stdlib/src/cheerio.rs"
+    ],
+    "js_cheerio_load_fragment": [
+      "crates/perry-ext-cheerio/src/lib.rs",
+      "crates/perry-stdlib/src/cheerio.rs"
+    ],
+    "js_cheerio_select": [
+      "crates/perry-ext-cheerio/src/lib.rs",
+      "crates/perry-stdlib/src/cheerio.rs"
+    ],
+    "js_cheerio_selection_attr": [
+      "crates/perry-ext-cheerio/src/lib.rs",
+      "crates/perry-stdlib/src/cheerio.rs"
+    ],
+    "js_cheerio_selection_attrs": [
+      "crates/perry-ext-cheerio/src/lib.rs",
+      "crates/perry-stdlib/src/cheerio.rs"
+    ],
+    "js_cheerio_selection_children": [
+      "crates/perry-ext-cheerio/src/lib.rs",
+      "crates/perry-stdlib/src/cheerio.rs"
+    ],
+    "js_cheerio_selection_eq": [
+      "crates/perry-ext-cheerio/src/lib.rs",
+      "crates/perry-stdlib/src/cheerio.rs"
+    ],
+    "js_cheerio_selection_find": [
+      "crates/perry-ext-cheerio/src/lib.rs",
+      "crates/perry-stdlib/src/cheerio.rs"
+    ],
+    "js_cheerio_selection_first": [
+      "crates/perry-ext-cheerio/src/lib.rs",
+      "crates/perry-stdlib/src/cheerio.rs"
+    ],
+    "js_cheerio_selection_has_class": [
+      "crates/perry-ext-cheerio/src/lib.rs",
+      "crates/perry-stdlib/src/cheerio.rs"
+    ],
+    "js_cheerio_selection_html": [
+      "crates/perry-ext-cheerio/src/lib.rs",
+      "crates/perry-stdlib/src/cheerio.rs"
+    ],
+    "js_cheerio_selection_is": [
+      "crates/perry-ext-cheerio/src/lib.rs",
+      "crates/perry-stdlib/src/cheerio.rs"
+    ],
+    "js_cheerio_selection_last": [
+      "crates/perry-ext-cheerio/src/lib.rs",
+      "crates/perry-stdlib/src/cheerio.rs"
+    ],
+    "js_cheerio_selection_length": [
+      "crates/perry-ext-cheerio/src/lib.rs",
+      "crates/perry-stdlib/src/cheerio.rs"
+    ],
+    "js_cheerio_selection_parent": [
+      "crates/perry-ext-cheerio/src/lib.rs",
+      "crates/perry-stdlib/src/cheerio.rs"
+    ],
+    "js_cheerio_selection_text": [
+      "crates/perry-ext-cheerio/src/lib.rs",
+      "crates/perry-stdlib/src/cheerio.rs"
+    ],
+    "js_cheerio_selection_texts": [
+      "crates/perry-ext-cheerio/src/lib.rs",
+      "crates/perry-stdlib/src/cheerio.rs"
+    ],
+    "js_cheerio_selection_to_array": [
+      "crates/perry-ext-cheerio/src/lib.rs",
+      "crates/perry-stdlib/src/cheerio.rs"
+    ],
+    "js_cron_timer_has_pending": [
+      "crates/perry-runtime/src/stdlib_stubs.rs",
+      "crates/perry-stdlib/src/lib.rs"
+    ],
+    "js_cron_timer_tick": [
+      "crates/perry-runtime/src/stdlib_stubs.rs",
+      "crates/perry-stdlib/src/lib.rs"
+    ],
+    "js_ethers_format_ether": [
+      "crates/perry-ext-ethers/src/lib.rs",
+      "crates/perry-stdlib/src/ethers.rs"
+    ],
+    "js_ethers_format_units": [
+      "crates/perry-ext-ethers/src/lib.rs",
+      "crates/perry-stdlib/src/ethers.rs"
+    ],
+    "js_ethers_get_address": [
+      "crates/perry-ext-ethers/src/lib.rs",
+      "crates/perry-stdlib/src/ethers.rs"
+    ],
+    "js_ethers_parse_ether": [
+      "crates/perry-ext-ethers/src/lib.rs",
+      "crates/perry-stdlib/src/ethers.rs"
+    ],
+    "js_ethers_parse_units": [
+      "crates/perry-ext-ethers/src/lib.rs",
+      "crates/perry-stdlib/src/ethers.rs"
+    ],
+    "js_ethers_wallet_create_random": [
+      "crates/perry-ext-ethers/src/lib.rs",
+      "crates/perry-stdlib/src/ethers.rs"
+    ],
+    "js_event_emitter_async_resource_async_id": [
+      "crates/perry-ext-events/src/lib.rs",
+      "crates/perry-stdlib/src/events/constructors.rs"
+    ],
+    "js_event_emitter_async_resource_async_resource": [
+      "crates/perry-ext-events/src/lib.rs",
+      "crates/perry-stdlib/src/events/constructors.rs"
+    ],
+    "js_event_emitter_async_resource_emit_destroy": [
+      "crates/perry-ext-events/src/lib.rs",
+      "crates/perry-stdlib/src/events/constructors.rs"
+    ],
+    "js_event_emitter_async_resource_new": [
+      "crates/perry-ext-events/src/lib.rs",
+      "crates/perry-stdlib/src/events/constructors.rs"
+    ],
+    "js_event_emitter_async_resource_trigger_async_id": [
+      "crates/perry-ext-events/src/lib.rs",
+      "crates/perry-stdlib/src/events/constructors.rs"
+    ],
+    "js_event_emitter_domain_value": [
+      "crates/perry-ext-events/src/lib.rs",
+      "crates/perry-stdlib/src/events/domain.rs"
+    ],
+    "js_event_emitter_emit": [
+      "crates/perry-ext-events/src/lib.rs",
+      "crates/perry-stdlib/src/events.rs"
+    ],
+    "js_event_emitter_emit0": [
+      "crates/perry-ext-events/src/lib.rs",
+      "crates/perry-stdlib/src/events.rs"
+    ],
+    "js_event_emitter_event_names": [
+      "crates/perry-ext-events/src/lib.rs",
+      "crates/perry-stdlib/src/events.rs"
+    ],
+    "js_event_emitter_get_domain": [
+      "crates/perry-ext-events/src/lib.rs",
+      "crates/perry-stdlib/src/events/domain.rs"
+    ],
+    "js_event_emitter_get_max_listeners": [
+      "crates/perry-ext-events/src/lib.rs",
+      "crates/perry-stdlib/src/events.rs"
+    ],
+    "js_event_emitter_is_handle": [
+      "crates/perry-ext-events/src/lib.rs",
+      "crates/perry-stdlib/src/events/domain.rs"
+    ],
+    "js_event_emitter_listener_count": [
+      "crates/perry-ext-events/src/lib.rs",
+      "crates/perry-stdlib/src/events.rs"
+    ],
+    "js_event_emitter_listeners": [
+      "crates/perry-ext-events/src/lib.rs",
+      "crates/perry-stdlib/src/events.rs"
+    ],
+    "js_event_emitter_new": [
+      "crates/perry-ext-events/src/lib.rs",
+      "crates/perry-stdlib/src/events/constructors.rs"
+    ],
+    "js_event_emitter_new_with_options": [
+      "crates/perry-ext-events/src/lib.rs",
+      "crates/perry-stdlib/src/events/constructors.rs"
+    ],
+    "js_event_emitter_on": [
+      "crates/perry-ext-events/src/lib.rs",
+      "crates/perry-stdlib/src/events.rs"
+    ],
+    "js_event_emitter_once": [
+      "crates/perry-ext-events/src/lib.rs",
+      "crates/perry-stdlib/src/events.rs"
+    ],
+    "js_event_emitter_prepend_listener": [
+      "crates/perry-ext-events/src/lib.rs",
+      "crates/perry-stdlib/src/events.rs"
+    ],
+    "js_event_emitter_prepend_once_listener": [
+      "crates/perry-ext-events/src/lib.rs",
+      "crates/perry-stdlib/src/events.rs"
+    ],
+    "js_event_emitter_raw_listeners": [
+      "crates/perry-ext-events/src/lib.rs",
+      "crates/perry-stdlib/src/events.rs"
+    ],
+    "js_event_emitter_remove_all_listeners": [
+      "crates/perry-ext-events/src/lib.rs",
+      "crates/perry-stdlib/src/events.rs"
+    ],
+    "js_event_emitter_remove_listener": [
+      "crates/perry-ext-events/src/lib.rs",
+      "crates/perry-stdlib/src/events.rs"
+    ],
+    "js_event_emitter_set_domain": [
+      "crates/perry-ext-events/src/lib.rs",
+      "crates/perry-stdlib/src/events/domain.rs"
+    ],
+    "js_event_emitter_set_max_listeners": [
+      "crates/perry-ext-events/src/lib.rs",
+      "crates/perry-stdlib/src/events.rs"
+    ],
+    "js_events_add_abort_listener": [
+      "crates/perry-ext-events/src/module_on.rs",
+      "crates/perry-stdlib/src/events/module_helpers.rs"
+    ],
+    "js_events_get_event_listeners": [
+      "crates/perry-ext-events/src/module_helpers.rs",
+      "crates/perry-stdlib/src/events/module_helpers.rs"
+    ],
+    "js_events_get_max_listeners": [
+      "crates/perry-ext-events/src/module_helpers.rs",
+      "crates/perry-stdlib/src/events/module_helpers.rs"
+    ],
+    "js_events_listener_count": [
+      "crates/perry-ext-events/src/module_helpers.rs",
+      "crates/perry-stdlib/src/events/module_helpers.rs"
+    ],
+    "js_events_native_dispatch": [
+      "crates/perry-ext-events/src/module_helpers.rs",
+      "crates/perry-stdlib/src/events/module_helpers.rs"
+    ],
+    "js_events_on": [
+      "crates/perry-ext-events/src/module_on.rs",
+      "crates/perry-stdlib/src/events/events_on.rs"
+    ],
+    "js_events_once": [
+      "crates/perry-ext-events/src/lib.rs",
+      "crates/perry-stdlib/src/events/once_helpers.rs"
+    ],
+    "js_events_set_max_listeners": [
+      "crates/perry-ext-events/src/module_helpers.rs",
+      "crates/perry-stdlib/src/events/module_helpers.rs"
+    ],
+    "js_fetch_with_options": [
+      "crates/perry-runtime/src/stdlib_stubs.rs",
+      "crates/perry-stdlib/src/fetch/mod.rs"
+    ],
+    "js_headers_from_value": [
+      "crates/perry-runtime/src/stdlib_stubs.rs",
+      "crates/perry-stdlib/src/fetch/headers.rs"
+    ],
+    "js_headers_init_from_value": [
+      "crates/perry-runtime/src/stdlib_stubs.rs",
+      "crates/perry-stdlib/src/fetch/headers.rs"
+    ],
+    "js_headers_new": [
+      "crates/perry-runtime/src/stdlib_stubs.rs",
+      "crates/perry-stdlib/src/fetch/headers.rs"
+    ],
+    "js_keccak256_native": [
+      "crates/perry-ext-ethers/src/lib.rs",
+      "crates/perry-stdlib/src/ethers.rs"
+    ],
+    "js_keccak256_native_bytes": [
+      "crates/perry-ext-ethers/src/lib.rs",
+      "crates/perry-stdlib/src/ethers.rs"
+    ],
+    "js_nodemailer_create_transport": [
+      "crates/perry-ext-nodemailer/src/lib.rs",
+      "crates/perry-stdlib/src/nodemailer.rs"
+    ],
+    "js_nodemailer_send_mail": [
+      "crates/perry-ext-nodemailer/src/lib.rs",
+      "crates/perry-stdlib/src/nodemailer.rs"
+    ],
+    "js_nodemailer_verify": [
+      "crates/perry-ext-nodemailer/src/lib.rs",
+      "crates/perry-stdlib/src/nodemailer.rs"
+    ],
+    "js_readable_stream_cancel": [
+      "crates/perry-ext-streams/src/lib.rs",
+      "crates/perry-stdlib/src/streams.rs"
+    ],
+    "js_readable_stream_controller_close": [
+      "crates/perry-ext-streams/src/lib.rs",
+      "crates/perry-stdlib/src/streams.rs"
+    ],
+    "js_readable_stream_controller_desired_size": [
+      "crates/perry-ext-streams/src/lib.rs",
+      "crates/perry-stdlib/src/streams.rs"
+    ],
+    "js_readable_stream_controller_enqueue": [
+      "crates/perry-ext-streams/src/lib.rs",
+      "crates/perry-stdlib/src/streams.rs"
+    ],
+    "js_readable_stream_controller_error": [
+      "crates/perry-ext-streams/src/lib.rs",
+      "crates/perry-stdlib/src/streams.rs"
+    ],
+    "js_readable_stream_from_blob": [
+      "crates/perry-ext-streams/src/lib.rs",
+      "crates/perry-stdlib/src/streams.rs"
+    ],
+    "js_readable_stream_from_iterable": [
+      "crates/perry-ext-streams/src/lib.rs",
+      "crates/perry-stdlib/src/streams.rs"
+    ],
+    "js_readable_stream_from_response": [
+      "crates/perry-ext-streams/src/lib.rs",
+      "crates/perry-stdlib/src/streams.rs"
+    ],
+    "js_readable_stream_get_reader": [
+      "crates/perry-ext-streams/src/lib.rs",
+      "crates/perry-stdlib/src/streams.rs"
+    ],
+    "js_readable_stream_locked": [
+      "crates/perry-ext-streams/src/lib.rs",
+      "crates/perry-stdlib/src/streams.rs"
+    ],
+    "js_readable_stream_new": [
+      "crates/perry-ext-streams/src/lib.rs",
+      "crates/perry-stdlib/src/streams.rs"
+    ],
+    "js_readable_stream_pipe_through": [
+      "crates/perry-ext-streams/src/lib.rs",
+      "crates/perry-stdlib/src/streams.rs"
+    ],
+    "js_readable_stream_pipe_to": [
+      "crates/perry-ext-streams/src/lib.rs",
+      "crates/perry-stdlib/src/streams/pipe.rs"
+    ],
+    "js_readable_stream_tee": [
+      "crates/perry-ext-streams/src/lib.rs",
+      "crates/perry-stdlib/src/streams/tee.rs"
+    ],
+    "js_reader_cancel": [
+      "crates/perry-ext-streams/src/lib.rs",
+      "crates/perry-stdlib/src/streams.rs"
+    ],
+    "js_reader_closed": [
+      "crates/perry-ext-streams/src/lib.rs",
+      "crates/perry-stdlib/src/streams.rs"
+    ],
+    "js_reader_read": [
+      "crates/perry-ext-streams/src/lib.rs",
+      "crates/perry-stdlib/src/streams.rs"
+    ],
+    "js_reader_release_lock": [
+      "crates/perry-ext-streams/src/lib.rs",
+      "crates/perry-stdlib/src/streams.rs"
+    ],
+    "js_readline_set_raw_mode": [
+      "crates/perry-runtime/src/stdlib_stubs.rs",
+      "crates/perry-stdlib/src/readline/mod.rs"
+    ],
+    "js_readline_stdin_destroy": [
+      "crates/perry-runtime/src/stdlib_stubs.rs",
+      "crates/perry-stdlib/src/readline/mod.rs"
+    ],
+    "js_readline_stdin_on": [
+      "crates/perry-runtime/src/stdlib_stubs.rs",
+      "crates/perry-stdlib/src/readline/mod.rs"
+    ],
+    "js_readline_stdin_pause": [
+      "crates/perry-runtime/src/stdlib_stubs.rs",
+      "crates/perry-stdlib/src/readline/mod.rs"
+    ],
+    "js_readline_stdin_ref": [
+      "crates/perry-runtime/src/stdlib_stubs.rs",
+      "crates/perry-stdlib/src/readline/mod.rs"
+    ],
+    "js_readline_stdin_remove_listener": [
+      "crates/perry-runtime/src/stdlib_stubs.rs",
+      "crates/perry-stdlib/src/readline/mod.rs"
+    ],
+    "js_readline_stdin_resume": [
+      "crates/perry-runtime/src/stdlib_stubs.rs",
+      "crates/perry-stdlib/src/readline/mod.rs"
+    ],
+    "js_readline_stdin_unref": [
+      "crates/perry-runtime/src/stdlib_stubs.rs",
+      "crates/perry-stdlib/src/readline/mod.rs"
+    ],
+    "js_request_new": [
+      "crates/perry-runtime/src/stdlib_stubs.rs",
+      "crates/perry-stdlib/src/fetch/request_ctor.rs"
+    ],
+    "js_response_new": [
+      "crates/perry-runtime/src/stdlib_stubs.rs",
+      "crates/perry-stdlib/src/fetch/response_ctor.rs"
+    ],
+    "js_response_static_error": [
+      "crates/perry-runtime/src/stdlib_stubs.rs",
+      "crates/perry-stdlib/src/fetch/body_metadata.rs"
+    ],
+    "js_response_static_json": [
+      "crates/perry-runtime/src/stdlib_stubs.rs",
+      "crates/perry-stdlib/src/fetch/body_clone.rs"
+    ],
+    "js_response_static_redirect": [
+      "crates/perry-runtime/src/stdlib_stubs.rs",
+      "crates/perry-stdlib/src/fetch/body_clone.rs"
+    ],
+    "js_sharp_blur": [
+      "crates/perry-ext-sharp/src/lib.rs",
+      "crates/perry-stdlib/src/sharp.rs"
+    ],
+    "js_sharp_crop": [
+      "crates/perry-ext-sharp/src/lib.rs",
+      "crates/perry-stdlib/src/sharp.rs"
+    ],
+    "js_sharp_flip": [
+      "crates/perry-ext-sharp/src/lib.rs",
+      "crates/perry-stdlib/src/sharp.rs"
+    ],
+    "js_sharp_flop": [
+      "crates/perry-ext-sharp/src/lib.rs",
+      "crates/perry-stdlib/src/sharp.rs"
+    ],
+    "js_sharp_from_buffer": [
+      "crates/perry-ext-sharp/src/lib.rs",
+      "crates/perry-stdlib/src/sharp.rs"
+    ],
+    "js_sharp_from_file": [
+      "crates/perry-ext-sharp/src/lib.rs",
+      "crates/perry-stdlib/src/sharp.rs"
+    ],
+    "js_sharp_grayscale": [
+      "crates/perry-ext-sharp/src/lib.rs",
+      "crates/perry-stdlib/src/sharp.rs"
+    ],
+    "js_sharp_height": [
+      "crates/perry-ext-sharp/src/lib.rs",
+      "crates/perry-stdlib/src/sharp.rs"
+    ],
+    "js_sharp_jpeg": [
+      "crates/perry-ext-sharp/src/lib.rs",
+      "crates/perry-stdlib/src/sharp.rs"
+    ],
+    "js_sharp_metadata": [
+      "crates/perry-ext-sharp/src/lib.rs",
+      "crates/perry-stdlib/src/sharp.rs"
+    ],
+    "js_sharp_png": [
+      "crates/perry-ext-sharp/src/lib.rs",
+      "crates/perry-stdlib/src/sharp.rs"
+    ],
+    "js_sharp_resize": [
+      "crates/perry-ext-sharp/src/lib.rs",
+      "crates/perry-stdlib/src/sharp.rs"
+    ],
+    "js_sharp_rotate": [
+      "crates/perry-ext-sharp/src/lib.rs",
+      "crates/perry-stdlib/src/sharp.rs"
+    ],
+    "js_sharp_sharpen": [
+      "crates/perry-ext-sharp/src/lib.rs",
+      "crates/perry-stdlib/src/sharp.rs"
+    ],
+    "js_sharp_to_buffer": [
+      "crates/perry-ext-sharp/src/lib.rs",
+      "crates/perry-stdlib/src/sharp.rs"
+    ],
+    "js_sharp_to_file": [
+      "crates/perry-ext-sharp/src/lib.rs",
+      "crates/perry-stdlib/src/sharp.rs"
+    ],
+    "js_sharp_webp": [
+      "crates/perry-ext-sharp/src/lib.rs",
+      "crates/perry-stdlib/src/sharp.rs"
+    ],
+    "js_sharp_width": [
+      "crates/perry-ext-sharp/src/lib.rs",
+      "crates/perry-stdlib/src/sharp.rs"
+    ],
+    "js_sqlite_begin_transaction": [
+      "crates/perry-ext-better-sqlite3/src/lib.rs",
+      "crates/perry-stdlib/src/sqlite/better.rs"
+    ],
+    "js_sqlite_close": [
+      "crates/perry-ext-better-sqlite3/src/lib.rs",
+      "crates/perry-stdlib/src/sqlite/better.rs"
+    ],
+    "js_sqlite_commit": [
+      "crates/perry-ext-better-sqlite3/src/lib.rs",
+      "crates/perry-stdlib/src/sqlite/better.rs"
+    ],
+    "js_sqlite_exec": [
+      "crates/perry-ext-better-sqlite3/src/lib.rs",
+      "crates/perry-stdlib/src/sqlite/better.rs"
+    ],
+    "js_sqlite_in_transaction": [
+      "crates/perry-ext-better-sqlite3/src/lib.rs",
+      "crates/perry-stdlib/src/sqlite/better.rs"
+    ],
+    "js_sqlite_is_db_handle": [
+      "crates/perry-ext-better-sqlite3/src/lib.rs",
+      "crates/perry-stdlib/src/lib.rs",
+      "crates/perry-stdlib/src/sqlite/better.rs"
+    ],
+    "js_sqlite_is_stmt_handle": [
+      "crates/perry-ext-better-sqlite3/src/lib.rs",
+      "crates/perry-stdlib/src/lib.rs",
+      "crates/perry-stdlib/src/sqlite/better.rs"
+    ],
+    "js_sqlite_open": [
+      "crates/perry-ext-better-sqlite3/src/lib.rs",
+      "crates/perry-stdlib/src/sqlite/better.rs"
+    ],
+    "js_sqlite_pragma": [
+      "crates/perry-ext-better-sqlite3/src/lib.rs",
+      "crates/perry-stdlib/src/sqlite/better.rs"
+    ],
+    "js_sqlite_prepare": [
+      "crates/perry-ext-better-sqlite3/src/lib.rs",
+      "crates/perry-stdlib/src/sqlite/better.rs"
+    ],
+    "js_sqlite_rollback": [
+      "crates/perry-ext-better-sqlite3/src/lib.rs",
+      "crates/perry-stdlib/src/sqlite/better.rs"
+    ],
+    "js_sqlite_stmt_all": [
+      "crates/perry-ext-better-sqlite3/src/lib.rs",
+      "crates/perry-stdlib/src/sqlite/better.rs"
+    ],
+    "js_sqlite_stmt_get": [
+      "crates/perry-ext-better-sqlite3/src/lib.rs",
+      "crates/perry-stdlib/src/sqlite/better.rs"
+    ],
+    "js_sqlite_stmt_raw": [
+      "crates/perry-ext-better-sqlite3/src/lib.rs",
+      "crates/perry-stdlib/src/sqlite/better.rs"
+    ],
+    "js_sqlite_stmt_run": [
+      "crates/perry-ext-better-sqlite3/src/lib.rs",
+      "crates/perry-stdlib/src/sqlite/better.rs"
+    ],
+    "js_stdlib_init_dispatch": [
+      "crates/perry-runtime/src/stdlib_stubs.rs",
+      "crates/perry-stdlib/src/common/dispatch/init.rs"
+    ],
+    "js_stdlib_process_pending": [
+      "crates/perry-runtime/src/stdlib_stubs.rs",
+      "crates/perry-stdlib/src/common/async_bridge.rs"
+    ],
+    "js_transform_stream_new": [
+      "crates/perry-ext-streams/src/lib.rs",
+      "crates/perry-stdlib/src/streams/transform.rs"
+    ],
+    "js_transform_stream_readable": [
+      "crates/perry-ext-streams/src/lib.rs",
+      "crates/perry-stdlib/src/streams/transform.rs"
+    ],
+    "js_transform_stream_writable": [
+      "crates/perry-ext-streams/src/lib.rs",
+      "crates/perry-stdlib/src/streams/transform.rs"
+    ],
+    "js_writable_stream_abort": [
+      "crates/perry-ext-streams/src/lib.rs",
+      "crates/perry-stdlib/src/streams/writable.rs"
+    ],
+    "js_writable_stream_close": [
+      "crates/perry-ext-streams/src/lib.rs",
+      "crates/perry-stdlib/src/streams/writable.rs"
+    ],
+    "js_writable_stream_get_writer": [
+      "crates/perry-ext-streams/src/lib.rs",
+      "crates/perry-stdlib/src/streams/writable.rs"
+    ],
+    "js_writable_stream_locked": [
+      "crates/perry-ext-streams/src/lib.rs",
+      "crates/perry-stdlib/src/streams/writable.rs"
+    ],
+    "js_writable_stream_new": [
+      "crates/perry-ext-streams/src/lib.rs",
+      "crates/perry-stdlib/src/streams/writable.rs"
+    ],
+    "js_writer_abort": [
+      "crates/perry-ext-streams/src/lib.rs",
+      "crates/perry-stdlib/src/streams/writable.rs"
+    ],
+    "js_writer_close": [
+      "crates/perry-ext-streams/src/lib.rs",
+      "crates/perry-stdlib/src/streams/writable.rs"
+    ],
+    "js_writer_closed": [
+      "crates/perry-ext-streams/src/lib.rs",
+      "crates/perry-stdlib/src/streams/writable.rs"
+    ],
+    "js_writer_desired_size": [
+      "crates/perry-ext-streams/src/lib.rs",
+      "crates/perry-stdlib/src/streams/writable.rs"
+    ],
+    "js_writer_ready": [
+      "crates/perry-ext-streams/src/lib.rs",
+      "crates/perry-stdlib/src/streams/writable.rs"
+    ],
+    "js_writer_release_lock": [
+      "crates/perry-ext-streams/src/lib.rs",
+      "crates/perry-stdlib/src/streams/writable.rs"
+    ],
+    "js_writer_write": [
+      "crates/perry-ext-streams/src/lib.rs",
+      "crates/perry-stdlib/src/streams/writable.rs"
+    ],
+    "js_ws_close": [
+      "crates/perry-ext-ws/src/lib.rs",
+      "crates/perry-runtime/src/stdlib_stubs.rs"
+    ],
+    "js_ws_close_with": [
+      "crates/perry-ext-ws/src/lib.rs",
+      "crates/perry-runtime/src/stdlib_stubs.rs"
+    ],
+    "js_ws_close_with_client_i64": [
+      "crates/perry-ext-ws/src/lib.rs",
+      "crates/perry-runtime/src/stdlib_stubs.rs"
+    ],
+    "js_ws_connect": [
+      "crates/perry-ext-ws/src/lib.rs",
+      "crates/perry-runtime/src/stdlib_stubs.rs"
+    ],
+    "js_ws_connect_start": [
+      "crates/perry-ext-ws/src/lib.rs",
+      "crates/perry-runtime/src/stdlib_stubs.rs"
+    ],
+    "js_ws_is_open": [
+      "crates/perry-ext-ws/src/lib.rs",
+      "crates/perry-runtime/src/stdlib_stubs.rs"
+    ],
+    "js_ws_message_count": [
+      "crates/perry-ext-ws/src/lib.rs",
+      "crates/perry-runtime/src/stdlib_stubs.rs"
+    ],
+    "js_ws_on": [
+      "crates/perry-ext-ws/src/lib.rs",
+      "crates/perry-runtime/src/stdlib_stubs.rs"
+    ],
+    "js_ws_ping": [
+      "crates/perry-ext-ws/src/lib.rs",
+      "crates/perry-runtime/src/stdlib_stubs.rs"
+    ],
+    "js_ws_pong": [
+      "crates/perry-ext-ws/src/lib.rs",
+      "crates/perry-runtime/src/stdlib_stubs.rs"
+    ],
+    "js_ws_process_pending": [
+      "crates/perry-ext-ws/src/lib.rs",
+      "crates/perry-runtime/src/stdlib_stubs.rs"
+    ],
+    "js_ws_receive": [
+      "crates/perry-ext-ws/src/lib.rs",
+      "crates/perry-runtime/src/stdlib_stubs.rs"
+    ],
+    "js_ws_send": [
+      "crates/perry-ext-ws/src/lib.rs",
+      "crates/perry-runtime/src/stdlib_stubs.rs"
+    ],
+    "js_ws_send_value": [
+      "crates/perry-ext-ws/src/lib.rs",
+      "crates/perry-runtime/src/stdlib_stubs.rs"
+    ],
+    "js_ws_send_value_client_i64": [
+      "crates/perry-ext-ws/src/lib.rs",
+      "crates/perry-runtime/src/stdlib_stubs.rs"
+    ],
+    "js_ws_server_clients": [
+      "crates/perry-ext-ws/src/server.rs",
+      "crates/perry-runtime/src/stdlib_stubs.rs"
+    ],
+    "js_ws_server_close": [
+      "crates/perry-ext-ws/src/lib.rs",
+      "crates/perry-runtime/src/stdlib_stubs.rs"
+    ],
+    "js_ws_server_close_with": [
+      "crates/perry-ext-ws/src/lib.rs",
+      "crates/perry-runtime/src/stdlib_stubs.rs"
+    ],
+    "js_ws_server_new": [
+      "crates/perry-ext-ws/src/server.rs",
+      "crates/perry-runtime/src/stdlib_stubs.rs"
+    ],
+    "js_ws_terminate": [
+      "crates/perry-ext-ws/src/lib.rs",
+      "crates/perry-runtime/src/stdlib_stubs.rs"
+    ],
+    "js_ws_wait_for_message": [
+      "crates/perry-ext-ws/src/lib.rs",
+      "crates/perry-runtime/src/stdlib_stubs.rs"
+    ],
+    "js_zlib_brotli_compress": [
+      "crates/perry-ext-zlib/src/stream.rs",
+      "crates/perry-stdlib/src/zlib.rs"
+    ],
+    "js_zlib_brotli_compress_sync": [
+      "crates/perry-ext-zlib/src/stream.rs",
+      "crates/perry-stdlib/src/zlib.rs"
+    ],
+    "js_zlib_brotli_decompress": [
+      "crates/perry-ext-zlib/src/stream.rs",
+      "crates/perry-stdlib/src/zlib.rs"
+    ],
+    "js_zlib_brotli_decompress_sync": [
+      "crates/perry-ext-zlib/src/stream.rs",
+      "crates/perry-stdlib/src/zlib.rs"
+    ],
+    "js_zlib_crc32": [
+      "crates/perry-ext-zlib/src/lib.rs",
+      "crates/perry-stdlib/src/zlib.rs"
+    ],
+    "js_zlib_create_brotli_compress": [
+      "crates/perry-ext-zlib/src/stream.rs",
+      "crates/perry-stdlib/src/zlib.rs"
+    ],
+    "js_zlib_create_brotli_decompress": [
+      "crates/perry-ext-zlib/src/stream.rs",
+      "crates/perry-stdlib/src/zlib.rs"
+    ],
+    "js_zlib_create_deflate": [
+      "crates/perry-ext-zlib/src/stream.rs",
+      "crates/perry-stdlib/src/zlib.rs"
+    ],
+    "js_zlib_create_deflate_raw": [
+      "crates/perry-ext-zlib/src/stream.rs",
+      "crates/perry-stdlib/src/zlib.rs"
+    ],
+    "js_zlib_create_gunzip": [
+      "crates/perry-ext-zlib/src/stream.rs",
+      "crates/perry-stdlib/src/zlib.rs"
+    ],
+    "js_zlib_create_gzip": [
+      "crates/perry-ext-zlib/src/stream.rs",
+      "crates/perry-stdlib/src/zlib.rs"
+    ],
+    "js_zlib_create_inflate": [
+      "crates/perry-ext-zlib/src/stream.rs",
+      "crates/perry-stdlib/src/zlib.rs"
+    ],
+    "js_zlib_create_inflate_raw": [
+      "crates/perry-ext-zlib/src/stream.rs",
+      "crates/perry-stdlib/src/zlib.rs"
+    ],
+    "js_zlib_create_unzip": [
+      "crates/perry-ext-zlib/src/stream.rs",
+      "crates/perry-stdlib/src/zlib.rs"
+    ],
+    "js_zlib_create_zstd_compress": [
+      "crates/perry-ext-zlib/src/stream.rs",
+      "crates/perry-stdlib/src/zlib.rs"
+    ],
+    "js_zlib_create_zstd_decompress": [
+      "crates/perry-ext-zlib/src/stream.rs",
+      "crates/perry-stdlib/src/zlib.rs"
+    ],
+    "js_zlib_deflate": [
+      "crates/perry-ext-zlib/src/lib.rs",
+      "crates/perry-stdlib/src/zlib.rs"
+    ],
+    "js_zlib_deflate_raw": [
+      "crates/perry-ext-zlib/src/lib.rs",
+      "crates/perry-stdlib/src/zlib.rs"
+    ],
+    "js_zlib_deflate_raw_sync": [
+      "crates/perry-ext-zlib/src/lib.rs",
+      "crates/perry-stdlib/src/zlib.rs"
+    ],
+    "js_zlib_deflate_sync": [
+      "crates/perry-ext-zlib/src/lib.rs",
+      "crates/perry-stdlib/src/zlib.rs"
+    ],
+    "js_zlib_gunzip": [
+      "crates/perry-ext-zlib/src/lib.rs",
+      "crates/perry-stdlib/src/zlib.rs"
+    ],
+    "js_zlib_gunzip_sync": [
+      "crates/perry-ext-zlib/src/lib.rs",
+      "crates/perry-stdlib/src/zlib.rs"
+    ],
+    "js_zlib_gzip": [
+      "crates/perry-ext-zlib/src/lib.rs",
+      "crates/perry-stdlib/src/zlib.rs"
+    ],
+    "js_zlib_gzip_sync": [
+      "crates/perry-ext-zlib/src/lib.rs",
+      "crates/perry-stdlib/src/zlib.rs"
+    ],
+    "js_zlib_inflate": [
+      "crates/perry-ext-zlib/src/lib.rs",
+      "crates/perry-stdlib/src/zlib.rs"
+    ],
+    "js_zlib_inflate_raw": [
+      "crates/perry-ext-zlib/src/lib.rs",
+      "crates/perry-stdlib/src/zlib.rs"
+    ],
+    "js_zlib_inflate_raw_sync": [
+      "crates/perry-ext-zlib/src/lib.rs",
+      "crates/perry-stdlib/src/zlib.rs"
+    ],
+    "js_zlib_inflate_sync": [
+      "crates/perry-ext-zlib/src/lib.rs",
+      "crates/perry-stdlib/src/zlib.rs"
+    ],
+    "js_zlib_unzip": [
+      "crates/perry-ext-zlib/src/lib.rs",
+      "crates/perry-stdlib/src/zlib.rs"
+    ],
+    "js_zlib_unzip_sync": [
+      "crates/perry-ext-zlib/src/lib.rs",
+      "crates/perry-stdlib/src/zlib.rs"
+    ],
+    "js_zlib_zstd_compress": [
+      "crates/perry-ext-zlib/src/stream.rs",
+      "crates/perry-stdlib/src/zlib.rs"
+    ],
+    "js_zlib_zstd_compress_sync": [
+      "crates/perry-ext-zlib/src/stream.rs",
+      "crates/perry-stdlib/src/zlib.rs"
+    ],
+    "js_zlib_zstd_decompress": [
+      "crates/perry-ext-zlib/src/stream.rs",
+      "crates/perry-stdlib/src/zlib.rs"
+    ],
+    "js_zlib_zstd_decompress_sync": [
+      "crates/perry-ext-zlib/src/stream.rs",
+      "crates/perry-stdlib/src/zlib.rs"
+    ]
+  }
+}

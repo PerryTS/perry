@@ -302,9 +302,12 @@ pub(crate) fn try_lower<'f, 'e>(
         let cid_ok = ctx
             .block()
             .icmp_eq(I32, &live_class, &candidate.class_id.to_string());
-        let shape_ok = ctx
-            .block()
-            .icmp_eq(I32, &live_shape, &expected_shapes[candidate_no]);
+        let shape_ok = crate::typed_shape::emit_compatible_shape_eq(
+            ctx.block(),
+            &live_shape,
+            &expected_shapes[candidate_no],
+            &[],
+        );
         let target_ok = ctx.block().and(I1, &cid_ok, &shape_ok);
         ctx.block().cond_br(&target_ok, &target_label, &miss_label);
 

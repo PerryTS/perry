@@ -556,6 +556,7 @@ pub(super) fn compile_method(
         proven_local_types: guarded_param_proofs,
         guarded_discriminant_aliases: std::collections::HashMap::new(),
         module_global_proven_types: &cross_module.module_global_proven_types,
+        module_global_transfers: &cross_module.module_global_transfers,
         reassigned_locals,
         const_string_locals: std::collections::HashMap::new(),
         const_number_locals: std::collections::HashMap::new(),
@@ -658,6 +659,7 @@ pub(super) fn compile_method(
         // emitted before FnCtx exists here), so clears never get skipped.
         shadow_slots_bound: shadow_slot_map.values().copied().collect(),
         temp_roots: crate::rooting::TempRootPool::default(),
+        scoped_temp_roots: Vec::new(),
         shadow_slot_map,
         persistent_shadow_slots: std::collections::HashSet::new(),
         declared_only_numeric_locals: std::collections::HashSet::new(),
@@ -670,7 +672,6 @@ pub(super) fn compile_method(
         array_length_snapshots: HashMap::new(),
         string_window_array_facts: Vec::new(),
         suppressed_cleared_shadow_slots: std::collections::HashSet::new(),
-        class_field_loop_facts: Vec::new(),
         region_loops: Vec::new(),
         region_loop_facts: Vec::new(),
         element_shape_loop_facts: Vec::new(),

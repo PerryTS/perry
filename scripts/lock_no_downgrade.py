@@ -77,6 +77,8 @@ USAGE
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import re
 import subprocess
 import sys
@@ -270,6 +272,25 @@ def report(downs, removed, edges_checked: int) -> int:
     return 1
 
 
+def report_changes(before_text: str, after_text: str):
+    """Show resolved registry movement on green runs too (#10978)."""
+    before, after = {}, {}
+    for target, text in ((before, before_text), (after, after_text)):
+        for name, version, registry, _deps in parse_lock(text):
+            if registry:
+                target.setdefault(name, set()).add(version)
+    changed = 0
+    for name in sorted(before.keys() | after.keys()):
+        old, new = before.get(name, set()), after.get(name, set())
+        if old == new:
+            continue
+        changed += 1
+        old_text = ", ".join(sorted(old, key=version_key)) or "(absent)"
+        new_text = ", ".join(sorted(new, key=version_key)) or "(absent)"
+        print(f"resolved package: {name}: {old_text} -> {new_text}")
+    print(f"resolved package changes: {changed}")
+
+
 def git_show(ref: str, path: str):
     r = subprocess.run(["git", "show", f"{ref}:{path}"],
                        capture_output=True, text=True, cwd=REPO_ROOT, check=False)
@@ -374,6 +395,22 @@ def self_test() -> int:
         + pkg("r", "2.0.0") + pkg("r", "1.0.0"),
         1, False))
 
+    # Assert review output for the actual mandatory fail/pass controls.
+    for case in (cases[0], cases[4], cases[5]):
+        label, before, after, expected, _zero = case
+        output, errors = io.StringIO(), io.StringIO()
+        downs, removed, compared = analyse(before, after)
+        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+            report_changes(before, after)
+            status = report(downs, removed, compared)
+        assert status == expected, label
+        if label == "unchanged passes":
+            assert "resolved package changes: 0" in output.getvalue()
+        else:
+            assert "resolved package:" in output.getvalue()
+        if expected:
+            assert "rustls: 0.23.45 -> 0.23.44" in errors.getvalue()
+
     failures = 0
     for label, before, after, expect, expect_zero in cases:
         downs, _removed, compared = analyse(before, after)
@@ -433,6 +470,13 @@ def main() -> int:
               "checks nothing and reports success is the failure mode this "
               "exists to remove.", file=sys.stderr)
         return 1
+    if args.vs:
+        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT,
+                              capture_output=True, text=True, check=True).stdout.strip()
+        print(f"lock comparison: {args.vs} -> {head} (working tree)")
+    else:
+        print(f"lock comparison: {args.before} -> {args.after}")
+    report_changes(before_text, after_text)
     return report(downs, removed, edges_checked)
 
 

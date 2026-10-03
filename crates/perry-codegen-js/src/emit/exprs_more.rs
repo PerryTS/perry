@@ -921,18 +921,23 @@ impl JsEmitter {
                 params,
                 body,
                 is_async,
+                is_generator,
                 ..
             } => {
                 if *is_async {
                     self.output.push_str("async ");
                 }
                 self.output.push('(');
-                self.emit_params(params);
+                let default_params = self.emit_params(params, !is_generator);
                 self.output.push_str(") => {\n");
                 self.indent += 1;
+                let temp_scope = self.begin_scoped_temp_scope();
+                self.emit_parameter_defaults(&default_params);
                 for s in body {
                     self.emit_stmt(s);
                 }
+                self.finish_parameter_defaults(&default_params);
+                self.finish_scoped_temp_scope(temp_scope.0, temp_scope.1, temp_scope.2);
                 self.indent -= 1;
                 self.write_indent();
                 self.output.push('}');

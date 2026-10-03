@@ -102,6 +102,7 @@ pub(crate) mod accessor_pair;
 pub(crate) mod attr_census;
 pub(crate) mod canonical_keys;
 mod census;
+mod constfn_key_add;
 pub(crate) mod field_rep;
 pub(crate) mod field_rep_store;
 pub(crate) mod key_attrs;
@@ -136,7 +137,6 @@ pub(crate) use global_fetch::scan_pending_fetch_signal_root_mut;
 pub(crate) mod chain_store;
 mod global_this;
 pub mod handle_expando;
-pub(crate) mod inherited_read_cache;
 pub(crate) mod prop_plan;
 pub(crate) mod proto_validity;
 pub(crate) use global_this::{

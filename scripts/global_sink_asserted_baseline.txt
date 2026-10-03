@@ -38,7 +38,6 @@ crates/perry-runtime/src/object/class_meta_registry.rs::PARENT_DENSE_INCOMPLETE
 crates/perry-runtime/src/object/delete_rest.rs::ON
 crates/perry-runtime/src/object/field_get_set/enumeration.rs::ON
 crates/perry-runtime/src/object/field_get_set/ic_miss.rs::ON
-crates/perry-runtime/src/object/inherited_read_cache.rs::ON
 crates/perry-runtime/src/object/map_set_subclass.rs::ITERATOR_PROTOCOL_TOUCHED
 crates/perry-runtime/src/object/native_module_registry.rs::NM_DISPATCH_REGISTRY
 crates/perry-runtime/src/object/prop_plan.rs::ON

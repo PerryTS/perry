@@ -13,6 +13,11 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
         | Expr::String(_) => expr.clone(),
 
         // Variables
+        Expr::ScopedTemp { id, value, body } => Expr::ScopedTemp {
+            id: *id,
+            value: Box::new(substitute_expr(value, substitutions)),
+            body: Box::new(substitute_expr(body, substitutions)),
+        },
         Expr::LocalGet(id) => Expr::LocalGet(*id),
         Expr::LocalSet(id, val) => {
             Expr::LocalSet(*id, Box::new(substitute_expr(val, substitutions)))

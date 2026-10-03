@@ -8,6 +8,10 @@ where
     F: FnMut(&mut Expr),
 {
     match expr {
+        Expr::ScopedTemp { value, body, .. } => {
+            f(value);
+            f(body);
+        }
         Expr::WebAssemblyInstantiate { bytes, imports } => {
             f(bytes);
             if let Some(imports) = imports {

@@ -53,6 +53,11 @@ pub struct JsEmitter {
     minify: bool,
     /// Counter for generating short mangled names
     mangle_counter: usize,
+    /// Compiler-only temporary names, one frame per emitted JS activation.
+    scoped_temps: Vec<BTreeMap<LocalId, (String, String)>>,
+    dirty_scoped_temps: Vec<BTreeSet<LocalId>>,
+    in_parameter_default: bool,
+    parameter_temp_values: BTreeMap<LocalId, Expr>,
     /// App metadata baked into compile-time `perry/system` introspection APIs.
     app_metadata: AppMetadata,
 }
@@ -74,6 +79,10 @@ impl JsEmitter {
             exported_names: BTreeSet::new(),
             minify,
             mangle_counter: 0,
+            scoped_temps: vec![BTreeMap::new()],
+            dirty_scoped_temps: vec![BTreeSet::new()],
+            in_parameter_default: false,
+            parameter_temp_values: BTreeMap::new(),
             app_metadata,
         }
     }
@@ -108,8 +117,8 @@ impl JsEmitter {
             }
         }
 
-        // When minifying, reserve class and enum names to prevent mangled name collisions
-        if self.minify {
+        // Reserve fixed class/enum names against mangled and compiler-private locals.
+        {
             for class in &module.classes {
                 self.used_names.insert(class.name.clone());
             }
@@ -137,6 +146,7 @@ impl JsEmitter {
         // Emit global variable declarations
         for global in &module.globals {
             self.emit_global(global);
+            self.clear_scoped_temps();
         }
 
         // Pre-register module-level init local names so functions can reference them
@@ -161,7 +171,10 @@ impl JsEmitter {
         // Emit init statements (top-level code)
         for stmt in &module.init {
             self.emit_stmt(stmt);
+            self.clear_scoped_temps();
         }
+
+        self.finish_scoped_temp_scope(0, 0, false);
 
         // Emit exports object
         if !self.exported_names.is_empty() {
@@ -169,6 +182,79 @@ impl JsEmitter {
         }
 
         self.output
+    }
+
+    /// Declarations are inserted after emission, so nested functions collect
+    /// their own names without a second HIR traversal or runtime closures.
+    pub(super) fn begin_scoped_temp_scope(&mut self) -> (usize, usize, bool) {
+        self.scoped_temps.push(BTreeMap::new());
+        self.dirty_scoped_temps.push(BTreeSet::new());
+        let previous = self.in_parameter_default;
+        self.in_parameter_default = false;
+        (self.output.len(), self.indent, previous)
+    }
+
+    pub(super) fn finish_scoped_temp_scope(
+        &mut self,
+        position: usize,
+        indent: usize,
+        previous_parameter_default: bool,
+    ) {
+        self.in_parameter_default = previous_parameter_default;
+        let frame = self.scoped_temps.pop().expect("JS temporary scope");
+        self.dirty_scoped_temps.pop().expect("JS temporary scope");
+        if !frame.is_empty() {
+            let names = frame
+                .values()
+                .flat_map(|(value, result)| [value.as_str(), result.as_str()])
+                .collect::<Vec<_>>()
+                .join(", ");
+            self.output.insert_str(
+                position,
+                &format!("{}let {};\n", "  ".repeat(indent), names),
+            );
+        }
+    }
+
+    pub(super) fn scoped_temp_names(&mut self, id: LocalId) -> (String, String) {
+        self.dirty_scoped_temps
+            .last_mut()
+            .expect("JS temporary scope")
+            .insert(id);
+        if let Some(names) = self.scoped_temps.last().and_then(|frame| frame.get(&id)) {
+            return names.clone();
+        }
+        let value = self.make_local_name(&format!("__perry_scoped_value_{id}"), id);
+        let mut result = format!("__perry_scoped_result_{id}");
+        while self.used_names.contains(&result) {
+            result.push('_');
+        }
+        self.used_names.insert(result.clone());
+        let names = (value, result);
+        self.scoped_temps
+            .last_mut()
+            .expect("JS temporary scope")
+            .insert(id, names.clone());
+        names
+    }
+
+    // Module initializers execute once. Release both their base and result
+    // after the enclosing statement has consumed the expression's value.
+    pub(super) fn clear_scoped_temps(&mut self) {
+        let frame = self.scoped_temps.last().expect("JS temporary scope");
+        let dirty = std::mem::take(
+            self.dirty_scoped_temps
+                .last_mut()
+                .expect("JS temporary scope"),
+        );
+        let names = dirty
+            .iter()
+            .filter_map(|id| frame.get(id))
+            .flat_map(|(value, result)| [value.clone(), result.clone()])
+            .collect::<Vec<_>>();
+        if !names.is_empty() {
+            self.writeln(&format!("{} = undefined;", names.join(" = ")));
+        }
     }
 
     /// Get the list of exported names for use by the IIFE wrapper
@@ -312,6 +398,8 @@ mod exprs;
 mod exprs_more;
 mod helpers;
 mod native;
+#[cfg(test)]
+mod scoped_temp_tests;
 mod stmts;
 
 // --- Internal re-exports for sibling modules (`use super::*;`) ---

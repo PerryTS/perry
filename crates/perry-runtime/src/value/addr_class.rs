@@ -285,15 +285,9 @@ pub(crate) unsafe fn try_read_gc_header_known_plausible(addr: usize) -> Option<&
     // "misaligned pointer dereference" abort that takes the whole test binary
     // down. `try_read_tracked_gc_header` has always checked this.
     //
-    // This guard lives HERE rather than in `try_read_gc_header` because that
-    // function delegates to this one, while three sites in
-    // `object/inherited_read_cache.rs` call this one DIRECTLY. Those callers
-    // satisfy this function's documented precondition — they proved
-    // `is_plausible_heap_addr` — but that predicate is
-    // `is_above_handle_band && is_valid_obj_ptr` and says nothing about
-    // alignment, so proving it does not transfer the guarantee. Guarding the
-    // delegate covers every path with one check instead of one check and one
-    // gap. Costs one AND on a path that then dereferences.
+    // Keep the guard in this delegate: its documented precondition only
+    // proves `is_plausible_heap_addr`, which says nothing about alignment.
+    // Direct callers remain safe, as do callers of `try_read_gc_header`.
     if !addr.is_multiple_of(std::mem::align_of::<GcHeader>()) {
         return None;
     }
@@ -646,11 +640,8 @@ mod known_plausible_alignment_tests {
     /// The alignment guard must be reachable from the DIRECT call path, not
     /// only through [`try_read_gc_header`].
     ///
-    /// `try_read_gc_header` checks plausibility then delegates, so a guard
-    /// placed in *its* body covers its own callers and misses the three sites
-    /// in `object/inherited_read_cache.rs` that call the delegate directly.
-    /// Those sites satisfy the delegate's documented precondition — they proved
-    /// `is_plausible_heap_addr` — but that predicate is
+    /// `try_read_gc_header` checks plausibility then delegates. The delegate's
+    /// documented precondition is only `is_plausible_heap_addr`, which is
     /// `is_above_handle_band && is_valid_obj_ptr`, which says nothing about
     /// alignment, so satisfying it does not transfer the guarantee.
     ///

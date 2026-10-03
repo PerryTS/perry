@@ -11,6 +11,7 @@ fn ir_opts() -> CompileOptions {
         target: None,
         is_entry_module: false,
         non_entry_module_prefixes: Vec::new(),
+        thread_literal_module_prefixes: Vec::new(),
         nextjs_path_init_modules: Vec::new(),
         import_function_prefixes: std::collections::HashMap::new(),
         import_function_ffi_aliases: std::collections::HashMap::new(),

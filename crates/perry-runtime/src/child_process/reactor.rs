@@ -1054,13 +1054,8 @@ pub(super) extern "C" fn cp_emit_spawn_error(
     closure: *const ClosureHeader,
     this: crate::closure::JsThis,
 ) -> f64 {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let cp = scope.root_nanbox_f64(cp_this(this, closure));
-    let err = scope.root_nanbox_f64(cp_get_field(cp.get_nanbox_f64(), b"__cpError"));
-    if !JSValue::from_bits(err.get_nanbox_f64().to_bits()).is_undefined() {
-        cp_emit(cp.get_nanbox_f64(), "error", &[err.get_nanbox_f64()]);
-        cp_set_field(cp.get_nanbox_f64(), b"signalCode", TAG_NULL_F64);
-    }
+    let unhandled = super::failed_spawn::emit_spawn_error(cp_this(this, closure));
+    super::failed_spawn::throw_if_unhandled(unhandled);
     cp_undefined()
 }
 

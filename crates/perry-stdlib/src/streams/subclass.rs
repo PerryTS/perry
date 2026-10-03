@@ -77,6 +77,38 @@ pub unsafe extern "C" fn js_stream_unwrap_handle(value: f64) -> f64 {
     f64::from_bits(result_bits)
 }
 
+// Pair conversion can call user getters and allocate its hidden-field key.
+// Keep that scoped rooting local to pipeThrough instead of legacy dispatch.
+#[cold]
+#[inline(never)]
+pub(super) unsafe fn unwrap_pair_stream_handle(value: f64) -> f64 {
+    if this_object_ptr(value).is_none() {
+        return value;
+    }
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(value);
+    unwrap_rooted_pair_stream_handle(receiver)
+}
+
+// The caller owns this root for the entire conversion, including allocations
+// and getter calls. Borrow it rather than parking a second copy in a new scope.
+#[inline]
+pub(super) unsafe fn unwrap_rooted_pair_stream_handle(
+    receiver: perry_runtime::gc::RuntimeHandle<'_>,
+) -> f64 {
+    if this_object_ptr(receiver.get_nanbox_f64()).is_none() {
+        return receiver.get_nanbox_f64();
+    }
+    let key = subclass_handle_key();
+    let obj = js_nanbox_get_pointer(receiver.get_nanbox_f64()) as *const ObjectHeader;
+    let result = js_object_get_field_by_name(obj, key);
+    let result_bits = result.bits();
+    if result_bits == TAG_UNDEFINED || result_bits == TAG_NULL {
+        return receiver.get_nanbox_f64();
+    }
+    f64::from_bits(result_bits)
+}
+
 #[inline]
 pub(super) fn box_promise(p: *mut Promise) -> f64 {
     f64::from_bits(JSValue::pointer(p as *const u8).bits())
@@ -164,9 +196,11 @@ pub(crate) unsafe fn dispatch_stream_method(
         .copied()
         .unwrap_or(f64::from_bits(TAG_UNDEFINED));
 
-    // Probe each registry for membership first (dropping the guard before we
-    // call the FFI, which re-locks the same registry).
-    let is_reader = READERS.lock().unwrap().contains_key(&id);
+    // IDs have one registry owner; eviction clears every registry before reuse.
+    // Skip registries that cannot handle this method, dropping each guard
+    // before the FFI call re-locks it. Controllers alias only readable IDs.
+    let is_reader = matches!(method, "read" | "releaseLock" | "cancel")
+        && READERS.lock().unwrap().contains_key(&id);
     if is_reader {
         match method {
             // BYOB readers fill the caller-supplied view (#4915); default
@@ -182,7 +216,8 @@ pub(crate) unsafe fn dispatch_stream_method(
             _ => return None,
         }
     }
-    let is_writer = WRITERS.lock().unwrap().contains_key(&id);
+    let is_writer = matches!(method, "write" | "close" | "abort" | "releaseLock")
+        && WRITERS.lock().unwrap().contains_key(&id);
     if is_writer {
         match method {
             "write" => return Some(box_promise(js_writer_write(handle, arg0))),
@@ -192,7 +227,20 @@ pub(crate) unsafe fn dispatch_stream_method(
             _ => return None,
         }
     }
-    let is_readable = READABLE_STREAMS.lock().unwrap().contains_key(&id);
+    let is_readable = matches!(
+        method,
+        "getReader"
+            | "values"
+            | "@@asyncIterator"
+            | "cancel"
+            | "tee"
+            | "pipeTo"
+            | "pipeThrough"
+            | "enqueue"
+            | "close"
+            | "terminate"
+            | "error"
+    ) && READABLE_STREAMS.lock().unwrap().contains_key(&id);
     if is_readable {
         match method {
             "getReader" => return Some(js_readable_stream_get_reader_with_options(handle, arg0)),
@@ -201,14 +249,22 @@ pub(crate) unsafe fn dispatch_stream_method(
             "tee" => return Some(js_readable_stream_tee(handle)),
             "pipeTo" => return Some(box_promise(js_readable_stream_pipe_to(handle, arg0, arg1))),
             "pipeThrough" => {
-                let transform = js_stream_unwrap_handle(arg0);
-                let writable = js_transform_stream_writable(transform);
-                let readable = js_transform_stream_readable(transform);
-                let output =
-                    js_readable_stream_pipe_through_validate(handle, writable, readable, arg1);
-                let pipe = js_readable_stream_pipe_to(handle, writable, arg1);
-                js_promise_mark_internally_handled(pipe);
-                return Some(output);
+                // Non-object pairs with default options need no scoped roots
+                // or getter conversion. Preserve the legacy endpoint sequence;
+                // the registry lookups and validation reject invalid handles.
+                if arg1.to_bits() == TAG_UNDEFINED
+                    && !JSValue::from_bits(arg0.to_bits()).is_pointer()
+                {
+                    let transform = js_stream_unwrap_handle(arg0);
+                    let writable = js_transform_stream_writable(transform);
+                    let readable = js_transform_stream_readable(transform);
+                    let output =
+                        js_readable_stream_pipe_through_validate(handle, writable, readable, arg1);
+                    let pipe = js_readable_stream_pipe_to(handle, writable, arg1);
+                    js_promise_mark_internally_handled(pipe);
+                    return Some(output);
+                }
+                return Some(js_readable_stream_pipe_through_pair(handle, arg0, arg1));
             }
             // #1644: a readable handle is also its own controller. The
             // start/transform/flush callbacks receive it as `controller`, so
@@ -230,7 +286,8 @@ pub(crate) unsafe fn dispatch_stream_method(
             _ => return None,
         }
     }
-    let is_writable = WRITABLE_STREAMS.lock().unwrap().contains_key(&id);
+    let is_writable = matches!(method, "getWriter" | "abort" | "close")
+        && WRITABLE_STREAMS.lock().unwrap().contains_key(&id);
     if is_writable {
         match method {
             "getWriter" => return Some(js_writable_stream_get_writer(handle)),

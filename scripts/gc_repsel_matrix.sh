@@ -73,6 +73,7 @@
 #                               [--shard N/M] [--defer-liveness]
 #                               [--list-arms] [--liveness-report-only]
 #                               [--self-test-liveness-parser]
+#                               [--self-test-fixture-env]
 set -uo pipefail
 
 # Sum objects actually relocated by completed copying minors. The diagnostic
@@ -113,6 +114,7 @@ JSON_OUT=""
 PROFILE="release"
 LIVENESS_REPORT_ONLY=0
 SELF_TEST_LIVENESS_PARSER=0
+SELF_TEST_FIXTURE_ENV=0
 SHARD_INDEX=1
 SHARD_COUNT=1
 DEFER_LIVENESS=0
@@ -143,6 +145,7 @@ while [ $# -gt 0 ]; do
         --defer-liveness) DEFER_LIVENESS=1; shift ;;
         --list-arms) ARMS_SEL="__list__"; shift ;;
         --self-test-liveness-parser) SELF_TEST_LIVENESS_PARSER=1; shift ;;
+        --self-test-fixture-env) SELF_TEST_FIXTURE_ENV=1; shift ;;
         # Local exploration only (e.g. a `--filter` narrow enough that an arm
         # legitimately has nothing to bite). CI never passes this: the whole
         # point of #7255 is that an inert arm must be able to turn a run red.
@@ -151,6 +154,13 @@ while [ $# -gt 0 ]; do
         *) echo "unknown flag: $1" >&2; exit 2 ;;
     esac
 done
+
+if [ "$SELF_TEST_FIXTURE_ENV" = 1 ]; then
+    exec python3 "$SCRIPT_DIR/gc_matrix_fixture_env.py" --self-test
+fi
+case "$PRESSURE_MB" in
+    ''|*[!0-9]*) echo "invalid --pressure '$PRESSURE_MB' (expected integer MB)" >&2; exit 2 ;;
+esac
 
 case "$SHARD_INDEX:$SHARD_COUNT" in
     *[!0-9:]*|:*|*:)
@@ -455,6 +465,21 @@ fi
 echo "==> shard $SHARD_INDEX/$SHARD_COUNT: ${#CORPUS[@]}/$CORPUS_TOTAL corpus files (stable manifest round-robin)"
 progress "selected files=${#CORPUS[@]} corpus_total=$CORPUS_TOTAL"
 
+# Fixture settings belong only to the explicit loop-poll witness arm. Validate
+# before compiling/running anything; no eval, shell quoting, or arbitrary env
+# keys are accepted. Apply the same settings at compile time so auto-optimize
+# selects gc-instruments for seeded/protected witnesses (freshness.rs).
+FIXTURE_ENVS=()
+for b in "${CORPUS[@]}"; do
+    fixture_env=""
+    case ",$SELECTED," in
+        *,loop_polls,*)
+            fixture_env="$(python3 "$SCRIPT_DIR/gc_matrix_fixture_env.py" "test-files/$b.ts")" || exit 2
+            ;;
+    esac
+    FIXTURE_ENVS+=("$fixture_env")
+done
+
 # ---------------------------------------------------------------------------
 # Oracle + compiler.  THE ORACLE VERSION IS LOAD-BEARING: a test the oracle
 # cannot run would drop out of the gate silently, so refuse to run at all.
@@ -503,17 +528,24 @@ done
 # ---------------------------------------------------------------------------
 ARM_IDS=(); ARM_CENVS=(); ARM_RENVS=(); ARM_LIVES=(); ARM_NOTES=(); ARM_SLUGS=()
 GROUP_SLUGS=(); GROUP_ENVS=()
+GROUP_FIXTURES=()
 for rec in "${ARMS[@]}"; do
     id="$(arm_field "$rec" 1)"
     case ",$SELECTED," in *",$id,"*) ;; *) continue ;; esac
     cenv="$(arm_field "$rec" 2)"
     slug="$(printf '%s' "${cenv:-_base}" | tr -c 'A-Za-z0-9' '_')"
+    fixture_group=0
+    # safepoint_minor has the same base compile env; never share its binaries
+    # with loop_polls when the latter carries fixture-specific instruments.
+    if [ "$id" = loop_polls ]; then slug="${slug}_fixture"; fixture_group=1; fi
     ARM_IDS+=("$id"); ARM_CENVS+=("$cenv"); ARM_RENVS+=("$(arm_field "$rec" 3)")
     ARM_LIVES+=("$(arm_field "$rec" 4)"); ARM_NOTES+=("$(arm_field "$rec" 5)")
     ARM_SLUGS+=("$slug")
     known=0
     for g in ${GROUP_SLUGS[@]+"${GROUP_SLUGS[@]}"}; do [ "$g" = "$slug" ] && known=1 && break; done
-    if [ "$known" = 0 ]; then GROUP_SLUGS+=("$slug"); GROUP_ENVS+=("$cenv"); fi
+    if [ "$known" = 0 ]; then
+        GROUP_SLUGS+=("$slug"); GROUP_ENVS+=("$cenv"); GROUP_FIXTURES+=("$fixture_group")
+    fi
 done
 NARMS="${#ARM_IDS[@]}"
 [ "$NARMS" -gt 0 ] || { echo "no arms selected ($ARMS_SEL)" >&2; exit 2; }
@@ -532,15 +564,45 @@ progress "compile-start env=_warm test=${CORPUS[0]}"
     || { echo "${RED}warm-up compile failed${NC} (see $WORK/bin/_warm/warm.log)" >&2; }
 progress "compile-result env=_warm test=${CORPUS[0]} result=$([ -x "$WORK/bin/_warm/warm" ] && echo PASS || echo FAIL)"
 
+# Seed/protection metadata selects a second auto-optimize runtime feature set.
+# Warm it serially too, preserving normal shipping archive selection and the
+# existing parallelism for all corpus compiles that follow.
+ti=0
+while [ "$ti" -lt "${#CORPUS[@]}" ]; do
+    fixture_env="${FIXTURE_ENVS[$ti]}"
+    case "$fixture_env" in
+        *PERRY_GC_SCHEDULE_SEED=*|*PERRY_GC_PROTECT_FROMSPACE=*)
+            progress "compile-start env=_warm_fixture test=${CORPUS[$ti]} compile_env=$fixture_env"
+            # All words have been validated as literal GC KEY=VALUE tokens.
+            # shellcheck disable=SC2086
+            env $fixture_env "$PERRY_BIN" "test-files/${CORPUS[$ti]}.ts" -o "$WORK/bin/_warm/fixture" \
+                > "$WORK/bin/_warm/fixture.log" 2>&1 \
+                || { echo "${RED}fixture warm-up compile failed${NC}" >&2; }
+            progress "compile-result env=_warm_fixture test=${CORPUS[$ti]} result=$([ -x "$WORK/bin/_warm/fixture" ] && echo PASS || echo FAIL)"
+            break
+            ;;
+    esac
+    ti=$((ti+1))
+done
+
 echo "==> compiling ${#CORPUS[@]} files x ${#GROUP_SLUGS[@]} compile-env groups (jobs=$JOBS)"
 gi=0
 while [ "$gi" -lt "${#GROUP_SLUGS[@]}" ]; do
     slug="${GROUP_SLUGS[$gi]}"; cenv="${GROUP_ENVS[$gi]}"
-    mkdir -p "$WORK/bin/$slug"
+    mkdir -p "$WORK/bin/$slug" "$WORK/env/$slug"
+    ti=0
+    for b in "${CORPUS[@]}"; do
+        effective_cenv="$cenv"
+        if [ "${GROUP_FIXTURES[$gi]}" = 1 ] && [ -n "${FIXTURE_ENVS[$ti]}" ]; then
+            effective_cenv="$effective_cenv ${FIXTURE_ENVS[$ti]}"
+        fi
+        printf '%s\n' "$effective_cenv" > "$WORK/env/$slug/$b"
+        ti=$((ti+1))
+    done
     printf '%s\n' "${CORPUS[@]}" | WORK="$WORK" PERRY_BIN="$PERRY_BIN" CENV="$cenv" SLUG="$slug" \
         PROGRESS_OUT="$PROGRESS_OUT" SHARD_INDEX="$SHARD_INDEX" SHARD_COUNT="$SHARD_COUNT" \
         xargs -P "$JOBS" -I{} sh -c \
-        'echo "  compile env=$SLUG test=$1"; [ -z "$PROGRESS_OUT" ] || printf "%s shard=%s/%s compile-start env=%s test=%s\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$SHARD_INDEX" "$SHARD_COUNT" "$SLUG" "$1" >> "$PROGRESS_OUT"; if env $CENV "$PERRY_BIN" "test-files/$1.ts" -o "$WORK/bin/$SLUG/$1" > "$WORK/bin/$SLUG/$1.log" 2>&1; then [ -z "$PROGRESS_OUT" ] || printf "%s shard=%s/%s compile-result env=%s test=%s result=PASS\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$SHARD_INDEX" "$SHARD_COUNT" "$SLUG" "$1" >> "$PROGRESS_OUT"; else echo "COMPILEFAIL $SLUG $1"; [ -z "$PROGRESS_OUT" ] || printf "%s shard=%s/%s compile-result env=%s test=%s result=FAIL\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$SHARD_INDEX" "$SHARD_COUNT" "$SLUG" "$1" >> "$PROGRESS_OUT"; fi' _ {}
+        'CENV=$(cat "$WORK/env/$SLUG/$1"); echo "  compile env=$SLUG test=$1"; [ -z "$PROGRESS_OUT" ] || printf "%s shard=%s/%s compile-start env=%s test=%s compile_env=%s\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$SHARD_INDEX" "$SHARD_COUNT" "$SLUG" "$1" "$CENV" >> "$PROGRESS_OUT"; if env $CENV "$PERRY_BIN" "test-files/$1.ts" -o "$WORK/bin/$SLUG/$1" > "$WORK/bin/$SLUG/$1.log" 2>&1; then [ -z "$PROGRESS_OUT" ] || printf "%s shard=%s/%s compile-result env=%s test=%s result=PASS\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$SHARD_INDEX" "$SHARD_COUNT" "$SLUG" "$1" >> "$PROGRESS_OUT"; else echo "COMPILEFAIL $SLUG $1"; [ -z "$PROGRESS_OUT" ] || printf "%s shard=%s/%s compile-result env=%s test=%s result=FAIL\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$SHARD_INDEX" "$SHARD_COUNT" "$SLUG" "$1" >> "$PROGRESS_OUT"; fi' _ {}
     gi=$((gi+1))
 done
 
@@ -562,20 +624,26 @@ triage_reason() { # $1 test, $2 arm
             END { exit(found ? 0 : 1) }'
 }
 
-CELLS=(); EVID=(); CYC=(); EVA=(); SCA=(); REC=()
+CELLS=(); EVID=(); CYC=(); EVA=(); SCA=(); REC=(); CELL_CENVS=(); CELL_RENVS=()
 n_pass=0; n_unver=0; n_fail=0; n_xfail=0
 ai=0
 while [ "$ai" -lt "$NARMS" ]; do
     id="${ARM_IDS[$ai]}"; slug="${ARM_SLUGS[$ai]}"; live="${ARM_LIVES[$ai]}"
-    renv="$(printf '%s' "${ARM_RENVS[$ai]}" | sed -e "s/%P%/$PRESSURE_ENV/" -e "s/%E%/$EVAC_ENV/")"
-    [ "$renv" = "-" ] && renv=""
+    arm_renv="$(printf '%s' "${ARM_RENVS[$ai]}" | sed -e "s/%P%/$PRESSURE_ENV/" -e "s/%E%/$EVAC_ENV/")"
+    [ "$arm_renv" = "-" ] && arm_renv=""
     echo "==> arm $id"
     ti=0
     while [ "$ti" -lt "${#CORPUS[@]}" ]; do
         b="${CORPUS[$ti]}"; bin="$WORK/bin/$slug/$b"; idx=$((ti*NARMS+ai))
+        renv="$arm_renv"
+        if [ "$id" = loop_polls ] && [ -n "${FIXTURE_ENVS[$ti]}" ]; then
+            renv="$renv ${FIXTURE_ENVS[$ti]}"
+        fi
+        CELL_CENVS[idx]="$(cat "$WORK/env/$slug/$b")"
+        CELL_RENVS[idx]="$renv PERRY_GC_TRACE=1 PERRY_GC_DIAG=1"
         echo "  run [$((ti+1))/${#CORPUS[@]}] test=$b env=$slug arm=$id"
-        progress "cell-start test=$b env=$slug arm=$id"
-        cycles=0; evacuated=0; scavenged=0
+        progress "cell-start test=$b env=$slug arm=$id compile_env=${CELL_CENVS[$idx]} run_env=${CELL_RENVS[$idx]}"
+        cycles=0; evacuated=0; scavenged=0; reclaimed=0
         if [ ! -x "$bin" ]; then
             result="FAIL"; ev="compile-failed"
         else
@@ -793,9 +861,10 @@ JSON_REPORT="${JSON_OUT:-$WORK/matrix.json}"
             # characters that would make this invalid JSON, so a malformed
             # report can never be the reason the gate fails.
             ev_json="$(printf '%s' "${EVID[$idx]:-}" | tr '"\\' "''")"
-            printf '{"test":"%s","arm":"%s","result":"%s","cycles":%d,"evacuated":%d,"scavenged":%d,"reclaimed":%d,"evidence":"%s"}' \
+            printf '{"test":"%s","arm":"%s","result":"%s","cycles":%d,"evacuated":%d,"scavenged":%d,"reclaimed":%d,"evidence":"%s","compile_env":"%s","run_env":"%s"}' \
                 "${CORPUS[$ti]}" "${ARM_IDS[$ai]}" "${CELLS[$idx]:-?}" \
-                "${CYC[$idx]:-0}" "${EVA[$idx]:-0}" "${SCA[$idx]:-0}" "${REC[$idx]:-0}" "$ev_json"
+                "${CYC[$idx]:-0}" "${EVA[$idx]:-0}" "${SCA[$idx]:-0}" "${REC[$idx]:-0}" "$ev_json" \
+                "${CELL_CENVS[$idx]}" "${CELL_RENVS[$idx]}"
             ai=$((ai+1))
         done
         ti=$((ti+1))

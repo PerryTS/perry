@@ -41,7 +41,27 @@ impl<'a> FuncEmitCtx<'a> {
             }
 
             // --- Variables ---
+            Expr::ScopedTemp { id, value, body } => {
+                let idx = *self.local_map.get(id).expect("collected scoped WASM local");
+                // Keep the old binding on the operand stack: nested binders and
+                // recursive calls cannot overwrite this activation's saved value.
+                func.instruction(&Instruction::LocalGet(idx));
+                self.emit_expr(func, value);
+                func.instruction(&Instruction::LocalSet(idx));
+                self.scoped_temp_ids.push(*id);
+                self.emit_expr(func, body);
+                self.scoped_temp_ids.pop();
+                func.instruction(&Instruction::LocalSet(self.temp_store_local));
+                func.instruction(&Instruction::LocalSet(idx));
+                func.instruction(&Instruction::LocalGet(self.temp_store_local));
+                func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
+                func.instruction(&Instruction::LocalSet(self.temp_store_local));
+            }
             Expr::LocalGet(id) => {
+                if self.scoped_temp_ids.contains(id) {
+                    func.instruction(&Instruction::LocalGet(self.local_map[id]));
+                    return true;
+                }
                 // Check module_let_globals FIRST (handles top-level Lets in current module)
                 if let Some(&gidx) = self
                     .emitter
@@ -58,7 +78,9 @@ impl<'a> FuncEmitCtx<'a> {
             }
             Expr::LocalSet(id, val) => {
                 self.emit_expr(func, val);
-                if let Some(&gidx) = self
+                if self.scoped_temp_ids.contains(id) {
+                    func.instruction(&Instruction::LocalTee(self.local_map[id]));
+                } else if let Some(&gidx) = self
                     .emitter
                     .module_let_globals
                     .get(&(self.emitter.current_mod_idx, *id))

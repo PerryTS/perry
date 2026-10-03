@@ -728,7 +728,37 @@ fn hoist_awaits_in_stmt(mut stmt: Stmt, next_id: &mut LocalId, hoisted: &mut Vec
 /// Hoist all awaits in an expression INCLUDING any at the top level of
 /// the expression itself. Used for non-statement-positioned operands
 /// (If condition, While condition, Switch discriminant, etc.).
+// A scoped expression binding must become a real generator local before any
+// suspension, so both its initializer and continuation retain source ordering.
+fn lift_scoped_temp_with_await(
+    expr: &mut Expr,
+    next_id: &mut LocalId,
+    hoisted: &mut Vec<Stmt>,
+) -> bool {
+    if !matches!(expr, Expr::ScopedTemp { .. }) || !expr_contains_await(expr) {
+        return false;
+    }
+    let Expr::ScopedTemp { id, value, body } = std::mem::replace(expr, Expr::Undefined) else {
+        unreachable!()
+    };
+    let mut declaration = vec![Stmt::Let {
+        id,
+        name: format!("__optional_base_{id}"),
+        ty: Type::Any,
+        mutable: false,
+        init: Some(*value),
+    }];
+    let declaration = hoist_awaits_in_stmt(declaration.pop().unwrap(), next_id, hoisted);
+    hoisted.push(declaration);
+    *expr = *body;
+    true
+}
+
 fn hoist_awaits_in_expr_full(expr: &mut Expr, next_id: &mut LocalId, hoisted: &mut Vec<Stmt>) {
+    if lift_scoped_temp_with_await(expr, next_id, hoisted) {
+        hoist_awaits_in_expr_full(expr, next_id, hoisted);
+        return;
+    }
     if matches!(expr, Expr::Closure { .. }) {
         // Don't descend into closure bodies; nested closures are out of
         // scope for the v1 plain-async pre-pass.
@@ -870,6 +900,10 @@ fn hoist_awaits_avoiding_top_level(
     next_id: &mut LocalId,
     hoisted: &mut Vec<Stmt>,
 ) {
+    if lift_scoped_temp_with_await(expr, next_id, hoisted) {
+        hoist_awaits_avoiding_top_level(expr, next_id, hoisted);
+        return;
+    }
     if let Expr::Await(_) = expr {
         // Outer is an await — keep it but recursively hoist nested awaits
         // inside the operand fully (they are nested, not top-level).
