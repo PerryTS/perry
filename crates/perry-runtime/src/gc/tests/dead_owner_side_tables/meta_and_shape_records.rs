@@ -139,10 +139,6 @@ fn test_object_meta_prototype_survives_copied_minor_move() {
         Some(ptr_bits(old_proto)),
         "test premise: the meta-resident prototype reads back before the GC"
     );
-    assert!(
-        crate::object::prototype_chain::object_has_user_prototype_override(old_owner),
-        "test premise: the per-instance override bit lives in the meta record"
-    );
     js_shadow_slot_set(0, ptr_bits(old_owner));
     js_shadow_slot_set(1, ptr_bits(old_proto));
 
@@ -158,10 +154,6 @@ fn test_object_meta_prototype_survives_copied_minor_move() {
         (recorded & POINTER_MASK) as usize,
         new_proto,
         "the meta record's prototype slot must be rewritten to the moved proto"
-    );
-    assert!(
-        crate::object::prototype_chain::object_has_user_prototype_override(new_owner),
-        "the non-pointer meta flags must travel with the copied record"
     );
 
     js_shadow_slot_set(0, 0);
@@ -738,10 +730,6 @@ fn test_object_meta_null_prototype_survives_full_gc_on_live_owner() {
         Some(crate::value::TAG_NULL),
         "a live (rooted) owner's explicit-null prototype (a fact of its \
          shape) must survive a full collection"
-    );
-    assert!(
-        !unsafe { (*(live as *const crate::object::ObjectHeader)).meta }.is_null(),
-        "the runtime-wiring link's divergence flag keeps its meta record alive"
     );
     js_shadow_slot_set(0, 0);
     js_shadow_frame_pop(frame);

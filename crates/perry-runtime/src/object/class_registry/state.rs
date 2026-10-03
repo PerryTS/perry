@@ -802,6 +802,7 @@ pub(crate) fn class_static_prototype_root_store(class_id: u32, proto_ptr: *mut O
     if class_id == 0 || proto_ptr.is_null() {
         return;
     }
+    super::super::prototype_chain::note_class_chain_relinked();
     let bits = crate::value::js_nanbox_pointer(proto_ptr as i64).to_bits();
     crate::closure::closure_set_static_prototype(
         crate::object::class_value::class_value_ptr(class_id) as usize,
@@ -814,6 +815,7 @@ pub(crate) fn class_static_prototype_root_clear(class_id: u32) {
     if class_id == 0 {
         return;
     }
+    super::super::prototype_chain::note_class_chain_relinked();
     crate::closure::closure_set_static_prototype(
         crate::object::class_value::class_value_ptr(class_id) as usize,
         crate::value::TAG_NULL,

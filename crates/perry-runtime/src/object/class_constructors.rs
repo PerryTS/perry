@@ -932,7 +932,7 @@ pub unsafe extern "C" fn js_super_method_call_dynamic(
     // the declared-chain paths below read the refreshed copies.
     let refreshed_args: Vec<f64>;
     let (this_value, args_ptr) = if static_entry.is_none()
-        || super::prototype_chain::any_user_prototype_override()
+        || super::prototype_chain::any_class_chain_relinked()
     {
         let live_scope = crate::gc::RuntimeHandleScope::new();
         let this_handle = live_scope.root_nanbox_f64(this_value);

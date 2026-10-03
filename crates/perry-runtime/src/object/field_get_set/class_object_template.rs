@@ -715,7 +715,6 @@ pub(crate) unsafe fn prototype_from_template(
         owner.to_bits(),
     );
     (*meta).prototype = parent_bits;
-    (*meta).flags |= crate::object::OBJECT_META_FLAG_CLASS_EVALUATION_PROTO;
     crate::gc::runtime_write_barrier_slot(
         meta as usize,
         &(*meta).prototype as *const u64 as usize,
@@ -784,7 +783,7 @@ pub(crate) unsafe fn record_prototype_template(
         || meta.is_null()
         || (*meta).prototype != parent_proto
         || (*meta).private_evaluation_brand != owner
-        || (*meta).flags & !crate::object::OBJECT_META_FLAG_CLASS_EVALUATION_PROTO != 0
+        || (*meta).flags != 0
         || (*meta).spill != 0
         || u32::try_from(count).is_err()
         || cell.proto_fills_base() + 2 * count > cell.len()
@@ -862,9 +861,9 @@ pub(crate) unsafe fn evaluation_chain_lost_method(
     obj: *const ObjectHeader,
     key: *const crate::string::StringHeader,
 ) -> bool {
-    let meta = (*obj).meta;
-    if meta.is_null() || (*meta).flags & crate::object::OBJECT_META_FLAG_CLASS_EVALUATION_PROTO == 0
-    {
+    // Linked through a class evaluation: its shape names a prototype other
+    // than the one its template class implies.
+    if !crate::object::prototype_chain::object_has_individual_class_prototype(obj as usize) {
         return false;
     }
     let class_id = (*obj).class_id;
@@ -884,7 +883,7 @@ pub(crate) unsafe fn evaluation_chain_lost_method(
         if intact(obj) {
             return false;
         }
-        let proto = JSValue::from_bits((*meta).prototype);
+        let proto = JSValue::from_bits(crate::object::shapes::object_prototype_word(obj));
         if proto.is_pointer() {
             let proto = proto.as_pointer::<ObjectHeader>();
             if crate::value::addr_class::try_read_gc_header(proto as usize)

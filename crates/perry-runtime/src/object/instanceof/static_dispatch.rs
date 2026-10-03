@@ -591,9 +591,8 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
             }
             // A relinked class prototype (or a replaced instance prototype)
             // can end the chain before `Object.prototype`.
-            if let Some(header) = super::super::prototype_chain::any_user_prototype_override()
-                .then(|| unsafe { crate::value::addr_class::try_read_gc_header(value_addr(value)) })
-                .flatten()
+            if let Some(header) =
+                unsafe { crate::value::addr_class::try_read_gc_header(value_addr(value)) }
             {
                 if header.obj_type == crate::gc::GC_TYPE_OBJECT {
                     let obj_class_id =
@@ -616,7 +615,7 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
                     unsafe { crate::value::addr_class::try_read_gc_header(obj as usize) }
                         .is_some_and(|h| h._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0);
                 if (born_null
-                    || crate::object::prototype_chain::any_user_prototype_override()
+                    || crate::object::prototype_chain::any_class_chain_relinked()
                     || crate::object::prototype_chain::object_static_prototype(addr).is_some())
                     && crate::object::prototype_chain::prototype_chain_ends_in_null_before_object_prototype(addr)
                 {

@@ -4027,18 +4027,18 @@ pub(crate) fn shape_is_keyless_birth(id: u32, proto_id: u64, slots: u32) -> bool
     }
 }
 
-/// A synthetic class id: a plain function constructor's (or
-/// `Object.create`'s historical) class, the only receivers the prototype
-/// funnel links without a meta record.
+/// The prototype identity `obj`'s ShapeId names, read through the agent
+/// directory (an unstamped or unknown id reads the default identity).
+///
+/// # Safety
+/// `obj` is a live `ObjectHeader`.
 #[inline]
-pub(crate) fn is_synthetic_class_id(class_id: u32) -> bool {
-    (SYNTHETIC_CLASS_ID_BASE
-        ..crate::object::class_registry::prototype_objects::SYNTHETIC_CLASS_ID_END)
-        .contains(&class_id)
+pub(crate) unsafe fn object_shape_identity(obj: *const crate::object::ObjectHeader) -> u64 {
+    (*ShapeSlab::agent_record(object_shape_stamp(obj))).proto_id
 }
 
-/// The first synthetic class id (`class_registry::prototype_objects`), for
-/// the receivers [`is_synthetic_class_id`] admits.
+/// The first synthetic class id (`class_registry::prototype_objects`): a
+/// plain function constructor's instances.
 pub(crate) const SYNTHETIC_CLASS_ID_BASE: u32 =
     crate::object::class_registry::prototype_objects::SYNTHETIC_CLASS_ID_BASE;
 
@@ -4062,14 +4062,6 @@ pub(crate) unsafe fn object_prototype_word(obj: *const crate::object::ObjectHead
     let meta = (*obj).meta;
     if !meta.is_null() && (*meta).prototype != 0 {
         return (*meta).prototype;
-    }
-    // Only a function constructor's instance (a synthetic class) is linked
-    // without writing a meta record's word
-    // (`prototype_chain::object_set_static_prototype_impl`); it may have
-    // gained a record for something else since. Any other receiver without a
-    // recorded word recorded nothing, which one compare says.
-    if !is_synthetic_class_id((*obj).class_id) {
-        return 0;
     }
     // The agent directory read: never null, an absent id reads the empty
     // record (identity 0, the default).
@@ -4121,6 +4113,17 @@ pub(crate) unsafe fn object_proto_id_for(
     let class_id = (*obj).class_id;
     let class = vtable_class(class_id);
     if recorded != 0 {
+        // A compiled class instance linked to its own class's declaration
+        // prototype (runtime wiring of a native-base subclass instance) has
+        // exactly the prototype its class implies: the class identity, so it
+        // shares its class's shapes and its class surface stays exact.
+        if class != 0 {
+            let decl = crate::object::class_registry::class_decl_prototype_object(class);
+            if !decl.is_null() && crate::value::js_nanbox_pointer(decl as i64).to_bits() == recorded
+            {
+                return PROTO_ID_CLASS | u64::from(class);
+            }
+        }
         if let Some(id) = stable_linked_proto_id(class_id, recorded) {
             return id;
         }

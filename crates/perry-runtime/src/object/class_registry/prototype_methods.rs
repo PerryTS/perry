@@ -230,6 +230,7 @@ pub(crate) unsafe fn class_prototype_relinked(proto: *mut crate::object::ObjectH
     if cid == 0 || super::class_decl_prototype_object(cid) != proto {
         return;
     }
+    super::super::prototype_chain::note_class_chain_relinked();
     let mut names: Vec<String> = Vec::new();
     if let Ok(registry) = super::CLASS_VTABLE_REGISTRY.read() {
         if let Some(reg) = registry.as_ref() {

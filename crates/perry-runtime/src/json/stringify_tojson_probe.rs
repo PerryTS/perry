@@ -810,7 +810,12 @@ pub(super) unsafe fn plain_object_member(
         return None;
     }
     let obj = addr as *const crate::ObjectHeader;
-    if !(*obj).meta.is_null() || !class_is_plain_record((*obj).class_id) {
+    // A recorded prototype (a fact of the shape, or a meta record's word)
+    // can carry a `toJSON` of its own: only a default-chained record is plain.
+    if !(*obj).meta.is_null()
+        || !class_is_plain_record((*obj).class_id)
+        || crate::object::shapes::object_prototype_word(obj) != 0
+    {
         return None;
     }
     let (keys, live_slots) = crate::object::object_keys_and_live_slot_count(obj);

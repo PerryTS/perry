@@ -80,9 +80,8 @@ fn a_null_prototype_is_a_shape_fact() {
         object_static_prototype(obj as usize),
         Some(crate::value::TAG_NULL)
     );
-    // The link's user-override FLAG needs a meta record, and a receiver with
-    // one keeps the same word there (the cheaper read).
-    assert_eq!(unsafe { (*(*obj).meta).prototype }, crate::value::TAG_NULL);
+    // A link records no flag, so it allocates no meta record.
+    assert!(unsafe { (*obj).meta }.is_null());
 }
 
 /// How the prototype was linked (`new F()` vs `Object.create(F.prototype)`)
