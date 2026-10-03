@@ -9,7 +9,7 @@
 //! programs, structurally non-leaf initializers, scalars, or reassigned
 //! bindings.
 
-use perry_codegen::{compile_module, set_program_has_thread_agents, CompileOptions};
+use perry_codegen::{compile_module, CompileOptions};
 use perry_hir::types::Type;
 use perry_hir::{BinaryOp, Export, Expr, Function, Module, Stmt};
 
@@ -99,24 +99,18 @@ fn producer(reassign: bool) -> Module {
     module
 }
 
-/// The whole-program perry/thread flag is process state that the driver sets
-/// before codegen; tests in this binary take turns holding it.
-static PROGRAM_FLAG: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-/// Compile the producer as a non-entry module of a program that does
-/// (`thread_graph`) or does not launch perry/thread agents. The producer
-/// itself never launches one.
 fn ir(module: &Module, thread_graph: bool) -> String {
-    let _flag = PROGRAM_FLAG.lock().unwrap_or_else(|e| e.into_inner());
-    set_program_has_thread_agents(thread_graph);
     let opts = CompileOptions {
         emit_ir_only: true,
         is_entry_module: false,
+        thread_literal_module_prefixes: if thread_graph {
+            vec!["main_ts".into(), PREFIX.into()]
+        } else {
+            Vec::new()
+        },
         ..Default::default()
     };
-    let out = compile_module(module, opts);
-    set_program_has_thread_agents(false);
-    String::from_utf8(out.expect("producer compiles")).unwrap()
+    String::from_utf8(compile_module(module, opts).expect("producer compiles")).unwrap()
 }
 
 fn function_body<'a>(ir: &'a str, symbol: &str) -> &'a str {

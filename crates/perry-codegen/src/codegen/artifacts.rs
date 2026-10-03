@@ -30,7 +30,10 @@ use super::string_pool::emit_string_pool;
 /// function, string pool. Mirrors the in-prelude execution order of
 /// the original `compile_module`.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
+pub(super) fn emit_module_artifacts(
+    c: ModuleArtifactsCtx<'_>,
+    agent_strings_tls: bool,
+) -> Result<()> {
     // Destructure so the verbatim block below reads against the
     // original local names. `llmod` / `strings` are `&mut` bindings
     // (auto-reborrowed on each per-function call site below); the
@@ -1006,6 +1009,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         llmod,
         strings,
         module_prefix,
+        agent_strings_tls,
         output_type,
         class_keys_init_data,
         class_header_image_inits,

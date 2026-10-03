@@ -1128,6 +1128,28 @@ pub fn run_with_parse_cache(
 
     classify_eager_modules(&mut ctx, &entry_path);
 
+    let sanitize_name = |s: &str| -> String {
+        let mut out: String = s
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        if out
+            .chars()
+            .next()
+            .map(|c| c.is_ascii_digit())
+            .unwrap_or(false)
+        {
+            out.insert(0, '_');
+        }
+        out
+    };
+
     // #10399: whole-program Worker detection, before ANY module codegen runs.
     //
     // A `worker_threads` worker is a real OS thread sharing this address
@@ -1165,6 +1187,27 @@ pub fn run_with_parse_cache(
         found
     });
     perry_codegen::set_program_has_thread_agents(program_has_thread_agents);
+    let thread_literal_module_prefixes: Vec<String> = if program_has_thread_agents {
+        let mut prefixes: Vec<_> = ctx
+            .native_modules
+            .values()
+            .map(|module| sanitize_name(&module.name))
+            .collect();
+        // Match prepare_module's actual entry path and codegen's sanitized
+        // HIR identity. Entry need not sort first, and may have no launches.
+        let owner = ctx
+            .native_modules
+            .get(&entry_path)
+            .map(|module| sanitize_name(&module.name))
+            .ok_or_else(|| anyhow!("thread literal callback entry is not a native module"))?;
+        prefixes.sort();
+        prefixes.dedup();
+        prefixes.retain(|prefix| prefix != &owner);
+        prefixes.insert(0, owner);
+        prefixes
+    } else {
+        Vec::new()
+    };
     // #11394: every method name the program writes onto a builtin prototype;
     // codegen routes those calls through a lookup-first runtime entry.
     perry_codegen::set_program_patched_proto_methods(perry_hir::patched_prototype_methods(
@@ -3365,27 +3408,7 @@ pub fn run_with_parse_cache(
         // identifiers cannot start with a digit, so prefix with
         // `_` if the first character would be one (handles module
         // names like `05_fibonacci.ts`).
-        let sanitize_name = |s: &str| -> String {
-            let mut out: String = s
-                .chars()
-                .map(|c| {
-                    if c.is_ascii_alphanumeric() || c == '_' {
-                        c
-                    } else {
-                        '_'
-                    }
-                })
-                .collect();
-            if out
-                .chars()
-                .next()
-                .map(|c| c.is_ascii_digit())
-                .unwrap_or(false)
-            {
-                out.insert(0, '_');
-            }
-            out
-        };
+
         // CRITICAL: iterate `non_entry_module_names` (topologically
         // sorted above) rather than `ctx.native_modules` — the latter
         // is a `BTreeMap<PathBuf, _>` and iterates in alphabetical
@@ -5538,6 +5561,7 @@ pub fn run_with_parse_cache(
             target: resolved_triple,
             is_entry_module: is_entry,
             non_entry_module_prefixes,
+            thread_literal_module_prefixes: thread_literal_module_prefixes.clone(),
             import_function_prefixes,
             import_function_ffi_aliases,
             import_function_origin_names,
@@ -5696,7 +5720,8 @@ pub fn run_with_parse_cache(
             ctx.native_modules
                 .par_iter()
                 .map(|(path, hir_module)| -> Result<_, String> {
-                    if hir_module.classes.is_empty()
+                    if std::env::var("PERRY_CONSTFN_SHAPE").as_deref() != Ok("1")
+                        && hir_module.classes.is_empty()
                         && prepare_module(path, hir_module, true)?
                             .imported_classes
                             .is_empty()
@@ -5721,6 +5746,21 @@ pub fn run_with_parse_cache(
             .iter()
             .flat_map(|(_, b)| b.iter().map(|m| &m.shape)),
     );
+    // Completed guard facts stay separate from class allocation suppliers.
+    // Include a foreign class's final content in an importer's cache inputs,
+    // so warm guards cannot retain an older body/rep/id assignment.
+    let mut class_final_shapes: BTreeMap<u32, Vec<(perry_codegen::BirthShape, u32)>> =
+        BTreeMap::new();
+    for (shape, &id) in &static_shape_ids {
+        if let perry_codegen::BirthProto::Class(cid) = shape.proto {
+            if !shape.constfn.is_empty() {
+                class_final_shapes
+                    .entry(cid)
+                    .or_default()
+                    .push((shape.clone(), id));
+            }
+        }
+    }
     // Decision 16: each class's id as its DEFINING module assigns it. Every
     // module gets the slice it can name (its classes and stubs, plus the
     // producer classes of its short-spread candidates); the slice is in its
@@ -5802,11 +5842,19 @@ pub fn run_with_parse_cache(
             );
             if let Some((ids, class_ids)) = static_shape_ids_by_module.get(path) {
                 opts.static_shape_ids = ids.clone();
-                let foreign = opts
+                let foreign: BTreeSet<u32> = opts
                     .short_spread_method_candidates
                     .values()
                     .flatten()
-                    .map(|c| c.class_id);
+                    .map(|c| c.class_id)
+                    .collect();
+                for cid in class_ids.iter().chain(foreign.iter()) {
+                    if let Some(finals) = class_final_shapes.get(cid) {
+                        opts.static_shape_ids.extend(finals.iter().cloned());
+                    }
+                }
+                opts.static_shape_ids.sort();
+                opts.static_shape_ids.dedup();
                 opts.program_class_shape_ids = program_class_shape_ids
                     .restricted_to(class_ids.iter().copied().chain(foreign));
             }

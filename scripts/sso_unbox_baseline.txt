@@ -8,11 +8,11 @@ heap-tag-only | perry-ext-events | 1
 heap-tag-only | perry-ext-http | 2
 heap-tag-only | perry-ext-nodemailer | 1
 heap-tag-only | perry-ffi | 2
-heap-tag-only | perry-runtime | 54
+heap-tag-only | perry-runtime | 53
 heap-tag-only | perry-stdlib | 8
 mask-cast | perry-ext-events | 3
 mask-cast | perry-ext-http | 2
 mask-cast | perry-ext-ws | 1
 mask-cast | perry-ffi | 1
-mask-cast | perry-runtime | 38
+mask-cast | perry-runtime | 37
 mask-cast | perry-stdlib | 4

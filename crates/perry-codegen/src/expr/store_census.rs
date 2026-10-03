@@ -29,8 +29,8 @@ pub(crate) const CFIELD_GUARD_STORE: usize = 5;
 pub(crate) const CFIELD_GUARD_FALLBACK: usize = 6;
 /// Class-field store: a `js_class_field_set_ic` call.
 pub(crate) const CFIELD_IC_CALL: usize = 7;
-/// Class-field store: the loop-versioned raw store.
-pub(crate) const CFIELD_LOOP_RAW: usize = 8;
+// Index 8 remains a zero tombstone for the removed class-loop raw store.
+// The runtime's diagnostic array keeps its indices stable across the deletion.
 /// Class setter dispatch (`__set_<name>`).
 pub(crate) const CFIELD_SETTER: usize = 9;
 /// Sloppy-mode class-field store.
@@ -61,6 +61,9 @@ pub(crate) const ELEM_STORE_APPEND: usize = 38;
 pub(crate) const ELEM_STORE_GUARD_MISS: usize = 39;
 /// Array element store: a runtime set / extend call.
 pub(crate) const ELEM_STORE_FALLBACK: usize = 40;
+/// Array element read through a versioned-indexed loop fact specifically.
+/// Unlike OTHER_TIER, no region or trusted-parameter read increments this word.
+pub(crate) const ELEM_READ_VERSIONED_INDEXED: usize = 41;
 /// Array element store into an F64 array of a NaN-boxed value: the cold arm
 /// that clears the kind (header first) or converts an INT32 box.
 pub(crate) const ELEM_STORE_F64_COLD: usize = 42;

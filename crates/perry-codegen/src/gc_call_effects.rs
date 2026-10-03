@@ -415,6 +415,24 @@ pub(crate) fn transitive_leaf_functions(functions: &[&LlFunction]) -> HashSet<St
 mod tests {
     use super::*;
 
+    #[test]
+    fn ungenerated_constfn_finalizer_and_class_mint_are_collecting_edges() {
+        // New helpers are absent from generated archives until regeneration;
+        // unknown is conservative in both ordinary and safepoint-only builds.
+        for name in [
+            "js_object_finalize_constfn_static",
+            "js_object_final_shape_id_for_class_keys_static_constfn",
+        ] {
+            if !generated().contains_key(name) {
+                assert_eq!(classify_direct_callee(name), GcCallEffect::Unknown);
+                assert!(!external_callee_cannot_collect(name));
+            }
+            // Regeneration may prove the current noncollecting mint Leaf;
+            // no handwritten override may hide future collecting effects.
+            assert!(!OVERRIDES.iter().any(|(symbol, _, _)| *symbol == name));
+        }
+    }
+
     /// #11522: `js_array_length`'s Proxy arm runs the `get` trap and a
     /// `valueOf` coercion; the other three reach JS or the collector too. The
     /// hand audit called them leaf / alloc-no-reentry; the graph proves they

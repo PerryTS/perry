@@ -166,7 +166,10 @@ pub(super) fn candidates(
     extra.extend(cond);
     extra.extend(update);
     let written = assigned(body, &extra);
-    let keyed: HashSet<Recv> = accesses(body).into_iter().map(|(r, _, _)| r).collect();
+    let keyed: HashSet<Recv> = accesses(body)
+        .into_iter()
+        .map(|(r, _, _, _, _)| r)
+        .collect();
     for (id, c) in reads {
         let r = Recv::Local(id);
         if written.contains(&id) || keyed.contains(&r) || !receiver_eligible(ctx, r) {

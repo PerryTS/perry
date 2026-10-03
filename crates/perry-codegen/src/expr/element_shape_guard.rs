@@ -164,8 +164,7 @@ pub(crate) struct ElementShapeGuardOutputs {
 /// Emit the once-per-loop element-shape guard into the current block chain.
 ///
 /// Leaves `ctx.current_block` on an UNTERMINATED block holding the accumulated
-/// `i1` predicate, exactly like
-/// [`super::class_field_inline_guard::emit_class_field_loop_preheader_check`]:
+/// `i1` predicate:
 /// the caller lowers the fast clone, proves it call-free, and only then
 /// terminates with `cond_br(shape_ok, fast, slow)`. Never entering a clone
 /// whose call-freeness is unproven is the whole revocation argument.
@@ -610,7 +609,8 @@ pub(crate) fn emit_element_deref_with_residual(
     // #8113: the ShapeId moved from header offset 8 to 4.
     let sid_ptr = blk.gep(I8, &elem_ptr, &[(I64, "4")]);
     let shape_id = blk.load(I32, &sid_ptr);
-    let shape_ok = blk.icmp_eq(I32, &shape_id, &fact.expected_shape_id);
+    let shape_ok =
+        crate::typed_shape::emit_compatible_shape_eq(blk, &shape_id, &fact.expected_shape_id, &[]);
 
     let ok = blk.and(I1, &hdr_ok, &shape_ok);
     // The side exit resumes the CURRENT iteration in the slow clone; no effect

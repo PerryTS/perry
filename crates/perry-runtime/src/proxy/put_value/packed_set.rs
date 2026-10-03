@@ -443,6 +443,12 @@ unsafe fn prime_packed_set(
     let Some(idx) = own_idx else {
         return;
     };
+    // The emitted hit stores raw bits and cannot invalidate a ConstFn body
+    // fact. Keep only this SPECIAL slot on the checked miss path; other
+    // Any/F64 slots in the same completed shape remain cacheable.
+    if crate::object::field_rep::slot_rep(shape.rep, idx) == crate::object::field_rep::REP_SPECIAL {
+        return;
+    }
     let inline = idx < shape.live_inline_slot_count;
     if !inline && !(idx < key_count && idx < IC_SLOT_OVERFLOW_BIT) {
         return;
@@ -463,7 +469,7 @@ unsafe fn prime_packed_set(
     } else {
         (stamp ^ SPILL_FLIP, idx)
     };
-    let f64_slot = if inline && !crate::object::field_rep_store::shape_slot_is_any(stamp, idx) {
+    let f64_slot = if inline && crate::object::field_rep_store::shape_slot_is_f64(stamp, idx) {
         PACKED_SET_F64_SLOT
     } else {
         0
@@ -507,3 +513,7 @@ static KEEP_JS_PUT_VALUE_SET_PACKED_MISS: extern "C" fn(
 #[cfg(test)]
 #[path = "packed_set_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "cached_constfn_tests.rs"]
+mod constfn_tests;
