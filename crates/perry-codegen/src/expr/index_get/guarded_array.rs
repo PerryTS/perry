@@ -357,8 +357,8 @@ pub(crate) fn emit_array_region_guard(
 /// The `Float64Array` twin of [`emit_array_region_guard`]'s dense facts
 /// (#10741): a heap pointer whose GC header names a typed array (never
 /// forwarded: typed arrays live in the non-moving space), of element kind
-/// `Float64`, with inline storage (`PERRY_TA_VIEW_GUARD == 0`: no aliasing
-/// view exists, so every typed array's elements start at payload `+16`), and
+/// `Float64`, with inline storage (its own storage byte, header byte 10, is
+/// `TA_STORAGE_INLINE` — #10516 — so its elements start at payload `+16`), and
 /// the same bounds against its `length` (payload `+0`). On a pass it stores
 /// the element base into `base_slot`; F-body's reads and stores are then the
 /// same raw `f64` slots as a dense array's, its reads canonicalising a NaN
@@ -399,9 +399,16 @@ pub(crate) fn emit_typed_f64_region_guard(
         let kind_ptr = blk.inttoptr(I64, &kind_addr);
         let kind = blk.load(I8, &kind_ptr);
         let is_f64 = blk.icmp_eq(I8, &kind, "7"); // KIND_FLOAT64
-        let vg = blk.load(I64, "@PERRY_TA_VIEW_GUARD");
-        let no_views = blk.icmp_eq(I64, &vg, "0");
-        let ok = blk.and(I1, &is_ta, &no_views);
+
+        // #10516: the receiver's own storage byte (header byte 10,
+        // `TA_STORAGE_INLINE` = 0) licenses `data == header + 16`. The
+        // process-wide `PERRY_TA_VIEW_GUARD` this used to read no longer
+        // exists, so referencing it left the symbol undefined.
+        let storage_addr = blk.add(I64, &handle, "10");
+        let storage_ptr = blk.inttoptr(I64, &storage_addr);
+        let storage = blk.load(I8, &storage_ptr);
+        let inline_storage = blk.icmp_eq(I8, &storage, "0");
+        let ok = blk.and(I1, &is_ta, &inline_storage);
         let ok = blk.and(I1, &ok, &is_f64);
         blk.cond_br(&ok, &len_label, &join_label);
         handle
