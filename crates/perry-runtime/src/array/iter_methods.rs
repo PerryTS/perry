@@ -560,6 +560,11 @@ pub extern "C" fn js_array_filter(
         let result_rooted = scope.root_nanbox_f64(result_box);
         // #854: `js_array_push_f64` already maintains `(*result).length`.
         let mut to = 0usize;
+        // #11816: the kept value is the one the callback saw, and the callback
+        // can run an evacuating minor. Hold it in a root across the call: a
+        // Rust local kept its pre-move address, so a young element (an
+        // `Object.entries` pair) was pushed dangling.
+        let element_root = scope.root_nanbox_f64(f64::from_bits(crate::value::TAG_UNDEFINED));
 
         let exotic = crate::array::array_iteration_is_exotic(arr);
         for i in 0..length as usize {
@@ -575,6 +580,7 @@ pub extern "C" fn js_array_filter(
                     None => continue,
                 }
             };
+            element_root.set_nanbox_f64(element);
             let callback = cb_handle.get_raw_const_ptr::<ClosureHeader>();
             let keep = cb_site.call(
                 callback,
@@ -583,6 +589,7 @@ pub extern "C" fn js_array_filter(
                 i as f64,
                 rooted.receiver(),
             );
+            let element = element_root.get_nanbox_f64();
             // Proper truthy check: handles NaN-boxed booleans (TAG_FALSE != 0.0 but is falsy)
             if crate::value::js_is_truthy(keep) != 0 {
                 if is_plain {
@@ -651,6 +658,9 @@ pub extern "C" fn js_array_find(arr: *const ArrayHeader, callback: *const Closur
             crate::value::js_nanbox_get_pointer(cb_handle.get_nanbox_f64()) as *const ClosureHeader
         };
         let exotic = crate::array::array_iteration_is_exotic(arr);
+        // #11816: see `js_array_filter` — the found value must survive the
+        // callback's collections.
+        let element_root = scope.root_nanbox_f64(f64::from_bits(crate::value::TAG_UNDEFINED));
 
         for i in 0..length as usize {
             let element = if exotic {
@@ -658,6 +668,7 @@ pub extern "C" fn js_array_find(arr: *const ArrayHeader, callback: *const Closur
             } else {
                 rooted.get_or_undefined(i)
             };
+            element_root.set_nanbox_f64(element);
             let result = cb_site.call(
                 current_callback(),
                 crate::closure::plain_call_receiver(),
@@ -667,7 +678,7 @@ pub extern "C" fn js_array_find(arr: *const ArrayHeader, callback: *const Closur
             );
             // Proper truthy check: handles NaN-boxed booleans
             if crate::value::js_is_truthy(result) != 0 {
-                return element;
+                return element_root.get_nanbox_f64();
             }
         }
 
@@ -786,12 +797,15 @@ pub extern "C" fn js_array_find_last(
             crate::value::js_nanbox_get_pointer(cb_handle.get_nanbox_f64()) as *const ClosureHeader
         };
         let exotic = crate::array::array_iteration_is_exotic(arr);
+        // #11816: see `js_array_filter`.
+        let element_root = scope.root_nanbox_f64(f64::from_bits(crate::value::TAG_UNDEFINED));
         for i in (0..length).rev() {
             let element = if exotic {
                 crate::array::array_spec_get(rooted.arr(), i as u32)
             } else {
                 rooted.get_or_undefined(i)
             };
+            element_root.set_nanbox_f64(element);
             let result = cb_site.call(
                 current_callback(),
                 crate::closure::plain_call_receiver(),
@@ -800,7 +814,7 @@ pub extern "C" fn js_array_find_last(
                 rooted.receiver(),
             );
             if crate::value::js_is_truthy(result) != 0 {
-                return element;
+                return element_root.get_nanbox_f64();
             }
         }
         f64::from_bits(crate::value::TAG_UNDEFINED)
