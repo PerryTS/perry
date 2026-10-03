@@ -72,8 +72,8 @@ fn block_size_for(min_size: usize) -> usize {
 // caps → 235/221/226 MB). Recycling released blocks bounds ever-dirtied pages
 // at the CONCURRENT high-water instead.
 //
-// Pooled blocks are `MADV_FREE`d so the OS can take the pages under memory
-// pressure; contents are undefined on reuse, which every consumer tolerates
+// Complete interior pages of pooled blocks are returned to the OS (immediately
+// on Linux); contents are undefined on reuse, which every consumer tolerates
 // (blocks are bump-filled from offset 0 and re-registered by the arena that
 // adopts them). The pool is capped; overflow falls through to real dealloc,
 // and thread teardown (`Arena::drop`) never pools.
@@ -160,11 +160,10 @@ thread_local! {
 ///
 /// The original 64 MiB choice was measured on
 /// tree.ts (Mac mini M1, quiet): no pool -> 225 MB peak RSS; 64 MB pool ->
-/// 190 MB; 128 MB pool -> 210 MB. Bigger is NOT better — pooled pages are
-/// MADV_FREE'd but stay resident until the OS wants them, so an oversized
-/// pool trades fresh-segment growth for held free pages past the optimum.
-/// This is a cap, not a floor — the pool holds only blocks that were
-/// actually released, and the OS can take every pooled page under pressure.
+/// 190 MB; 128 MB pool -> 210 MB with lazy page release. Linux now discards
+/// complete interior pages immediately, so the cap bounds reusable address
+/// space rather than requiring all of it to stay resident. Boundary pages
+/// can still be resident. The pool holds only blocks actually released.
 static BLOCK_POOL_PROCESS_BYTES: AtomicUsize = AtomicUsize::new(0);
 #[cfg(test)]
 static BLOCK_POOL_EXPLICIT_DRAINED_BYTES: AtomicUsize = AtomicUsize::new(0);
@@ -214,6 +213,9 @@ fn block_pool_cap_bytes() -> usize {
     crate::gc::gc_block_pool_cap_bytes()
 }
 
+#[path = "block/decommit.rs"]
+mod decommit;
+
 /// Offer a released block to the pool. Returns false (caller deallocs) when
 /// the pool is full or the block is null.
 pub(crate) fn block_pool_put(data: *mut u8, size: usize) -> bool {
@@ -226,10 +228,9 @@ pub(crate) fn block_pool_put(data: *mut u8, size: usize) -> bool {
     {
         return false;
     }
-    #[cfg(unix)]
-    unsafe {
-        libc::madvise(data as *mut libc::c_void, size, libc::MADV_FREE);
-    }
+    // Boundary pages can also contain allocator metadata or other allocations.
+    // Only this empty block's complete interior pages may be discarded.
+    unsafe { decommit::release(data, size) };
     BLOCK_POOL.with(|p| p.borrow_mut().blocks.push((data, size)));
     BLOCK_POOL_BYTES.with(|c| c.set(c.get().saturating_add(size)));
     true
@@ -1237,8 +1238,9 @@ pub(crate) fn old_gen_in_use_bytes_sub(delta: usize) {
     OLD_GEN_IN_USE_BYTES.with(|c| c.set(c.get().saturating_sub(delta)));
 }
 
-/// Bytes currently held in this thread's recycled-block pool (MADV_FREE'd,
-/// still mapped). `PERRY_GC_CENSUS` reads it; nothing else should.
+/// Allocation bytes held in this thread's recycled-block pool. Interior pages
+/// may be nonresident; this is retained address space, not an RSS reading.
+/// `PERRY_GC_CENSUS` reads it; nothing else should.
 pub(crate) fn block_pool_bytes() -> usize {
     BLOCK_POOL_BYTES.with(Cell::get)
 }
