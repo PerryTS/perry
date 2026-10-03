@@ -25,3 +25,14 @@ str-method true true
 str-template true true
 str-proto true
 str-override custom1 custom1 custom1
+tpl-own ["length","name","prototype","s","who"] ["constructor","m","n"]
+tpl-statics s1 s2 s3 false false s 0
+tpl-detached s2 s3 s2 s3 s3
+tpl-methods m1 m2 m3 3 b
+tpl-method-identity false true n 1 function
+tpl-proto true true true true false
+tpl-desc {"writable":true,"enumerable":false,"configurable":true} {"writable":true,"enumerable":false,"configurable":true}
+tpl-isolated undefined re s1 s4
+tpl-proto-isolated undefined function ["constructor","m","n"] ["constructor","m"]
+tpl-loop sk39mk390
+tpl-accessor-isolated ["constructor","g","m"] m3 m2 undefined 3

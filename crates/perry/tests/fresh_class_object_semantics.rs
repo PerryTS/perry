@@ -7,7 +7,11 @@
 //! * the class object owns `length`, `name`, `prototype` and its static methods
 //!   as real own properties, so reflection lists them and `delete` removes them
 //!   from that evaluation's class alone (`own-*` lines);
-//! * `String(C)` and `C.toString()` are the class source (`str-*` lines).
+//! * `String(C)` and `C.toString()` are the class source (`str-*` lines);
+//! * every evaluation after a template's first is built from the template's
+//!   class-object and prototype shapes, and still owns its statics, its
+//!   prototype and its methods: distinct per evaluation, at home in it, and a
+//!   delete or redefinition on one leaves the others alone (`tpl-*` lines).
 //!
 //! The program and node's output are the `fresh_class_object_semantics`
 //! fixture. The second run forces every minor collection to evacuate: the
@@ -83,6 +87,11 @@ fn a_class_object_owns_its_length_name_prototype_and_statics() {
 #[test]
 fn a_fresh_class_stringifies_to_its_source() {
     check(&run(&[]), "str-");
+}
+
+#[test]
+fn evaluations_built_from_the_template_shapes_own_their_members() {
+    check(&run(&[]), "tpl-");
 }
 
 #[test]
