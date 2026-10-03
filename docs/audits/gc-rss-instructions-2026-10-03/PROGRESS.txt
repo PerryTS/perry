@@ -892,3 +892,49 @@ runtime/static-wrapper products are already off qb6. Rental copy deadline is
 still 18:00Z; the watcher stops by 17:55Z. No foreign process or directory was
 changed. Current goal remains active; runtime correctness is verified, full
 performance acceptance and new-main heap attribution remain outstanding.
+
+CURRENT 0ed APPLICATION AND HEAP EVIDENCE COMPLETE (2026-10-03)
+The original-host full-runtime TS/Zod matrix completed all24 correct cells.
+TS RSS247.094 ->238.977MiB(-3.285%), instructions-0.292%; minor faults+42.04%.
+Zod RSS29.195 ->28.867MiB(-1.124%), instructions-0.673%. Zod CPU/wall increase
+0.03s at coarse timer resolution; do not call this universal speed acceptance.
+See current-main0ed-full-runtime-summary.json, with all ranges preserved.
+
+New debugger-only heap census uses currentObjectMeta168B and confirms each
+live type count/byte against the runtime in all8 observations (botharms2reps).
+TS at thirdnatural full:53102 ordinary meta records,8921136B(8.508MiB);
+52550 records carry only flags+private_evaluation_brand+prototype. These remain
+campaign-owned. Only17 records/2856B contain summaries alone. The four summary
+words cost1699264B in ordinary meta, not an independently removable RSS sum.
+6977 shapes,541chunks,4pages,366extras,956ConstFnentries:1165096 requestedB.
+Zod explicit schema-live diagnostic:277 meta/46536B;3summary-only/504B;
+2036shapes,140chunks,3pages,11extras,15ConstFnentries:311992requestedB.
+No debugger timing or RSS enters peak-performance acceptance.
+
+Native allocator attribution completed4 independent snapshots. Canonical keys
+retain2.5MiB usable backing inTS (nodes1.25,edges0.8125,by_addr0.4375),
+0.375MiB inZod. Native usable is not RSS: whole resident pages attributed to
+canonical keys total~1.81MiB inTS and~0.309MiB inZod. TS arena usable111.5625MiB,
+whole resident arena pages104.2383MiB at this boundary versus census26.49MiB
+reachable. These snapshots differ in census instrumentation and must not be
+subtracted from one another or peak RSS. Category owner stacks and mixed-page
+limitations are preserved in current-main0ed-native-attribution.json.
+
+Compiler handoff now identifies an obsolete process-wide Float64 view guard,
+not just a missing declaration. Current runtime storage byte+10 distinguishes
+inline vs external elements; #10741 needs to reconcile its emitter. No authored
+codegen/shape/header change is applied. Partial16-case normal-auto measurements
+are prepared; full17-case guard remains red until request compilation is fixed.
+Node/test-registration/address-class checks passed on0ed; address ratchet warns
+about an inherited stale node_stream_event_emitter entry. File-size check still
+fails on inherited2068-line string_pool.rs, byte-identical to0edmain.
+
+COMMON-META COORDINATION BOUNDARY
+A further independently matched pristine0ed census finds52607 common-only meta
+owners in114 exact(shape,class,prototype,brand,flags)groups and114existing shapes:
+zero extra identity groups in this heap. Gross current meta allocation8837976B
+(8.429MiB) is a stronger representation target than shrinking object headers
+alone. It is not a proved universal migration or an RSS savings forecast.
+Most are the four dominantTS AST classes. Campaign must decide facts placement,
+prototype/private-brand semantics and one-shape-compare/one-load ABI first.
+No cold split or header change is independently applied here.

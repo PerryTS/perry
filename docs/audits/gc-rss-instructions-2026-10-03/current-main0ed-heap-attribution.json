@@ -1,0 +1,4933 @@
+{
+  "source_base": "0ed699b9f26267d5ede9e9aabd12160c842cec81",
+  "production_source": "8e07570c3706e3b42fb58812ac879b28a1c207b6",
+  "inputs": {
+    "census-v17/current0ed-v17-tscwork-current0ed-base-0.sharing.json": "7b52027a9c68016616bda489bf3676df970e22c756a8b7191ece59e084a26bd6",
+    "census-v17/current0ed-v17-tscwork-current0ed-base-0.jsonl": "dc4242159031d8b3d3376956ef79bd1fa3823b3e6f909f66b0037154245ef78e",
+    "census-v17/current0ed-v17-tscwork-current0ed-base-1.sharing.json": "500569416dc7a1b2f87c56dbb68ded9d7524cd9248cb5105e20a631f8e71dea9",
+    "census-v17/current0ed-v17-tscwork-current0ed-base-1.jsonl": "25eb182d4e27e52ae9323c59c528584e7430d5c36aacf8c468723a366b8c0469",
+    "census-v17/current0ed-v17-tscwork-current0ed-gc-0.sharing.json": "a549448923019355a84df6fc31e699ead56c4c5b6fd0754265e848f1c1217f9e",
+    "census-v17/current0ed-v17-tscwork-current0ed-gc-0.jsonl": "b1336d5337eb17a65d28850126f9335a23c8d59a9ec6c329f04fead622a94bbe",
+    "census-v17/current0ed-v17-tscwork-current0ed-gc-1.sharing.json": "b4e618abbe691f9069c03a18a8d62d62b6d7e39e873b806a45db0a9088ab4e50",
+    "census-v17/current0ed-v17-tscwork-current0ed-gc-1.jsonl": "c6e439620bcabf3d08441ce2678213eb26ebcf6138455a969d6e7f07de0e963e",
+    "census-zod-v17/current0ed-v17-zodwork-current0ed-base-0.sharing.json": "b5b87b2451960fce64760220c1c1cae2a12f10d53f6544ddcb9eca1f1e06912d",
+    "census-zod-v17/current0ed-v17-zodwork-current0ed-base-0.jsonl": "cbea7833f487b296ef6699b58a33881f8b4e8076dbf7d62eb72f6873d73b504a",
+    "census-zod-v17/current0ed-v17-zodwork-current0ed-base-1.sharing.json": "e0ae672b7e2ae0230284712338e849f9a56143d07524f23ddbc03049696b9b2b",
+    "census-zod-v17/current0ed-v17-zodwork-current0ed-base-1.jsonl": "02ddf05b096c7ecb9697b893a151317545e459007a439e137b6cc19f7f4b74b2",
+    "census-zod-v17/current0ed-v17-zodwork-current0ed-gc-0.sharing.json": "0875fce12e30220f24b8fb30699089183644180a94bb506eaead22ee8eb6eaa9",
+    "census-zod-v17/current0ed-v17-zodwork-current0ed-gc-0.jsonl": "20e2f7aa46c1885e50efbebabd2be8c83da9bb04ccbda5cdb47ff9517ba4c5f4",
+    "census-zod-v17/current0ed-v17-zodwork-current0ed-gc-1.sharing.json": "128a991a2c9785b589a40d6fd38a871114a12b9dd45b42c18361bf307fa3ace9",
+    "census-zod-v17/current0ed-v17-zodwork-current0ed-gc-1.jsonl": "76201781605b094ed386c61b56f64d5c41e8a5956f24a572fbfa5fb197765ce7"
+  },
+  "snapshots": [
+    {
+      "case": "tscwork",
+      "arm": "current0ed-base",
+      "repeat": 0,
+      "boundary": "third natural synchronous full; existing census adds reporting only",
+      "live_counts": {
+        "1": 36819,
+        "2": 79842,
+        "25": 351,
+        "4": 21837,
+        "3": 27584,
+        "8": 5821,
+        "19": 53112,
+        "22": 45,
+        "20": 59,
+        "21": 61,
+        "12": 19,
+        "17": 2,
+        "9": 2
+      },
+      "live_bytes": {
+        "1": 3544920,
+        "2": 11044440,
+        "25": 96352,
+        "4": 1872288,
+        "3": 1971864,
+        "8": 279408,
+        "19": 8922816,
+        "22": 720,
+        "20": 3776,
+        "21": 42232,
+        "12": 760,
+        "17": 48,
+        "9": 176
+      },
+      "metadata": {
+        "source_base": "0ed699b9f26267d5ede9e9aabd12160c842cec81",
+        "pass1_headers": 225556,
+        "object_meta_header_inclusive_bytes": 168,
+        "object_meta_payload_bytes": 160,
+        "ordinary_objects_without_meta": 26740,
+        "ordinary_meta_owners": 53102,
+        "ordinary_distinct_meta_records": 53102,
+        "ordinary_meta_bytes": 8921136,
+        "ordinary_meta_patterns": {
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+dictionary_keys+spill": 2,
+          "spill": 308,
+          "flags+private_evaluation_brand+prototype": 52550,
+          "flags+private_evaluation_brand+prototype+spill": 22,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+spill": 52,
+          "flags+proto_serial+spill": 4,
+          "flags+proto_serial": 2,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+proto_serial+spill": 6,
+          "flags+proto_serial+prototype+spill": 3,
+          "flags+private_evaluation_brand+proto_serial+prototype": 9,
+          "flags+proto_serial+prototype": 4,
+          "prototype": 6,
+          "flags+prototype+spill": 9,
+          "flags+prototype": 51,
+          "expando+spill": 27,
+          "expando": 12,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+prototype+spill": 3,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash": 17,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+prototype+spill": 4,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+private_evaluation_brand+proto_serial+prototype": 4,
+          "flags+instance_birth+proto_serial+prototype": 1,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+prototype": 6
+        },
+        "all_meta_patterns": {
+          "flags+private_evaluation_brand+prototype": 52550,
+          "flags+private_evaluation_brand+prototype+spill": 22,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+dictionary_keys+spill": 2,
+          "spill": 308,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+spill": 52,
+          "flags+proto_serial+spill": 4,
+          "flags+proto_serial": 2,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+proto_serial+spill": 6,
+          "flags+proto_serial+prototype+spill": 3,
+          "flags+private_evaluation_brand+proto_serial+prototype": 9,
+          "flags+proto_serial+prototype": 4,
+          "prototype": 6,
+          "flags+prototype+spill": 9,
+          "flags+prototype": 51,
+          "expando+spill": 27,
+          "native_state": 10,
+          "expando": 12,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+prototype+spill": 3,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash": 17,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+prototype+spill": 4,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+private_evaluation_brand+proto_serial+prototype": 4,
+          "flags+instance_birth+proto_serial+prototype": 1,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+prototype": 6
+        },
+        "all_meta_fields_nonzero": {
+          "private_evaluation_brand": 52585,
+          "prototype": 52672,
+          "flags": 52675,
+          "spill": 440,
+          "descriptor_key_count": 94,
+          "descriptor_key_hash": 94,
+          "accessor_key_bits": 94,
+          "dictionary_keys": 2,
+          "proto_serial": 33,
+          "expando": 39,
+          "native_state": 10,
+          "instance_birth": 1
+        },
+        "ordinary_summary_only_meta_records": 17,
+        "ordinary_summary_only_meta_bytes": 2856,
+        "summary_payload_bytes_in_all_meta": 1699584,
+        "summary_payload_bytes_in_ordinary_meta": 1699264,
+        "ordinary_meta_owner_histogram": {
+          "1": 53102
+        }
+      },
+      "shapes": {
+        "records": 6977,
+        "records_by_kind": {
+          "0": 6355,
+          "5": 324,
+          "1": 108,
+          "3": 188,
+          "4": 2
+        },
+        "chunks": 541,
+        "pages": 4,
+        "directory_used_bytes": 280,
+        "chunk_storage_bytes": 1107968,
+        "present_record_bytes": 446528,
+        "empty_record_slot_bytes": 661440,
+        "directory_page_bytes": 32768,
+        "extras_count": 366,
+        "extras_payload_bytes": 8784,
+        "constfn_entries": 956,
+        "constfn_list_payload_bytes": 15296,
+        "constfn_list_lengths": {
+          "1": 185,
+          "2": 105,
+          "4": 12,
+          "20": 2,
+          "3": 22,
+          "11": 5,
+          "26": 1,
+          "9": 7,
+          "6": 3,
+          "5": 7,
+          "7": 2,
+          "10": 2,
+          "15": 1,
+          "22": 1,
+          "8": 3,
+          "14": 5,
+          "19": 1,
+          "13": 2
+        },
+        "record_growth_payload_bytes": 55816,
+        "record_growth_chunk_bytes": 138496,
+        "requested_bytes": 1165096
+      },
+      "arena": {
+        "block_pool_bytes": 32505856,
+        "capacity_bytes": 77594624,
+        "free_list_bytes": 0,
+        "live_allocated_bytes_estimate": 61909336,
+        "old_free_bytes": 5349288,
+        "spaces": [
+          {
+            "blocks": 6,
+            "capacity_bytes": 6291456,
+            "dead": {
+              "bytes": 657160,
+              "count": 8199
+            },
+            "late_marked": {
+              "bytes": 0,
+              "count": 0
+            },
+            "live": {
+              "bytes": 320,
+              "count": 6
+            },
+            "object_starts_bytes": 98304,
+            "space": "nursery_eden",
+            "stub_dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "stub_live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "tombstones": 53,
+            "used_bytes": 657480,
+            "walked_bytes": 657480
+          },
+          {
+            "blocks": 1,
+            "capacity_bytes": 1048576,
+            "dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "late_marked": {
+              "bytes": 0,
+              "count": 0
+            },
+            "live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "object_starts_bytes": 16384,
+            "space": "survivor0",
+            "stub_dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "stub_live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "tombstones": 0,
+            "used_bytes": 0,
+            "walked_bytes": 0
+          },
+          {
+            "blocks": 1,
+            "capacity_bytes": 1048576,
+            "dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "late_marked": {
+              "bytes": 0,
+              "count": 0
+            },
+            "live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "object_starts_bytes": 16384,
+            "space": "survivor1",
+            "stub_dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "stub_live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "tombstones": 2,
+            "used_bytes": 0,
+            "walked_bytes": 0
+          },
+          {
+            "blocks": 2,
+            "capacity_bytes": 2097152,
+            "dead": {
+              "bytes": 1577296,
+              "count": 28389
+            },
+            "late_marked": {
+              "bytes": 0,
+              "count": 0
+            },
+            "live": {
+              "bytes": 126208,
+              "count": 1565
+            },
+            "object_starts_bytes": 32768,
+            "space": "longlived",
+            "stub_dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "stub_live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "tombstones": 0,
+            "used_bytes": 1703504,
+            "walked_bytes": 1703504
+          },
+          {
+            "blocks": 64,
+            "capacity_bytes": 67108864,
+            "dead": {
+              "bytes": 34291888,
+              "count": 1706
+            },
+            "late_marked": {
+              "bytes": 0,
+              "count": 0
+            },
+            "live": {
+              "bytes": 27043416,
+              "count": 223981
+            },
+            "object_starts_bytes": 1048576,
+            "space": "old",
+            "stub_dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "stub_live": {
+              "bytes": 18464,
+              "count": 2
+            },
+            "tombstones": 0,
+            "used_bytes": 66703056,
+            "walked_bytes": 61353768
+          },
+          {
+            "dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "late_marked": {
+              "bytes": 0,
+              "count": 0
+            },
+            "live": {
+              "bytes": 609856,
+              "count": 2
+            },
+            "space": "malloc",
+            "stub_dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "stub_live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "walked_bytes": 609856
+          }
+        ],
+        "used_bytes": 69064040
+      },
+      "side_tables": [
+        {
+          "bytes": 819216,
+          "entries": 21100,
+          "table": "fn.name_registry"
+        },
+        {
+          "bytes": 5971,
+          "entries": 101,
+          "table": "fn.name_overrides(copied)"
+        },
+        {
+          "bytes": 1081360,
+          "entries": 21591,
+          "table": "fn.source_registry(toString)"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "fn.source_overrides(copied)"
+        },
+        {
+          "bytes": 288,
+          "entries": 11,
+          "table": "closure.singletons"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "closure.captured_singletons"
+        },
+        {
+          "bytes": 1141016,
+          "entries": 6977,
+          "table": "shapes.descriptors"
+        },
+        {
+          "bytes": 157968,
+          "entries": 115,
+          "table": "shapes.indices"
+        },
+        {
+          "bytes": 409616,
+          "entries": 6977,
+          "table": "shapes.by_facts"
+        },
+        {
+          "bytes": 176747,
+          "entries": 2733,
+          "table": "shapes.families"
+        },
+        {
+          "bytes": 0,
+          "entries": 14443,
+          "table": "shapes.ids_minted(process)"
+        },
+        {
+          "bytes": 0,
+          "entries": 5849,
+          "table": "shapes.proto(object_prototype)"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "shapes.proto(null)"
+        },
+        {
+          "bytes": 0,
+          "entries": 214,
+          "table": "shapes.proto(object_serial)"
+        },
+        {
+          "bytes": 0,
+          "entries": 160,
+          "table": "shapes.proto(class_default)"
+        },
+        {
+          "bytes": 0,
+          "entries": 751,
+          "table": "shapes.proto(class_recorded)"
+        },
+        {
+          "bytes": 0,
+          "entries": 3,
+          "table": "shapes.proto(unique)"
+        },
+        {
+          "bytes": 0,
+          "entries": 123,
+          "table": "shapes.proto.distinct_identities"
+        },
+        {
+          "bytes": 2878,
+          "entries": 48,
+          "table": "class.names"
+        },
+        {
+          "bytes": 98726,
+          "entries": 857,
+          "table": "class.vtables(methods+accessors)"
+        },
+        {
+          "bytes": 3937,
+          "entries": 17,
+          "table": "class.static_methods"
+        },
+        {
+          "bytes": 58773,
+          "entries": 851,
+          "table": "class.method_bind_lengths"
+        },
+        {
+          "bytes": 20496,
+          "entries": 1861,
+          "table": "class.registered_ids"
+        },
+        {
+          "bytes": 288,
+          "entries": 11,
+          "table": "class.prototype_objects"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "class.declared_static_global_slots"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "object.overflow_fields"
+        },
+        {
+          "bytes": 524288,
+          "entries": 16384,
+          "table": "object.transition_cache(fixed)"
+        },
+        {
+          "bytes": 6144,
+          "entries": 256,
+          "table": "object.shape_inline_cache(fixed)"
+        },
+        {
+          "bytes": 355726,
+          "entries": 3891,
+          "table": "object.property_descriptors"
+        },
+        {
+          "bytes": 231,
+          "entries": 1,
+          "table": "object.accessor_descriptors"
+        },
+        {
+          "bytes": 917504,
+          "entries": 6071,
+          "table": "ic.lazy_caches"
+        },
+        {
+          "bytes": 5388196,
+          "entries": 1,
+          "table": "stackmap.sections(file-backed)"
+        },
+        {
+          "bytes": 1048576,
+          "entries": 23728,
+          "table": "stackmap.functions"
+        },
+        {
+          "bytes": 131072,
+          "entries": 8192,
+          "table": "string.intern_table(fixed)"
+        },
+        {
+          "bytes": 32768,
+          "entries": 2,
+          "table": "gc.malloc_objects_vec"
+        },
+        {
+          "bytes": 73744,
+          "entries": 2,
+          "table": "gc.malloc_objects_set"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "gc.malloc_realloc_forwarding"
+        },
+        {
+          "bytes": 10512,
+          "entries": 100,
+          "table": "arena.page_generations"
+        },
+        {
+          "bytes": 3814672,
+          "entries": 15050,
+          "table": "arena.old_gen_page_objects"
+        },
+        {
+          "bytes": 3702800,
+          "entries": 16384,
+          "table": "arena.old_gen_page_meta"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "arena.old_gen_page_promoted_runs"
+        },
+        {
+          "bytes": 9232,
+          "entries": 3,
+          "table": "gc.dirty_old_pages"
+        },
+        {
+          "bytes": 280,
+          "entries": 0,
+          "table": "gc.external_dirty_slot_pages"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "gc.remembered_set"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "gc.ever_dirty_old_pages"
+        },
+        {
+          "bytes": 571,
+          "entries": 3,
+          "table": "module.path_registry"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "timer.agent_store"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "timer.ref_states"
+        },
+        {
+          "bytes": 190,
+          "entries": 2,
+          "table": "symbol.registry"
+        },
+        {
+          "bytes": 559872,
+          "entries": 23328,
+          "table": "gc.layout_slot_masks"
+        },
+        {
+          "bytes": 959480,
+          "entries": 0,
+          "table": "gc.external_side_live_bytes(map/set/tape)"
+        },
+        {
+          "bytes": 0,
+          "entries": 923,
+          "table": "shapes.descriptors.carried(live objects)"
+        },
+        {
+          "bytes": 0,
+          "entries": 6054,
+          "table": "shapes.descriptors.uncarried"
+        },
+        {
+          "bytes": 0,
+          "entries": 6050,
+          "table": "shapes.descriptors.uncarried.cache_carrier"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "shapes.descriptors.uncarried.old_carrier"
+        },
+        {
+          "bytes": 4244,
+          "entries": 1028,
+          "table": "shapes.families.multi(families,extra descriptors)"
+        },
+        {
+          "bytes": 0,
+          "entries": 81,
+          "table": "shapes.families.largest"
+        }
+      ],
+      "totals": {
+        "dead_bytes": 36526344,
+        "dead_objects": 38294,
+        "late_marked_bytes": 0,
+        "late_marked_objects": 0,
+        "live_bytes": 27779800,
+        "live_objects": 225554,
+        "non_regex_side_table_bytes": 21517382,
+        "reachability_pass": true,
+        "regex_side_table_bytes": 0,
+        "side_table_bytes": 21517382
+      }
+    },
+    {
+      "case": "tscwork",
+      "arm": "current0ed-base",
+      "repeat": 1,
+      "boundary": "third natural synchronous full; existing census adds reporting only",
+      "live_counts": {
+        "1": 36819,
+        "2": 79842,
+        "25": 351,
+        "4": 21837,
+        "3": 27584,
+        "8": 5821,
+        "19": 53112,
+        "22": 45,
+        "20": 59,
+        "21": 61,
+        "12": 19,
+        "17": 2,
+        "9": 2
+      },
+      "live_bytes": {
+        "1": 3544920,
+        "2": 11044440,
+        "25": 96352,
+        "4": 1872288,
+        "3": 1971864,
+        "8": 279408,
+        "19": 8922816,
+        "22": 720,
+        "20": 3776,
+        "21": 42232,
+        "12": 760,
+        "17": 48,
+        "9": 176
+      },
+      "metadata": {
+        "source_base": "0ed699b9f26267d5ede9e9aabd12160c842cec81",
+        "pass1_headers": 225556,
+        "object_meta_header_inclusive_bytes": 168,
+        "object_meta_payload_bytes": 160,
+        "ordinary_objects_without_meta": 26740,
+        "ordinary_meta_owners": 53102,
+        "ordinary_distinct_meta_records": 53102,
+        "ordinary_meta_bytes": 8921136,
+        "ordinary_meta_patterns": {
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+dictionary_keys+spill": 2,
+          "spill": 308,
+          "flags+private_evaluation_brand+prototype": 52550,
+          "flags+private_evaluation_brand+prototype+spill": 22,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+spill": 52,
+          "flags+proto_serial+spill": 4,
+          "flags+proto_serial": 2,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+proto_serial+spill": 6,
+          "flags+proto_serial+prototype+spill": 3,
+          "flags+private_evaluation_brand+proto_serial+prototype": 9,
+          "flags+proto_serial+prototype": 4,
+          "prototype": 6,
+          "flags+prototype+spill": 9,
+          "flags+prototype": 51,
+          "expando+spill": 27,
+          "expando": 12,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash": 17,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+prototype+spill": 3,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+prototype+spill": 4,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+private_evaluation_brand+proto_serial+prototype": 4,
+          "flags+instance_birth+proto_serial+prototype": 1,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+prototype": 6
+        },
+        "all_meta_patterns": {
+          "flags+private_evaluation_brand+prototype": 52550,
+          "flags+private_evaluation_brand+prototype+spill": 22,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+dictionary_keys+spill": 2,
+          "spill": 308,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+spill": 52,
+          "flags+proto_serial+spill": 4,
+          "flags+proto_serial": 2,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+proto_serial+spill": 6,
+          "flags+proto_serial+prototype+spill": 3,
+          "flags+private_evaluation_brand+proto_serial+prototype": 9,
+          "flags+proto_serial+prototype": 4,
+          "prototype": 6,
+          "flags+prototype+spill": 9,
+          "flags+prototype": 51,
+          "expando+spill": 27,
+          "native_state": 10,
+          "expando": 12,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash": 17,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+prototype+spill": 3,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+prototype+spill": 4,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+private_evaluation_brand+proto_serial+prototype": 4,
+          "flags+instance_birth+proto_serial+prototype": 1,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+prototype": 6
+        },
+        "all_meta_fields_nonzero": {
+          "prototype": 52672,
+          "flags": 52675,
+          "private_evaluation_brand": 52585,
+          "spill": 440,
+          "descriptor_key_count": 94,
+          "descriptor_key_hash": 94,
+          "dictionary_keys": 2,
+          "accessor_key_bits": 94,
+          "proto_serial": 33,
+          "expando": 39,
+          "native_state": 10,
+          "instance_birth": 1
+        },
+        "ordinary_summary_only_meta_records": 17,
+        "ordinary_summary_only_meta_bytes": 2856,
+        "summary_payload_bytes_in_all_meta": 1699584,
+        "summary_payload_bytes_in_ordinary_meta": 1699264,
+        "ordinary_meta_owner_histogram": {
+          "1": 53102
+        }
+      },
+      "shapes": {
+        "records": 6977,
+        "records_by_kind": {
+          "0": 6355,
+          "5": 324,
+          "1": 108,
+          "3": 188,
+          "4": 2
+        },
+        "chunks": 541,
+        "pages": 4,
+        "directory_used_bytes": 280,
+        "chunk_storage_bytes": 1107968,
+        "present_record_bytes": 446528,
+        "empty_record_slot_bytes": 661440,
+        "directory_page_bytes": 32768,
+        "extras_count": 366,
+        "extras_payload_bytes": 8784,
+        "constfn_entries": 956,
+        "constfn_list_payload_bytes": 15296,
+        "constfn_list_lengths": {
+          "1": 185,
+          "2": 105,
+          "4": 12,
+          "20": 2,
+          "3": 22,
+          "11": 5,
+          "26": 1,
+          "9": 7,
+          "6": 3,
+          "5": 7,
+          "7": 2,
+          "10": 2,
+          "15": 1,
+          "22": 1,
+          "8": 3,
+          "14": 5,
+          "19": 1,
+          "13": 2
+        },
+        "record_growth_payload_bytes": 55816,
+        "record_growth_chunk_bytes": 138496,
+        "requested_bytes": 1165096
+      },
+      "arena": {
+        "block_pool_bytes": 32505856,
+        "capacity_bytes": 77594624,
+        "free_list_bytes": 0,
+        "live_allocated_bytes_estimate": 61909336,
+        "old_free_bytes": 5349288,
+        "spaces": [
+          {
+            "blocks": 6,
+            "capacity_bytes": 6291456,
+            "dead": {
+              "bytes": 657160,
+              "count": 8199
+            },
+            "late_marked": {
+              "bytes": 0,
+              "count": 0
+            },
+            "live": {
+              "bytes": 320,
+              "count": 6
+            },
+            "object_starts_bytes": 98304,
+            "space": "nursery_eden",
+            "stub_dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "stub_live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "tombstones": 53,
+            "used_bytes": 657480,
+            "walked_bytes": 657480
+          },
+          {
+            "blocks": 1,
+            "capacity_bytes": 1048576,
+            "dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "late_marked": {
+              "bytes": 0,
+              "count": 0
+            },
+            "live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "object_starts_bytes": 16384,
+            "space": "survivor0",
+            "stub_dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "stub_live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "tombstones": 0,
+            "used_bytes": 0,
+            "walked_bytes": 0
+          },
+          {
+            "blocks": 1,
+            "capacity_bytes": 1048576,
+            "dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "late_marked": {
+              "bytes": 0,
+              "count": 0
+            },
+            "live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "object_starts_bytes": 16384,
+            "space": "survivor1",
+            "stub_dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "stub_live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "tombstones": 2,
+            "used_bytes": 0,
+            "walked_bytes": 0
+          },
+          {
+            "blocks": 2,
+            "capacity_bytes": 2097152,
+            "dead": {
+              "bytes": 1577296,
+              "count": 28389
+            },
+            "late_marked": {
+              "bytes": 0,
+              "count": 0
+            },
+            "live": {
+              "bytes": 126208,
+              "count": 1565
+            },
+            "object_starts_bytes": 32768,
+            "space": "longlived",
+            "stub_dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "stub_live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "tombstones": 0,
+            "used_bytes": 1703504,
+            "walked_bytes": 1703504
+          },
+          {
+            "blocks": 64,
+            "capacity_bytes": 67108864,
+            "dead": {
+              "bytes": 34291888,
+              "count": 1706
+            },
+            "late_marked": {
+              "bytes": 0,
+              "count": 0
+            },
+            "live": {
+              "bytes": 27043416,
+              "count": 223981
+            },
+            "object_starts_bytes": 1048576,
+            "space": "old",
+            "stub_dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "stub_live": {
+              "bytes": 18464,
+              "count": 2
+            },
+            "tombstones": 0,
+            "used_bytes": 66703056,
+            "walked_bytes": 61353768
+          },
+          {
+            "dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "late_marked": {
+              "bytes": 0,
+              "count": 0
+            },
+            "live": {
+              "bytes": 609856,
+              "count": 2
+            },
+            "space": "malloc",
+            "stub_dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "stub_live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "walked_bytes": 609856
+          }
+        ],
+        "used_bytes": 69064040
+      },
+      "side_tables": [
+        {
+          "bytes": 819216,
+          "entries": 21100,
+          "table": "fn.name_registry"
+        },
+        {
+          "bytes": 5971,
+          "entries": 101,
+          "table": "fn.name_overrides(copied)"
+        },
+        {
+          "bytes": 1081360,
+          "entries": 21591,
+          "table": "fn.source_registry(toString)"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "fn.source_overrides(copied)"
+        },
+        {
+          "bytes": 288,
+          "entries": 11,
+          "table": "closure.singletons"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "closure.captured_singletons"
+        },
+        {
+          "bytes": 1141016,
+          "entries": 6977,
+          "table": "shapes.descriptors"
+        },
+        {
+          "bytes": 157968,
+          "entries": 115,
+          "table": "shapes.indices"
+        },
+        {
+          "bytes": 409616,
+          "entries": 6977,
+          "table": "shapes.by_facts"
+        },
+        {
+          "bytes": 176747,
+          "entries": 2733,
+          "table": "shapes.families"
+        },
+        {
+          "bytes": 0,
+          "entries": 14443,
+          "table": "shapes.ids_minted(process)"
+        },
+        {
+          "bytes": 0,
+          "entries": 5849,
+          "table": "shapes.proto(object_prototype)"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "shapes.proto(null)"
+        },
+        {
+          "bytes": 0,
+          "entries": 214,
+          "table": "shapes.proto(object_serial)"
+        },
+        {
+          "bytes": 0,
+          "entries": 160,
+          "table": "shapes.proto(class_default)"
+        },
+        {
+          "bytes": 0,
+          "entries": 751,
+          "table": "shapes.proto(class_recorded)"
+        },
+        {
+          "bytes": 0,
+          "entries": 3,
+          "table": "shapes.proto(unique)"
+        },
+        {
+          "bytes": 0,
+          "entries": 123,
+          "table": "shapes.proto.distinct_identities"
+        },
+        {
+          "bytes": 2878,
+          "entries": 48,
+          "table": "class.names"
+        },
+        {
+          "bytes": 98726,
+          "entries": 857,
+          "table": "class.vtables(methods+accessors)"
+        },
+        {
+          "bytes": 3937,
+          "entries": 17,
+          "table": "class.static_methods"
+        },
+        {
+          "bytes": 58773,
+          "entries": 851,
+          "table": "class.method_bind_lengths"
+        },
+        {
+          "bytes": 20496,
+          "entries": 1861,
+          "table": "class.registered_ids"
+        },
+        {
+          "bytes": 288,
+          "entries": 11,
+          "table": "class.prototype_objects"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "class.declared_static_global_slots"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "object.overflow_fields"
+        },
+        {
+          "bytes": 524288,
+          "entries": 16384,
+          "table": "object.transition_cache(fixed)"
+        },
+        {
+          "bytes": 6144,
+          "entries": 256,
+          "table": "object.shape_inline_cache(fixed)"
+        },
+        {
+          "bytes": 355726,
+          "entries": 3891,
+          "table": "object.property_descriptors"
+        },
+        {
+          "bytes": 231,
+          "entries": 1,
+          "table": "object.accessor_descriptors"
+        },
+        {
+          "bytes": 917504,
+          "entries": 6071,
+          "table": "ic.lazy_caches"
+        },
+        {
+          "bytes": 5388196,
+          "entries": 1,
+          "table": "stackmap.sections(file-backed)"
+        },
+        {
+          "bytes": 1048576,
+          "entries": 23728,
+          "table": "stackmap.functions"
+        },
+        {
+          "bytes": 131072,
+          "entries": 8192,
+          "table": "string.intern_table(fixed)"
+        },
+        {
+          "bytes": 32768,
+          "entries": 2,
+          "table": "gc.malloc_objects_vec"
+        },
+        {
+          "bytes": 73744,
+          "entries": 2,
+          "table": "gc.malloc_objects_set"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "gc.malloc_realloc_forwarding"
+        },
+        {
+          "bytes": 10512,
+          "entries": 100,
+          "table": "arena.page_generations"
+        },
+        {
+          "bytes": 3814416,
+          "entries": 15050,
+          "table": "arena.old_gen_page_objects"
+        },
+        {
+          "bytes": 3702800,
+          "entries": 16384,
+          "table": "arena.old_gen_page_meta"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "arena.old_gen_page_promoted_runs"
+        },
+        {
+          "bytes": 9232,
+          "entries": 3,
+          "table": "gc.dirty_old_pages"
+        },
+        {
+          "bytes": 280,
+          "entries": 0,
+          "table": "gc.external_dirty_slot_pages"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "gc.remembered_set"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "gc.ever_dirty_old_pages"
+        },
+        {
+          "bytes": 571,
+          "entries": 3,
+          "table": "module.path_registry"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "timer.agent_store"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "timer.ref_states"
+        },
+        {
+          "bytes": 190,
+          "entries": 2,
+          "table": "symbol.registry"
+        },
+        {
+          "bytes": 559872,
+          "entries": 23328,
+          "table": "gc.layout_slot_masks"
+        },
+        {
+          "bytes": 959480,
+          "entries": 0,
+          "table": "gc.external_side_live_bytes(map/set/tape)"
+        },
+        {
+          "bytes": 0,
+          "entries": 923,
+          "table": "shapes.descriptors.carried(live objects)"
+        },
+        {
+          "bytes": 0,
+          "entries": 6054,
+          "table": "shapes.descriptors.uncarried"
+        },
+        {
+          "bytes": 0,
+          "entries": 6050,
+          "table": "shapes.descriptors.uncarried.cache_carrier"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "shapes.descriptors.uncarried.old_carrier"
+        },
+        {
+          "bytes": 4244,
+          "entries": 1028,
+          "table": "shapes.families.multi(families,extra descriptors)"
+        },
+        {
+          "bytes": 0,
+          "entries": 81,
+          "table": "shapes.families.largest"
+        }
+      ],
+      "totals": {
+        "dead_bytes": 36526344,
+        "dead_objects": 38294,
+        "late_marked_bytes": 0,
+        "late_marked_objects": 0,
+        "live_bytes": 27779800,
+        "live_objects": 225554,
+        "non_regex_side_table_bytes": 21517126,
+        "reachability_pass": true,
+        "regex_side_table_bytes": 0,
+        "side_table_bytes": 21517126
+      }
+    },
+    {
+      "case": "tscwork",
+      "arm": "current0ed-gc",
+      "repeat": 0,
+      "boundary": "third natural synchronous full; existing census adds reporting only",
+      "live_counts": {
+        "1": 36820,
+        "2": 79841,
+        "25": 351,
+        "4": 21837,
+        "3": 27582,
+        "8": 5821,
+        "19": 53112,
+        "20": 59,
+        "21": 61,
+        "12": 19,
+        "17": 2,
+        "9": 2,
+        "22": 45
+      },
+      "live_bytes": {
+        "1": 3545064,
+        "2": 11044400,
+        "25": 96352,
+        "4": 1872288,
+        "3": 1925672,
+        "8": 279408,
+        "19": 8922816,
+        "20": 3776,
+        "21": 42232,
+        "12": 760,
+        "17": 48,
+        "9": 176,
+        "22": 720
+      },
+      "metadata": {
+        "source_base": "0ed699b9f26267d5ede9e9aabd12160c842cec81",
+        "pass1_headers": 225554,
+        "object_meta_header_inclusive_bytes": 168,
+        "object_meta_payload_bytes": 160,
+        "ordinary_objects_without_meta": 26739,
+        "ordinary_meta_owners": 53102,
+        "ordinary_distinct_meta_records": 53102,
+        "ordinary_meta_bytes": 8921136,
+        "ordinary_meta_patterns": {
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+dictionary_keys+spill": 2,
+          "spill": 308,
+          "flags+private_evaluation_brand+prototype": 52550,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+spill": 52,
+          "flags+proto_serial+spill": 4,
+          "flags+proto_serial": 2,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+proto_serial+spill": 6,
+          "flags+proto_serial+prototype+spill": 3,
+          "flags+private_evaluation_brand+proto_serial+prototype": 9,
+          "flags+proto_serial+prototype": 4,
+          "prototype": 6,
+          "flags+prototype+spill": 9,
+          "flags+prototype": 51,
+          "expando+spill": 27,
+          "expando": 12,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+prototype+spill": 3,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash": 17,
+          "flags+private_evaluation_brand+prototype+spill": 22,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+prototype+spill": 4,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+private_evaluation_brand+proto_serial+prototype": 4,
+          "flags+instance_birth+proto_serial+prototype": 1,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+prototype": 6
+        },
+        "all_meta_patterns": {
+          "flags+private_evaluation_brand+prototype": 52550,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+dictionary_keys+spill": 2,
+          "spill": 308,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+spill": 52,
+          "flags+proto_serial+spill": 4,
+          "flags+proto_serial": 2,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+proto_serial+spill": 6,
+          "flags+proto_serial+prototype+spill": 3,
+          "flags+private_evaluation_brand+proto_serial+prototype": 9,
+          "flags+proto_serial+prototype": 4,
+          "prototype": 6,
+          "flags+prototype+spill": 9,
+          "flags+prototype": 51,
+          "expando+spill": 27,
+          "native_state": 10,
+          "expando": 12,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+prototype+spill": 3,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash": 17,
+          "flags+private_evaluation_brand+prototype+spill": 22,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+prototype+spill": 4,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+private_evaluation_brand+proto_serial+prototype": 4,
+          "flags+instance_birth+proto_serial+prototype": 1,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+prototype": 6
+        },
+        "all_meta_fields_nonzero": {
+          "prototype": 52672,
+          "private_evaluation_brand": 52585,
+          "flags": 52675,
+          "descriptor_key_hash": 94,
+          "spill": 440,
+          "accessor_key_bits": 94,
+          "descriptor_key_count": 94,
+          "dictionary_keys": 2,
+          "proto_serial": 33,
+          "expando": 39,
+          "native_state": 10,
+          "instance_birth": 1
+        },
+        "ordinary_summary_only_meta_records": 17,
+        "ordinary_summary_only_meta_bytes": 2856,
+        "summary_payload_bytes_in_all_meta": 1699584,
+        "summary_payload_bytes_in_ordinary_meta": 1699264,
+        "ordinary_meta_owner_histogram": {
+          "1": 53102
+        }
+      },
+      "shapes": {
+        "records": 6977,
+        "records_by_kind": {
+          "0": 6355,
+          "5": 324,
+          "1": 108,
+          "3": 188,
+          "4": 2
+        },
+        "chunks": 541,
+        "pages": 4,
+        "directory_used_bytes": 280,
+        "chunk_storage_bytes": 1107968,
+        "present_record_bytes": 446528,
+        "empty_record_slot_bytes": 661440,
+        "directory_page_bytes": 32768,
+        "extras_count": 366,
+        "extras_payload_bytes": 8784,
+        "constfn_entries": 956,
+        "constfn_list_payload_bytes": 15296,
+        "constfn_list_lengths": {
+          "1": 185,
+          "2": 105,
+          "4": 12,
+          "20": 2,
+          "3": 22,
+          "11": 5,
+          "26": 1,
+          "9": 7,
+          "6": 3,
+          "5": 7,
+          "7": 2,
+          "10": 2,
+          "15": 1,
+          "22": 1,
+          "8": 3,
+          "14": 5,
+          "19": 1,
+          "13": 2
+        },
+        "record_growth_payload_bytes": 55816,
+        "record_growth_chunk_bytes": 138496,
+        "requested_bytes": 1165096
+      },
+      "arena": {
+        "block_pool_bytes": 32505856,
+        "capacity_bytes": 77594624,
+        "free_list_bytes": 0,
+        "live_allocated_bytes_estimate": 61868032,
+        "old_free_bytes": 5390576,
+        "spaces": [
+          {
+            "blocks": 6,
+            "capacity_bytes": 6291456,
+            "dead": {
+              "bytes": 657056,
+              "count": 8199
+            },
+            "late_marked": {
+              "bytes": 0,
+              "count": 0
+            },
+            "live": {
+              "bytes": 424,
+              "count": 6
+            },
+            "object_starts_bytes": 98304,
+            "space": "nursery_eden",
+            "stub_dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "stub_live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "tombstones": 53,
+            "used_bytes": 657480,
+            "walked_bytes": 657480
+          },
+          {
+            "blocks": 1,
+            "capacity_bytes": 1048576,
+            "dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "late_marked": {
+              "bytes": 0,
+              "count": 0
+            },
+            "live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "object_starts_bytes": 16384,
+            "space": "survivor0",
+            "stub_dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "stub_live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "tombstones": 0,
+            "used_bytes": 0,
+            "walked_bytes": 0
+          },
+          {
+            "blocks": 1,
+            "capacity_bytes": 1048576,
+            "dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "late_marked": {
+              "bytes": 0,
+              "count": 0
+            },
+            "live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "object_starts_bytes": 16384,
+            "space": "survivor1",
+            "stub_dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "stub_live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "tombstones": 2,
+            "used_bytes": 0,
+            "walked_bytes": 0
+          },
+          {
+            "blocks": 2,
+            "capacity_bytes": 2097152,
+            "dead": {
+              "bytes": 1577296,
+              "count": 28389
+            },
+            "late_marked": {
+              "bytes": 0,
+              "count": 0
+            },
+            "live": {
+              "bytes": 126208,
+              "count": 1565
+            },
+            "object_starts_bytes": 32768,
+            "space": "longlived",
+            "stub_dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "stub_live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "tombstones": 0,
+            "used_bytes": 1703504,
+            "walked_bytes": 1703504
+          },
+          {
+            "blocks": 64,
+            "capacity_bytes": 67108864,
+            "dead": {
+              "bytes": 34296792,
+              "count": 1706
+            },
+            "late_marked": {
+              "bytes": 0,
+              "count": 0
+            },
+            "live": {
+              "bytes": 26997224,
+              "count": 223979
+            },
+            "object_starts_bytes": 1048576,
+            "space": "old",
+            "stub_dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "stub_live": {
+              "bytes": 18464,
+              "count": 2
+            },
+            "tombstones": 0,
+            "used_bytes": 66703056,
+            "walked_bytes": 61312480
+          },
+          {
+            "dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "late_marked": {
+              "bytes": 0,
+              "count": 0
+            },
+            "live": {
+              "bytes": 609856,
+              "count": 2
+            },
+            "space": "malloc",
+            "stub_dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "stub_live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "walked_bytes": 609856
+          }
+        ],
+        "used_bytes": 69064040
+      },
+      "side_tables": [
+        {
+          "bytes": 819216,
+          "entries": 21100,
+          "table": "fn.name_registry"
+        },
+        {
+          "bytes": 5971,
+          "entries": 101,
+          "table": "fn.name_overrides(copied)"
+        },
+        {
+          "bytes": 1081360,
+          "entries": 21591,
+          "table": "fn.source_registry(toString)"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "fn.source_overrides(copied)"
+        },
+        {
+          "bytes": 288,
+          "entries": 11,
+          "table": "closure.singletons"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "closure.captured_singletons"
+        },
+        {
+          "bytes": 1141016,
+          "entries": 6977,
+          "table": "shapes.descriptors"
+        },
+        {
+          "bytes": 157968,
+          "entries": 115,
+          "table": "shapes.indices"
+        },
+        {
+          "bytes": 409616,
+          "entries": 6977,
+          "table": "shapes.by_facts"
+        },
+        {
+          "bytes": 176747,
+          "entries": 2733,
+          "table": "shapes.families"
+        },
+        {
+          "bytes": 0,
+          "entries": 14443,
+          "table": "shapes.ids_minted(process)"
+        },
+        {
+          "bytes": 0,
+          "entries": 5849,
+          "table": "shapes.proto(object_prototype)"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "shapes.proto(null)"
+        },
+        {
+          "bytes": 0,
+          "entries": 214,
+          "table": "shapes.proto(object_serial)"
+        },
+        {
+          "bytes": 0,
+          "entries": 160,
+          "table": "shapes.proto(class_default)"
+        },
+        {
+          "bytes": 0,
+          "entries": 751,
+          "table": "shapes.proto(class_recorded)"
+        },
+        {
+          "bytes": 0,
+          "entries": 3,
+          "table": "shapes.proto(unique)"
+        },
+        {
+          "bytes": 0,
+          "entries": 123,
+          "table": "shapes.proto.distinct_identities"
+        },
+        {
+          "bytes": 2878,
+          "entries": 48,
+          "table": "class.names"
+        },
+        {
+          "bytes": 98726,
+          "entries": 857,
+          "table": "class.vtables(methods+accessors)"
+        },
+        {
+          "bytes": 3937,
+          "entries": 17,
+          "table": "class.static_methods"
+        },
+        {
+          "bytes": 58773,
+          "entries": 851,
+          "table": "class.method_bind_lengths"
+        },
+        {
+          "bytes": 20496,
+          "entries": 1861,
+          "table": "class.registered_ids"
+        },
+        {
+          "bytes": 288,
+          "entries": 11,
+          "table": "class.prototype_objects"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "class.declared_static_global_slots"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "object.overflow_fields"
+        },
+        {
+          "bytes": 524288,
+          "entries": 16384,
+          "table": "object.transition_cache(fixed)"
+        },
+        {
+          "bytes": 6144,
+          "entries": 256,
+          "table": "object.shape_inline_cache(fixed)"
+        },
+        {
+          "bytes": 355726,
+          "entries": 3891,
+          "table": "object.property_descriptors"
+        },
+        {
+          "bytes": 231,
+          "entries": 1,
+          "table": "object.accessor_descriptors"
+        },
+        {
+          "bytes": 917504,
+          "entries": 6071,
+          "table": "ic.lazy_caches"
+        },
+        {
+          "bytes": 5388196,
+          "entries": 1,
+          "table": "stackmap.sections(file-backed)"
+        },
+        {
+          "bytes": 1048576,
+          "entries": 23728,
+          "table": "stackmap.functions"
+        },
+        {
+          "bytes": 131072,
+          "entries": 8192,
+          "table": "string.intern_table(fixed)"
+        },
+        {
+          "bytes": 32768,
+          "entries": 2,
+          "table": "gc.malloc_objects_vec"
+        },
+        {
+          "bytes": 73744,
+          "entries": 2,
+          "table": "gc.malloc_objects_set"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "gc.malloc_realloc_forwarding"
+        },
+        {
+          "bytes": 10512,
+          "entries": 100,
+          "table": "arena.page_generations"
+        },
+        {
+          "bytes": 2026432,
+          "entries": 15039,
+          "table": "arena.old_gen_page_objects"
+        },
+        {
+          "bytes": 1046808,
+          "entries": 16384,
+          "table": "arena.old_gen_page_meta"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "arena.old_gen_page_promoted_runs"
+        },
+        {
+          "bytes": 9232,
+          "entries": 3,
+          "table": "gc.dirty_old_pages"
+        },
+        {
+          "bytes": 280,
+          "entries": 0,
+          "table": "gc.external_dirty_slot_pages"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "gc.remembered_set"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "gc.ever_dirty_old_pages"
+        },
+        {
+          "bytes": 571,
+          "entries": 3,
+          "table": "module.path_registry"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "timer.agent_store"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "timer.ref_states"
+        },
+        {
+          "bytes": 190,
+          "entries": 2,
+          "table": "symbol.registry"
+        },
+        {
+          "bytes": 559872,
+          "entries": 23328,
+          "table": "gc.layout_slot_masks"
+        },
+        {
+          "bytes": 959480,
+          "entries": 0,
+          "table": "gc.external_side_live_bytes(map/set/tape)"
+        },
+        {
+          "bytes": 0,
+          "entries": 923,
+          "table": "shapes.descriptors.carried(live objects)"
+        },
+        {
+          "bytes": 0,
+          "entries": 6054,
+          "table": "shapes.descriptors.uncarried"
+        },
+        {
+          "bytes": 0,
+          "entries": 6050,
+          "table": "shapes.descriptors.uncarried.cache_carrier"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "shapes.descriptors.uncarried.old_carrier"
+        },
+        {
+          "bytes": 4244,
+          "entries": 1028,
+          "table": "shapes.families.multi(families,extra descriptors)"
+        },
+        {
+          "bytes": 0,
+          "entries": 81,
+          "table": "shapes.families.largest"
+        }
+      ],
+      "totals": {
+        "dead_bytes": 36531144,
+        "dead_objects": 38294,
+        "late_marked_bytes": 0,
+        "late_marked_objects": 0,
+        "live_bytes": 27733712,
+        "live_objects": 225552,
+        "non_regex_side_table_bytes": 17073150,
+        "reachability_pass": true,
+        "regex_side_table_bytes": 0,
+        "side_table_bytes": 17073150
+      }
+    },
+    {
+      "case": "tscwork",
+      "arm": "current0ed-gc",
+      "repeat": 1,
+      "boundary": "third natural synchronous full; existing census adds reporting only",
+      "live_counts": {
+        "1": 36820,
+        "2": 79841,
+        "25": 351,
+        "4": 21837,
+        "3": 27582,
+        "8": 5821,
+        "19": 53112,
+        "20": 59,
+        "21": 61,
+        "12": 19,
+        "17": 2,
+        "9": 2,
+        "22": 45
+      },
+      "live_bytes": {
+        "1": 3545064,
+        "2": 11044400,
+        "25": 96352,
+        "4": 1872288,
+        "3": 1925672,
+        "8": 279408,
+        "19": 8922816,
+        "20": 3776,
+        "21": 42232,
+        "12": 760,
+        "17": 48,
+        "9": 176,
+        "22": 720
+      },
+      "metadata": {
+        "source_base": "0ed699b9f26267d5ede9e9aabd12160c842cec81",
+        "pass1_headers": 225554,
+        "object_meta_header_inclusive_bytes": 168,
+        "object_meta_payload_bytes": 160,
+        "ordinary_objects_without_meta": 26739,
+        "ordinary_meta_owners": 53102,
+        "ordinary_distinct_meta_records": 53102,
+        "ordinary_meta_bytes": 8921136,
+        "ordinary_meta_patterns": {
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+dictionary_keys+spill": 2,
+          "spill": 308,
+          "flags+private_evaluation_brand+prototype": 52550,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+spill": 52,
+          "flags+proto_serial+spill": 4,
+          "flags+proto_serial": 2,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+proto_serial+spill": 6,
+          "flags+proto_serial+prototype+spill": 3,
+          "flags+private_evaluation_brand+proto_serial+prototype": 9,
+          "flags+proto_serial+prototype": 4,
+          "prototype": 6,
+          "flags+prototype+spill": 9,
+          "flags+prototype": 51,
+          "expando+spill": 27,
+          "expando": 12,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+prototype+spill": 3,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash": 17,
+          "flags+private_evaluation_brand+prototype+spill": 22,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+prototype+spill": 4,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+private_evaluation_brand+proto_serial+prototype": 4,
+          "flags+instance_birth+proto_serial+prototype": 1,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+prototype": 6
+        },
+        "all_meta_patterns": {
+          "flags+private_evaluation_brand+prototype": 52550,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+dictionary_keys+spill": 2,
+          "spill": 308,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+spill": 52,
+          "flags+proto_serial+spill": 4,
+          "flags+proto_serial": 2,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+proto_serial+spill": 6,
+          "flags+proto_serial+prototype+spill": 3,
+          "flags+private_evaluation_brand+proto_serial+prototype": 9,
+          "flags+proto_serial+prototype": 4,
+          "prototype": 6,
+          "flags+prototype+spill": 9,
+          "flags+prototype": 51,
+          "expando+spill": 27,
+          "native_state": 10,
+          "expando": 12,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+prototype+spill": 3,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash": 17,
+          "flags+private_evaluation_brand+prototype+spill": 22,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+prototype+spill": 4,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+private_evaluation_brand+proto_serial+prototype": 4,
+          "flags+instance_birth+proto_serial+prototype": 1,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+prototype": 6
+        },
+        "all_meta_fields_nonzero": {
+          "prototype": 52672,
+          "flags": 52675,
+          "private_evaluation_brand": 52585,
+          "dictionary_keys": 2,
+          "accessor_key_bits": 94,
+          "spill": 440,
+          "descriptor_key_hash": 94,
+          "descriptor_key_count": 94,
+          "proto_serial": 33,
+          "expando": 39,
+          "native_state": 10,
+          "instance_birth": 1
+        },
+        "ordinary_summary_only_meta_records": 17,
+        "ordinary_summary_only_meta_bytes": 2856,
+        "summary_payload_bytes_in_all_meta": 1699584,
+        "summary_payload_bytes_in_ordinary_meta": 1699264,
+        "ordinary_meta_owner_histogram": {
+          "1": 53102
+        }
+      },
+      "shapes": {
+        "records": 6977,
+        "records_by_kind": {
+          "0": 6355,
+          "5": 324,
+          "1": 108,
+          "3": 188,
+          "4": 2
+        },
+        "chunks": 541,
+        "pages": 4,
+        "directory_used_bytes": 280,
+        "chunk_storage_bytes": 1107968,
+        "present_record_bytes": 446528,
+        "empty_record_slot_bytes": 661440,
+        "directory_page_bytes": 32768,
+        "extras_count": 366,
+        "extras_payload_bytes": 8784,
+        "constfn_entries": 956,
+        "constfn_list_payload_bytes": 15296,
+        "constfn_list_lengths": {
+          "1": 185,
+          "2": 105,
+          "4": 12,
+          "20": 2,
+          "3": 22,
+          "11": 5,
+          "26": 1,
+          "9": 7,
+          "6": 3,
+          "5": 7,
+          "7": 2,
+          "10": 2,
+          "15": 1,
+          "22": 1,
+          "8": 3,
+          "14": 5,
+          "19": 1,
+          "13": 2
+        },
+        "record_growth_payload_bytes": 55816,
+        "record_growth_chunk_bytes": 138496,
+        "requested_bytes": 1165096
+      },
+      "arena": {
+        "block_pool_bytes": 32505856,
+        "capacity_bytes": 77594624,
+        "free_list_bytes": 0,
+        "live_allocated_bytes_estimate": 61868032,
+        "old_free_bytes": 5390576,
+        "spaces": [
+          {
+            "blocks": 6,
+            "capacity_bytes": 6291456,
+            "dead": {
+              "bytes": 657056,
+              "count": 8199
+            },
+            "late_marked": {
+              "bytes": 0,
+              "count": 0
+            },
+            "live": {
+              "bytes": 424,
+              "count": 6
+            },
+            "object_starts_bytes": 98304,
+            "space": "nursery_eden",
+            "stub_dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "stub_live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "tombstones": 53,
+            "used_bytes": 657480,
+            "walked_bytes": 657480
+          },
+          {
+            "blocks": 1,
+            "capacity_bytes": 1048576,
+            "dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "late_marked": {
+              "bytes": 0,
+              "count": 0
+            },
+            "live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "object_starts_bytes": 16384,
+            "space": "survivor0",
+            "stub_dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "stub_live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "tombstones": 0,
+            "used_bytes": 0,
+            "walked_bytes": 0
+          },
+          {
+            "blocks": 1,
+            "capacity_bytes": 1048576,
+            "dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "late_marked": {
+              "bytes": 0,
+              "count": 0
+            },
+            "live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "object_starts_bytes": 16384,
+            "space": "survivor1",
+            "stub_dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "stub_live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "tombstones": 2,
+            "used_bytes": 0,
+            "walked_bytes": 0
+          },
+          {
+            "blocks": 2,
+            "capacity_bytes": 2097152,
+            "dead": {
+              "bytes": 1577296,
+              "count": 28389
+            },
+            "late_marked": {
+              "bytes": 0,
+              "count": 0
+            },
+            "live": {
+              "bytes": 126208,
+              "count": 1565
+            },
+            "object_starts_bytes": 32768,
+            "space": "longlived",
+            "stub_dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "stub_live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "tombstones": 0,
+            "used_bytes": 1703504,
+            "walked_bytes": 1703504
+          },
+          {
+            "blocks": 64,
+            "capacity_bytes": 67108864,
+            "dead": {
+              "bytes": 34296792,
+              "count": 1706
+            },
+            "late_marked": {
+              "bytes": 0,
+              "count": 0
+            },
+            "live": {
+              "bytes": 26997224,
+              "count": 223979
+            },
+            "object_starts_bytes": 1048576,
+            "space": "old",
+            "stub_dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "stub_live": {
+              "bytes": 18464,
+              "count": 2
+            },
+            "tombstones": 0,
+            "used_bytes": 66703056,
+            "walked_bytes": 61312480
+          },
+          {
+            "dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "late_marked": {
+              "bytes": 0,
+              "count": 0
+            },
+            "live": {
+              "bytes": 609856,
+              "count": 2
+            },
+            "space": "malloc",
+            "stub_dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "stub_live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "walked_bytes": 609856
+          }
+        ],
+        "used_bytes": 69064040
+      },
+      "side_tables": [
+        {
+          "bytes": 819216,
+          "entries": 21100,
+          "table": "fn.name_registry"
+        },
+        {
+          "bytes": 5971,
+          "entries": 101,
+          "table": "fn.name_overrides(copied)"
+        },
+        {
+          "bytes": 1081360,
+          "entries": 21591,
+          "table": "fn.source_registry(toString)"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "fn.source_overrides(copied)"
+        },
+        {
+          "bytes": 288,
+          "entries": 11,
+          "table": "closure.singletons"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "closure.captured_singletons"
+        },
+        {
+          "bytes": 1141016,
+          "entries": 6977,
+          "table": "shapes.descriptors"
+        },
+        {
+          "bytes": 157968,
+          "entries": 115,
+          "table": "shapes.indices"
+        },
+        {
+          "bytes": 409616,
+          "entries": 6977,
+          "table": "shapes.by_facts"
+        },
+        {
+          "bytes": 176747,
+          "entries": 2733,
+          "table": "shapes.families"
+        },
+        {
+          "bytes": 0,
+          "entries": 14443,
+          "table": "shapes.ids_minted(process)"
+        },
+        {
+          "bytes": 0,
+          "entries": 5849,
+          "table": "shapes.proto(object_prototype)"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "shapes.proto(null)"
+        },
+        {
+          "bytes": 0,
+          "entries": 214,
+          "table": "shapes.proto(object_serial)"
+        },
+        {
+          "bytes": 0,
+          "entries": 160,
+          "table": "shapes.proto(class_default)"
+        },
+        {
+          "bytes": 0,
+          "entries": 751,
+          "table": "shapes.proto(class_recorded)"
+        },
+        {
+          "bytes": 0,
+          "entries": 3,
+          "table": "shapes.proto(unique)"
+        },
+        {
+          "bytes": 0,
+          "entries": 123,
+          "table": "shapes.proto.distinct_identities"
+        },
+        {
+          "bytes": 2878,
+          "entries": 48,
+          "table": "class.names"
+        },
+        {
+          "bytes": 98726,
+          "entries": 857,
+          "table": "class.vtables(methods+accessors)"
+        },
+        {
+          "bytes": 3937,
+          "entries": 17,
+          "table": "class.static_methods"
+        },
+        {
+          "bytes": 58773,
+          "entries": 851,
+          "table": "class.method_bind_lengths"
+        },
+        {
+          "bytes": 20496,
+          "entries": 1861,
+          "table": "class.registered_ids"
+        },
+        {
+          "bytes": 288,
+          "entries": 11,
+          "table": "class.prototype_objects"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "class.declared_static_global_slots"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "object.overflow_fields"
+        },
+        {
+          "bytes": 524288,
+          "entries": 16384,
+          "table": "object.transition_cache(fixed)"
+        },
+        {
+          "bytes": 6144,
+          "entries": 256,
+          "table": "object.shape_inline_cache(fixed)"
+        },
+        {
+          "bytes": 355726,
+          "entries": 3891,
+          "table": "object.property_descriptors"
+        },
+        {
+          "bytes": 231,
+          "entries": 1,
+          "table": "object.accessor_descriptors"
+        },
+        {
+          "bytes": 917504,
+          "entries": 6071,
+          "table": "ic.lazy_caches"
+        },
+        {
+          "bytes": 5388196,
+          "entries": 1,
+          "table": "stackmap.sections(file-backed)"
+        },
+        {
+          "bytes": 1048576,
+          "entries": 23728,
+          "table": "stackmap.functions"
+        },
+        {
+          "bytes": 131072,
+          "entries": 8192,
+          "table": "string.intern_table(fixed)"
+        },
+        {
+          "bytes": 32768,
+          "entries": 2,
+          "table": "gc.malloc_objects_vec"
+        },
+        {
+          "bytes": 73744,
+          "entries": 2,
+          "table": "gc.malloc_objects_set"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "gc.malloc_realloc_forwarding"
+        },
+        {
+          "bytes": 10512,
+          "entries": 100,
+          "table": "arena.page_generations"
+        },
+        {
+          "bytes": 2026560,
+          "entries": 15039,
+          "table": "arena.old_gen_page_objects"
+        },
+        {
+          "bytes": 1046808,
+          "entries": 16384,
+          "table": "arena.old_gen_page_meta"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "arena.old_gen_page_promoted_runs"
+        },
+        {
+          "bytes": 9232,
+          "entries": 3,
+          "table": "gc.dirty_old_pages"
+        },
+        {
+          "bytes": 280,
+          "entries": 0,
+          "table": "gc.external_dirty_slot_pages"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "gc.remembered_set"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "gc.ever_dirty_old_pages"
+        },
+        {
+          "bytes": 571,
+          "entries": 3,
+          "table": "module.path_registry"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "timer.agent_store"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "timer.ref_states"
+        },
+        {
+          "bytes": 190,
+          "entries": 2,
+          "table": "symbol.registry"
+        },
+        {
+          "bytes": 559872,
+          "entries": 23328,
+          "table": "gc.layout_slot_masks"
+        },
+        {
+          "bytes": 959480,
+          "entries": 0,
+          "table": "gc.external_side_live_bytes(map/set/tape)"
+        },
+        {
+          "bytes": 0,
+          "entries": 923,
+          "table": "shapes.descriptors.carried(live objects)"
+        },
+        {
+          "bytes": 0,
+          "entries": 6054,
+          "table": "shapes.descriptors.uncarried"
+        },
+        {
+          "bytes": 0,
+          "entries": 6050,
+          "table": "shapes.descriptors.uncarried.cache_carrier"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "shapes.descriptors.uncarried.old_carrier"
+        },
+        {
+          "bytes": 4244,
+          "entries": 1028,
+          "table": "shapes.families.multi(families,extra descriptors)"
+        },
+        {
+          "bytes": 0,
+          "entries": 81,
+          "table": "shapes.families.largest"
+        }
+      ],
+      "totals": {
+        "dead_bytes": 36531144,
+        "dead_objects": 38294,
+        "late_marked_bytes": 0,
+        "late_marked_objects": 0,
+        "live_bytes": 27733712,
+        "live_objects": 225552,
+        "non_regex_side_table_bytes": 17073278,
+        "reachability_pass": true,
+        "regex_side_table_bytes": 0,
+        "side_table_bytes": 17073278
+      }
+    },
+    {
+      "case": "zodwork",
+      "arm": "current0ed-base",
+      "repeat": 0,
+      "boundary": "explicit diagnostic full before safeParse at iteration100, schema live; unmodified workload has no natural full; not benchmark RSS",
+      "live_counts": {
+        "3": 4081,
+        "1": 1473,
+        "4": 2285,
+        "2": 2071,
+        "20": 11,
+        "21": 11,
+        "19": 277
+      },
+      "live_bytes": {
+        "3": 172208,
+        "1": 187688,
+        "4": 92544,
+        "2": 88384,
+        "20": 704,
+        "21": 16520,
+        "19": 46536
+      },
+      "metadata": {
+        "source_base": "0ed699b9f26267d5ede9e9aabd12160c842cec81",
+        "pass1_headers": 10209,
+        "object_meta_header_inclusive_bytes": 168,
+        "object_meta_payload_bytes": 160,
+        "ordinary_objects_without_meta": 1794,
+        "ordinary_meta_owners": 277,
+        "ordinary_distinct_meta_records": 277,
+        "ordinary_meta_bytes": 46536,
+        "ordinary_meta_patterns": {
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+spill": 26,
+          "spill": 130,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+prototype+spill": 5,
+          "flags+proto_serial+spill": 3,
+          "flags+proto_serial": 2,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+proto_serial+spill": 6,
+          "flags+proto_serial+prototype+spill": 3,
+          "flags+proto_serial+prototype": 4,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+proto_serial+prototype": 5,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+prototype": 13,
+          "prototype": 6,
+          "flags+prototype+spill": 9,
+          "flags+prototype": 33,
+          "expando": 12,
+          "expando+spill": 14,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+prototype+spill": 3,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash": 3
+        },
+        "all_meta_patterns": {
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+spill": 26,
+          "spill": 130,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+prototype+spill": 5,
+          "flags+proto_serial+spill": 3,
+          "flags+proto_serial": 2,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+proto_serial+spill": 6,
+          "flags+proto_serial+prototype+spill": 3,
+          "flags+proto_serial+prototype": 4,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+proto_serial+prototype": 5,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+prototype": 13,
+          "prototype": 6,
+          "flags+prototype+spill": 9,
+          "flags+prototype": 33,
+          "expando": 12,
+          "expando+spill": 14,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+prototype+spill": 3,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash": 3
+        },
+        "all_meta_fields_nonzero": {
+          "descriptor_key_hash": 61,
+          "spill": 199,
+          "accessor_key_bits": 61,
+          "descriptor_key_count": 61,
+          "prototype": 81,
+          "flags": 83,
+          "proto_serial": 23,
+          "expando": 26
+        },
+        "ordinary_summary_only_meta_records": 3,
+        "ordinary_summary_only_meta_bytes": 504,
+        "summary_payload_bytes_in_all_meta": 8864,
+        "summary_payload_bytes_in_ordinary_meta": 8864,
+        "ordinary_meta_owner_histogram": {
+          "1": 277
+        }
+      },
+      "shapes": {
+        "records": 2036,
+        "records_by_kind": {
+          "0": 928,
+          "5": 935,
+          "3": 171,
+          "4": 2
+        },
+        "chunks": 140,
+        "pages": 3,
+        "directory_used_bytes": 272,
+        "chunk_storage_bytes": 286720,
+        "present_record_bytes": 130304,
+        "empty_record_slot_bytes": 156416,
+        "directory_page_bytes": 24576,
+        "extras_count": 11,
+        "extras_payload_bytes": 264,
+        "constfn_entries": 15,
+        "constfn_list_payload_bytes": 240,
+        "constfn_list_lengths": {
+          "1": 10,
+          "5": 1
+        },
+        "record_growth_payload_bytes": 16288,
+        "record_growth_chunk_bytes": 35840,
+        "requested_bytes": 312072
+      },
+      "arena": {
+        "block_pool_bytes": 0,
+        "capacity_bytes": 10485760,
+        "free_list_bytes": 0,
+        "live_allocated_bytes_estimate": 1946016,
+        "old_free_bytes": 0,
+        "spaces": [
+          {
+            "blocks": 6,
+            "capacity_bytes": 6291456,
+            "dead": {
+              "bytes": 1278184,
+              "count": 18945
+            },
+            "late_marked": {
+              "bytes": 0,
+              "count": 0
+            },
+            "live": {
+              "bytes": 32864,
+              "count": 402
+            },
+            "object_starts_bytes": 98304,
+            "space": "nursery_eden",
+            "stub_dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "stub_live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "tombstones": 0,
+            "used_bytes": 1311048,
+            "walked_bytes": 1311048
+          },
+          {
+            "blocks": 1,
+            "capacity_bytes": 1048576,
+            "dead": {
+              "bytes": 33168,
+              "count": 405
+            },
+            "late_marked": {
+              "bytes": 0,
+              "count": 0
+            },
+            "live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "object_starts_bytes": 16384,
+            "space": "survivor0",
+            "stub_dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "stub_live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "tombstones": 0,
+            "used_bytes": 33168,
+            "walked_bytes": 33168
+          },
+          {
+            "blocks": 1,
+            "capacity_bytes": 1048576,
+            "dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "late_marked": {
+              "bytes": 0,
+              "count": 0
+            },
+            "live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "object_starts_bytes": 16384,
+            "space": "survivor1",
+            "stub_dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "stub_live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "tombstones": 0,
+            "used_bytes": 0,
+            "walked_bytes": 0
+          },
+          {
+            "blocks": 1,
+            "capacity_bytes": 1048576,
+            "dead": {
+              "bytes": 30080,
+              "count": 803
+            },
+            "late_marked": {
+              "bytes": 0,
+              "count": 0
+            },
+            "live": {
+              "bytes": 320,
+              "count": 20
+            },
+            "object_starts_bytes": 16384,
+            "space": "longlived",
+            "stub_dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "stub_live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "tombstones": 0,
+            "used_bytes": 30400,
+            "walked_bytes": 30400
+          },
+          {
+            "blocks": 1,
+            "capacity_bytes": 1048576,
+            "dead": {
+              "bytes": 32,
+              "count": 1
+            },
+            "late_marked": {
+              "bytes": 0,
+              "count": 0
+            },
+            "live": {
+              "bytes": 571368,
+              "count": 9786
+            },
+            "object_starts_bytes": 16384,
+            "space": "old",
+            "stub_dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "stub_live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "tombstones": 0,
+            "used_bytes": 571400,
+            "walked_bytes": 571400
+          },
+          {
+            "dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "late_marked": {
+              "bytes": 0,
+              "count": 0
+            },
+            "live": {
+              "bytes": 32,
+              "count": 1
+            },
+            "space": "malloc",
+            "stub_dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "stub_live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "walked_bytes": 32
+          }
+        ],
+        "used_bytes": 1946016
+      },
+      "side_tables": [
+        {
+          "bytes": 25616,
+          "entries": 455,
+          "table": "fn.name_registry"
+        },
+        {
+          "bytes": 5971,
+          "entries": 101,
+          "table": "fn.name_overrides(copied)"
+        },
+        {
+          "bytes": 16912,
+          "entries": 416,
+          "table": "fn.source_registry(toString)"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "fn.source_overrides(copied)"
+        },
+        {
+          "bytes": 152,
+          "entries": 7,
+          "table": "closure.singletons"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "closure.captured_singletons"
+        },
+        {
+          "bytes": 311592,
+          "entries": 2036,
+          "table": "shapes.descriptors"
+        },
+        {
+          "bytes": 9456,
+          "entries": 18,
+          "table": "shapes.indices"
+        },
+        {
+          "bytes": 204816,
+          "entries": 2036,
+          "table": "shapes.by_facts"
+        },
+        {
+          "bytes": 68824,
+          "entries": 591,
+          "table": "shapes.families"
+        },
+        {
+          "bytes": 0,
+          "entries": 3249,
+          "table": "shapes.ids_minted(process)"
+        },
+        {
+          "bytes": 0,
+          "entries": 997,
+          "table": "shapes.proto(object_prototype)"
+        },
+        {
+          "bytes": 0,
+          "entries": 101,
+          "table": "shapes.proto(null)"
+        },
+        {
+          "bytes": 0,
+          "entries": 238,
+          "table": "shapes.proto(object_serial)"
+        },
+        {
+          "bytes": 0,
+          "entries": 649,
+          "table": "shapes.proto(class_default)"
+        },
+        {
+          "bytes": 0,
+          "entries": 47,
+          "table": "shapes.proto(class_recorded)"
+        },
+        {
+          "bytes": 0,
+          "entries": 4,
+          "table": "shapes.proto(unique)"
+        },
+        {
+          "bytes": 0,
+          "entries": 97,
+          "table": "shapes.proto.distinct_identities"
+        },
+        {
+          "bytes": 2511,
+          "entries": 40,
+          "table": "class.names"
+        },
+        {
+          "bytes": 33745,
+          "entries": 214,
+          "table": "class.vtables(methods+accessors)"
+        },
+        {
+          "bytes": 1943,
+          "entries": 8,
+          "table": "class.static_methods"
+        },
+        {
+          "bytes": 11622,
+          "entries": 165,
+          "table": "class.method_bind_lengths"
+        },
+        {
+          "bytes": 1296,
+          "entries": 149,
+          "table": "class.registered_ids"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "class.declared_static_global_slots"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "object.overflow_fields"
+        },
+        {
+          "bytes": 524288,
+          "entries": 16384,
+          "table": "object.transition_cache(fixed)"
+        },
+        {
+          "bytes": 6144,
+          "entries": 256,
+          "table": "object.shape_inline_cache(fixed)"
+        },
+        {
+          "bytes": 353164,
+          "entries": 3252,
+          "table": "object.property_descriptors"
+        },
+        {
+          "bytes": 231,
+          "entries": 1,
+          "table": "object.accessor_descriptors"
+        },
+        {
+          "bytes": 65536,
+          "entries": 351,
+          "table": "ic.lazy_caches"
+        },
+        {
+          "bytes": 164009,
+          "entries": 1,
+          "table": "stackmap.sections(file-backed)"
+        },
+        {
+          "bytes": 32768,
+          "entries": 693,
+          "table": "stackmap.functions"
+        },
+        {
+          "bytes": 131072,
+          "entries": 8192,
+          "table": "string.intern_table(fixed)"
+        },
+        {
+          "bytes": 32768,
+          "entries": 1,
+          "table": "gc.malloc_objects_vec"
+        },
+        {
+          "bytes": 73744,
+          "entries": 1,
+          "table": "gc.malloc_objects_set"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "gc.malloc_realloc_forwarding"
+        },
+        {
+          "bytes": 672,
+          "entries": 13,
+          "table": "arena.page_generations"
+        },
+        {
+          "bytes": 119280,
+          "entries": 140,
+          "table": "arena.old_gen_page_objects"
+        },
+        {
+          "bytes": 57872,
+          "entries": 256,
+          "table": "arena.old_gen_page_meta"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "arena.old_gen_page_promoted_runs"
+        },
+        {
+          "bytes": 52,
+          "entries": 1,
+          "table": "gc.dirty_old_pages"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "gc.external_dirty_slot_pages"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "gc.remembered_set"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "gc.ever_dirty_old_pages"
+        },
+        {
+          "bytes": 418,
+          "entries": 1,
+          "table": "module.path_registry"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "timer.agent_store"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "timer.ref_states"
+        },
+        {
+          "bytes": 190,
+          "entries": 2,
+          "table": "symbol.registry"
+        },
+        {
+          "bytes": 12288,
+          "entries": 512,
+          "table": "gc.layout_slot_masks"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "gc.external_side_live_bytes(map/set/tape)"
+        },
+        {
+          "bytes": 0,
+          "entries": 207,
+          "table": "shapes.descriptors.carried(live objects)"
+        },
+        {
+          "bytes": 0,
+          "entries": 1829,
+          "table": "shapes.descriptors.uncarried"
+        },
+        {
+          "bytes": 0,
+          "entries": 1180,
+          "table": "shapes.descriptors.uncarried.cache_carrier"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "shapes.descriptors.uncarried.old_carrier"
+        },
+        {
+          "bytes": 1445,
+          "entries": 423,
+          "table": "shapes.families.multi(families,extra descriptors)"
+        },
+        {
+          "bytes": 0,
+          "entries": 63,
+          "table": "shapes.families.largest"
+        }
+      ],
+      "totals": {
+        "dead_bytes": 1341464,
+        "dead_objects": 20154,
+        "late_marked_bytes": 0,
+        "late_marked_objects": 0,
+        "live_bytes": 604584,
+        "live_objects": 10209,
+        "non_regex_side_table_bytes": 2270397,
+        "reachability_pass": true,
+        "regex_side_table_bytes": 0,
+        "side_table_bytes": 2270397
+      }
+    },
+    {
+      "case": "zodwork",
+      "arm": "current0ed-base",
+      "repeat": 1,
+      "boundary": "explicit diagnostic full before safeParse at iteration100, schema live; unmodified workload has no natural full; not benchmark RSS",
+      "live_counts": {
+        "3": 4081,
+        "1": 1473,
+        "4": 2285,
+        "2": 2071,
+        "20": 11,
+        "21": 11,
+        "19": 277
+      },
+      "live_bytes": {
+        "3": 172208,
+        "1": 187688,
+        "4": 92544,
+        "2": 88384,
+        "20": 704,
+        "21": 16520,
+        "19": 46536
+      },
+      "metadata": {
+        "source_base": "0ed699b9f26267d5ede9e9aabd12160c842cec81",
+        "pass1_headers": 10209,
+        "object_meta_header_inclusive_bytes": 168,
+        "object_meta_payload_bytes": 160,
+        "ordinary_objects_without_meta": 1794,
+        "ordinary_meta_owners": 277,
+        "ordinary_distinct_meta_records": 277,
+        "ordinary_meta_bytes": 46536,
+        "ordinary_meta_patterns": {
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+spill": 26,
+          "spill": 130,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+prototype+spill": 5,
+          "flags+proto_serial+spill": 3,
+          "flags+proto_serial": 2,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+proto_serial+spill": 6,
+          "flags+proto_serial+prototype+spill": 3,
+          "flags+proto_serial+prototype": 4,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+proto_serial+prototype": 5,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+prototype": 13,
+          "prototype": 6,
+          "flags+prototype+spill": 9,
+          "flags+prototype": 33,
+          "expando": 12,
+          "expando+spill": 14,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+prototype+spill": 3,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash": 3
+        },
+        "all_meta_patterns": {
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+spill": 26,
+          "spill": 130,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+prototype+spill": 5,
+          "flags+proto_serial+spill": 3,
+          "flags+proto_serial": 2,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+proto_serial+spill": 6,
+          "flags+proto_serial+prototype+spill": 3,
+          "flags+proto_serial+prototype": 4,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+proto_serial+prototype": 5,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+prototype": 13,
+          "prototype": 6,
+          "flags+prototype+spill": 9,
+          "flags+prototype": 33,
+          "expando": 12,
+          "expando+spill": 14,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+prototype+spill": 3,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash": 3
+        },
+        "all_meta_fields_nonzero": {
+          "descriptor_key_count": 61,
+          "spill": 199,
+          "descriptor_key_hash": 61,
+          "accessor_key_bits": 61,
+          "prototype": 81,
+          "flags": 83,
+          "proto_serial": 23,
+          "expando": 26
+        },
+        "ordinary_summary_only_meta_records": 3,
+        "ordinary_summary_only_meta_bytes": 504,
+        "summary_payload_bytes_in_all_meta": 8864,
+        "summary_payload_bytes_in_ordinary_meta": 8864,
+        "ordinary_meta_owner_histogram": {
+          "1": 277
+        }
+      },
+      "shapes": {
+        "records": 2036,
+        "records_by_kind": {
+          "0": 928,
+          "5": 935,
+          "3": 171,
+          "4": 2
+        },
+        "chunks": 140,
+        "pages": 3,
+        "directory_used_bytes": 272,
+        "chunk_storage_bytes": 286720,
+        "present_record_bytes": 130304,
+        "empty_record_slot_bytes": 156416,
+        "directory_page_bytes": 24576,
+        "extras_count": 11,
+        "extras_payload_bytes": 264,
+        "constfn_entries": 15,
+        "constfn_list_payload_bytes": 240,
+        "constfn_list_lengths": {
+          "1": 10,
+          "5": 1
+        },
+        "record_growth_payload_bytes": 16288,
+        "record_growth_chunk_bytes": 35840,
+        "requested_bytes": 312072
+      },
+      "arena": {
+        "block_pool_bytes": 0,
+        "capacity_bytes": 10485760,
+        "free_list_bytes": 0,
+        "live_allocated_bytes_estimate": 1946016,
+        "old_free_bytes": 0,
+        "spaces": [
+          {
+            "blocks": 6,
+            "capacity_bytes": 6291456,
+            "dead": {
+              "bytes": 1278184,
+              "count": 18945
+            },
+            "late_marked": {
+              "bytes": 0,
+              "count": 0
+            },
+            "live": {
+              "bytes": 32864,
+              "count": 402
+            },
+            "object_starts_bytes": 98304,
+            "space": "nursery_eden",
+            "stub_dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "stub_live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "tombstones": 0,
+            "used_bytes": 1311048,
+            "walked_bytes": 1311048
+          },
+          {
+            "blocks": 1,
+            "capacity_bytes": 1048576,
+            "dead": {
+              "bytes": 33168,
+              "count": 405
+            },
+            "late_marked": {
+              "bytes": 0,
+              "count": 0
+            },
+            "live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "object_starts_bytes": 16384,
+            "space": "survivor0",
+            "stub_dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "stub_live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "tombstones": 0,
+            "used_bytes": 33168,
+            "walked_bytes": 33168
+          },
+          {
+            "blocks": 1,
+            "capacity_bytes": 1048576,
+            "dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "late_marked": {
+              "bytes": 0,
+              "count": 0
+            },
+            "live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "object_starts_bytes": 16384,
+            "space": "survivor1",
+            "stub_dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "stub_live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "tombstones": 0,
+            "used_bytes": 0,
+            "walked_bytes": 0
+          },
+          {
+            "blocks": 1,
+            "capacity_bytes": 1048576,
+            "dead": {
+              "bytes": 30080,
+              "count": 803
+            },
+            "late_marked": {
+              "bytes": 0,
+              "count": 0
+            },
+            "live": {
+              "bytes": 320,
+              "count": 20
+            },
+            "object_starts_bytes": 16384,
+            "space": "longlived",
+            "stub_dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "stub_live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "tombstones": 0,
+            "used_bytes": 30400,
+            "walked_bytes": 30400
+          },
+          {
+            "blocks": 1,
+            "capacity_bytes": 1048576,
+            "dead": {
+              "bytes": 32,
+              "count": 1
+            },
+            "late_marked": {
+              "bytes": 0,
+              "count": 0
+            },
+            "live": {
+              "bytes": 571368,
+              "count": 9786
+            },
+            "object_starts_bytes": 16384,
+            "space": "old",
+            "stub_dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "stub_live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "tombstones": 0,
+            "used_bytes": 571400,
+            "walked_bytes": 571400
+          },
+          {
+            "dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "late_marked": {
+              "bytes": 0,
+              "count": 0
+            },
+            "live": {
+              "bytes": 32,
+              "count": 1
+            },
+            "space": "malloc",
+            "stub_dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "stub_live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "walked_bytes": 32
+          }
+        ],
+        "used_bytes": 1946016
+      },
+      "side_tables": [
+        {
+          "bytes": 25616,
+          "entries": 455,
+          "table": "fn.name_registry"
+        },
+        {
+          "bytes": 5971,
+          "entries": 101,
+          "table": "fn.name_overrides(copied)"
+        },
+        {
+          "bytes": 16912,
+          "entries": 416,
+          "table": "fn.source_registry(toString)"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "fn.source_overrides(copied)"
+        },
+        {
+          "bytes": 152,
+          "entries": 7,
+          "table": "closure.singletons"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "closure.captured_singletons"
+        },
+        {
+          "bytes": 311592,
+          "entries": 2036,
+          "table": "shapes.descriptors"
+        },
+        {
+          "bytes": 9456,
+          "entries": 18,
+          "table": "shapes.indices"
+        },
+        {
+          "bytes": 204816,
+          "entries": 2036,
+          "table": "shapes.by_facts"
+        },
+        {
+          "bytes": 68824,
+          "entries": 591,
+          "table": "shapes.families"
+        },
+        {
+          "bytes": 0,
+          "entries": 3249,
+          "table": "shapes.ids_minted(process)"
+        },
+        {
+          "bytes": 0,
+          "entries": 997,
+          "table": "shapes.proto(object_prototype)"
+        },
+        {
+          "bytes": 0,
+          "entries": 101,
+          "table": "shapes.proto(null)"
+        },
+        {
+          "bytes": 0,
+          "entries": 238,
+          "table": "shapes.proto(object_serial)"
+        },
+        {
+          "bytes": 0,
+          "entries": 649,
+          "table": "shapes.proto(class_default)"
+        },
+        {
+          "bytes": 0,
+          "entries": 47,
+          "table": "shapes.proto(class_recorded)"
+        },
+        {
+          "bytes": 0,
+          "entries": 4,
+          "table": "shapes.proto(unique)"
+        },
+        {
+          "bytes": 0,
+          "entries": 97,
+          "table": "shapes.proto.distinct_identities"
+        },
+        {
+          "bytes": 2511,
+          "entries": 40,
+          "table": "class.names"
+        },
+        {
+          "bytes": 33745,
+          "entries": 214,
+          "table": "class.vtables(methods+accessors)"
+        },
+        {
+          "bytes": 1943,
+          "entries": 8,
+          "table": "class.static_methods"
+        },
+        {
+          "bytes": 11622,
+          "entries": 165,
+          "table": "class.method_bind_lengths"
+        },
+        {
+          "bytes": 1296,
+          "entries": 149,
+          "table": "class.registered_ids"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "class.declared_static_global_slots"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "object.overflow_fields"
+        },
+        {
+          "bytes": 524288,
+          "entries": 16384,
+          "table": "object.transition_cache(fixed)"
+        },
+        {
+          "bytes": 6144,
+          "entries": 256,
+          "table": "object.shape_inline_cache(fixed)"
+        },
+        {
+          "bytes": 353164,
+          "entries": 3252,
+          "table": "object.property_descriptors"
+        },
+        {
+          "bytes": 231,
+          "entries": 1,
+          "table": "object.accessor_descriptors"
+        },
+        {
+          "bytes": 65536,
+          "entries": 351,
+          "table": "ic.lazy_caches"
+        },
+        {
+          "bytes": 164009,
+          "entries": 1,
+          "table": "stackmap.sections(file-backed)"
+        },
+        {
+          "bytes": 32768,
+          "entries": 693,
+          "table": "stackmap.functions"
+        },
+        {
+          "bytes": 131072,
+          "entries": 8192,
+          "table": "string.intern_table(fixed)"
+        },
+        {
+          "bytes": 32768,
+          "entries": 1,
+          "table": "gc.malloc_objects_vec"
+        },
+        {
+          "bytes": 73744,
+          "entries": 1,
+          "table": "gc.malloc_objects_set"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "gc.malloc_realloc_forwarding"
+        },
+        {
+          "bytes": 672,
+          "entries": 13,
+          "table": "arena.page_generations"
+        },
+        {
+          "bytes": 119280,
+          "entries": 140,
+          "table": "arena.old_gen_page_objects"
+        },
+        {
+          "bytes": 57872,
+          "entries": 256,
+          "table": "arena.old_gen_page_meta"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "arena.old_gen_page_promoted_runs"
+        },
+        {
+          "bytes": 52,
+          "entries": 1,
+          "table": "gc.dirty_old_pages"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "gc.external_dirty_slot_pages"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "gc.remembered_set"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "gc.ever_dirty_old_pages"
+        },
+        {
+          "bytes": 418,
+          "entries": 1,
+          "table": "module.path_registry"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "timer.agent_store"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "timer.ref_states"
+        },
+        {
+          "bytes": 190,
+          "entries": 2,
+          "table": "symbol.registry"
+        },
+        {
+          "bytes": 12288,
+          "entries": 512,
+          "table": "gc.layout_slot_masks"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "gc.external_side_live_bytes(map/set/tape)"
+        },
+        {
+          "bytes": 0,
+          "entries": 207,
+          "table": "shapes.descriptors.carried(live objects)"
+        },
+        {
+          "bytes": 0,
+          "entries": 1829,
+          "table": "shapes.descriptors.uncarried"
+        },
+        {
+          "bytes": 0,
+          "entries": 1180,
+          "table": "shapes.descriptors.uncarried.cache_carrier"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "shapes.descriptors.uncarried.old_carrier"
+        },
+        {
+          "bytes": 1445,
+          "entries": 423,
+          "table": "shapes.families.multi(families,extra descriptors)"
+        },
+        {
+          "bytes": 0,
+          "entries": 63,
+          "table": "shapes.families.largest"
+        }
+      ],
+      "totals": {
+        "dead_bytes": 1341464,
+        "dead_objects": 20154,
+        "late_marked_bytes": 0,
+        "late_marked_objects": 0,
+        "live_bytes": 604584,
+        "live_objects": 10209,
+        "non_regex_side_table_bytes": 2270397,
+        "reachability_pass": true,
+        "regex_side_table_bytes": 0,
+        "side_table_bytes": 2270397
+      }
+    },
+    {
+      "case": "zodwork",
+      "arm": "current0ed-gc",
+      "repeat": 0,
+      "boundary": "explicit diagnostic full before safeParse at iteration100, schema live; unmodified workload has no natural full; not benchmark RSS",
+      "live_counts": {
+        "3": 4081,
+        "1": 1473,
+        "4": 2285,
+        "2": 2071,
+        "20": 11,
+        "21": 11,
+        "19": 277
+      },
+      "live_bytes": {
+        "3": 172208,
+        "1": 187688,
+        "4": 92544,
+        "2": 88384,
+        "20": 704,
+        "21": 16520,
+        "19": 46536
+      },
+      "metadata": {
+        "source_base": "0ed699b9f26267d5ede9e9aabd12160c842cec81",
+        "pass1_headers": 10209,
+        "object_meta_header_inclusive_bytes": 168,
+        "object_meta_payload_bytes": 160,
+        "ordinary_objects_without_meta": 1794,
+        "ordinary_meta_owners": 277,
+        "ordinary_distinct_meta_records": 277,
+        "ordinary_meta_bytes": 46536,
+        "ordinary_meta_patterns": {
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+spill": 26,
+          "spill": 130,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+prototype+spill": 5,
+          "flags+proto_serial+spill": 3,
+          "flags+proto_serial": 2,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+proto_serial+spill": 6,
+          "flags+proto_serial+prototype+spill": 3,
+          "flags+proto_serial+prototype": 4,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+proto_serial+prototype": 5,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+prototype": 13,
+          "prototype": 6,
+          "flags+prototype+spill": 9,
+          "flags+prototype": 33,
+          "expando": 12,
+          "expando+spill": 14,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+prototype+spill": 3,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash": 3
+        },
+        "all_meta_patterns": {
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+spill": 26,
+          "spill": 130,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+prototype+spill": 5,
+          "flags+proto_serial+spill": 3,
+          "flags+proto_serial": 2,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+proto_serial+spill": 6,
+          "flags+proto_serial+prototype+spill": 3,
+          "flags+proto_serial+prototype": 4,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+proto_serial+prototype": 5,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+prototype": 13,
+          "prototype": 6,
+          "flags+prototype+spill": 9,
+          "flags+prototype": 33,
+          "expando": 12,
+          "expando+spill": 14,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+prototype+spill": 3,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash": 3
+        },
+        "all_meta_fields_nonzero": {
+          "descriptor_key_hash": 61,
+          "spill": 199,
+          "accessor_key_bits": 61,
+          "descriptor_key_count": 61,
+          "prototype": 81,
+          "flags": 83,
+          "proto_serial": 23,
+          "expando": 26
+        },
+        "ordinary_summary_only_meta_records": 3,
+        "ordinary_summary_only_meta_bytes": 504,
+        "summary_payload_bytes_in_all_meta": 8864,
+        "summary_payload_bytes_in_ordinary_meta": 8864,
+        "ordinary_meta_owner_histogram": {
+          "1": 277
+        }
+      },
+      "shapes": {
+        "records": 2036,
+        "records_by_kind": {
+          "0": 928,
+          "5": 935,
+          "3": 171,
+          "4": 2
+        },
+        "chunks": 140,
+        "pages": 3,
+        "directory_used_bytes": 272,
+        "chunk_storage_bytes": 286720,
+        "present_record_bytes": 130304,
+        "empty_record_slot_bytes": 156416,
+        "directory_page_bytes": 24576,
+        "extras_count": 11,
+        "extras_payload_bytes": 264,
+        "constfn_entries": 15,
+        "constfn_list_payload_bytes": 240,
+        "constfn_list_lengths": {
+          "1": 10,
+          "5": 1
+        },
+        "record_growth_payload_bytes": 16288,
+        "record_growth_chunk_bytes": 35840,
+        "requested_bytes": 312072
+      },
+      "arena": {
+        "block_pool_bytes": 0,
+        "capacity_bytes": 10485760,
+        "free_list_bytes": 0,
+        "live_allocated_bytes_estimate": 1946016,
+        "old_free_bytes": 0,
+        "spaces": [
+          {
+            "blocks": 6,
+            "capacity_bytes": 6291456,
+            "dead": {
+              "bytes": 1278184,
+              "count": 18945
+            },
+            "late_marked": {
+              "bytes": 0,
+              "count": 0
+            },
+            "live": {
+              "bytes": 32864,
+              "count": 402
+            },
+            "object_starts_bytes": 98304,
+            "space": "nursery_eden",
+            "stub_dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "stub_live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "tombstones": 0,
+            "used_bytes": 1311048,
+            "walked_bytes": 1311048
+          },
+          {
+            "blocks": 1,
+            "capacity_bytes": 1048576,
+            "dead": {
+              "bytes": 33168,
+              "count": 405
+            },
+            "late_marked": {
+              "bytes": 0,
+              "count": 0
+            },
+            "live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "object_starts_bytes": 16384,
+            "space": "survivor0",
+            "stub_dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "stub_live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "tombstones": 0,
+            "used_bytes": 33168,
+            "walked_bytes": 33168
+          },
+          {
+            "blocks": 1,
+            "capacity_bytes": 1048576,
+            "dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "late_marked": {
+              "bytes": 0,
+              "count": 0
+            },
+            "live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "object_starts_bytes": 16384,
+            "space": "survivor1",
+            "stub_dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "stub_live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "tombstones": 0,
+            "used_bytes": 0,
+            "walked_bytes": 0
+          },
+          {
+            "blocks": 1,
+            "capacity_bytes": 1048576,
+            "dead": {
+              "bytes": 30080,
+              "count": 803
+            },
+            "late_marked": {
+              "bytes": 0,
+              "count": 0
+            },
+            "live": {
+              "bytes": 320,
+              "count": 20
+            },
+            "object_starts_bytes": 16384,
+            "space": "longlived",
+            "stub_dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "stub_live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "tombstones": 0,
+            "used_bytes": 30400,
+            "walked_bytes": 30400
+          },
+          {
+            "blocks": 1,
+            "capacity_bytes": 1048576,
+            "dead": {
+              "bytes": 32,
+              "count": 1
+            },
+            "late_marked": {
+              "bytes": 0,
+              "count": 0
+            },
+            "live": {
+              "bytes": 571368,
+              "count": 9786
+            },
+            "object_starts_bytes": 16384,
+            "space": "old",
+            "stub_dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "stub_live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "tombstones": 0,
+            "used_bytes": 571400,
+            "walked_bytes": 571400
+          },
+          {
+            "dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "late_marked": {
+              "bytes": 0,
+              "count": 0
+            },
+            "live": {
+              "bytes": 32,
+              "count": 1
+            },
+            "space": "malloc",
+            "stub_dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "stub_live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "walked_bytes": 32
+          }
+        ],
+        "used_bytes": 1946016
+      },
+      "side_tables": [
+        {
+          "bytes": 25616,
+          "entries": 455,
+          "table": "fn.name_registry"
+        },
+        {
+          "bytes": 5971,
+          "entries": 101,
+          "table": "fn.name_overrides(copied)"
+        },
+        {
+          "bytes": 16912,
+          "entries": 416,
+          "table": "fn.source_registry(toString)"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "fn.source_overrides(copied)"
+        },
+        {
+          "bytes": 152,
+          "entries": 7,
+          "table": "closure.singletons"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "closure.captured_singletons"
+        },
+        {
+          "bytes": 311592,
+          "entries": 2036,
+          "table": "shapes.descriptors"
+        },
+        {
+          "bytes": 9456,
+          "entries": 18,
+          "table": "shapes.indices"
+        },
+        {
+          "bytes": 204816,
+          "entries": 2036,
+          "table": "shapes.by_facts"
+        },
+        {
+          "bytes": 68824,
+          "entries": 591,
+          "table": "shapes.families"
+        },
+        {
+          "bytes": 0,
+          "entries": 3249,
+          "table": "shapes.ids_minted(process)"
+        },
+        {
+          "bytes": 0,
+          "entries": 997,
+          "table": "shapes.proto(object_prototype)"
+        },
+        {
+          "bytes": 0,
+          "entries": 101,
+          "table": "shapes.proto(null)"
+        },
+        {
+          "bytes": 0,
+          "entries": 238,
+          "table": "shapes.proto(object_serial)"
+        },
+        {
+          "bytes": 0,
+          "entries": 649,
+          "table": "shapes.proto(class_default)"
+        },
+        {
+          "bytes": 0,
+          "entries": 47,
+          "table": "shapes.proto(class_recorded)"
+        },
+        {
+          "bytes": 0,
+          "entries": 4,
+          "table": "shapes.proto(unique)"
+        },
+        {
+          "bytes": 0,
+          "entries": 97,
+          "table": "shapes.proto.distinct_identities"
+        },
+        {
+          "bytes": 2511,
+          "entries": 40,
+          "table": "class.names"
+        },
+        {
+          "bytes": 33745,
+          "entries": 214,
+          "table": "class.vtables(methods+accessors)"
+        },
+        {
+          "bytes": 1943,
+          "entries": 8,
+          "table": "class.static_methods"
+        },
+        {
+          "bytes": 11622,
+          "entries": 165,
+          "table": "class.method_bind_lengths"
+        },
+        {
+          "bytes": 1296,
+          "entries": 149,
+          "table": "class.registered_ids"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "class.declared_static_global_slots"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "object.overflow_fields"
+        },
+        {
+          "bytes": 524288,
+          "entries": 16384,
+          "table": "object.transition_cache(fixed)"
+        },
+        {
+          "bytes": 6144,
+          "entries": 256,
+          "table": "object.shape_inline_cache(fixed)"
+        },
+        {
+          "bytes": 353164,
+          "entries": 3252,
+          "table": "object.property_descriptors"
+        },
+        {
+          "bytes": 231,
+          "entries": 1,
+          "table": "object.accessor_descriptors"
+        },
+        {
+          "bytes": 65536,
+          "entries": 351,
+          "table": "ic.lazy_caches"
+        },
+        {
+          "bytes": 164009,
+          "entries": 1,
+          "table": "stackmap.sections(file-backed)"
+        },
+        {
+          "bytes": 32768,
+          "entries": 693,
+          "table": "stackmap.functions"
+        },
+        {
+          "bytes": 131072,
+          "entries": 8192,
+          "table": "string.intern_table(fixed)"
+        },
+        {
+          "bytes": 32768,
+          "entries": 1,
+          "table": "gc.malloc_objects_vec"
+        },
+        {
+          "bytes": 73744,
+          "entries": 1,
+          "table": "gc.malloc_objects_set"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "gc.malloc_realloc_forwarding"
+        },
+        {
+          "bytes": 672,
+          "entries": 14,
+          "table": "arena.page_generations"
+        },
+        {
+          "bytes": 38216,
+          "entries": 140,
+          "table": "arena.old_gen_page_objects"
+        },
+        {
+          "bytes": 14520,
+          "entries": 256,
+          "table": "arena.old_gen_page_meta"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "arena.old_gen_page_promoted_runs"
+        },
+        {
+          "bytes": 52,
+          "entries": 1,
+          "table": "gc.dirty_old_pages"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "gc.external_dirty_slot_pages"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "gc.remembered_set"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "gc.ever_dirty_old_pages"
+        },
+        {
+          "bytes": 418,
+          "entries": 1,
+          "table": "module.path_registry"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "timer.agent_store"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "timer.ref_states"
+        },
+        {
+          "bytes": 190,
+          "entries": 2,
+          "table": "symbol.registry"
+        },
+        {
+          "bytes": 12288,
+          "entries": 512,
+          "table": "gc.layout_slot_masks"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "gc.external_side_live_bytes(map/set/tape)"
+        },
+        {
+          "bytes": 0,
+          "entries": 207,
+          "table": "shapes.descriptors.carried(live objects)"
+        },
+        {
+          "bytes": 0,
+          "entries": 1829,
+          "table": "shapes.descriptors.uncarried"
+        },
+        {
+          "bytes": 0,
+          "entries": 1180,
+          "table": "shapes.descriptors.uncarried.cache_carrier"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "shapes.descriptors.uncarried.old_carrier"
+        },
+        {
+          "bytes": 1445,
+          "entries": 423,
+          "table": "shapes.families.multi(families,extra descriptors)"
+        },
+        {
+          "bytes": 0,
+          "entries": 63,
+          "table": "shapes.families.largest"
+        }
+      ],
+      "totals": {
+        "dead_bytes": 1341464,
+        "dead_objects": 20154,
+        "late_marked_bytes": 0,
+        "late_marked_objects": 0,
+        "live_bytes": 604584,
+        "live_objects": 10209,
+        "non_regex_side_table_bytes": 2145981,
+        "reachability_pass": true,
+        "regex_side_table_bytes": 0,
+        "side_table_bytes": 2145981
+      }
+    },
+    {
+      "case": "zodwork",
+      "arm": "current0ed-gc",
+      "repeat": 1,
+      "boundary": "explicit diagnostic full before safeParse at iteration100, schema live; unmodified workload has no natural full; not benchmark RSS",
+      "live_counts": {
+        "3": 4081,
+        "1": 1473,
+        "4": 2285,
+        "2": 2071,
+        "20": 11,
+        "21": 11,
+        "19": 277
+      },
+      "live_bytes": {
+        "3": 172208,
+        "1": 187688,
+        "4": 92544,
+        "2": 88384,
+        "20": 704,
+        "21": 16520,
+        "19": 46536
+      },
+      "metadata": {
+        "source_base": "0ed699b9f26267d5ede9e9aabd12160c842cec81",
+        "pass1_headers": 10209,
+        "object_meta_header_inclusive_bytes": 168,
+        "object_meta_payload_bytes": 160,
+        "ordinary_objects_without_meta": 1794,
+        "ordinary_meta_owners": 277,
+        "ordinary_distinct_meta_records": 277,
+        "ordinary_meta_bytes": 46536,
+        "ordinary_meta_patterns": {
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+spill": 26,
+          "spill": 130,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+prototype+spill": 5,
+          "flags+proto_serial+spill": 3,
+          "flags+proto_serial": 2,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+proto_serial+spill": 6,
+          "flags+proto_serial+prototype+spill": 3,
+          "flags+proto_serial+prototype": 4,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+proto_serial+prototype": 5,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+prototype": 13,
+          "prototype": 6,
+          "flags+prototype+spill": 9,
+          "flags+prototype": 33,
+          "expando": 12,
+          "expando+spill": 14,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+prototype+spill": 3,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash": 3
+        },
+        "all_meta_patterns": {
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+spill": 26,
+          "spill": 130,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+prototype+spill": 5,
+          "flags+proto_serial+spill": 3,
+          "flags+proto_serial": 2,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+proto_serial+spill": 6,
+          "flags+proto_serial+prototype+spill": 3,
+          "flags+proto_serial+prototype": 4,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+proto_serial+prototype": 5,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+prototype": 13,
+          "prototype": 6,
+          "flags+prototype+spill": 9,
+          "flags+prototype": 33,
+          "expando": 12,
+          "expando+spill": 14,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash+prototype+spill": 3,
+          "accessor_key_bits+descriptor_key_count+descriptor_key_hash": 3
+        },
+        "all_meta_fields_nonzero": {
+          "accessor_key_bits": 61,
+          "descriptor_key_count": 61,
+          "spill": 199,
+          "descriptor_key_hash": 61,
+          "prototype": 81,
+          "flags": 83,
+          "proto_serial": 23,
+          "expando": 26
+        },
+        "ordinary_summary_only_meta_records": 3,
+        "ordinary_summary_only_meta_bytes": 504,
+        "summary_payload_bytes_in_all_meta": 8864,
+        "summary_payload_bytes_in_ordinary_meta": 8864,
+        "ordinary_meta_owner_histogram": {
+          "1": 277
+        }
+      },
+      "shapes": {
+        "records": 2036,
+        "records_by_kind": {
+          "0": 928,
+          "5": 935,
+          "3": 171,
+          "4": 2
+        },
+        "chunks": 140,
+        "pages": 3,
+        "directory_used_bytes": 272,
+        "chunk_storage_bytes": 286720,
+        "present_record_bytes": 130304,
+        "empty_record_slot_bytes": 156416,
+        "directory_page_bytes": 24576,
+        "extras_count": 11,
+        "extras_payload_bytes": 264,
+        "constfn_entries": 15,
+        "constfn_list_payload_bytes": 240,
+        "constfn_list_lengths": {
+          "1": 10,
+          "5": 1
+        },
+        "record_growth_payload_bytes": 16288,
+        "record_growth_chunk_bytes": 35840,
+        "requested_bytes": 312072
+      },
+      "arena": {
+        "block_pool_bytes": 0,
+        "capacity_bytes": 10485760,
+        "free_list_bytes": 0,
+        "live_allocated_bytes_estimate": 1946016,
+        "old_free_bytes": 0,
+        "spaces": [
+          {
+            "blocks": 6,
+            "capacity_bytes": 6291456,
+            "dead": {
+              "bytes": 1278184,
+              "count": 18945
+            },
+            "late_marked": {
+              "bytes": 0,
+              "count": 0
+            },
+            "live": {
+              "bytes": 32864,
+              "count": 402
+            },
+            "object_starts_bytes": 98304,
+            "space": "nursery_eden",
+            "stub_dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "stub_live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "tombstones": 0,
+            "used_bytes": 1311048,
+            "walked_bytes": 1311048
+          },
+          {
+            "blocks": 1,
+            "capacity_bytes": 1048576,
+            "dead": {
+              "bytes": 33168,
+              "count": 405
+            },
+            "late_marked": {
+              "bytes": 0,
+              "count": 0
+            },
+            "live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "object_starts_bytes": 16384,
+            "space": "survivor0",
+            "stub_dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "stub_live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "tombstones": 0,
+            "used_bytes": 33168,
+            "walked_bytes": 33168
+          },
+          {
+            "blocks": 1,
+            "capacity_bytes": 1048576,
+            "dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "late_marked": {
+              "bytes": 0,
+              "count": 0
+            },
+            "live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "object_starts_bytes": 16384,
+            "space": "survivor1",
+            "stub_dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "stub_live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "tombstones": 0,
+            "used_bytes": 0,
+            "walked_bytes": 0
+          },
+          {
+            "blocks": 1,
+            "capacity_bytes": 1048576,
+            "dead": {
+              "bytes": 30080,
+              "count": 803
+            },
+            "late_marked": {
+              "bytes": 0,
+              "count": 0
+            },
+            "live": {
+              "bytes": 320,
+              "count": 20
+            },
+            "object_starts_bytes": 16384,
+            "space": "longlived",
+            "stub_dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "stub_live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "tombstones": 0,
+            "used_bytes": 30400,
+            "walked_bytes": 30400
+          },
+          {
+            "blocks": 1,
+            "capacity_bytes": 1048576,
+            "dead": {
+              "bytes": 32,
+              "count": 1
+            },
+            "late_marked": {
+              "bytes": 0,
+              "count": 0
+            },
+            "live": {
+              "bytes": 571368,
+              "count": 9786
+            },
+            "object_starts_bytes": 16384,
+            "space": "old",
+            "stub_dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "stub_live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "tombstones": 0,
+            "used_bytes": 571400,
+            "walked_bytes": 571400
+          },
+          {
+            "dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "late_marked": {
+              "bytes": 0,
+              "count": 0
+            },
+            "live": {
+              "bytes": 32,
+              "count": 1
+            },
+            "space": "malloc",
+            "stub_dead": {
+              "bytes": 0,
+              "count": 0
+            },
+            "stub_live": {
+              "bytes": 0,
+              "count": 0
+            },
+            "walked_bytes": 32
+          }
+        ],
+        "used_bytes": 1946016
+      },
+      "side_tables": [
+        {
+          "bytes": 25616,
+          "entries": 455,
+          "table": "fn.name_registry"
+        },
+        {
+          "bytes": 5971,
+          "entries": 101,
+          "table": "fn.name_overrides(copied)"
+        },
+        {
+          "bytes": 16912,
+          "entries": 416,
+          "table": "fn.source_registry(toString)"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "fn.source_overrides(copied)"
+        },
+        {
+          "bytes": 152,
+          "entries": 7,
+          "table": "closure.singletons"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "closure.captured_singletons"
+        },
+        {
+          "bytes": 311592,
+          "entries": 2036,
+          "table": "shapes.descriptors"
+        },
+        {
+          "bytes": 9456,
+          "entries": 18,
+          "table": "shapes.indices"
+        },
+        {
+          "bytes": 204816,
+          "entries": 2036,
+          "table": "shapes.by_facts"
+        },
+        {
+          "bytes": 68824,
+          "entries": 591,
+          "table": "shapes.families"
+        },
+        {
+          "bytes": 0,
+          "entries": 3249,
+          "table": "shapes.ids_minted(process)"
+        },
+        {
+          "bytes": 0,
+          "entries": 997,
+          "table": "shapes.proto(object_prototype)"
+        },
+        {
+          "bytes": 0,
+          "entries": 101,
+          "table": "shapes.proto(null)"
+        },
+        {
+          "bytes": 0,
+          "entries": 238,
+          "table": "shapes.proto(object_serial)"
+        },
+        {
+          "bytes": 0,
+          "entries": 649,
+          "table": "shapes.proto(class_default)"
+        },
+        {
+          "bytes": 0,
+          "entries": 47,
+          "table": "shapes.proto(class_recorded)"
+        },
+        {
+          "bytes": 0,
+          "entries": 4,
+          "table": "shapes.proto(unique)"
+        },
+        {
+          "bytes": 0,
+          "entries": 97,
+          "table": "shapes.proto.distinct_identities"
+        },
+        {
+          "bytes": 2511,
+          "entries": 40,
+          "table": "class.names"
+        },
+        {
+          "bytes": 33745,
+          "entries": 214,
+          "table": "class.vtables(methods+accessors)"
+        },
+        {
+          "bytes": 1943,
+          "entries": 8,
+          "table": "class.static_methods"
+        },
+        {
+          "bytes": 11622,
+          "entries": 165,
+          "table": "class.method_bind_lengths"
+        },
+        {
+          "bytes": 1296,
+          "entries": 149,
+          "table": "class.registered_ids"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "class.declared_static_global_slots"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "object.overflow_fields"
+        },
+        {
+          "bytes": 524288,
+          "entries": 16384,
+          "table": "object.transition_cache(fixed)"
+        },
+        {
+          "bytes": 6144,
+          "entries": 256,
+          "table": "object.shape_inline_cache(fixed)"
+        },
+        {
+          "bytes": 353164,
+          "entries": 3252,
+          "table": "object.property_descriptors"
+        },
+        {
+          "bytes": 231,
+          "entries": 1,
+          "table": "object.accessor_descriptors"
+        },
+        {
+          "bytes": 65536,
+          "entries": 351,
+          "table": "ic.lazy_caches"
+        },
+        {
+          "bytes": 164009,
+          "entries": 1,
+          "table": "stackmap.sections(file-backed)"
+        },
+        {
+          "bytes": 32768,
+          "entries": 693,
+          "table": "stackmap.functions"
+        },
+        {
+          "bytes": 131072,
+          "entries": 8192,
+          "table": "string.intern_table(fixed)"
+        },
+        {
+          "bytes": 32768,
+          "entries": 1,
+          "table": "gc.malloc_objects_vec"
+        },
+        {
+          "bytes": 73744,
+          "entries": 1,
+          "table": "gc.malloc_objects_set"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "gc.malloc_realloc_forwarding"
+        },
+        {
+          "bytes": 672,
+          "entries": 14,
+          "table": "arena.page_generations"
+        },
+        {
+          "bytes": 38216,
+          "entries": 140,
+          "table": "arena.old_gen_page_objects"
+        },
+        {
+          "bytes": 14520,
+          "entries": 256,
+          "table": "arena.old_gen_page_meta"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "arena.old_gen_page_promoted_runs"
+        },
+        {
+          "bytes": 52,
+          "entries": 1,
+          "table": "gc.dirty_old_pages"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "gc.external_dirty_slot_pages"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "gc.remembered_set"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "gc.ever_dirty_old_pages"
+        },
+        {
+          "bytes": 418,
+          "entries": 1,
+          "table": "module.path_registry"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "timer.agent_store"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "timer.ref_states"
+        },
+        {
+          "bytes": 190,
+          "entries": 2,
+          "table": "symbol.registry"
+        },
+        {
+          "bytes": 12288,
+          "entries": 512,
+          "table": "gc.layout_slot_masks"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "gc.external_side_live_bytes(map/set/tape)"
+        },
+        {
+          "bytes": 0,
+          "entries": 207,
+          "table": "shapes.descriptors.carried(live objects)"
+        },
+        {
+          "bytes": 0,
+          "entries": 1829,
+          "table": "shapes.descriptors.uncarried"
+        },
+        {
+          "bytes": 0,
+          "entries": 1180,
+          "table": "shapes.descriptors.uncarried.cache_carrier"
+        },
+        {
+          "bytes": 0,
+          "entries": 0,
+          "table": "shapes.descriptors.uncarried.old_carrier"
+        },
+        {
+          "bytes": 1445,
+          "entries": 423,
+          "table": "shapes.families.multi(families,extra descriptors)"
+        },
+        {
+          "bytes": 0,
+          "entries": 63,
+          "table": "shapes.families.largest"
+        }
+      ],
+      "totals": {
+        "dead_bytes": 1341464,
+        "dead_objects": 20154,
+        "late_marked_bytes": 0,
+        "late_marked_objects": 0,
+        "live_bytes": 604584,
+        "live_objects": 10209,
+        "non_regex_side_table_bytes": 2145981,
+        "reachability_pass": true,
+        "regex_side_table_bytes": 0,
+        "side_table_bytes": 2145981
+      }
+    }
+  ],
+  "limitations": "Debugger-only boundaries, not peak RSS or additive savings. TS uses third natural full; Zod adds one explicit GC before safeParse at iteration100. ObjectMeta is168 bytes including GC header. Shape directory counts used slots rather than vector capacity. Side table rows are runtime storage estimates; native usable/resident attribution is separate."
+}

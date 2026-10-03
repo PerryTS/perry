@@ -1,0 +1,46 @@
+{
+  "source_base": "0ed699b9f26267d5ede9e9aabd12160c842cec81",
+  "failed_module": "validator/lib/isTaxID.js",
+  "failed_ir_sha256": "a2c7019bab5cd3c20070d9042ecc52855dc2c6343ab8c8b1dc9cd3c1cf90e3d4",
+  "failed_ir_bytes": 7459606,
+  "guard_references": [
+    {
+      "line": 75296,
+      "ir": "  %r365 = load i64, ptr @PERRY_TA_VIEW_GUARD"
+    },
+    {
+      "line": 75488,
+      "ir": "  %r458 = load i64, ptr @PERRY_TA_VIEW_GUARD"
+    },
+    {
+      "line": 102536,
+      "ir": "  %r365 = load i64, ptr @PERRY_TA_VIEW_GUARD"
+    },
+    {
+      "line": 102737,
+      "ir": "  %r458 = load i64, ptr @PERRY_TA_VIEW_GUARD"
+    }
+  ],
+  "emitter": {
+    "file": "crates/perry-codegen/src/expr/index_get/guarded_array.rs",
+    "line": 402,
+    "sha256": "2dcdfca8e05b33e8215d10b8a583012a67ce50d22dbcaf3d2e26094df9d64895",
+    "call_site": "stmt/region_loop/arrays.rs:490"
+  },
+  "runtime": {
+    "file": "crates/perry-runtime/src/typedarray/mod.rs",
+    "sha256": "809e7749e4af6ef25a46dd23e37e3cb02c354b1dfc330a861c76f04e0fbf9d1d",
+    "inline_storage": 0,
+    "external_storage": 1,
+    "storage_offset": 10,
+    "source_lines": "165-200"
+  },
+  "finding": "Region-loop Float64 guard still emits a removed process-wide global. Repository search finds no current runtime definition or declaration. Current receiver-local storage byte is authoritative; a declaration alone cannot fix this emitter.",
+  "coordination": "Compiler / #10741 campaign lane owns this. No independently authored codegen fix in RSS PR.",
+  "acceptance_needed": [
+    "Ordinary array loop and owning Float64Array loop compile and match Node.",
+    "ArrayBuffer alias, materialized .buffer, native-view backing and storage changes cannot enter or remain in an invalid inline region.",
+    "Full validator/isTaxID request-processing source compiles without partial linking in both pristine main and GC arms.",
+    "Run original request program before and after moving GC; then rerun full17-case204-cell matrix."
+  ]
+}
