@@ -999,7 +999,7 @@ mod fifo_pending_tests {
         build_readable_async_iterator(f64::from_bits(TAG_UNDEFINED), true)
     }
 
-    fn result_field(promise: *mut crate::promise::Promise, field: &[u8]) -> f64 {
+    fn result_field(promise: *mut crate::promise::Promise, field: &'static [u8]) -> f64 {
         let boxed = unsafe { (*promise).value };
         let obj = crate::value::js_nanbox_get_pointer(boxed) as *const crate::object::ObjectHeader;
         crate::object::js_object_get_field_by_name_f64(obj, hidden_key(field))

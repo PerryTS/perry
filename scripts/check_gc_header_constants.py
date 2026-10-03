@@ -164,6 +164,10 @@ REGISTRY: list[Restatement] = [
      "0xFF | (GC_FLAG_FORWARDED << 8)"
      " | ((OBJ_FLAG_HAS_DESCRIPTORS) << 16)",
      "method probe: one fused 32-bit mask over all three header bytes"),
+    ("crates/perry-codegen/src/lower_call/method_override.rs",
+     "GC_OBJECT_LEARNED_GUARD_MASK_I32",
+     "0xFF | (GC_FLAG_FORWARDED << 8)",
+     "learned-word method arms: kind byte plus forwarding bit only"),
     ("crates/perry-codegen/src/lower_call/property_get/imported_object.rs",
      "GC_OBJECT_METHOD_GUARD_MASK_I32",
      "0xFF | (GC_FLAG_FORWARDED << 8)"

@@ -2772,6 +2772,36 @@
       "name": "KEY_BYTE_READS",
       "verdict": "test_only",
       "why": "#10502: cfg(test) thread-local count of stored-key byte reads/comparisons. The Cell holds only an incremented u64 counter, never a heap pointer or NaN-boxed value; it is absent from production builds."
+    },
+    {
+      "file": "crates/perry-runtime/src/closure/shape.rs",
+      "name": "PROTOTYPE_SLOT_CACHE",
+      "verdict": "not_a_gc_pointer",
+      "why": "Per-agent cache of (ShapeId, inline slot index) u32 pairs. ShapeIds are numbers that are never reused and slot indices are integers; no heap address or NaN-boxed value is stored, so an entry can only go unused, never dangle."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/arguments.rs",
+      "name": "ARGUMENTS_SHAPES",
+      "verdict": "not_a_gc_pointer",
+      "why": "[u32; 130] of the ShapeId an arguments object of each ARGUMENTS_KEYS slot was last born with. ShapeIds are never-reused numbers re-validated against the live descriptor by try_birth_stamp_preinstalled_shape; no heap pointer is stored."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/class_registry/decl_prototype_birth.rs",
+      "name": "BORN_FINAL_BUILDS",
+      "verdict": "test_only",
+      "why": "#[cfg(test)] Cell<u32> counter of prototypes built born-final, used by tests to prove which path ran. Stores only a count and is absent from shipped binaries."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/field_get_set/class_object_template.rs",
+      "name": "TEMPLATE_HITS",
+      "verdict": "test_only",
+      "why": "#[cfg(test)] Cell<(u32, u32)> counters of class objects and prototype objects built from a template's shapes. Stores only counts and is absent from shipped binaries."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/field_rep_store.rs",
+      "name": "TEST_COLLECT_AFTER_KEY_ADD_PUBLISH",
+      "verdict": "test_only",
+      "why": "#[cfg(test)] Cell<u32> test seam: the number of publish_key_add_edge publications after which a copying minor runs. Stores only a count and is compiled out of every non-test build."
     }
   ],
   "_FRONTIER_README": "Identity-pinned debt ratchet over new perry-ui* candidates and otherwise-unclassified core raw/Perry TLS declarations (see the census docstring, \u201cThe identity-pinned frontier\u201d). A new uncovered holder fails until it is scanned, receives a researched holders verdict, or is deliberately pinned as debt. Moving a researched false positive to holders graduates it from this list. A fixed or classified holder makes its old frontier pin stale, so the receipt must be deleted.",
@@ -3620,10 +3650,6 @@
     {
       "file": "crates/perry-runtime/src/object/class_registry/prototype_methods.rs",
       "name": "CLASS_PROTOTYPE_METHODS"
-    },
-    {
-      "file": "crates/perry-runtime/src/object/class_registry/state.rs",
-      "name": "CLASS_DECL_PROTOTYPE_OBJECTS"
     },
     {
       "file": "crates/perry-runtime/src/object/class_registry/state.rs",
