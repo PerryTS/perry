@@ -316,6 +316,24 @@ fn socket_handle(id: i64) -> i64 {
         .unwrap_or(0)
 }
 
+fn connection_id_for_socket(socket: i64) -> Option<i64> {
+    owned_ids()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .find_map(|(id, handle)| (*handle == socket).then_some(*id))
+}
+
+/// Route a JS accepted-socket handle through the HTTP/2 transport owner.
+pub(crate) fn destroy_socket(socket: i64) -> bool {
+    if let Some(id) = connection_id_for_socket(socket) {
+        destroy_connection(id);
+        true
+    } else {
+        false
+    }
+}
+
 pub(crate) fn insert(conn: H2Conn, socket_handle: i64) {
     owned_ids()
         .lock()
@@ -1439,13 +1457,16 @@ mod prescan_tests {
             let mut connection = conn(0, false);
             connection.id = id;
             insert(connection, socket);
+            assert_eq!(connection_id_for_socket(socket), Some(id));
             if destroyed_early {
                 with_owned(id, |connection| connection.destroyed = true);
                 assert!(peek(id, |_| ()).is_none());
+                assert_eq!(connection_id_for_socket(socket), Some(id));
             }
 
             on_closed(id);
             assert!(!owns(id));
+            assert_eq!(connection_id_for_socket(socket), None);
             assert_eq!(
                 crate::server::turnloop_serve::take_closed_sockets(),
                 vec![socket]
