@@ -156,3 +156,58 @@ console.log(e1 === E1, E1.q, new E1() instanceof e1);
         "the wrapper body is not provably run once:\n{ir}"
     );
 }
+
+/// A loop that cannot rebind the class binding tests the first evaluation
+/// once, before the loop, and lowers itself twice: the first-evaluation copy
+/// holds the static `new` (which scalar replacement then sees) and the static
+/// field read, the later-evaluation copy the by-value forms.
+#[test]
+fn a_loop_over_a_repeatable_class_tests_its_first_evaluation_once() {
+    let (ir, out) = compile(
+        r#"
+function run(n: number) {
+  class C { x: number; constructor(x: number) { this.x = x; } static s = 3; }
+  let t = 0;
+  for (let i = 0; i < n; i++) { const c = new C(i); t += c.x + C.s; }
+  return t;
+}
+console.log(run(3));
+console.log(run(3));
+"#,
+    );
+    assert_eq!(out, "12\n12\n");
+    assert!(
+        ir.contains("classloop.first"),
+        "the loop is versioned:\n{ir}"
+    );
+    assert!(
+        ir.contains("classloop.later"),
+        "the loop is versioned:\n{ir}"
+    );
+}
+
+/// A loop that rebinds the class binding keeps its per-use tests: the
+/// binding can stop holding the first evaluation mid-loop.
+#[test]
+fn a_loop_that_rebinds_the_class_keeps_its_per_use_tests() {
+    let (ir, out) = compile(
+        r#"
+function run(k: number) {
+  class C { static s = 1; }
+  let r = 0;
+  for (let i = 0; i < 2; i++) {
+    r += C.s;
+    if (k) { (C as any) = class { static s = 10; }; }
+  }
+  return r;
+}
+console.log(run(1));
+console.log(run(0));
+"#,
+    );
+    assert_eq!(out, "11\n2\n");
+    assert!(
+        !ir.contains("classloop.first"),
+        "a rebinding loop is not versioned:\n{ir}"
+    );
+}

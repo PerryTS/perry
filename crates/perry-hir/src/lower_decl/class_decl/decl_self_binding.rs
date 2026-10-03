@@ -167,6 +167,44 @@ pub(crate) fn guard_shared_first_static_get(ctx: &LoweringContext, expr: Expr) -
     }
 }
 
+/// #11759 (c′): `C.<static method>(args)` through a local holding an
+/// evaluation of a shared-first class declaration: the template's static
+/// method call when the local holds the first evaluation (what a single
+/// evaluation's `C.m()` is), else the call on the evaluated object. Arguments
+/// holding a function or class are left by value, as for `new`.
+pub(crate) fn guard_shared_first_static_call(ctx: &LoweringContext, expr: Expr) -> Expr {
+    let Expr::Call { callee, args, .. } = &expr else {
+        return expr;
+    };
+    let Expr::PropertyGet {
+        object, property, ..
+    } = callee.as_ref()
+    else {
+        return expr;
+    };
+    let Expr::LocalGet(binding) = object.as_ref() else {
+        return expr;
+    };
+    let Some((template, _)) = ctx.shared_first_class_bindings.get(binding) else {
+        return expr;
+    };
+    if !ctx.has_static_method(template, property) || args.iter().any(defines_code) {
+        return expr;
+    }
+    Expr::Conditional {
+        condition: Box::new(Expr::ClassIsFirstEvaluation {
+            value: Box::new(Expr::LocalGet(*binding)),
+            template: template.clone(),
+        }),
+        then_expr: Box::new(Expr::StaticMethodCall {
+            class_name: template.clone(),
+            method_name: property.clone(),
+            args: args.clone(),
+        }),
+        else_expr: Box::new(expr),
+    }
+}
+
 /// #11759 (c′): a template-keyed capture refresh (`RegisterClassCaptures`)
 /// of a shared-first declaration runs only while the declaration's binding
 /// holds its first evaluation; a later evaluation's captures live on its own

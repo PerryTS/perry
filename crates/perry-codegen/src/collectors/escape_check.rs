@@ -27,6 +27,28 @@ pub fn find_new_candidates(
             } if !boxed_vars.contains(id) && !module_globals.contains_key(id) => {
                 candidates.insert(*id, class_name.clone());
             }
+            // #11759 (c′): `new C()` guarded on a class declaration's first
+            // evaluation. Its first-evaluation branch is the static `new`; a
+            // loop versioned on the guard (`stmt/class_first_loop.rs`) lowers
+            // that branch alone, which scalar replacement then sees. Where the
+            // guard stays, the init is not a `New` and is never replaced.
+            Stmt::Let {
+                id,
+                init:
+                    Some(Expr::Conditional {
+                        condition,
+                        then_expr,
+                        ..
+                    }),
+                ..
+            } if matches!(condition.as_ref(), Expr::ClassIsFirstEvaluation { .. })
+                && !boxed_vars.contains(id)
+                && !module_globals.contains_key(id) =>
+            {
+                if let Expr::New { class_name, .. } = then_expr.as_ref() {
+                    candidates.insert(*id, class_name.clone());
+                }
+            }
             Stmt::If {
                 then_branch,
                 else_branch,
@@ -1159,6 +1181,14 @@ pub fn check_escapes_in_expr(
         // arm (around line 4949). The `ErrorNew(None)` here was dead —
         // removed.
         | Expr::BigInt(_) => {}
+        // #11759 (c′): a class declaration's evaluation and its
+        // first-evaluation test hold candidates only in their operand
+        // expressions (captured values, static initializers, the binding).
+        Expr::ClassExprFresh { .. } | Expr::ClassIsFirstEvaluation { .. } => {
+            perry_hir::walker::walk_expr_children(e, &mut |child| {
+                check_escapes_in_expr(child, candidates, classes, escaped)
+            });
+        }
         // Catch-all: conservatively mark any candidate referenced in an
         // unrecognized expression as escaped. This is safe — just misses
         // the optimization for patterns we haven't enumerated.

@@ -114,7 +114,10 @@ fn lower_expr_impl(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<Expr> 
         ast::Expr::Ident(ident) => lower_ident_expr(ctx, ident),
         ast::Expr::Bin(bin) => lower_bin_expr(ctx, bin),
         ast::Expr::Unary(unary) => lower_unary_expr(ctx, unary),
-        ast::Expr::Call(call) => expr_call::lower_call(ctx, call),
+        ast::Expr::Call(call) => {
+            let call = expr_call::lower_call(ctx, call)?;
+            Ok(crate::lower_decl::guard_shared_first_static_call(ctx, call))
+        }
         ast::Expr::Member(member) => {
             let read = expr_member::lower_member(ctx, member)?;
             Ok(crate::lower_decl::guard_shared_first_static_get(ctx, read))
