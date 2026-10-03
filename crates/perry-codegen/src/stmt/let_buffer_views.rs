@@ -33,7 +33,11 @@ pub(super) fn register_noalias_buffer_view(
     init_expr: &perry_hir::Expr,
     value: &str,
 ) {
-    let Some(init) = buffer_view_init_for_expr(ctx, init_expr) else {
+    // Every caller registers only a `known_noalias_buffer_locals` member: an
+    // immutable binding whose construction the HIR fact layer proved fresh
+    // and owned (`collectors/hir_facts.rs::is_owned_u8_buffer_alloc`).
+    let owned_by_fact = ctx.known_noalias_buffer_locals.contains(&id);
+    let Some(init) = buffer_view_init_for_expr(ctx, init_expr, owned_by_fact) else {
         return;
     };
     let blk = ctx.block();
@@ -126,7 +130,11 @@ pub(super) fn ctor_arg_is_literal_length(arg: Option<&perry_hir::Expr>) -> bool 
     }
 }
 
-fn buffer_view_init_for_expr(ctx: &FnCtx<'_>, expr: &perry_hir::Expr) -> Option<BufferViewInit> {
+fn buffer_view_init_for_expr(
+    ctx: &FnCtx<'_>,
+    expr: &perry_hir::Expr,
+    owned_by_fact: bool,
+) -> Option<BufferViewInit> {
     match expr {
         perry_hir::Expr::NativeMethodCall {
             module,
@@ -191,10 +199,15 @@ fn buffer_view_init_for_expr(ctx: &FnCtx<'_>, expr: &perry_hir::Expr) -> Option<
                 native_byte_offset: None,
                 native_byte_length: None,
                 resolve_buffer_backing: false,
-                // Same view-form hazard as Uint8ArrayNew: only a literal
-                // length proves the non-view construction here (the pre-pass
-                // proves the plain-array-source form separately for params).
-                storage_inline_proven: ctor_arg_is_literal_length(arg.as_deref()),
+                // The view form (`new TA(arrayBuffer)`) and the copy forms
+                // (`new TA(typedArray)`, `new TA(arrayLike)`) all need an
+                // Object argument. A literal length is never one, and an owned
+                // binding's argument was proven never one by the fact layer
+                // (`is_fresh_uint8array_length_expr`: literals, fixed-length
+                // locals and non-Object locals), so either proves fresh inline
+                // storage. The pre-pass proves the plain-array-source form
+                // separately for params.
+                storage_inline_proven: owned_by_fact || ctor_arg_is_literal_length(arg.as_deref()),
             })
         }
         perry_hir::Expr::NativeArenaView {

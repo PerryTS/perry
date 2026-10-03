@@ -598,6 +598,21 @@ pub(crate) fn lower(
                 // literal / loop-counter index stays `is_numeric_expr`, so every
                 // proven element fast path below is preserved.
                 if !is_numeric_expr(ctx, index) {
+                    // A key that is a Number, BigInt or `undefined` on a
+                    // storage-proven view: one run-time index test, then a
+                    // bare store; a miss exits to the same runtime setter.
+                    if let Some(stored) = super::try_lower_proven_view_guarded_store(
+                        ctx,
+                        object,
+                        index,
+                        value,
+                        assignment_strict,
+                    )? {
+                        if value_discarded {
+                            return Ok(double_literal(0.0));
+                        }
+                        return Ok(stored);
+                    }
                     // #7640 section A: receiver AND key were both lowered
                     // before `value`, with no rooting decision at all. The
                     // typed-array object itself is old-arena/non-movable
@@ -610,15 +625,21 @@ pub(crate) fn lower(
                         ctx,
                         &[object, index, value],
                         |ctx, vals| {
-                            let (arr_box, idx_double, val_double) = (&vals[0], &vals[1], &vals[2]);
-                            let blk = ctx.block();
-                            let arr_bits = blk.bitcast_double_to_i64(arr_box);
-                            let arr_i64 = blk.and(I64, &arr_bits, POINTER_MASK_I64);
-                            Ok(blk.call(
-                                DOUBLE,
-                                "js_typed_array_index_set_dynamic",
-                                &[(I64, &arr_i64), (DOUBLE, idx_double), (DOUBLE, val_double)],
-                            ))
+                            // The guarded inline store the runtime-key arm below
+                            // takes, instead of an unconditional
+                            // `js_typed_array_index_set_dynamic` call. Its index
+                            // guard is an ordered `fcmp`, so a NaN-boxed Symbol,
+                            // string or `undefined` key always exits to
+                            // `js_dyn_index_set_strict`, which triages symbol
+                            // keys before any element store (#5735).
+                            lower_inline_dyn_typed_array_set(
+                                ctx,
+                                &vals[0],
+                                &vals[1],
+                                &vals[2],
+                                assignment_strict,
+                                None,
+                            )
                         },
                     );
                 }
@@ -646,6 +667,20 @@ pub(crate) fn lower(
                         stored,
                         MaterializationReason::FunctionAbi,
                     ));
+                }
+                // The same view with an index of unproven shape or a value
+                // that is not statically ToInt32-exact: run-time tests.
+                if let Some(stored) = super::try_lower_proven_view_guarded_store(
+                    ctx,
+                    object,
+                    index,
+                    value,
+                    assignment_strict,
+                )? {
+                    if value_discarded {
+                        return Ok(double_literal(0.0));
+                    }
+                    return Ok(stored);
                 }
                 if typed_array_index_needs_runtime_key(ctx, object.as_ref(), index.as_ref()) {
                     return rooting::with_operands_rooted(
