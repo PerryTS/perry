@@ -1,3 +1,15 @@
+MAIN07 MAC FFI/EVENTS VERIFIED (2026-10-03 23:33Z)
+Rebased current main07FFI75/events15pass, plus5FFIdoc tests (13ignored).
+Terminal0, all5010inputs rehashed post-test, rawlog sections/hash verified.
+Original private real-collection v35compiled successfully, then failed the
+known fixture assumption: publication reset current, so current>=6was false.
+Corrected capacity-witness/control pair remains queued; no shipping fault
+claimed. Both original v34visibility and v35fixture failures are preserved
+locally as13raw files with all hashes independently recomputed.
+Private17matrix11of15entry builds done; TypeScript compile live.
+Latest07three-arm45build/306measurement matrix1250828queued separately.
+Production/source ownership unchanged; all private advice policies unapplied.
+
 MAIN07 MAC RUNTIME AND REQUIRED CHECKS VERIFIED (2026-10-03 23:22Z)
 Mac4876/0/5, no filtered cases, selected5010sources match before/after.
 New hidden-key marking/rewriting/registration and declared-prototype birth

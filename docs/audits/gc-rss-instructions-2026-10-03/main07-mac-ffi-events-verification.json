@@ -1,0 +1,42 @@
+{
+  "base": "07e50b14a3d23e8f914193ec4d5a679adbd7c37a",
+  "production_runtime": "4f9121c09b642a007e592c1d91cbe86d5d122851",
+  "rc": 0,
+  "command": [
+    "cargo",
+    "+nightly-2026-08-20",
+    "test",
+    "--locked",
+    "--release",
+    "-p",
+    "perry-ffi",
+    "-p",
+    "perry-ext-events"
+  ],
+  "tracked_inputs": 5010,
+  "source_manifest_sha256": "20c72d93b8a257c97fb0dea77c7213f8aaee399016078e59b780319a6dce5d7d",
+  "raw_log_sha256": "42123f4c334e9ed41e7555f292ad4f7d041ef8d6b80a672151b4a8a8609fd88d",
+  "test_sections": [
+    [
+      "15",
+      "0",
+      "0"
+    ],
+    [
+      "75",
+      "0",
+      "0"
+    ],
+    [
+      "0",
+      "0",
+      "0"
+    ],
+    [
+      "5",
+      "0",
+      "13"
+    ]
+  ],
+  "scope": "Rebased main07 macOS FFI/events:15event tests,75FFI tests,5FFI doc tests;13doc tests ignored. Complete source-input hashes still match."
+}
