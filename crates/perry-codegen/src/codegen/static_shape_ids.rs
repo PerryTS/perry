@@ -501,6 +501,25 @@ pub(crate) fn module_final_seeds() -> Vec<(BirthShape, u32)> {
     })
 }
 
+/// Every ConstFn body the module's seed set names, as `$info` symbols.
+///
+/// The static shape-seed object references each of these records, so the
+/// module must emit every one of them as a linkable (`hidden`) definition. A
+/// shape can join the seed set through a guard (`compatible_final_shapes`)
+/// without being named by a finalizer, and [`module_final_seeds`] lists only
+/// the latter; requesting from this set instead keeps the seed table and the
+/// emitted records in agreement by construction.
+pub(crate) fn module_seed_constfn_infos() -> Vec<String> {
+    MODULE_SEEDS.with(|s| {
+        s.borrow()
+            .values()
+            .flat_map(|shape| shape.constfn.iter().map(|e| e.symbol.clone()))
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    })
+}
+
 /// Drain the seed set of the module just compiled on this thread: every
 /// seedable static id its guards embedded, with its content. The driver
 /// persists it beside the module's cached object, so a cache hit replays the

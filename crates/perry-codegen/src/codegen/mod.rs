@@ -3939,6 +3939,12 @@ fn compile_module_impl(
             &module_prefix,
             &static_shape_ids::module_final_seeds(),
         );
+        // The seed table names every ConstFn body of every seed, including
+        // shapes that joined the seed set through a guard rather than a
+        // finalizer; each of those records must be emitted linkable too.
+        for info in static_shape_ids::module_seed_constfn_infos() {
+            llmod.request_static_seed_body(info.strip_suffix("$info").expect("body info suffix"));
+        }
     }
     llmod.emit_fn_infos(constfn_body_metadata);
 
