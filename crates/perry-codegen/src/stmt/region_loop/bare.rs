@@ -274,7 +274,8 @@ pub(crate) fn try_lower_bare_get(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<Option
     Ok(Some(v))
 }
 
-/// The `PutValueSet` hook: a planned-bare store in F-body. The value is
+/// The `PutValueSet` and `PropertySet` hook: a planned-bare store in F-body
+/// (`k` is the static key). The value is
 /// evaluated first (the target is a binding read, so evaluating it after the
 /// RHS is unobservable), then the receiver's CURRENT address is read from its
 /// root, then the store and exactly the store IC's GC obligations.
@@ -282,13 +283,13 @@ pub(crate) fn try_lower_bare_put(
     ctx: &mut FnCtx<'_>,
     e: &Expr,
     target: &Expr,
-    key: &Expr,
+    k: &str,
     value: &Expr,
 ) -> Result<Option<String>> {
     if ctx.region_loop_facts.is_empty() {
         return Ok(None);
     }
-    let (Some(r), Expr::String(k)) = (Recv::of(target), key) else {
+    let Some(r) = Recv::of(target) else {
         return Ok(None);
     };
     let Some(slot) = active_slot(ctx, e, r, k) else {
