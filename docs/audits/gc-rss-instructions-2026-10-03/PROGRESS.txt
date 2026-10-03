@@ -175,3 +175,28 @@ gc-runtime-scan-v2-linked.exit, gc-runtime-scan-v2-auto.exit.
 Absent exit files are not proof that a process is alive: inspect its PID.
 The raw logs, source/binary hashes, harnesses and frozen experimental reports
 are retained there; current PR source hashes match pool-source-and-validation.json.
+
+Validation update: queue fixture repaired
+The baseline and scan-revision queue test were byte-identical. Thirty fresh
+isolated reruns of the original test passed, so the failure is intermittent.
+The dependency removes jobs from the queue before entering work: first Busy
+therefore does not prove the queue stays full until the fallback submission.
+The fixture now holds exactly the configured workers, with acknowledgements
+from those jobs, before filling the queue. All refusal, inline execution,
+exactly-once delivery and drain assertions remain intact. No production pool
+or GC code changed in this repair.
+Linux scan revision plus this fixture: 4,816 passed, 0 failed, 5 ignored.
+The original exit101 is retained; replacement logs use scan-v2r1. FFI/events,
+coherent build, moving fixtures and normal-auto matrix follow in the existing
+serialized driver. The invalid earlier pool-only waiter was stopped while
+confirmed childless; the replacement scan-pool-resume driver runs scan then
+pool stages in order, with unchanged source hashes for both production arms.
+The pool revision's macOS suite with the fixture repair is still running.
+See queue-fixture-validation.json for hashes and the original repeat results.
+
+Next GC instruction experiment is prepared separately (not yet in this draft):
+instantiate the existing shared visitor body for full marking and retained-old
+parent rebuilding, removing per-slot indirect callbacks without changing the
+slots visited. Compare instructions, code size and RSS before accepting it.
+GC page-table compaction remains the next independent metadata candidate;
+prototype/brand/flags, shape facts and canonical indices stay campaign-owned.
