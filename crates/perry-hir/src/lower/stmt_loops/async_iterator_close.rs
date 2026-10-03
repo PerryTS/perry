@@ -3,6 +3,21 @@
 //! statements cannot close it when the consumer calls the generator's return.
 use super::*;
 
+/// Spec "If innerResult is not an Object, throw a TypeError" check for
+/// IteratorNext / AsyncIteratorClose results.
+fn iterator_result_validated(call: Expr) -> Expr {
+    Expr::Call {
+        callee: Box::new(Expr::ExternFuncRef {
+            name: "js_iterator_result_validate".to_string(),
+            param_types: vec![Type::Any],
+            return_type: Type::Any,
+        }),
+        args: vec![call],
+        type_args: vec![],
+        byte_offset: 0,
+    }
+}
+
 pub(crate) fn emit_driver(
     ctx: &mut LoweringContext,
     output: &mut Vec<Stmt>,

@@ -42,24 +42,6 @@ fn async_iterator_method_call(iterable: Expr) -> Expr {
     }
 }
 
-fn iterator_return_call(iter_id: LocalId, needs_await: bool) -> Expr {
-    let call = Expr::Call {
-        callee: Box::new(Expr::PropertyGet {
-            byte_offset: 0,
-            object: Box::new(Expr::LocalGet(iter_id)),
-            property: "return".to_string(),
-        }),
-        args: vec![],
-        type_args: vec![],
-        byte_offset: 0,
-    };
-    if needs_await {
-        Expr::Await(Box::new(call))
-    } else {
-        call
-    }
-}
-
 /// Element source for a `for...of` binding: `__result.value` on the lazy
 /// iterator path, `__arr[__idx]` on the materialized-array path.
 pub(crate) fn lazy_or_index_elem(
