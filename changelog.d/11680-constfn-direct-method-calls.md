@@ -14,6 +14,12 @@ ConstFn lanes it still satisfies when it is marked as a prototype. A method
 shorthand that doesn't use `this`, which is hoisted to a module function, gets
 a lane for its function-value body.
 
+A learned ConstFn hit whose recorded body is one of the site's compile-time
+candidates (for example `this.m()` inside a prototype literal's own method,
+reached by an inheriting receiver) calls that body directly. Compact lane
+bodies are admitted to the early inliner, so these direct calls flatten the
+way a class method's exact-receiver clone does.
+
 The receiver guard in a method body compares the completed id before the
 birth id, so a finalized literal hits on its first compare. Any store of
 another body still deprecates the lane, and the site falls back to the

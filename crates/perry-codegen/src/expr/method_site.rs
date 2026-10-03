@@ -637,8 +637,48 @@ pub(crate) fn emit_method_site(
     let cf_func = ctx
         .block()
         .phi(I64, &[(&constfn_func, &constfn_end), (&icf_func, &icf_end)]);
-    let cf_fptr = ctx.block().inttoptr(I64, &cf_func);
     let cf_recv_bits = ctx.block().bitcast_double_to_i64(recv_box);
+    // The entry's code is a body the compared shape names. When it is one of
+    // this site's compile-time candidate bodies (the static lanes' bodies; a
+    // `this` in a literal method also reaches inheriting receivers), call that
+    // body DIRECTLY, so the call can be inlined; otherwise call the entry's
+    // code. The ConstFn prime admits only bodies declaring at most `argc`, so
+    // a candidate's own arity never needs more arguments than the call has.
+    let mut cf_results: Vec<(String, String)> = Vec::new();
+    let mut seen: Vec<&str> = Vec::new();
+    for lane in lanes {
+        if seen.contains(&lane.body.as_str()) || lane.arity > lowered_args.len() {
+            continue;
+        }
+        seen.push(&lane.body);
+        let direct_idx = ctx.new_block("msite.constfn_direct");
+        let next_idx = ctx.new_block("msite.constfn_body");
+        let direct_l = ctx.block_label(direct_idx);
+        let next_l = ctx.block_label(next_idx);
+        {
+            let blk = ctx.block();
+            let body_addr = blk.ptrtoint(&format!("@{}", lane.body), I64);
+            let same = blk.icmp_eq(I64, &cf_func, &body_addr);
+            blk.cond_br(&same, &direct_l, &next_l);
+        }
+        ctx.current_block = direct_idx;
+        let blk = ctx.block();
+        let args: Vec<String> = lowered_args.iter().take(lane.arity).cloned().collect();
+        let r = crate::expr::body_call::emit_js_body_call(
+            blk,
+            crate::expr::body_call::JsBody::Symbol(&lane.body),
+            &cf_handle,
+            &cf_recv_bits,
+            &args,
+        );
+        let end = blk.label.clone();
+        if !blk.is_terminated() {
+            blk.br(&merge_l);
+        }
+        cf_results.push((r, end));
+        ctx.current_block = next_idx;
+    }
+    let cf_fptr = ctx.block().inttoptr(I64, &cf_func);
     let cf_value = crate::expr::body_call::emit_js_body_call(
         ctx.block(),
         crate::expr::body_call::JsBody::Pointer(&cf_fptr),
@@ -696,5 +736,6 @@ pub(crate) fn emit_method_site(
         (&prim_value, &prim_end),
     ];
     incoming.extend(lane_hits.iter().map(|(v, l)| (v.as_str(), l.as_str())));
+    incoming.extend(cf_results.iter().map(|(v, l)| (v.as_str(), l.as_str())));
     ctx.block().phi(DOUBLE, &incoming)
 }

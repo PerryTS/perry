@@ -652,6 +652,17 @@ pub(crate) fn slot_may_be_constfn(keys_global: &str, slot: u32) -> bool {
     })
 }
 
+/// Does any completed shape of the program name `body` (a JS body symbol) in
+/// a ConstFn lane? Such a body is the target of static method-lane calls.
+pub(crate) fn body_has_constfn_lane(body: &str) -> bool {
+    let info = crate::fn_info::info_symbol(body);
+    MODULE_FINAL_IDS.with(|m| {
+        m.borrow()
+            .keys()
+            .any(|s| s.constfn.iter().any(|e| e.symbol == info))
+    })
+}
+
 /// Guard-only compatible completed identities. Allocation suppliers continue
 /// returning the ordinary birth id. Match all structural facts and preserve
 /// every base representation; a written SPECIAL slot cannot use a raw store.

@@ -7,6 +7,8 @@
 //!   directly (`call @perry_closure_...`), before its learned memo.
 //! * A receiver only known at run time takes the learned memo; an inherited
 //!   method on a prototype whose shape carries the lane is a ConstFn entry too.
+//!   A learned ConstFn hit whose body is one of the site's compile-time
+//!   candidates calls that body directly.
 //! * The method body's own `this.x` guard compares the completed id first.
 //!
 //! Every program also changes the method (another body, the same body with
@@ -241,7 +243,11 @@ fn completed_shapes_call_their_body_and_every_mutation_is_seen() {
 }
 
 const INHERITED: &str = r#"
-const PROTO: any = { pa: 9, m(x: number) { return this.a + this.pa + x; } };
+const PROTO: any = {
+  pa: 9,
+  m(x: number) { return this.a + this.pa + x; },
+  run(n: number): number { let h = 0; for (let k = 0; k < n; k++) h += this.m(k); return h; },
+};
 function mkc(a: number): any { const t: any = Object.create(PROTO); t.a = a; return t; }
 function drive(o: any, n: number): number {
   let h = 0;
@@ -250,25 +256,46 @@ function drive(o: any, n: number): number {
 }
 const o: any = mkc(1);
 const before = drive(o, 100);
+const viaThis = o.run(100);
 PROTO.m = function (this: any, x: number) { return -x; };
-console.log(before, drive(o, 100));
+console.log(before, viaThis, drive(o, 100), o.run(100));
 "#;
 
 /// An inherited method on a prototype whose shape carries the ConstFn lane is
 /// a ConstFn entry (the prototype keeps its lanes when it is marked as one),
-/// and a write to the prototype's method is seen by the next call.
+/// and a write to the prototype's method is seen by the next call. `this.m()`
+/// in the prototype's own method has the prototype's body as a compile-time
+/// candidate, so its learned ConstFn hit calls that body directly.
 #[test]
 fn an_inherited_constfn_method_is_a_constfn_entry_and_sees_a_prototype_write() {
     let dir = tempfile::tempdir().unwrap();
-    let (exe, _) = compile(dir.path(), INHERITED, None);
+    let (exe, ll) = compile(dir.path(), INHERITED, None);
     let (out, stderr) = run(&exe, &[]);
-    assert_eq!(out, "5950 -4950", "{stderr}");
-    assert!(stat(&stderr, "primes_inherited") >= 1, "{stderr}");
+    // node v22
+    assert_eq!(out, "5950 5950 -4950 -4950", "{stderr}");
+    assert!(stat(&stderr, "primes_inherited") >= 2, "{stderr}");
     assert!(
-        stat(&stderr, "primes_constfn") >= 1,
-        "the holder's ConstFn lane must make the inherited entry ConstFn: {stderr}"
+        stat(&stderr, "primes_constfn") >= 2,
+        "the holder's ConstFn lane must make the inherited entries ConstFn: {stderr}"
     );
-    assert!(stat(&stderr, "misses") < 10, "the site must hit: {stderr}");
+    assert!(stat(&stderr, "misses") < 20, "the sites must hit: {stderr}");
+    let run_ir = function_ir(&ll, "@perry_closure_main_ts__");
+    let direct = run_ir
+        .iter()
+        .position(|l| l.starts_with("msite.constfn_direct"))
+        .unwrap_or_else(|| {
+            panic!(
+                "this.m() must dispatch its learned ConstFn hit to the candidate body:\n{}",
+                run_ir.join("\n")
+            )
+        });
+    assert!(
+        run_ir[direct..]
+            .iter()
+            .find(|l| l.contains(" = call "))
+            .is_some_and(|l| l.contains("call double @perry_closure_main_ts__")),
+        "the candidate dispatch must be a direct call"
+    );
 }
 
 /// The method body's receiver guard (`this.a` in a literal method) compares
