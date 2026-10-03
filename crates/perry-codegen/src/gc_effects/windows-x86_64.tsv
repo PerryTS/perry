@@ -2110,6 +2110,8 @@ js_object_delete_field	Reenters
 js_object_delete_field_value	Reenters
 js_object_entries	Reenters
 js_object_entries_value	Reenters
+js_object_final_shape_id_for_class_keys_static_constfn	Reenters
+js_object_finalize_constfn_static	Reenters
 js_object_free	Leaf
 js_object_freeze	Reenters
 js_object_from_entries	Reenters
@@ -2800,6 +2802,7 @@ js_register_path_init	Leaf
 js_register_path_module	Reenters
 js_register_path_module_partial	Reenters
 js_register_prototype_method	Reenters
+js_register_readable_handle_predicate	Leaf
 js_register_set_text_handler	Reenters
 js_register_show_toast_handler	Reenters
 js_register_stdin_flow_ops	Leaf
@@ -2997,6 +3000,7 @@ js_shape_ordinary_inline_slot_for_key	Reenters
 js_shape_register_static_seed	Leaf
 js_shape_run_static_seed	Reenters
 js_shape_seed_plain	Reenters
+js_shape_seed_plain_constfn	Reenters
 js_shared_array_buffer_new	Reenters
 js_shared_array_buffer_new_value	Reenters
 js_sharp_blur	Reenters

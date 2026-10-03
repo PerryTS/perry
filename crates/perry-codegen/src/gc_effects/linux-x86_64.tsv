@@ -2802,6 +2802,7 @@ js_register_path_init	Reenters
 js_register_path_module	Reenters
 js_register_path_module_partial	Reenters
 js_register_prototype_method	Reenters
+js_register_readable_handle_predicate	Leaf
 js_register_set_text_handler	Reenters
 js_register_show_toast_handler	Reenters
 js_register_stdin_flow_ops	Leaf
