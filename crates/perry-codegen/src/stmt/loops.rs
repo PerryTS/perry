@@ -6902,6 +6902,14 @@ pub(crate) fn lower_for(
         return Ok(());
     }
 
+    // #10511: a receiver-free loop whose bitwise operators read locals the
+    // function scope cannot prove Number runs in a clone versioned on one
+    // entry test per local (the 5L rule over the loop's own writes). It
+    // touches no receiver, so the region tier below has nothing to plan.
+    if super::number_local_loop::lower(ctx, init, condition, update, body)? {
+        return Ok(());
+    }
+
     // Step 4b (#10884): every specialised tier above declined; a loop (or
     // body) region guards its receivers once here, in the preheader, and
     // splits the body when the tier below lowers it (`stmt::region_loop`).
