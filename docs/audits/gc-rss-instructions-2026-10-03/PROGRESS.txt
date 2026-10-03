@@ -1,3 +1,9 @@
+Current implementation: reuse-window proposal plus shared full-mark/retained
+visitors (v7). Added visitor specialization was rejected by both full-runtime
+and 17-workload normal-auto A/Bs and reverted. Current-combination macOS tests
+passed 4,850 / 0 failures / 5 ignored; Linux and application acceptance remain pending. Historic v6
+measurements are immutable and cannot validate this new source revision.
+
 GC RSS and instruction work — draft progress, 2026-10-03
 
 LATEST STATE
@@ -526,3 +532,21 @@ fault-handler attribution. Five corrupt synthetic counter records were rejected;
 that verifies the parser only. No application result or acceptance yet.
 Latest fetched main remains 69de7f3526. PR still a draft; current v6 Linux/app
 validation and broader memory/instruction optimization remain open.
+
+VISITOR DECISION: revert added specialization (v7; supersedes v6 HEAD scope)
+Normal-auto visitor v4 completed and verified 204/204 executions across all 17
+workloads. TS instructions +1.96%, RSS +0.04%; Zod instructions +0.29%, RSS +0.32%.
+String/JSON/document instruction medians improve about 0.3%, but there is no
+substantial peak-RSS benefit to offset the TS regression in either build mode.
+The two newly specialized call sites (full mark and retained-parent rebuild)
+are reverted to their shared dispatch. The existing copying-minor inline visitor
+on main is unchanged, as are the v2 no-op predicates, pool alignment/window and
+page compaction. visitor-comparison.json preserves the full normal-auto evidence.
+
+This source decision removes a failed optimization; the new combination still
+requires validation. macOS full suite passed on the reverted source: 4,850 passed, 0 failed, 5 ignored. Frozen
+v4/v5/immediate-main69/v6 sources and artifacts are not changed: their queued
+results remain useful isolated evidence, never proofs about the new v7 HEAD.
+The v6 window comparison must finish before deciding the final pool policy and
+scheduling the final shared-visitor acceptance measurement. Linux now runs the
+page-compaction v5r2 stage; the earlier v4 stage completed successfully.
