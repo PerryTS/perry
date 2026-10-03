@@ -872,3 +872,23 @@ The original-host shared-visitor/window/page proposal's 24 cells completed after
 the foreign lock owner released: TS RSS 251.09 -> 248.012 MiB (-1.23%),
 instructions -2.30%; Zod RSS +0.53%, instructions +0.28%. The latter instruction
 cost remains reported. This is e532 evidence, not a current-main0ed result.
+
+CURRENT-MAIN REQUEST BLOCKER STILL REPRODUCES
+The fresh 0ed baseline retry still emits an undefined PERRY_TA_VIEW_GUARD load
+in validator/isTaxID.js. Earlier wording calling #11817 the fix for this case
+was premature: it is a related fix, not acceptance of this emitter path. The
+new failed IR is preserved in qb6 export logs. No partial linking or independent
+codegen/shape fix is applied. The new auto r1 build pass retains eight verified
+successful baseline binaries and continues all sources/arms despite failures;
+any failed request build is excluded and the final full-matrix guard stays red.
+Both fresh full-runtime TS/Zod arms compile successfully and their new-main
+24 measurements are queued under the original host's benchmark lock.
+
+LOCAL ARTIFACT COPY HEADROOM
+Local disk exhaustion interrupted an export watcher. Removed only our completed,
+reproducible gc-runtime-test-target cache; source, reports, saved assembly and
+programs remain intact. Restored continuous export with cache exclusions. All
+runtime/static-wrapper products are already off qb6. Rental copy deadline is
+still 18:00Z; the watcher stops by 17:55Z. No foreign process or directory was
+changed. Current goal remains active; runtime correctness is verified, full
+performance acceptance and new-main heap attribution remain outstanding.
