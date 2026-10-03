@@ -443,18 +443,18 @@ pub(crate) fn class_object_source_text(value: f64) -> Option<String> {
 }
 
 /// The text `String(C)` / `` `${C}` `` produce for the class object `value`
-/// when no `toString` of the program's is in the way, else `None`. A static
-/// `toString` of this evaluation or of a class it inherits from answers
-/// instead (the caller's ordinary conversion finds and runs it).
+/// when no `toString` of the program's is in the way, else `None`. An own
+/// `toString` property of the object, whatever it holds (a non-callable one
+/// makes the conversion throw), and a static `toString` the object or a class
+/// it inherits from still declares answer instead: the caller's ordinary
+/// conversion finds them. A declared static `toString` the evaluation no
+/// longer holds is not in the way.
 pub(crate) fn class_object_default_to_string(value: f64) -> Option<String> {
     let text = class_object_source_text(value)?;
     let obj = JSValue::from_bits(value.to_bits()).as_pointer::<ObjectHeader>();
     // SAFETY: a live class object (above).
-    let class_id = unsafe { (*obj).class_id };
-    let own = super::super::class_registry::class_object_own_field_bytes(obj, b"toString")
-        .is_some_and(|v| !JSValue::from_bits(v.to_bits()).is_undefined());
-    if own
-        || super::super::class_registry::lookup_static_method_owner(class_id, "toString").is_some()
+    if super::super::class_registry::class_object_owns_key_bytes(obj, b"toString")
+        || unsafe { class_object_registry_serves_static(obj, "toString") }
     {
         return None;
     }

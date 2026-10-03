@@ -470,6 +470,34 @@ pub(crate) fn class_object_own_field_bytes(
     None
 }
 
+/// Does class object `obj` have an own property `want`, whatever it holds (a
+/// data value, `undefined` included, or an accessor)?
+pub(crate) fn class_object_owns_key_bytes(
+    obj: *const crate::object::ObjectHeader,
+    want: &[u8],
+) -> bool {
+    if obj.is_null()
+        || !crate::value::addr_class::is_above_handle_band(obj as usize)
+        || !crate::object::is_valid_obj_ptr(obj as *const u8)
+    {
+        return false;
+    }
+    unsafe {
+        let keys_view = crate::object::object_keys(obj);
+        let keys = keys_view.arr();
+        if keys.is_null() {
+            return false;
+        }
+        let (slots, slot_len) = crate::object::keys_array_dense_slots(keys);
+        (0..(keys_view.count() as usize).min(slot_len)).any(|i| {
+            crate::string::js_string_key_matches_bytes(
+                crate::JSValue::from_bits((*slots.add(i)).to_bits()),
+                want,
+            )
+        })
+    }
+}
+
 /// Read back the parent constructor value stashed at class-definition time by
 /// `js_register_class_parent_dynamic` (see `CLASS_DYNAMIC_PARENT_VALUE`).
 /// `super()` in a `class X extends <runtime-value>` body uses this so the

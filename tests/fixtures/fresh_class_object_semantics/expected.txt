@@ -25,6 +25,9 @@ str-method true true
 str-template true true
 str-proto true
 str-override custom1 custom1 custom1
+str-deleted-static true d2
+str-own-undefined TypeError
+own-index ["0","length","name","prototype","s"] ["0","length","name","prototype","s"]
 tpl-own ["length","name","prototype","s","who"] ["constructor","m","n"]
 tpl-statics s1 s2 s3 false false s 0
 tpl-detached s2 s3 s2 s3 s3

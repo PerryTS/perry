@@ -122,6 +122,19 @@ function ov(tag: string) {
 }
 const O1: any = ov("1");
 console.log("str-override", String(O1), O1.toString(), `${O1}`);
+// A static `toString` this evaluation no longer holds is not in the way; an
+// own `toString` that is not callable makes the conversion throw.
+function sd(i: number) { class D { v = i; static toString() { return "d" + i; } } return D; }
+const D1: any = sd(1), D2: any = sd(2);
+delete D1.toString;
+console.log("str-deleted-static", String(D1) === Function.prototype.toString.call(D1), String(D2));
+function su(i: number) { class U { v = i; } return U; }
+const U1: any = su(1);
+U1.toString = undefined;
+try { console.log("str-own-undefined", String(U1)); } catch (e) { console.log("str-own-undefined", (e as any).constructor.name); }
+// Integer keys come first among a class object's own keys, before `prototype`.
+function ix(i: number) { class X { v = i; static 0() { return 0; } static s() { return i; } } return X; }
+console.log("own-index", JSON.stringify(Object.getOwnPropertyNames(ix(1))), JSON.stringify(Object.getOwnPropertyNames(ix(2))));
 // ---- tpl: evaluations after the first are born in the template shapes ----
 function tp(tag: string, base: any) {
   const t = tag;
