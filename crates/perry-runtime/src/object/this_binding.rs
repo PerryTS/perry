@@ -388,6 +388,96 @@ pub extern "C" fn js_static_method_entry_enter(class_id: u32, this_bits: u64) {
     static_this_arm(this.get_nanbox_f64());
 }
 
+/// Prologue of the closure-convention entry of a static method declared by a
+/// per-evaluation class (`ClassExprFresh`): as [`js_static_method_entry_enter`],
+/// except that the body runs in the evaluation the function object belongs
+/// to. That evaluation is the function object's one capture, its home class
+/// object (`define_class_object_own_properties`), so `const f = C.s; f()` and
+/// `C.s.call(D)` read `C`'s environment, as `C.s()` does. A function object
+/// without a home (the template's shared function object) runs as
+/// [`js_static_method_entry_enter`] does.
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_STATIC_METHOD_ENTRY_ENTER_HOME: extern "C" fn(u32, u64, i64) =
+    js_static_method_entry_enter_home;
+
+#[no_mangle]
+pub extern "C" fn js_static_method_entry_enter_home(class_id: u32, this_bits: u64, callee: i64) {
+    let home = if callee == 0 {
+        crate::value::TAG_UNDEFINED
+    } else {
+        crate::closure::js_closure_get_capture_bits(
+            callee as *const crate::closure::ClosureHeader,
+            0,
+        )
+    };
+    let home = f64::from_bits(home);
+    let is_home = super::class_registry::is_class_object_value(home)
+        && super::js_object_get_class_id(
+            crate::value::JSValue::from_bits(home.to_bits()).as_pointer::<super::ObjectHeader>(),
+        ) == class_id;
+    if !is_home {
+        js_static_method_entry_enter(class_id, this_bits);
+        return;
+    }
+    static_private_owner_push(home);
+    static_this_arm(f64::from_bits(this_bits));
+}
+
+/// Prologue of `<method>__eclo`, the code of the function object a
+/// per-evaluation class's prototype holds for one of its methods: the body
+/// runs in the evaluation the function object belongs to, its home class
+/// object (its one capture), as a call through that evaluation's method value
+/// always has (`call_vtable_method_value`'s private brand). A function object
+/// without a home runs in its receiver's evaluation. Returns the depth
+/// [`js_class_method_entry_leave`] restores.
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_CLASS_METHOD_ENTRY_ENTER_HOME: extern "C" fn(u32, u64, i64) -> i64 =
+    js_class_method_entry_enter_home;
+
+#[no_mangle]
+pub extern "C" fn js_class_method_entry_enter_home(
+    class_id: u32,
+    this_bits: u64,
+    callee: i64,
+) -> i64 {
+    let home = if callee == 0 {
+        crate::value::TAG_UNDEFINED
+    } else {
+        crate::closure::js_closure_get_capture_bits(
+            callee as *const crate::closure::ClosureHeader,
+            0,
+        )
+    };
+    let home = f64::from_bits(home);
+    let brand = if super::class_registry::is_class_object_value(home)
+        && super::js_object_get_class_id(
+            crate::value::JSValue::from_bits(home.to_bits()).as_pointer::<super::ObjectHeader>(),
+        ) == class_id
+    {
+        home
+    } else {
+        super::private_evaluation_brand_value(f64::from_bits(this_bits))
+            .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED))
+    };
+    let depth = derived_super_binding_stack_savepoint();
+    super::private_lexical_brand_push(brand);
+    depth as i64
+}
+
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_CLASS_METHOD_ENTRY_LEAVE: extern "C" fn(i64) = js_class_method_entry_leave;
+
+/// Epilogue of `<method>__eclo`: drops what
+/// [`js_class_method_entry_enter_home`] set up.
+#[no_mangle]
+pub extern "C" fn js_class_method_entry_leave(depth: i64) {
+    super::private_lexical_brand_pop();
+    derived_super_binding_stack_restore(depth as usize);
+}
+
 /// Epilogue of a static method's closure-convention entry: pops the owner the
 /// prologue pushed and drops an override the body never consumed.
 // #1561-style force-keep: only generated IR calls this.

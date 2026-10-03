@@ -589,6 +589,7 @@ js_class_env_register_slot	void	i32u,i32u,ptr
 js_class_env_register_state	void	i32u,ptr
 js_class_env_set	void	f64,i32u,i32u,f64
 js_class_env_stamp	f64	f64,i32u,f64
+js_class_evaluation_object	i64	i32u,i32u,i32u
 js_class_field_add	f64	f64,f64,f64
 js_class_field_get_ic	f64	i64,f64,i32u,i32u,ptr,i32u,i32s,ptr
 js_class_field_get_ic_fast	f64	i64,f64,i32u,i32u,ptr,i32u,i32s,ptr
@@ -601,9 +602,11 @@ js_class_lexical_binding_get	f64	f64
 js_class_lexical_binding_set	f64	f64,f64
 js_class_method_bind	f64	f64,ptr,usize
 js_class_method_bind_by_id	f64	f64,i64
+js_class_method_entry_enter_home	i64	i32u,i64,i64
+js_class_method_entry_leave	void	i64
 js_class_method_snapshot_bind	f64	f64,ptr,usize
-js_class_object_pin_parent	void	i64,i32u,i32u
 js_class_object_refresh_capture_values	void	f64,i64,f64
+js_class_object_set_ctor_caps	void	i64,f64
 js_class_prototype_method_value	f64	f64,f64
 js_class_register_capture_values	void	i32u,ptr,usize
 js_class_register_static_field	void	i32u,ptr,usize,f64,ptr
@@ -3214,6 +3217,7 @@ js_register_class_id	void	i32u
 js_register_class_length	void	i32u,i32u
 js_register_class_method	void	i64,ptr,i64,i64,i64,i64,i64
 js_register_class_method_bind_length	void	i64,ptr,i64,i64
+js_register_class_method_entry	void	i64,ptr,i64,i64
 js_register_class_name	void	i32u,ptr,i32u
 js_register_class_parent	void	i32u,i32u
 js_register_class_parent_dynamic	void	i32u,f64
@@ -3516,6 +3520,7 @@ js_state_get	f64	f64
 js_state_init	void	f64,f64
 js_state_set	void	f64,f64
 js_static_method_entry_enter	void	i32u,i64
+js_static_method_entry_enter_home	void	i32u,i64,i64
 js_static_method_entry_leave	void	
 js_static_this_arm_classref	void	i32u
 js_static_this_arm_value	void	f64

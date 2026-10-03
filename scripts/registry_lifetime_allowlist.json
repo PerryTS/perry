@@ -264,12 +264,6 @@
       "why": "Attribute census counters, compiled only with the attr-census feature and armed by PERRY_ATTR_DIAG"
     },
     {
-      "file": "crates/perry-runtime/src/object/class_constructors.rs",
-      "name": "CLASS_CAPTURE_VALUES",
-      "verdict": "bounded_by_program",
-      "why": "Keyed by codegen class_id from js_class_register_capture_values at the declaration site; re-runs overwrite"
-    },
-    {
       "file": "crates/perry-runtime/src/object/class_env.rs",
       "name": "CLASS_ENVS",
       "verdict": "bounded_by_program",
@@ -553,6 +547,18 @@
       "name": "UNTRANSFERABLE_OBJECTS",
       "verdict": "open_leak",
       "why": "NaN-box bits of each object passed to markAsUntransferable: one per marked object, never unmarked"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/field_get_set/class_object_template.rs",
+      "name": "TEMPLATES",
+      "verdict": "bounded_by_program",
+      "why": "Per agent, keyed by per-evaluation class template id: the final class-object ShapeId and slot fills, recorded once per template (the records are external carriers)"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/field_get_set/class_object_template.rs",
+      "name": "PROTOTYPES",
+      "verdict": "bounded_by_program",
+      "why": "Per agent, keyed by per-evaluation class template id: the final prototype ShapeId and slot fills, recorded once per template (the record is an external carrier)"
     }
   ]
 }

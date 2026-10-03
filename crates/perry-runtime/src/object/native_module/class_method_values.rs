@@ -3,6 +3,14 @@ pub(crate) fn class_evaluation_method_value_for_name(
     method_name: &str,
     evaluation_brand: f64,
 ) -> f64 {
+    // A template compiled with method entries gives each evaluation's
+    // prototype its own function object per method (`<method>__eclo`): that
+    // is the evaluation's method value while the prototype still holds it.
+    if let Some(value) =
+        evaluation_prototype_method_value(owner_class_id, method_name, evaluation_brand)
+    {
+        return value;
+    }
     let cache_key = format!("#<perry:class-evaluation-method:{owner_class_id}:{method_name}>");
     let cached = crate::object::js_object_get_own_field_or_undef(
         evaluation_brand,
@@ -127,4 +135,30 @@ pub(crate) fn build_bound_method_closure(
     method_name_len: usize,
 ) -> f64 {
     build_bound_method_closure_with_private_brand(instance, method_name_ptr, method_name_len, None)
+}
+
+/// The function object evaluation `brand` (a class object of template
+/// `owner_class_id`) holds for method `name` in its prototype, while that
+/// prototype's own `name` is still the declaration's entry-backed function at
+/// home in `brand`. `None` for a template without method entries.
+fn evaluation_prototype_method_value(owner_class_id: u32, name: &str, brand: f64) -> Option<f64> {
+    let code = class_registry::class_method_entry(owner_class_id, name)?;
+    if !class_registry::is_class_object_value(brand) {
+        return None;
+    }
+    let class = JSValue::from_bits(brand.to_bits()).as_pointer::<ObjectHeader>();
+    if class.is_null() || crate::object::js_object_get_class_id(class) != owner_class_id {
+        return None;
+    }
+    let proto = unsafe { crate::object::field_get_set::class_object_prototype_value(class) };
+    if !proto.is_pointer() {
+        return None;
+    }
+    let class = JSValue::from_bits(brand.to_bits()).as_pointer::<ObjectHeader>();
+    let value =
+        class_registry::class_object_own_field_bytes(proto.as_pointer::<ObjectHeader>(), name.as_bytes())?;
+    unsafe {
+        crate::object::field_get_set::static_method_value_runs(value.to_bits(), code, class)
+    }
+    .then_some(value)
 }

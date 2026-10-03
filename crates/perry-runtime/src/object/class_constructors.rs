@@ -375,12 +375,13 @@ pub unsafe extern "C" fn js_class_register_capture_values(
     if class_id == 0 || values_ptr.is_null() {
         return;
     }
-    let mut values = Vec::with_capacity(len);
-    for i in 0..len {
-        values.push((*values_ptr.add(i)).to_bits());
-    }
+    // Every evaluation of a capturing class registers its snapshot: refill
+    // the template's entry in place rather than allocate a new one.
     CLASS_CAPTURE_VALUES.with(|m| {
-        m.borrow_mut().insert(class_id, values);
+        let mut m = m.borrow_mut();
+        let values = m.entry(class_id).or_default();
+        values.clear();
+        values.extend((0..len).map(|i| (*values_ptr.add(i)).to_bits()));
     });
 }
 

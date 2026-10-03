@@ -3852,6 +3852,32 @@ unsafe fn prototype_serial(bits: u64) -> u64 {
     }
 }
 
+/// The [[Prototype]] identity of an ordinary object of class `class_id` whose
+/// meta record links prototype `bits` (NaN-boxed, or `TAG_NULL`): the rule
+/// [`object_proto_id`] applies to a recorded prototype. `None` when that link
+/// has no stable identity (a prototype with no serial, or a serial past the
+/// mixed band), which `object_proto_id` answers with a fresh unique id.
+///
+/// # Safety
+/// `bits` is a live prototype value or `TAG_NULL`.
+pub(crate) unsafe fn stable_linked_proto_id(class_id: u32, bits: u64) -> Option<u64> {
+    if bits == crate::value::TAG_NULL {
+        return Some(PROTO_ID_NULL);
+    }
+    let serial = prototype_serial(bits);
+    if serial == 0 {
+        return None;
+    }
+    let class = vtable_class(class_id);
+    if class == 0 {
+        return Some(serial);
+    }
+    if serial >= 1 << PROTO_ID_MIXED_SERIAL_BITS {
+        return None;
+    }
+    Some(PROTO_ID_MIXED | u64::from(class) << PROTO_ID_MIXED_SERIAL_BITS | serial)
+}
+
 /// `obj`'s [[Prototype]] identity, read off the object: what a mint with no
 /// lineage to copy stamps into the shape. Allocation-free.
 ///
@@ -3880,21 +3906,8 @@ pub(crate) unsafe fn object_proto_id(obj: *const crate::object::ObjectHeader) ->
     let class_id = (*obj).class_id;
     let class = vtable_class(class_id);
     if !meta.is_null() && (*meta).prototype != 0 {
-        let bits = (*meta).prototype;
-        if bits == crate::value::TAG_NULL {
-            return PROTO_ID_NULL;
-        }
-        let serial = prototype_serial(bits);
-        if serial == 0 {
-            return fresh_unique_proto_id();
-        }
-        if class == 0 {
-            return serial;
-        }
-        if serial >= 1 << PROTO_ID_MIXED_SERIAL_BITS {
-            return fresh_unique_proto_id();
-        }
-        return PROTO_ID_MIXED | u64::from(class) << PROTO_ID_MIXED_SERIAL_BITS | serial;
+        return stable_linked_proto_id(class_id, (*meta).prototype)
+            .unwrap_or_else(fresh_unique_proto_id);
     }
     if class != 0 {
         return PROTO_ID_CLASS | u64::from(class);

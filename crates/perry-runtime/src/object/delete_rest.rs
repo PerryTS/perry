@@ -311,11 +311,16 @@ pub extern "C" fn js_object_delete_field(
                     {
                         // The member's storage is this object's key (removed
                         // by the scan below) plus, for a runtime prototype
-                        // assignment, its dispatch entry: remove both.
-                        super::class_registry::class_prototype_method_root_remove(cid, name);
-                        super::class_registry::invalidate_class_string_member_order(
-                            cid, name, false,
-                        );
+                        // assignment, its dispatch entry: remove both. One
+                        // evaluation's prototype (`ClassExprFresh`) owns its
+                        // members alone: the template's records belong to
+                        // every evaluation, so they stay.
+                        if !super::field_get_set::is_evaluation_prototype_with_methods(obj, cid) {
+                            super::class_registry::class_prototype_method_root_remove(cid, name);
+                            super::class_registry::invalidate_class_string_member_order(
+                                cid, name, false,
+                            );
+                        }
                         super::class_registry::invalidate_class_prototype_fast_guards_for_method(
                             name,
                         );

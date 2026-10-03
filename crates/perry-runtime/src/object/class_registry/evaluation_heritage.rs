@@ -18,7 +18,7 @@
 //! ```
 //!
 //! Every evaluation already carries its OWN heritage as an own property on its
-//! class object (`js_class_object_pin_parent`), and the two consumers that were
+//! class object (`js_class_evaluation_object`), and the two consumers that were
 //! already per-evaluation — the prototype chain
 //! (`class_evaluation_prototype_value`) and the capture snapshot
 //! (`pinned_class_object_for_ancestor`) — read it from there. The `super()` leg
@@ -152,7 +152,7 @@ pub(crate) fn is_self_heritage_value(class_id: u32, parent_bits: u64) -> bool {
 }
 
 /// #10624: monotone "has any class object ever pinned its own heritage"
-/// flag. `js_class_object_pin_parent` arms it before its own write, so
+/// flag. `js_class_evaluation_object` arms it before its own write, so
 /// anything it can EVER make true (an instance pinned to its constructing
 /// class object, or a class_id that has more than one live per-evaluation
 /// parent) is only reachable once this is armed. `instanceof`'s value-aware
@@ -169,7 +169,7 @@ pub(crate) static CLASS_OBJECT_HERITAGE_PIN_LATCH: crate::registry_latch::Regist
 /// `new <perEvaluationClassObject>()`) remembers which SPECIFIC evaluation
 /// built it (#10624).
 ///
-/// `js_class_object_pin_parent`'s pin lives on the CLASS OBJECT and answers
+/// `js_class_evaluation_object`'s pin lives on the CLASS OBJECT and answers
 /// "what is MY parent" — `super()`, the prototype chain, and capture
 /// resolution above all already consult it. Nothing, though, gave the
 /// resulting INSTANCE a way back to that same evaluation: an instance
@@ -210,7 +210,7 @@ pub(crate) fn pin_instance_constructing_class(inst: *mut ObjectHeader, classobj_
     if instance_pinned_constructing_class(inst).is_some() {
         return;
     }
-    // `js_class_object_pin_parent` already armed `CLASS_OBJECT_HERITAGE_PIN_LATCH`
+    // `js_class_evaluation_object` already armed `CLASS_OBJECT_HERITAGE_PIN_LATCH`
     // before writing `class_ptr`'s own pin above (the ordering rule in
     // `registry_latch.rs`) — that write happens-before this one in this
     // thread's program order, so the latch is already armed here.

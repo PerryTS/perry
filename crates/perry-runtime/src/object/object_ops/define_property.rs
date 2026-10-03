@@ -72,6 +72,7 @@ unsafe fn define_class_prototype_method(target_cid: u32, name: &str, value_bits:
                             param_count,
                             has_synthetic_arguments,
                             has_rest,
+                            entry: 0,
                         },
                     );
                     drop(guard);
