@@ -1,0 +1,16 @@
+{
+  "runtime_suite_counts": [
+    4818,
+    0,
+    5
+  ],
+  "required_tests": [
+    "only_complete_owned_pages_are_eligible",
+    "kernel_releases_interior_pages_without_touching_either_neighbor"
+  ],
+  "test_log_sha256": "34fd393b228e0a381dc2afddfaca6d0ea960f37a334001db8ca0ca7694432e29",
+  "archive_sha256": "6038558f8083771ea809214b9d4ce9f9203c73db2df7893a655e2f7088e7ea94",
+  "preceding_archive_sha256": "7bdc8c99433388d6be8555ff210ed982e1263b3df50f93035879f30edc5f14e3",
+  "decommit_symbol_witness": true,
+  "symbol_listing_sha256": "5bb2e78b44e323301ec07f20b0f54738196568cb177bd82962034b93beee1f9c"
+}
