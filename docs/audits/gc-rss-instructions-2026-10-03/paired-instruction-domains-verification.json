@@ -1,0 +1,39 @@
+{
+  "scope": "Paired full-runtime TypeScript user/kernel instruction counts. Three repetitions on a shared host. Diagnostic only; separate runs from the original RSS/total-instruction matrices. Kernel counts include page-fault handling and other kernel work, not a direct fault-handler attribution.",
+  "complete_cells": 12,
+  "receipt_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+  "runs_sha256": "b16bc115a22848657fc88bcd33c0c3fc3b7b6a5c648aa9226f2550ed76ed36a7",
+  "summary_sha256": "0e197e408598b05561804a114949c98fcb084df07797a5815b0817ae7f5074f3",
+  "products": {
+    "/root/rss-header-20261002/bin/gc-pool-v3-noauto-gc-runtime-scan-main-tscwork": "8dd5c5223470af4065f4229256a352ff6534d7a0203a95c1cd01f4ea730553a6",
+    "/root/rss-header-20261002/bin/gc-pool-v3-noauto-gc-runtime-pool-r1-main-tscwork": "018378bac06b0cf0b09fdacf19507adb0923bb2a90c3c3f5199ac40fe93d2ea1",
+    "/root/rss-header-20261002/bin/gc-inline-v4-noauto-gc-runtime-pool-r1-main-tscwork": "018378bac06b0cf0b09fdacf19507adb0923bb2a90c3c3f5199ac40fe93d2ea1",
+    "/root/rss-header-20261002/bin/gc-inline-v4-noauto-gc-runtime-inline-main-tscwork": "39a578500e86742d6aa77a1f499e0748ff4901aae4d3744bd49aad33c079b88e"
+  },
+  "logs": {
+    "/root/rss-header-20261002/logs/gc-paired-instruction-domains-v1-gc-pool-v3-noauto-gc-runtime-scan-main-0.err": "be66690f2b4cac1d9f036c3778679c529a52516757d30d92af3a7502cd36f873",
+    "/root/rss-header-20261002/logs/gc-paired-instruction-domains-v1-gc-pool-v3-noauto-gc-runtime-scan-main-0.out": "f5ab100c8088ecc3ac2aef63d6053e9a06eda3745869eb0ab1470a6f0c584ec1",
+    "/root/rss-header-20261002/logs/gc-paired-instruction-domains-v1-gc-pool-v3-noauto-gc-runtime-pool-r1-main-0.err": "d35aa2e0acf11f9521680825dfad7b150261b6d496ffbe5b362e303c6cdb9ebf",
+    "/root/rss-header-20261002/logs/gc-paired-instruction-domains-v1-gc-pool-v3-noauto-gc-runtime-pool-r1-main-0.out": "f5ab100c8088ecc3ac2aef63d6053e9a06eda3745869eb0ab1470a6f0c584ec1",
+    "/root/rss-header-20261002/logs/gc-paired-instruction-domains-v1-gc-inline-v4-noauto-gc-runtime-pool-r1-main-0.err": "9cb59a20fbdad788606717e354f43356a191c59a1f8ca56c97bfe89833468293",
+    "/root/rss-header-20261002/logs/gc-paired-instruction-domains-v1-gc-inline-v4-noauto-gc-runtime-pool-r1-main-0.out": "f5ab100c8088ecc3ac2aef63d6053e9a06eda3745869eb0ab1470a6f0c584ec1",
+    "/root/rss-header-20261002/logs/gc-paired-instruction-domains-v1-gc-inline-v4-noauto-gc-runtime-inline-main-0.err": "bdf3a4679e71584da306eb37da369dd4fc95fc16b76ef501db8df6335dd2107c",
+    "/root/rss-header-20261002/logs/gc-paired-instruction-domains-v1-gc-inline-v4-noauto-gc-runtime-inline-main-0.out": "f5ab100c8088ecc3ac2aef63d6053e9a06eda3745869eb0ab1470a6f0c584ec1",
+    "/root/rss-header-20261002/logs/gc-paired-instruction-domains-v1-gc-inline-v4-noauto-gc-runtime-inline-main-1.err": "aa4fc9840985d678670f31cd5da587c04d3f0d97820695a981a2dbddfc8c5ca3",
+    "/root/rss-header-20261002/logs/gc-paired-instruction-domains-v1-gc-inline-v4-noauto-gc-runtime-inline-main-1.out": "f5ab100c8088ecc3ac2aef63d6053e9a06eda3745869eb0ab1470a6f0c584ec1",
+    "/root/rss-header-20261002/logs/gc-paired-instruction-domains-v1-gc-inline-v4-noauto-gc-runtime-pool-r1-main-1.err": "50b4d4f6aecacb8da1129eb9623a5ca26e0c267ed83282c4eb6e6952c4cef08e",
+    "/root/rss-header-20261002/logs/gc-paired-instruction-domains-v1-gc-inline-v4-noauto-gc-runtime-pool-r1-main-1.out": "f5ab100c8088ecc3ac2aef63d6053e9a06eda3745869eb0ab1470a6f0c584ec1",
+    "/root/rss-header-20261002/logs/gc-paired-instruction-domains-v1-gc-pool-v3-noauto-gc-runtime-pool-r1-main-1.err": "78ce581c8766bf1e92c2473d7043e53193295a4017397a968355d74feae3be68",
+    "/root/rss-header-20261002/logs/gc-paired-instruction-domains-v1-gc-pool-v3-noauto-gc-runtime-pool-r1-main-1.out": "f5ab100c8088ecc3ac2aef63d6053e9a06eda3745869eb0ab1470a6f0c584ec1",
+    "/root/rss-header-20261002/logs/gc-paired-instruction-domains-v1-gc-pool-v3-noauto-gc-runtime-scan-main-1.err": "1ce9b9e617d6481054ab3968141d49e1bbc3d5089d8ff754b23780f184b62af0",
+    "/root/rss-header-20261002/logs/gc-paired-instruction-domains-v1-gc-pool-v3-noauto-gc-runtime-scan-main-1.out": "f5ab100c8088ecc3ac2aef63d6053e9a06eda3745869eb0ab1470a6f0c584ec1",
+    "/root/rss-header-20261002/logs/gc-paired-instruction-domains-v1-gc-pool-v3-noauto-gc-runtime-scan-main-2.err": "9f199b3f3dfb39de3a34a7a737825a8157097cf7a3297bcfb06beada120eca52",
+    "/root/rss-header-20261002/logs/gc-paired-instruction-domains-v1-gc-pool-v3-noauto-gc-runtime-scan-main-2.out": "f5ab100c8088ecc3ac2aef63d6053e9a06eda3745869eb0ab1470a6f0c584ec1",
+    "/root/rss-header-20261002/logs/gc-paired-instruction-domains-v1-gc-pool-v3-noauto-gc-runtime-pool-r1-main-2.err": "6b8c9a583dfb9908aff660ea9d12e79304dcc6d9728fde8d50b20c7a58d4e2de",
+    "/root/rss-header-20261002/logs/gc-paired-instruction-domains-v1-gc-pool-v3-noauto-gc-runtime-pool-r1-main-2.out": "f5ab100c8088ecc3ac2aef63d6053e9a06eda3745869eb0ab1470a6f0c584ec1",
+    "/root/rss-header-20261002/logs/gc-paired-instruction-domains-v1-gc-inline-v4-noauto-gc-runtime-pool-r1-main-2.err": "f323f158adf7775be1fc932217017c4d340a11cd88d3d0d540dac7dcaad42829",
+    "/root/rss-header-20261002/logs/gc-paired-instruction-domains-v1-gc-inline-v4-noauto-gc-runtime-pool-r1-main-2.out": "f5ab100c8088ecc3ac2aef63d6053e9a06eda3745869eb0ab1470a6f0c584ec1",
+    "/root/rss-header-20261002/logs/gc-paired-instruction-domains-v1-gc-inline-v4-noauto-gc-runtime-inline-main-2.err": "34da1e7824dc98689af9e1c1444dd5c5ffb28d01d35edab71bca5b0d5ec755ed",
+    "/root/rss-header-20261002/logs/gc-paired-instruction-domains-v1-gc-inline-v4-noauto-gc-runtime-inline-main-2.out": "f5ab100c8088ecc3ac2aef63d6053e9a06eda3745869eb0ab1470a6f0c584ec1"
+  }
+}
