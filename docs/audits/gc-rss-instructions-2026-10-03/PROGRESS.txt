@@ -1,3 +1,32 @@
+LATEST MAIN NORMAL-AUTO MATRIX VERIFIED (2026-10-03 23:03Z)
+Base2026ecfe, runtime6c761801fa:30 fresh builds and204 correct executions
+cover all17 application workloads with untouched defaultGC and no exclusions.
+Independent source/product/stripped-and-symbol .text/raw-output/RSS/counter
+verification passes; 515 raw evidence files copied locally and rehashed.
+RSS improves15 cases; noop flat; binarytrees+0.175% remains visible.
+Case: peakRSS% / instructions% / minorfaults% (three-repeat medians):
+12_large_live_set: -6.698 / -1.595 / -7.001
+14_grow_then_churn: -5.537 / -1.461 / -4.567
+23-binary-trees: +0.175 / -0.459 / +25.481
+30-string-build: -1.700 / -0.143 / +10.555
+31-json: -3.542 / -0.459 / +2.667
+51-pipeline: -10.814 / -0.742 / -5.389
+60-ring-churn: -0.324 / -0.087 / -1.797
+71-async-worker: -1.735 / -1.492 / -1.783
+72-request-processing: -3.032 / +0.194 / -4.966
+73-retain-then-release: -9.757 / -1.373 / -8.045
+70-documents-replace: -9.213 / -1.103 / -12.368
+70-documents-retain: -11.447 / -1.836 / -8.990
+70-documents-transition: -9.835 / -1.502 / -10.217
+tscwork: -2.015 / -1.437 / +37.300
+zodwork: -1.558 / -0.543 / -0.656
+00-noop: +0.000 / -1.248 / +0.000
+15-crc32: -2.819 / -0.011 / -7.153
+Private entry policy is not adopted; its three-arm full matrix and genuinely
+moving linked checks remain queued. A test-only real-collection fixture
+followup adds an expected-failing control to establish residency sensitivity.
+Production runtime/header/shape source remains unchanged.
+
 FRESH MAIN FOUR-CASE COMPARISON VERIFIED — 2026-10-03 22:25Z
 All12fresh builds succeed;72/72 runs are Node-correct and independently
 verified against source, nine actual compiler/static products, binaries, raw
