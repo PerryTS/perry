@@ -336,7 +336,10 @@ pub extern "C" fn js_register_class_parent_dynamic(class_id: u32, mut parent_val
     // the CLASS_PROTOTYPE_OBJECTS map (the same #711/#809 vehicle), resolved
     // via `resolve_proto_chain_field`; the class_id parent edge above keeps
     // method/`new`/instanceof dispatch on the existing fast path.
-    if tag == POINTER_TAG {
+    // #11759 (c′): a later evaluation pins its parent on its own class object;
+    // the template's static parent stays the first evaluation's.
+    if tag == POINTER_TAG && !crate::object::class_value::class_value_is_first_evaluation(class_id)
+    {
         let ptr = crate::value::js_nanbox_get_pointer(parent_value) as *mut ObjectHeader;
         if !ptr.is_null() && js_object_get_class_id(ptr as *const ObjectHeader) != 0 {
             class_prototype_object_root_store(class_id, ptr);
@@ -531,12 +534,11 @@ pub(crate) fn template_dynamic_parent_value(class_id: u32) -> f64 {
     if class_id == 0 {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    let dynamic_parent = CLASS_DYNAMIC_PARENT_VALUE.with(|table| {
-        let guard = table.read().unwrap();
-        guard.as_ref().and_then(|m| m.get(&class_id).copied())
-    });
-    if let Some(bits) = dynamic_parent {
-        return f64::from_bits(bits);
+    // #11759 (c′): a first evaluation keeps its static heritage.
+    if !crate::object::class_value::class_value_is_first_evaluation(class_id) {
+        if let Some(parent) = super::stashed_dynamic_parent_value(class_id) {
+            return parent;
+        }
     }
     // #5957/#806: no dynamic VALUE stashed — fall back to the STATIC
     // parent-id edge as a ClassRef. An `extends <call>(...)` mixin

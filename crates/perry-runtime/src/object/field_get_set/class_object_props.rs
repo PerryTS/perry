@@ -547,6 +547,14 @@ pub(super) unsafe fn instance_constructor_value(
     if let Some(v) = super::super::class_registry::class_object_value_for_cid(class_id) {
         return Some(JSValue::from_bits(v.to_bits()));
     }
+    // #11759 (c′): an instance of a later evaluation of a declaration whose
+    // first evaluation is the class function object reads `constructor` from
+    // its own evaluation's prototype (the generic walk).
+    if crate::object::class_value::class_value_is_first_evaluation(class_id)
+        && super::super::prototype_chain::object_static_prototype(obj as usize).is_some()
+    {
+        return None;
+    }
     // #5834: WeakMap/WeakSet instances carry a reserved class_id
     // (not a registered declared-class one), so none of the
     // arms below resolve them and `(new WeakMap()).constructor`

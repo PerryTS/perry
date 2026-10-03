@@ -1050,6 +1050,7 @@ pub(crate) fn is_bool_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         | Expr::MapHas { .. }
         | Expr::MapDelete { .. } => true,
         Expr::ArrayIncludes { .. } => true,
+        Expr::ClassIsFirstEvaluation { .. } => true,
         Expr::LocalGet(id) => matches!(ctx.stable_local_type_proof(id), Some(HirType::Boolean)),
         _ => false,
     }

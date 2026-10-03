@@ -346,7 +346,16 @@ pub extern "C" fn js_class_evaluation_object(
     // body. A template recorded without heritage has none to read.
     let has_parent = template.is_none_or(|t| t.2);
     let parent = if has_parent {
-        crate::object::parent_static::template_dynamic_parent_value(template_class_id)
+        // #11759 (c′): when the template's class function object is the
+        // declaration's first evaluation, this is a later one: it pins the
+        // parent its own heritage registered, which the template no longer
+        // answers with (its class function object keeps the static heritage).
+        crate::object::class_value::class_value_is_first_evaluation(template_class_id)
+            .then(|| crate::object::class_registry::stashed_dynamic_parent_value(template_class_id))
+            .flatten()
+            .unwrap_or_else(|| {
+                crate::object::parent_static::template_dynamic_parent_value(template_class_id)
+            })
     } else {
         f64::from_bits(crate::value::TAG_UNDEFINED)
     };

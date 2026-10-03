@@ -40,7 +40,13 @@ fn per_evaluation_class_decl_members_use_the_evaluation() {
     );
     let bump = static_method_debug(&hir, "C", "bump");
     assert!(!bump.contains("StaticFieldSet"), "template write: {bump}");
-    assert!(!bump.contains("StaticFieldGet"), "template read: {bump}");
+    // #11759 (c′): a template read appears only as the first evaluation's
+    // static form, guarded on the binding holding the first evaluation.
+    assert_eq!(
+        bump.matches("StaticFieldGet").count(),
+        bump.matches("ClassIsFirstEvaluation").count(),
+        "unguarded template read: {bump}"
+    );
     let class = hir.classes.iter().find(|c| c.name == "C").unwrap();
     let reset = class
         .static_fields

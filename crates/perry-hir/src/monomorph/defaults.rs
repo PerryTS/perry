@@ -250,6 +250,17 @@ fn fill_defaults_in_expr(expr: &mut Expr, cx: &DefaultFill) {
         Expr::Update { .. } => {
             // Update expressions (++/--) don't contain sub-expressions
         }
+        // A guarded class environment's static construction (a fresh class
+        // expression's `new K()`, and #11759 (c′)'s first-evaluation
+        // `new C()`) is a `New` like any other.
+        Expr::ClassEnvStamp {
+            instance,
+            evaluation,
+            ..
+        } => {
+            fill_defaults_in_expr(instance, cx);
+            fill_defaults_in_expr(evaluation, cx);
+        }
         Expr::Conditional {
             condition,
             then_expr,

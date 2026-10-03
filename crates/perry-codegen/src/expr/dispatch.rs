@@ -556,6 +556,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::RegisterClassComputedMethod { .. }
         | Expr::RegisterClassComputedAccessor { .. }
         | Expr::ClassExprFresh { .. }
+        | Expr::ClassIsFirstEvaluation { .. }
         | Expr::SetFunctionPrototype { .. }
         | Expr::RegisterPrototypeMethod { .. }
         | Expr::RegisterFunctionPrototypeMethod { .. }

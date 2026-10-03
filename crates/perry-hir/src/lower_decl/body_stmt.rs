@@ -368,6 +368,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                 // #11142: a self-binding capture holds the evaluated class
                 // object, so snapshot the captures only once it exists.
                 let mut deferred_capture_snapshot = None;
+                let mut early_capture_snapshot = None;
                 if !captured_exprs.is_empty() {
                     let snapshot = Stmt::Expr(Expr::RegisterClassCaptures {
                         class_name: class.name.clone(),
@@ -376,7 +377,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                     if decl_self_binding.is_some() {
                         deferred_capture_snapshot = Some(snapshot);
                     } else {
-                        result.push(snapshot);
+                        early_capture_snapshot = Some(snapshot);
                     }
                 }
                 // Captures (#6465), private brands (#5893), computed names,
@@ -395,10 +396,28 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                         .iter()
                         .any(|m| m.name.starts_with("__perry_static_init_"));
                 let has_private_elements = class.has_private_elements();
-                let fresh_binding = has_private_elements
+                // Captures alone need a class object per evaluation only when
+                // the instances carry them: a guarded class environment
+                // (#11759 (c′)) gives the first evaluation the environment's
+                // slots and each later one its own capture array.
+                let per_evaluation_state = has_private_elements
                     || class.extends_expr.is_some()
                     || !computed_keys.is_empty()
-                    || (!captured_exprs.is_empty() && !has_static_state)
+                    || (!captured_exprs.is_empty()
+                        && !has_static_state
+                        && !ctx.is_class_env_guarded(&class.name));
+                // #11759 (c′): a declaration that may be evaluated more than
+                // once and has no other per-evaluation state keeps the shared
+                // class for its FIRST evaluation; later ones are fresh.
+                let shares_first_evaluation = !per_evaluation_state
+                    && crate::lower_decl::class_decl::may_evaluate_repeatedly(
+                        ctx,
+                        class_decl.class.span,
+                        class.extends_expr.is_some(),
+                        class.native_extends.is_some(),
+                    );
+                let fresh_binding = per_evaluation_state
+                    || shares_first_evaluation
                     // #11157: members that captured the self-binding need it.
                     || decl_self_binding.is_some();
                 let named_statics: Vec<(String, Expr)> = if fresh_binding {
@@ -448,16 +467,45 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                 // classes initialized. Interleaved in source order (see
                 // `build_interleaved_static_init_stmts`), with lexical `this`
                 // in field initializers bound to the class ref.
-                if !fresh_binding {
-                    result.extend(
-                        crate::lower_decl::build_interleaved_static_init_stmts_after_computed_names(
-                            &class_decl.class.body,
-                            &class.name,
-                            &class.fields,
-                            &class.static_fields,
-                            &class.static_methods,
-                        ),
-                    );
+                let shared_static_init = (!fresh_binding || shares_first_evaluation).then(|| {
+                    crate::lower_decl::build_interleaved_static_init_stmts_after_computed_names(
+                        &class_decl.class.body,
+                        &class.name,
+                        &class.fields,
+                        &class.static_fields,
+                        &class.static_methods,
+                    )
+                });
+                // #11759 (c′): the template-keyed capture snapshot belongs to
+                // the first evaluation (the shared class, constructed by value
+                // from it); a later evaluation carries its own array.
+                let first_evaluation_snapshot = if shares_first_evaluation {
+                    early_capture_snapshot
+                        .take()
+                        .or_else(|| deferred_capture_snapshot.take())
+                } else {
+                    None
+                };
+                result.extend(early_capture_snapshot);
+                // The first evaluation runs the shared class's static
+                // initialization; it is a sequence of expression statements.
+                let mut shared_first_evaluation = None;
+                if let Some(stmts) = shared_static_init {
+                    if !fresh_binding {
+                        result.extend(stmts);
+                    } else {
+                        let exprs: Vec<Expr> = first_evaluation_snapshot
+                            .into_iter()
+                            .chain(stmts)
+                            .map(|stmt| match stmt {
+                                Stmt::Expr(expr) => expr,
+                                other => unreachable!(
+                                    "static initialization lowers to expression statements, got {other:?}"
+                                ),
+                            })
+                            .collect();
+                        shared_first_evaluation = Some(Box::new(Expr::Sequence(exprs)));
+                    }
                 }
                 let evaluation_owner = decl_self_binding_owner(
                     ctx,
@@ -471,6 +519,12 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                 let template_name = class.name.clone();
                 if fresh_binding {
                     ctx.per_evaluation_class_decls.insert(template_name.clone());
+                }
+                if shares_first_evaluation {
+                    // `C.prototype.m = v` writes THIS evaluation's prototype,
+                    // never the template-keyed side table every evaluation
+                    // shares (#11134's rule for fresh class expressions).
+                    ctx.fresh_evaluation_classes.insert(template_name.clone());
                 }
                 ctx.pending_classes.push(class);
                 // #6465/#5893/#9502 (see `fresh_binding` above): bind the
@@ -489,6 +543,19 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                     let binding_name = class_decl.ident.sym.to_string();
                     let class_local = ctx.define_local(binding_name.clone(), Type::Any);
                     ctx.record_local_source_span(class_local, class_decl.ident.span);
+                    if shares_first_evaluation {
+                        ctx.shared_first_decl_locals
+                            .insert(template_name.clone(), class_local);
+                        let statics = crate::lower_decl::class_decl::declared_static_field_names(
+                            &class_decl.class,
+                        );
+                        ctx.shared_first_class_bindings
+                            .insert(class_local, (template_name.clone(), statics));
+                    }
+                    let evaluated_parent = ctx
+                        .evaluated_parent_bindings
+                        .get(&template_name)
+                        .map(|id| Box::new(Expr::LocalGet(*id)));
                     result.push(Stmt::Let {
                         id: class_local,
                         name: binding_name,
@@ -503,6 +570,8 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                                 computed_statics,
                                 static_init_order,
                                 captured_args: captured_exprs,
+                                shared_first_evaluation,
+                                evaluated_parent,
                             },
                         )),
                         mutable: false,

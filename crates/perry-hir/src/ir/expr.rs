@@ -671,6 +671,37 @@ pub enum Expr {
         /// environment — which the static `new ClassName()` inlining
         /// can't do once the class escapes its defining scope.
         captured_args: Vec<Expr>,
+        /// #11759 (c′): a class DECLARATION whose definition may be evaluated
+        /// more than once (`lower::run_once` cannot prove otherwise) and that
+        /// has no other per-evaluation state. Its FIRST evaluation is the
+        /// shared class, `ClassRef(template)`, exactly what a single
+        /// evaluation gets; only the second and later evaluations allocate a
+        /// fresh class object. Whether the shared class was handed out is a
+        /// fact of the template (one flag codegen keeps beside the class),
+        /// tested with one compare and branch. `Some(init)` carries the first
+        /// evaluation's static initialization against the shared class (the
+        /// template-keyed statements a single-evaluation declaration runs) as
+        /// one `Sequence` evaluated for its effects. `None`: every evaluation
+        /// is fresh.
+        shared_first_evaluation: Option<Box<Expr>>,
+        /// #11759 (c′): the binding of this declaration's parent, itself a
+        /// shared-first declaration of the same body (`class D extends L`).
+        /// The template's heritage is the parent's template (its first
+        /// evaluation); an evaluation shares D's first evaluation only while
+        /// the binding holds L's first evaluation, and every other
+        /// evaluation pins the evaluated parent the binding holds.
+        evaluated_parent: Option<Box<Expr>>,
+    },
+
+    /// #11759 (c′): is `value` (a class declaration's evaluated binding) the
+    /// declaration's FIRST evaluation, the shared class of `template`? Guards
+    /// the static forms (`new`, static field reads) a single evaluation gets,
+    /// so code running in the first evaluation keeps them; a later
+    /// evaluation takes the by-value form. Codegen: one load of the
+    /// template's first-evaluation word and one compare.
+    ClassIsFirstEvaluation {
+        value: Box<Expr>,
+        template: String,
     },
 
     // Static `.prototype` assignment. Evaluates the receiver once and performs

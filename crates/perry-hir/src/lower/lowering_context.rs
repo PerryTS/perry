@@ -410,6 +410,22 @@ pub struct LoweringContext {
     /// per-evaluation `ClassExprFresh` binding. A static write through such a
     /// class's name must reach the evaluated object, not the template.
     pub(crate) per_evaluation_class_decls: HashSet<String>,
+    /// #11759 (c′): locals that hold an evaluation of a class declaration
+    /// whose later evaluations are fresh (the declaration's binding and its
+    /// members' self-binding) → (template, its declared static field names).
+    /// `new C()` and `C.<static>` through such a local test whether it holds
+    /// the first evaluation and then take the static form.
+    pub(crate) shared_first_class_bindings: HashMap<LocalId, (String, Vec<String>)>,
+    /// #11759 (c′): declarations whose parent is a shared-first declaration of
+    /// the same body, resolved statically to its template → the parent's
+    /// binding (`ClassExprFresh::evaluated_parent`).
+    pub(crate) evaluated_parent_bindings: HashMap<String, LocalId>,
+    /// #11759 (c′): template → the declaration's own binding, for a
+    /// shared-first declaration. The template-keyed capture snapshot
+    /// (`RegisterClassCaptures`, read when the shared class is constructed by
+    /// value) belongs to the first evaluation only; later evaluations carry
+    /// their own capture arrays.
+    pub(crate) shared_first_decl_locals: HashMap<String, LocalId>,
     /// #11142: the active `class_expr_self_bindings` entries that belong to
     /// per-evaluation class DECLARATIONS. `new C()` and `x instanceof C` in
     /// such a body construct and test against the evaluation too.

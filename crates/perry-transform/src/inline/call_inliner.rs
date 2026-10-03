@@ -373,7 +373,10 @@ pub fn inline_calls_in_stmts(
                 local_types.insert(*id, class_name.clone());
             }
             // Also check if init is a New expression
-            if let Some(Expr::New { class_name, .. }) = init {
+            if let Some(class_name) = init
+                .as_ref()
+                .and_then(super::exact_receivers::constructed_class)
+            {
                 local_types.insert(*id, class_name.clone());
             }
         }

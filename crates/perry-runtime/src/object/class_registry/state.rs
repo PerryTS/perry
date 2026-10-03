@@ -681,6 +681,18 @@ crate::perry_thread_local! {
     pub static CLASS_DYNAMIC_PARENT_VALUE: RwLock<Option<HashMap<u32, u64>>> = RwLock::new(None);
 }
 
+/// The `js_register_class_parent_dynamic` stash for `class_id`: the parent
+/// value its latest evaluation registered.
+pub(crate) fn stashed_dynamic_parent_value(class_id: u32) -> Option<f64> {
+    CLASS_DYNAMIC_PARENT_VALUE.with(|table| {
+        let guard = table.read().unwrap();
+        guard
+            .as_ref()
+            .and_then(|m| m.get(&class_id).copied())
+            .map(f64::from_bits)
+    })
+}
+
 crate::perry_thread_local! {
     /// #6530: maps a template class_id to the raw NaN-boxed POINTER bits of the
     /// per-evaluation CLASS OBJECT the class statement materialized as (marked by
@@ -706,6 +718,13 @@ pub(crate) static CLASS_OBJECT_EVER: std::sync::atomic::AtomicBool =
 /// `CLASS_OBJECT_VALUES`).
 pub(crate) fn class_object_value_root_store(class_id: u32, obj_ptr: *mut ObjectHeader) {
     if class_id == 0 || obj_ptr.is_null() {
+        return;
+    }
+    // #11759 (c′): the class function object is the declaration's first
+    // evaluation, and a later evaluation is a class of its own. It never
+    // stands in for the template: `C.x` on the first evaluation and the
+    // `constructor` of its instances stay the first evaluation's.
+    if crate::object::class_value::class_value_is_first_evaluation(class_id) {
         return;
     }
     CLASS_OBJECT_EVER.store(true, std::sync::atomic::Ordering::Relaxed);

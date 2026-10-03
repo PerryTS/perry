@@ -10,6 +10,40 @@ fn lower_src(src: &str) -> perry_hir::Module {
         .expect("lowering should succeed")
 }
 
+/// `ret` constructs `class_name` statically. A class declared in a function
+/// that may run more than once (#11759 (c′)) constructs its first evaluation
+/// statically and a later one through its own evaluation: the static form is
+/// the guarded branch, and the by-value branch never reads a module-level
+/// binding of the same name.
+fn constructs_own_class(module: &perry_hir::Module, ret: &Expr, class_name: &str) -> bool {
+    match ret {
+        Expr::New { class_name: c, .. } => c == class_name,
+        Expr::ClassEnvStamp { instance, .. } => constructs_own_class(module, instance, class_name),
+        Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } if matches!(condition.as_ref(), Expr::ClassIsFirstEvaluation { .. }) => {
+            let outer: Vec<_> = module
+                .init
+                .iter()
+                .filter_map(|stmt| match stmt {
+                    Stmt::Let { id, name, .. } if name == "h" => Some(*id),
+                    _ => None,
+                })
+                .collect();
+            let by_value_is_outer = matches!(
+                else_expr.as_ref(),
+                Expr::NewDynamic { callee, .. }
+                    if matches!(callee.as_ref(), Expr::LocalGet(id) if outer.contains(id))
+                        || matches!(callee.as_ref(), Expr::GlobalGet(_))
+            );
+            constructs_own_class(module, then_expr, class_name) && !by_value_is_outer
+        }
+        _ => false,
+    }
+}
+
 #[test]
 fn class_self_new_wins_over_same_named_outer_local() {
     let module = lower_src(
@@ -40,7 +74,7 @@ fn class_self_new_wins_over_same_named_outer_local() {
     assert!(
         instance.body.iter().any(|stmt| matches!(
             stmt,
-            Stmt::Return(Some(Expr::New { class_name, .. })) if class_name == "h"
+            Stmt::Return(Some(ret)) if constructs_own_class(&module, ret, "h")
         )),
         "class self-construction must bind to the class, not the outer local: {:#?}",
         instance.body
@@ -77,7 +111,7 @@ fn collision_renamed_class_self_new_uses_unique_class_name() {
     assert!(
         instance.body.iter().any(|stmt| matches!(
             stmt,
-            Stmt::Return(Some(Expr::New { class_name, .. })) if class_name == &class.name
+            Stmt::Return(Some(ret)) if constructs_own_class(&module, ret, &class.name)
         )),
         "renamed class self-construction must use its unique name: {:#?}",
         instance.body

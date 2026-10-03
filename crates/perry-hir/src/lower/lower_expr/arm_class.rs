@@ -394,6 +394,8 @@ pub(crate) fn lower_class_expr(
             computed_statics,
             static_init_order,
             captured_args,
+            shared_first_evaluation: None,
+            evaluated_parent: None,
         };
         let mut seq: Vec<Expr> = Vec::new();
         if let Some(p) = parent_expr {

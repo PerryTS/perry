@@ -1043,6 +1043,11 @@ pub(super) fn emit_module_artifacts(
     );
     progress.checkpoint("string pool and registration initializer");
 
+    crate::expr::class_first_evaluation::emit_flag_globals(
+        llmod,
+        &super::fresh_class_templates::shared_first_templates(hir),
+    );
+
     super::namespace_value_getters::emit(llmod, module_prefix, cross_module);
 
     Ok(())

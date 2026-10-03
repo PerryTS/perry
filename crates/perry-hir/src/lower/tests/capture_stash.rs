@@ -3,7 +3,9 @@
 //! for the 2000-line file cap.
 //!
 //! The fixtures declare their classes in a function that may run many times,
-//! so the classes keep the per-instance snapshot. A class evaluated once keeps
+//! and give the derived class a private element, so it keeps the per-instance
+//! snapshot (#11759 (c′): a repeatable declaration without per-evaluation
+//! state reads its captures from a guarded class environment instead). A class evaluated once keeps
 //! its captures in the class environment instead, needs no `this`, and
 //! publishes at constructor entry (the last test).
 
@@ -22,6 +24,7 @@ fn derived_ctor_capture_stash_follows_super_inside_comma_sequence() {
                 constructor(opts) { this.definition = opts.definition; }
             }
             class Derived extends Base {
+                #p = 0;
                 constructor({ definition: r, name: n }) {
                     super({ definition: r }), this.name = n, this.tag = shared.tag;
                 }
@@ -43,6 +46,7 @@ fn derived_ctor_capture_stash_follows_super_inside_if_test() {
                 constructor() { this.base = 1; }
             }
             class Derived extends Base {
+                #p = 0;
                 constructor(e) {
                     var q;
                     if (super(), this.count = 0, this.tag = shared.tag, !e) { q = 1; }

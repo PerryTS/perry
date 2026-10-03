@@ -472,6 +472,8 @@ mod tests {
             computed_statics: vec![("value".into(), Expr::LocalGet(7))],
             static_init_order: vec![],
             captured_args: vec![Expr::LocalGet(7), Expr::LocalGet(8)],
+            shared_first_evaluation: None,
+            evaluated_parent: None,
         }
     }
 
