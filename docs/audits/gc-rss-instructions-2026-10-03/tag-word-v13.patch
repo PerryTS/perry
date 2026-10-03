@@ -1,0 +1,21 @@
+diff --git a/crates/perry-runtime/src/gc/trace.rs b/crates/perry-runtime/src/gc/trace.rs
+index 0f234464a0..d330560133 100644
+--- a/crates/perry-runtime/src/gc/trace.rs
++++ b/crates/perry-runtime/src/gc/trace.rs
+@@ -1330,8 +1330,14 @@ pub(super) unsafe fn mark_field_into_worklist(
+     if proxy_trace_active && super::full_trace::observe_handle(val_bits, valid_ptrs) {
+         return false;
+     }
+-    let tag = val_bits & TAG_MASK;
+-    let ptr_val: usize = if tag == POINTER_TAG || tag == STRING_TAG || tag == BIGINT_TAG {
++    // Compare the high tag word directly, avoiding three full-width tag
++    // constants in the per-slot marking path. Pointer validation and the
++    // raw-address fallback below retain their original bounds.
++    let tag = (val_bits >> 48) as u16;
++    let ptr_val: usize = if tag == (POINTER_TAG >> 48) as u16
++        || tag == (STRING_TAG >> 48) as u16
++        || tag == (BIGINT_TAG >> 48) as u16
++    {
+         let p = (val_bits & POINTER_MASK) as usize;
+         if p == 0 {
+             return false;
