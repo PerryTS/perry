@@ -1798,8 +1798,33 @@ fn match_packed_f64_range_loop(
             &mut accesses,
             &mut pending_accumulators,
         ) {
-            return range_loop_reject("body_not_admissible");
+            // #10718: `a[i] += x; s += a[i]` reaches here as alias `Let`s
+            // followed by the store, so the store's receiver is the alias,
+            // not a tracked array. Fold every compound-assign alias run into
+            // the statement it was minted for (the same fold the classic
+            // walk retries with, generalised to several statements) and
+            // retry the dense walk on the folded body. The folded body is
+            // what the guarded clones lower; the slow clone keeps the
+            // statements as written.
+            accesses.clear();
+            pending_accumulators.clear();
+            let folded = packed_f64_range_loop_compound_alias_fold_all(body).filter(|folded| {
+                packed_f64_range_loop_dense_body_collect(
+                    ctx,
+                    folded,
+                    counter_id,
+                    bound_local,
+                    &mut accesses,
+                    &mut pending_accumulators,
+                )
+            });
+            let Some(folded) = folded else {
+                return range_loop_reject("body_not_admissible");
+            };
+            range_loop_trace("dense_compound_assign_alias_fold");
+            fast_body = Some(folded);
         }
+        let collected_body: &[Stmt] = fast_body.as_deref().unwrap_or(body);
         if !pending_accumulators.is_empty() {
             // The peel above assumed each pending local numeric; that holds
             // only if the lowering will actually admit it (entry tag check +
@@ -1807,18 +1832,24 @@ fn match_packed_f64_range_loop(
             // the SAME array selection `emit_range_loop_accumulator_admission`
             // uses -- if the two disagree, the clone would contain a dynamic
             // `+` (a collecting call) under facts that forbid one.
-            if accesses.len() != 1 {
-                return range_loop_reject("accumulator_needs_single_array");
-            }
-            let array_id = *accesses.keys().next().expect("len checked");
+            //
+            // #10718: the verification passes exactly the arguments the
+            // lowering's `emit_range_loop_accumulator_admission` derives —
+            // the whole guarded array set and the same masked/affine flags —
+            // so the two cannot disagree. (It used to demand a single array,
+            // a leftover from before the accumulator walk took the set, which
+            // kept `a[i] = a[i] + b[i]; s += a[i]` off the tier.)
+            let array_ids: std::collections::BTreeSet<u32> = accesses.keys().copied().collect();
+            let masked_reads_validated = accesses.values().any(|a| a.stat.is_some());
+            let affine_reads = accesses.values().any(|a| a.affine);
             let admitted = super::stable_packed_accumulator::collect_numeric_accumulators(
                 ctx,
-                body,
-                &std::collections::BTreeSet::from([array_id]),
+                collected_body,
+                &array_ids,
                 counter_id,
                 true,
-                true,
-                false,
+                masked_reads_validated,
+                affine_reads,
             );
             if !pending_accumulators.iter().all(|id| admitted.contains(id)) {
                 return range_loop_reject("accumulator_not_provable");
@@ -2081,6 +2112,89 @@ pub(super) fn packed_f64_range_loop_compound_alias_fold(body: &[Stmt]) -> Option
 /// for the read index, once for the store index — where the original
 /// evaluated it once. And its value cannot change between those two
 /// evaluations, because the admitted statement writes no local at all.
+/// #10718: [`packed_f64_range_loop_compound_alias_fold`] over a whole
+/// statement list, for the DENSE walk. Every run of compiler-minted
+/// `__cmpd_*` alias `Let`s is folded into the one statement that follows it;
+/// every other statement is kept as written. `None` when nothing was folded,
+/// when a run cannot be folded, or when an alias is still mentioned anywhere
+/// in the result.
+///
+/// The single-statement fold's argument carries over per run: the aliases
+/// are bound immediately before their statement, nothing runs between the
+/// binding and the statement, and the statement itself is a whitelisted
+/// walk that writes no local. The last check makes the "read only by the
+/// statement they were minted for" property structural rather than assumed:
+/// a later statement that read an alias would read a slot the fast clone
+/// never writes, so it rejects the fold instead.
+pub(super) fn packed_f64_range_loop_compound_alias_fold_all(body: &[Stmt]) -> Option<Vec<Stmt>> {
+    fn is_alias_let(stmt: &Stmt) -> Option<u32> {
+        match stmt {
+            Stmt::Let {
+                id,
+                name,
+                mutable: false,
+                init: Some(_),
+                ..
+            } if name.starts_with("__cmpd_") => Some(*id),
+            _ => None,
+        }
+    }
+    fn stmts_touch_local(stmts: &[Stmt], id: u32) -> bool {
+        stmts.iter().any(|stmt| match stmt {
+            Stmt::Let { init: None, .. } => false,
+            Stmt::Let {
+                id: bound,
+                init: Some(init),
+                ..
+            } => *bound == id || packed_f64_range_loop_expr_touches_local(init, id),
+            Stmt::Expr(expr) => packed_f64_range_loop_expr_touches_local(expr, id),
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                packed_f64_range_loop_expr_touches_local(condition, id)
+                    || stmts_touch_local(then_branch, id)
+                    || else_branch
+                        .as_deref()
+                        .is_some_and(|branch| stmts_touch_local(branch, id))
+            }
+            // Any other statement is outside the dense grammar; answer
+            // conservatively so the fold is refused rather than trusted.
+            _ => true,
+        })
+    }
+    let mut out = Vec::with_capacity(body.len());
+    let mut aliases = Vec::new();
+    let mut index = 0;
+    while index < body.len() {
+        if is_alias_let(&body[index]).is_none() {
+            out.push(body[index].clone());
+            index += 1;
+            continue;
+        }
+        let start = index;
+        while index < body.len() {
+            match is_alias_let(&body[index]) {
+                Some(id) => aliases.push(id),
+                None => break,
+            }
+            index += 1;
+        }
+        if index == body.len() {
+            return None;
+        }
+        out.extend(packed_f64_range_loop_compound_alias_fold(
+            &body[start..=index],
+        )?);
+        index += 1;
+    }
+    if aliases.is_empty() || aliases.iter().any(|id| stmts_touch_local(&out, *id)) {
+        return None;
+    }
+    Some(out)
+}
+
 fn packed_f64_range_loop_alias_init_is_stable(init: &perry_hir::Expr) -> bool {
     use perry_hir::{BinaryOp, Expr};
     match init {
@@ -2559,6 +2673,31 @@ fn packed_f64_range_loop_dense_stmts_collect(
                     let perry_hir::Expr::LocalGet(arr_id) = object else {
                         return false;
                     };
+                    // #10718: a COUNTER-offset store (`a[i] = a[i] + 1`,
+                    // `a[i + 1] = …`) takes the same rule as a masked one.
+                    // The dense guard validates the counter window
+                    // `[start + min, bound + max)` exactly as it validates a
+                    // static window — in bounds, hole-free, raw-f64, plain,
+                    // integrity-clean — and the RHS must be a statically
+                    // genuine double, so the store has no value check and no
+                    // side exit. That is what makes a store legal in a
+                    // multi-statement dense body: an iteration still runs
+                    // entirely in one copy, so a store that already ran can
+                    // never be replayed by the slow copy.
+                    if let Some(offset) = packed_f64_range_loop_index_offset(index, counter_id) {
+                        if !masked_window_expression_is_non_collecting(ctx, value)
+                            || !dense_masked_store_rhs_is_admissible(
+                                ctx, value, counter_id, accesses,
+                            )
+                            || !packed_f64_range_loop_pure_expr_collect(
+                                value, counter_id, true, accesses, None,
+                            )
+                        {
+                            return false;
+                        }
+                        record_packed_f64_range_access(accesses, *arr_id, offset, true);
+                        continue;
+                    }
                     if !masked_window_expression_is_non_collecting(ctx, index)
                         || !masked_window_expression_is_non_collecting(ctx, value)
                         || !dense_masked_store_rhs_is_admissible(ctx, value, counter_id, accesses)
@@ -2672,10 +2811,15 @@ fn dense_masked_store_rhs_is_admissible(
     match expr {
         Expr::Number(_) | Expr::Integer(_) => true,
         Expr::LocalGet(id) => *id == counter_id || ctx.i32_counter_slots.contains_key(id),
+        // A counter-offset read (`a[i]`, `a[i ± c]`) is admitted too: the
+        // pure walk records its window for the same dense guard, and the
+        // lowering serves it from the clone's `PackedF64LoopFact` as a raw
+        // load of a slot that guard proved holds a raw-f64 number (#10718).
         Expr::IndexGet { object, index } => {
             matches!(object.as_ref(), Expr::LocalGet(_))
-                && crate::collectors::static_index_window(index)
-                    .is_some_and(|(lo, hi)| lo >= 0 && hi < i64::from(i32::MAX))
+                && (packed_f64_range_loop_index_offset(index, counter_id).is_some()
+                    || crate::collectors::static_index_window(index)
+                        .is_some_and(|(lo, hi)| lo >= 0 && hi < i64::from(i32::MAX)))
         }
         // Float arithmetic over admitted operands — see the lowering-side
         // twin (`masked_store_rhs_is_genuine_f64`) for the argument. `%`/`**`

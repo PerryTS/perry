@@ -219,7 +219,12 @@ fn packed_f64_loop_fact_for_index(
 ) -> Option<(PackedF64LoopFact, u32, i32)> {
     let (idx_id, offset) = super::packed_f64_loop_index_parts(index)?;
     let fact = packed_f64_loop_fact(ctx, arr_id, idx_id)?;
-    if offset != 0 && !fact.allow_holes {
+    // A dense range guard validated the whole constant-offset window too
+    // (`window_validated` without `allow_holes`), so its offsets are proven
+    // exactly like the hole-tolerant guard's (#10718). Only the length-bound
+    // guard of the versioned matcher leaves an offset store unproven; an
+    // affine fact proves the receiver only.
+    if offset != 0 && !fact.allow_holes && (!fact.window_validated || fact.affine_indices) {
         return None;
     }
     Some((fact, idx_id, offset))
@@ -1017,7 +1022,28 @@ pub(crate) fn lower(
                         // than abort codegen, let U32 facts fall through to the
                         // generic/bounded array-store path below (correct, just
                         // not the packed fast path).
-                        if !matches!(fact.array_kind, PackedNumericLoopKind::U32) {
+                        // A dense range copy has no side exit to take: an
+                        // iteration must run entirely in one copy, because a
+                        // multi-statement body may already have stored. The
+                        // matcher admits a store there only with a statically
+                        // genuine RHS (`dense_masked_store_rhs_is_admissible`,
+                        // this predicate's match-time twin); a store that
+                        // reaches here without that proof is matcher/lowering
+                        // drift and must not get a side-exiting store.
+                        let dense_copy =
+                            !fact.allow_holes && fact.window_validated && !fact.affine_indices;
+                        let side_exit_forbidden_but_needed = dense_copy
+                            && !super::masked_window::masked_store_rhs_is_genuine_f64(
+                                ctx,
+                                value.as_ref(),
+                            );
+                        debug_assert!(
+                            !side_exit_forbidden_but_needed,
+                            "dense range store without a genuine-f64 RHS proof"
+                        );
+                        if !matches!(fact.array_kind, PackedNumericLoopKind::U32)
+                            && !side_exit_forbidden_but_needed
+                        {
                             if let Some(i32_slot) = ctx.i32_counter_slots.get(&idx_id).cloned() {
                                 let idx_i32 = load_packed_loop_index_i32(ctx, &i32_slot, offset);
                                 return lower_packed_numeric_loop_index_set(
