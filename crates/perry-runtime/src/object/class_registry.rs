@@ -62,6 +62,9 @@ pub(crate) use evaluation_heritage::{
     active_class_evaluation_parent, instance_pinned_constructing_class, is_self_heritage_value,
     pin_instance_constructing_class, push_active_class_evaluation,
 };
+#[cfg(test)]
+#[path = "class_registry/decl_method_slots_tests.rs"]
+mod decl_method_slots_tests;
 mod function_prototype;
 mod gc_roots;
 pub(crate) mod parent_static;
@@ -209,9 +212,10 @@ pub(crate) use registration::{
 };
 pub use registration::{
     is_class_id_registered, js_register_class_getter, js_register_class_method,
-    js_register_class_method_bind_length, js_register_class_method_entry, js_register_class_setter,
-    js_register_class_static_getter, js_register_class_static_method_bind_length,
-    js_register_class_static_setter, js_register_class_string_member_order,
+    js_register_class_method_bind_length, js_register_class_method_entry,
+    js_register_class_method_with_entry, js_register_class_setter, js_register_class_static_getter,
+    js_register_class_static_method_bind_length, js_register_class_static_setter,
+    js_register_class_string_member_order,
 };
 
 // ── dispatch.rs ─────────────────────────────────────────────────────────────

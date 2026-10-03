@@ -382,6 +382,11 @@ pub(crate) fn declare_core(module: &mut LlModule) {
         VOID,
         &[I64, I64, I64, I64, I64, I64, I64],
     );
+    module.declare_function(
+        "js_register_class_method_with_entry",
+        VOID,
+        &[I64, I64, I64, I64, I64, I64, I64, I64],
+    );
     // #1787: register a class's standalone constructor so `new
     // <classObjectValue>()` can replay it on a dynamically-allocated instance.
     module.declare_function("js_register_class_constructor", VOID, &[I64, I64, I64, I64]);

@@ -1377,6 +1377,7 @@ fn is_non_configurable_exotic_own(target: f64, key: f64) -> bool {
             // is a non-configurable own property.
             if !crate::closure::closure_is_arrow(closure)
                 && !crate::closure::closure_is_bound_method(closure)
+                && !crate::closure::closure_body_is_non_constructor(closure)
             {
                 return true;
             }

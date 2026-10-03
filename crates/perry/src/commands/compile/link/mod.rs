@@ -99,6 +99,7 @@ pub(super) const PLUGIN_HOST_SYMBOLS: &[&str] = &[
     "js_object_alloc_class_with_keys",
     "js_object_alloc_with_shape",
     "js_register_class_method",
+    "js_register_class_method_with_entry",
     "js_string_char_code_at",
     "js_string_from_bytes",
     "js_string_length",
