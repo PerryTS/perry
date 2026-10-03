@@ -113,7 +113,7 @@ pub fn set_bigint_lane_bits(ta: *mut TypedArrayHeader, index: i32, bits: u64) ->
 /// read (`== ToInt32(undefined)`, the only observable value in the i32/ToInt32
 /// consumer context that path serves). It routes here only when its guard
 /// rejects the access — a view/detached/resizable backing
-/// (`PERRY_TA_VIEW_GUARD != 0`), a kind-cache miss, or a receiver that is not the
+/// (`TA_STORAGE_EXTERNAL`), a kind-cache miss, or a receiver that is not the
 /// statically-expected kind. This helper performs the full ECMAScript
 /// IntegerIndexedExotic `[[Get]]` (bounds-checked, view-aware, detach-safe) and
 /// applies `ToInt32` to the result (`undefined` / non-finite -> `0`). Because it

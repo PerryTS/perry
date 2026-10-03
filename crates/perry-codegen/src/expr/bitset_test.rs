@@ -159,8 +159,9 @@ pub(super) fn try_lower_u32_bitset_test(
             &crate::nanbox::i64_literal(crate::nanbox::TAG_MASK),
         );
         let is_pointer = blk.icmp_eq(I64, &tag, crate::nanbox::POINTER_TAG_I64);
-        let view_guard = blk.load(I64, "@PERRY_TA_VIEW_GUARD");
-        let owns_inline_storage = blk.icmp_eq(I64, &view_guard, "0");
+        // #10516: the kind-cache tag carries the receiver's storage: an
+        // external-storage typed array (a view) caches `kind | 0x80`, so the
+        // kind compare below rejects it. No process-wide view count.
         let slot = blk.lshr(I64, &raw, "3");
         let slot = blk.and(I64, &slot, "63");
         let cache_ptr = blk.gep(
@@ -175,8 +176,7 @@ pub(super) fn try_lower_u32_bitset_test(
         // Numeric typed-array kind 5 is Uint32Array. Other kinds retain the
         // canonical property read and ToNumeric behavior in the slow arm.
         let is_uint32 = blk.icmp_eq(I64, &kind, "5");
-        let guard = blk.and(I1, &is_pointer, &owns_inline_storage);
-        let guard = blk.and(I1, &guard, &address_matches);
+        let guard = blk.and(I1, &is_pointer, &address_matches);
         let guard = blk.and(I1, &guard, &is_uint32);
         blk.cond_br(&guard, &header_label, &slow_label);
         raw

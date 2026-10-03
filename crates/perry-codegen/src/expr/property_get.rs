@@ -92,8 +92,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     // the buffer, and neither direction aliased: the repro summed 0 instead of
     // 10, and writing through `bytes` was equally invisible to `words`.
     //
-    // The runtime side already guards its own inline reader with
-    // `PERRY_TA_VIEW_GUARD`, which `register_view_meta` bumps. These tiers are
+    // The runtime side already guards its own inline reader with the typed
+    // array's storage byte, which `register_view_meta` sets. These tiers are
     // the compile-time proof that skips that check entirely, so the hazard has
     // to be recorded where the alias is created rather than where it is used.
     // `MutableAlias` is exactly what this is.
@@ -556,17 +556,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // An owning `TypedArrayHeader` also stores `length: u32` at payload
             // offset 0. The slow path used to resolve it by NAME — heap-copying
             // "length" and parsing it as a numeric index on every read. The
-            // header is authoritative while no live view exists
-            // (`PERRY_TA_VIEW_GUARD`) and no typed array has an own named
-            // property that could shadow the prototype getter.
+            // header is authoritative for a typed array whose own storage byte
+            // says inline (#10516: header byte 10, `TA_STORAGE_INLINE`) while
+            // no typed array has an own named property that could shadow the
+            // prototype getter.
             ctx.current_block = typed_array_idx;
             let is_typed_array = ctx.block().icmp_eq(I8, &gc_type, "11"); // GC_TYPE_TYPED_ARRAY
             let ta_header_ok = ctx.block().and(I1, &is_typed_array, &not_forwarded);
-            let view_guard = ctx.block().load(I64, "@PERRY_TA_VIEW_GUARD");
-            let no_views = ctx.block().icmp_eq(I64, &view_guard, "0");
+            let storage_addr = ctx.block().add(I64, &recv_handle, "10");
+            let storage_ptr = ctx.block().inttoptr(I64, &storage_addr);
+            let storage = ctx.block().load(I8, &storage_ptr);
+            let inline_storage = ctx.block().icmp_eq(I8, &storage, "0");
             let own_props = ctx.block().load(I8, "@PERRY_TA_OWN_PROPS_PRESENT");
             let no_own_props = ctx.block().icmp_eq(I8, &own_props, "0");
-            let ta_ok = ctx.block().and(I1, &ta_header_ok, &no_views);
+            let ta_ok = ctx.block().and(I1, &ta_header_ok, &inline_storage);
             let ta_ok = ctx.block().and(I1, &ta_ok, &no_own_props);
             ctx.block().cond_br(&ta_ok, &fast_label, &slow_label);
 

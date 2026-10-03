@@ -248,8 +248,8 @@ pub(crate) fn zero_views_of_detached_backing(backing: usize) {
 /// stays oblivious to resizing. Growing past the construction-time element
 /// count is memory-safe: a registered view's `data_ptr` resolves into the
 /// backing (which reserves `maxByteLength`), never into the header's inline
-/// region, and the codegen inline tiers are barred while any view exists
-/// (`PERRY_TA_VIEW_GUARD`).
+/// region, and the codegen inline tiers refuse it on its own storage byte
+/// (`TA_STORAGE_EXTERNAL`, #10516).
 pub(crate) fn relength_views_of_resized_backing(backing: usize, buffer_len: u32) {
     if !any_view_meta() {
         return;
@@ -310,6 +310,10 @@ fn is_view_out_of_bounds(ta: usize) -> bool {
 /// `data_ptr(ta)` resolves into the backing store rather than `ta`'s inline
 /// region, so reads/writes are shared with the buffer and every other view.
 pub(crate) fn register_view_meta(ta: *const TypedArrayHeader, backing: usize, byte_offset: u32) {
+    // The header itself now says its elements live in `backing` (#10516):
+    // every inline element path checks that byte (or the kind-cache tag
+    // derived from it) instead of a process-wide count of live views.
+    crate::typedarray::note_external_storage(ta as *mut TypedArrayHeader);
     TYPED_ARRAY_VIEW_META.with(|r| {
         let prev = r.borrow_mut().insert(
             ta as usize,
@@ -326,10 +330,6 @@ pub(crate) fn register_view_meta(ta: *const TypedArrayHeader, backing: usize, by
         );
         if prev.is_none() {
             VIEW_META_COUNT.fetch_add(1, Ordering::Relaxed);
-            // #5525 follow-up: this typed array now aliases an ArrayBuffer, so
-            // its element-0 pointer no longer follows the header inline — bar
-            // the codegen inline element fast path until it's gone.
-            crate::typedarray::ta_view_guard_inc();
         }
     });
 }
@@ -387,7 +387,6 @@ pub(crate) fn clear_view_meta(addr: usize) {
     TYPED_ARRAY_VIEW_META.with(|r| {
         if r.borrow_mut().remove(&addr).is_some() {
             VIEW_META_COUNT.fetch_sub(1, Ordering::Relaxed);
-            crate::typedarray::ta_view_guard_dec();
         }
     });
 }

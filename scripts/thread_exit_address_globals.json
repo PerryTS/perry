@@ -1538,14 +1538,6 @@
   {
    "file": "crates/perry-runtime/src/typedarray/mod.rs",
    "names": [
-    "PERRY_TA_VIEW_GUARD"
-   ],
-   "verdict": "no_heap_address",
-   "why": "#[no_mangle] count of live non-owning typed-array views, inc/dec by the view register/unregister paths; a counter (a worker exiting with views live only leaves it high, which disables the inline fast path, never makes it unsound)."
-  },
-  {
-   "file": "crates/perry-runtime/src/typedarray/mod.rs",
-   "names": [
     "TYPED_ARRAY_ADDR_WINDOW"
    ],
    "verdict": "conservative_filter",

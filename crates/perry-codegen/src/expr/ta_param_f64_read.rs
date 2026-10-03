@@ -218,7 +218,7 @@ pub(crate) fn try_lower_ta_f64_read_for_number_context(
 
 /// Emit the checked inline f64 element load. Same runtime-fact guard and header
 /// bounds check as [`super::i32_fast_path`]'s `lower_checked_typed_array_i32_load`
-/// (pointer + inline-storage `PERRY_TA_VIEW_GUARD == 0` + kind-cache addr/kind),
+/// (pointer + kind-cache addr/kind, whose tag also says inline storage),
 /// but the load arm widens the element to f64, the OOB arm merges in the
 /// `TAG_UNDEFINED` double, and guard misses defer to `js_typed_array_read_f64`.
 #[allow(clippy::too_many_arguments)]
@@ -255,8 +255,9 @@ fn lower_checked_typed_array_f64_load(
         let raw = blk.and(I64, &obj_bits, crate::nanbox::POINTER_MASK_I64);
         let tagged = blk.and(I64, &obj_bits, &tag_mask);
         let is_ptr = blk.icmp_eq(I64, &tagged, crate::nanbox::POINTER_TAG_I64);
-        let vg = blk.load(I64, "@PERRY_TA_VIEW_GUARD");
-        let vg_zero = blk.icmp_eq(I64, &vg, "0");
+        // #10516: the kind-cache tag carries the receiver's storage: an
+        // external-storage typed array (a view) caches `kind | 0x80`, so the
+        // kind compare below rejects it. No process-wide view count.
         let slot = blk.lshr(I64, &raw, "3");
         let slot = blk.and(I64, &slot, "63");
         let entry_ptr = blk.gep(
@@ -269,8 +270,7 @@ fn lower_checked_typed_array_f64_load(
         let addr_match = blk.icmp_eq(I64, &entry_addr, &raw); // also rejects empty slot 0
         let kind_bits = blk.and(I64, &entry_val, "255");
         let kind_ok = blk.icmp_eq(I64, &kind_bits, &kind.to_string());
-        let g = blk.and(I1, &is_ptr, &vg_zero);
-        let g = blk.and(I1, &g, &addr_match);
+        let g = blk.and(I1, &is_ptr, &addr_match);
         let g = blk.and(I1, &g, &kind_ok);
         blk.cond_br(&g, &chk_label, &slow_label);
         raw
