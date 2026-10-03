@@ -1,0 +1,240 @@
+{
+ "finished": "2026-10-01T13:51:20+0000",
+ "host": "ideal-mastodon",
+ "load_threshold": 8.0,
+ "machine": "x86_64",
+ "modes": [
+  "instr",
+  "rss"
+ ],
+ "ncpu": 16,
+ "perry_bin_dir": "/root/codex-11726-results/final-bins",
+ "perry_commit": "ca77316359",
+ "platform": "Linux-6.17.0-23-generic-x86_64-with-glibc2.39",
+ "schema": 1,
+ "servers": {
+  "mongo": "ok"
+ },
+ "started": "2026-10-01T13:49:30+0000",
+ "toolchain": {
+  "bun": "/root/.bun/bin/bun",
+  "bun_version": "1.4.2",
+  "node": "/opt/node-v26.5.1-linux-x64/bin/node",
+  "node_version": "26.5.1",
+  "version_problems": []
+ },
+ "workloads": {
+  "control/bare_loop": {
+   "arms": {
+    "node": {
+     "correctness_output": "control/bare_loop @- n=2000000 warm=1000\nchecksum 84a22c45",
+     "instr": {
+      "n1": [
+       491628101,
+       489503612,
+       492401798
+      ],
+      "n2": [
+       840576294,
+       838413106,
+       839523640
+      ],
+      "per_iter": 57.982589833333336
+     },
+     "load_flagged": true,
+     "load_max": 13.92,
+     "load_mean": 13.92,
+     "peak_rss_kb": 73880,
+     "status": "OK",
+     "timeout_s": 120
+    },
+    "perry": {
+     "compile_s": 1.25,
+     "correctness_output": "control/bare_loop @- n=2000000 warm=1000\nchecksum 84a22c45",
+     "instr": {
+      "n1": [
+       53377333,
+       53376796,
+       53376642
+      ],
+      "n2": [
+       209375431,
+       209376620,
+       209376768
+      ],
+      "per_iter": 25.999970666666666
+     },
+     "load_flagged": true,
+     "load_max": 13.92,
+     "load_mean": 13.92,
+     "peak_rss_kb": 29256,
+     "size_bytes": 22493936,
+     "status": "OK",
+     "timeout_s": 120
+    }
+   },
+   "n1": 2000000,
+   "n2": 8000000,
+   "warm": 1000
+  },
+  "control/prop_read": {
+   "arms": {
+    "node": {
+     "correctness_output": "control/prop_read @- n=500000 warm=1000\nchecksum d9dbf305",
+     "instr": {
+      "n1": [
+       414868368,
+       417532236,
+       419314883
+      ],
+      "n2": [
+       503172001,
+       496357258,
+       498328591
+      ],
+      "per_iter": 53.86423666666666
+     },
+     "load_flagged": true,
+     "load_max": 13.92,
+     "load_mean": 13.92,
+     "peak_rss_kb": 73760,
+     "status": "OK",
+     "timeout_s": 120
+    },
+    "perry": {
+     "compile_s": 1.2,
+     "correctness_output": "control/prop_read @- n=500000 warm=1000\nchecksum d9dbf305",
+     "instr": {
+      "n1": [
+       66513601,
+       66513647,
+       66513747
+      ],
+      "n2": [
+       261514681,
+       261515758,
+       261513688
+      ],
+      "per_iter": 130.00068933333333
+     },
+     "load_flagged": true,
+     "load_max": 13.92,
+     "load_mean": 13.92,
+     "peak_rss_kb": 29312,
+     "size_bytes": 22498536,
+     "status": "OK",
+     "timeout_s": 120
+    }
+   },
+   "n1": 500000,
+   "n2": 2000000,
+   "warm": 1000
+  },
+  "mongodb/batch_query": {
+   "arms": {
+    "node": {
+     "correctness_output": "mongodb/batch_query mongodb@7.6.0 n=125 warm=50\nchecksum 98345e44",
+     "instr": {
+      "n1": [
+       1715314683,
+       1705931202,
+       1699945928
+      ],
+      "n2": [
+       2690605346,
+       2680367914,
+       2690550657
+      ],
+      "per_iter": 2625651.88
+     },
+     "load_flagged": true,
+     "load_max": 10.54,
+     "load_mean": 10.46,
+     "peak_rss_kb": 115176,
+     "status": "OK",
+     "timeout_s": 120
+    },
+    "perry": {
+     "compile_s": 75.98,
+     "correctness_output": "mongodb/batch_query mongodb@7.6.0 n=125 warm=50\nchecksum 98345e44",
+     "instr": {
+      "n1": [
+       14519379816,
+       14502943032,
+       14521277268
+      ],
+      "n2": [
+       44774547328,
+       44765103270,
+       44746828335
+      ],
+      "per_iter": 80655262.544
+     },
+     "load_flagged": true,
+     "load_max": 10.02,
+     "load_mean": 9.55,
+     "peak_rss_kb": 178340,
+     "size_bytes": 75830856,
+     "status": "OK",
+     "timeout_s": 120
+    }
+   },
+   "n1": 125,
+   "n2": 500,
+   "warm": 50
+  },
+  "mongodb/insert_find": {
+   "arms": {
+    "node": {
+     "correctness_output": "mongodb/insert_find mongodb@7.6.0 n=500 warm=200\nchecksum 57050a96",
+     "instr": {
+      "n1": [
+       1938843485,
+       1940862265,
+       1938908108
+      ],
+      "n2": [
+       3232898894,
+       3245368481,
+       3240673633
+      ],
+      "per_iter": 867843.6833333333
+     },
+     "load_flagged": true,
+     "load_max": 14.09,
+     "load_mean": 14.07,
+     "peak_rss_kb": 118476,
+     "status": "OK",
+     "timeout_s": 120
+    },
+    "perry": {
+     "compile_s": 289.75,
+     "correctness_output": "mongodb/insert_find mongodb@7.6.0 n=500 warm=200\nchecksum 57050a96",
+     "instr": {
+      "n1": [
+       26407041112,
+       26472757674,
+       26440582930
+      ],
+      "n2": [
+       82509536999,
+       82469520675,
+       82380020423
+      ],
+      "per_iter": 37352625.163333334
+     },
+     "load_flagged": true,
+     "load_max": 14.09,
+     "load_mean": 13.44,
+     "peak_rss_kb": 210400,
+     "size_bytes": 75821136,
+     "status": "OK",
+     "timeout_s": 120
+    }
+   },
+   "n1": 500,
+   "n2": 2000,
+   "warm": 200
+  }
+ }
+}
