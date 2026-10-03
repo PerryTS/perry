@@ -1058,3 +1058,15 @@ Pinned comparator revisions rechecked unchanged at17:36Z; the seven-case
 Perry/ScriptC/Porffor/Static Hermes RSS join is published with compiler failures
 left unranked. Current normal application coverage is complete; resolving
 remaining instruction costs and deeper arena residency work remain open.
+
+PROFILE QUEUE STATUS (2026-10-03 17:48Z)
+The 228 application measurements are finished and independently verified.
+The separate eight-run request/Zod profile job is queued under the shared
+measurement lock, owned wrapper3982721/flock3982722. Another lane's Prettier
+compiler (3978379, /root/bunaot/prettier/target/release/perry) holds the lock.
+It is not our process and is not stopped. No profile result is claimed yet.
+All qb6 current binaries/logs/source inputs are copied and verified locally;
+no remaining measurement depends on the rental host.
+Private callback-capture source is independently verified against4994tracked
+Rust/Cargo inputs, differing only in trace.rs. The21copied own generated/cache
+entries are excluded from source attestation. Probe remains unapplied.
