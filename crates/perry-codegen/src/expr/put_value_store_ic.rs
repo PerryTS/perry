@@ -211,6 +211,12 @@ fn straight_line_site_outlined(ctx: &FnCtx<'_>) -> bool {
 ///
 /// A nullish receiver fails the receiver test, and the miss entry's `[[Set]]`
 /// throws its TypeError, so the hit path pays nothing for it.
+///
+/// `value_may_be_closure` is false when the stored value's expression can
+/// never evaluate to a closure ([`value_never_closure`]): a ConstFn lane then
+/// admits nothing it could store, so its admission arms are not emitted and a
+/// flagged lane takes the miss, exactly as a failed admission would.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn emit_static_store_ic(
     ctx: &mut FnCtx<'_>,
     obj_box: &str,
@@ -218,6 +224,7 @@ pub(crate) fn emit_static_store_ic(
     value_double: &str,
     value_bits: &str,
     strict: bool,
+    value_may_be_closure: bool,
 ) -> String {
     let key_idx = ctx.strings.intern(property);
     let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
@@ -485,15 +492,19 @@ pub(crate) fn emit_static_store_ic(
     let f64_slot = ctx.block().icmp_slt(I64, &word, "0");
     let f64_idx = ctx.new_block(&format!("{STORE_IC_STEM}.hit.f64"));
     let f64_label = ctx.block_label(f64_idx);
-    let constfn_idx = ctx.new_block(&format!("{STORE_IC_STEM}.hit.constfn"));
-    let constfn_label = ctx.block_label(constfn_idx);
-    ctx.block().cond_br(&f64_slot, &f64_label, &constfn_label);
+    if value_may_be_closure {
+        let constfn_idx = ctx.new_block(&format!("{STORE_IC_STEM}.hit.constfn"));
+        let constfn_label = ctx.block_label(constfn_idx);
+        ctx.block().cond_br(&f64_slot, &f64_label, &constfn_label);
+        ctx.current_block = constfn_idx;
+        emit_constfn_value_check(ctx, &packed_ref, value_bits, &store_label, &miss_label);
+    } else {
+        ctx.block().cond_br(&f64_slot, &f64_label, &miss_label);
+    }
     ctx.current_block = f64_idx;
     let exponent = ctx.block().and(I64, value_bits, F64_EXP_MASK);
     let boxed = ctx.block().icmp_eq(I64, &exponent, F64_EXP_MASK);
     ctx.block().cond_br(&boxed, &miss_label, &store_label);
-    ctx.current_block = constfn_idx;
-    emit_constfn_value_check(ctx, &packed_ref, value_bits, &store_label, &miss_label);
 
     // The store, then the GC's obligations for the bits actually stored.
     ctx.current_block = store_idx;
@@ -536,6 +547,7 @@ pub(crate) fn emit_static_store_ic(
         value_bits,
         &miss_label,
         &merge_label,
+        value_may_be_closure,
     );
 
     ctx.current_block = miss_idx;
@@ -612,6 +624,7 @@ fn emit_key_add_hit(
     value_bits: &str,
     miss_label: &str,
     merge_label: &str,
+    value_may_be_closure: bool,
 ) -> String {
     let rep_idx = ctx.new_block(&format!("{ADD_STEM}.rep"));
     let obj_idx = ctx.new_block(&format!("{ADD_STEM}.object"));
@@ -652,15 +665,19 @@ fn emit_key_add_hit(
     let f64_slot = ctx.block().icmp_eq(I64, &flags, &ADD_F64_SLOT.to_string());
     let f64_idx = ctx.new_block(&format!("{ADD_STEM}.f64"));
     let f64_label = ctx.block_label(f64_idx);
-    let constfn_idx = ctx.new_block(&format!("{ADD_STEM}.constfn"));
-    let constfn_label = ctx.block_label(constfn_idx);
-    ctx.block().cond_br(&f64_slot, &f64_label, &constfn_label);
+    if value_may_be_closure {
+        let constfn_idx = ctx.new_block(&format!("{ADD_STEM}.constfn"));
+        let constfn_label = ctx.block_label(constfn_idx);
+        ctx.block().cond_br(&f64_slot, &f64_label, &constfn_label);
+        ctx.current_block = constfn_idx;
+        emit_constfn_value_check(ctx, packed_ref, value_bits, &obj_label, miss_label);
+    } else {
+        ctx.block().cond_br(&f64_slot, &f64_label, miss_label);
+    }
     ctx.current_block = f64_idx;
     let exponent = ctx.block().and(I64, value_bits, F64_EXP_MASK);
     let boxed = ctx.block().icmp_eq(I64, &exponent, F64_EXP_MASK);
     ctx.block().cond_br(&boxed, miss_label, &obj_label);
-    ctx.current_block = constfn_idx;
-    emit_constfn_value_check(ctx, packed_ref, value_bits, &obj_label, miss_label);
 
     // The GcHeader's first word (obj_type | gc_flags << 8 | _reserved << 16).
     // No receiver-kind admission: the memo's pre-shape is an `Ordinary` shape
@@ -982,4 +999,41 @@ fn emit_key_handle(ctx: &mut FnCtx<'_>, key_handle_global: &str) -> String {
     let key_box = blk.load(DOUBLE, key_handle_global);
     let key_bits = blk.bitcast_double_to_i64(&key_box);
     blk.and(I64, &key_bits, crate::nanbox::POINTER_MASK_I64)
+}
+
+/// Can `value` never evaluate to a closure? Literals, operators whose result
+/// is a primitive, fresh object and array literals, and a conditional or
+/// logical expression all of whose possible results are such values. Anything
+/// else (a read, a call, `new`, a function expression) may be one.
+pub(crate) fn value_never_closure(value: &perry_hir::Expr) -> bool {
+    use perry_hir::Expr;
+    match value {
+        Expr::Undefined
+        | Expr::Null
+        | Expr::Bool(_)
+        | Expr::Number(_)
+        | Expr::Integer(_)
+        | Expr::BigInt(_)
+        | Expr::String(_)
+        | Expr::WtfString(_)
+        | Expr::Binary { .. }
+        | Expr::Unary { .. }
+        | Expr::Compare { .. }
+        | Expr::Update { .. }
+        | Expr::TypeOf(_)
+        | Expr::Void(_)
+        | Expr::InstanceOf { .. }
+        | Expr::In { .. }
+        | Expr::Object(_)
+        | Expr::Array(_) => true,
+        Expr::Logical { left, right, .. } => {
+            value_never_closure(left) && value_never_closure(right)
+        }
+        Expr::Conditional {
+            then_expr,
+            else_expr,
+            ..
+        } => value_never_closure(then_expr) && value_never_closure(else_expr),
+        _ => false,
+    }
 }
