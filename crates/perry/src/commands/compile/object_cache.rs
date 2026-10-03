@@ -887,6 +887,16 @@ fn compute_object_cache_key_with_env(
         h.field("short_spread_method_candidates", &value);
     }
 
+    // #10498: other modules' class accessors decide which of this module's
+    // sites carry an accessor arm.
+    h.field(
+        "program_class_accessor_names",
+        &opts
+            .program_class_accessor_names
+            .as_deref()
+            .map_or_else(|| "*".to_string(), |names| names.cache_key()),
+    );
+
     // #8775 reverse-flow object candidates likewise affect modules that do
     // not import the producer and therefore are not covered by the imported
     // class/object fingerprint above.

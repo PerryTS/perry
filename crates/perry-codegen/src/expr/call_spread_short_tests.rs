@@ -128,6 +128,7 @@ fn emit_reverse_dependency_consumer() -> String {
     let opts = crate::CompileOptions {
         emit_ir_only: true,
         short_spread_method_candidates: std::sync::Arc::new(by_method),
+        program_class_accessor_names: Default::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         ..Default::default()
     };

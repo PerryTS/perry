@@ -313,8 +313,11 @@ pub(crate) fn emit_static_store_ic(
     // #10498: a store to a key the receiver inherits as a compiled class
     // setter calls it inline (`setter_arm`), ahead of the key-add memo and the
     // ways. 64-bit targets only: the entry is a record of 8-byte words.
-    let setter_entry = setter_arm_target(ctx.target_triple)
-        .then(|| ctx.new_block(&format!("{STORE_IC_STEM}.acc")));
+    // Only for a name some compiled class of the program declares as a setter:
+    // no other site can ever take an entry.
+    let setter_entry = (setter_arm_target(ctx.target_triple)
+        && ctx.program_may_declare_setter(property))
+    .then(|| ctx.new_block(&format!("{STORE_IC_STEM}.acc")));
     let shape_miss = setter_entry
         .map(|idx| ctx.block_label(idx))
         .unwrap_or_else(|| add_label.clone());
