@@ -198,6 +198,19 @@ pub struct ObjectMeta {
     ///
     /// Placed before `native_state` for the same reason as `proto_serial`.
     pub arguments: u64,
+    /// #10507: the birth record of the objects `new F()` creates while this
+    /// object is `F.prototype` — 0 until the first such construction. The low
+    /// half is the class id those objects carry (the minting function's
+    /// synthetic class); the high half is their birth ShapeId (no keys, this
+    /// object's serial as `proto_id`), the one the class-default link leaves.
+    /// Both are facts of THIS object, so a construction reaches them from
+    /// `F.prototype` with two loads. Cleared when that class's registered
+    /// prototype moves to another object.
+    ///
+    /// POD, never a heap edge.
+    ///
+    /// Placed before `native_state` for the same reason as `proto_serial`.
+    pub instance_birth: u64,
     /// #340/#341 honest tags: packed state for a runtime class whose instances
     /// are ORDINARY objects rather than small registry handles
     /// (`TextEncoder` / `TextDecoder` today; the other twelve families follow).

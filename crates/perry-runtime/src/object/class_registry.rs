@@ -49,6 +49,7 @@ mod construct;
 #[cfg(feature = "regex-engine")]
 pub(crate) use construct::construct_two_rooted;
 pub(crate) use construct::{construct_rooted_arguments, scan_current_new_target_root_mut};
+pub(crate) use construct::{ordinary_compiled_function_has_instance, OrdinaryInstanceof};
 mod decl_accessors;
 pub(crate) use decl_accessors::{
     class_chain_getter_value, class_chain_setter_apply, decl_prototype_own_accessor,
@@ -164,10 +165,10 @@ pub use prototype_methods::{
 
 // ── construct.rs / vm_brand.rs ──────────────────────────────────────────────
 pub(crate) use construct::{
-    extends_target_must_throw, is_callable_function_value, js_value_is_constructor,
-    lookup_own_prototype_method, lookup_prototype_method, nm_ctor_child_process, nm_ctor_cluster,
-    nm_ctor_fs, nm_ctor_readline, nm_ctor_repl, nm_ctor_stream, nm_ctor_tls, nm_ctor_tty,
-    nm_ctor_vm, nm_ctor_wasi, promise_parent_in_chain,
+    bound_function_target_value, extends_target_must_throw, is_callable_function_value,
+    js_value_is_constructor, lookup_own_prototype_method, lookup_prototype_method,
+    nm_ctor_child_process, nm_ctor_cluster, nm_ctor_fs, nm_ctor_readline, nm_ctor_repl,
+    nm_ctor_stream, nm_ctor_tls, nm_ctor_tty, nm_ctor_vm, nm_ctor_wasi, promise_parent_in_chain,
 };
 pub use construct::{
     js_ctor_return_override, js_new_function_construct, js_new_function_construct_apply,

@@ -732,6 +732,12 @@ pub(crate) fn class_prototype_object_root_store(class_id: u32, proto_ptr: *mut O
         }
         guard.as_mut().unwrap().insert(class_id, proto_ptr as usize)
     });
+    if let Some(old) = old.filter(|&old| old != 0 && old != proto_ptr as usize) {
+        // SAFETY: the registry held `old` as a live root until this store.
+        unsafe {
+            super::construct::forget_birth_record_of_class(old as *mut ObjectHeader, class_id)
+        };
+    }
     class_prototype_object_addr_index_rekey(old.unwrap_or(0), proto_ptr as usize);
     crate::gc::runtime_write_barrier_root_raw_ptr(proto_ptr);
     // A materialized prototype object can carry arbitrary later-added
