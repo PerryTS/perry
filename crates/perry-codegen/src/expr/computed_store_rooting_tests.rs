@@ -410,21 +410,23 @@ fn typed_array_runtime_key_store_roots_operands_only_when_rhs_collects() {
     };
     let collecting = compile("ta_runtime_store_collecting", allocating_value());
     let inert = compile("ta_runtime_store_inert", inert_value());
-    let callee = "@js_typed_array_index_set_dynamic(";
+    // The runtime-key store takes the guarded inline typed-array arm, whose
+    // single out-of-line exit is the complete dynamic `[[Set]]`.
+    let callee = "@js_dyn_index_set_strict(";
     assert!(
         collecting.contains(callee) && inert.contains(callee),
         "both fixtures must reach the typed-array runtime-key store arm:\n{collecting}\n{inert}"
     );
     assert_call_operand_rooted_across_operand(
         &collecting,
-        "js_typed_array_index_set_dynamic",
+        "js_dyn_index_set_strict",
         0,
         2,
         "the typed-array receiver",
     );
     assert_call_operand_rooted_across_operand(
         &collecting,
-        "js_typed_array_index_set_dynamic",
+        "js_dyn_index_set_strict",
         1,
         2,
         "the typed-array property key",

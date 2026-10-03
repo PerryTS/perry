@@ -880,6 +880,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 {
                     return Ok(v);
                 }
+                // Same proven view, a Number/BigInt/undefined key of unproven
+                // shape: one run-time index test (expr/proven_view_guarded.rs).
+                if let Some(v) = super::try_lower_proven_view_guarded_load(ctx, object, index)? {
+                    return Ok(v);
+                }
                 if typed_array_index_needs_runtime_key(ctx, object.as_ref(), index.as_ref()) {
                     if runtime_key_may_expose_typed_array_backing_buffer(index) {
                         if let Expr::LocalGet(id) = object.as_ref() {

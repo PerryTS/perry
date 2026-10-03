@@ -147,6 +147,21 @@ pub(crate) fn rebound_locals(stmts: &[Stmt]) -> HashSet<u32> {
     ids
 }
 
+/// Every local whose slot `stmts` can fill from something other than a
+/// `Stmt::Let` initialiser, a `LocalSet` right-hand side or an `Update`: a
+/// closure parameter or `catch` binding, a box pre-allocation, or a
+/// `with (o) { x = v }` fallback. A value judgment that reads only those three
+/// write forms must exclude these ids, and the enclosing function's own
+/// parameters, which `stmts` does not bind.
+pub(crate) fn non_expression_bound_locals(stmts: &[Stmt]) -> HashSet<u32> {
+    let mut scan = ModuleScan::default();
+    walk_stmts(stmts, 0, &mut scan);
+    let mut ids = scan.other_bindings;
+    ids.extend(scan.boxed_prealloc);
+    ids.extend(scan.with_fallback_writes);
+    ids
+}
+
 /// Every local reassigned in any executable body in `hir`.
 ///
 /// Closure codegen seeds receiver types from module-wide declarations, so it
@@ -238,6 +253,10 @@ struct ModuleScan {
     /// single-`Let`-plus-no-writes id can still have held the caller's argument
     /// before that `Let` ran.
     other_bindings: HashSet<u32>,
+    /// `with (o) { x = v }` fallback targets. The local receives `v` through a
+    /// `WithSetFallback`, never through a `LocalSet` right-hand side, so a
+    /// value judgment over `Let` initialisers and `LocalSet`s cannot see it.
+    with_fallback_writes: HashSet<u32>,
 }
 
 fn record_expr_use(e: &Expr, depth: u32, scan: &mut ModuleScan) {
@@ -301,6 +320,7 @@ fn record_expr_use(e: &Expr, depth: u32, scan: &mut ModuleScan) {
             | perry_hir::WithSetFallback::SloppyImplicit(id) = fallback
             {
                 scan.writes.insert(*id);
+                scan.with_fallback_writes.insert(*id);
                 if depth > 0 {
                     scan.closure_refs.insert(*id);
                 }

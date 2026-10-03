@@ -113,6 +113,7 @@ mod pod_layout_constants;
 mod pod_record;
 mod property_get_names;
 mod proven_view_access;
+mod proven_view_guarded;
 mod range_facts;
 mod strings;
 mod typed_feedback;
@@ -175,6 +176,9 @@ pub(crate) use proven_view_access::{
     try_lower_proven_view_checked_f64_load, try_lower_proven_view_checked_store,
     try_lower_proven_view_checked_u32_load,
 };
+pub(crate) use proven_view_guarded::{
+    try_lower_proven_view_guarded_load, try_lower_proven_view_guarded_store,
+};
 pub(crate) use range_facts::{
     bounds_for_buffer_access_width, effective_alias_state_for_access,
     guarded_buffer_indices_for_condition, int_range_expr, invalidate_local_write_facts,
@@ -231,6 +235,8 @@ mod hit_path_access_tests;
 mod index_set_barrier_tests;
 #[cfg(test)]
 mod instanceof_imported_rhs_tests;
+#[cfg(test)]
+mod proven_view_guarded_tests;
 mod record_value;
 #[cfg(test)]
 mod region_array_loop_tests;

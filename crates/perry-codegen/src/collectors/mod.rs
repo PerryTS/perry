@@ -31,6 +31,7 @@ mod loop_bounded_i32;
 mod mutation;
 mod not_bigint_locals;
 mod number_by_construction;
+pub(crate) mod numeric_key_locals;
 mod object_create_proto;
 mod object_literal_exports;
 mod param_ranges;
