@@ -571,7 +571,7 @@ unsafe fn remember_retained_old_to_young_slots(
     if !barrier_parent_needs_remembering(user_ptr as usize, true) {
         return;
     }
-    visit_gc_rewrite_slots_inline(header, |slot| unsafe {
+    visit_gc_rewrite_slots(header, |slot| unsafe {
         if crate::weakref::is_weak_target_trace_slot(header, slot.slot) {
             return;
         }
