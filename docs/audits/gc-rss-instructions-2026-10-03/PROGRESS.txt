@@ -1,3 +1,12 @@
+MAIN07 MAC RUNTIME AND REQUIRED CHECKS VERIFIED (2026-10-03 23:22Z)
+Mac4876/0/5, no filtered cases, selected5010sources match before/after.
+New hidden-key marking/rewriting/registration and declared-prototype birth
+subjects all present and green. Explicit pinned nightly2026-08-20.
+Address1858files/307allowlist/484held passes; file-size allRust<=2000passes;
+Node26.5.1consistency passes; registration260Rustmodules allregistered.
+Original wrong-toolchain compile failure stays in proof with exact rawhash.
+Linux runtime/app/moving followups remain queued, not claimed complete.
+
 LATEST MAIN REBASE / CURRENT VALIDATION (2026-10-03 23:16Z)
 Production cleanly rebased onto main07e50b14a3 (class/prototype and rooting
 fixes). All22authored GC/arena file hashes equal the earlier6c proposal;
