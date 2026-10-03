@@ -10,10 +10,7 @@ diff --git a/crates/perry-runtime/src/arena/block/reuse_window_tests.rs b/crates
 index cf49a57e52..8a78ba492c 100644
 --- a/crates/perry-runtime/src/arena/block/reuse_window_tests.rs
 +++ b/crates/perry-runtime/src/arena/block/reuse_window_tests.rs
-@@ -40,6 +40,64 @@ unsafe fn resident_pages(raw: *mut u8, size: usize) -> usize {
-     pages.iter().filter(|&&p| p & 1 != 0).count()
- }
- 
+@@ -42,0 +43,58 @@ unsafe fn resident_pages(raw: *mut u8, size: usize) -> usize {
 +#[cfg(target_os = "linux")]
 +#[test]
 +fn idle_eden_pages_leave_rss_without_releasing_recent_or_reused_blocks() {
@@ -72,6 +69,3 @@ index cf49a57e52..8a78ba492c 100644
 +    });
 +}
 +
- #[cfg(target_os = "linux")]
- #[test]
- fn real_collection_publication_keeps_warm_pages_and_releases_unused_pages() {
