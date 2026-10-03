@@ -227,6 +227,33 @@ fn method_inline_probe_enabled() -> bool {
     })
 }
 
+/// `i1`: no prototype surgery has retired direct-method arms for the name
+/// whose guard slot is `method_guard_slot` (the low 16 bits of its dispatch
+/// hash) — neither the all-names byte nor that name's byte is set.
+///
+/// A compiler-resolved method body for an INHERITED name (the dispatch tower,
+/// `super.m()`) assumes the declared `extends` chain is the instance chain.
+/// Assigning, deleting or redefining a prototype member, or relinking a class
+/// prototype (`Object.setPrototypeOf(C.prototype, X)`), sets these bytes
+/// (`perry-runtime` `class_registry/prototype_methods.rs`); a set byte sends
+/// the site to its runtime dispatch.
+pub(crate) fn emit_prototype_method_guard_ok(
+    blk: &mut crate::block::LlBlock,
+    method_guard_slot: &str,
+) -> String {
+    let invalidated =
+        blk.load_atomic_acquire(I8, "@PERRY_CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED", 1);
+    let all_methods_ok = blk.icmp_eq(I8, &invalidated, "0");
+    let method_slot_ptr = blk.gep(
+        I8,
+        "@PERRY_CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED_BY_METHOD",
+        &[(I64, method_guard_slot)],
+    );
+    let method_invalidated = blk.load_atomic_acquire(I8, &method_slot_ptr, 1);
+    let method_ok = blk.icmp_eq(I8, &method_invalidated, "0");
+    blk.and(I1, &all_methods_ok, &method_ok)
+}
+
 pub(crate) fn emit_inline_direct_method_shape_guard(
     ctx: &mut FnCtx<'_>,
     recv_box: &str,
