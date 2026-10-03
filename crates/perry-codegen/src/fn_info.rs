@@ -26,8 +26,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::runtime_abi::{
     FN_ARROW, FN_ASYNC, FN_ASYNC_GENERATOR, FN_COMPILED_BODY, FN_GENERATOR, FN_HAS_DECLARED,
-    FN_HAS_LENGTH, FN_PERMANENT_IMAGE, FN_REST_SYNTHETIC_ARGUMENTS, FN_REST_USER,
-    FN_REST_USER_AND_ARGUMENTS, FN_STRICT,
+    FN_HAS_LENGTH, FN_NON_CONSTRUCTOR, FN_PERMANENT_IMAGE, FN_REST_SYNTHETIC_ARGUMENTS,
+    FN_REST_USER, FN_REST_USER_AND_ARGUMENTS, FN_STRICT,
 };
 
 /// The LLVM type of a `JsFunctionInfo`, field for field (perry-abi's
@@ -106,6 +106,11 @@ impl FnInfoFacts {
 
     pub(crate) fn set_strict(&mut self) {
         self.flags |= FN_STRICT;
+    }
+
+    /// A method: no `[[Construct]]` and no own `prototype`.
+    pub(crate) fn set_non_constructor(&mut self) {
+        self.flags |= FN_NON_CONSTRUCTOR;
     }
 
     pub(crate) fn set_async(&mut self) {

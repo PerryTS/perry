@@ -211,6 +211,7 @@ pub extern "C" fn js_object_delete_field(
                     let closure = obj as *const crate::closure::ClosureHeader;
                     if !crate::closure::closure_is_arrow(closure)
                         && !crate::closure::closure_is_bound_method(closure)
+                        && !crate::closure::closure_body_is_non_constructor(closure)
                     {
                         return 0;
                     }

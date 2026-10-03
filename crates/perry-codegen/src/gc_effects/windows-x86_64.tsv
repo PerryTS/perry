@@ -2743,6 +2743,7 @@ js_register_class_length	Reenters
 js_register_class_method	Leaf
 js_register_class_method_bind_length	Leaf
 js_register_class_method_entry	Leaf
+js_register_class_method_with_entry	Leaf
 js_register_class_name	Reenters
 js_register_class_parent	Leaf
 js_register_class_parent_dynamic	Reenters

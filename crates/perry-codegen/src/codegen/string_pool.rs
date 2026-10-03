@@ -1175,6 +1175,7 @@ pub(super) fn emit_string_pool(
         );
     }
     method_triples.sort_unstable();
+    let mut method_entries: Vec<StaticMethodEntry> = Vec::new();
     for (
         cid,
         method_name,
@@ -1197,6 +1198,29 @@ pub(super) fn emit_string_pool(
         };
         let bytes_global = format!("@{}", entry.bytes_global);
         let len_str = entry.byte_len.to_string();
+        // Every class prototype holds a function object of each method's own
+        // body, running this closure-convention entry: its JsFunctionInfo is the
+        // ConstFn fact the prototype's shape records for the method's slot. A
+        // per-evaluation template's evaluations each hold their own object, at
+        // home in that evaluation (`class_method_entry_enter_home`); a declared
+        // class's one object has no home and runs in its receiver's evaluation,
+        // exactly as a vtable call does.
+        // The entries are defined after every init chunk (below), so the
+        // init code module init runs stays contiguous: an entry runs only
+        // when its method value is called.
+        let home = fresh_cids.contains(&cid);
+        let entry_name = format!("{}__eclo", llvm_name);
+        let entry_ref = format!("@{}", entry_name);
+        method_entries.push(StaticMethodEntry {
+            cid,
+            llvm_name: llvm_name.clone(),
+            param_count,
+            spec_length,
+            has_user_rest: has_rest,
+            has_synth_args,
+            home,
+        });
+        let entry_info_ref = blk.fn_info_ref(&entry_name);
         // Cast the method function pointer to i64 via ptrtoint so the
         // runtime can store it as a `usize` in the VTABLE_REGISTRY
         // entry. The `inttoptr` round-trip in `call_vtable_method`
@@ -1204,10 +1228,16 @@ pub(super) fn emit_string_pool(
         let func_ref = format!("@{}", llvm_name);
         let func_i64 = blk.ptrtoint(&func_ref, I64);
         let bytes_i64 = blk.ptrtoint(&bytes_global, I64);
+        let entry_i64 = blk.ptrtoint(&entry_info_ref, I64);
         let has_synth_args_str = if has_synth_args { "1" } else { "0" };
         let has_rest_str = if has_rest { "1" } else { "0" };
+        // One registration per method carries its entry. A declared class's
+        // method object names its entry's code when it is first built, so the
+        // init pays nothing more per method; each evaluation of a template
+        // builds its own objects from the template, so the name is
+        // registered here.
         blk.call_void(
-            "js_register_class_method",
+            "js_register_class_method_with_entry",
             &[
                 (I64, &cid.to_string()),
                 (I64, &bytes_i64),
@@ -1216,8 +1246,15 @@ pub(super) fn emit_string_pool(
                 (I64, &param_count.to_string()),
                 (I64, has_synth_args_str),
                 (I64, has_rest_str),
+                (I64, &entry_i64),
             ],
         );
+        if home {
+            blk.call_void(
+                register_name_fn,
+                &[(PTR, &entry_ref), (PTR, &bytes_global), (I32, &len_str)],
+            );
+        }
         blk.call_void(
             "js_register_class_string_member_order",
             &[
@@ -1239,38 +1276,6 @@ pub(super) fn emit_string_pool(
                 (I64, &spec_length.to_string()),
             ],
         );
-        // A per-evaluation template's prototype holds one function object per
-        // method for each evaluation, running this entry at home in that
-        // evaluation (`class_method_entry_enter_home`).
-        if fresh_cids.contains(&cid) {
-            let (entry_ref, entry_info_ref) = emit_class_method_entry(
-                &mut chunker,
-                &StaticMethodEntry {
-                    cid,
-                    llvm_name: llvm_name.clone(),
-                    param_count,
-                    spec_length,
-                    has_user_rest: has_rest,
-                    has_synth_args,
-                    home: true,
-                },
-            );
-            let blk = chunker.current_block();
-            blk.call_void(
-                register_name_fn,
-                &[(PTR, &entry_ref), (PTR, &bytes_global), (I32, &len_str)],
-            );
-            let entry_i64 = blk.ptrtoint(&entry_info_ref, I64);
-            blk.call_void(
-                "js_register_class_method_entry",
-                &[
-                    (I64, &cid.to_string()),
-                    (I64, &bytes_i64),
-                    (I64, &len_str),
-                    (I64, &entry_i64),
-                ],
-            );
-        }
     }
     // #1788: register static methods into CLASS_STATIC_METHODS so inherited
     // static methods (subclass extends a class-expression value) resolve at
@@ -1766,6 +1771,9 @@ pub(super) fn emit_string_pool(
         }
     }
 
+    for e in &method_entries {
+        emit_class_method_entry(&mut chunker, e);
+    }
     let [literal_chunks, class_chunks] = chunker.finish();
     record_fn_info_facts(
         llmod,
@@ -1956,141 +1964,6 @@ fn record_fn_info_facts(llmod: &LlModule, module_prefix: &str, src: FnInfoFactSo
 #[path = "class_name_registration_tests.rs"]
 mod class_name_registration_tests;
 
-/// A ClassBody static method's closure-convention entry (`<body>__clo`).
-struct StaticMethodEntry {
-    cid: u32,
-    llvm_name: String,
-    param_count: u32,
-    spec_length: u32,
-    has_user_rest: bool,
-    has_synth_args: bool,
-    /// The class is a per-evaluation template: each evaluation's function
-    /// object for this method is at home in that evaluation's class object.
-    home: bool,
-}
-
-/// Define `<body>__clo(callee, this, args...)`, the code of a ClassBody static
-/// method's own function object: the call's `this` (the JS body ABI's receiver
-/// parameter) becomes the body's `this` (enter), the body runs, leave drops
-/// what enter set up. Arity, rest bundling, length and strictness are facts of
-/// the entry's own `JsFunctionInfo`, as for any function body (the caller
-/// registers the name against the code). Returns `(@<body>__clo,
-/// @<body>__clo$info)`: the code and the info a function object allocates
-/// from.
-fn emit_static_method_entry(
-    chunker: &mut InitChunker<'_>,
-    e: &StaticMethodEntry,
-) -> (String, String) {
-    use crate::fn_info::RestKind;
-    let entry_name = format!("{}__clo", e.llvm_name);
-    {
-        let n = e.param_count as usize;
-        let mut params: Vec<(crate::types::LlvmType, String)> =
-            vec![(I64, "%callee".to_string()), (I64, "%this".to_string())];
-        params.extend((0..n).map(|i| (DOUBLE, format!("%a{}", i))));
-        let f = chunker
-            .module()
-            .define_function(&entry_name, DOUBLE, params);
-        let _ = f.create_block("entry");
-        let b = f.block_mut(0).unwrap();
-        if e.home {
-            b.call_void(
-                "js_static_method_entry_enter_home",
-                &[(I32, &e.cid.to_string()), (I64, "%this"), (I64, "%callee")],
-            );
-        } else {
-            b.call_void(
-                "js_static_method_entry_enter",
-                &[(I32, &e.cid.to_string()), (I64, "%this")],
-            );
-        }
-        let arg_names: Vec<String> = (0..n).map(|i| format!("%a{}", i)).collect();
-        let call_args: Vec<(crate::types::LlvmType, &str)> =
-            arg_names.iter().map(|a| (DOUBLE, a.as_str())).collect();
-        let r = b.call(DOUBLE, &e.llvm_name, &call_args);
-        b.call_void("js_static_method_entry_leave", &[]);
-        b.ret(DOUBLE, &r);
-    }
-    let (rest, rest_kind) = match (e.has_user_rest, e.has_synth_args) {
-        (true, true) => (
-            Some(e.param_count.saturating_sub(2)),
-            Some(RestKind::UserAndArguments),
-        ),
-        (true, false) => (Some(e.param_count.saturating_sub(1)), Some(RestKind::User)),
-        (false, true) => (
-            Some(e.param_count.saturating_sub(1)),
-            Some(RestKind::SyntheticArguments),
-        ),
-        (false, false) => (None, None),
-    };
-    chunker.module().note_fn_info(&entry_name, |f| {
-        match (rest, rest_kind) {
-            (Some(fixed), Some(kind)) => f.set_rest(fixed as usize, kind),
-            _ => f.set_declared(e.param_count),
-        }
-        f.set_length(e.spec_length);
-        f.set_strict();
-    });
-    let info_ref = chunker.current_block().fn_info_ref(&entry_name);
-    (format!("@{}", entry_name), info_ref)
-}
-
-/// Define `<method>__eclo(callee, this, args...)`, the code of the function
-/// object a per-evaluation class's prototype holds for an instance method:
-/// the call's `this` is the body's receiver, and the body runs in the
-/// evaluation the function object belongs to (its home class object, the
-/// object's one capture) for its private names and captured environment.
-/// Arity, rest bundling, length and strictness are facts of the entry's own
-/// `JsFunctionInfo`. Returns `(@<method>__eclo, @<method>__eclo$info)`.
-fn emit_class_method_entry(
-    chunker: &mut InitChunker<'_>,
-    e: &StaticMethodEntry,
-) -> (String, String) {
-    use crate::fn_info::RestKind;
-    let entry_name = format!("{}__eclo", e.llvm_name);
-    {
-        let n = e.param_count as usize;
-        let mut params: Vec<(crate::types::LlvmType, String)> =
-            vec![(I64, "%callee".to_string()), (I64, "%this".to_string())];
-        params.extend((0..n).map(|i| (DOUBLE, format!("%a{}", i))));
-        let f = chunker
-            .module()
-            .define_function(&entry_name, DOUBLE, params);
-        let _ = f.create_block("entry");
-        let b = f.block_mut(0).unwrap();
-        let depth = b.call(
-            I64,
-            "js_class_method_entry_enter_home",
-            &[(I32, &e.cid.to_string()), (I64, "%this"), (I64, "%callee")],
-        );
-        let this_box = b.bitcast_i64_to_double("%this");
-        let arg_names: Vec<String> = (0..n).map(|i| format!("%a{}", i)).collect();
-        let mut call_args: Vec<(crate::types::LlvmType, &str)> = vec![(DOUBLE, this_box.as_str())];
-        call_args.extend(arg_names.iter().map(|a| (DOUBLE, a.as_str())));
-        let r = b.call(DOUBLE, &e.llvm_name, &call_args);
-        b.call_void("js_class_method_entry_leave", &[(I64, &depth)]);
-        b.ret(DOUBLE, &r);
-    }
-    let (rest, rest_kind) = match (e.has_user_rest, e.has_synth_args) {
-        (true, true) => (
-            Some(e.param_count.saturating_sub(2)),
-            Some(RestKind::UserAndArguments),
-        ),
-        (true, false) => (Some(e.param_count.saturating_sub(1)), Some(RestKind::User)),
-        (false, true) => (
-            Some(e.param_count.saturating_sub(1)),
-            Some(RestKind::SyntheticArguments),
-        ),
-        (false, false) => (None, None),
-    };
-    chunker.module().note_fn_info(&entry_name, |f| {
-        match (rest, rest_kind) {
-            (Some(fixed), Some(kind)) => f.set_rest(fixed as usize, kind),
-            _ => f.set_declared(e.param_count),
-        }
-        f.set_length(e.spec_length);
-        f.set_strict();
-    });
-    let info_ref = chunker.current_block().fn_info_ref(&entry_name);
-    (format!("@{}", entry_name), info_ref)
-}
+#[path = "method_entries.rs"]
+mod method_entries;
+use method_entries::{emit_class_method_entry, emit_static_method_entry, StaticMethodEntry};

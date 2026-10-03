@@ -3615,6 +3615,106 @@ pub(crate) unsafe fn transition_object_shape_semantics(
     id
 }
 
+/// Give `obj`'s current shape a ConstFn lane for every inline slot `claims`
+/// selects whose value is a closure of one permanent body (the store check's
+/// own test, `field_rep_store::constfn_store_info`), keeping the lanes it
+/// already has. For an object whose members were installed by a path that
+/// cannot carry a lane (a key claimed with its attributes, then stored), so
+/// that its shape names each member's body as an ordinary key-add would have.
+/// Returns whether a lane was added. Nothing happens to a dictionary, a
+/// holey or deprecated layout, or when no selected slot qualifies.
+///
+/// # Safety
+/// `obj` is a live `ObjectHeader`, or null.
+pub(crate) unsafe fn learn_object_constfn_lanes(
+    obj: *mut crate::object::ObjectHeader,
+    claims: impl Fn(u32, u64) -> bool,
+) -> bool {
+    if obj.is_null()
+        || !shape_word_is_writable(obj)
+        || crate::object::dictionary::is_dictionary(obj)
+    {
+        return false;
+    }
+    let Some(current) = object_shape_descriptor(obj) else {
+        return false;
+    };
+    if current.hole_count != 0
+        || current.deprecation_targets() != (0, 0)
+        || super::field_rep::has_deprecated(current.rep)
+    {
+        return false;
+    }
+    let base = (obj as *const u8).add(std::mem::size_of::<crate::object::ObjectHeader>());
+    let read = |slot: u32| std::ptr::read(base.add(slot as usize * 8) as *const u64);
+    let lanes = current
+        .live_inline_slot_count
+        .min(current.logical_key_count)
+        .min(super::field_rep::REP_SLOTS);
+    let mut infos: Vec<shapes_store::ConstFnSlotInfo> = Vec::new();
+    let mut added = false;
+    for slot in 0..lanes {
+        let bits = read(slot);
+        let existing = current
+            .constfn_infos()
+            .iter()
+            .find(|i| u32::from(i.slot) == slot);
+        let info = super::field_rep_store::constfn_store_info(bits);
+        match (existing, info) {
+            (Some(e), Some(info)) if e.info == info => infos.push(*e),
+            (None, Some(info))
+                if super::field_rep::slot_rep(current.rep, slot) == super::field_rep::REP_ANY
+                    && claims(slot, bits) =>
+            {
+                infos.push(shapes_store::ConstFnSlotInfo {
+                    slot: slot as u8,
+                    info,
+                });
+                added = true;
+            }
+            _ => {}
+        }
+    }
+    if !added {
+        return false;
+    }
+    // The other lanes keep their representation; every ConstFn lane is SPECIAL.
+    let mut rep = current.rep;
+    for slot in 0..lanes {
+        if super::field_rep::slot_rep(rep, slot) == super::field_rep::REP_SPECIAL {
+            rep = super::field_rep::with_slot_rep(rep, slot, super::field_rep::REP_ANY);
+        }
+    }
+    let rep = infos.iter().fold(rep, |rep, i| {
+        super::field_rep::with_slot_rep(rep, u32::from(i.slot), super::field_rep::REP_SPECIAL)
+    });
+    let keys = current.keys as usize as *const ArrayHeader;
+    let summary = receiver_extra_summary(obj)
+        | if keys.is_null() {
+            0
+        } else {
+            crate::object::key_attrs::keys_summary_checked(keys, current.logical_key_count)
+        };
+    let Ok(id) = shape_descriptor_intern_with_special(
+        keys,
+        current.logical_key_count,
+        current.live_inline_slot_count,
+        current.semantic_generation,
+        store_kind::mint_kind(current.object_kind, obj),
+        0,
+        current.proto_id,
+        summary,
+        rep,
+        &infos,
+        None,
+    ) else {
+        return false;
+    };
+    stamp_object_shape_id_with_carrier_note(obj, id);
+    debug_assert_object_shape_parity(obj);
+    true
+}
+
 /// [`transition_object_shape_semantics`] for a change that writes no slot and
 /// no descriptor: marking an object as a prototype. The fresh semantic
 /// generation still says "a structural change happened here" to every memo

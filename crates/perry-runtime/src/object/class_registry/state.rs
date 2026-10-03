@@ -346,9 +346,9 @@ pub struct VTableMethodEntry {
     /// rest position onward, so apply/dynamic dispatch bundles them correctly.
     pub has_rest: bool,
     /// The method's closure-convention entry (`<method>__eclo`'s
-    /// `JsFunctionInfo`) when its class is evaluated per evaluation
-    /// (`ClassExprFresh`): each evaluation's prototype holds one function
-    /// object running it. 0 otherwise.
+    /// `JsFunctionInfo`): the prototype holds a function object running it
+    /// (each evaluation's prototype its own, for a `ClassExprFresh` class).
+    /// 0 for a method registered without one (runtime-built classes).
     pub entry: usize,
 }
 
@@ -1188,6 +1188,34 @@ fn install_class_decl_prototype_method_fields(proto: *mut ObjectHeader, class_id
     }
 }
 
+/// The decl prototype `proto` of `class_id`, complete and linked: each method
+/// was claimed with its attributes and then stored, and the link restamped
+/// it, neither of which carries a lane. Its shape names each method's own
+/// body, as an ordinary key-add of the same function object would: the slot
+/// is a ConstFn lane (step 5C), and a later store of anything else to it
+/// generalizes the lane through the store check.
+fn learn_decl_prototype_method_lanes(proto: *mut ObjectHeader, class_id: u32) {
+    let home = super::super::class_prototype_ref_value(class_id).to_bits();
+    unsafe {
+        crate::object::shapes::learn_object_constfn_lanes(proto, |_, bits| {
+            class_method_entry_object_of(bits, home)
+        });
+    }
+}
+
+/// Is `bits` a function object running a class method's closure-convention
+/// entry whose one capture is `home`?
+unsafe fn class_method_entry_object_of(bits: u64, home: u64) -> bool {
+    let value = JSValue::from_bits(bits);
+    if !value.is_pointer() {
+        return false;
+    }
+    let closure = value.as_pointer::<crate::closure::ClosureHeader>();
+    crate::closure::is_closure_ptr(closure as usize)
+        && crate::closure::real_capture_count((*closure).capture_count) == 1
+        && crate::closure::js_closure_get_capture_bits(closure, 0) == home
+}
+
 fn class_parent_prototype_bits(value: f64) -> Option<u64> {
     let bits = value.to_bits();
     if bits == crate::value::TAG_NULL {
@@ -1443,6 +1471,7 @@ pub(crate) fn class_decl_prototype_value(class_id: u32) -> f64 {
     }
 
     let proto = class_decl_prototype_object(class_id);
+    learn_decl_prototype_method_lanes(proto, class_id);
     crate::value::js_nanbox_pointer(proto as i64)
 }
 

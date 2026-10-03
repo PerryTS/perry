@@ -201,7 +201,9 @@ mod nm_namespace_hooks;
 pub(crate) use native_module::class_instance_has_member;
 pub(crate) use native_module::class_ref_id;
 pub(crate) use native_module::install_native_module_vtable;
-pub(crate) use native_module::{class_prototype_ref_id, SYMBOL_BOUND_METHOD_NAME};
+pub(crate) use native_module::{
+    class_method_entry_source_func_ptr, class_prototype_ref_id, SYMBOL_BOUND_METHOD_NAME,
+};
 mod native_module_crypto_key_object;
 mod native_module_crypto_random;
 mod native_module_dispatch;

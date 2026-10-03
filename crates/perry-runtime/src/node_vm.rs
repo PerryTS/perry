@@ -258,6 +258,7 @@ pub(crate) fn function_source_for_closure(closure: usize) -> String {
         let func_ptr = unsafe {
             crate::closure::bound_method_source_func_ptr(closure_ptr)
                 .or_else(|| crate::object::class_accessor_source_func_ptr(closure_ptr))
+                .or_else(|| crate::object::class_method_entry_source_func_ptr(closure_ptr))
                 .unwrap_or((*closure_ptr).code() as usize)
         };
         crate::builtins::function_source_for_func_ptr(func_ptr)

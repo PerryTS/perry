@@ -1366,7 +1366,9 @@ pub(crate) fn extends_target_must_throw(value: f64) -> bool {
         if !ptr.is_null() && is_valid_obj_ptr(ptr as *const u8) {
             // A bound *method* (class/instance method read as a value) is never
             // a constructor.
-            if crate::closure::closure_is_bound_method(ptr) {
+            if crate::closure::closure_is_bound_method(ptr)
+                || crate::closure::closure_body_is_non_constructor(ptr)
+            {
                 return true;
             }
             let fp = crate::closure::get_valid_func_ptr(ptr);

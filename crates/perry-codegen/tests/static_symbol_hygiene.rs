@@ -281,10 +281,19 @@ fn static_and_instance_methods_with_same_name_keep_distinct_symbols() {
     )
     .unwrap();
 
+    // The instance body, and its prototype function object's
+    // closure-convention entry `<body>__eclo`: exactly one definition each.
     assert_eq!(
         count(
             &ir,
-            "define double @perry_method_static_instance_symbol_hygiene_ts__x__lex"
+            "define double @perry_method_static_instance_symbol_hygiene_ts__x__lex("
+        ),
+        1
+    );
+    assert_eq!(
+        count(
+            &ir,
+            "define double @perry_method_static_instance_symbol_hygiene_ts__x__lex__eclo("
         ),
         1
     );
