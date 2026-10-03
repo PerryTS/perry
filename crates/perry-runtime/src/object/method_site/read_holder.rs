@@ -231,6 +231,11 @@ pub(crate) unsafe fn entry_answer(c: &PicCache, token: i64) -> Option<u64> {
     // kinds. Only a token miss can search the extra ABSENT shapes; keeping
     // that search off the ordinary inherited hit avoids taxing every read.
     if c[HOLDER_RECV] != token {
+        // Only a multi-shape entry has further receiver tokens; every other
+        // site (a class entry's site among them) leaves on this load.
+        if c[HOLDER_KIND] as u64 & HOLDER_MULTI_ABSENT == 0 {
+            return None;
+        }
         return multi_absent_extra_answer(c, token);
     }
     let kind = c[HOLDER_KIND];
@@ -413,8 +418,7 @@ pub(super) unsafe fn holder_slot_value(addr: usize, slot: u32) -> Option<u64> {
     holder_spill_value(addr, slot & !HOLDER_SLOT_SPILL)
 }
 
-#[cold]
-#[inline(never)]
+#[inline]
 unsafe fn holder_spill_value(addr: usize, index: u32) -> Option<u64> {
     crate::object::spill::spill_get(addr, index as usize)
 }
