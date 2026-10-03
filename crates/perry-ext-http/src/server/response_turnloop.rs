@@ -103,7 +103,17 @@ pub(crate) fn req_handle_of(handle: i64) -> i64 {
 /// The handler runs on the thread that owns the connection, so `res.end()`
 /// encodes and submits the write itself.
 pub(crate) fn alloc_server_response_for_turnloop(conn_id: i64, seq: u64, req_handle: i64) -> i64 {
+    alloc_http1_server_response_for_turnloop(conn_id, seq, req_handle, 0)
+}
+
+pub(crate) fn alloc_http1_server_response_for_turnloop(
+    conn_id: i64,
+    seq: u64,
+    req_handle: i64,
+    socket_handle: i64,
+) -> i64 {
     let mut response = ServerResponse::new().with_request_handle(req_handle);
+    response.socket_handle = socket_handle;
     response.turnloop = Some((conn_id, seq));
     register_handle(response)
 }

@@ -1332,6 +1332,11 @@ fn response_socket_value(handle: i64) -> f64 {
             };
         }
     }
+    if let Some(sr) = get_handle::<ServerResponse>(handle) {
+        if sr.socket_handle != 0 {
+            return handle_to_pointer_f64(sr.socket_handle);
+        }
+    }
     let req_handle = unsafe { js_node_http_res_req_handle(handle) };
     if req_handle == 0 {
         f64::from_bits(TAG_NULL)
@@ -1344,13 +1349,16 @@ fn response_socket_value(handle: i64) -> f64 {
 #[cfg(test)]
 mod response_socket_tests {
     use super::*;
-    use crate::server::request::{alloc_incoming_message, incoming_socket_assign};
+    use crate::server::request::{
+        alloc_connection_socket, alloc_incoming_message, incoming_socket_assign,
+    };
     use perry_ffi::{drop_handle, register_handle};
     use std::collections::HashMap;
 
     #[test]
-    fn response_socket_follows_request_socket_without_changing_standalone_assignment() {
-        let socket = 1234.5_f64;
+    fn response_socket_retains_initial_socket_after_request_reassignment() {
+        let socket_handle = alloc_connection_socket("127.0.0.1".into(), 1234);
+        let socket = handle_to_pointer_f64(socket_handle);
         for _ in 0..2 {
             let request = alloc_incoming_message(IncomingMessage::new(
                 "GET".into(),
@@ -1362,7 +1370,14 @@ mod response_socket_tests {
                 1234,
             ));
             assert!(incoming_socket_assign(request, socket));
-            let response = register_handle(ServerResponse::new().with_request_handle(request));
+            let response = crate::server::response::alloc_http1_server_response_for_turnloop(
+                0,
+                0,
+                request,
+                socket_handle,
+            );
+            assert_eq!(response_socket_value(response).to_bits(), socket.to_bits());
+            assert!(incoming_socket_assign(request, 42.0));
             assert_eq!(response_socket_value(response).to_bits(), socket.to_bits());
             drop_handle(response);
             drop_handle(request);
@@ -1376,6 +1391,7 @@ mod response_socket_tests {
             socket.to_bits()
         );
         drop_handle(standalone);
+        drop_handle(socket_handle);
     }
 }
 
