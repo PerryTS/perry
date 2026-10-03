@@ -8,10 +8,14 @@ import { createServer, get } from "node:http";
 const connections: Record<string, any> = {};
 const seen: any[] = [];
 const events: string[] = [];
+let requests = 0;
 
 const server = createServer((req, res) => {
   events.push("request");
-  console.log("req.socket is the connection socket:", req.socket === seen[0]);
+  requests++;
+  console.log("req.socket is the connection socket:", req.socket === seen[requests - 1]);
+  console.log("res.socket is req.socket:", res.socket === req.socket);
+  console.log("res.connection is req.socket:", res.connection === req.socket);
   res.end("ok");
 });
 
@@ -34,14 +38,21 @@ server.on("connection", (conn: any) => {
 
 server.listen(0, "127.0.0.1", () => {
   const { port } = server.address() as { port: number };
-  get({ host: "127.0.0.1", port, path: "/", agent: false }, (res) => {
-    res.resume();
-    res.on("end", () => {
-      server.close(() => {
-        console.log("connection events:", seen.length);
-        console.log("tracked after close:", Object.keys(connections).length);
-        console.log("order:", events.join(" > "));
+  const request = () => {
+    get({ host: "127.0.0.1", port, path: "/", agent: false }, (res) => {
+      res.resume();
+      res.on("end", () => {
+        if (requests < 2) {
+          request();
+        } else {
+          server.close(() => {
+            console.log("connection events:", seen.length);
+            console.log("tracked after close:", Object.keys(connections).length);
+            console.log("order:", events.join(" > "));
+          });
+        }
       });
     });
-  });
+  };
+  request();
 });
