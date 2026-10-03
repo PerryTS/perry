@@ -1021,3 +1021,40 @@ instructions-0.36%,minor faults+42.64%; Zod29.184->29.258MiB(+0.254%),instructio
 These are fresh c170 results, three repetitions on the original shared host.
 Full17-case204normal-auto comparison remains running; no universal acceptance
 is claimed. Detailed repetitions and counters remain in the bound summary.
+
+NEXT MEMORY AND INSTRUCTION PRIORITIES
+1. Finish the current full application matrix and retain signed regressions.
+   Judge changes on real TS/Zod, retained graphs, requests, async and idle use;
+   smaller peak RSS must be assessed alongside user/kernel work and faults.
+2. Measure arena occupancy/residency at the actual RSS peak, before/after full
+   collection, and after release plus the existing idle drain. Separate live
+   cells, old holes, nursery/survivor capacity and reusable empty block pages.
+   The existing non-peak snapshots do not establish which dominates the peak.
+3. Target repeated tracing and remembered-parent enumeration only where exact
+   current-binary profiles show work. Preserve malloc/PromotedYoung edges,
+   forwarding aliases, precise membership and rewritable shape keys/prototypes.
+   Blanket inlining and two tiny callback/tag probes failed the application test
+   despite shorter static assembly; they remain out of production.
+4. Give the campaign the 8.43 MiB common-metadata sharing attribution and 114
+   observed fact groups. Prototype/brand semantics and header ABI remain theirs.
+   An 8-byte object header alone is only a 0.61 MiB gross bound in this TS heap.
+The absolute minimum cannot be derived from peak RSS alone: it depends on the
+reachable graph, representation, collector scratch, fragmentation, allocator
+residency, code and native libraries at the same instant. No measured snapshot
+is relabelled as an achievable universal RSS floor.
+
+CURRENT c170 FULL NORMAL-AUTO MATRIX COMPLETE AND VERIFIED
+204/204 correct runs, all17cases, no exclusions; independent current source,
+binary, raw stdout, RSS/counters and recomputed summary checks pass.
+RSS improves16cases and stays flat for noop. TS245.602->236.285MiB(-3.793%),
+instructions-1.144%; document retention-13.679%, pipeline-10.547%, replacement
+-9.450%, transitions-9.640%, large live set-6.675%, grow/churn-5.558%.
+Request RSS-2.993% but instructions+0.699%; Zod RSS-1.413% but instructions
++0.634%. TS faults+42.720%, trees+25.465%, strings+10.765%. CPU/cycles vary
+widely on the shared host and do not override exact instruction counts.
+Current-binary request/Zod self instruction profiles are launched separately
+to investigate the two instruction costs. They do not replace perf-stat/RSS.
+Pinned comparator revisions rechecked unchanged at17:36Z; the seven-case
+Perry/ScriptC/Porffor/Static Hermes RSS join is published with compiler failures
+left unranked. Current normal application coverage is complete; resolving
+remaining instruction costs and deeper arena residency work remain open.
