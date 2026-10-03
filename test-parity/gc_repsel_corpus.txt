@@ -929,6 +929,10 @@ test_gap_gc_11559_spill_headroom_store
 # registration reading the retired closure. moment 2.31.0 module init under a
 # seeded schedule (#11635).
 test_gap_gc_11635_func_proto_register_across_call
+# #11789: a direct call to a closure-valued local (`const show = (a, b) => ...`)
+# held each evaluated argument in a register while the later arguments were
+# lowered, so `show(String(x), work())` passed the retired from-space string.
+test_gap_gc_11789_closure_call_args
 
 # #11743: a field receiver and captured method cross allocating arguments.
 # Recursive child pushes observe parent identity after relocation and growth.

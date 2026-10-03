@@ -415,13 +415,23 @@ pub fn try_lower_closure_typed_local_call(
             // truthfully puts `stage(rec)` — `pipeline`'s inner loop, three of
             // these per record — back on the IR it had before #8084, while
             // `stage(mk())` still roots.
-            let mut callee_group = crate::rooting::open_rooted_group(1);
+            //
+            // #11789: the ARGUMENTS outlive each other the same way. They are
+            // evaluated left to right, and each one is held while the ones
+            // after it are lowered, so `show(String(x), work(3))` kept
+            // `String(x)`'s string in a bare register across `work`'s loop
+            // polls and handed the closure its retired from-space address.
+            // Every argument joins the callee's group, rooted across exactly
+            // the arguments that follow it: `lower_call_args_rooted`'s window,
+            // which a call to a `function` declaration already had.
+            let mut callee_group = crate::rooting::open_rooted_group(1 + args.len());
             let recv_box = lower_expr(ctx, callee)?;
             let collects = crate::rooting::any_operand_may_collect(ctx, args.iter());
             let callee_root = callee_group.adopt(ctx, callee, &recv_box, collects);
-            let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
-            for a in args {
-                lowered_args.push(lower_expr(ctx, a)?);
+            let mut arg_roots: Vec<usize> = Vec::with_capacity(args.len());
+            for (i, a) in args.iter().enumerate() {
+                let collects = crate::rooting::any_operand_may_collect(ctx, args[i + 1..].iter());
+                arg_roots.push(callee_group.lower(ctx, a, collects)?);
             }
 
             // Issue #493: rest-bundling is handled inside js_closure_callN from
@@ -443,6 +453,10 @@ pub fn try_lower_closure_typed_local_call(
             // Re-read below the argument lowering, THEN unmask: the unmask
             // must consume the post-relocation address.
             let recv_box = callee_group.reread(ctx, callee_root)?;
+            let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
+            for &root in &arg_roots {
+                lowered_args.push(callee_group.reread(ctx, root)?);
+            }
             let closure_handle = {
                 let blk = ctx.block();
                 unbox_to_i64(blk, &recv_box)
