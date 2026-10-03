@@ -1,3 +1,27 @@
+LATEST MAIN REBASE / CURRENT VALIDATION (2026-10-03 23:16Z)
+Production cleanly rebased onto main07e50b14a3 (class/prototype and rooting
+fixes). All22authored GC/arena file hashes equal the earlier6c proposal;
+no campaign paths authored. Latest07source has5010selected Rust/Cargo/toolchain
+inputs; baseline5003. Previous204/72 measurements stay bound to2026ecfe.
+They are not acceptance for this new upstream checkpoint.
+Mac runtime revalidation is live, pinned nightly2026-08-20. Original invocation
+from secret-tests selected stable despite --manifest-path, failed E0554/E0658;
+that failure/log is preserved. Corrected run uses checkout cwd and explicit pin.
+Linux07base/gc/private-entry fresh isolated builds1209022queued.
+ScriptC latest changed to0.2.2 at23:05Z; Porffor/Hermes refs unchanged.
+Separate ScriptC022 installation and seven-source rerun1194864queued.
+Npm skipped its installer by default; reviewed native installer was run
+explicitly, its separate log retained and actual --version reports0.2.2.
+Original private old-hole Linux build succeeds; runtime tests fail E0603
+(private sibling test-helper visibility). Test-only correction f22104289b
+uses the identical fresh-thread isolation without sibling access. Original
+failure retained; new v34r1 build1209021/apps1211284queued, not green yet.
+Real-collection Eden fixture followup1180647corrects post-reset cursor
+assumption and requires control to fail precisely the residency assertion.
+Original fixture execution remains queued/preserved; no result hidden.
+Private moving checks1172478queued:44runs,22must actuallycopy andprotect.
+Other lane holds shared heavy lock; no foreign process/files changed.
+
 LATEST MAIN NORMAL-AUTO MATRIX VERIFIED (2026-10-03 23:03Z)
 Base2026ecfe, runtime6c761801fa:30 fresh builds and204 correct executions
 cover all17 application workloads with untouched defaultGC and no exclusions.
