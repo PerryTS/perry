@@ -1,0 +1,1 @@
+- Destroying an accepted HTTP/1 or HTTP/2 connection socket now closes its underlying transport and emits the socket's `close` event once.
