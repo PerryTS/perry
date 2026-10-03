@@ -222,27 +222,47 @@ pub(super) fn emit_body_guard_direct(
 /// Class provenance chooses the supplier when available; otherwise a class
 /// hint suffices. Neither licenses a slot access: the guard compares the live
 /// ShapeId against the supplier's id, and a different shape selects G.
-fn static_region_word(ctx: &FnCtx<'_>, rv: &Receiver) -> Option<(u64, u32, u32, bool)> {
+/// The class a receiver's static supplier names, if the compiler names one
+/// (DESIGN §4.1). `init`: the initialiser of a binding the body declares and
+/// has not lowered yet (planning runs before its `Let`); the binding's type is
+/// then the one its declaration will refine from it.
+pub(super) fn static_class_name(ctx: &FnCtx<'_>, r: Recv, init: Option<&Expr>) -> Option<String> {
+    let named = |ty: &perry_hir::types::Type| match ty {
+        perry_hir::types::Type::Named(name) if ctx.classes.contains_key(name) => Some(name.clone()),
+        // A closed object type: the literal class its literals allocate.
+        ty => crate::stmt::element_shape_loop::anon_shape_class_for_object_type(ctx, ty),
+    };
+    ctx.ptr_shape_region_class(&r.expr())
+        .or_else(|| crate::type_analysis::receiver_class_name(ctx, &r.expr()))
+        .or_else(|| match r {
+            Recv::Local(id) => match ctx.local_type_hint(&id) {
+                Some(ty) => named(ty),
+                None => named(&crate::type_analysis::refine_type_from_init(ctx, init?)?),
+            },
+            Recv::This => None,
+        })
+}
+
+/// Can `keys` (with `boxed_mask`) of a receiver of class `class_name` be
+/// served by its static birth shape? A receiver naming more keys than one
+/// learned word addresses ([`MAX_KEYS`]) is planned only when this holds.
+pub(super) fn static_keys_served(
+    ctx: &FnCtx<'_>,
+    class_name: &str,
+    keys: &[String],
+    boxed_mask: u32,
+) -> bool {
+    ctx.class_keys_globals
+        .get(class_name)
+        .is_some_and(|g| crate::codegen::static_region_slots(g, keys, boxed_mask).is_some())
+}
+
+fn static_region_word(ctx: &FnCtx<'_>, rv: &Receiver) -> Option<(u64, Vec<u32>, u32, u32, bool)> {
     // Use containment's exact class to select the supplier when available.
     // This consumes only class provenance: the compared ShapeId below remains
     // the sole authority for slot locations and Number representation.
     let proven_class = ctx.ptr_shape_region_class(&rv.recv.expr());
-    let class_name = proven_class.clone().or_else(|| {
-        crate::type_analysis::receiver_class_name(ctx, &rv.recv.expr()).or_else(|| {
-            match rv.recv {
-                Recv::Local(id) => match ctx.local_type_hint(&id)? {
-                    perry_hir::types::Type::Named(name) if ctx.classes.contains_key(name) => {
-                        Some(name.clone())
-                    }
-                    // A closed object type: the literal class its literals allocate.
-                    ty => {
-                        crate::stmt::element_shape_loop::anon_shape_class_for_object_type(ctx, ty)
-                    }
-                },
-                Recv::This => None,
-            }
-        })
-    })?;
+    let class_name = static_class_name(ctx, rv.recv, None)?;
     let keys_global = ctx.class_keys_globals.get(&class_name)?;
     let (id, slots, f64_lanes) =
         crate::codegen::static_region_slots(keys_global, &rv.keys, rv.boxed_mask)?;
@@ -251,15 +271,26 @@ fn static_region_word(ctx: &FnCtx<'_>, rv: &Receiver) -> Option<(u64, u32, u32, 
     // and one on an `Any` lane is served by a value test on the object
     // unless a bare store may write that key a non-Number, or the plan does
     // not allow value tests (`vt_mask`: a guard re-run every iteration).
+    // The slots are compile-time constants (`Receiver::static_slots`), so the
+    // word carries only the id and the value-test bit, and a receiver may
+    // name more keys than a learned word can address.
     let tested = rv.r_mask & rv.vt_mask & !f64_lanes & !rv.boxed_mask;
     let mut word = u64::from(id);
-    for (i, slot) in slots.iter().enumerate() {
-        word |= u64::from(*slot) << (32 + SLOT_BITS * i as u32);
-    }
     if tested != 0 {
         word |= VALUE_TEST_BIT;
     }
-    Some((word, f64_lanes | tested, tested, proven_class.is_some()))
+    Some((word, slots, f64_lanes | tested, tested, proven_class.is_some()))
+}
+
+/// Key `i`'s slot (`i64`): a static receiver's constant, or decoded from
+/// its learned `word`.
+pub(super) fn slot_of(ctx: &mut FnCtx<'_>, rv: &Receiver, word: &str, i: usize) -> String {
+    if let Some(slots) = &rv.static_slots {
+        return slots[i].to_string();
+    }
+    let shift = (32 + SLOT_BITS * i as u32).to_string();
+    let s = ctx.block().lshr(I64, word, &shift);
+    ctx.block().and(I64, &s, "63")
 }
 
 /// Bit 63 of a region word, `REGION_LOOP_WORD_VALUE_TEST`: a Number read
@@ -277,9 +308,7 @@ fn value_tests_on(ctx: &mut FnCtx<'_>, rv: &Receiver, word: &str, handle: &str) 
         if (rv.r_mask & rv.vt_mask) & (1 << i) == 0 {
             continue;
         }
-        let shift = (32 + SLOT_BITS * i as u32).to_string();
-        let s = ctx.block().lshr(I64, word, &shift);
-        let slot = ctx.block().and(I64, &s, "63");
+        let slot = slot_of(ctx, rv, word, i);
         let p = super::bare::slot_ptr(ctx, handle, &slot);
         let v = ctx.block().load(DOUBLE, &p);
         let number = crate::stmt::loops::emit_js_value_is_number(ctx, &v);
@@ -398,9 +427,7 @@ fn emit_static_guard(
     // Region slots remain identical. Refuse a raw write to any CF lane;
     // other completed shapes retain the same numeric/boxed slot facts.
     let written_slots: Vec<u32> = if rv.has_store {
-        (0..rv.keys.len())
-            .map(|i| ((word >> (32 + SLOT_BITS * i as u32)) & ((1 << SLOT_BITS) - 1)) as u32)
-            .collect()
+        rv.static_slots.clone().unwrap_or_default()
     } else {
         Vec::new()
     };
@@ -451,12 +478,16 @@ pub(super) fn emit_guard(
 ) -> Result<(String, String, String)> {
     // A receiver whose class the compiler names takes its guard's ShapeId
     // from the driver's static id (DESIGN §4.1): no loaded supplier.
-    if let Some((w, r_mask, tested, uses_ptr_shape_class)) = static_region_word(ctx, rv) {
+    if let Some((w, slots, r_mask, tested, uses_ptr_shape_class)) = static_region_word(ctx, rv) {
         rv.r_mask = r_mask;
         rv.vt_mask = tested;
         rv.uses_ptr_shape_class = uses_ptr_shape_class;
+        rv.static_slots = Some(slots);
         return emit_static_guard(ctx, rv, w);
     }
+    // A learned word addresses MAX_KEYS keys; wider receivers are planned
+    // only with a static supplier (`static_keys_served`).
+    debug_assert!(rv.keys.len() <= MAX_KEYS);
     // A learned word may carry VALUE_TEST_BIT for any R key: its guard must
     // honour the bit whatever the plan allowed a static word.
     rv.vt_mask = rv.r_mask;
@@ -610,11 +641,8 @@ pub(super) fn emit_guard(
 
 pub(super) fn decode_slots(ctx: &mut FnCtx<'_>, rv: &mut Receiver, word: &str) {
     rv.word = word.to_string();
+    let snapshot = rv.clone();
     rv.slots = (0..rv.keys.len())
-        .map(|i| {
-            let shift = (32 + SLOT_BITS * i as u32).to_string();
-            let s = ctx.block().lshr(I64, word, &shift);
-            ctx.block().and(I64, &s, "63")
-        })
+        .map(|i| slot_of(ctx, &snapshot, word, i))
         .collect();
 }
