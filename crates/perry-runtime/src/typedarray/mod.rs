@@ -171,8 +171,31 @@ pub struct TypedArrayHeader {
     pub kind: u8,
     /// Element size in bytes (1, 2, 4, 8).
     pub elem_size: u8,
-    pub _pad: [u8; 6],
+    /// Where element 0 lives: [`TA_STORAGE_INLINE`] (right after this
+    /// header) or [`TA_STORAGE_EXTERNAL`] (an `ArrayBuffer` backing or a
+    /// native arena, resolved through `data_ptr`). Byte 10 of the header;
+    /// emitted code reads it, so the offset is part of the codegen contract.
+    pub storage: u8,
+    pub _pad: [u8; 5],
 }
+
+/// [`TypedArrayHeader::storage`]: the elements follow the header inline.
+pub const TA_STORAGE_INLINE: u8 = 0;
+/// [`TypedArrayHeader::storage`]: the elements live elsewhere (an
+/// `ArrayBuffer`-aliasing view, a materialized `.buffer`, a native-arena view).
+/// Set before the typed array can be read through its new backing, and never
+/// cleared while the header lives: a backing, once taken, is kept.
+pub const TA_STORAGE_EXTERNAL: u8 = 1;
+/// Byte offset of [`TypedArrayHeader::storage`], for emitted header reads.
+pub const TA_STORAGE_OFFSET: usize = 10;
+const _: () = assert!(std::mem::offset_of!(TypedArrayHeader, storage) == TA_STORAGE_OFFSET);
+
+/// [`PERRY_TA_KIND_CACHE`] tag bit for a typed array with external storage.
+/// The tag of an inline-storage array is its bare kind, so an emitted guard
+/// that compares the tag with the kind it expects (or tests `kind <= N`)
+/// rejects an external-storage array by the same compare: the receiver's own
+/// representation decides, not a process-wide count of live views.
+pub const TA_CACHE_EXTERNAL_STORAGE: u64 = 0x80;
 
 crate::perry_thread_local! {
     /// Address -> kind, so we can detect typed arrays at format/instanceof time.
@@ -247,29 +270,29 @@ const INLINE_OWNING_U32_CACHE_SLOTS: usize = 64;
 static INLINE_OWNING_U32_CACHE: [AtomicU64; INLINE_OWNING_U32_CACHE_SLOTS] =
     [const { AtomicU64::new(0) }; INLINE_OWNING_U32_CACHE_SLOTS];
 
-/// #5525 follow-up: process-global "any exotic typed-array views exist" guard,
-/// exported under a stable link name for the codegen inline element path. A
-/// non-owning typed array (an `ArrayBuffer`-aliasing view, or a native-arena
-/// view) resolves its element-0 pointer through a side table rather than
-/// `header + size_of::<TypedArrayHeader>()`, so the inline reader — which
-/// assumes inline storage — MUST NOT fire while any such view is live. Both
-/// view-registration paths (`typedarray_view::register_view_meta` and
-/// `native_arena::register_view`) bump this; the matching unregister paths
-/// decrement it. When it reads 0 (the overwhelmingly common case, and always
-/// true for bcryptjs's owning `new Int32Array(P_ORIG)` boxes) the inline load
-/// of `*(header + 16 + idx*elem_size)` is identical to what `data_ptr` + the
-/// per-kind `load_at` slow path computes.
-#[no_mangle]
-pub static PERRY_TA_VIEW_GUARD: AtomicU64 = AtomicU64::new(0);
-
+/// The [`PERRY_TA_KIND_CACHE`] tag for the registered typed array at `ta`:
+/// its kind, plus [`TA_CACHE_EXTERNAL_STORAGE`] when its elements do not
+/// follow the header (#10516).
+///
+/// # Safety
+/// `ta` is a live registered typed array (or native typed view) header.
 #[inline]
-pub(crate) fn ta_view_guard_inc() {
-    PERRY_TA_VIEW_GUARD.fetch_add(1, Ordering::Relaxed);
+unsafe fn kind_cache_tag(ta: *const TypedArrayHeader, kind: u8) -> u64 {
+    if (*ta).storage == TA_STORAGE_INLINE {
+        kind as u64
+    } else {
+        kind as u64 | TA_CACHE_EXTERNAL_STORAGE
+    }
 }
 
-#[inline]
-pub(crate) fn ta_view_guard_dec() {
-    PERRY_TA_VIEW_GUARD.fetch_sub(1, Ordering::Relaxed);
+/// Move the typed array at `ta` to external storage (#10516): from here on its
+/// elements are reached through `data_ptr`, never at `header + 16`. Drops the
+/// address's inline-path admissions so the next lookup re-derives them from
+/// the header.
+pub(crate) fn note_external_storage(ta: *mut TypedArrayHeader) {
+    unsafe { (*ta).storage = TA_STORAGE_EXTERNAL };
+    ta_kind_cache_invalidate(ta as usize);
+    inline_owning_u32_cache_invalidate(ta as usize);
 }
 
 #[inline]
@@ -285,11 +308,6 @@ fn ta_kind_cache_store_tag(addr: usize, tag: u64) {
     // `addr` is always > 0x10000, so `(addr << 8) | tag` is never 0 (= empty).
     PERRY_TA_KIND_CACHE[ta_kind_cache_slot(addr)]
         .store(((addr as u64) << 8) | tag, Ordering::Relaxed);
-}
-
-#[inline]
-fn ta_kind_cache_store(addr: usize, kind: u8) {
-    ta_kind_cache_store_tag(addr, kind as u64);
 }
 
 #[inline]
@@ -359,7 +377,7 @@ fn ta_kind_cache_get(addr: usize) -> Option<Option<u8>> {
         if tag == TA_CACHE_NEGATIVE {
             Some(None)
         } else {
-            Some(Some(tag as u8))
+            Some(Some((tag & !TA_CACHE_EXTERNAL_STORAGE) as u8))
         }
     } else {
         None
@@ -428,7 +446,7 @@ pub fn register_typed_array(ptr: *const TypedArrayHeader, kind: u8) {
     TYPED_ARRAY_EVER_REGISTERED.arm();
     // Keep the cache authoritative: overwrite any colliding/stale slot so a
     // freed-then-reused address never reads back its previous kind.
-    ta_kind_cache_store(ptr as usize, kind);
+    ta_kind_cache_store_tag(ptr as usize, unsafe { kind_cache_tag(ptr, kind) });
     TYPED_ARRAY_REGISTRY.with(|r| {
         r.borrow_mut().insert(ptr as usize, kind);
     });
@@ -542,7 +560,14 @@ fn lookup_registered_typed_array_kind(addr: usize) -> Option<u8> {
     // Record both outcomes: a typed array (positive) or a confirmed non-typed
     // address (negative), so repeated plain-array element access stops hitting
     // the thread-local registry too.
-    ta_kind_cache_store_tag(addr, kind.map_or(TA_CACHE_NEGATIVE, |k| k as u64));
+    // A registered address is a live typed-array header, so its storage byte
+    // is readable.
+    ta_kind_cache_store_tag(
+        addr,
+        kind.map_or(TA_CACHE_NEGATIVE, |k| unsafe {
+            kind_cache_tag(addr as *const TypedArrayHeader, k)
+        }),
+    );
     kind
 }
 
@@ -689,7 +714,9 @@ pub(crate) fn classify_element_read_receiver(raw: u64) -> ElementReadReceiver {
 #[inline]
 pub(crate) fn data_ptr(ta: *const TypedArrayHeader) -> *const u8 {
     unsafe {
-        if crate::native_arena::is_native_typed_view(ta) {
+        if (*ta).storage == TA_STORAGE_INLINE {
+            (ta as *const u8).add(std::mem::size_of::<TypedArrayHeader>())
+        } else if crate::native_arena::is_native_typed_view(ta) {
             crate::native_arena::native_view_data_ptr(ta)
         } else if let Some(p) = crate::typedarray_view::view_backing_data_ptr(ta as usize) {
             p as *const u8
@@ -750,7 +777,9 @@ pub(crate) fn inline_u32_addr(receiver: f64) -> usize {
 #[inline]
 pub(crate) fn data_ptr_mut(ta: *mut TypedArrayHeader) -> *mut u8 {
     unsafe {
-        if crate::native_arena::is_native_typed_view(ta as *const TypedArrayHeader) {
+        if (*ta).storage == TA_STORAGE_INLINE {
+            (ta as *mut u8).add(std::mem::size_of::<TypedArrayHeader>())
+        } else if crate::native_arena::is_native_typed_view(ta as *const TypedArrayHeader) {
             crate::native_arena::native_view_data_ptr_mut(ta)
         } else if let Some(p) = crate::typedarray_view::view_backing_data_ptr(ta as usize) {
             p
@@ -1070,7 +1099,8 @@ pub fn typed_array_alloc(kind: u8, length: u32) -> *mut TypedArrayHeader {
         (*p).capacity = capacity;
         (*p).kind = kind;
         (*p).elem_size = elem_size as u8;
-        (*p)._pad = [0; 6];
+        (*p).storage = TA_STORAGE_INLINE;
+        (*p)._pad = [0; 5];
         let data = data_ptr_mut(p);
         ptr::write_bytes(data, 0, (capacity as usize) * elem_size);
     }

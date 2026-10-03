@@ -688,9 +688,14 @@ fn unknown_numeric_read_routes_typed_arrays_through_the_single_exit() {
     let ta_kind_guard = super::class_field_barrier_tests::block_body(&ir, "tav.kind_guard.")
         .expect("the typed-array kind/bounds guard exists");
     assert!(
-        ta_kind_guard.contains("@PERRY_TA_VIEW_GUARD") && ta_kind_guard.contains("arrlike.ic.miss"),
-        "inline storage, the element kind and the bounds check belong behind the \
-         tag, and their miss leaves through the single exit:\n{ta_kind_guard}"
+        ta_kind_guard
+            .lines()
+            .any(|l| l.contains("add i64") && l.trim_end().ends_with(", 10"))
+            && ta_kind_guard.matches("load i8").count() >= 2
+            && ta_kind_guard.contains("arrlike.ic.miss"),
+        "inline storage (the receiver's storage byte at header + 10, #10516), the \
+         element kind and the bounds check belong behind the tag, and their miss \
+         leaves through the single exit:\n{ta_kind_guard}"
     );
     let w4 = super::class_field_barrier_tests::block_body(&ir, "tav.w4.")
         .expect("the 4-byte width block exists");

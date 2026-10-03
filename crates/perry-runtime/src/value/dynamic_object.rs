@@ -845,7 +845,8 @@ mod length_handle_band_tests {
                     capacity: 37,
                     kind: crate::typedarray::KIND_UINT8,
                     elem_size: 1,
-                    _pad: [0; 6],
+                    storage: crate::typedarray::TA_STORAGE_INLINE,
+                    _pad: [0; 5],
                 },
             );
             crate::typedarray::register_typed_array(ptr, crate::typedarray::KIND_UINT8);

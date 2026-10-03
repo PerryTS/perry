@@ -152,8 +152,9 @@ fn emit_receiver_guard(ctx: &mut FnCtx<'_>, object_box: &str) -> (String, String
     let raw = blk.and(I64, &object_bits, POINTER_MASK_I64);
     let tagged = blk.and(I64, &object_bits, &tag_mask);
     let is_pointer = blk.icmp_eq(I64, &tagged, crate::nanbox::POINTER_TAG_I64);
-    let view_guard = blk.load(I64, "@PERRY_TA_VIEW_GUARD");
-    let inline_storage = blk.icmp_eq(I64, &view_guard, "0");
+    // #10516: the kind-cache tag carries the receiver's storage: an
+    // external-storage typed array (a view) caches `kind | 0x80`, so the
+    // kind compare below rejects it. No process-wide view count.
     let slot = blk.lshr(I64, &raw, "3");
     let slot = blk.and(I64, &slot, "63");
     let entry_ptr = blk.gep(
@@ -166,8 +167,7 @@ fn emit_receiver_guard(ctx: &mut FnCtx<'_>, object_box: &str) -> (String, String
     let address_matches = blk.icmp_eq(I64, &cached_addr, &raw);
     let kind = blk.and(I64, &entry, "255");
     let kind_matches = blk.icmp_eq(I64, &kind, &UINT32_KIND.to_string());
-    let guard = blk.and(I1, &is_pointer, &inline_storage);
-    let guard = blk.and(I1, &guard, &address_matches);
+    let guard = blk.and(I1, &is_pointer, &address_matches);
     (raw, blk.and(I1, &guard, &kind_matches))
 }
 

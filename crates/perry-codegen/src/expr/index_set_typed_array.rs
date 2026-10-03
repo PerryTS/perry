@@ -27,7 +27,7 @@ use super::FnCtx;
 /// `obj[i] = v` whose receiver static type is erased (`any`/unknown) but is, at
 /// runtime, commonly an owning numeric typed array (bcryptjs's `P[i]=`/`S[i]=`
 /// Int32Array boxes). Mirrors [`index_get::lower_inline_dyn_typed_array_get`]:
-/// the same pointer / `PERRY_TA_VIEW_GUARD` / `PERRY_TA_KIND_CACHE` / index
+/// the same pointer / `PERRY_TA_KIND_CACHE` (tag = kind + storage) / index
 /// guards, then a direct per-kind store into `header + 16 + idx*elem_size`,
 /// falling back to `js_dyn_index_set` on any guard miss. The store result is the
 /// assigned value (`val_double`), matching `js_dyn_index_set`'s return.
@@ -190,8 +190,9 @@ fn emit_inline_ta_set_then_runtime(
         let raw = blk.and(I64, &obj_bits, pointer_mask);
         let tagged = blk.and(I64, &obj_bits, &tag_mask);
         let is_ptr = blk.icmp_eq(I64, &tagged, pointer_tag);
-        let vg = blk.load(I64, "@PERRY_TA_VIEW_GUARD");
-        let vg_zero = blk.icmp_eq(I64, &vg, "0");
+        // #10516: the kind-cache tag carries the receiver's storage: an
+        // external-storage typed array (a view) caches `kind | 0x80`, so the
+        // kind compare below rejects it. No process-wide view count.
         let slot = blk.lshr(I64, &raw, "3");
         let slot = blk.and(I64, &slot, "63");
         let entry_ptr = blk.gep(
@@ -220,8 +221,7 @@ fn emit_inline_ta_set_then_runtime(
         let val_bits = blk.bitcast_double_to_i64(val_double);
         // 0x7FF9 << 48: the lowest NaN-box tag.
         let val_is_plain_number = blk.icmp_slt(I64, &val_bits, "9221401712017801216");
-        let g = blk.and(I1, &is_ptr, &vg_zero);
-        let g = blk.and(I1, &g, &addr_match);
+        let g = blk.and(I1, &is_ptr, &addr_match);
         let g = blk.and(I1, &g, &kind_ok);
         let g = blk.and(I1, &g, &idx_ge0);
         let g = blk.and(I1, &g, &val_is_plain_number);
