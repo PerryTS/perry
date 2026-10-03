@@ -1894,18 +1894,28 @@ pub(super) fn emit_guarded_direct_method_call(
     }
     let method_id = crate::strings::emit_static_dispatch_id(ctx.block(), &dispatch_global);
     let fallback_value = match learned_site.as_ref() {
-        Some((word, _)) => ctx.block().call(
-            DOUBLE,
-            "js_native_call_method_by_id_learn",
-            &[
-                (DOUBLE, recv_box),
-                (I64, &method_id),
-                (crate::types::PTR, &args_ptr),
-                (I64, &args_len),
-                (crate::types::PTR, word),
-                (I32, &expected_class_id_str),
-            ],
-        ),
+        Some((word, _)) => {
+            // The learned word is consulted only behind the prototype guard
+            // bytes, so while they are set (a prototype member of this
+            // method's name was assigned, deleted or redefined) nothing the
+            // runtime could learn would ever be read: the miss edge passes
+            // no site, and the runtime dispatches without proving anything.
+            let blk = ctx.block();
+            let prototype_ok = emit_prototype_method_guard_ok(blk, &method_guard_slot_str);
+            let site = blk.select(I1, &prototype_ok, crate::types::PTR, word, "null");
+            ctx.block().call(
+                DOUBLE,
+                "js_native_call_method_by_id_learn",
+                &[
+                    (DOUBLE, recv_box),
+                    (I64, &method_id),
+                    (crate::types::PTR, &args_ptr),
+                    (I64, &args_len),
+                    (crate::types::PTR, &site),
+                    (I32, &expected_class_id_str),
+                ],
+            )
+        }
         None => ctx.block().call(
             DOUBLE,
             "js_native_call_method_by_id",
