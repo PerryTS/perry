@@ -929,6 +929,10 @@ test_gap_gc_11559_spill_headroom_store
 # registration reading the retired closure. moment 2.31.0 module init under a
 # seeded schedule (#11635).
 test_gap_gc_11635_func_proto_register_across_call
+# #11816: filter/find/findLast held the callback's element in a Rust local
+# across the callback; a moving minor there left the pre-move address in the
+# result (an `Object.entries` pair read back as garbage).
+test_gap_gc_11816_array_callback_element
 # #11789: a direct call to a closure-valued local (`const show = (a, b) => ...`)
 # held each evaluated argument in a register while the later arguments were
 # lowered, so `show(String(x), work())` passed the retired from-space string.
