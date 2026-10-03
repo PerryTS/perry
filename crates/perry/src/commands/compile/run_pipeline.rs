@@ -3984,6 +3984,17 @@ pub fn run_with_parse_cache(
                         for (export_name, origin_path) in exports {
                             let origin_prefix =
                                 compute_module_prefix(origin_path, &ctx.project_root);
+                            // #10945: a namespace member enters the FLAT maps below only as a
+                            // best-effort fallback for a bare-name call (#5927). A bare name that is a
+                            // global intrinsic (`Array`, `Map`, `Request`, ...) never means the member in
+                            // an importer that did not import it by name, and an entry here makes the
+                            // importer's `new Array(n)` construct the member instead (`lower_new`'s
+                            // `user_owns_construction`) -- effect's `Array.ts` exports
+                            // `const Array = globalThis.Array`. Same rule #10356 applies to implicitly
+                            // registered classes. The per-namespace entries are kept, so `ns.Array`
+                            // still resolves.
+                            let flat =
+                                !perry_hir::analysis::is_global_intrinsic_value_name(export_name);
                             // Issue #5927: namespace members are a
                             // best-effort fallback in the flat
                             // `import_function_prefixes` map — the
@@ -4009,9 +4020,11 @@ pub fn run_with_parse_cache(
                             // remeda call) resolved against
                             // `Context.ts`'s prefix instead of
                             // remeda's chunk.
-                            import_function_prefixes
-                                .entry(export_name.clone())
-                                .or_insert_with(|| origin_prefix.clone());
+                            if flat {
+                                import_function_prefixes
+                                    .entry(export_name.clone())
+                                    .or_insert_with(|| origin_prefix.clone());
+                            }
                             // Issue #678: surface origin-name overrides
                             // for namespace-imported members too. A
                             // member reached via a re-export rename
@@ -4023,7 +4036,7 @@ pub fn run_with_parse_cache(
                                 .and_then(|m| m.get(export_name))
                                 .cloned();
                             if let Some(ref origin_name) = resolved_origin_name {
-                                if origin_name != export_name {
+                                if flat && origin_name != export_name {
                                     // Issue #5927: same `or_insert`
                                     // rationale as `import_function_prefixes`
                                     // above — never let a namespace
@@ -4066,15 +4079,21 @@ pub fn run_with_parse_cache(
                             let scoped_func_key =
                                 perry_codegen::namespace_member_func_key(local, export_name);
                             if let Some(&param_count) = exported_func_param_counts.get(&key) {
-                                imported_param_counts.insert(export_name.clone(), param_count);
+                                if flat {
+                                    imported_param_counts.insert(export_name.clone(), param_count);
+                                }
                                 imported_param_counts.insert(scoped_func_key.clone(), param_count);
                             }
                             if exported_func_has_rest.get(&key).copied().unwrap_or(false) {
-                                imported_has_rest.insert(export_name.clone());
+                                if flat {
+                                    imported_has_rest.insert(export_name.clone());
+                                }
                                 imported_has_rest.insert(scoped_func_key.clone());
                             }
                             if exported_func_synthetic_arguments.contains(&key) {
-                                imported_synthetic_arguments.insert(export_name.clone());
+                                if flat {
+                                    imported_synthetic_arguments.insert(export_name.clone());
+                                }
                                 imported_synthetic_arguments.insert(scoped_func_key);
                             }
                             // Issue #636: namespace-imported vars must
@@ -4457,6 +4476,18 @@ pub fn run_with_parse_cache(
                             for (export_name, origin_path) in target_exports {
                                 let origin_prefix =
                                     compute_module_prefix(origin_path, &ctx.project_root);
+                                // #10945: a namespace member enters the FLAT maps below only as a
+                                // best-effort fallback for a bare-name call (#5927). A bare name that is a
+                                // global intrinsic (`Array`, `Map`, `Request`, ...) never means the member in
+                                // an importer that did not import it by name, and an entry here makes the
+                                // importer's `new Array(n)` construct the member instead (`lower_new`'s
+                                // `user_owns_construction`) -- effect's `Array.ts` exports
+                                // `const Array = globalThis.Array`. Same rule #10356 applies to implicitly
+                                // registered classes. The per-namespace entries are kept, so `ns.Array`
+                                // still resolves.
+                                let flat = !perry_hir::analysis::is_global_intrinsic_value_name(
+                                    export_name,
+                                );
                                 // Issue #5927: `or_insert` — see the
                                 // matching rationale on the
                                 // `namespace_like_local` branch above.
@@ -4466,9 +4497,11 @@ pub fn run_with_parse_cache(
                                 // has no other resolution path and
                                 // must always win, regardless of
                                 // import-statement order.
-                                import_function_prefixes
-                                    .entry(export_name.clone())
-                                    .or_insert_with(|| origin_prefix.clone());
+                                if flat {
+                                    import_function_prefixes
+                                        .entry(export_name.clone())
+                                        .or_insert_with(|| origin_prefix.clone());
+                                }
                                 // Issue #5922 (companion to #680): also
                                 // register under the per-namespace key so
                                 // `Context.foo` and `Option.foo` resolve to
@@ -4493,7 +4526,7 @@ pub fn run_with_parse_cache(
                                     .and_then(|m| m.get(export_name))
                                     .cloned();
                                 if let Some(ref origin_name) = resolved_origin_name {
-                                    if origin_name != export_name {
+                                    if flat && origin_name != export_name {
                                         // Issue #5927: `or_insert` — see
                                         // the matching rationale above.
                                         import_function_origin_names
@@ -4544,16 +4577,23 @@ pub fn run_with_parse_cache(
                                     export_name,
                                 );
                                 if let Some(&param_count) = exported_func_param_counts.get(&key) {
-                                    imported_param_counts.insert(export_name.clone(), param_count);
+                                    if flat {
+                                        imported_param_counts
+                                            .insert(export_name.clone(), param_count);
+                                    }
                                     imported_param_counts
                                         .insert(scoped_func_key.clone(), param_count);
                                 }
                                 if exported_func_has_rest.get(&key).copied().unwrap_or(false) {
-                                    imported_has_rest.insert(export_name.clone());
+                                    if flat {
+                                        imported_has_rest.insert(export_name.clone());
+                                    }
                                     imported_has_rest.insert(scoped_func_key.clone());
                                 }
                                 if exported_func_synthetic_arguments.contains(&key) {
-                                    imported_synthetic_arguments.insert(export_name.clone());
+                                    if flat {
+                                        imported_synthetic_arguments.insert(export_name.clone());
+                                    }
                                     imported_synthetic_arguments.insert(scoped_func_key);
                                 }
                                 // Issue #321: NamespaceReExport members
