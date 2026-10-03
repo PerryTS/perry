@@ -2763,7 +2763,14 @@ impl<'a> FnCtx<'a> {
         &self,
         e: &perry_hir::Expr,
     ) -> Option<&crate::collectors::PtrShapeLocal> {
-        if !self.repsel_context_allows_ptr_shape {
+        // An admitted region's authority covers its receivers' STORES only
+        // (`ptr_shape_store_fact`). A read or a call's dispatch keeps the
+        // route it has outside the region: it writes nothing the region's
+        // facts rest on, and the region's own bare stores keep every lane's
+        // representation, so the exact-class proof stays true inside it.
+        if !self.repsel_context_allows_ptr_shape
+            && self.repsel_ptr_shape_context_denial != Some(PTR_SHAPE_REGION_AUTHORITY)
+        {
             // #7106 follow-up: this early return is the whole of mechanism 2.
             // The fact EXISTS — `collect_shape_proven_ptr_locals` already ran
             // and already recorded a `select()` for it — and every access site
@@ -2780,6 +2787,26 @@ impl<'a> FnCtx<'a> {
             perry_hir::Expr::This => self.proven_this.as_ref(),
             _ => None,
         }
+    }
+
+    /// The `Ptr<Shape>` proof a STORE to `e` may act on.
+    ///
+    /// An admitted loop/body region owns its receivers' stores
+    /// ([`PTR_SHAPE_REGION_AUTHORITY`]): its live ShapeId guard and store
+    /// admission replace the unguarded store route, so inside the region a
+    /// store never takes it. Reads and a call's dispatch are not under that
+    /// authority ([`FnCtx::ptr_shape_receiver_fact`]).
+    pub(crate) fn ptr_shape_store_fact(
+        &self,
+        e: &perry_hir::Expr,
+    ) -> Option<&crate::collectors::PtrShapeLocal> {
+        if !self.repsel_context_allows_ptr_shape {
+            if crate::opt_report::enabled() {
+                self.report_ptr_shape_context_drop(e);
+            }
+            return None;
+        }
+        self.ptr_shape_receiver_fact(e)
     }
 
     /// Shared exact-shape lookup for a local, with clone-parameter overlays

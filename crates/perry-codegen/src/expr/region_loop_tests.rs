@@ -462,9 +462,10 @@ fn a_region_r_proven_increment_store_clears_only_its_number_boxed_bit() {
     );
 }
 
-/// A fresh bare read used by a Number-consuming add requests an F64 lane.
-/// The prime must refuse an Any receiver, so this is an actual R-bearing
-/// region rather than a vacuous mask argument.
+/// A fresh bare read used by a Number-consuming add requests R. The prime
+/// serves an Any lane only with `REGION_LOOP_WORD_VALUE_TEST`, which the
+/// guard honours with a value test, so this is an actual R-bearing region
+/// rather than a vacuous mask argument.
 #[test]
 fn a_number_consuming_bare_read_sets_the_prime_rep_mask() {
     let ir = loop_ir(
@@ -485,6 +486,80 @@ fn a_number_consuming_bare_read_sets_the_prime_rep_mask() {
         masks.iter().all(|&m| m == 1),
         "fresh x read must request key 0: {masks:?}"
     );
+}
+
+/// The R-bearing guard tests the R slot's value whenever the learned word
+/// carries the value-test bit (bit 63: a signed compare against 0), and the
+/// test is the strict Number test below the tag band.
+#[test]
+fn a_number_read_guard_value_tests_a_word_that_asks() {
+    let ir = loop_ir(
+        "region_loop_value_test",
+        vec![Stmt::Expr(Expr::LocalSet(
+            H,
+            Box::new(Expr::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(Expr::LocalGet(H)),
+                right: Box::new(get("x")),
+            }),
+        ))],
+    );
+    let bl = blocks(&ir);
+    let value: Vec<&Vec<String>> = bl
+        .iter()
+        .filter(|(l, _)| {
+            l.strip_prefix("rloop.guard.value.")
+                .is_some_and(|t| t.chars().all(|c| c.is_ascii_digit()))
+        })
+        .map(|(_, (insts, _))| insts)
+        .collect();
+    assert!(!value.is_empty(), "no value-test block in\n{ir}");
+    assert!(
+        value.iter().all(|insts| {
+            insts.iter().any(|i| i.contains("load double"))
+                && insts
+                    .iter()
+                    .any(|i| i.contains("and i64") && i.contains("9223372036854775807"))
+                && insts
+                    .iter()
+                    .any(|i| i.contains("icmp ult i64") && i.contains("9221401712017801216"))
+        }),
+        "every value test must load the slot and test it below the tag band:\n{value:#?}"
+    );
+    assert!(
+        bl.iter()
+            .filter(|(l, _)| l.starts_with("rloop.guard.value.need"))
+            .all(|(_, (insts, _))| insts.iter().any(|i| i.contains("icmp slt i64"))),
+        "the value test must be selected by the word's sign bit"
+    );
+}
+
+/// A read beneath another property access is that access's receiver
+/// (`o.x.length`), never a Number operand: the region asks for no R.
+#[test]
+fn a_receiver_read_beneath_a_property_access_requests_no_number_lane() {
+    let ir = loop_ir(
+        "region_loop_receiver_not_operand",
+        vec![Stmt::Expr(Expr::LocalSet(
+            H,
+            Box::new(Expr::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(Expr::LocalGet(H)),
+                right: Box::new(Expr::PropertyGet {
+                    object: Box::new(get("x")),
+                    property: "length".to_string(),
+                    byte_offset: 0,
+                }),
+            }),
+        ))],
+    );
+    let masks = prime_rep_masks(&ir);
+    assert!(!masks.is_empty(), "the region must form:\n{ir}");
+    assert!(
+        masks.iter().all(|&m| m == 0),
+        "`o.x` is `.length`'s receiver, not a Number operand: {masks:?}"
+    );
+    assert!(!ir.contains("rloop.guard.value"), "no R, so no value test");
 }
 
 /// The F-local fixed point follows the fresh F64 read through a temporary and

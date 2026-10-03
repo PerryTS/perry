@@ -75,8 +75,8 @@ pub(crate) use self::arrays::{
 use self::bare::note;
 pub(crate) use self::bare::{try_lower_bare_get, try_lower_bare_put, try_lower_fact_add_tree};
 use self::guard::{
-    decode_slots, emit_body_guard_direct, emit_guard, emit_guard_word, field_i32, handle_of,
-    has_static_supplier, lower_recv, store_admission,
+    decode_slots, emit_body_guard_direct, emit_guard, emit_guard_word, emit_recheck_eq,
+    emit_value_tests, field_i32, handle_of, has_static_supplier, lower_recv, store_admission,
 };
 pub(crate) use self::numeric_expression::try_lower_numeric_compare;
 use self::plan::{
@@ -189,8 +189,14 @@ pub(crate) struct Receiver {
     /// Bit `i`: a bare store may write `keys[i]` a value not proven a
     /// canonical double (the word must then give it an `Any` lane).
     boxed_mask: u32,
-    /// Bit `i`: a read assumes the key has an identity F64 lane.
+    /// Bit `i`: a read assumes the key holds a raw canonical Number (R).
     r_mask: u32,
+    /// Bit `i`: an R key the guard value-tests on the object when the word
+    /// carries `VALUE_TEST_BIT` (a lane that is not an identity F64 lane).
+    /// Before the guard: the R keys the plan lets a STATIC word value-test.
+    /// After it: a static word's exact `Any`-lane R keys, or every R key of a
+    /// learned word (which may ask for any of them).
+    vt_mask: u32,
     /// `i1`: the guard matched this receiver's SPILL word (flipped id).
     spill: String,
     sites: Option<(String, String)>,
@@ -205,8 +211,9 @@ pub(crate) struct Receiver {
 
 /// Whether this exact fresh bare read is protected by an R bit in an
 /// active F clone. The published word (or exact static birth id) guarantees
-/// the slot holds a canonical raw JS Number; G and post-loop have no Active
-/// fact and therefore never answer true.
+/// the slot holds a canonical raw JS Number — by its identity F64 lane, or by
+/// the guard's value test when the word carries `VALUE_TEST_BIT`; G and
+/// post-loop have no Active fact and therefore never answer true.
 pub(crate) fn is_f64_read(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     let Expr::PropertyGet {
         object, property, ..
@@ -472,6 +479,11 @@ fn begin_with(
                 stored_mask: effective_stored_mask(*sm, k.len()),
                 boxed_mask: *bm,
                 r_mask: *rm,
+                // A static word's value-tested R is re-tested at every
+                // re-check; a loop that re-checks every iteration would pay
+                // that test every iteration for what R saves, so it takes no
+                // value-tested R (a learned word is decided by its bit).
+                vt_mask: if p.recheck == Recheck::Always { 0 } else { *rm },
                 spill: "false".to_string(),
                 sites: None,
                 word: String::new(),
@@ -483,6 +495,7 @@ fn begin_with(
         for rv in receivers.iter_mut() {
             let (word, pass, spill) = emit_guard(ctx, rv)?;
             rv.spill = spill;
+            let pass = emit_value_tests(ctx, rv, &word, &pass)?;
             all = ctx.block().and(I1, &all, &pass);
             decode_slots(ctx, rv, &word);
         }
@@ -723,6 +736,7 @@ fn body_pending(p: Plan, body: &[Stmt], split_at: usize) -> Pending {
             stored_mask: effective_stored_mask(*sm, k.len()),
             boxed_mask: *bm,
             r_mask: *rm,
+            vt_mask: *rm,
             spill: "false".to_string(),
             sites: None,
             word: String::new(),
@@ -1011,7 +1025,9 @@ pub(crate) fn lower_split(
                     } else {
                         exp
                     };
-                    let eq = ctx.block().icmp_eq(I32, &sid, &exp);
+                    // A re-check follows JS that may have written an R slot
+                    // of a value-tested lane: the values are tested again.
+                    let eq = emit_recheck_eq(ctx, rv, &sid, &exp)?;
                     let eq = if rv.has_store {
                         let adm = store_admission(ctx, &h, false);
                         ctx.block().and(I1, &eq, &adm)
@@ -1054,6 +1070,7 @@ pub(crate) fn lower_split(
             for rv in receivers.iter_mut() {
                 let (word, pass, spill) = emit_guard(ctx, rv)?;
                 rv.spill = spill;
+                let pass = emit_value_tests(ctx, rv, &word, &pass)?;
                 all = ctx.block().and(I1, &all, &pass);
                 decode_slots(ctx, rv, &word);
             }

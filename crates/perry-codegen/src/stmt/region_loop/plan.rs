@@ -90,14 +90,26 @@ pub(super) fn fact_tree_leaves<'e>(
 
 /// Candidate reads inside a Number-consuming expression. The planner's
 /// exact bare-access set filters these by freshness after the walk.
+///
+/// Only a value the operator itself consumes is a candidate. A read beneath
+/// another property access is that access's RECEIVER (`o.a.length` reads
+/// `o.a` as an object), and a read beneath an element access or a call is
+/// that operation's key, receiver or argument: none of them is a Number
+/// operand, so none may ask the region for a Number lane (R).
 fn number_operand_reads(e: &Expr, out: &mut Vec<(usize, Recv, String)>) {
-    if let Expr::PropertyGet {
-        object, property, ..
-    } = e
-    {
-        if let Some(r) = Recv::of(object) {
-            out.push((e as *const Expr as usize, r, property.clone()));
+    match e {
+        Expr::PropertyGet {
+            object, property, ..
+        } => {
+            if let Some(r) = Recv::of(object) {
+                out.push((e as *const Expr as usize, r, property.clone()));
+            }
+            return;
         }
+        Expr::IndexGet { .. } | Expr::Call { .. } | Expr::CallSpread { .. } | Expr::New { .. } => {
+            return
+        }
+        _ => {}
     }
     perry_hir::walker::walk_expr_children(e, &mut |child| number_operand_reads(child, out));
 }
@@ -857,13 +869,15 @@ pub(super) fn receiver_eligible(ctx: &FnCtx<'_>, r: Recv) -> bool {
         // A derived constructor's `this` may still be in its TDZ (before
         // `super()`), and reading it throws: the preheader must not hoist
         // that read, so such a body's `this` is not a region receiver.
-        // A `this` whose shape is already PROVEN (a proven-shape method clone)
-        // reads its slots with no guard at all; a region would only add one.
+        //
+        // A receiver whose shape is already PROVEN (Ptr<Shape>, or a
+        // proven-shape method clone's `this`) stays eligible: the region adds
+        // one guard but brings the R facts and bare stores a proof alone does
+        // not (`h += o.a` on such a local: 24 -> 11 instructions), and its
+        // reads and calls keep their proven routes inside the region
+        // (`FnCtx::ptr_shape_receiver_fact`).
         Recv::This => {
-            !ctx.this_stack.is_empty()
-                && !ctx.in_static_member
-                && ctx.super_called_stack.is_empty()
-                && ctx.ptr_shape_receiver_fact(&Expr::This).is_none()
+            !ctx.this_stack.is_empty() && !ctx.in_static_member && ctx.super_called_stack.is_empty()
         }
         Recv::Local(id) => {
             !ctx.boxed_vars.contains(&id)
@@ -878,7 +892,6 @@ pub(super) fn receiver_eligible(ctx: &FnCtx<'_>, r: Recv) -> bool {
                 && !ctx.local_slot_reps.contains_key(&id)
                 && !ctx.integer_locals.contains(&id)
                 && !ctx.receiver_descriptors.contains_buffer_view(id)
-                && ctx.ptr_shape_receiver_fact(&Expr::LocalGet(id)).is_none()
                 && (ctx.locals.contains_key(&id)
                     || ctx.closure_captures.contains_key(&id)
                     || ctx.module_globals.contains_key(&id))

@@ -921,7 +921,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                                 field_index,
                             );
                         let route_proven = ctx
-                            .ptr_shape_receiver_fact(object.as_ref())
+                            .ptr_shape_store_fact(object.as_ref())
                             .is_some_and(|fact| fact.class_name == class_name);
                         if !route_proven
                             && crate::expr::class_field_inline_guard::class_instances_grow_past_layout(
@@ -1004,7 +1004,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                                 // sealed target would otherwise silently accept a raw
                                 // store where the spec requires a strict TypeError.
                                 let ptr_shape_proven = ctx
-                                    .ptr_shape_receiver_fact(object.as_ref())
+                                    .ptr_shape_store_fact(object.as_ref())
                                     .map(|fact| fact.class_name == class_name)
                                     .unwrap_or(false);
                                 // A contained offset proof may carry completed

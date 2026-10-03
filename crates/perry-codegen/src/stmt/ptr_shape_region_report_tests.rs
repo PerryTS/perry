@@ -20,6 +20,16 @@ fn fixture() -> Module {
         panic!("fixture loop")
     };
     body.insert(0, receiver);
+    // A compound update alongside the put-value store: the admitted region
+    // owns its receivers' STORES, so the generic copy's update of this
+    // receiver is where the region authority refuses the unguarded route.
+    body.push(Stmt::Expr(Expr::PropertyUpdate {
+        object: Box::new(Expr::LocalGet(1)),
+        property: "value".into(),
+        op: BinaryOp::Add,
+        prefix: false,
+        strict: false,
+    }));
     m
 }
 
