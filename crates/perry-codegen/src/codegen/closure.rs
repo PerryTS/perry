@@ -555,6 +555,7 @@ pub(super) fn compile_closure(
 
     let ic_base = llmod.ic_counter;
     let buffer_alias_base = llmod.buffer_alias_counter;
+    let closure_function_index = llmod.function_count();
     let lf = llmod.define_function(&llvm_name, DOUBLE, llvm_params);
     // #7908: closures live outside `hir.functions`, so they do not pass
     // through `codegen/function.rs`, which applies this same collector result
@@ -1424,6 +1425,27 @@ pub(super) fn compile_closure(
     }
     for raw in &typed_parse_rodata {
         llmod.add_raw_global(raw.clone());
+    }
+    // Step 5C: a compact public body that a completed shape's ConstFn lane
+    // names is called DIRECTLY by static method lanes; admit it to the early
+    // (pre-statepoint) inliner so those calls flatten like a class method's
+    // exact-receiver clone. Every other caller reaches it through a code
+    // pointer, which the inliner never touches.
+    if llvm_name == public_llvm_name
+        && typed_public_trampoline.is_none()
+        && !trusted_box_captures
+        && !is_async
+        && !is_generator
+        && super::static_shape_ids::body_has_constfn_lane(&llvm_name)
+    {
+        if let Some(lowered) = llmod.function_mut(closure_function_index) {
+            if super::helpers::guarded_specialization_admits_preinline(
+                lowered.estimated_ir_bytes(),
+                body.len(),
+            ) {
+                lowered.pre_statepoint_inline = true;
+            }
+        }
     }
     if !trusted_box_captures {
         if let Some(kind) = typed_public_trampoline {
