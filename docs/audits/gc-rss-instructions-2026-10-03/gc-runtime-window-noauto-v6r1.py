@@ -1,10 +1,10 @@
-"""Isolate the consolidated GC patch against freshly fetched currente532 on full-runtime TS/Zod.
+"""Isolate the consolidated GC patch against freshly fetched main69 on full-runtime TS/Zod.
 Normal-auto acceptance is a separate matrix. No collection knobs are changed.
 """
 import json, subprocess
 import bench
-B=bench.B; V='gc-currente532-v12-noauto'; rows=[]
-arms=['currente532-base','currente532-gc']
+B=bench.B; V='gc-window-v6r1-noauto'; rows=[]
+arms=['main69-gc','main69-window']
 cases=[('tscwork',['1']),('zodwork',['200'])]
 assert not (B/(V+'-runs.json')).exists()
 products={str(p):bench.m.sha(p) for arm in arms for p in [B/arm/n for n in ['perry','libperry_runtime.a','libperry_stdlib.a']]}
@@ -17,8 +17,20 @@ for case,args in cases:
     oracles[case]=r['stdout']
     for arm in arms:
         binary=B/'bin'/f'{V}-{arm}-{case}'
+        if arm=='main69-gc' and case=='tscwork':
+            previous_path=B/'gc-window-v6-noauto-builds.json'
+            matches=[r for r in json.loads(previous_path.read_text()) if r['arm']==arm and r['case']==case and r['rc']==0 and r['reason'] is None]
+            assert len(matches)==1
+            prior=matches[0]
+            binary=B/'bin'/f'gc-window-v6-noauto-{arm}-{case}'
+            assert bench.m.sha(binary)==prior['binary_sha256']
+            assert bench.m.sha(src)==prior['source_sha256']
+            reused=dict(prior,reused_from_manifest=str(previous_path),reuse_manifest_sha256=bench.m.sha(previous_path))
+            builds.append(reused);bench.m.save(V+'-builds.json',builds)
+            binaries[arm,case]=binary
+            continue
         assert not binary.exists()
-        env={'PERRY_RUNTIME_DIR':str(B/arm),'PERRY_WORKSPACE_ROOT':str(B/('perry-currente532-base' if arm=='currente532-base' else 'perry-currente532-gc')),'PERRY_NO_CACHE':'1','PERRY_KEEP_SYMBOLS':'1'}
+        env={'PERRY_RUNTIME_DIR':str(B/arm),'PERRY_WORKSPACE_ROOT':str(B/('perry-main69-gc' if arm=='main69-gc' else 'perry-main69-window')),'PERRY_NO_CACHE':'1','PERRY_KEEP_SYMBOLS':'1'}
         r=bench.run(V+'-build-'+arm+'-'+case,[B/arm/'perry','compile',src,'--no-auto-optimize','-o',binary],env,1800)
         r.update(case=case,arm=arm,source_sha256=bench.m.sha(src));builds.append(r)
         bench.m.save(V+'-builds.json',builds)
