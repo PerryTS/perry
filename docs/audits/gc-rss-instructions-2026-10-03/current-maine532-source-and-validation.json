@@ -1,0 +1,130 @@
+{
+  "scope": "Current fetched main e532 plus consolidated shared visitors, compact pages and proposed pool window. Private capture/cache candidates excluded; Linux and app acceptance remain pending.",
+  "base": "e532bf3d0efce80ef699aa67b4834967050cf5ef",
+  "source_head": "c8f42db07606a2471784a66d66a0f079841416e8",
+  "macos": {
+    "passed": 4862,
+    "failed": 0,
+    "ignored": 5,
+    "input": {
+      "base": "e532bf3d0efce80ef699aa67b4834967050cf5ef",
+      "head": "c8f42db07606a2471784a66d66a0f079841416e8",
+      "source_sha256": {
+        "crates/perry-runtime/src/arena/block.rs": "80fe691f930208ac5562b40d4fddd7471f65f37cfc0ae32728d074e764c9df1f",
+        "crates/perry-runtime/src/arena/block/decommit.rs": "373112473c98732dd1e9e5b513de2f994f70ca7e0d19416ea3401d4e53062fa3",
+        "crates/perry-runtime/src/arena/block/reuse_window_tests.rs": "52668541321e94786fad55cf6193c6499ac4f763a2ce908be31a11b2d707ff25",
+        "crates/perry-runtime/src/arena/mod.rs": "4bc0fba68394a00a02baa368c00e37168c7bb09cb48e5551a24be8eb71860903",
+        "crates/perry-runtime/src/arena/page_meta/compact.rs": "9cb37c3003560cf46de300159ba98829e8ed45b469ce63f2b4e2ce081e65e481",
+        "crates/perry-runtime/src/arena/page_meta/compact/tests.rs": "35e121f6aa1bc4f36dee0c04595daeb5455c31fcaf0fb2798037bef16f9056ea",
+        "crates/perry-runtime/src/arena/page_meta/maintenance.rs": "cf4a8ec96ce435c5a7fd56ef5cf151709af84d1c1820d38204a0ea809b921e4a",
+        "crates/perry-runtime/src/arena/page_meta/mod.rs": "045b85c7a87e780f1d5bc9b65c2c273fe1182e3c2059f9095e0394a9c39037e8",
+        "crates/perry-runtime/src/arena/page_meta/storage.rs": "021733aa3126f82f2abc774bf2ee2111cf9c94654e9494de2e9c41de6f3ab49a",
+        "crates/perry-runtime/src/arena/page_meta/sweep_tally.rs": "ebb54d8d153cc0ce5237e09c16f1cc6388b2da06ec2971e7907e28136ba82fd0",
+        "crates/perry-runtime/src/arena/tests.rs": "741b32a49e3631bef59af384b72bf397e77abffd9b17e22fa9e822678b9e4f7b",
+        "crates/perry-runtime/src/arena/tests_page_meta_audit.rs": "4743a1775a167f7ac0a2d0bbb4eb1030605557476dc21324fa14a5a8a34113f6",
+        "crates/perry-runtime/src/arena/tests_promoted_runs.rs": "ea18f705c24ec5ced08d8df089ba8631c2b9b47936430103530f03f81169c0d1",
+        "crates/perry-runtime/src/arena/walk.rs": "140f556601614921992d5d8fdd3b427d06ff4366145cc26fe5a12686eb167682",
+        "crates/perry-runtime/src/gc/cycle.rs": "d1ae86380ae9fe53b4a47b93715c5475254553b2a5b9af89ae5bb360bf8c182f",
+        "crates/perry-runtime/src/gc/layout_slot_visit.rs": "9efdf4063dc95e900c0b9213fbb2f437405602f01107df15c6cde0f11afb47ac",
+        "crates/perry-runtime/src/gc/malloc.rs": "2eec963d62c7af5d7a21ce00d1cc98bb2f34b6daf84afd5a310937c99d215233",
+        "crates/perry-runtime/src/gc/mod.rs": "1acac5f29b3fabdf93972a0ac21bfa857a5bf29ce9ccad6c69fb3262aa950360",
+        "crates/perry-runtime/src/gc/tests/alloc.rs": "b1aecc30fdfffd7f9336d0f7b7a08168deed189c8d47c2b5f0051459ce084edf",
+        "crates/perry-runtime/src/gc/tests/full_rebuild_skip.rs": "665bbb157c621dd5dd1b80913de079c7ed3b5cac02aa67909a4f548da99bf078",
+        "crates/perry-runtime/src/gc/verify.rs": "3dd3c7326dd5d1d159dd9d21d58968e5f55ec608cf38b30af33895bd2465145b",
+        "crates/perry-runtime/src/turnloop_pool/tests.rs": "5e78833ca5151d13a25b39303fd9d4af3adac66c7dd523ec62e6dc31f6a6ccfc"
+      },
+      "cmd": [
+        "cargo",
+        "test",
+        "--release",
+        "-p",
+        "perry-runtime",
+        "--lib"
+      ],
+      "overrides": {
+        "CARGO_TARGET_DIR": "/Users/amlug/projects/perry/secret-tests/scratchpad/rss-header-20261002/gc-runtime-test-target",
+        "CARGO_PROFILE_RELEASE_CODEGEN_UNITS": "16",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_BUILD_JOBS": "4",
+        "RUST_TEST_THREADS": "1"
+      },
+      "started": 1791032847.006484,
+      "exit": 0,
+      "ended": 1791033006.335836,
+      "log_sha256": "58ab6bfc5890a515c841fdc5250eec383a5d7586dfa81adac393ce0f6f6d7855"
+    },
+    "log": "/Users/amlug/projects/perry/secret-tests/scratchpad/rss-header-20261002/gc-currente532-v12-macos-full.log"
+  },
+  "source": {
+    "head": "c8f42db07606a2471784a66d66a0f079841416e8",
+    "base": "e532bf3d0efce80ef699aa67b4834967050cf5ef",
+    "archive_sha256": "0b2378605c8a2f9ff51eaa44329a9a407668ce8b5d535778aab6dfa36eb0f467",
+    "files": {
+      "crates/perry-runtime/src/arena/block.rs": "80fe691f930208ac5562b40d4fddd7471f65f37cfc0ae32728d074e764c9df1f",
+      "crates/perry-runtime/src/arena/block/decommit.rs": "373112473c98732dd1e9e5b513de2f994f70ca7e0d19416ea3401d4e53062fa3",
+      "crates/perry-runtime/src/arena/block/reuse_window_tests.rs": "52668541321e94786fad55cf6193c6499ac4f763a2ce908be31a11b2d707ff25",
+      "crates/perry-runtime/src/arena/mod.rs": "4bc0fba68394a00a02baa368c00e37168c7bb09cb48e5551a24be8eb71860903",
+      "crates/perry-runtime/src/arena/page_meta/compact.rs": "9cb37c3003560cf46de300159ba98829e8ed45b469ce63f2b4e2ce081e65e481",
+      "crates/perry-runtime/src/arena/page_meta/compact/tests.rs": "35e121f6aa1bc4f36dee0c04595daeb5455c31fcaf0fb2798037bef16f9056ea",
+      "crates/perry-runtime/src/arena/page_meta/maintenance.rs": "cf4a8ec96ce435c5a7fd56ef5cf151709af84d1c1820d38204a0ea809b921e4a",
+      "crates/perry-runtime/src/arena/page_meta/mod.rs": "045b85c7a87e780f1d5bc9b65c2c273fe1182e3c2059f9095e0394a9c39037e8",
+      "crates/perry-runtime/src/arena/page_meta/storage.rs": "021733aa3126f82f2abc774bf2ee2111cf9c94654e9494de2e9c41de6f3ab49a",
+      "crates/perry-runtime/src/arena/page_meta/sweep_tally.rs": "ebb54d8d153cc0ce5237e09c16f1cc6388b2da06ec2971e7907e28136ba82fd0",
+      "crates/perry-runtime/src/arena/tests.rs": "741b32a49e3631bef59af384b72bf397e77abffd9b17e22fa9e822678b9e4f7b",
+      "crates/perry-runtime/src/arena/tests_page_meta_audit.rs": "4743a1775a167f7ac0a2d0bbb4eb1030605557476dc21324fa14a5a8a34113f6",
+      "crates/perry-runtime/src/arena/tests_promoted_runs.rs": "ea18f705c24ec5ced08d8df089ba8631c2b9b47936430103530f03f81169c0d1",
+      "crates/perry-runtime/src/arena/walk.rs": "140f556601614921992d5d8fdd3b427d06ff4366145cc26fe5a12686eb167682",
+      "crates/perry-runtime/src/gc/cycle.rs": "d1ae86380ae9fe53b4a47b93715c5475254553b2a5b9af89ae5bb360bf8c182f",
+      "crates/perry-runtime/src/gc/layout_slot_visit.rs": "9efdf4063dc95e900c0b9213fbb2f437405602f01107df15c6cde0f11afb47ac",
+      "crates/perry-runtime/src/gc/malloc.rs": "2eec963d62c7af5d7a21ce00d1cc98bb2f34b6daf84afd5a310937c99d215233",
+      "crates/perry-runtime/src/gc/mod.rs": "1acac5f29b3fabdf93972a0ac21bfa857a5bf29ce9ccad6c69fb3262aa950360",
+      "crates/perry-runtime/src/gc/tests/alloc.rs": "b1aecc30fdfffd7f9336d0f7b7a08168deed189c8d47c2b5f0051459ce084edf",
+      "crates/perry-runtime/src/gc/tests/full_rebuild_skip.rs": "665bbb157c621dd5dd1b80913de079c7ed3b5cac02aa67909a4f548da99bf078",
+      "crates/perry-runtime/src/gc/trace.rs": "7debbcd869502ef13aa52e5e712362e13749128b8e0bd4c7b9c9b5ea64b456ca",
+      "crates/perry-runtime/src/gc/verify.rs": "3dd3c7326dd5d1d159dd9d21d58968e5f55ec608cf38b30af33895bd2465145b",
+      "crates/perry-runtime/src/turnloop_pool/tests.rs": "5e78833ca5151d13a25b39303fd9d4af3adac66c7dd523ec62e6dc31f6a6ccfc"
+    },
+    "scope": "Consolidated shared-visitor/reuse-window/compact-page proposal. Private capture/cache experiments excluded; explicit unchanged trace.rs included to replace frozen inline arms."
+  },
+  "archives": {
+    "perry-currente532-source.tar.gz": "254af5e6a8a5e5b7bc9a917c627f36b2051896dde42b51843f044383a96f8562",
+    "gc-runtime-currente532-v12-source.tar.gz": "0b2378605c8a2f9ff51eaa44329a9a407668ce8b5d535778aab6dfa36eb0f467"
+  },
+  "prepared_scripts": {
+    "base": "e532bf3d0efce80ef699aa67b4834967050cf5ef",
+    "head": "c8f42db07606a2471784a66d66a0f079841416e8",
+    "scripts": {
+      "gc-runtime-currente532-v12-run.sh": "ab0c249e5a7fc912c261dd53cb35132c74dea4d41115bc6cd4fe13461c389cbd",
+      "gc-runtime-currente532-v12-build.sh": "fc2c488bee6bffdd32ef1e6c434c4b14ebd58fc1b37142507ef4edb1518b00d0",
+      "gc-runtime-currente532-v12-linked.py": "b3a8d4df664220929ced202f6378976011d6a124ef22ba2f5b7ec571097bce5d",
+      "gc-runtime-currente532-v12-auto-matrix.py": "78c4f37e4dd753ff234e90c000b6a65f180866b04956791e2b35356426d694e6",
+      "gc-runtime-currente532-v12-noauto.py": "565109489dc4c4fecbec1f184f70e78088381af6bec338fcefa03b3edb47e025"
+    },
+    "queued": false,
+    "scope": "Prepared for execution only after v6 pool-policy measurements support the window, or revised if they reject it. Coherent fresh compilers and static wrappers, whole-workspace refresh, Linux runtime/FFI/events, 40 linked default/moving runs, 24 no-auto and 204 normal-auto cells. Compile guard is 1800 seconds, revised after the frozen v6 TypeScript build exceeded 600 seconds. Requires successful v6r1 auto receipt."
+  },
+  "checks": {
+    "node_pin": "passed",
+    "test_registration": "passed: 404 files, 4 registries",
+    "address_class_inventory": "passed: 1843 files, 309 allowlisted, 485 ratcheted sites",
+    "file_size": {
+      "status": "failed on inherited main file",
+      "path": "crates/perry-codegen/src/codegen/string_pool.rs",
+      "lines": 2068,
+      "limit": 2000,
+      "identical_to_base": true,
+      "sha256": "a84f2145f9a18ca99405b08f7a5782340d0ba4992396b608805bac3ac507fef6"
+    }
+  },
+  "remote_source_transfer": "Both archives and all 23 overlay members rehashed successfully on the build host.",
+  "linux_build_server_validation": {
+    "build_verification": "qb6-current-maine532-build-verification.json",
+    "linked_verification": "qb6-current-maine532-linked-verification.json",
+    "runtime_tests": 4846,
+    "ffi_tests": 75,
+    "events_tests": 15,
+    "linked_default": 20,
+    "linked_moving_copied_and_protected": 20,
+    "performance_acceptance": false
+  }
+}

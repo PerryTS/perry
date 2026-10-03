@@ -1,0 +1,3284 @@
+{
+  "CAMPAIGN-SHAPE-META-ATTRIBUTION-v2.json": {
+    "raw_sha256": "93ece7c66abb71e139a2af64433e3a89e11ae49352a2db01d8eb1ae185dcedb1",
+    "raw_location": "/root/rss-header-20261002/CAMPAIGN-SHAPE-META-ATTRIBUTION-v2.json",
+    "observations": [
+      {
+        "case": "tscwork",
+        "scope": "no-auto full runtime diagnostic; normal-auto acceptance is separate",
+        "peak_rss_median_bytes": 257892352,
+        "peak_rss_range_bytes": [
+          257863680,
+          257994752
+        ],
+        "cpu_median_s": 9.19,
+        "selected_full": 3,
+        "boundary_criterion": "third natural synchronous full; diagnostic snapshot, not peak RSS; ordinal chosen early because debugger and plain-run total counts differ",
+        "snapshots": [
+          {
+            "live_gc_bytes": 29387472,
+            "live_gc_objects": 238018,
+            "by_type": [
+              {
+                "dead": {
+                  "bytes": 1115792,
+                  "count": 10508
+                },
+                "id": 1,
+                "late_marked": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "live": {
+                  "bytes": 3552344,
+                  "count": 36807
+                },
+                "type": "array"
+              },
+              {
+                "dead": {
+                  "bytes": 247608,
+                  "count": 4161
+                },
+                "id": 2,
+                "late_marked": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "live": {
+                  "bytes": 11062512,
+                  "count": 80079
+                },
+                "type": "object"
+              },
+              {
+                "dead": {
+                  "bytes": 35787472,
+                  "count": 30472
+                },
+                "id": 3,
+                "late_marked": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "live": {
+                  "bytes": 2114992,
+                  "count": 28232
+                },
+                "type": "string"
+              },
+              {
+                "dead": {
+                  "bytes": 21632,
+                  "count": 425
+                },
+                "id": 4,
+                "late_marked": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "live": {
+                  "bytes": 1876816,
+                  "count": 21811
+                },
+                "type": "closure"
+              },
+              {
+                "dead": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "id": 8,
+                "late_marked": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "live": {
+                  "bytes": 279408,
+                  "count": 5821
+                },
+                "type": "map"
+              },
+              {
+                "dead": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "id": 9,
+                "late_marked": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "live": {
+                  "bytes": 176,
+                  "count": 2
+                },
+                "type": "lazy_array"
+              },
+              {
+                "dead": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "id": 12,
+                "late_marked": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "live": {
+                  "bytes": 760,
+                  "count": 19
+                },
+                "type": "set"
+              },
+              {
+                "dead": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "id": 17,
+                "late_marked": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "live": {
+                  "bytes": 48,
+                  "count": 2
+                },
+                "type": "date"
+              },
+              {
+                "dead": {
+                  "bytes": 323360,
+                  "count": 2021
+                },
+                "id": 19,
+                "late_marked": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "live": {
+                  "bytes": 10357440,
+                  "count": 64734
+                },
+                "type": "object_meta"
+              },
+              {
+                "dead": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "id": 20,
+                "late_marked": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "live": {
+                  "bytes": 3776,
+                  "count": 59
+                },
+                "type": "regexp"
+              },
+              {
+                "dead": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "id": 21,
+                "late_marked": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "live": {
+                  "bytes": 42232,
+                  "count": 61
+                },
+                "type": "regex_program"
+              },
+              {
+                "dead": {
+                  "bytes": 42240,
+                  "count": 2640
+                },
+                "id": 22,
+                "late_marked": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "live": {
+                  "bytes": 720,
+                  "count": 45
+                },
+                "type": "box"
+              },
+              {
+                "dead": {
+                  "bytes": 4928,
+                  "count": 308
+                },
+                "id": 25,
+                "late_marked": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "live": {
+                  "bytes": 96248,
+                  "count": 346
+                },
+                "type": "scope"
+              }
+            ],
+            "arena": {
+              "block_pool_bytes": 32505856,
+              "capacity_bytes": 75497472,
+              "free_list_bytes": 0,
+              "live_allocated_bytes_estimate": 63471144,
+              "old_free_bytes": 5719784,
+              "spaces": [
+                {
+                  "blocks": 2,
+                  "capacity_bytes": 2097152,
+                  "dead": {
+                    "bytes": 1654008,
+                    "count": 20834
+                  },
+                  "late_marked": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "live": {
+                    "bytes": 1440,
+                    "count": 23
+                  },
+                  "object_starts_bytes": 32768,
+                  "space": "nursery_eden",
+                  "stub_dead": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "stub_live": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "tombstones": 49,
+                  "used_bytes": 1655448,
+                  "walked_bytes": 1655448
+                },
+                {
+                  "blocks": 1,
+                  "capacity_bytes": 1048576,
+                  "dead": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "late_marked": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "live": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "object_starts_bytes": 16384,
+                  "space": "survivor0",
+                  "stub_dead": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "stub_live": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "tombstones": 0,
+                  "used_bytes": 0,
+                  "walked_bytes": 0
+                },
+                {
+                  "blocks": 1,
+                  "capacity_bytes": 1048576,
+                  "dead": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "late_marked": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "live": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "object_starts_bytes": 16384,
+                  "space": "survivor1",
+                  "stub_dead": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "stub_live": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "tombstones": 2,
+                  "used_bytes": 0,
+                  "walked_bytes": 0
+                },
+                {
+                  "blocks": 2,
+                  "capacity_bytes": 2097152,
+                  "dead": {
+                    "bytes": 1577296,
+                    "count": 28389
+                  },
+                  "late_marked": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "live": {
+                    "bytes": 126208,
+                    "count": 1565
+                  },
+                  "object_starts_bytes": 32768,
+                  "space": "longlived",
+                  "stub_dead": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "stub_live": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "tombstones": 0,
+                  "used_bytes": 1703504,
+                  "walked_bytes": 1703504
+                },
+                {
+                  "blocks": 66,
+                  "capacity_bytes": 69206016,
+                  "dead": {
+                    "bytes": 34311728,
+                    "count": 1312
+                  },
+                  "late_marked": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "live": {
+                    "bytes": 28649960,
+                    "count": 236428
+                  },
+                  "object_starts_bytes": 1081344,
+                  "space": "old",
+                  "stub_dead": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "stub_live": {
+                    "bytes": 18464,
+                    "count": 2
+                  },
+                  "tombstones": 12,
+                  "used_bytes": 68699936,
+                  "walked_bytes": 62980152
+                },
+                {
+                  "dead": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "late_marked": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "live": {
+                    "bytes": 609864,
+                    "count": 2
+                  },
+                  "space": "malloc",
+                  "stub_dead": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "stub_live": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "walked_bytes": 609864
+                }
+              ],
+              "used_bytes": 72058888
+            },
+            "shapes": {
+              "records": 6849,
+              "records_by_kind": {
+                "0": 6274,
+                "5": 335,
+                "1": 50,
+                "3": 188,
+                "4": 2
+              },
+              "chunks": 541,
+              "pages": 4,
+              "present_record_bytes": 438336,
+              "empty_record_slot_bytes": 669632,
+              "directory_capacity_bytes": 280,
+              "directory_used_bytes": 280,
+              "directory_page_bytes": 32768,
+              "chunk_storage_bytes": 1107968,
+              "extras_count": 355,
+              "extras_payload_bytes": 8520,
+              "constfn_entries": 945,
+              "constfn_list_payload_bytes": 15120,
+              "slab_requested_bytes": 1141016,
+              "slab_plus_extras_requested_bytes": 1164656,
+              "record_56_to_64_extra_requested_bytes_at_same_chunk_count": 138496,
+              "stock_census_omitted_extras_bytes": 23640
+            },
+            "metadata": {
+              "all_live_meta_records": 64734,
+              "all_live_meta_gc_bytes": 10357440,
+              "four_summary_fields_reserved_bytes_in_all_live_meta": 2071488,
+              "ordinary_meta_owners": 64722,
+              "ordinary_distinct_meta_records": 64722,
+              "ordinary_owners_with_any_summary": 94,
+              "ordinary_owners_with_nonzero_field": {
+                "descriptor_key_count": 94,
+                "accessor_key_bits": 94,
+                "descriptor_key_hash": 94
+              },
+              "summary_only_distinct_records": 17,
+              "summary_only_records_gross_gc_bytes": 2720,
+              "ordinary_field_patterns": {
+                "flags+private_evaluation_brand+prototype": 52559,
+                "accessor_key_bits+descriptor_key_count+descriptor_key_hash+dictionary_keys+spill": 2,
+                "spill": 326,
+                "prototype": 11607,
+                "accessor_key_bits+descriptor_key_count+descriptor_key_hash+spill": 52,
+                "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+proto_serial+spill": 6,
+                "flags+proto_serial+spill": 4,
+                "flags+proto_serial+prototype": 5,
+                "flags+proto_serial+prototype+spill": 3,
+                "flags+prototype+spill": 9,
+                "flags+prototype": 51,
+                "flags+proto_serial": 2,
+                "expando+spill": 27,
+                "expando": 12,
+                "accessor_key_bits+descriptor_key_count+descriptor_key_hash+prototype+spill": 3,
+                "accessor_key_bits+descriptor_key_count+descriptor_key_hash": 17,
+                "flags+private_evaluation_brand+proto_serial+prototype": 9,
+                "flags+private_evaluation_brand+prototype+spill": 14,
+                "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+prototype+spill": 4,
+                "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+private_evaluation_brand+proto_serial+prototype": 4,
+                "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+prototype": 6
+              },
+              "common_only_owners": 64217,
+              "distinct_common_fact_groups": 117,
+              "additional_common_fact_groups_beyond_existing_shapes": 0
+            },
+            "side_tables": [
+              {
+                "bytes": 819216,
+                "entries": 20252,
+                "table": "fn.name_registry"
+              },
+              {
+                "bytes": 5971,
+                "entries": 101,
+                "table": "fn.name_overrides(copied)"
+              },
+              {
+                "bytes": 1081360,
+                "entries": 21591,
+                "table": "fn.source_registry(toString)"
+              },
+              {
+                "bytes": 0,
+                "entries": 0,
+                "table": "fn.source_overrides(copied)"
+              },
+              {
+                "bytes": 288,
+                "entries": 11,
+                "table": "closure.singletons"
+              },
+              {
+                "bytes": 0,
+                "entries": 0,
+                "table": "closure.captured_singletons"
+              },
+              {
+                "bytes": 1141016,
+                "entries": 6849,
+                "table": "shapes.descriptors"
+              },
+              {
+                "bytes": 153872,
+                "entries": 92,
+                "table": "shapes.indices"
+              },
+              {
+                "bytes": 409616,
+                "entries": 6849,
+                "table": "shapes.by_facts"
+              },
+              {
+                "bytes": 179333,
+                "entries": 2730,
+                "table": "shapes.families"
+              },
+              {
+                "bytes": 0,
+                "entries": 14771,
+                "table": "shapes.ids_minted(process)"
+              },
+              {
+                "bytes": 0,
+                "entries": 5846,
+                "table": "shapes.proto(object_prototype)"
+              },
+              {
+                "bytes": 0,
+                "entries": 0,
+                "table": "shapes.proto(null)"
+              },
+              {
+                "bytes": 0,
+                "entries": 214,
+                "table": "shapes.proto(object_serial)"
+              },
+              {
+                "bytes": 0,
+                "entries": 102,
+                "table": "shapes.proto(class_default)"
+              },
+              {
+                "bytes": 0,
+                "entries": 684,
+                "table": "shapes.proto(class_recorded)"
+              },
+              {
+                "bytes": 0,
+                "entries": 3,
+                "table": "shapes.proto(unique)"
+              },
+              {
+                "bytes": 0,
+                "entries": 123,
+                "table": "shapes.proto.distinct_identities"
+              },
+              {
+                "bytes": 2878,
+                "entries": 48,
+                "table": "class.names"
+              },
+              {
+                "bytes": 87270,
+                "entries": 857,
+                "table": "class.vtables(methods+accessors)"
+              },
+              {
+                "bytes": 3937,
+                "entries": 17,
+                "table": "class.static_methods"
+              },
+              {
+                "bytes": 58773,
+                "entries": 851,
+                "table": "class.method_bind_lengths"
+              },
+              {
+                "bytes": 20496,
+                "entries": 1861,
+                "table": "class.registered_ids"
+              },
+              {
+                "bytes": 288,
+                "entries": 11,
+                "table": "class.prototype_objects"
+              },
+              {
+                "bytes": 0,
+                "entries": 0,
+                "table": "class.declared_static_global_slots"
+              },
+              {
+                "bytes": 0,
+                "entries": 0,
+                "table": "object.overflow_fields"
+              },
+              {
+                "bytes": 524288,
+                "entries": 16384,
+                "table": "object.transition_cache(fixed)"
+              },
+              {
+                "bytes": 6144,
+                "entries": 256,
+                "table": "object.shape_inline_cache(fixed)"
+              },
+              {
+                "bytes": 356666,
+                "entries": 4126,
+                "table": "object.property_descriptors"
+              },
+              {
+                "bytes": 231,
+                "entries": 1,
+                "table": "object.accessor_descriptors"
+              },
+              {
+                "bytes": 917504,
+                "entries": 6007,
+                "table": "ic.lazy_caches"
+              },
+              {
+                "bytes": 4989817,
+                "entries": 1,
+                "table": "stackmap.sections(file-backed)"
+              },
+              {
+                "bytes": 1048576,
+                "entries": 23729,
+                "table": "stackmap.functions"
+              },
+              {
+                "bytes": 131072,
+                "entries": 8192,
+                "table": "string.intern_table(fixed)"
+              },
+              {
+                "bytes": 32768,
+                "entries": 2,
+                "table": "gc.malloc_objects_vec"
+              },
+              {
+                "bytes": 73744,
+                "entries": 2,
+                "table": "gc.malloc_objects_set"
+              },
+              {
+                "bytes": 0,
+                "entries": 0,
+                "table": "gc.malloc_realloc_forwarding"
+              },
+              {
+                "bytes": 10512,
+                "entries": 97,
+                "table": "arena.page_generations"
+              },
+              {
+                "bytes": 3904368,
+                "entries": 15437,
+                "table": "arena.old_gen_page_objects"
+              },
+              {
+                "bytes": 3702800,
+                "entries": 16896,
+                "table": "arena.old_gen_page_meta"
+              },
+              {
+                "bytes": 0,
+                "entries": 0,
+                "table": "arena.old_gen_page_promoted_runs"
+              },
+              {
+                "bytes": 9232,
+                "entries": 3,
+                "table": "gc.dirty_old_pages"
+              },
+              {
+                "bytes": 280,
+                "entries": 0,
+                "table": "gc.external_dirty_slot_pages"
+              },
+              {
+                "bytes": 0,
+                "entries": 0,
+                "table": "gc.remembered_set"
+              },
+              {
+                "bytes": 0,
+                "entries": 0,
+                "table": "gc.ever_dirty_old_pages"
+              },
+              {
+                "bytes": 544,
+                "entries": 3,
+                "table": "module.path_registry"
+              },
+              {
+                "bytes": 0,
+                "entries": 0,
+                "table": "timer.agent_store"
+              },
+              {
+                "bytes": 0,
+                "entries": 0,
+                "table": "timer.ref_states"
+              },
+              {
+                "bytes": 190,
+                "entries": 2,
+                "table": "symbol.registry"
+              },
+              {
+                "bytes": 565080,
+                "entries": 23545,
+                "table": "gc.layout_slot_masks"
+              },
+              {
+                "bytes": 959480,
+                "entries": 0,
+                "table": "gc.external_side_live_bytes(map/set/tape)"
+              },
+              {
+                "bytes": 0,
+                "entries": 928,
+                "table": "shapes.descriptors.carried(live objects)"
+              },
+              {
+                "bytes": 0,
+                "entries": 5921,
+                "table": "shapes.descriptors.uncarried"
+              },
+              {
+                "bytes": 0,
+                "entries": 5917,
+                "table": "shapes.descriptors.uncarried.cache_carrier"
+              },
+              {
+                "bytes": 0,
+                "entries": 0,
+                "table": "shapes.descriptors.uncarried.old_carrier"
+              },
+              {
+                "bytes": 4119,
+                "entries": 1012,
+                "table": "shapes.families.multi(families,extra descriptors)"
+              },
+              {
+                "bytes": 0,
+                "entries": 81,
+                "table": "shapes.families.largest"
+              }
+            ]
+          },
+          {
+            "live_gc_bytes": 29387472,
+            "live_gc_objects": 238018,
+            "by_type": [
+              {
+                "dead": {
+                  "bytes": 1115792,
+                  "count": 10508
+                },
+                "id": 1,
+                "late_marked": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "live": {
+                  "bytes": 3552344,
+                  "count": 36807
+                },
+                "type": "array"
+              },
+              {
+                "dead": {
+                  "bytes": 247608,
+                  "count": 4161
+                },
+                "id": 2,
+                "late_marked": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "live": {
+                  "bytes": 11062512,
+                  "count": 80079
+                },
+                "type": "object"
+              },
+              {
+                "dead": {
+                  "bytes": 35763152,
+                  "count": 30471
+                },
+                "id": 3,
+                "late_marked": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "live": {
+                  "bytes": 2114992,
+                  "count": 28232
+                },
+                "type": "string"
+              },
+              {
+                "dead": {
+                  "bytes": 21632,
+                  "count": 425
+                },
+                "id": 4,
+                "late_marked": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "live": {
+                  "bytes": 1876816,
+                  "count": 21811
+                },
+                "type": "closure"
+              },
+              {
+                "dead": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "id": 8,
+                "late_marked": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "live": {
+                  "bytes": 279408,
+                  "count": 5821
+                },
+                "type": "map"
+              },
+              {
+                "dead": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "id": 9,
+                "late_marked": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "live": {
+                  "bytes": 176,
+                  "count": 2
+                },
+                "type": "lazy_array"
+              },
+              {
+                "dead": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "id": 12,
+                "late_marked": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "live": {
+                  "bytes": 760,
+                  "count": 19
+                },
+                "type": "set"
+              },
+              {
+                "dead": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "id": 17,
+                "late_marked": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "live": {
+                  "bytes": 48,
+                  "count": 2
+                },
+                "type": "date"
+              },
+              {
+                "dead": {
+                  "bytes": 323360,
+                  "count": 2021
+                },
+                "id": 19,
+                "late_marked": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "live": {
+                  "bytes": 10357440,
+                  "count": 64734
+                },
+                "type": "object_meta"
+              },
+              {
+                "dead": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "id": 20,
+                "late_marked": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "live": {
+                  "bytes": 3776,
+                  "count": 59
+                },
+                "type": "regexp"
+              },
+              {
+                "dead": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "id": 21,
+                "late_marked": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "live": {
+                  "bytes": 42232,
+                  "count": 61
+                },
+                "type": "regex_program"
+              },
+              {
+                "dead": {
+                  "bytes": 42240,
+                  "count": 2640
+                },
+                "id": 22,
+                "late_marked": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "live": {
+                  "bytes": 720,
+                  "count": 45
+                },
+                "type": "box"
+              },
+              {
+                "dead": {
+                  "bytes": 4928,
+                  "count": 308
+                },
+                "id": 25,
+                "late_marked": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "live": {
+                  "bytes": 96248,
+                  "count": 346
+                },
+                "type": "scope"
+              }
+            ],
+            "arena": {
+              "block_pool_bytes": 32505856,
+              "capacity_bytes": 74448896,
+              "free_list_bytes": 0,
+              "live_allocated_bytes_estimate": 63446824,
+              "old_free_bytes": 4698008,
+              "spaces": [
+                {
+                  "blocks": 2,
+                  "capacity_bytes": 2097152,
+                  "dead": {
+                    "bytes": 1654008,
+                    "count": 20834
+                  },
+                  "late_marked": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "live": {
+                    "bytes": 1440,
+                    "count": 23
+                  },
+                  "object_starts_bytes": 32768,
+                  "space": "nursery_eden",
+                  "stub_dead": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "stub_live": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "tombstones": 49,
+                  "used_bytes": 1655448,
+                  "walked_bytes": 1655448
+                },
+                {
+                  "blocks": 1,
+                  "capacity_bytes": 1048576,
+                  "dead": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "late_marked": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "live": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "object_starts_bytes": 16384,
+                  "space": "survivor0",
+                  "stub_dead": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "stub_live": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "tombstones": 0,
+                  "used_bytes": 0,
+                  "walked_bytes": 0
+                },
+                {
+                  "blocks": 1,
+                  "capacity_bytes": 1048576,
+                  "dead": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "late_marked": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "live": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "object_starts_bytes": 16384,
+                  "space": "survivor1",
+                  "stub_dead": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "stub_live": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "tombstones": 2,
+                  "used_bytes": 0,
+                  "walked_bytes": 0
+                },
+                {
+                  "blocks": 2,
+                  "capacity_bytes": 2097152,
+                  "dead": {
+                    "bytes": 1577296,
+                    "count": 28389
+                  },
+                  "late_marked": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "live": {
+                    "bytes": 126208,
+                    "count": 1565
+                  },
+                  "object_starts_bytes": 32768,
+                  "space": "longlived",
+                  "stub_dead": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "stub_live": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "tombstones": 0,
+                  "used_bytes": 1703504,
+                  "walked_bytes": 1703504
+                },
+                {
+                  "blocks": 65,
+                  "capacity_bytes": 68157440,
+                  "dead": {
+                    "bytes": 34287408,
+                    "count": 1311
+                  },
+                  "late_marked": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "live": {
+                    "bytes": 28649960,
+                    "count": 236428
+                  },
+                  "object_starts_bytes": 1064960,
+                  "space": "old",
+                  "stub_dead": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "stub_live": {
+                    "bytes": 18464,
+                    "count": 2
+                  },
+                  "tombstones": 13,
+                  "used_bytes": 67653840,
+                  "walked_bytes": 62955832
+                },
+                {
+                  "dead": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "late_marked": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "live": {
+                    "bytes": 609864,
+                    "count": 2
+                  },
+                  "space": "malloc",
+                  "stub_dead": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "stub_live": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "walked_bytes": 609864
+                }
+              ],
+              "used_bytes": 71012792
+            },
+            "shapes": {
+              "records": 6849,
+              "records_by_kind": {
+                "0": 6274,
+                "5": 335,
+                "1": 50,
+                "3": 188,
+                "4": 2
+              },
+              "chunks": 541,
+              "pages": 4,
+              "present_record_bytes": 438336,
+              "empty_record_slot_bytes": 669632,
+              "directory_capacity_bytes": 280,
+              "directory_used_bytes": 280,
+              "directory_page_bytes": 32768,
+              "chunk_storage_bytes": 1107968,
+              "extras_count": 355,
+              "extras_payload_bytes": 8520,
+              "constfn_entries": 945,
+              "constfn_list_payload_bytes": 15120,
+              "slab_requested_bytes": 1141016,
+              "slab_plus_extras_requested_bytes": 1164656,
+              "record_56_to_64_extra_requested_bytes_at_same_chunk_count": 138496,
+              "stock_census_omitted_extras_bytes": 23640
+            },
+            "metadata": {
+              "all_live_meta_records": 64734,
+              "all_live_meta_gc_bytes": 10357440,
+              "four_summary_fields_reserved_bytes_in_all_live_meta": 2071488,
+              "ordinary_meta_owners": 64722,
+              "ordinary_distinct_meta_records": 64722,
+              "ordinary_owners_with_any_summary": 94,
+              "ordinary_owners_with_nonzero_field": {
+                "descriptor_key_count": 94,
+                "accessor_key_bits": 94,
+                "descriptor_key_hash": 94
+              },
+              "summary_only_distinct_records": 17,
+              "summary_only_records_gross_gc_bytes": 2720,
+              "ordinary_field_patterns": {
+                "flags+private_evaluation_brand+prototype": 52559,
+                "accessor_key_bits+descriptor_key_count+descriptor_key_hash+dictionary_keys+spill": 2,
+                "spill": 326,
+                "prototype": 11607,
+                "accessor_key_bits+descriptor_key_count+descriptor_key_hash+spill": 52,
+                "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+proto_serial+spill": 6,
+                "flags+proto_serial+spill": 4,
+                "flags+proto_serial+prototype": 5,
+                "flags+proto_serial+prototype+spill": 3,
+                "flags+prototype+spill": 9,
+                "flags+prototype": 51,
+                "flags+proto_serial": 2,
+                "expando+spill": 27,
+                "expando": 12,
+                "accessor_key_bits+descriptor_key_count+descriptor_key_hash": 17,
+                "accessor_key_bits+descriptor_key_count+descriptor_key_hash+prototype+spill": 3,
+                "flags+private_evaluation_brand+proto_serial+prototype": 9,
+                "flags+private_evaluation_brand+prototype+spill": 14,
+                "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+prototype+spill": 4,
+                "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+private_evaluation_brand+proto_serial+prototype": 4,
+                "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+prototype": 6
+              },
+              "common_only_owners": 64217,
+              "distinct_common_fact_groups": 117,
+              "additional_common_fact_groups_beyond_existing_shapes": 0
+            },
+            "side_tables": [
+              {
+                "bytes": 819216,
+                "entries": 20252,
+                "table": "fn.name_registry"
+              },
+              {
+                "bytes": 5971,
+                "entries": 101,
+                "table": "fn.name_overrides(copied)"
+              },
+              {
+                "bytes": 1081360,
+                "entries": 21591,
+                "table": "fn.source_registry(toString)"
+              },
+              {
+                "bytes": 0,
+                "entries": 0,
+                "table": "fn.source_overrides(copied)"
+              },
+              {
+                "bytes": 288,
+                "entries": 11,
+                "table": "closure.singletons"
+              },
+              {
+                "bytes": 0,
+                "entries": 0,
+                "table": "closure.captured_singletons"
+              },
+              {
+                "bytes": 1141016,
+                "entries": 6849,
+                "table": "shapes.descriptors"
+              },
+              {
+                "bytes": 153872,
+                "entries": 92,
+                "table": "shapes.indices"
+              },
+              {
+                "bytes": 409616,
+                "entries": 6849,
+                "table": "shapes.by_facts"
+              },
+              {
+                "bytes": 179333,
+                "entries": 2730,
+                "table": "shapes.families"
+              },
+              {
+                "bytes": 0,
+                "entries": 14771,
+                "table": "shapes.ids_minted(process)"
+              },
+              {
+                "bytes": 0,
+                "entries": 5846,
+                "table": "shapes.proto(object_prototype)"
+              },
+              {
+                "bytes": 0,
+                "entries": 0,
+                "table": "shapes.proto(null)"
+              },
+              {
+                "bytes": 0,
+                "entries": 214,
+                "table": "shapes.proto(object_serial)"
+              },
+              {
+                "bytes": 0,
+                "entries": 102,
+                "table": "shapes.proto(class_default)"
+              },
+              {
+                "bytes": 0,
+                "entries": 684,
+                "table": "shapes.proto(class_recorded)"
+              },
+              {
+                "bytes": 0,
+                "entries": 3,
+                "table": "shapes.proto(unique)"
+              },
+              {
+                "bytes": 0,
+                "entries": 123,
+                "table": "shapes.proto.distinct_identities"
+              },
+              {
+                "bytes": 2878,
+                "entries": 48,
+                "table": "class.names"
+              },
+              {
+                "bytes": 87270,
+                "entries": 857,
+                "table": "class.vtables(methods+accessors)"
+              },
+              {
+                "bytes": 3937,
+                "entries": 17,
+                "table": "class.static_methods"
+              },
+              {
+                "bytes": 58773,
+                "entries": 851,
+                "table": "class.method_bind_lengths"
+              },
+              {
+                "bytes": 20496,
+                "entries": 1861,
+                "table": "class.registered_ids"
+              },
+              {
+                "bytes": 288,
+                "entries": 11,
+                "table": "class.prototype_objects"
+              },
+              {
+                "bytes": 0,
+                "entries": 0,
+                "table": "class.declared_static_global_slots"
+              },
+              {
+                "bytes": 0,
+                "entries": 0,
+                "table": "object.overflow_fields"
+              },
+              {
+                "bytes": 524288,
+                "entries": 16384,
+                "table": "object.transition_cache(fixed)"
+              },
+              {
+                "bytes": 6144,
+                "entries": 256,
+                "table": "object.shape_inline_cache(fixed)"
+              },
+              {
+                "bytes": 356666,
+                "entries": 4126,
+                "table": "object.property_descriptors"
+              },
+              {
+                "bytes": 231,
+                "entries": 1,
+                "table": "object.accessor_descriptors"
+              },
+              {
+                "bytes": 917504,
+                "entries": 6007,
+                "table": "ic.lazy_caches"
+              },
+              {
+                "bytes": 4989817,
+                "entries": 1,
+                "table": "stackmap.sections(file-backed)"
+              },
+              {
+                "bytes": 1048576,
+                "entries": 23729,
+                "table": "stackmap.functions"
+              },
+              {
+                "bytes": 131072,
+                "entries": 8192,
+                "table": "string.intern_table(fixed)"
+              },
+              {
+                "bytes": 32768,
+                "entries": 2,
+                "table": "gc.malloc_objects_vec"
+              },
+              {
+                "bytes": 73744,
+                "entries": 2,
+                "table": "gc.malloc_objects_set"
+              },
+              {
+                "bytes": 0,
+                "entries": 0,
+                "table": "gc.malloc_realloc_forwarding"
+              },
+              {
+                "bytes": 10512,
+                "entries": 98,
+                "table": "arena.page_generations"
+              },
+              {
+                "bytes": 3902128,
+                "entries": 15430,
+                "table": "arena.old_gen_page_objects"
+              },
+              {
+                "bytes": 3702800,
+                "entries": 16640,
+                "table": "arena.old_gen_page_meta"
+              },
+              {
+                "bytes": 0,
+                "entries": 0,
+                "table": "arena.old_gen_page_promoted_runs"
+              },
+              {
+                "bytes": 9232,
+                "entries": 3,
+                "table": "gc.dirty_old_pages"
+              },
+              {
+                "bytes": 280,
+                "entries": 0,
+                "table": "gc.external_dirty_slot_pages"
+              },
+              {
+                "bytes": 0,
+                "entries": 0,
+                "table": "gc.remembered_set"
+              },
+              {
+                "bytes": 0,
+                "entries": 0,
+                "table": "gc.ever_dirty_old_pages"
+              },
+              {
+                "bytes": 544,
+                "entries": 3,
+                "table": "module.path_registry"
+              },
+              {
+                "bytes": 0,
+                "entries": 0,
+                "table": "timer.agent_store"
+              },
+              {
+                "bytes": 0,
+                "entries": 0,
+                "table": "timer.ref_states"
+              },
+              {
+                "bytes": 190,
+                "entries": 2,
+                "table": "symbol.registry"
+              },
+              {
+                "bytes": 565080,
+                "entries": 23545,
+                "table": "gc.layout_slot_masks"
+              },
+              {
+                "bytes": 959480,
+                "entries": 0,
+                "table": "gc.external_side_live_bytes(map/set/tape)"
+              },
+              {
+                "bytes": 0,
+                "entries": 928,
+                "table": "shapes.descriptors.carried(live objects)"
+              },
+              {
+                "bytes": 0,
+                "entries": 5921,
+                "table": "shapes.descriptors.uncarried"
+              },
+              {
+                "bytes": 0,
+                "entries": 5917,
+                "table": "shapes.descriptors.uncarried.cache_carrier"
+              },
+              {
+                "bytes": 0,
+                "entries": 0,
+                "table": "shapes.descriptors.uncarried.old_carrier"
+              },
+              {
+                "bytes": 4119,
+                "entries": 1012,
+                "table": "shapes.families.multi(families,extra descriptors)"
+              },
+              {
+                "bytes": 0,
+                "entries": 81,
+                "table": "shapes.families.largest"
+              }
+            ]
+          }
+        ],
+        "caveat": "Snapshot is not peak RSS. Summary removal gross bytes exclude replacement shape facts and allocator/GC effects. Canonical native indices require the separate native ledger."
+      },
+      {
+        "case": "zodwork",
+        "scope": "no-auto full runtime diagnostic; normal-auto acceptance is separate",
+        "peak_rss_median_bytes": 30400512,
+        "peak_rss_range_bytes": [
+          30330880,
+          30474240
+        ],
+        "cpu_median_s": 0.15,
+        "selected_full": 1,
+        "boundary_criterion": "explicit diagnostic GC at iteration100 before safeParse, schema live; original 200-iteration workload has no full GC; not peak RSS",
+        "snapshots": [
+          {
+            "live_gc_bytes": 602360,
+            "live_gc_objects": 10209,
+            "by_type": [
+              {
+                "dead": {
+                  "bytes": 255632,
+                  "count": 2020
+                },
+                "id": 1,
+                "late_marked": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "live": {
+                  "bytes": 187640,
+                  "count": 1472
+                },
+                "type": "array"
+              },
+              {
+                "dead": {
+                  "bytes": 232024,
+                  "count": 3760
+                },
+                "id": 2,
+                "late_marked": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "live": {
+                  "bytes": 88384,
+                  "count": 2071
+                },
+                "type": "object"
+              },
+              {
+                "dead": {
+                  "bytes": 285536,
+                  "count": 7273
+                },
+                "id": 3,
+                "late_marked": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "live": {
+                  "bytes": 172248,
+                  "count": 4082
+                },
+                "type": "string"
+              },
+              {
+                "dead": {
+                  "bytes": 456072,
+                  "count": 6471
+                },
+                "id": 4,
+                "late_marked": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "live": {
+                  "bytes": 92544,
+                  "count": 2285
+                },
+                "type": "closure"
+              },
+              {
+                "dead": {
+                  "bytes": 112800,
+                  "count": 705
+                },
+                "id": 19,
+                "late_marked": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "live": {
+                  "bytes": 44320,
+                  "count": 277
+                },
+                "type": "object_meta"
+              },
+              {
+                "dead": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "id": 20,
+                "late_marked": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "live": {
+                  "bytes": 704,
+                  "count": 11
+                },
+                "type": "regexp"
+              },
+              {
+                "dead": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "id": 21,
+                "late_marked": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "live": {
+                  "bytes": 16520,
+                  "count": 11
+                },
+                "type": "regex_program"
+              },
+              {
+                "dead": {
+                  "bytes": 1680,
+                  "count": 105
+                },
+                "id": 25,
+                "late_marked": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "live": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "type": "scope"
+              }
+            ],
+            "arena": {
+              "block_pool_bytes": 0,
+              "capacity_bytes": 10485760,
+              "free_list_bytes": 0,
+              "live_allocated_bytes_estimate": 1946072,
+              "old_free_bytes": 0,
+              "spaces": [
+                {
+                  "blocks": 6,
+                  "capacity_bytes": 6291456,
+                  "dead": {
+                    "bytes": 1280560,
+                    "count": 19125
+                  },
+                  "late_marked": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "live": {
+                    "bytes": 32776,
+                    "count": 402
+                  },
+                  "object_starts_bytes": 98304,
+                  "space": "nursery_eden",
+                  "stub_dead": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "stub_live": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "tombstones": 0,
+                  "used_bytes": 1313336,
+                  "walked_bytes": 1313336
+                },
+                {
+                  "blocks": 1,
+                  "capacity_bytes": 1048576,
+                  "dead": {
+                    "bytes": 33072,
+                    "count": 405
+                  },
+                  "late_marked": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "live": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "object_starts_bytes": 16384,
+                  "space": "survivor0",
+                  "stub_dead": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "stub_live": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "tombstones": 0,
+                  "used_bytes": 33072,
+                  "walked_bytes": 33072
+                },
+                {
+                  "blocks": 1,
+                  "capacity_bytes": 1048576,
+                  "dead": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "late_marked": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "live": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "object_starts_bytes": 16384,
+                  "space": "survivor1",
+                  "stub_dead": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "stub_live": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "tombstones": 0,
+                  "used_bytes": 0,
+                  "walked_bytes": 0
+                },
+                {
+                  "blocks": 1,
+                  "capacity_bytes": 1048576,
+                  "dead": {
+                    "bytes": 30080,
+                    "count": 803
+                  },
+                  "late_marked": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "live": {
+                    "bytes": 320,
+                    "count": 20
+                  },
+                  "object_starts_bytes": 16384,
+                  "space": "longlived",
+                  "stub_dead": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "stub_live": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "tombstones": 0,
+                  "used_bytes": 30400,
+                  "walked_bytes": 30400
+                },
+                {
+                  "blocks": 1,
+                  "capacity_bytes": 1048576,
+                  "dead": {
+                    "bytes": 32,
+                    "count": 1
+                  },
+                  "late_marked": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "live": {
+                    "bytes": 569232,
+                    "count": 9786
+                  },
+                  "object_starts_bytes": 16384,
+                  "space": "old",
+                  "stub_dead": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "stub_live": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "tombstones": 0,
+                  "used_bytes": 569264,
+                  "walked_bytes": 569264
+                },
+                {
+                  "dead": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "late_marked": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "live": {
+                    "bytes": 32,
+                    "count": 1
+                  },
+                  "space": "malloc",
+                  "stub_dead": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "stub_live": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "walked_bytes": 32
+                }
+              ],
+              "used_bytes": 1946072
+            },
+            "shapes": {
+              "records": 3249,
+              "records_by_kind": {
+                "0": 928,
+                "5": 2148,
+                "3": 171,
+                "4": 2
+              },
+              "chunks": 178,
+              "pages": 3,
+              "present_record_bytes": 207936,
+              "empty_record_slot_bytes": 156608,
+              "directory_capacity_bytes": 296,
+              "directory_used_bytes": 272,
+              "directory_page_bytes": 24576,
+              "chunk_storage_bytes": 364544,
+              "extras_count": 11,
+              "extras_payload_bytes": 264,
+              "constfn_entries": 15,
+              "constfn_list_payload_bytes": 240,
+              "slab_requested_bytes": 389416,
+              "slab_plus_extras_requested_bytes": 389920,
+              "record_56_to_64_extra_requested_bytes_at_same_chunk_count": 45568,
+              "stock_census_omitted_extras_bytes": 504
+            },
+            "metadata": {
+              "all_live_meta_records": 277,
+              "all_live_meta_gc_bytes": 44320,
+              "four_summary_fields_reserved_bytes_in_all_live_meta": 8864,
+              "ordinary_meta_owners": 277,
+              "ordinary_distinct_meta_records": 277,
+              "ordinary_owners_with_any_summary": 61,
+              "ordinary_owners_with_nonzero_field": {
+                "descriptor_key_count": 61,
+                "accessor_key_bits": 61,
+                "descriptor_key_hash": 61
+              },
+              "summary_only_distinct_records": 3,
+              "summary_only_records_gross_gc_bytes": 480,
+              "ordinary_field_patterns": {
+                "accessor_key_bits+descriptor_key_count+descriptor_key_hash+spill": 26,
+                "spill": 130,
+                "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+prototype+spill": 5,
+                "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+proto_serial+spill": 6,
+                "flags+proto_serial+spill": 3,
+                "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+proto_serial+prototype": 5,
+                "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+prototype": 13,
+                "prototype": 6,
+                "flags+proto_serial+prototype": 4,
+                "flags+proto_serial+prototype+spill": 3,
+                "flags+prototype+spill": 9,
+                "flags+prototype": 33,
+                "flags+proto_serial": 2,
+                "expando": 12,
+                "expando+spill": 14,
+                "accessor_key_bits+descriptor_key_count+descriptor_key_hash+prototype+spill": 3,
+                "accessor_key_bits+descriptor_key_count+descriptor_key_hash": 3
+              },
+              "common_only_owners": 39,
+              "distinct_common_fact_groups": 24,
+              "additional_common_fact_groups_beyond_existing_shapes": 0
+            },
+            "side_tables": [
+              {
+                "bytes": 25616,
+                "entries": 455,
+                "table": "fn.name_registry"
+              },
+              {
+                "bytes": 5971,
+                "entries": 101,
+                "table": "fn.name_overrides(copied)"
+              },
+              {
+                "bytes": 16912,
+                "entries": 416,
+                "table": "fn.source_registry(toString)"
+              },
+              {
+                "bytes": 0,
+                "entries": 0,
+                "table": "fn.source_overrides(copied)"
+              },
+              {
+                "bytes": 152,
+                "entries": 7,
+                "table": "closure.singletons"
+              },
+              {
+                "bytes": 0,
+                "entries": 0,
+                "table": "closure.captured_singletons"
+              },
+              {
+                "bytes": 389416,
+                "entries": 3249,
+                "table": "shapes.descriptors"
+              },
+              {
+                "bytes": 9040,
+                "entries": 14,
+                "table": "shapes.indices"
+              },
+              {
+                "bytes": 204816,
+                "entries": 3249,
+                "table": "shapes.by_facts"
+              },
+              {
+                "bytes": 91152,
+                "entries": 591,
+                "table": "shapes.families"
+              },
+              {
+                "bytes": 0,
+                "entries": 4462,
+                "table": "shapes.ids_minted(process)"
+              },
+              {
+                "bytes": 0,
+                "entries": 1605,
+                "table": "shapes.proto(object_prototype)"
+              },
+              {
+                "bytes": 0,
+                "entries": 101,
+                "table": "shapes.proto(null)"
+              },
+              {
+                "bytes": 0,
+                "entries": 238,
+                "table": "shapes.proto(object_serial)"
+              },
+              {
+                "bytes": 0,
+                "entries": 649,
+                "table": "shapes.proto(class_default)"
+              },
+              {
+                "bytes": 0,
+                "entries": 47,
+                "table": "shapes.proto(class_recorded)"
+              },
+              {
+                "bytes": 0,
+                "entries": 609,
+                "table": "shapes.proto(unique)"
+              },
+              {
+                "bytes": 0,
+                "entries": 97,
+                "table": "shapes.proto.distinct_identities"
+              },
+              {
+                "bytes": 2511,
+                "entries": 40,
+                "table": "class.names"
+              },
+              {
+                "bytes": 31121,
+                "entries": 214,
+                "table": "class.vtables(methods+accessors)"
+              },
+              {
+                "bytes": 1943,
+                "entries": 8,
+                "table": "class.static_methods"
+              },
+              {
+                "bytes": 11622,
+                "entries": 165,
+                "table": "class.method_bind_lengths"
+              },
+              {
+                "bytes": 1296,
+                "entries": 149,
+                "table": "class.registered_ids"
+              },
+              {
+                "bytes": 0,
+                "entries": 0,
+                "table": "class.declared_static_global_slots"
+              },
+              {
+                "bytes": 0,
+                "entries": 0,
+                "table": "object.overflow_fields"
+              },
+              {
+                "bytes": 524288,
+                "entries": 16384,
+                "table": "object.transition_cache(fixed)"
+              },
+              {
+                "bytes": 6144,
+                "entries": 256,
+                "table": "object.shape_inline_cache(fixed)"
+              },
+              {
+                "bytes": 353164,
+                "entries": 3252,
+                "table": "object.property_descriptors"
+              },
+              {
+                "bytes": 231,
+                "entries": 1,
+                "table": "object.accessor_descriptors"
+              },
+              {
+                "bytes": 65536,
+                "entries": 346,
+                "table": "ic.lazy_caches"
+              },
+              {
+                "bytes": 148987,
+                "entries": 1,
+                "table": "stackmap.sections(file-backed)"
+              },
+              {
+                "bytes": 32768,
+                "entries": 697,
+                "table": "stackmap.functions"
+              },
+              {
+                "bytes": 131072,
+                "entries": 8192,
+                "table": "string.intern_table(fixed)"
+              },
+              {
+                "bytes": 32768,
+                "entries": 1,
+                "table": "gc.malloc_objects_vec"
+              },
+              {
+                "bytes": 73744,
+                "entries": 1,
+                "table": "gc.malloc_objects_set"
+              },
+              {
+                "bytes": 0,
+                "entries": 0,
+                "table": "gc.malloc_realloc_forwarding"
+              },
+              {
+                "bytes": 672,
+                "entries": 13,
+                "table": "arena.page_generations"
+              },
+              {
+                "bytes": 119280,
+                "entries": 139,
+                "table": "arena.old_gen_page_objects"
+              },
+              {
+                "bytes": 57872,
+                "entries": 256,
+                "table": "arena.old_gen_page_meta"
+              },
+              {
+                "bytes": 0,
+                "entries": 0,
+                "table": "arena.old_gen_page_promoted_runs"
+              },
+              {
+                "bytes": 52,
+                "entries": 1,
+                "table": "gc.dirty_old_pages"
+              },
+              {
+                "bytes": 0,
+                "entries": 0,
+                "table": "gc.external_dirty_slot_pages"
+              },
+              {
+                "bytes": 0,
+                "entries": 0,
+                "table": "gc.remembered_set"
+              },
+              {
+                "bytes": 0,
+                "entries": 0,
+                "table": "gc.ever_dirty_old_pages"
+              },
+              {
+                "bytes": 409,
+                "entries": 1,
+                "table": "module.path_registry"
+              },
+              {
+                "bytes": 0,
+                "entries": 0,
+                "table": "timer.agent_store"
+              },
+              {
+                "bytes": 0,
+                "entries": 0,
+                "table": "timer.ref_states"
+              },
+              {
+                "bytes": 190,
+                "entries": 2,
+                "table": "symbol.registry"
+              },
+              {
+                "bytes": 14376,
+                "entries": 599,
+                "table": "gc.layout_slot_masks"
+              },
+              {
+                "bytes": 0,
+                "entries": 0,
+                "table": "gc.external_side_live_bytes(map/set/tape)"
+              },
+              {
+                "bytes": 0,
+                "entries": 207,
+                "table": "shapes.descriptors.carried(live objects)"
+              },
+              {
+                "bytes": 0,
+                "entries": 3042,
+                "table": "shapes.descriptors.uncarried"
+              },
+              {
+                "bytes": 0,
+                "entries": 1180,
+                "table": "shapes.descriptors.uncarried.cache_carrier"
+              },
+              {
+                "bytes": 0,
+                "entries": 0,
+                "table": "shapes.descriptors.uncarried.old_carrier"
+              },
+              {
+                "bytes": 2658,
+                "entries": 424,
+                "table": "shapes.families.multi(families,extra descriptors)"
+              },
+              {
+                "bytes": 0,
+                "entries": 1213,
+                "table": "shapes.families.largest"
+              }
+            ]
+          },
+          {
+            "live_gc_bytes": 602360,
+            "live_gc_objects": 10209,
+            "by_type": [
+              {
+                "dead": {
+                  "bytes": 255632,
+                  "count": 2020
+                },
+                "id": 1,
+                "late_marked": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "live": {
+                  "bytes": 187640,
+                  "count": 1472
+                },
+                "type": "array"
+              },
+              {
+                "dead": {
+                  "bytes": 232024,
+                  "count": 3760
+                },
+                "id": 2,
+                "late_marked": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "live": {
+                  "bytes": 88384,
+                  "count": 2071
+                },
+                "type": "object"
+              },
+              {
+                "dead": {
+                  "bytes": 285536,
+                  "count": 7273
+                },
+                "id": 3,
+                "late_marked": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "live": {
+                  "bytes": 172248,
+                  "count": 4082
+                },
+                "type": "string"
+              },
+              {
+                "dead": {
+                  "bytes": 456072,
+                  "count": 6471
+                },
+                "id": 4,
+                "late_marked": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "live": {
+                  "bytes": 92544,
+                  "count": 2285
+                },
+                "type": "closure"
+              },
+              {
+                "dead": {
+                  "bytes": 112800,
+                  "count": 705
+                },
+                "id": 19,
+                "late_marked": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "live": {
+                  "bytes": 44320,
+                  "count": 277
+                },
+                "type": "object_meta"
+              },
+              {
+                "dead": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "id": 20,
+                "late_marked": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "live": {
+                  "bytes": 704,
+                  "count": 11
+                },
+                "type": "regexp"
+              },
+              {
+                "dead": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "id": 21,
+                "late_marked": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "live": {
+                  "bytes": 16520,
+                  "count": 11
+                },
+                "type": "regex_program"
+              },
+              {
+                "dead": {
+                  "bytes": 1680,
+                  "count": 105
+                },
+                "id": 25,
+                "late_marked": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "live": {
+                  "bytes": 0,
+                  "count": 0
+                },
+                "type": "scope"
+              }
+            ],
+            "arena": {
+              "block_pool_bytes": 0,
+              "capacity_bytes": 10485760,
+              "free_list_bytes": 0,
+              "live_allocated_bytes_estimate": 1946072,
+              "old_free_bytes": 0,
+              "spaces": [
+                {
+                  "blocks": 6,
+                  "capacity_bytes": 6291456,
+                  "dead": {
+                    "bytes": 1280560,
+                    "count": 19125
+                  },
+                  "late_marked": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "live": {
+                    "bytes": 32776,
+                    "count": 402
+                  },
+                  "object_starts_bytes": 98304,
+                  "space": "nursery_eden",
+                  "stub_dead": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "stub_live": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "tombstones": 0,
+                  "used_bytes": 1313336,
+                  "walked_bytes": 1313336
+                },
+                {
+                  "blocks": 1,
+                  "capacity_bytes": 1048576,
+                  "dead": {
+                    "bytes": 33072,
+                    "count": 405
+                  },
+                  "late_marked": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "live": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "object_starts_bytes": 16384,
+                  "space": "survivor0",
+                  "stub_dead": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "stub_live": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "tombstones": 0,
+                  "used_bytes": 33072,
+                  "walked_bytes": 33072
+                },
+                {
+                  "blocks": 1,
+                  "capacity_bytes": 1048576,
+                  "dead": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "late_marked": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "live": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "object_starts_bytes": 16384,
+                  "space": "survivor1",
+                  "stub_dead": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "stub_live": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "tombstones": 0,
+                  "used_bytes": 0,
+                  "walked_bytes": 0
+                },
+                {
+                  "blocks": 1,
+                  "capacity_bytes": 1048576,
+                  "dead": {
+                    "bytes": 30080,
+                    "count": 803
+                  },
+                  "late_marked": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "live": {
+                    "bytes": 320,
+                    "count": 20
+                  },
+                  "object_starts_bytes": 16384,
+                  "space": "longlived",
+                  "stub_dead": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "stub_live": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "tombstones": 0,
+                  "used_bytes": 30400,
+                  "walked_bytes": 30400
+                },
+                {
+                  "blocks": 1,
+                  "capacity_bytes": 1048576,
+                  "dead": {
+                    "bytes": 32,
+                    "count": 1
+                  },
+                  "late_marked": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "live": {
+                    "bytes": 569232,
+                    "count": 9786
+                  },
+                  "object_starts_bytes": 16384,
+                  "space": "old",
+                  "stub_dead": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "stub_live": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "tombstones": 0,
+                  "used_bytes": 569264,
+                  "walked_bytes": 569264
+                },
+                {
+                  "dead": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "late_marked": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "live": {
+                    "bytes": 32,
+                    "count": 1
+                  },
+                  "space": "malloc",
+                  "stub_dead": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "stub_live": {
+                    "bytes": 0,
+                    "count": 0
+                  },
+                  "walked_bytes": 32
+                }
+              ],
+              "used_bytes": 1946072
+            },
+            "shapes": {
+              "records": 3249,
+              "records_by_kind": {
+                "0": 928,
+                "5": 2148,
+                "3": 171,
+                "4": 2
+              },
+              "chunks": 178,
+              "pages": 3,
+              "present_record_bytes": 207936,
+              "empty_record_slot_bytes": 156608,
+              "directory_capacity_bytes": 296,
+              "directory_used_bytes": 272,
+              "directory_page_bytes": 24576,
+              "chunk_storage_bytes": 364544,
+              "extras_count": 11,
+              "extras_payload_bytes": 264,
+              "constfn_entries": 15,
+              "constfn_list_payload_bytes": 240,
+              "slab_requested_bytes": 389416,
+              "slab_plus_extras_requested_bytes": 389920,
+              "record_56_to_64_extra_requested_bytes_at_same_chunk_count": 45568,
+              "stock_census_omitted_extras_bytes": 504
+            },
+            "metadata": {
+              "all_live_meta_records": 277,
+              "all_live_meta_gc_bytes": 44320,
+              "four_summary_fields_reserved_bytes_in_all_live_meta": 8864,
+              "ordinary_meta_owners": 277,
+              "ordinary_distinct_meta_records": 277,
+              "ordinary_owners_with_any_summary": 61,
+              "ordinary_owners_with_nonzero_field": {
+                "descriptor_key_count": 61,
+                "accessor_key_bits": 61,
+                "descriptor_key_hash": 61
+              },
+              "summary_only_distinct_records": 3,
+              "summary_only_records_gross_gc_bytes": 480,
+              "ordinary_field_patterns": {
+                "accessor_key_bits+descriptor_key_count+descriptor_key_hash+spill": 26,
+                "spill": 130,
+                "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+prototype+spill": 5,
+                "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+proto_serial+spill": 6,
+                "flags+proto_serial+spill": 3,
+                "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+proto_serial+prototype": 5,
+                "accessor_key_bits+descriptor_key_count+descriptor_key_hash+flags+prototype": 13,
+                "prototype": 6,
+                "flags+proto_serial+prototype": 4,
+                "flags+proto_serial+prototype+spill": 3,
+                "flags+prototype+spill": 9,
+                "flags+prototype": 33,
+                "flags+proto_serial": 2,
+                "expando": 12,
+                "expando+spill": 14,
+                "accessor_key_bits+descriptor_key_count+descriptor_key_hash+prototype+spill": 3,
+                "accessor_key_bits+descriptor_key_count+descriptor_key_hash": 3
+              },
+              "common_only_owners": 39,
+              "distinct_common_fact_groups": 24,
+              "additional_common_fact_groups_beyond_existing_shapes": 0
+            },
+            "side_tables": [
+              {
+                "bytes": 25616,
+                "entries": 455,
+                "table": "fn.name_registry"
+              },
+              {
+                "bytes": 5971,
+                "entries": 101,
+                "table": "fn.name_overrides(copied)"
+              },
+              {
+                "bytes": 16912,
+                "entries": 416,
+                "table": "fn.source_registry(toString)"
+              },
+              {
+                "bytes": 0,
+                "entries": 0,
+                "table": "fn.source_overrides(copied)"
+              },
+              {
+                "bytes": 152,
+                "entries": 7,
+                "table": "closure.singletons"
+              },
+              {
+                "bytes": 0,
+                "entries": 0,
+                "table": "closure.captured_singletons"
+              },
+              {
+                "bytes": 389416,
+                "entries": 3249,
+                "table": "shapes.descriptors"
+              },
+              {
+                "bytes": 9040,
+                "entries": 14,
+                "table": "shapes.indices"
+              },
+              {
+                "bytes": 204816,
+                "entries": 3249,
+                "table": "shapes.by_facts"
+              },
+              {
+                "bytes": 91152,
+                "entries": 591,
+                "table": "shapes.families"
+              },
+              {
+                "bytes": 0,
+                "entries": 4462,
+                "table": "shapes.ids_minted(process)"
+              },
+              {
+                "bytes": 0,
+                "entries": 1605,
+                "table": "shapes.proto(object_prototype)"
+              },
+              {
+                "bytes": 0,
+                "entries": 101,
+                "table": "shapes.proto(null)"
+              },
+              {
+                "bytes": 0,
+                "entries": 238,
+                "table": "shapes.proto(object_serial)"
+              },
+              {
+                "bytes": 0,
+                "entries": 649,
+                "table": "shapes.proto(class_default)"
+              },
+              {
+                "bytes": 0,
+                "entries": 47,
+                "table": "shapes.proto(class_recorded)"
+              },
+              {
+                "bytes": 0,
+                "entries": 609,
+                "table": "shapes.proto(unique)"
+              },
+              {
+                "bytes": 0,
+                "entries": 97,
+                "table": "shapes.proto.distinct_identities"
+              },
+              {
+                "bytes": 2511,
+                "entries": 40,
+                "table": "class.names"
+              },
+              {
+                "bytes": 31121,
+                "entries": 214,
+                "table": "class.vtables(methods+accessors)"
+              },
+              {
+                "bytes": 1943,
+                "entries": 8,
+                "table": "class.static_methods"
+              },
+              {
+                "bytes": 11622,
+                "entries": 165,
+                "table": "class.method_bind_lengths"
+              },
+              {
+                "bytes": 1296,
+                "entries": 149,
+                "table": "class.registered_ids"
+              },
+              {
+                "bytes": 0,
+                "entries": 0,
+                "table": "class.declared_static_global_slots"
+              },
+              {
+                "bytes": 0,
+                "entries": 0,
+                "table": "object.overflow_fields"
+              },
+              {
+                "bytes": 524288,
+                "entries": 16384,
+                "table": "object.transition_cache(fixed)"
+              },
+              {
+                "bytes": 6144,
+                "entries": 256,
+                "table": "object.shape_inline_cache(fixed)"
+              },
+              {
+                "bytes": 353164,
+                "entries": 3252,
+                "table": "object.property_descriptors"
+              },
+              {
+                "bytes": 231,
+                "entries": 1,
+                "table": "object.accessor_descriptors"
+              },
+              {
+                "bytes": 65536,
+                "entries": 346,
+                "table": "ic.lazy_caches"
+              },
+              {
+                "bytes": 148987,
+                "entries": 1,
+                "table": "stackmap.sections(file-backed)"
+              },
+              {
+                "bytes": 32768,
+                "entries": 697,
+                "table": "stackmap.functions"
+              },
+              {
+                "bytes": 131072,
+                "entries": 8192,
+                "table": "string.intern_table(fixed)"
+              },
+              {
+                "bytes": 32768,
+                "entries": 1,
+                "table": "gc.malloc_objects_vec"
+              },
+              {
+                "bytes": 73744,
+                "entries": 1,
+                "table": "gc.malloc_objects_set"
+              },
+              {
+                "bytes": 0,
+                "entries": 0,
+                "table": "gc.malloc_realloc_forwarding"
+              },
+              {
+                "bytes": 672,
+                "entries": 13,
+                "table": "arena.page_generations"
+              },
+              {
+                "bytes": 119280,
+                "entries": 139,
+                "table": "arena.old_gen_page_objects"
+              },
+              {
+                "bytes": 57872,
+                "entries": 256,
+                "table": "arena.old_gen_page_meta"
+              },
+              {
+                "bytes": 0,
+                "entries": 0,
+                "table": "arena.old_gen_page_promoted_runs"
+              },
+              {
+                "bytes": 52,
+                "entries": 1,
+                "table": "gc.dirty_old_pages"
+              },
+              {
+                "bytes": 0,
+                "entries": 0,
+                "table": "gc.external_dirty_slot_pages"
+              },
+              {
+                "bytes": 0,
+                "entries": 0,
+                "table": "gc.remembered_set"
+              },
+              {
+                "bytes": 0,
+                "entries": 0,
+                "table": "gc.ever_dirty_old_pages"
+              },
+              {
+                "bytes": 409,
+                "entries": 1,
+                "table": "module.path_registry"
+              },
+              {
+                "bytes": 0,
+                "entries": 0,
+                "table": "timer.agent_store"
+              },
+              {
+                "bytes": 0,
+                "entries": 0,
+                "table": "timer.ref_states"
+              },
+              {
+                "bytes": 190,
+                "entries": 2,
+                "table": "symbol.registry"
+              },
+              {
+                "bytes": 14376,
+                "entries": 599,
+                "table": "gc.layout_slot_masks"
+              },
+              {
+                "bytes": 0,
+                "entries": 0,
+                "table": "gc.external_side_live_bytes(map/set/tape)"
+              },
+              {
+                "bytes": 0,
+                "entries": 207,
+                "table": "shapes.descriptors.carried(live objects)"
+              },
+              {
+                "bytes": 0,
+                "entries": 3042,
+                "table": "shapes.descriptors.uncarried"
+              },
+              {
+                "bytes": 0,
+                "entries": 1180,
+                "table": "shapes.descriptors.uncarried.cache_carrier"
+              },
+              {
+                "bytes": 0,
+                "entries": 0,
+                "table": "shapes.descriptors.uncarried.old_carrier"
+              },
+              {
+                "bytes": 2658,
+                "entries": 424,
+                "table": "shapes.families.multi(families,extra descriptors)"
+              },
+              {
+                "bytes": 0,
+                "entries": 1213,
+                "table": "shapes.families.largest"
+              }
+            ]
+          }
+        ],
+        "caveat": "Snapshot is not peak RSS. Summary removal gross bytes exclude replacement shape facts and allocator/GC effects. Canonical native indices require the separate native ledger."
+      }
+    ]
+  },
+  "CAMPAIGN-NATIVE-ATTRIBUTION-v2.json": {
+    "raw_sha256": "67f4b8e012c80946055422d2f89995f7c1e8b893fab81c94059ae55e22a18f11",
+    "raw_location": "/root/rss-header-20261002/CAMPAIGN-NATIVE-ATTRIBUTION-v2.json",
+    "observations": [
+      {
+        "case": "tscwork",
+        "repeat": 0,
+        "selected_full": 3,
+        "observation_kind": "third natural synchronous full; diagnostic snapshot, not peak RSS; ordinal chosen early because debugger and plain-run total counts differ",
+        "binary_sha256": "0b335b8f7736dc5f522155387156401882d9dc5483bc69c50062dc7c75665c4d",
+        "allocator_blocks": 70851,
+        "allocated_usable_bytes": {
+          "Unattributed small/fast-path allocations": 11480416,
+          "Shapes: ConstFn body lists": 15472,
+          "GC arena backing": 113639424,
+          "Shapes: shape extras": 11360,
+          "Shapes: shape directory page": 40960,
+          "Shapes: shape record chunk": 1107968,
+          "Shapes: shape directory used slots": 336,
+          "Arena page tables": 5242880,
+          "Property plan caches": 524288,
+          "Malloc GC bookkeeping": 81920,
+          "Shape tables": 2195456,
+          "Builtin closure metadata": 81920,
+          "Inline cache storage": 1146880,
+          "String intern storage": 753664,
+          "Exception state": 491520,
+          "Declared field names": 163840,
+          "Property descriptor owner index": 163840,
+          "Property descriptor table": 393216,
+          "Function name registry": 851968,
+          "Function source registry": 1114112,
+          "Class parent table": 327680,
+          "Canonical keys: by_addr index": 458752,
+          "Class key cache": 229376,
+          "Class constructor registry": 114688,
+          "Module global roots": 262144,
+          "Malloc-managed GC objects": 655360,
+          "Other matched native tables": 1703936,
+          "Canonical keys: edges index": 851968,
+          "Object dispatch cache": 81920,
+          "Shadow stack": 98304,
+          "Canonical keys: node vector": 1310720,
+          "Per-object GC slot-map table": 2359296
+        },
+        "allocation_counts": {
+          "Unattributed small/fast-path allocations": 69438,
+          "Shapes: ConstFn body lists": 355,
+          "GC arena backing": 102,
+          "Shapes: shape extras": 355,
+          "Shapes: shape directory page": 4,
+          "Shapes: shape record chunk": 541,
+          "Shapes: shape directory used slots": 3,
+          "Arena page tables": 3,
+          "Property plan caches": 2,
+          "Malloc GC bookkeeping": 1,
+          "Shape tables": 7,
+          "Builtin closure metadata": 1,
+          "Inline cache storage": 14,
+          "String intern storage": 2,
+          "Exception state": 2,
+          "Declared field names": 1,
+          "Property descriptor owner index": 1,
+          "Property descriptor table": 1,
+          "Function name registry": 1,
+          "Function source registry": 1,
+          "Class parent table": 1,
+          "Canonical keys: by_addr index": 1,
+          "Class key cache": 2,
+          "Class constructor registry": 1,
+          "Module global roots": 1,
+          "Malloc-managed GC objects": 2,
+          "Other matched native tables": 3,
+          "Canonical keys: edges index": 1,
+          "Object dispatch cache": 1,
+          "Shadow stack": 1,
+          "Canonical keys: node vector": 1,
+          "Per-object GC slot-map table": 1
+        },
+        "shape_used_bytes": {
+          "Shapes: shape directory used slots": 280,
+          "Shapes: shape directory page": 32768,
+          "Shapes: shape record chunk": 1107968,
+          "Shapes: shape extras": 8520,
+          "Shapes: ConstFn body lists": 15120
+        },
+        "resident_anonymous_bytes": 150343680,
+        "resident_whole_pages_by_owner_bytes": {
+          "Allocator pages outside visited allocations": 11476992,
+          "Mixed allocation/free-slot pages": 1417216,
+          "Unattributed small/fast-path allocations": 10498048,
+          "GC arena backing": 106176512,
+          "Shapes: shape directory page": 36864,
+          "Shapes: shape record chunk": 983040,
+          "Arena page tables": 4956160,
+          "Property plan caches": 491520,
+          "Malloc GC bookkeeping": 32768,
+          "Shape tables": 1187840,
+          "Builtin closure metadata": 81920,
+          "Inline cache storage": 1064960,
+          "String intern storage": 688128,
+          "Exception state": 331776,
+          "Declared field names": 151552,
+          "Property descriptor owner index": 139264,
+          "Property descriptor table": 380928,
+          "Function name registry": 823296,
+          "Function source registry": 1085440,
+          "Class parent table": 327680,
+          "Canonical keys: by_addr index": 413696,
+          "Class key cache": 212992,
+          "Class constructor registry": 106496,
+          "Module global roots": 176128,
+          "Malloc-managed GC objects": 614400,
+          "Other matched native tables": 1417216,
+          "Canonical keys: edges index": 823296,
+          "Object dispatch cache": 4096,
+          "Shadow stack": 49152,
+          "Allocator rounding after arena payload": 167936,
+          "Canonical keys: node vector": 700416,
+          "Per-object GC slot-map table": 2166784,
+          "Other anonymous mappings": 1159168
+        },
+        "area_committed_bytes": 155146072,
+        "area_reserved_bytes": 187905504,
+        "limitation": "Native sites cover generic allocations >=64KiB only; exact shape spans supplement small blocks. Mixed pages remain unassigned."
+      },
+      {
+        "case": "tscwork",
+        "repeat": 1,
+        "selected_full": 3,
+        "observation_kind": "third natural synchronous full; diagnostic snapshot, not peak RSS; ordinal chosen early because debugger and plain-run total counts differ",
+        "binary_sha256": "0b335b8f7736dc5f522155387156401882d9dc5483bc69c50062dc7c75665c4d",
+        "allocator_blocks": 70853,
+        "allocated_usable_bytes": {
+          "Unattributed small/fast-path allocations": 11460288,
+          "Shapes: ConstFn body lists": 15488,
+          "GC arena backing": 113639424,
+          "Shapes: shape extras": 11392,
+          "Shapes: shape directory page": 40960,
+          "Shapes: shape record chunk": 1107968,
+          "Shapes: shape directory used slots": 336,
+          "Arena page tables": 5242880,
+          "Property plan caches": 524288,
+          "Malloc GC bookkeeping": 81920,
+          "Shape tables": 2195456,
+          "Builtin closure metadata": 81920,
+          "Inline cache storage": 1146880,
+          "String intern storage": 753664,
+          "Exception state": 491520,
+          "Declared field names": 163840,
+          "Property descriptor owner index": 163840,
+          "Property descriptor table": 393216,
+          "Function name registry": 851968,
+          "Function source registry": 1114112,
+          "Class parent table": 327680,
+          "Canonical keys: by_addr index": 458752,
+          "Class key cache": 229376,
+          "Class constructor registry": 114688,
+          "Module global roots": 262144,
+          "Malloc-managed GC objects": 655360,
+          "Other matched native tables": 1703936,
+          "Canonical keys: edges index": 851968,
+          "Object dispatch cache": 81920,
+          "Shadow stack": 98304,
+          "Canonical keys: node vector": 1310720,
+          "Per-object GC slot-map table": 2359296
+        },
+        "allocation_counts": {
+          "Unattributed small/fast-path allocations": 69438,
+          "Shapes: ConstFn body lists": 356,
+          "GC arena backing": 102,
+          "Shapes: shape extras": 356,
+          "Shapes: shape directory page": 4,
+          "Shapes: shape record chunk": 541,
+          "Shapes: shape directory used slots": 3,
+          "Arena page tables": 3,
+          "Property plan caches": 2,
+          "Malloc GC bookkeeping": 1,
+          "Shape tables": 7,
+          "Builtin closure metadata": 1,
+          "Inline cache storage": 14,
+          "String intern storage": 2,
+          "Exception state": 2,
+          "Declared field names": 1,
+          "Property descriptor owner index": 1,
+          "Property descriptor table": 1,
+          "Function name registry": 1,
+          "Function source registry": 1,
+          "Class parent table": 1,
+          "Canonical keys: by_addr index": 1,
+          "Class key cache": 2,
+          "Class constructor registry": 1,
+          "Module global roots": 1,
+          "Malloc-managed GC objects": 2,
+          "Other matched native tables": 3,
+          "Canonical keys: edges index": 1,
+          "Object dispatch cache": 1,
+          "Shadow stack": 1,
+          "Canonical keys: node vector": 1,
+          "Per-object GC slot-map table": 1
+        },
+        "shape_used_bytes": {
+          "Shapes: shape directory used slots": 280,
+          "Shapes: shape directory page": 32768,
+          "Shapes: shape record chunk": 1107968,
+          "Shapes: shape extras": 8544,
+          "Shapes: ConstFn body lists": 15136
+        },
+        "resident_anonymous_bytes": 149823488,
+        "resident_whole_pages_by_owner_bytes": {
+          "Allocator pages outside visited allocations": 11198464,
+          "Mixed allocation/free-slot pages": 1413120,
+          "Unattributed small/fast-path allocations": 10317824,
+          "GC arena backing": 106176512,
+          "Shapes: shape directory page": 36864,
+          "Shapes: shape record chunk": 983040,
+          "Arena page tables": 4956160,
+          "Property plan caches": 491520,
+          "Malloc GC bookkeeping": 32768,
+          "Shape tables": 1187840,
+          "Builtin closure metadata": 81920,
+          "Inline cache storage": 1064960,
+          "String intern storage": 688128,
+          "Exception state": 331776,
+          "Declared field names": 151552,
+          "Property descriptor owner index": 139264,
+          "Property descriptor table": 380928,
+          "Function name registry": 823296,
+          "Function source registry": 1085440,
+          "Class parent table": 327680,
+          "Canonical keys: by_addr index": 413696,
+          "Class key cache": 212992,
+          "Class constructor registry": 106496,
+          "Module global roots": 176128,
+          "Malloc-managed GC objects": 614400,
+          "Other matched native tables": 1417216,
+          "Canonical keys: edges index": 823296,
+          "Object dispatch cache": 4096,
+          "Shadow stack": 49152,
+          "Canonical keys: node vector": 679936,
+          "Per-object GC slot-map table": 2166784,
+          "Allocator rounding after arena payload": 131072,
+          "Other anonymous mappings": 1159168
+        },
+        "area_committed_bytes": 155125592,
+        "area_reserved_bytes": 187905504,
+        "limitation": "Native sites cover generic allocations >=64KiB only; exact shape spans supplement small blocks. Mixed pages remain unassigned."
+      },
+      {
+        "case": "zodwork",
+        "repeat": 0,
+        "selected_full": 1,
+        "observation_kind": "explicit diagnostic GC at iteration100 before safeParse, schema live; original 200-iteration workload has no full GC; not peak RSS",
+        "binary_sha256": "e98356583b6f69fec829797aa33c38efaf8c5c174b22adf0df5450a7b6437f99",
+        "allocator_blocks": 11002,
+        "allocated_usable_bytes": {
+          "Unattributed small/fast-path allocations": 1296024,
+          "GC arena backing": 11141120,
+          "Shapes: shape directory page": 30720,
+          "Shapes: ConstFn body lists": 240,
+          "Shapes: shape record chunk": 364544,
+          "Arena page tables": 196608,
+          "Property plan caches": 524288,
+          "Shapes: shape extras": 352,
+          "Shapes: shape directory used slots": 352,
+          "Malloc GC bookkeeping": 81920,
+          "Shape tables": 1851392,
+          "Object dispatch cache": 81920,
+          "Builtin closure metadata": 81920,
+          "Inline cache storage": 81920,
+          "Per-object GC slot-map table": 81920,
+          "String intern storage": 163840,
+          "Exception state": 491520,
+          "Canonical keys: node vector": 163840,
+          "Other matched native tables": 622592,
+          "Property descriptor table": 393216,
+          "Class parent table": 327680,
+          "Canonical keys: edges index": 114688,
+          "Canonical keys: by_addr index": 114688
+        },
+        "allocation_counts": {
+          "Unattributed small/fast-path allocations": 10762,
+          "GC arena backing": 10,
+          "Shapes: shape directory page": 3,
+          "Shapes: ConstFn body lists": 11,
+          "Shapes: shape record chunk": 178,
+          "Arena page tables": 1,
+          "Property plan caches": 2,
+          "Shapes: shape extras": 11,
+          "Shapes: shape directory used slots": 2,
+          "Malloc GC bookkeeping": 1,
+          "Shape tables": 6,
+          "Object dispatch cache": 1,
+          "Builtin closure metadata": 1,
+          "Inline cache storage": 1,
+          "Per-object GC slot-map table": 1,
+          "String intern storage": 1,
+          "Exception state": 2,
+          "Canonical keys: node vector": 1,
+          "Other matched native tables": 3,
+          "Property descriptor table": 1,
+          "Class parent table": 1,
+          "Canonical keys: edges index": 1,
+          "Canonical keys: by_addr index": 1
+        },
+        "shape_used_bytes": {
+          "Shapes: shape directory used slots": 272,
+          "Shapes: shape directory page": 24576,
+          "Shapes: shape record chunk": 364544,
+          "Shapes: shape extras": 264,
+          "Shapes: ConstFn body lists": 240
+        },
+        "resident_anonymous_bytes": 13303808,
+        "resident_whole_pages_by_owner_bytes": {
+          "Allocator pages outside visited allocations": 1753088,
+          "Mixed allocation/free-slot pages": 524288,
+          "Unattributed small/fast-path allocations": 925696,
+          "GC arena backing": 6524928,
+          "Shapes: shape directory page": 24576,
+          "Shapes: shape record chunk": 356352,
+          "Arena page tables": 163840,
+          "Property plan caches": 339968,
+          "Malloc GC bookkeeping": 20480,
+          "Shape tables": 876544,
+          "Object dispatch cache": 81920,
+          "Builtin closure metadata": 73728,
+          "Inline cache storage": 49152,
+          "Per-object GC slot-map table": 69632,
+          "String intern storage": 131072,
+          "Exception state": 8192,
+          "Canonical keys: node vector": 110592,
+          "Other matched native tables": 303104,
+          "Property descriptor table": 339968,
+          "Class parent table": 4096,
+          "Canonical keys: edges index": 106496,
+          "Canonical keys: by_addr index": 106496,
+          "Other anonymous mappings": 409600
+        },
+        "area_committed_bytes": 19599256,
+        "area_reserved_bytes": 48777800,
+        "limitation": "Native sites cover generic allocations >=64KiB only; exact shape spans supplement small blocks. Mixed pages remain unassigned."
+      },
+      {
+        "case": "zodwork",
+        "repeat": 1,
+        "selected_full": 1,
+        "observation_kind": "explicit diagnostic GC at iteration100 before safeParse, schema live; original 200-iteration workload has no full GC; not peak RSS",
+        "binary_sha256": "e98356583b6f69fec829797aa33c38efaf8c5c174b22adf0df5450a7b6437f99",
+        "allocator_blocks": 11002,
+        "allocated_usable_bytes": {
+          "Unattributed small/fast-path allocations": 1296024,
+          "GC arena backing": 11141120,
+          "Shapes: shape directory page": 30720,
+          "Shapes: ConstFn body lists": 240,
+          "Shapes: shape record chunk": 364544,
+          "Arena page tables": 196608,
+          "Property plan caches": 524288,
+          "Shapes: shape extras": 352,
+          "Shapes: shape directory used slots": 352,
+          "Malloc GC bookkeeping": 81920,
+          "Shape tables": 1851392,
+          "Object dispatch cache": 81920,
+          "Builtin closure metadata": 81920,
+          "Inline cache storage": 81920,
+          "Per-object GC slot-map table": 81920,
+          "String intern storage": 163840,
+          "Exception state": 491520,
+          "Canonical keys: node vector": 163840,
+          "Other matched native tables": 622592,
+          "Property descriptor table": 393216,
+          "Class parent table": 327680,
+          "Canonical keys: edges index": 114688,
+          "Canonical keys: by_addr index": 114688
+        },
+        "allocation_counts": {
+          "Unattributed small/fast-path allocations": 10762,
+          "GC arena backing": 10,
+          "Shapes: shape directory page": 3,
+          "Shapes: ConstFn body lists": 11,
+          "Shapes: shape record chunk": 178,
+          "Arena page tables": 1,
+          "Property plan caches": 2,
+          "Shapes: shape extras": 11,
+          "Shapes: shape directory used slots": 2,
+          "Malloc GC bookkeeping": 1,
+          "Shape tables": 6,
+          "Object dispatch cache": 1,
+          "Builtin closure metadata": 1,
+          "Inline cache storage": 1,
+          "Per-object GC slot-map table": 1,
+          "String intern storage": 1,
+          "Exception state": 2,
+          "Canonical keys: node vector": 1,
+          "Other matched native tables": 3,
+          "Property descriptor table": 1,
+          "Class parent table": 1,
+          "Canonical keys: edges index": 1,
+          "Canonical keys: by_addr index": 1
+        },
+        "shape_used_bytes": {
+          "Shapes: shape directory used slots": 272,
+          "Shapes: shape directory page": 24576,
+          "Shapes: shape record chunk": 364544,
+          "Shapes: shape extras": 264,
+          "Shapes: ConstFn body lists": 240
+        },
+        "resident_anonymous_bytes": 13303808,
+        "resident_whole_pages_by_owner_bytes": {
+          "Allocator pages outside visited allocations": 1757184,
+          "Mixed allocation/free-slot pages": 524288,
+          "Unattributed small/fast-path allocations": 925696,
+          "GC arena backing": 6524928,
+          "Shapes: shape directory page": 24576,
+          "Shapes: shape record chunk": 356352,
+          "Arena page tables": 163840,
+          "Property plan caches": 335872,
+          "Malloc GC bookkeeping": 20480,
+          "Shape tables": 876544,
+          "Object dispatch cache": 81920,
+          "Builtin closure metadata": 73728,
+          "Inline cache storage": 49152,
+          "Per-object GC slot-map table": 69632,
+          "String intern storage": 131072,
+          "Exception state": 8192,
+          "Canonical keys: node vector": 110592,
+          "Other matched native tables": 303104,
+          "Property descriptor table": 339968,
+          "Class parent table": 4096,
+          "Canonical keys: edges index": 106496,
+          "Canonical keys: by_addr index": 106496,
+          "Other anonymous mappings": 409600
+        },
+        "area_committed_bytes": 19599256,
+        "area_reserved_bytes": 48777800,
+        "limitation": "Native sites cover generic allocations >=64KiB only; exact shape spans supplement small blocks. Mixed pages remain unassigned."
+      }
+    ]
+  }
+}

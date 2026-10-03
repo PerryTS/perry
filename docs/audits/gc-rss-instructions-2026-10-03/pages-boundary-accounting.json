@@ -1,0 +1,183 @@
+{
+  "scope": "Two old-generation page tables; requested native storage, not allocator usable bytes or peak RSS.",
+  "limitations": "TS boundary graphs differ by two live objects and 22,808 bytes; Zod uses explicit diagnostic collection, not the unmodified workload.",
+  "inputs": {
+    "gc-pages-v5-census-runs.json": "603bb4adfb0c902bae67a7e4403e258118abd54e4924eea7431e15c3e3159552",
+    "gc-pages-v5-census-observations.json": "594906810bd25e55f47d96fa1026322aaf7dd18b2d5171cf0a5e10d2a4ef9039",
+    "gc-auto-v5-summary.json": "e58d041839724a56dbe693847731ebe6235cdb1c60ee2af658b8705235e621fe",
+    "gc-pages-v5-noauto-summary.json": "6f2e39b910f02b54fe1bafadd6eb3174974d387a2bd5f0f642e69a1690ac9537",
+    "gc-pages-v5-linked-runs.json": "ddde40ebb083ff7fc317d76e2599e6d5cd5d09ad8cfa9b66835ea4151202ef9c"
+  },
+  "snapshots": [
+    {
+      "arm": "gc-runtime-inline-main",
+      "case": "tscwork",
+      "repeat": 0,
+      "criterion": "third natural synchronous full; not peak RSS",
+      "tables": {
+        "arena.old_gen_page_objects": {
+          "bytes": 3904016,
+          "entries": 15430
+        },
+        "arena.old_gen_page_meta": {
+          "bytes": 3702800,
+          "entries": 16640
+        }
+      },
+      "requested_bytes": 7606816,
+      "gc_live_bytes": 29387840,
+      "gc_live_objects": 238021
+    },
+    {
+      "arm": "gc-runtime-inline-main",
+      "case": "tscwork",
+      "repeat": 1,
+      "criterion": "third natural synchronous full; not peak RSS",
+      "tables": {
+        "arena.old_gen_page_objects": {
+          "bytes": 3904496,
+          "entries": 15430
+        },
+        "arena.old_gen_page_meta": {
+          "bytes": 3702800,
+          "entries": 16640
+        }
+      },
+      "requested_bytes": 7607296,
+      "gc_live_bytes": 29387840,
+      "gc_live_objects": 238021
+    },
+    {
+      "arm": "gc-runtime-inline-main",
+      "case": "zodwork",
+      "repeat": 0,
+      "criterion": "explicit diagnostic gc at iteration100 before safeParse, schema live; unmodified benchmark has no full; not peak RSS",
+      "tables": {
+        "arena.old_gen_page_objects": {
+          "bytes": 119280,
+          "entries": 139
+        },
+        "arena.old_gen_page_meta": {
+          "bytes": 57872,
+          "entries": 256
+        }
+      },
+      "requested_bytes": 177152,
+      "gc_live_bytes": 602360,
+      "gc_live_objects": 10209
+    },
+    {
+      "arm": "gc-runtime-inline-main",
+      "case": "zodwork",
+      "repeat": 1,
+      "criterion": "explicit diagnostic gc at iteration100 before safeParse, schema live; unmodified benchmark has no full; not peak RSS",
+      "tables": {
+        "arena.old_gen_page_objects": {
+          "bytes": 119280,
+          "entries": 139
+        },
+        "arena.old_gen_page_meta": {
+          "bytes": 57872,
+          "entries": 256
+        }
+      },
+      "requested_bytes": 177152,
+      "gc_live_bytes": 602360,
+      "gc_live_objects": 10209
+    },
+    {
+      "arm": "gc-runtime-pages-main",
+      "case": "tscwork",
+      "repeat": 0,
+      "criterion": "third natural synchronous full; not peak RSS",
+      "tables": {
+        "arena.old_gen_page_objects": {
+          "bytes": 2049136,
+          "entries": 15430
+        },
+        "arena.old_gen_page_meta": {
+          "bytes": 1061176,
+          "entries": 16640
+        }
+      },
+      "requested_bytes": 3110312,
+      "gc_live_bytes": 29410648,
+      "gc_live_objects": 238023
+    },
+    {
+      "arm": "gc-runtime-pages-main",
+      "case": "tscwork",
+      "repeat": 1,
+      "criterion": "third natural synchronous full; not peak RSS",
+      "tables": {
+        "arena.old_gen_page_objects": {
+          "bytes": 2049032,
+          "entries": 15438
+        },
+        "arena.old_gen_page_meta": {
+          "bytes": 1082728,
+          "entries": 16896
+        }
+      },
+      "requested_bytes": 3131760,
+      "gc_live_bytes": 29410648,
+      "gc_live_objects": 238023
+    },
+    {
+      "arm": "gc-runtime-pages-main",
+      "case": "zodwork",
+      "repeat": 0,
+      "criterion": "explicit diagnostic gc at iteration100 before safeParse, schema live; unmodified benchmark has no full; not peak RSS",
+      "tables": {
+        "arena.old_gen_page_objects": {
+          "bytes": 38216,
+          "entries": 139
+        },
+        "arena.old_gen_page_meta": {
+          "bytes": 14520,
+          "entries": 256
+        }
+      },
+      "requested_bytes": 52736,
+      "gc_live_bytes": 602360,
+      "gc_live_objects": 10209
+    },
+    {
+      "arm": "gc-runtime-pages-main",
+      "case": "zodwork",
+      "repeat": 1,
+      "criterion": "explicit diagnostic gc at iteration100 before safeParse, schema live; unmodified benchmark has no full; not peak RSS",
+      "tables": {
+        "arena.old_gen_page_objects": {
+          "bytes": 38216,
+          "entries": 139
+        },
+        "arena.old_gen_page_meta": {
+          "bytes": 14520,
+          "entries": 256
+        }
+      },
+      "requested_bytes": 52736,
+      "gc_live_bytes": 602360,
+      "gc_live_objects": 10209
+    }
+  ],
+  "medians": [
+    {
+      "case": "tscwork",
+      "requested_bytes": {
+        "gc-runtime-inline-main": 7607056.0,
+        "gc-runtime-pages-main": 3121036.0
+      },
+      "change_bytes": -4486020.0
+    },
+    {
+      "case": "zodwork",
+      "requested_bytes": {
+        "gc-runtime-inline-main": 177152.0,
+        "gc-runtime-pages-main": 52736.0
+      },
+      "change_bytes": -124416.0
+    }
+  ]
+}

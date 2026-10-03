@@ -1,0 +1,89 @@
+{
+  "status": "Private experimental source only; not applied to production PR code, not performance accepted.",
+  "private_commit": "75999697bec605264261fbb93496b653a9fdc78c",
+  "base": "23965109407be73052655d04123882e3e403257a",
+  "patch_sha256": "4d01257bb2bea56113a9fa94e4136fc374ac366d16e28ba7a1fcfbd9d88654d3",
+  "macos": {
+    "passed": 4861,
+    "failed": 0,
+    "ignored": 5,
+    "input": {
+      "base": "23965109407be73052655d04123882e3e403257a",
+      "trace_sha256": "e3a396d23de824479727410ac85934401cf1003106cb30df6d4340373cd2225e",
+      "log_sha256": "260e502de89fef6194a218402b11620bbbe99835b66ff093fc8b2ab4fa02c2fa"
+    },
+    "log": "/Users/amlug/projects/perry/secret-tests/scratchpad/rss-header-20261002/gc-capture-v11-macos-full.log"
+  },
+  "assembly": {
+    "scope": "arm64 default-feature runtime rlib before final static-library/application link, codegen-units=16. Static instruction counts include all paths; not retired instruction counts or RSS.",
+    "control_input": {
+      "head": "23965109407be73052655d04123882e3e403257a",
+      "trace_sha256": "7debbcd869502ef13aa52e5e712362e13749128b8e0bd4c7b9c9b5ea64b456ca",
+      "cmd": [
+        "cargo",
+        "rustc",
+        "--release",
+        "-p",
+        "perry-runtime",
+        "--lib",
+        "--",
+        "--emit=asm"
+      ],
+      "overrides": {
+        "CARGO_TARGET_DIR": "/Users/amlug/projects/perry/secret-tests/scratchpad/rss-header-20261002/gc-runtime-test-target",
+        "CARGO_PROFILE_RELEASE_CODEGEN_UNITS": "16",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_BUILD_JOBS": "4"
+      },
+      "scope": "Production default-feature runtime rlib codegen, arm64 macOS, 16 codegen units. Not final linked application assembly or an instruction measurement.",
+      "started": 1791032266.168443,
+      "exit": 0,
+      "ended": 1791032350.133908,
+      "log_sha256": "cb3fab2e0fbb4e927f31447bcefe8b3f059d1152c118b1dc305253e548d32c4d"
+    },
+    "candidate_input": {
+      "head": "23965109407be73052655d04123882e3e403257a",
+      "trace_sha256": "e3a396d23de824479727410ac85934401cf1003106cb30df6d4340373cd2225e",
+      "cmd": [
+        "cargo",
+        "rustc",
+        "--release",
+        "-p",
+        "perry-runtime",
+        "--lib",
+        "--",
+        "--emit=asm"
+      ],
+      "overrides": {
+        "CARGO_TARGET_DIR": "/Users/amlug/projects/perry/secret-tests/scratchpad/rss-header-20261002/gc-runtime-test-target",
+        "CARGO_PROFILE_RELEASE_CODEGEN_UNITS": "16",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_BUILD_JOBS": "4"
+      },
+      "scope": "Production default-feature runtime rlib codegen, arm64 macOS, 16 codegen units. Not final linked application assembly or an instruction measurement.",
+      "started": 1791032454.6047418,
+      "exit": 0,
+      "ended": 1791032515.351491,
+      "log_sha256": "f2f608ea23bb167f071358a76694a77b7fa030353e96a8f3c98112dabd22ba08"
+    },
+    "functions": [
+      {
+        "control": "/Users/amlug/projects/perry/secret-tests/scratchpad/rss-header-20261002/gc-capture-v11-control-asm/perry_runtime-8e2fc356256476ca.perry_runtime.7490c544b15b3e61-cgu.01.rcgu-inner.s",
+        "candidate": "/Users/amlug/projects/perry/secret-tests/scratchpad/rss-header-20261002/gc-capture-v11-candidate-asm/perry_runtime-8e2fc356256476ca.perry_runtime.7490c544b15b3e61-cgu.10.rcgu-inner.s",
+        "control_sha256": "ab6c6137caa5d873a4aea8b6fb0f23a911d0891e7be9b570133b90f5ace72d84",
+        "candidate_sha256": "81b02d0bd75553eafb1cd5c74f93b5394fd79f26c3e891968fa67d58c20c44be",
+        "control_static_instructions": 113,
+        "candidate_static_instructions": 109
+      },
+      {
+        "control": "/Users/amlug/projects/perry/secret-tests/scratchpad/rss-header-20261002/gc-capture-v11-control-asm/perry_runtime-8e2fc356256476ca.perry_runtime.7490c544b15b3e61-cgu.01.rcgu-inner.s",
+        "candidate": "/Users/amlug/projects/perry/secret-tests/scratchpad/rss-header-20261002/gc-capture-v11-candidate-asm/perry_runtime-8e2fc356256476ca.perry_runtime.7490c544b15b3e61-cgu.11.rcgu-inner.s",
+        "control_sha256": "ab6c6137caa5d873a4aea8b6fb0f23a911d0891e7be9b570133b90f5ace72d84",
+        "candidate_sha256": "0b4768dc28fdff9f5b6a4af50779fddcc24b7f86b53b550cdac2873c3deaa66a",
+        "control_static_instructions": 113,
+        "candidate_static_instructions": 109
+      }
+    ]
+  },
+  "conclusion": "In the inspected production arm64 rlib callback, stable facts use direct context loads, removing two loads on the usual non-weak, non-proxy path. Static whole-function count 113 -> 109. Final x86_64 linked instructions and application RSS/CPU remain unmeasured."
+}

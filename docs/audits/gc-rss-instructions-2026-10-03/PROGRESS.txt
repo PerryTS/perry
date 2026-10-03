@@ -1,0 +1,982 @@
+GC RSS and instruction work — draft progress, 2026-10-03
+
+LATEST STATE (2026-10-03)
+Current source rebased onto fetched main e532bf3d0e, with shared full-mark/
+retained visitors, compact page indices and the proposed pool reuse window.
+The runtime rebuilt and passed macOS 4,862 / 0 failed / 5 ignored. No GC branch
+codegen, shape/header layout or ABI changes are authored.
+
+Frozen main69 normal-auto comparison is COMPLETE and independently reverified:
+204/204 executions, all 17 workloads, three plain and three perf repeats per arm,
+with exact Node output, build/current-binary identity and all fault counters.
+TS RSS 243.992 -> 239.461 MiB (-1.86%), instructions +7.18%, minor faults +653.46%.
+Request-processing RSS -5.78%, instructions +7.33%. Document retain RSS -12.32%,
+transition -11.55%, replacement -10.95%, pipeline -10.81%. This frozen candidate
+has immediate discard and rejected visitor specialization; these results do NOT
+validate the current shared-visitor/window source. Its instruction regressions
+remain disqualifying. See main69-normal-auto-comparison.json for every case and
+repetition; main69-full-runtime-comparison.json contains the separate 24 cells.
+
+The exact-binary instruction profile also finished: 16 user-instruction samples
+across TS/Zod/string and two isolated arms, zero lost samples. Raw report/data,
+source/build/oracle/product hashes and text sections were independently checked.
+On main69 TS, GC accounts for 74.64-75.08% of baseline self samples and
+79.53-79.80% in the frozen immediate/inline candidate. These are sampled shares,
+NOT exact GC instruction deltas or new-main measurements. See instruction-profile-
+summary.json, instruction-profile-verification.json and its verifier.
+
+The frozen v6 Linux runtime (4,834), FFI/events and protected-moving linked
+stages passed, including both real residency/publication tests. Its application
+stage stopped when the TypeScript compiler exceeded the 600-second build guard;
+no app measurements were produced. Failure preserved; unchanged products and
+checks reverified. The v6r1 repair uses a new namespace and 1,800-second compile
+guard, reusing the successful control executable by source/product identity.
+It is queued behind a live campaign build on the shared lock. The rejected
+visitor specialization stays in that comparison to isolate pool policy.
+The paired user/kernel diagnostic has completed and is independently verified.
+Current source still requires its own Linux/app acceptance after that decision.
+
+Private capture-by-value callback candidate: one trace.rs change, based on
+239651/main334; macOS runtime 4,861 passed, 0 failed, 5 ignored. Production
+arm64 rlib assembly confirms two fewer loads on the usual slot path (whole
+callback 113 -> 109 static instructions); linked application counters remain
+unmeasured. Source and assembly excerpts are reviewable in callback-capture-
+v11.patch and callback-capture-v11-validation.json. It keeps shared enumeration and the same
+slots, captures stable per-object facts by value, and reborrows the worklist.
+No application instruction saving or RSS change is established. It is separate
+from production PR source and from the rejected visitor specialization.
+
+Private compact-cache patch remains unapplied: 4,852 Mac tests passed on its
+older pinned base, Linux/app acceptance pending. Historical attribution used
+160-byte header-inclusive ObjectMeta allocations; main added instance_birth,
+so that ledger must not be relabeled as current-main attribution.
+
+All following sections are chronological evidence with their original scope.
+Statements that a now-completed run is queued/live describe that older stage.
+
+
+Objective
+Minimize compiled-program peak RSS with Perry's GC while minimizing the
+instructions required to retain those savings. Application correctness,
+moving collection, FFI/events, idle/async behavior and retained/churn mixes
+remain acceptance requirements. This draft does not establish an absolute
+RSS minimum or a finished performance result.
+
+Original measurement base
+f6c873d99622d1bb751f198cfbd6cf3475251935, fetched from main on October 3.
+The existing measured baseline is ebc858cb9806845998cee28decc666c3ea226fd2.
+The intervening commit changes CI/test/docs files only. Crates, Cargo inputs
+and toolchain inputs are identical (main-production-equivalence.json).
+
+Implemented in this draft
+1. MallocState's exact-pointer set has no backing allocation until activation.
+   Preserve the existing initial/heavy growth headroom when it becomes active.
+   The independent Linux allocator probe avoids 73,744 bytes initially and
+   4,718,608 bytes for an inactive heavy registry. These are requested backing
+   bytes, NOT measured application RSS savings. An active registry retains
+   its full membership and headroom.
+2. Remembered-set rebuilding drops snapshots of uniformly nursery/longlived
+   blocks before iterating objects. Keep old, unknown and mixed ranges, plus
+   the existing malloc-parent walk and global census block indices.
+   Generation classification is essential: in-place promotion retags Eden
+   old before transferring its blocks to OLD_ARENA. Filtering by arena owner
+   alone was rejected during the audit. A new test exercises that window.
+   Other tests compare the resulting remembered edges with the original
+   whole-heap walk and require at least 40,000 avoided young-object visits.
+3. Reuse the copying collector's exact already-noted shape-carrier predicate
+   in the generic layout visitor. Skip a generation probe and a repeated
+   carrier note only when both epoch flags already make that note a no-op.
+   Continue enumerating the shape's keys edge and all other child slots.
+
+4. Release complete interior pages of empty pooled blocks. The original
+   madvise used a pointer guaranteed only 16-byte alignment and ignored errors.
+   An isolated Linux probe demonstrates EINVAL and unchanged residency.
+   Cache page size; preserve both boundary pages; use MADV_DONTNEED on Linux
+   and aligned MADV_FREE elsewhere on Unix. Keep the allocation for reuse.
+   The kernel test confirms three interior pages become nonresident, both
+   neighbors retain sentinel data, and the mapping remains writable.
+   Application RSS, page-fault and instruction tradeoffs still need measurement.
+
+Validation so far
+Current six-file runtime/test patch: 4,834 passed, 0 failed, 5 ignored on
+macOS arm64, serial perry-runtime unit suite. Source hashes and log digest
+are in source-and-validation.json. This includes the promotion-window test.
+Earlier lazy-registry-only revision: Linux runtime 4,813 passed / 5 ignored;
+FFI with runtime-link 75 passed; events 15 passed; compiler and both static
+wrappers built together successfully. Those Linux results do not validate
+the two subsequent scan optimizations. The scan revision's Linux suite aborted (exit 101) at
+turnloop_pool::tests::a_full_pool_queue_refuses_rather_than_growing_without_bound:
+"a saturated pool must refuse and fall back", then a destructor panic.
+A queue saturation race is suspected but not yet established against baseline.
+Do not count this run as a Linux pass. Linked checks and application A/B did
+not run because the driver stopped at this failure.
+
+Pool-release revision before visitor specialization: macOS 4,835 passed,
+0 failed, 5 ignored; isolated Linux kernel helper 3 passed. Hashes and log
+receipts are in pool-source-and-validation.json. Whole Linux validation of
+this revision is pending. Earlier six-file hashes remain separately recorded.
+
+Current measurements
+Clean-main TypeScript, three fresh plain processes, full runtime/no auto:
+peak RSS 257,863,680 / 257,892,352 / 257,994,752 bytes (about 246 MiB).
+Total retired instructions about 65.75 billion. Two user-instruction sample
+profiles attribute 73.72% / 73.64% of self samples to GC functions. This is
+sampled instruction attribution, not an exact GC-only instruction counter
+or a wall-time fraction. The separate trace reports 82 fulls and 6 minors;
+all full triggers are old_gen_bytes. Fulls reclaim substantial garbage,
+so raising thresholds to suppress them is not an established improvement.
+Main costs: slot visitors/marking, retained-edge rebuild, pointer validation,
+shape carrier notes, valid-pointer-set construction and sweep.
+
+Heap attribution requested by the shape campaign — completed
+campaign-attribution.json contains both repeated observations and hashes of
+the raw reports on the build host. Requested/usable/resident bytes are kept
+separate. These snapshots are NOT peak RSS and must not be added together.
+
+TypeScript: third natural synchronous full, two matching census observations.
+Live GC payload: 28.03 MiB; ObjectMeta: 64,734 records x 160 bytes = 9.88 MiB.
+64,217 ordinary owners carry only common prototype/brand/flag facts. Their
+observed facts form 117 groups and require no additional grouping beyond
+existing shapes in this snapshot. This is evidence for the campaign's planned
+migration, not proof of zero replacement storage or an achieved RSS saving.
+Four accessor/descriptor summary fields reserve 32 bytes per meta: 1.98 MiB
+across all records, but only 94 ordinary owners have any nonzero summary.
+Only 17 records (2,720 gross bytes) exist solely for those summaries.
+
+Shape storage: 6,849 records, 541 chunks, four directory pages, 355 extras,
+945 ConstFn entries. Slabs plus extras request 1,164,656 bytes (1.11 MiB).
+Empty record slots occupy 669,632 bytes. At the same chunk count, the 56->64
+byte record growth costs 138,496 requested bytes; this is not an RSS delta.
+Stock shape census omits 23,640 requested bytes of extras/ConstFn lists.
+Native usable allocation: canonical indices 2.50 MiB, arena page tables
+5 MiB, per-object slot-map 2.25 MiB, arena backing 108.375 MiB. Some capacity
+is nonresident. Anonymous resident totals reconcile to smaps: 143.38/142.88
+MiB in the separate native observations. Mixed-owner/free pages stay unassigned.
+
+Zod: original 200-iteration workload has four minors and no natural full;
+plain peak RSS is 30,330,880 / 30,474,240 / 30,400,512 bytes. Even a separate
+2,000-iteration diagnostic reached no full. Therefore a distinct census-only
+source calls gc() at iteration 100 BEFORE safeParse, keeping the schema live.
+The original benchmark and primary measurements remain unchanged. Both
+forced-census repeats match the original Node output. This boundary cannot
+be interpreted as the original workload's natural GC behavior or peak RSS.
+Live GC payload: 602,360 bytes; 277 ObjectMeta records: 44,320 bytes;
+summary fields: 8,864 reserved bytes, three summary-only records: 480 bytes.
+3,249 shapes plus directories/extras request 389,920 bytes. Canonical indices
+use 0.375 MiB allocator capacity; native anonymous resident total is 12.6875
+MiB in each diagnostic repeat. See the JSON for full ownership categories.
+
+Failed measurement history remains available: the first TS hook at full #80
+was never reached under GDB (77 fulls); successful stdout was not a census.
+The original Zod natural-full driver exited 1 because no full existed; the
+explicit diagnostic boundary is documented instead of silently relabeled.
+
+Earlier experiments still relevant, held separately
+The larger rss-header-20261002 experimental tree contains cold metadata,
+header, arena and GC-policy experiments plus dynamic string accumulation.
+An older combined experiment reduced TypeScript median RSS 237.45 -> 180.30
+MiB and instructions about 80%, chiefly by reducing transient string
+allocation (about 2.36 GB -> 75.6 MB cumulative arena allocation). These are
+historical comparisons between those experimental arms, NOT gains proven
+for this draft versus latest main. The broad tree is frozen pending isolation
+and coordination; it is not a landable combined implementation. An eight-byte
+TOTAL object header remains unimplemented and unproven.
+
+Shape campaign boundary
+The owner-approved order is #10498 prototype-in-shape first, compact header
+later with coordinated codegen/ABI offsets. The campaign owns prototype,
+brand/flag placement; accessors and descriptor summaries (#10498/#10871);
+function descriptors (#10507); array named props/layout; closure/ConstFn
+layout; canonical-key/reverse indices (#10753); and shape record layout.
+This draft changes GC bookkeeping, traversal and empty-page release; it adds
+no side table or shape format. Residual exotic/symbol/prototype table restructuring still requires
+a concrete coordination proposal before implementation. No such rewrite is
+underway. The existing exact shape no-op predicate is reused unchanged.
+
+Queued work and remaining acceptance
+- Triage Linux queue-test abort, then runtime/FFI/events and coherent build.
+- Validate pooled-page release end to end, including page-fault/CPU tradeoffs.
+- Three compiled rooting/old-to-young fixtures on baseline and candidate,
+  default and stress modes. Stress must match Node output, copy objects and
+  report protected retired from-space. A zero-moving run is not a pass.
+- Normal-auto 17-case A/B, 3 RSS/CPU and 3 instruction/cycle measurements per
+  case/arm (204 executions), exact complete stdout against Node 26.5.1.
+- Use completed TS/Zod attribution to coordinate representation changes;
+  inspect remaining allocation amplification and expensive GC callbacks.
+- Competitors: latest npm ScriptC 0.2.1, Porffor alpha15 (72d048d73d49), and
+  Static Hermes static_h ade4a2b20246 pinned. Porffor/Hermes refreshed runs
+  complete. ScriptC retry with installed LLVM 22 is complete: six cases match
+  Node in all three runs; JSON fails compilation with SC1043. Initial clang
+  failures are retained. Competitor versions and per-case RSS/CPU medians are
+  included beside this report. Final normal-auto Perry comparison pending.
+- Preserve the strongest validated memory changes while measuring each
+  instruction optimization. Review real-app tradeoffs and run CI gates
+  before this draft is ready to merge. No merge is requested now.
+
+Where Claude can inspect running evidence
+Build host: perrymaster.skelpo.net, /root/rss-header-20261002.
+Remote source: perry-gc-runtime-main (six-file v2 at the failed Linux run).
+Current draft also includes the two-file pool revision; see its source manifest.
+Frozen earlier products: gc-runtime-main; next products: gc-runtime-scan-main.
+Drivers: campaign-v2-run.sh, comparator-scriptc-retry.sh,
+gc-runtime-scan-v2-run.sh. They serialize on /root/.perry-heavy.lock.
+The scan driver stopped at Linux tests; no v2 frozen products or A/B exist.
+The pool driver is queued behind the shared lock but requires the absent v2
+success receipt. It cannot provide validation until prerequisites are repaired.
+Do not interpret its queued process as progress past the failed v2 tests.
+State files: campaign-main-v2.exit, campaign-main-native-v2.exit,
+comparator-scriptc-retry.exit, gc-runtime-scan-v2-build.exit,
+gc-runtime-scan-v2-linked.exit, gc-runtime-scan-v2-auto.exit.
+Absent exit files are not proof that a process is alive: inspect its PID.
+The raw logs, source/binary hashes, harnesses and frozen experimental reports
+are retained there; pool-stage source hashes match pool-source-and-validation.json; the current
+visitor experiment is pinned by inline-source-and-validation.json.
+
+Validation update: queue fixture repaired
+The baseline and scan-revision queue test were byte-identical. Thirty fresh
+isolated reruns of the original test passed, so the failure is intermittent.
+The dependency removes jobs from the queue before entering work: first Busy
+therefore does not prove the queue stays full until the fallback submission.
+The fixture now holds exactly the configured workers, with acknowledgements
+from those jobs, before filling the queue. All refusal, inline execution,
+exactly-once delivery and drain assertions remain intact. No production pool
+or GC code changed in this repair.
+Linux scan revision plus this fixture: 4,816 passed, 0 failed, 5 ignored.
+The original exit101 is retained; replacement logs use scan-v2r1. FFI/events,
+coherent build, moving fixtures and normal-auto matrix follow in the existing
+serialized driver. The invalid earlier pool-only waiter was stopped while
+confirmed childless; the replacement scan-pool-resume driver runs scan then
+pool stages in order, with unchanged source hashes for both production arms.
+The pool revision with the fixture repair also passed macOS: 4,835 passed,
+0 failed, 5 ignored. Linux scan-revision FFI passed all 75 tests.
+See queue-fixture-validation.json for hashes and the original repeat results.
+
+Visitor instruction experiment is included (macOS passed, Linux/A/B pending):
+instantiate the existing shared visitor body for full marking and retained-old
+parent rebuilding, removing per-slot indirect callbacks without changing the
+slots visited. Compare instructions, code size and RSS before accepting it.
+GC page-table compaction remains the next independent metadata candidate;
+prototype/brand/flags, shape facts and canonical indices stay campaign-owned.
+
+Visitor experiment validation plan
+Current head adds two hot caller instantiations of the existing enumeration:
+trace_heap_rewrite_slots and remember_retained_old_to_young_slots. No slot,
+weak-edge rule, descriptor case, collection threshold or shape fact changes.
+Its own macOS runtime suite passed 4,835 tests, 0 failed, 5 ignored.
+Linux/application results are still pending for this visitor revision. Linux driver is queued behind the
+scan/pool sequence and will stop if its predecessor fails.
+The follow-up driver first compares frozen scan and pool arms on original
+TS/Zod full-runtime programs (24 runs), including instructions, cycles and
+minor/major faults. It then builds/tests the visitor revision coherently,
+runs linked moving fixtures, compares pool versus visitor (24 diagnostic runs),
+and runs the separate 17-case normal-auto A/B using verified pool binaries.
+Both diagnostic comparisons record binary section sizes; more inlining may
+trade fewer executed instructions for larger text, so it is not accepted as
+an unconditional improvement before the measurements finish.
+Drivers: gc-runtime-scan-pool-resume.sh and gc-runtime-inline-v4-run.sh.
+New receipts: gc-runtime-scan-v2r1-build.exit,
+gc-runtime-scan-pool-resume.exit, gc-runtime-inline-v4-run.exit.
+Original failure and all preceding source manifests remain immutable.
+
+GC page-table compaction
+- Keep OldPageMeta's external snapshot unchanged; stored counters shrink from
+  104 to 56 bytes per page. Dirty-slot work remains usize and epochs remain u64.
+- Group 64 neighboring page facts in a chunk with explicit presence bits and
+  release a chunk when its final page is removed. This avoids one hash bucket
+  per page; old arena blocks register dense page ranges.
+- Store in-page object starts as u16 byte offsets. One full entering address
+  handles an object starting before the page, even when it spans gigabytes.
+  Preserve insertion order, deduplication, partial-removal and promoted-run rules.
+- Shrink sparse map capacity after full-cycle removals, with twofold retained
+  headroom and fourfold sparsity admission. Collection thresholds are unchanged.
+- Discover every page_meta Rust module in both source obligation audits. The
+  former fixed list omitted sweep_tally; its existing flush-free writer rule
+  is now explicit. Directory shrink need not expand described object runs.
+Tests compare compact storage against independent maps/vectors through reuse,
+missing pages, high addresses, boundary crossings, removals and wide epochs.
+At the old TypeScript census, the two targeted tables requested 7,607,168 bytes.
+That is the target, not a measured saving. Normal-auto and full-runtime A/B,
+page-fault/code-size observations and repeated TS/Zod census remain required.
+Isolated pre-rebase driver: gc-runtime-pages-v5-run.sh, source revision v5r1.
+Latest-main tests: logs/gc-runtime-pages-main69-macos.log. The original failed
+log gc-runtime-pages-v5-macos.log is retained; never relabel it as a pass.
+
+Latest-main validation result
+The complete current source on main69 passed the macOS runtime suite:
+4,849 passed, 0 failed, 5 ignored. Source and log hashes are recorded in
+pages-source-and-validation.json. This includes all new table tests and both
+expanded obligation audits. No Rust inputs changed after that successful run.
+Fresh-main source archive and separate candidate overlay are uploaded. The
+main69 driver builds a pristine baseline and the consolidated candidate in
+separate roots/targets, runs candidate runtime/FFI/events, linked moving checks,
+24 full-runtime TS/Zod diagnostic runs and 204 normal-auto executions. It is
+queued after the isolated older-base arms, whose results remain separately
+identified. Final comparator join must use these fresh-main normal-auto results.
+Source roots: perry-main69-base / perry-main69-gc (created only on admission).
+Driver: gc-runtime-main69-run.sh; receipt: gc-runtime-main69-run.exit.
+
+Executable attribution, existing frozen-main diagnostics (not main69 acceptance)
+Added executable-footprint.json: hashes bind all four observations to the
+previously validated full-runtime campaign binaries and their pre-observer
+smaps files. Two TypeScript observations show 85.793 MiB of executable-backed
+RSS, of which 70.770 MiB is in executable-permission mappings. Two Zod
+observations show 14.109 MiB and 10.492 MiB respectively. TypeScript is at its
+third natural full; Zod uses the separately labelled explicit-census workload.
+These are collection-boundary snapshots, not peak/default-auto-build RSS.
+
+TypeScript's .text is 109,252,738 bytes of ELF layout. One generated closure
+is 8.266 MiB of machine code, two more are about 2.5 MiB each. Symbol sizes
+do not establish which of their pages are resident. Constants, stack maps,
+unwind information and relocated data occupy other mappings; the report
+keeps those separate from executable-permission RSS. This is evidence for
+a generated-code footprint audit after the current runtime comparisons, not
+a lower bound or an estimate that heap compaction could save those bytes.
+No codegen/header/shape changes are included in this attribution step.
+
+Measurement acceptance preparation
+The queued v3/v4/v5/main69 normal-auto matrices now measure minor and major
+page faults on ALL 17 workloads, alongside instructions/cycles. This closes
+a gap in the earlier plan, which observed fault costs only on full-runtime
+TS/Zod. Plain RSS/CPU runs remain separate. The active v2 matrix is unchanged.
+Before replacing the four queued scripts, verified the active v2 process and
+that none of the four later matrix processes existed. Original scripts and
+before/after hashes are retained (gc-auto-fault-events-revision.json).
+
+Added summarize-gc-comparison.py: require a successful terminal matrix receipt,
+all 204 unique cells (24 for no-auto), exact Node output independent of the
+recorded correctness flag, consistent executable digests, successful matching
+builds and current binary hashes. Summaries retain every repeat plus min,
+median, max and signed changes for RSS, CPU, instructions, cycles and faults.
+Missing/zero/nonfinite counters cannot silently become a passing zero. A zero
+fault baseline retains its absolute change without an invented percentage.
+check-gc-summary-verifier.py accepts three complete synthetic matrices and
+rejects 12 corrupted inputs (including a build from the wrong workload). This verifies the summarizer, not applications.
+
+Usage after a queued fault-enabled normal-auto matrix succeeds:
+python3 summarize-gc-comparison.py /root/rss-header-20261002/gc-auto-main69 \
+  --arms main69-base main69-gc --suite auto --fault-events \
+  --complete /root/rss-header-20261002/gc-runtime-main69-auto.exit
+Do not declare acceptance from an average across workloads: inspect each
+case's RSS/instruction tradeoff and investigate regressions. The summarizer
+deliberately makes no automatic performance-acceptance verdict.
+
+COMPLETED: v2 normal-auto scan/bookkeeping comparison (old production base)
+204/204 executions match Node. Successful terminal receipt, exact 17 x 2 x
+2 x 3 cell coverage, build-to-workload bindings and current binary digests
+were checked by the published summarizer. See scan-comparison.json.
+This validates v2 only; page release/visitors/page compaction and main69
+acceptance are still pending. The existing driver has advanced to v3 build.
+
+RSS mostly unchanged; document replacement falls 145.062 -> 142.273 MiB
+(-1.92%). TypeScript falls 244.598 -> 243.992 MiB (-0.25%), instructions
+-1.82%. Large live-set instructions -2.74%; retain/release -1.66%.
+Open regressions/tradeoffs: Zod RSS 24.215 -> 24.508 MiB (+1.21%); string
+build instructions +0.53% (all three candidate counts exceed all baseline
+counts). Do not call this an across-the-board win. TypeScript plain CPU
+time +12.89% despite instructions -1.82% and median perf cycles -1.47%;
+shared-host timings/cycles vary widely across several cases. Keep both
+measurements and investigate; do not discard the slower CPU result.
+
+Next: assess whether the visitor revision removes the string instruction
+regression, and whether the consolidated memory changes improve Zod. If
+not, isolate those costs before accepting the combined candidate. Quantify
+the pool release's fault/CPU cost across all workloads and the page-table
+census savings. No performance-acceptance verdict has been made.
+
+BUILD-FRESHNESS CORRECTION (2026-10-03)
+The original pool v3 build was stale: tar restored runtime inputs with mtimes
+older than Cargo's dependency outputs. Cargo reported 4,816 passing tests in
+0.36 seconds but omitted both new page-release tests. All three copied products
+were byte-identical to v2. Its 50 partial application rows, linked checks and
+successful build receipt are REJECTED as pool-revision evidence. Original logs,
+binaries and terminal receipts remain preserved; no measurements were erased.
+See gc-runtime-pool-v3-stale-build-rejection.json.
+
+V2 remains independently supported: its runtime and static builds recompiled,
+its added scan tests passed, and linked TS/Zod/string binaries contain the new
+generation-filter calls absent from their baselines. See
+ gc-auto-v2-build-freshness-proof.json. Existing v2 regressions remain open.
+
+prepare-gc-overlay.py now refreshes every runtime Rust input timestamp after
+verifying source contents, and invalidates outer auto-runtime cache stamps
+while retaining backups. A tiny real Cargo reproduction demonstrates both
+stale reuse and successful recompilation after the repair; see
+check-gc-overlay-cargo-refresh.py and gc-overlay-cargo-refresh-selftest.json.
+verify-gc-runtime-build.py rejects the stale production test log and requires
+new tests, an actually rebuilt runtime, a changed static archive and a compiled
+page-release symbol. Later page-table builds additionally require their new
+tests. Normal-auto TS/string outputs also require the page-release symbol.
+These guards supplement source hashes; source hashes alone were insufficient.
+
+The repaired pool v3r1 runtime suite has now actually compiled and passed:
+4,818 passed, 0 failed, 5 ignored, including both kernel/page-boundary tests;
+75 runtime-linked FFI and 15 event tests passed (pool-retry-linux-validation.json).
+Coherent archives and application acceptance
+are still pending. Refreshed 1,494 source inputs and invalidated four outer
+cache stamps; compact receipt: pool-retry-source-refresh.json.
+
+Execution order is now a single serialized pipeline:
+gc-runtime-mtime-repair-run.sh -> pool-v3r1 -> inline-v4r1 -> pages-v5r2 ->
+main69r1. Repaired v3 uses gc-runtime-pool-r1-main / gc-auto-v3r1; invalid v3
+products are never reused. Later source revisions are unchanged; the new
+suffixes identify repaired execution. Full pipeline success requires all
+runtime/FFI/events, linked moving checks and workload matrices to complete.
+The final summary receipt is gc-runtime-main69r1-auto.exit (not the superseded
+main69-auto receipt shown in the historical command above).
+
+Pool retry advanced: the coherent compiler/runtime/stdlib build completed and
+verify-gc-runtime-build.py accepted the changed archive plus decommit symbol
+(pool-retry-artifact-verification.json / pool-retry-products.json). All three
+linked fixtures passed in default and moving modes; copied-object counts were
+12,442 / 5,689 / 63,625, with protected from-space. Compact observations are in
+pool-retry-linux-validation.json. The guarded normal-auto matrix is now running;
+RSS/instruction/fault tradeoffs remain unmeasured for this repaired revision.
+
+NEXT INSTRUCTION ATTRIBUTION (queued; no result claimed)
+After the full repaired pipeline succeeds, gc-final-instruction-profile.py
+samples user instructions in the exact verified normal-auto symbol builds:
+main69 baseline/candidate for TS, Zod and string-building, plus the older v2
+baseline/candidate string case with its observed +0.53% instruction cost.
+Two repeats per subject (16 runs), reversed order on repeat two. Source,
+plain/symbol binary hashes and matching .text are checked against build records;
+each input must have six correct matrix cells. Profile output must match Node.
+Lost samples or missing attribution fail the report parser. These are self
+samples, not elapsed time, peak RSS or exact per-function instruction deltas.
+Inlining can move attribution between symbols, so compare the machine code
+and aggregate collector work before inferring a regression's cause.
+
+The parser was exercised on the actual 64,885-sample baseline TS report
+(47,835 GC self samples, 3,111 arena self samples) and rejects lost samples,
+empty attribution and missing event counts. This only validates report reading;
+it does not establish that the queued final profiles have run. See
+instruction-profile-plan.json for the pinned host harness dependencies.
+Independent serialized follow-up: gc-final-instruction-profile-run.sh;
+receipt gc-final-instruction-profile-v1.exit. It requires the whole preceding
+pipeline to succeed and cannot silently profile a partial/failed build.
+
+COMPLETED: repaired v3r1 pool comparison (204/204 correct)
+The complete normal-auto 17-case comparison passed coverage, Node stdout,
+receipt/build/binary checks and all four perf counters. pool-comparison.json
+contains every repetition and input digests. This is pool + scan/lazy changes
+versus original mainrefresh-base, NOT an isolated pool-versus-scan comparison
+and NOT final main69 acceptance.
+
+Immediate page discard is NOT accepted as the final policy. TS peak RSS was
+243.777 -> 243.574 MiB (-0.08%), but minor faults 109,561 -> 811,105 (+640%),
+instructions +4.74%, and plain CPU +15.28%. Earlier v2 scan-only TS instructions
+were -1.82%; those separate runs are supporting evidence, not a paired v3/v2
+measurement. The new discard behavior plausibly explains the fault increase;
+its reuse dynamics need direct attribution before selecting a replacement.
+JSON RSS -0.10%, instructions +2.11%, faults 119,803 -> 231,235. String RSS
+-0.71%, instructions +1.82%, faults 100,283 -> 144,122. Document replacement
+RSS -3.71%, instructions +1.64%, faults 71,253 -> 135,860.
+
+There are useful savings to retain: pipeline RSS 285.543 -> 270.113 MiB
+(-5.40%), instructions -0.17%, faults 79,117 -> 79,354. Grow/churn RSS -3.14%
+with instructions +1.00%. Small ring/request/Zod RSS regressions remain visible
+in the table, not rounded into an across-the-board success. CPU medians are
+shared-host observations and carry the reported timing limitations.
+
+Next policy requirement: retain rapidly reused pool blocks without repeatedly
+faulting them back, while returning cold/excess blocks and preserving the
+observed RSS reductions. The alignment/boundary fix remains required. Candidate
+criteria must derive from allocation/reuse demand and GC/idle boundaries, not
+workload names or benchmark-only settings. Existing v4/v5/main69 measurements
+continue with immutable sources to isolate visitor/page-table effects; their
+results cannot automatically accept the immediate-discard policy.
+
+CURRENT PROPOSAL: pooled-block publication grace window (v6)
+Implemented on top of the consolidated main69 candidate. A newly pooled block
+starts with two publication ticks: the first completed collection preserves
+resident contents; the following completed collection discards interior pages
+if the block remains unused. Taking/re-pooling a block restarts the window.
+Expired entries are advised only once. Critical, emergency and idle drains
+retain their existing immediate allocation-release behavior.
+
+This is a reuse heuristic indexed by completed collections. With normal pacing
+it provides the intervening mutator an opportunity to reuse storage; consecutive
+explicit/forced collections can advance the clock without an allocation gap.
+It does not prove a block can never be needed again. Application fault/RSS/CPU
+results must decide whether this criterion is worthwhile; no benchmark names,
+new GC knobs or threshold changes are involved. Private pool entries gain one
+small countdown field; no per-live-object side table or shape/header ABI changes.
+
+Release executes before pause accounting on both full/budgeted publication and
+the copied-minor fast path. macOS focused reuse test and the complete runtime
+suite passed: 4,850 passed, 0 failed, 5 ignored. Test registration and whitespace
+checks passed. reuse-window-source-and-validation.json binds all 23 runtime
+inputs, archive and logs. Linux has an actual mincore test through full GC
+publication; it remains pending, as do FFI/events, moving and application checks.
+
+A separate v6 driver is queued behind existing isolated/full-main measurements
+and the final instruction-profile diagnostic. It copies immutable source/build
+inputs into independent roots, refreshes Cargo inputs/cache stamps, requires
+both new policy tests and the new policy code in the production archive, then
+runs linked/moving checks and a full-runtime TS/Zod policy A/B. Normal-auto is
+three arms: pristine main69, immediate-discard consolidated main69, and the
+reuse-window candidate. There are 306 actual runs (17 x 3 x 2 x 3).
+project-gc-window-comparison.py derives two verified 204-cell comparisons from
+those cells without creating or altering measurements. A synthetic integration
+check passes both projections and rejects five corrupted matrices. That checks
+measurement handling only; application acceptance remains open.
+
+New roots/products: perry-main69-window / main69-window-target / main69-window.
+Driver: gc-runtime-window-v6-run.sh; terminal receipt of the same stem.
+Current PR implementation is v6; earlier v2/v3/v4/v5/immediate-main69 results
+validate their pinned revisions, not the newly changed policy on current HEAD.
+
+PAIRED FULL-RUNTIME RESULTS (measured earlier production base)
+Both dedicated TS/Zod comparisons completed 24/24 correct executions and passed
+the comparison verifier, including current executable identities and all four
+counters. These are --no-auto-optimize measurements; they do not replace the
+17-workload normal-auto matrices or validate current v6 HEAD.
+
+Pool vs scan: TS RSS 246.801 -> 246.336 MiB (-0.19%), instructions +6.42%,
+minor faults 108,795 -> 812,164 (+646.51%). All three instruction counts in the
+pool arm exceed all three scan-arm counts. Plain CPU median +17.69%; shared-host
+cycles/timing remain variable. Zod RSS +0.33%, instructions +0.004%.
+This directly isolates the page-release revision against v2, strengthening the
+reason to reject immediate-discard as the final policy. It does not yet measure
+what fraction of those extra instructions belongs to fault handling.
+
+Visitor vs pool: TS RSS 247.105 -> 247.070 MiB (-0.01%), instructions +1.41%,
+minor faults +0.023%. Every candidate instruction count exceeds every paired
+baseline count. Zod RSS +0.80%, instructions +0.016%. Per-slot inlining is NOT an
+accepted instruction optimization on this evidence. Normal-auto results and
+compiled instruction attribution will determine whether to revert it or keep
+only a smaller beneficial part. No instruction win is inferred from fewer
+indirect calls in source. Detailed repetitions: pool-vs-scan-full-runtime.json
+and visitor-vs-pool-full-runtime.json.
+
+The pinned visitor v4 Linux build now passed 4,818 runtime, 75 runtime-linked
+FFI and 15 event tests. Its six linked default/moving executions match Node;
+all three moving fixtures copied objects (12,442 / 5,689 / 63,625) and protected
+from-space. Archived products and logs are bound in visitor-linux-validation.json.
+This validates that isolated source revision, not later page compaction or v6.
+
+Additional diagnostic queued: 12 executions of those exact TS executables under
+the shared benchmark lock, with instructions:u and instructions:k separately.
+It rejects missing/duplicate/unavailable/multiplexed counters and requires both
+domains to be observed. Counts represent all user/kernel work, not direct
+fault-handler attribution. Five corrupt synthetic counter records were rejected;
+that verifies the parser only. No application result or acceptance yet.
+Latest fetched main remains 69de7f3526. PR still a draft; current v6 Linux/app
+validation and broader memory/instruction optimization remain open.
+
+VISITOR DECISION: revert added specialization (v7; supersedes v6 HEAD scope)
+Normal-auto visitor v4 completed and verified 204/204 executions across all 17
+workloads. TS instructions +1.96%, RSS +0.04%; Zod instructions +0.29%, RSS +0.32%.
+String/JSON/document instruction medians improve about 0.3%, but there is no
+substantial peak-RSS benefit to offset the TS regression in either build mode.
+The two newly specialized call sites (full mark and retained-parent rebuild)
+are reverted to their shared dispatch. The existing copying-minor inline visitor
+on main is unchanged, as are the v2 no-op predicates, pool alignment/window and
+page compaction. visitor-comparison.json preserves the full normal-auto evidence.
+
+This source decision removes a failed optimization; the new combination still
+requires validation. macOS full suite passed on the reverted source: 4,850 passed, 0 failed, 5 ignored. Frozen
+v4/v5/immediate-main69/v6 sources and artifacts are not changed: their queued
+results remain useful isolated evidence, never proofs about the new v7 HEAD.
+The v6 window comparison must finish before deciding the final pool policy and
+scheduling the final shared-visitor acceptance measurement. Linux now runs the
+page-compaction v5r2 stage; the earlier v4 stage completed successfully.
+
+PAGE COMPACTION v5: isolated measurements complete (earlier production base)
+All 204/204 normal-auto executions match Node and passed the comparison verifier,
+including source/build/current executable identities and all four counters.
+Peak RSS decreases in 16 cases and is unchanged for the empty program. This
+isolates page compaction against the frozen immediate-discard/specialized-visitor
+control; it does not validate current v7 shared-visitor/reuse-window combination.
+
+Normal-auto median RSS MiB / instruction change:
+TS 244.457 -> 239.344 (-2.09%) / -3.84%;
+Zod 24.492 -> 24.441 (-0.21%) / -0.19%;
+pipeline 270.230 -> 254.738 (-5.73%) / -0.33%;
+document retain 349.074 -> 311.711 (-10.70%) / -0.23%;
+document transition 188.078 -> 167.926 (-10.71%) / +0.12%;
+retain/release 271.781 -> 246.504 (-9.30%) / +0.08%;
+large live set 103.137 -> 96.465 (-6.47%) / +1.25%.
+Other open instruction costs: document replacement +0.33%, JSON +0.23%,
+empty-program startup +2.83%. CPU/cycles are retained for every case; shared-host
+short-run timing remains variable. All repetitions are in pages-comparison.json.
+
+The paired full-runtime (--no-auto-optimize) 24/24 comparison also passed:
+TS 247.629 -> 242.039 MiB (-2.26%), instructions -3.82%, minor faults +0.59%;
+Zod 28.930 -> 28.707 MiB (-0.77%), instructions +0.31%.
+All three TS candidate instruction counts are below all control counts; all three
+Zod candidate counts are above all control counts. The Zod instruction cost
+remains reported, despite its opposite direction in the normal-auto build.
+See pages-vs-visitor-full-runtime.json.
+
+Linux v5: 4,830 runtime + 75 FFI + 15 events passed. Five required tests ran,
+including wide metadata/epoch preservation, page-boundary reuse and real kernel
+page release. Six linked default/moving runs match exact Node 26.5.1; all three
+moving fixtures copied objects (12,442 / 5,689 / 63,625) and protected from-space.
+Current archive, executable, logs, completed receipts and app inputs are bound
+in pages-linux-validation.json. verify-gc-pages-v5-evidence.py rechecks them on
+the measurement host and derives the two-table boundary ledger.
+
+At the third natural synchronous full, the two old-generation page tables use
+7,607,056 -> 3,121,036 median requested bytes, a 4,486,020-byte (4.28 MiB) decrease.
+TS snapshot live graphs differ by two objects / 22,808 bytes; they are not
+claimed identical. Zod's separate explicit-collection diagnostic has the same
+602,360-byte/10,209-object live graph and tables 177,152 -> 52,736 requested
+bytes (-124,416). These requested native byte counts are not allocator usable
+bytes or peak RSS; they cannot be added to peak-RSS savings. Details and repeated
+snapshots are in pages-boundary-accounting.json.
+
+The serialized Linux job advanced to the fresh main69 build. The v6 reuse-window
+and user/kernel attribution drivers remain queued under the same benchmark lock.
+Private 32-byte page-class cache prototype: six focused default tests passed,
+including exact bitmap origin, epoch/bounds and >u32 authoritative-map fallback.
+Control-arm/full-suite validation is running separately. That prototype has not
+been accepted or added to production source in this draft.
+
+PRIVATE CACHE PROTOTYPE AND FINAL ACCEPTANCE PREPARATION
+Private cache prototype commit 1f1e2e7102: compact exact page-class entry 40 ->
+32 bytes; the unchanged initial 4,096-entry table requests 32 KiB less per thread.
+The exact original bitmap origin and full-width authoritative ranges are
+preserved. Lengths beyond u32 bypass only this cache, with explicit refusal
+accounting. No managed object/shape/header layout changes. Default/control
+focused suites passed six tests each; full macOS runtime 4,852 passed, 0 failed,
+5 ignored. page-class-compact-v8.patch is reviewable experimental source only;
+it is NOT applied to production PR source. See its macOS validation record.
+Linux and application instruction/RSS acceptance remain unmeasured.
+
+Prepared final shared-visitor v7 acceptance scripts, not uploaded or queued.
+They copy independent source/target roots, apply all 23 pinned v7 overlay paths
+(including baseline trace.rs), refresh build inputs, require new policy tests
+and coherent changed production artifacts, run Linux runtime/FFI/events and
+six genuinely moving/default Node-exact fixtures, then measure full-runtime
+TS/Zod (24 cells) and all 17 normal-auto applications (204 cells) against pristine
+main69. Existing pristine-control build records/executables are reused only after
+source/compiler/product/binary identity verification; measured runs are fresh
+for both arms. All five scripts pass Python/bash syntax checks. They launch only
+after v6 measurements support keeping the proposed window, or are revised if
+policy evidence requires another choice. This is preparation, not acceptance.
+
+Main freshly fetched again: 69de7f3526 unchanged. The Linux main69 baseline build
+completed; consolidated immediate-discard main69 runtime tests passed 4,832,
+0 failed, 5 ignored. Its remaining FFI/events/build/application stages are live.
+Those frozen results will not validate current v7 or the private cache prototype.
+
+CURRENT MAIN REBASE (main334; supersedes main69/v7 as current source scope)
+Main advanced through #10498 accessors, #10753 dynamic keys, #10507 function
+constructors, array RMW/bitwise lanes, typed-array/arguments work, function-store
+caches and class super/instanceof relink fixes. The draft rebases cleanly onto
+334217b507e875535648d243fe6d8cf3d2749941; there is no codegen/ABI change authored
+by this GC branch. The GC source keeps the shared visitors, pool-window proposal
+and compact page metadata. Private compact-cache patch remains unapplied.
+
+First fetched intermediate main994 plus GC passed macOS 4,861/0/5. The follow-up
+main334 rebase also rebuilt runtime and passed 4,861/0/5. Source/archive/log
+identities are in current-main334-source-and-validation.json. Main may continue
+advancing; final build inputs must pin the then-fetched source explicitly.
+
+Running main69 jobs remain immutable, with their original comparison scope.
+Main69 full-runtime TS/Zod finished 24 cells; verification/results are being
+processed. Main69 normal-auto compilation is live. Its earlier Linux runtime
+4,832, FFI75/events15 and linked/moving results validate its frozen source only.
+V6 pool-policy and domain-attribution jobs remain queued. Prepared v7/main69
+final-acceptance scripts are now historical preparation: do not run or claim
+them as latest-main334 acceptance. Fresh current-main inputs are prepared.
+
+The campaign added ObjectMeta.instance_birth (POD u64) on main. Prior census
+records used 160-byte header-inclusive metadata allocations; their byte counts
+must remain historical rather than being relabeled as new-main attribution.
+The exact new owner distribution/bytes must be measured on current programs.
+
+Additional old-hole audit: intrusive free lists retain a dead hole's GcHeader
+and first payload word (the next link). Raw walks still step by that header's
+size. Large-hole interior payload pages could be discarded while preserving
+those words; arbitrary free pages cannot be discarded when they contain headers
+or links. Scattered small holes require coalescing/compaction or another traversal
+representation before physical-page release. No hole policy/layout change made;
+its real eligible bytes and reuse/instruction costs remain unmeasured.
+
+MAIN69 FULL-RUNTIME COMPARISON VERIFIED (24/24; frozen immediate-discard source)
+TS 247.312 -> 242.418 MiB (-1.98%), instructions +2.83%, minor faults
+109,161 -> 816,234 (+647.73%), CPU +10.22%. Every candidate instruction count
+exceeds every baseline count. Zod RSS 28.910 -> 29.008 MiB (+0.34%), instructions
++0.015%; its instruction repetitions overlap. All current-binary/build/stdout/
+counter guards passed. main69-full-runtime-comparison.json keeps repetitions.
+This reinforces rejecting immediate discard as the final policy. It does not
+measure the window or the restored shared visitors, and is not new-main334
+acceptance. Normal-auto main69 compilation continues under the shared lock.
+
+CURRENT-MAIN334 ACCEPTANCE INPUTS
+Both pristine source and the 23-path GC overlay are archived and hash-bound.
+New independent source roots/targets are specified. The builder refreshes ALL
+workspace Rust inputs and Cargo manifests, including codegen/HIR/ABI, because
+new-main source archive timestamps can predate reused main69 targets. It requires
+both compilers to rebuild/change, newly landed dynamic-key/arguments/function-
+constructor tests and runtime symbols, Linux page residency/window tests, and
+absence of the rejected visitor helper. It builds both static wrappers.
+
+Default/protected-moving fixtures include the original three GC probes plus
+new-main #10498 accessors, #10753 dynamic keys and #10507 function constructors:
+24 executions (six cases x two arms x two modes). Every moving execution must
+copy objects and protect from-space, as well as match exact Node output. Full-
+runtime TS/Zod is 24 cells; all 17 normal-auto applications total 204 cells.
+All scripts pass Python/bash syntax; source transfer/verification is in progress.
+The job is NOT queued: v6 measurements must first decide the pool window. Its
+prepared script receipt is not a performance-acceptance claim.
+
+CURRENT-MAIN e532 INPUTS AND VALIDATION
+Rebased onto e532bf3d0e, including #10495/#10497 inherited/function-holder reads,
+#10741 loop admission, fresh class template construction and closure-call
+argument rooting. Our changes still author no codegen/shape/header/ABI edits.
+The rebuilt Mac runtime passed 4,862 tests / 0 failures / 5 ignored. Node pin
+and 404-file test-registration checks passed; source/product manifests retain
+explicit hashes and original build scopes. No Linux/app acceptance is claimed.
+
+Fresh pristine source and 23-path overlay are archived. Updated v12 scripts
+require the new class-template test and runtime symbol, actual fresh codegen
+compiles in both arms, and the new runtime policy tests. Linked coverage is
+40 default/protected-moving executions (10 cases x two arms x two modes),
+adding closure-call-argument rooting, fresh class statics and inherited/function
+reads to the earlier six cases. Every moving case must copy objects and protect
+from-space. Full-runtime TS/Zod remains 24 cells; normal-auto remains all
+17 workloads / 204 cells. No current-main334 artifact is reused as proof about
+e532. Scripts passed syntax checks and remain unqueued until the pool-policy
+evidence has been assessed. current-maine532-source-and-validation.json binds
+source archives, Mac tests and the prepared scripts.
+
+INHERITED MAIN FILE-CAP FAILURE
+The e532 rebase's file-size check fails on codegen/string_pool.rs: 2,068 lines
+against the 2,000 cap. That file is byte-identical to pristine e532; no GC-branch
+edit caused it. It is part of the campaign's fresh class-template/codegen work.
+No independent codegen refactor is made here. Current-main validation records
+this actual failure; the draft cannot claim all required checks passed.
+
+PAIRED USER/KERNEL DIAGNOSTIC VERIFIED (12/12, frozen earlier full-runtime arms)
+Immediate discard versus scan: TS user instructions 63,803,547,046 ->
+63,806,187,361 (+0.00414%); kernel instructions 918,458,658 -> 5,073,916,819
+(+452.44%, +4,155,458,161); minor faults 108,996 -> 812,151 (+645.12%).
+The extra retired instructions are overwhelmingly in kernel execution. Kernel
+counts include all kernel work, so this is not direct fault-handler attribution.
+It strongly supports avoiding advice on promptly reused blocks; it does not
+validate the window or current main.
+
+Visitor specialization versus immediate-pool control: user instructions
++991,384,583 (+1.55%); kernel +0.03%, faults +0.015%. That regression is in user
+execution and independently reinforces its rollback. Raw perf logs, complete
+cell coverage, source/build/oracle/executable identities and every published
+distribution were independently rechecked. See paired-instruction-domains-
+comparison.json, its verification record and verifier.
+
+V6 COMPILATION TIMEOUT REPAIR
+Original v6 pipeline terminal exit 1; candidate TS compiler killed by the
+harness after 600.92 seconds during code generation. Control compiled correctly,
+but there are zero application measurement rows. This is a compilation failure,
+not a measured program RSS/CPU regression. The v6r1 input verifier rechecks all
+frozen production products/source, Linux/FFI/events and 12 linked executions
+(including six copied/protected runs) before retry. New r1 app identities and
+receipts preserve the original failed build. The final e532 preparation now
+requires the successful r1 policy receipt and allows 1,800-second no-auto builds.
+The repair process is live and waiting for the shared benchmark lock; no
+foreign campaign process was stopped. Policy acceptance is still open.
+
+CURRENT-MAIN METADATA DECODER PREPARATION
+Compiled the exact e532 ObjectMeta source with its offset assertions: twenty
+u64 fields, 160-byte payload, 168 bytes including the existing 8-byte GC header.
+instance_birth is at payload offset 144, native_state at 152. This is layout
+proof only, not a new owner census or RSS result; the forthcoming Linux observer
+must assert those allocations and remeasure owner/shape/canonical distributions.
+
+QB6 FRESH-MAIN BUILD AND LINKED VALIDATION (2026-10-03)
+Used only /root/rss-gc-build-20261003 on the explicitly authorized temporary
+build host, with separate source, target and runtime paths per arm; 8 Cargo
+jobs per arm. Both pristine e532 and production GC compiler/static-wrapper
+builds completed in 208 seconds. All products/logs and archive/source bindings
+were verified and copied to the Mac and original benchmark host, well before
+the rental deadline. Both compilers launch on that host. Linux runtime tests
+passed 4,846/0/5; FFI 75/0; events 15/0. Both real page-window tests and the
+new-main shape/class-template tests actually passed. No private tag/cache/
+capture experiment was included in those production builds.
+
+The current-main linked suite passes all 40 executions (20 default, 20 moving)
+and every moving run copied objects and protected from-space. 28 successful
+r3 executions were retained with their original manifest/executable bindings;
+12 were measured in r4. Stronger density was needed for read-only fixtures.
+Every-poll function-constructor stress exceeded the 300-second guard on pristine
+baseline; that timeout remains recorded. Normal paced stress succeeds and moves
+objects. The fresh-class-static fixture has no copying at its normal size, so
+its derived GC fixture inserts three explicit collections between class creation
+and later static reads. Original source is unchanged, and Node output matches
+both original and derived versions. See linked verification for exact scope.
+
+WINDOW COMPARISON COMPLETE (306/306 normal-auto, 24/24 full-runtime)
+The repaired frozen main69 matrix finished with all outputs correct and was
+independently rechecked using the complete executable/build/oracle/counter
+validator. The window versus immediate discard reduces TS normal-auto
+instructions 10.11% with RSS -0.16%; full-runtime instructions -6.23%, RSS +0.07%
+and minor faults -83.79%. Some other normal-auto RSS increases remain: trees
++3.72%, strings +2.91%, grow/churn +2.44%. The window is a provisional CPU/RSS
+tradeoff, not a universal minimum or final current-main acceptance.
+Against pristine main69, that frozen window arm has TS RSS -2.31%, instructions
+-3.82%; documents/pipeline RSS roughly -10% to -12%. Request processing still
+has +7.25% instructions, so that combination remains unacceptable. It retains
+the rejected visitor specialization to isolate pool policy. The current source
+uses the shared visitor and must be judged against fresh e532 separately.
+
+Fresh e532 full-runtime TS/Zod binaries are compiled on qb6 and bound to source
+and coherent products. Their 24 measurements are now queued/running under the
+original host's benchmark lock. Normal-auto builds for all 17 cases proceed on
+qb6 separately. The first auto attempt stopped before any builds because the
+request fixture's npm dependencies had not been transferred; the retry supplies
+the exact original packages/configuration, excludes build caches and keeps
+separate evidence. Artifacts/logs are continuously copied off qb6.
+
+PRIVATE TAG-WORD INSTRUCTION PROBE
+Private commit 6fc7b304f8 changes only mark_field_into_worklist's high-word tag
+comparison, retaining proxy observation, exact pointer validation, raw-pointer
+bounds and marking/worklist semantics. All 65,536 tag words match the old
+predicate; the e532 Mac runtime passes 4,862/0/5. Actual optimized arm64 default-
+feature rlib callback counts are 125 -> 124; the usual tagged-pointer comparison
+is 8 -> 7 static instructions. No x86 linked instruction/cycle/RSS benefit has
+been measured, so the patch remains a review artifact and is unapplied to
+production source. See tag-word-v13-validation.json and the patch/assembly.
+
+LATEST FETCH / REBASE: main 0ed699b9f2
+The fresh e532 request normal-auto build fails on pristine baseline: validator/
+isTaxID.js reads an undeclared PERRY_TA_VIEW_GUARD. The full failed IR and error
+are preserved; partial linking was not enabled. Newly fetched main already has
+#11817 (1fe7fe898e), the hidden-global declaration fix across codegen units.
+It also has #11815 (263c6f5507), the campaign's prototype-in-shape migration.
+Rebased the GC proposal without conflicts onto 0ed699b9f2; no independently
+authored codegen/shape/header/ABI changes. The new Mac runtime passes 4,872/0/5.
+New source archives and 22-path GC overlay are bound by hash. Both production
+builds and Linux suites are running in new own qb6 directories, using only our
+completed old build caches and refreshing ALL workspace inputs. e532 evidence
+remains valid only for its frozen source; it does not validate new main.
+The new prototype ownership can reduce ordinary ObjectMeta allocations, so
+current owner/shape/canonical attribution must precede any proposed metadata
+split. The original-host e532 no-auto measurement is queued behind foreign
+benchmark-lock owners; those processes are untouched. Latest-main performance
+acceptance and the 17-case final matrix remain open.
+
+MAIN0ed COHERENT BUILDS / LINUX / LINKED VERIFIED
+Both new compiler/static-wrapper builds completed in 165-166 seconds on qb6.
+Independent source/product/log verification passes; 4,856 runtime, 75 FFI and
+15 event tests pass. Both real residency/publication tests actually run. All
+40 fresh linked executions match Node; every one of the 20 moving executions
+copies objects and protects from-space. Derived fresh-class collections retain
+the original Node output. The prototype-in-shape work is included in both arms.
+Latest-main real/full and normal-auto app builds are live in separate own paths;
+artifacts/logs are continuously copied off. Final 24/204 performance acceptance
+and current owner/shape/canonical census are not yet complete.
+
+FROZEN e532 FULL-RUNTIME MEASUREMENTS COMPLETE
+The original-host shared-visitor/window/page proposal's 24 cells completed after
+the foreign lock owner released: TS RSS 251.09 -> 248.012 MiB (-1.23%),
+instructions -2.30%; Zod RSS +0.53%, instructions +0.28%. The latter instruction
+cost remains reported. This is e532 evidence, not a current-main0ed result.
+
+CURRENT-MAIN REQUEST BLOCKER STILL REPRODUCES
+The fresh 0ed baseline retry still emits an undefined PERRY_TA_VIEW_GUARD load
+in validator/isTaxID.js. Earlier wording calling #11817 the fix for this case
+was premature: it is a related fix, not acceptance of this emitter path. The
+new failed IR is preserved in qb6 export logs. No partial linking or independent
+codegen/shape fix is applied. The new auto r1 build pass retains eight verified
+successful baseline binaries and continues all sources/arms despite failures;
+any failed request build is excluded and the final full-matrix guard stays red.
+Both fresh full-runtime TS/Zod arms compile successfully and their new-main
+24 measurements are queued under the original host's benchmark lock.
+
+LOCAL ARTIFACT COPY HEADROOM
+Local disk exhaustion interrupted an export watcher. Removed only our completed,
+reproducible gc-runtime-test-target cache; source, reports, saved assembly and
+programs remain intact. Restored continuous export with cache exclusions. All
+runtime/static-wrapper products are already off qb6. Rental copy deadline is
+still 18:00Z; the watcher stops by 17:55Z. No foreign process or directory was
+changed. Current goal remains active; runtime correctness is verified, full
+performance acceptance and new-main heap attribution remain outstanding.
+
+CURRENT 0ed APPLICATION AND HEAP EVIDENCE COMPLETE (2026-10-03)
+The original-host full-runtime TS/Zod matrix completed all24 correct cells.
+TS RSS247.094 ->238.977MiB(-3.285%), instructions-0.292%; minor faults+42.04%.
+Zod RSS29.195 ->28.867MiB(-1.124%), instructions-0.673%. Zod CPU/wall increase
+0.03s at coarse timer resolution; do not call this universal speed acceptance.
+See current-main0ed-full-runtime-summary.json, with all ranges preserved.
+
+New debugger-only heap census uses currentObjectMeta168B and confirms each
+live type count/byte against the runtime in all8 observations (botharms2reps).
+TS at thirdnatural full:53102 ordinary meta records,8921136B(8.508MiB);
+52550 records carry only flags+private_evaluation_brand+prototype. These remain
+campaign-owned. Only17 records/2856B contain summaries alone. The four summary
+words cost1699264B in ordinary meta, not an independently removable RSS sum.
+6977 shapes,541chunks,4pages,366extras,956ConstFnentries:1165096 requestedB.
+Zod explicit schema-live diagnostic:277 meta/46536B;3summary-only/504B;
+2036shapes,140chunks,3pages,11extras,15ConstFnentries:311992requestedB.
+No debugger timing or RSS enters peak-performance acceptance.
+
+Native allocator attribution completed4 independent snapshots. Canonical keys
+retain2.5MiB usable backing inTS (nodes1.25,edges0.8125,by_addr0.4375),
+0.375MiB inZod. Native usable is not RSS: whole resident pages attributed to
+canonical keys total~1.81MiB inTS and~0.309MiB inZod. TS arena usable111.5625MiB,
+whole resident arena pages104.2383MiB at this boundary versus census26.49MiB
+reachable. These snapshots differ in census instrumentation and must not be
+subtracted from one another or peak RSS. Category owner stacks and mixed-page
+limitations are preserved in current-main0ed-native-attribution.json.
+
+Compiler handoff now identifies an obsolete process-wide Float64 view guard,
+not just a missing declaration. Current runtime storage byte+10 distinguishes
+inline vs external elements; #10741 needs to reconcile its emitter. No authored
+codegen/shape/header change is applied. Partial16-case normal-auto measurements
+are prepared; full17-case guard remains red until request compilation is fixed.
+Node/test-registration/address-class checks passed on0ed; address ratchet warns
+about an inherited stale node_stream_event_emitter entry. File-size check still
+fails on inherited2068-line string_pool.rs, byte-identical to0edmain.
+
+COMMON-META COORDINATION BOUNDARY
+A further independently matched pristine0ed census finds52607 common-only meta
+owners in114 exact(shape,class,prototype,brand,flags)groups and114existing shapes:
+zero extra identity groups in this heap. Gross current meta allocation8837976B
+(8.429MiB) is a stronger representation target than shrinking object headers
+alone. It is not a proved universal migration or an RSS savings forecast.
+Most are the four dominantTS AST classes. Campaign must decide facts placement,
+prototype/private-brand semantics and one-shape-compare/one-load ABI first.
+No cold split or header change is independently applied here.
+
+CURRENT 0ed NORMAL-AUTO PARTIAL MATRIX VERIFIED
+All192executions pass exactNode output, source/build/binary/text/counter checks.
+16cases; both request-processing compilations remain failed. Independent full
+17-case coverage validator rejects this matrix, as required. Original v17
+preflight failure is retained: reused binaries had no renamed ELF text dump.
+Repair v17r1 hashes actual current ELF sections against original build records.
+TS normal RSS237.793->236.074MiB(-0.723%), instructions-2.608%, faults+42.34%.
+Zod RSS24.387->24.0MiB(-1.586%), instructions+0.664%. Strings RSS-1.587%,
+instructions+0.335%; these regressions remain open. Document retention RSS
+-11.794%, pipeline-10.477%, transitions-9.939%, replace-9.525%, large-live-set
+-6.405%, grow/churn-5.462%. Trees RSS+0.107%, instructions-0.377%,faults+25.48%.
+Its cycle distributions overlap widely on the shared host; no stable+46.37%
+time penalty is claimed from medians alone. Full ranges remain in summary.
+
+PRIVATE CURRENT-MAIN TAG-WORD RESULT
+Fresh source differs from production Rust inputs only in trace.rs. Linux4856
+runtime tests and20linked executions pass; all10moving runs copied/protected.
+Both app binaries freshly link separate private archives. All24measurements
+pass. TS instructions-0.0565%, RSS-0.103%; Zod instructions+0.0344%,RSS+0.108%.
+This has no material demonstrated app benefit, remains unapplied, and is not
+presented as an accepted optimization. Original v18 builder failed before a
+source upload completed; v18r1 requires archive SHA before extraction, preserves
+the failure, and completed fresh build/tests. Callback capture is tested next.
+
+MEMORY FLOOR AND 8-BYTE HEADER SCOPE
+At the measuredTS boundary, a16->8B ObjectHeader saves638736B(0.609MiB)
+over79842GC_TYPE_OBJECT cells before alignment/changed backing. This is an
+8-byte OBJECT header; the separate8-byte GC header remains. Common-meta
+elimination targets8.43MiB of retained allocation in this heap, so it deserves
+priority over the header alone. Neither number is a peak RSS prediction.
+Canonical native indices2.50MiB include a node vector(1.25),by_addr(0.4375),
+and edges(0.8125); owner lookup/reverse paths remain needed and campaign-owned.
+The per-object GC slot-map backing2.25MiB belongs to the array-layout lane.
+ObjectHeader/metadata/shape mutations must preserve class/prototype/brand,
+private evaluation identity, GC strong+rewritable edges and fused one-load
+identity guards. Sharing114observed fact groups does not prove those semantic
+transitions correct. No8-byte header or independent facts deletion is applied.
+Largest non-overlapping RSS investigation: retained arena backing at peak,
+release latency/reuse and old-hole compaction cost. Whole free-block advice is
+implemented; intrusive headers/free-chain links prevent blind advice of small
+holes. The measured memory floor is not yet an established absolute minimum.

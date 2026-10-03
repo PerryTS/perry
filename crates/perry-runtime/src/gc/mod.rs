@@ -471,6 +471,7 @@ fn gc_collect_minor_with_trigger_inner(
     };
     if let Some(fast_path) = copying_outcome {
         let freed_bytes = fast_path.freed_bytes;
+        crate::arena::advance_block_pool_reuse_window();
         let elapsed_us = start.elapsed().as_micros() as u64;
         GC_STATS.with(|stats| {
             stats

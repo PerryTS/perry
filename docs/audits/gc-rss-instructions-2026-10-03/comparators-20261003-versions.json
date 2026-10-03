@@ -1,0 +1,33 @@
+{
+  "checked_utc": "2026-10-03T05:41:46.075442+00:00",
+  "scriptc": {
+    "npm_latest": "0.2.1",
+    "dist_integrity": "sha512-w8LPduUYUipy+kqqDX+tYh8N7LNpEnfFQnEnJ/cNPqxvp2XHe+Vwih/U8+kJf+IECorNcgY8YMembCX26o1SrQ==",
+    "gitHead": null
+  },
+  "porffor": {
+    "npm_latest": "0.0.0-alpha.15",
+    "dist_integrity": "sha512-F6po1djFXszGo1J11Qvgs5rdtQBK5z74ViAk+CedDbE4gBeYF8SkWcaCXOtqqGq/D6VERmq8fNCKQmts6wf8ug==",
+    "gitHead": "72d048d73d49e217631ac8a1bc4fa9070d22fbc9",
+    "requested_ref": "refs/heads/main",
+    "remote_commit": "72d048d73d49e217631ac8a1bc4fa9070d22fbc9"
+  },
+  "hermes": {
+    "requested_ref": "refs/heads/static_h",
+    "remote_commit": "ade4a2b20246340d4309cf62be51f9652dcde279"
+  },
+  "executables": {
+    "scriptc": {
+      "stdout": "0.2.1\n",
+      "sha256": "2ec5eb64e819e7849cedd58603e7478afc450e83fc243cc436c62840f5237045"
+    },
+    "porffor": {
+      "stdout": "alpha 15 (72d048d 2026-10-02)\n",
+      "sha256": "ae4a28777c9a818c3a28a8d5bfc6d5a050537f529436660202c1b003eb097a6c"
+    },
+    "shermes": {
+      "stdout": "LLVM (http://llvm.org/):\n  LLVH version 8.0.0svn\n  Optimized build\n\nStatic Hermes JS Compiler v0.0\n",
+      "sha256": "7237d409f9cec65b41e70e92335628d94950cb814402009989f7ff31f8a07b8a"
+    }
+  }
+}

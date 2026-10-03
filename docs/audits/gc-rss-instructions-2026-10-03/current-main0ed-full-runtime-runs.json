@@ -1,0 +1,782 @@
+[
+  {
+    "label": "gc-current0ed-qb6-v14-noauto-plain-current0ed-base-tscwork-0",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-qb6-current0ed-v14-noauto-current0ed-base-tscwork",
+      "1"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 257302528,
+    "wall_s": 9.94,
+    "user_s": 9.25,
+    "sys_s": 0.44,
+    "elapsed_s": 10.046019016765058,
+    "stdout": "typescript 5.8.2 96760\n",
+    "case": "tscwork",
+    "arm": "current0ed-base",
+    "mode": "plain",
+    "repeat": 0,
+    "binary_sha256": "e6fb5196254eb173ee5f0fe00242d111e77d4f9bb9afd2d25ecb6a39e3d40f77",
+    "correct": true
+  },
+  {
+    "label": "gc-current0ed-qb6-v14-noauto-plain-current0ed-gc-tscwork-0",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-qb6-current0ed-v14-noauto-current0ed-gc-tscwork",
+      "1"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 246738944,
+    "wall_s": 9.57,
+    "user_s": 8.94,
+    "sys_s": 0.39,
+    "elapsed_s": 9.7106221197173,
+    "stdout": "typescript 5.8.2 96760\n",
+    "case": "tscwork",
+    "arm": "current0ed-gc",
+    "mode": "plain",
+    "repeat": 0,
+    "binary_sha256": "a46c42d658f5f2bd96f6aba8bf4a8256b82cd4aa229d24192f05609dd3d7ba0c",
+    "correct": true
+  },
+  {
+    "label": "gc-current0ed-qb6-v14-noauto-plain-current0ed-base-zodwork-0",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-qb6-current0ed-v14-noauto-current0ed-base-zodwork",
+      "200"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 30347264,
+    "wall_s": 0.15,
+    "user_s": 0.12,
+    "sys_s": 0.01,
+    "elapsed_s": 0.17183573497459292,
+    "stdout": "200\n",
+    "case": "zodwork",
+    "arm": "current0ed-base",
+    "mode": "plain",
+    "repeat": 0,
+    "binary_sha256": "d4d162a6868ad35eefecb6bfe31eca4ab96772bc0acbc68e3f88aa1551d3dc74",
+    "correct": true
+  },
+  {
+    "label": "gc-current0ed-qb6-v14-noauto-plain-current0ed-gc-zodwork-0",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-qb6-current0ed-v14-noauto-current0ed-gc-zodwork",
+      "200"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 29810688,
+    "wall_s": 0.17,
+    "user_s": 0.14,
+    "sys_s": 0.01,
+    "elapsed_s": 0.3383920746855438,
+    "stdout": "200\n",
+    "case": "zodwork",
+    "arm": "current0ed-gc",
+    "mode": "plain",
+    "repeat": 0,
+    "binary_sha256": "e8f5796c475d4d5cd17398ca46317fdef83e8b3e93857e92e5ac531ea2fd9d22",
+    "correct": true
+  },
+  {
+    "label": "gc-current0ed-qb6-v14-noauto-plain-current0ed-gc-tscwork-1",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-qb6-current0ed-v14-noauto-current0ed-gc-tscwork",
+      "1"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 251985920,
+    "wall_s": 9.56,
+    "user_s": 9.09,
+    "sys_s": 0.4,
+    "elapsed_s": 9.602995905093849,
+    "stdout": "typescript 5.8.2 96760\n",
+    "case": "tscwork",
+    "arm": "current0ed-gc",
+    "mode": "plain",
+    "repeat": 1,
+    "binary_sha256": "a46c42d658f5f2bd96f6aba8bf4a8256b82cd4aa229d24192f05609dd3d7ba0c",
+    "correct": true
+  },
+  {
+    "label": "gc-current0ed-qb6-v14-noauto-plain-current0ed-base-tscwork-1",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-qb6-current0ed-v14-noauto-current0ed-base-tscwork",
+      "1"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 259096576,
+    "wall_s": 9.69,
+    "user_s": 9.18,
+    "sys_s": 0.36,
+    "elapsed_s": 9.82700505014509,
+    "stdout": "typescript 5.8.2 96760\n",
+    "case": "tscwork",
+    "arm": "current0ed-base",
+    "mode": "plain",
+    "repeat": 1,
+    "binary_sha256": "e6fb5196254eb173ee5f0fe00242d111e77d4f9bb9afd2d25ecb6a39e3d40f77",
+    "correct": true
+  },
+  {
+    "label": "gc-current0ed-qb6-v14-noauto-plain-current0ed-gc-zodwork-1",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-qb6-current0ed-v14-noauto-current0ed-gc-zodwork",
+      "200"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 30269440,
+    "wall_s": 0.15,
+    "user_s": 0.12,
+    "sys_s": 0.01,
+    "elapsed_s": 0.16915153805166483,
+    "stdout": "200\n",
+    "case": "zodwork",
+    "arm": "current0ed-gc",
+    "mode": "plain",
+    "repeat": 1,
+    "binary_sha256": "e8f5796c475d4d5cd17398ca46317fdef83e8b3e93857e92e5ac531ea2fd9d22",
+    "correct": true
+  },
+  {
+    "label": "gc-current0ed-qb6-v14-noauto-plain-current0ed-base-zodwork-1",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-qb6-current0ed-v14-noauto-current0ed-base-zodwork",
+      "200"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 30699520,
+    "wall_s": 0.12,
+    "user_s": 0.11,
+    "sys_s": 0.0,
+    "elapsed_s": 0.17582590086385608,
+    "stdout": "200\n",
+    "case": "zodwork",
+    "arm": "current0ed-base",
+    "mode": "plain",
+    "repeat": 1,
+    "binary_sha256": "d4d162a6868ad35eefecb6bfe31eca4ab96772bc0acbc68e3f88aa1551d3dc74",
+    "correct": true
+  },
+  {
+    "label": "gc-current0ed-qb6-v14-noauto-plain-current0ed-base-tscwork-2",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-qb6-current0ed-v14-noauto-current0ed-base-tscwork",
+      "1"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 259751936,
+    "wall_s": 9.75,
+    "user_s": 9.25,
+    "sys_s": 0.34,
+    "elapsed_s": 9.868911942001432,
+    "stdout": "typescript 5.8.2 96760\n",
+    "case": "tscwork",
+    "arm": "current0ed-base",
+    "mode": "plain",
+    "repeat": 2,
+    "binary_sha256": "e6fb5196254eb173ee5f0fe00242d111e77d4f9bb9afd2d25ecb6a39e3d40f77",
+    "correct": true
+  },
+  {
+    "label": "gc-current0ed-qb6-v14-noauto-plain-current0ed-gc-tscwork-2",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-qb6-current0ed-v14-noauto-current0ed-gc-tscwork",
+      "1"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 250585088,
+    "wall_s": 9.36,
+    "user_s": 8.81,
+    "sys_s": 0.33,
+    "elapsed_s": 9.39383897697553,
+    "stdout": "typescript 5.8.2 96760\n",
+    "case": "tscwork",
+    "arm": "current0ed-gc",
+    "mode": "plain",
+    "repeat": 2,
+    "binary_sha256": "a46c42d658f5f2bd96f6aba8bf4a8256b82cd4aa229d24192f05609dd3d7ba0c",
+    "correct": true
+  },
+  {
+    "label": "gc-current0ed-qb6-v14-noauto-plain-current0ed-base-zodwork-2",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-qb6-current0ed-v14-noauto-current0ed-base-zodwork",
+      "200"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 30613504,
+    "wall_s": 0.12,
+    "user_s": 0.11,
+    "sys_s": 0.0,
+    "elapsed_s": 0.18222057912498713,
+    "stdout": "200\n",
+    "case": "zodwork",
+    "arm": "current0ed-base",
+    "mode": "plain",
+    "repeat": 2,
+    "binary_sha256": "d4d162a6868ad35eefecb6bfe31eca4ab96772bc0acbc68e3f88aa1551d3dc74",
+    "correct": true
+  },
+  {
+    "label": "gc-current0ed-qb6-v14-noauto-plain-current0ed-gc-zodwork-2",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-qb6-current0ed-v14-noauto-current0ed-gc-zodwork",
+      "200"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 30744576,
+    "wall_s": 0.14,
+    "user_s": 0.13,
+    "sys_s": 0.01,
+    "elapsed_s": 0.1718472340144217,
+    "stdout": "200\n",
+    "case": "zodwork",
+    "arm": "current0ed-gc",
+    "mode": "plain",
+    "repeat": 2,
+    "binary_sha256": "e8f5796c475d4d5cd17398ca46317fdef83e8b3e93857e92e5ac531ea2fd9d22",
+    "correct": true
+  },
+  {
+    "label": "gc-current0ed-qb6-v14-noauto-perf-current0ed-base-tscwork-0",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-qb6-current0ed-v14-noauto-current0ed-base-tscwork",
+      "1"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 9.737607415299863,
+    "stdout": "typescript 5.8.2 96760\n",
+    "case": "tscwork",
+    "arm": "current0ed-base",
+    "mode": "perf",
+    "repeat": 0,
+    "binary_sha256": "e6fb5196254eb173ee5f0fe00242d111e77d4f9bb9afd2d25ecb6a39e3d40f77",
+    "correct": true,
+    "events": {
+      "instructions": 64277417787,
+      "cycles": 47021331236,
+      "minor-faults": 103837,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-current0ed-qb6-v14-noauto-perf-current0ed-gc-tscwork-0",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-qb6-current0ed-v14-noauto-current0ed-gc-tscwork",
+      "1"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 9.763950746972114,
+    "stdout": "typescript 5.8.2 96760\n",
+    "case": "tscwork",
+    "arm": "current0ed-gc",
+    "mode": "perf",
+    "repeat": 0,
+    "binary_sha256": "a46c42d658f5f2bd96f6aba8bf4a8256b82cd4aa229d24192f05609dd3d7ba0c",
+    "correct": true,
+    "events": {
+      "instructions": 64093162997,
+      "cycles": 46681569424,
+      "minor-faults": 147190,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-current0ed-qb6-v14-noauto-perf-current0ed-base-zodwork-0",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-qb6-current0ed-v14-noauto-current0ed-base-zodwork",
+      "200"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 0.1699354713782668,
+    "stdout": "200\n",
+    "case": "zodwork",
+    "arm": "current0ed-base",
+    "mode": "perf",
+    "repeat": 0,
+    "binary_sha256": "d4d162a6868ad35eefecb6bfe31eca4ab96772bc0acbc68e3f88aa1551d3dc74",
+    "correct": true,
+    "events": {
+      "instructions": 1021575857,
+      "cycles": 711260648,
+      "minor-faults": 4036,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-current0ed-qb6-v14-noauto-perf-current0ed-gc-zodwork-0",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-qb6-current0ed-v14-noauto-current0ed-gc-zodwork",
+      "200"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 0.18585694301873446,
+    "stdout": "200\n",
+    "case": "zodwork",
+    "arm": "current0ed-gc",
+    "mode": "perf",
+    "repeat": 0,
+    "binary_sha256": "e8f5796c475d4d5cd17398ca46317fdef83e8b3e93857e92e5ac531ea2fd9d22",
+    "correct": true,
+    "events": {
+      "instructions": 1014919528,
+      "cycles": 692247092,
+      "minor-faults": 4025,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-current0ed-qb6-v14-noauto-perf-current0ed-gc-tscwork-1",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-qb6-current0ed-v14-noauto-current0ed-gc-tscwork",
+      "1"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 9.698559146840125,
+    "stdout": "typescript 5.8.2 96760\n",
+    "case": "tscwork",
+    "arm": "current0ed-gc",
+    "mode": "perf",
+    "repeat": 1,
+    "binary_sha256": "a46c42d658f5f2bd96f6aba8bf4a8256b82cd4aa229d24192f05609dd3d7ba0c",
+    "correct": true,
+    "events": {
+      "instructions": 64115912408,
+      "cycles": 47338776420,
+      "minor-faults": 148870,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-current0ed-qb6-v14-noauto-perf-current0ed-base-tscwork-1",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-qb6-current0ed-v14-noauto-current0ed-base-tscwork",
+      "1"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 9.999585215002298,
+    "stdout": "typescript 5.8.2 96760\n",
+    "case": "tscwork",
+    "arm": "current0ed-base",
+    "mode": "perf",
+    "repeat": 1,
+    "binary_sha256": "e6fb5196254eb173ee5f0fe00242d111e77d4f9bb9afd2d25ecb6a39e3d40f77",
+    "correct": true,
+    "events": {
+      "instructions": 64281020962,
+      "cycles": 48109722541,
+      "minor-faults": 103624,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-current0ed-qb6-v14-noauto-perf-current0ed-gc-zodwork-1",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-qb6-current0ed-v14-noauto-current0ed-gc-zodwork",
+      "200"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 0.3430572021752596,
+    "stdout": "200\n",
+    "case": "zodwork",
+    "arm": "current0ed-gc",
+    "mode": "perf",
+    "repeat": 1,
+    "binary_sha256": "e8f5796c475d4d5cd17398ca46317fdef83e8b3e93857e92e5ac531ea2fd9d22",
+    "correct": true,
+    "events": {
+      "instructions": 1014549485,
+      "cycles": 701545821,
+      "minor-faults": 4023,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-current0ed-qb6-v14-noauto-perf-current0ed-base-zodwork-1",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-qb6-current0ed-v14-noauto-current0ed-base-zodwork",
+      "200"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 0.17307489505037665,
+    "stdout": "200\n",
+    "case": "zodwork",
+    "arm": "current0ed-base",
+    "mode": "perf",
+    "repeat": 1,
+    "binary_sha256": "d4d162a6868ad35eefecb6bfe31eca4ab96772bc0acbc68e3f88aa1551d3dc74",
+    "correct": true,
+    "events": {
+      "instructions": 1021345112,
+      "cycles": 674907139,
+      "minor-faults": 4042,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-current0ed-qb6-v14-noauto-perf-current0ed-base-tscwork-2",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-qb6-current0ed-v14-noauto-current0ed-base-tscwork",
+      "1"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 10.04284176370129,
+    "stdout": "typescript 5.8.2 96760\n",
+    "case": "tscwork",
+    "arm": "current0ed-base",
+    "mode": "perf",
+    "repeat": 2,
+    "binary_sha256": "e6fb5196254eb173ee5f0fe00242d111e77d4f9bb9afd2d25ecb6a39e3d40f77",
+    "correct": true,
+    "events": {
+      "instructions": 64302595099,
+      "cycles": 48696274439,
+      "minor-faults": 103522,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-current0ed-qb6-v14-noauto-perf-current0ed-gc-tscwork-2",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-qb6-current0ed-v14-noauto-current0ed-gc-tscwork",
+      "1"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 9.723910172004253,
+    "stdout": "typescript 5.8.2 96760\n",
+    "case": "tscwork",
+    "arm": "current0ed-gc",
+    "mode": "perf",
+    "repeat": 2,
+    "binary_sha256": "a46c42d658f5f2bd96f6aba8bf4a8256b82cd4aa229d24192f05609dd3d7ba0c",
+    "correct": true,
+    "events": {
+      "instructions": 64083568868,
+      "cycles": 47347820303,
+      "minor-faults": 146950,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-current0ed-qb6-v14-noauto-perf-current0ed-base-zodwork-2",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-qb6-current0ed-v14-noauto-current0ed-base-zodwork",
+      "200"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 0.19201149186119437,
+    "stdout": "200\n",
+    "case": "zodwork",
+    "arm": "current0ed-base",
+    "mode": "perf",
+    "repeat": 2,
+    "binary_sha256": "d4d162a6868ad35eefecb6bfe31eca4ab96772bc0acbc68e3f88aa1551d3dc74",
+    "correct": true,
+    "events": {
+      "instructions": 1021910693,
+      "cycles": 728666472,
+      "minor-faults": 4040,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-current0ed-qb6-v14-noauto-perf-current0ed-gc-zodwork-2",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-qb6-current0ed-v14-noauto-current0ed-gc-zodwork",
+      "200"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 0.206682909745723,
+    "stdout": "200\n",
+    "case": "zodwork",
+    "arm": "current0ed-gc",
+    "mode": "perf",
+    "repeat": 2,
+    "binary_sha256": "e8f5796c475d4d5cd17398ca46317fdef83e8b3e93857e92e5ac531ea2fd9d22",
+    "correct": true,
+    "events": {
+      "instructions": 1014696475,
+      "cycles": 735350385,
+      "minor-faults": 4029,
+      "major-faults": 0
+    }
+  }
+]

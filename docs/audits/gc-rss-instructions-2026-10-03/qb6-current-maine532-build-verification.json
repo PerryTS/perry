@@ -1,0 +1,51 @@
+{
+  "base": "e532bf3d0efce80ef699aa67b4834967050cf5ef",
+  "source_head": "c8f42db07606a2471784a66d66a0f079841416e8",
+  "host": "qb6",
+  "boot_id": "5ad70936-c58b-4515-8e31-8079fe7bc797",
+  "inputs_sha256": "a17b532dc0af37f0dc1a15e9c60eb4e7277eb099bb2d6fa63bf1624428a73f37",
+  "scripts": {
+    "qb6-currente532-build-v1.py": "5216f7d2d5a09639a534ee6b3e91b22792e968a8a2e0c90c37d712092e9fe617",
+    "qb6-export-watch-v1.py": "a0869e43585836bc273a2e1af7850459fa0d730b457eac29a9384ae691b7f855"
+  },
+  "products": {
+    "base/libperry_stdlib.a": "521f62a94c8632d469c100f1977935030ad7e362cbc99915f3969e53c2959987",
+    "base/libperry_runtime.a": "3e9e3ddd6ba571cc141ecfe2311d17b2e0241b45e5547cba8308c9782d59ae27",
+    "base/perry": "5fc1976badd158f1b0afe25a8acb1d37dfcfeb4b26044ba69b878ab144b62b4b",
+    "gc/libperry_stdlib.a": "e50804252ca5af2be85fe708c494a72c4752405693516d36b8f0c11ba994eb68",
+    "gc/libperry_runtime.a": "251967a6b26d915276b8f8b117b7fa6a0a67bedf820f74f61fd15e5bf54f2cc1",
+    "gc/perry": "6303abe96dfd52120b79e20d719fa91707ae32124f21068d3ae840f9f379dc87"
+  },
+  "logs": {
+    "base-build.log": "8451eaf2c5f4266add8bbde721531374159b7444e343b78203f03607175ff434",
+    "gc-build.log": "8c8b5911e1e2c8b666805bb9f1f6bbfd62ff26675059cbcd8f0b52f7f0d936b8",
+    "gc-runtime-tests.log": "36643e752ac5deea73e7384afa36478241c80d261a5319d7a5c5e3c2e43d27d4",
+    "gc-ffi-tests.log": "301fd84d4d2bd4ccb4f0a8591349a1ea1f346099f1cd8cd409595ca58d0ae8fc",
+    "gc-events-tests.log": "b992a15da5f1e78cd9ab2b4fab92eea90369dd8696ad83d24be5f0aeded4906c"
+  },
+  "tests": {
+    "runtime-tests": 4846,
+    "ffi-tests": 75,
+    "events-tests": 15
+  },
+  "required_tests": [
+    "reused_blocks_restart_the_window_and_cold_blocks_are_advised_once",
+    "real_collection_publication_keeps_warm_pages_and_releases_unused_pages",
+    "a_present_key_is_answered_by_the_receivers_shape",
+    "arguments_objects_of_one_arity_share_one_shape",
+    "construction_is_born_from_the_prototype_birth_record",
+    "later_evaluations_are_born_in_the_template_shapes"
+  ],
+  "compile_seconds": {
+    "base": 208.47215869299907,
+    "gc": 208.46778629899927
+  },
+  "meta_layout": {
+    "payload_bytes": 160,
+    "gc_header_inclusive_bytes": 168,
+    "stdout": "size=160 align=8\nprototype=0\nattr_key_bits=8\naccessor_key_bits=16\nflags=24\nspill=32\nprivate_evaluation_brand=40\narray_subclass_named_prefix_token=48\narray_tail_object_hot=56\narray_subclass_dense_key=64\narray_subclass_dense_slots=72\narray_subclass_dense_bounds=80\nexpando=88\nelements=96\ndescriptor_key_hash=104\ndescriptor_key_count=112\ndictionary_keys=120\nproto_serial=128\narguments=136\ninstance_birth=144\nnative_state=152\n",
+    "stdout_sha256": "26adcec387644c5e0d7874b9e4d26c8e325e0c18faf93d2964f7d89946344767",
+    "binary_sha256": "1911c52b102ddc957154bc8475b92419cdce88d0662eeab7f4a95cfa825655dd"
+  },
+  "scope": "Fresh source, coherent compiler/static-wrapper builds and Linux correctness; no application performance acceptance, owner census or cross-host comparison."
+}

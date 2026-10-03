@@ -67,21 +67,25 @@ pub(crate) fn old_page_account_swept_tally(page: usize, tally: &OldPageSweepTall
     }
     OLD_GEN_PAGE_META.with(|meta| {
         let mut meta = meta.borrow_mut();
-        let page_meta = meta
-            .entry(page)
-            .or_insert_with(|| OldPageMeta::zero_for_page(page));
-        page_meta.live_bytes = page_meta.live_bytes.saturating_add(tally.live_bytes);
+        let page_meta = meta.get_or_insert(page);
+        page_meta.live_bytes = page_meta
+            .live_bytes
+            .saturating_add(page_count(tally.live_bytes));
         page_meta.live_object_count = page_meta
             .live_object_count
-            .saturating_add(tally.live_objects);
-        page_meta.pinned_bytes = page_meta.pinned_bytes.saturating_add(tally.pinned_bytes);
+            .saturating_add(page_count(tally.live_objects));
+        page_meta.pinned_bytes = page_meta
+            .pinned_bytes
+            .saturating_add(page_count(tally.pinned_bytes));
         page_meta.pinned_object_count = page_meta
             .pinned_object_count
-            .saturating_add(tally.pinned_objects);
-        page_meta.dead_bytes = page_meta.dead_bytes.saturating_add(tally.dead_bytes);
+            .saturating_add(page_count(tally.pinned_objects));
+        page_meta.dead_bytes = page_meta
+            .dead_bytes
+            .saturating_add(page_count(tally.dead_bytes));
         page_meta.dead_object_count = page_meta
             .dead_object_count
-            .saturating_add(tally.dead_objects);
+            .saturating_add(page_count(tally.dead_objects));
         page_meta.refresh_policy_bits();
     });
 }

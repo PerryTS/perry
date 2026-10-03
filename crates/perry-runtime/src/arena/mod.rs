@@ -38,6 +38,8 @@ mod tests;
 mod tests_batch_unregister;
 #[cfg(test)]
 mod tests_promoted_runs;
+#[cfg(test)]
+mod tests_page_meta_audit;
 
 // Cross-sibling shared types/thread-locals (used by sibling modules via
 // `use super::*;`). These are not part of the crate-public surface
@@ -48,7 +50,8 @@ pub(crate) use allocators::{
 #[cfg(test)]
 pub(crate) use block::old_gen_in_use_bytes_slot_index;
 pub(crate) use block::{
-    arena_cell_alloc, arena_cell_try_alloc_current, drain_block_pool_if_requested,
+    advance_block_pool_reuse_window, arena_cell_alloc, arena_cell_try_alloc_current,
+    drain_block_pool_if_requested,
     new_object_start_bitmap, old_gen_in_use_bytes_sub, release_arena_block,
     request_block_pool_drain, Arena, ArenaBlock, ArenaBlockRelease, BlockPoolDrainStats,
     ACTIVE_SURVIVOR, ARENA, ARENA_TOTAL_BYTES, BLOCK_SIZE, FRESH_GENERAL_BLOCK_MIN_USED_BYTES,
@@ -68,7 +71,7 @@ pub(crate) use block::{
 };
 pub(crate) use page_meta::{
     address_span_overlaps_pages, defer_old_object_page_registration, page_class_table_report,
-    register_block_space_with_object_starts, register_old_object_pages,
+    register_block_space_with_object_starts, register_old_object_pages, shrink_page_tables,
     unregister_block_generation, unregister_old_block_pages, OLD_GEN_RECLAIM_POOLED_BYTES,
     OLD_GEN_RECLAIM_RETURNED_BYTES, OLD_GEN_RECLAIM_REUSABLE_BYTES,
 };
