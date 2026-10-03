@@ -1,0 +1,36 @@
+{
+  "reason": "v3 static products identical to v2; runtime tests omit both new decommit tests; archived source mtimes allowed Cargo reuse",
+  "stopped_pid": 1479522,
+  "command": [
+    "python3",
+    "gc-runtime-pool-auto-matrix.py"
+  ],
+  "cwd": "/root/rss-header-20261002",
+  "children_to_recheck_before_any_source_mutation": [
+    {
+      "pid": 1510771,
+      "cmd": "/usr/bin/time -f RSS_KIB=%M WALL=%e USER=%U SYS=%S /root/rss-header-20261002/bin/gc-auto-v3-gc-runtime-pool-main-72-request-processing "
+    }
+  ],
+  "proc_stat": "1479522 (python3) S 1465044 915010 915010 0 -1 4194304 2524 19997567 0 656 337 71 172624 7412 20 0 1 0 311806935 29999104 4703 18446744073709551615 4325376 7353021 140727054007664 0 0 0 0 16781312 2 1 0 0 17 6 0 0 0 0 0 10657224 12220544 717127680 140727054011693 140727054011732 140727054011732 140727054012391 0\n",
+  "time": 1791018961.151885,
+  "v2_products": {
+    "perry": "6a5ccc10fcfd465c4534e68c2950c6e316240deebd1b7e5d32599cee6569f055",
+    "libperry_runtime.a": "7bdc8c99433388d6be8555ff210ed982e1263b3df50f93035879f30edc5f14e3",
+    "libperry_stdlib.a": "24f053a93585faa81b5a1896f6a89ce2c0a94b1b41fb771246af7f597cfef037"
+  },
+  "invalid_v3_products": {
+    "perry": "6a5ccc10fcfd465c4534e68c2950c6e316240deebd1b7e5d32599cee6569f055",
+    "libperry_runtime.a": "7bdc8c99433388d6be8555ff210ed982e1263b3df50f93035879f30edc5f14e3",
+    "libperry_stdlib.a": "24f053a93585faa81b5a1896f6a89ce2c0a94b1b41fb771246af7f597cfef037"
+  },
+  "source_mtimes": {
+    "crates/perry-runtime/src/arena/block.rs": "1791012985394454000",
+    "crates/perry-runtime/src/arena/block/decommit.rs": "1791012985394595900"
+  },
+  "recorded_product_hashes_rechecked_on_disk": true,
+  "stale_suite_log_sha256": "96657efc7bc27736df40754c36e81aee38cb07d851a551c7e4948e20ff655f90",
+  "stale_suite_runtime_compile_absent": true,
+  "v2_runtime_rebuilt": true,
+  "invalid_partial_matrix_rows": 50
+}
