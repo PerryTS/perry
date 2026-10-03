@@ -1,3 +1,23 @@
+PRIVATE ENTRY POLICY LINUX TESTS COMPLETE — 2026-10-03 22:06Z
+Private6e311851fa Linux4862/0/5passes, including the real mincore subject:
+aged empty Eden pages leave RSS; fresh/recent/in-use pages and reused data
+remain intact; mapping/bitmap/age stay unchanged. 4999 tracked inputs, six
+exact private deltas, three real compiler/static products and both fresh
+build/test logs independently verified. Eleven raw evidence files copied and
+rehashed locally. Mac4877/0/5already passes. Policy remains UNAPPLIED.
+Fresh three-arm four-case app job776931 is live: baseTS compiled; gcTS codegen
+is progressing (51 LLVM units, two compiler workers). No result claimed yet.
+Full17-case normal-auto job799887 remains queued, not failed/restarted.
+
+Further memory lead: old-generation free-list holes in still-live blocks.
+The intrusive size-class list already removes reused and recycled spans, so
+entry-time membership proves prior non-use without a new side table. A
+separate private old-hole experiment is being prepared: retain heap headers
+and the link word, advise only full interior dead payload pages. It changes
+no reserved layout bits/headers/shape facts, adds no GC trigger, and remains
+separate from the Eden policy. Its instruction cost, including repeat advice,
+must be measured. No memory benefit or production adoption is claimed.
+
 COLLECTION-ENTRY EXPERIMENT AND REBASED MOVING ACCEPTANCE — 2026-10-03 21:53Z
 New-main linked acceptance is COMPLETE and independently verified: 44 Node-
 correct executions, all22 moving runs actually copy/protect from-space. Sources,
