@@ -108,3 +108,27 @@ const sym = Symbol("s");
 (D.prototype as any)[sym] = "sym";
 (D.prototype as any)["7"] = "seven";
 phase("keys.odd", (o) => `${o[sym]}|${o["7"]}|${o[7]}`, ds);
+
+// --- a prototype with more keys than its inline slots: the late keys live in
+// its spill storage and are read from there.
+class Wide {
+  w0 = 0;
+}
+const wp: any = Wide.prototype;
+const wideKeys = ["p0", "p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8", "p9", "p10", "p11", "p12", "p13"];
+for (let i = 0; i < wideKeys.length; i++) wp[wideKeys[i]] = 100 + i;
+const ws: any[] = [new Wide(), new Wide()];
+const readWide = (o: any) => `${o.p0}|${o.p7}|${o.p9}|${o.p12}|${o.p13}|${o.pX}`;
+phase("wide.start", readWide, ws);
+wp.p12 = "changed";
+phase("wide.value", readWide, ws);
+wp.p13 = undefined;
+phase("wide.undef", readWide, ws);
+delete wp.p9;
+phase("wide.deleted", readWide, ws);
+const plainProto: any = {};
+for (let i = 0; i < wideKeys.length; i++) plainProto[wideKeys[i]] = 200 + i;
+const viaCreate: any[] = [Object.create(plainProto), Object.create(plainProto)];
+phase("wide.create", readWide, viaCreate);
+plainProto.p13 = "late";
+phase("wide.create.value", readWide, viaCreate);
