@@ -1,3 +1,39 @@
+LATEST VERIFIED STATE — 2026-10-03 20:25Z
+Production head remains the c170-based GC proposal; no private helper adopted.
+228 production application runs and 204 private ELF runs independently verified.
+Private ELF rejected for pipeline/TS instruction regressions; its additional
+44 linked runs also pass, all22moving runs actually copy/protect from-space.
+
+New memory diagnosis COMPLETE and independently checked against raw evidence:
+151 natural synchronous full-GC censuses (TS73baseline/78proposal; Zod0both),
+12 external near-peak mapping observations, and4995 geometry source inputs.
+212 raw evidence files copied locally and independently rehashed. Natural
+census/debugger observations perturb residency/timing and are diagnostic only.
+Near TS peak: proposal~148MiB anonymous,~77MiB executable,~15MiB other file
+pages. Signed smaps/GNUtime peak distances are preserved; absolute gaps<1MiB.
+Natural post-mark TS live graph~26.5–27.3MiB; dead strings often35–54MiB.
+These are separate observations, not an achievable RSS floor or peak liveness.
+Initial observer quoting/launcher-highwater/exit-race/source-cache failures
+remain preserved. Accepted peak records use GNUtime's direct-child RSS and
+streaming hashes, not the contaminated initial launcher measurements.
+
+Read-only per-block pagemap observer352651 COMPLETE and independently checked:
+151 block snapshots agree with authoritative census capacity/used/block counts.
+At the first natural full,39empty non-current Eden blocks retain40,816,640
+resident interior bytes (~38.9MiB); two empty non-current survivor blocks retain
+2,035,712bytes. Both baseline/proposal show this. This is observed residency,
+not an accepted saving: no reset/reuse age was captured. A follow-up observer
+is launched to capture the existing dead_cycles field before policy changes.
+All block page observations and shipping access proof are copied/rehashed
+locally. No workload, thresholds, GC calls, block payloads, object/shape/codegen/
+ABI fields are changed. Initial failures remain preserved in raw evidence.
+ObjectMeta sharing/header migration remain owned by the shape campaign.
+Request/Zod instruction costs, fault increases and deeper RSS reduction remain
+open; no radical TypeScript improvement or absolute minimum is claimed.
+
+All following entries are historical; earlier queued/live wording describes
+that recorded stage and does not override the latest verified state above.
+
 GC RSS and instruction work — draft progress, 2026-10-03
 
 LATEST STATE (2026-10-03)
