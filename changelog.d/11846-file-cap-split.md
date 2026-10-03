@@ -1,0 +1,1 @@
+Split `perry-runtime`'s `object/class_registry/parent_static.rs` (2025 lines, over the 2000-line cap) by moving the Symbol-keyed member lookups into `parent_static/symbol_members.rs`. No behaviour change; paths are preserved through re-exports.
