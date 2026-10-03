@@ -1796,6 +1796,7 @@ impl GcCycleState {
     }
 
     fn publish_reclaim_outcome(&mut self) {
+        crate::arena::advance_block_pool_reuse_window();
         let elapsed_us = self.active_elapsed_us();
         GC_STATS.with(|stats| {
             stats
