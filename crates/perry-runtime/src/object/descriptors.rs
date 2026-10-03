@@ -1009,9 +1009,10 @@ pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
     js_object_get_own_property_names_shape(obj_value)
 }
 
-/// `names` (a class object's stored own keys, in creation order) with
-/// `prototype` inserted where ClassDefinitionEvaluation created it: after the
-/// leading `length` / `name` that are still the object's first keys.
+/// `names` (a class object's stored own keys in property order: integer
+/// indices first, then strings in creation order) with `prototype` inserted
+/// where ClassDefinitionEvaluation created it among the strings: after the
+/// leading `length` / `name` that are still the object's first string keys.
 fn class_object_names_with_prototype(names: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let names = scope.root_nanbox_f64(names);
@@ -1032,7 +1033,7 @@ fn class_object_names_with_prototype(names: f64) -> f64 {
     }
     let at = out
         .iter()
-        .position(|n| n != "length" && n != "name")
+        .position(|n| n != "length" && n != "name" && property_name_array_index(n).is_none())
         .unwrap_or(out.len());
     out.insert(at, "prototype".to_string());
     let result = crate::array::js_array_alloc(out.len() as u32);
