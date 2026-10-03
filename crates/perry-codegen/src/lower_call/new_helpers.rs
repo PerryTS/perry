@@ -227,9 +227,13 @@ pub(crate) fn emit_native_instance_base_init(
     let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
     match base {
         NativeInstanceBase::EventEmitter => {
-            // The bare emitter seeds no state from its options bag, so the args
-            // (already lowered for their side effects) are not forwarded.
-            crate::expr::lower_event_emitter_subclass_init(ctx, this_box);
+            // node's `EventEmitter.init(opts)`: the first argument is the
+            // options bag (`captureRejections`).
+            let options = lowered_args
+                .first()
+                .cloned()
+                .unwrap_or_else(|| undef.clone());
+            crate::expr::lower_event_emitter_subclass_init(ctx, this_box, &options);
         }
         NativeInstanceBase::Array => {
             let n = lowered_args.len();

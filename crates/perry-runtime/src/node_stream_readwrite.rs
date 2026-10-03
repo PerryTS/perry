@@ -1937,14 +1937,13 @@ pub(super) fn readable_methods() -> [(&'static str, StubFn); 39] {
 
 /// #5137: the bare `EventEmitter` surface — the same 15 listener/emit
 /// methods that `readable_methods`/`writable_methods` share, minus all the
-/// stream-specific entries. Installed onto `this` by
-/// `js_event_emitter_subclass_init` so a source-compiled `class X extends
-/// EventEmitter` (e.g. commander's `Command`) gets working
-/// `.on`/`.emit`/`.once`/… without routing through the handle-based
-/// `js_event_emitter_*` shim. The closures are the generic
-/// `ns_*` emitter helpers, which key all state off the receiver object, so
-/// they work unchanged on a plain object that never went through a stream
-/// constructor.
+/// stream-specific entries. `install_event_emitter_prototype` puts ONE set of
+/// them on `EventEmitter.prototype`, which a source-compiled `class X extends
+/// EventEmitter` (e.g. commander's `Command`) inherits, without routing
+/// through the handle-based `js_event_emitter_*` shim. The closures are the
+/// generic `ns_*` emitter helpers, which keep all state in the receiver's
+/// own `_events`, so they work unchanged on a plain object that never went
+/// through a stream constructor.
 pub(super) fn emitter_methods() -> [(&'static str, StubFn); 15] {
     [
         ("on", &NS_ON2_INFO),

@@ -915,28 +915,35 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
                     }
                     // #5137: `class X extends EventEmitter` (node:events) —
-                    // `super()` installs the bare EventEmitter listener/emit
-                    // surface onto `this` (see `lower_event_emitter_subclass_init`).
-                    // `super(opts)` takes an optional options bag in Node; we lower
-                    // the args for side effects but the bare emitter seeds no state.
+                    // `super(opts)` runs node's `EventEmitter.init(opts)` on
+                    // `this` (see `lower_event_emitter_subclass_init`); the
+                    // methods are inherited from the shared
+                    // `EventEmitter.prototype`. Every argument is lowered (in
+                    // order, rooted across the later ones); the first is the
+                    // options bag (`captureRejections`).
                     if parent_name.as_str() == "EventEmitter" {
-                        for a in super_args {
-                            let _ = lower_expr(ctx, a)?;
-                        }
-                        let this_box = match ctx.this_stack.last().cloned() {
-                            Some(slot) => ctx.block().load(DOUBLE, &slot),
-                            None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
-                        };
-                        lower_event_emitter_subclass_init(ctx, &this_box);
-                        bind_derived_this_after_super(ctx);
+                        let operands: Vec<_> = super_args.iter().collect();
                         let current_class_name =
                             ctx.class_stack.last().cloned().unwrap_or_default();
-                        crate::lower_call::apply_field_initializers_recursive(
-                            ctx,
-                            &current_class_name,
-                            crate::lower_call::FieldInitMode::SelfOnly,
-                        )?;
-                        return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+                        return rooting::with_operands_rooted(ctx, &operands, |ctx, lowered| {
+                            let options = lowered.first().cloned().unwrap_or_else(|| {
+                                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                            });
+                            let this_box = match ctx.this_stack.last().cloned() {
+                                Some(slot) => ctx.block().load(DOUBLE, &slot),
+                                None => {
+                                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                                }
+                            };
+                            lower_event_emitter_subclass_init(ctx, &this_box, &options);
+                            bind_derived_this_after_super(ctx);
+                            crate::lower_call::apply_field_initializers_recursive(
+                                ctx,
+                                &current_class_name,
+                                crate::lower_call::FieldInitMode::SelfOnly,
+                            )?;
+                            Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
+                        });
                     }
                     if parent_name.as_str() == "EventEmitterAsyncResource" {
                         let operands: Vec<_> = super_args.iter().collect();

@@ -119,9 +119,9 @@ unsafe fn native_call_value_this_impl(
     // the direct `class X extends EventEmitter` form (#5137) — never fires, and
     // `js_register_class_parent_dynamic` early-returns for bound native parents.
     // The dynamic super lowering (expr/this_super_call.rs) dispatches the parent
-    // VALUE here with `this` = the fresh subclass instance. Install
-    // the EventEmitter listener/emit methods onto that instance, exactly as the
-    // direct form does, so `this.setMaxListeners(…)`/`.on`/`.emit` resolve.
+    // VALUE here with `this` = the fresh subclass instance. Run node's
+    // `EventEmitter.init` on that instance, exactly as the direct form does;
+    // `this.setMaxListeners(…)`/`.on`/`.emit` resolve on the shared prototype.
     // Routed through the armed ops table (see `nm_namespace_hooks`): the
     // probe can only match a bound native callable, which exists only once
     // `callable_exports` minted one (arming the table).

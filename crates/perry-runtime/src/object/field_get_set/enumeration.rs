@@ -1653,6 +1653,7 @@ pub(crate) fn is_internal_runtime_key_bytes(b: &[u8]) -> bool {
         || b == crate::async_hooks::ASYNC_RESOURCE_EVENT_EMITTER_KEY
         || is_class_capture_key(b)
         || b.starts_with(crate::node_stream::NATIVE_BASE_SUPER_PREFIX)
+        || b == crate::node_stream::STREAM_CAPTURE_REJECTIONS_KEY
         || b.starts_with(b"__perry_computed_field_key_")
         || b == b"#<perry:class-evaluation-prototype>"
         || b == b"#<perry:private-class-lexical-binding>"

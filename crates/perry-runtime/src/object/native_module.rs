@@ -542,7 +542,14 @@ unsafe fn nm_ee_dynamic_super(
                     ),
                 );
             }
-            return Some(crate::node_stream::js_event_emitter_subclass_init(this_val));
+            let options = if !args_ptr.is_null() && args_len > 0 {
+                *args_ptr
+            } else {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            };
+            return Some(crate::node_stream::js_event_emitter_subclass_init(
+                this_val, options,
+            ));
         }
     }
     None

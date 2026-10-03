@@ -62,6 +62,10 @@ pub(crate) fn has_stream_listeners(stream: f64, event: &[u8]) -> bool {
 // #3049 — `process.setMaxListeners` reuses the EventEmitter setter
 // validation (TypeError/RangeError + fractional/Infinity storage).
 pub(crate) use event_emitter::validate_max_listeners;
+// node EventEmitter instance state (EventEmitter.init) and the prototype defaults.
+pub(crate) use event_emitter::{
+    init_event_emitter_capture, init_event_emitter_state, install_event_emitter_prototype_state,
+};
 pub use event_emitter::{
     js_node_stream_method_event_names, js_node_stream_method_get_max_listeners,
     js_node_stream_method_listener_count, js_node_stream_method_listeners,
@@ -101,8 +105,9 @@ const STREAM_READABLE_SCHEDULED_KEY: &[u8] = b"__perryStreamReadableScheduled";
 const STREAM_END_SCHEDULED_KEY: &[u8] = b"__perryStreamEndScheduled";
 const STREAM_END_EMITTED_KEY: &[u8] = b"__perryStreamEndEmitted";
 const STREAM_ENDED_KEY: &[u8] = b"__perryStreamEnded";
-const STREAM_MAX_LISTENERS_KEY: &[u8] = b"__perryStreamMaxListeners";
-const STREAM_CAPTURE_REJECTIONS_KEY: &[u8] = b"__perryStreamCaptureRejections";
+/// An emitter's `captureRejections` flag (node's `this[kCapture]`). Internal:
+/// hidden from own-key enumeration (`is_internal_runtime_key_bytes`).
+pub(crate) const STREAM_CAPTURE_REJECTIONS_KEY: &[u8] = b"__perryStreamCaptureRejections";
 const EVENT_EMITTER_ASYNC_RESOURCE_KEY: &[u8] = b"__perryEventEmitterAsyncResource";
 const WRITABLE_WRITE_KEY: &[u8] = b"__perryWritableWrite";
 const WRITABLE_FINISH_SCHEDULED_KEY: &[u8] = b"__perryWritableFinishScheduled";

@@ -1148,7 +1148,7 @@ js_event_emitter_remove_all_listeners	i64	i64,ptr
 js_event_emitter_remove_listener	i64	i64,i64,i64
 js_event_emitter_set_domain	i32s	i64,i64
 js_event_emitter_set_max_listeners	i64	i64,f64
-js_event_emitter_subclass_init	f64	f64
+js_event_emitter_subclass_init	f64	f64,f64
 js_event_loop_check_phase	i32s	
 js_event_loop_host_driven	i32s	
 js_event_loop_poll_callbacks	i32s	
