@@ -62,6 +62,16 @@ const sub = new Sub(text, true);
 for (let i = 0; i < 3; i++) s = callTag(sub);
 console.log("subclass", s, callTag(warm));
 
+// A subclass the compiler cannot see (a mixin over an unknown base) reaches
+// the same site: its instances must never take the declared class's body.
+function mixin(B: any): any {
+  return class extends B { tag(): string { return "mixed"; } };
+}
+const Mixed = mixin(Tok);
+let mixedOut = "";
+for (let i = 0; i < 5; i++) mixedOut += callTag(new Mixed(text, i % 2 === 0)) + ",";
+console.log("mixin subclass", mixedOut, callTag(warm));
+
 // Moving collections between calls: the learned word holds no address.
 let keep: any[] = [];
 let acc = 0;
