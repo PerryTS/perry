@@ -1,0 +1,13 @@
+{
+  "scope": "Queued diagnostics; no new program measurements yet",
+  "script_sha256": "81f92841def232c2c4794879207547778a80319d143a1e9bf2671b2c716e686a",
+  "driver_sha256": "1ba37384178795d38f845aeb3c89d4ebb61c55fd2e8517a73cad7e88d4bd2a83",
+  "required_host_harness": {
+    "bench.py": "e31565faca40f8b3ba735b8888939b388d98b554c6634d787adca1b9add65e84",
+    "measure.py": "de4528ba16158609d3d2f12e71a6c66d601ea342b9a1a46badbf52b433738577"
+  },
+  "host_root": "/root/rss-header-20261002",
+  "run": "POLICY_ROOT=/root/rss-header-20261002 python3 gc-final-instruction-profile.py",
+  "precondition": "gc-runtime-mtime-repair-run.exit = 0; run under /root/.perry-heavy.lock",
+  "planned_runs": 16
+}

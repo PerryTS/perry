@@ -1,0 +1,9 @@
+{
+  "kind": "Parsed existing real TypeScript instruction sample report; rejected lost samples, empty attribution and missing event count",
+  "script_sha256": "81f92841def232c2c4794879207547778a80319d143a1e9bf2671b2c716e686a",
+  "report_sha256": "ef8c9cf8bb817993c412f8f8f199968f0ce4b5b64862e55c1dbd2255cfaf5093",
+  "samples": 64885,
+  "gc_self_samples": 47835,
+  "arena_self_samples": 3111,
+  "rejected_inputs": 3
+}
