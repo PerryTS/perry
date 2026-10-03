@@ -1147,3 +1147,17 @@ workload edit or process stop. Exact wait4 max RSS and signed sampling gap
 are separate. Smaps is non-atomic; near-peak categories are diagnosis and do
 not replace acceptance. This first separates anonymous from executable/other
 file-backed residency, rather than subtracting a non-peak live census from RSS.
+
+PRIVATE ELF FULL MATRIX VERIFIED / REJECTED FOR PRODUCTION
+All204cells/17cases correct; raw logs/products/source/build bindings/counters
+and summaries independently verified. Original driver exit1 is preserved: its
+last source-binding check rejected document workload labels. Derived manifest
+normalizes only case to actual source stem and retains workload_case; all
+measurements remain unchanged. Strict full coverage validation passes.
+Relative to fresh GC-proposal control, ELF instructions pipeline+1.375%,
+TS+0.463%, requests-0.998%, Zod-0.537%, async-0.946%, retain/release-0.706%.
+RSS is mostly small signed variation; request+0.936%, retained-doc+1.140%,
+TS+0.021%, Zod-0.517%, CRC-2.789%. No uniform improvement. Probe stays
+unapplied/rejected despite its earlier four-case benefit. Production22runtime
+paths remain unchanged. Memory observers remain queued behind live lock owner
+4129218, another lane. No process or file belonging to it is changed.
