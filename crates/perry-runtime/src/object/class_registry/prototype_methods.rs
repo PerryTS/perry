@@ -270,6 +270,57 @@ pub(crate) fn invalidate_class_prototype_fast_guards() {
     retire_prototype_dependent_caches();
 }
 
+/// Can a new `[[Prototype]]` on the object at `obj_ptr` change what a
+/// compiler-emitted direct-method arm resolved?
+///
+/// Those arms call a body the compiler resolved along a declared class's
+/// `extends` chain, for a receiver whose exact `(class_id, ShapeId)` the arm
+/// compares on every call. Their resolution can only move when the new link
+/// sits on such a chain or on such a receiver:
+///
+/// * a class instance (a real class id): conservatively retired, although its
+///   ShapeId already names the new prototype;
+/// * a declared class's prototype object: [`class_prototype_relinked`]
+///   retires the inherited names precisely, and this keeps the all-names latch
+///   on top;
+/// * an object perry cannot classify (not meta-capable, not regular): retired.
+///
+/// Every other target — an object literal, an `Object.create` result, a plain
+/// function's `.prototype` (`util.inherits`, `setPrototypeOf(Sub.prototype,
+/// Base.prototype)`; registered under the function's synthetic class id, which
+/// no compiled arm names), a dictionary built with `__proto__` — is on no
+/// declared class chain. A class whose chain later reaches it (`class X extends Sub`)
+/// resolves no inherited body statically through a function base, and an
+/// instance that later takes it as its prototype is re-stamped by that link.
+/// Retiring every direct arm in the process for these turned one
+/// `util.inherits` in any dependency into a 3.7x tax on every `this.m()`
+/// (#10504).
+///
+/// # Safety
+/// `obj_ptr` must be a heap address the caller already validated as an object.
+pub(crate) unsafe fn prototype_relink_may_retarget_direct_arms(obj_ptr: usize) -> bool {
+    let Some(obj) = crate::object::prototype_chain::meta_capable_object(obj_ptr) else {
+        return true;
+    };
+    if !crate::object::object_is_regular(obj) {
+        return true;
+    }
+    let class_id = (*obj).class_id;
+    if class_id != 0 && !super::is_anon_shape_class_id(class_id) {
+        return true;
+    }
+    super::class_id_for_decl_prototype_object(obj_ptr).is_some()
+}
+
+/// The cache retirements of [`invalidate_class_prototype_fast_guards`]
+/// without its all-names latch: for a prototype relink that
+/// [`prototype_relink_may_retarget_direct_arms`] proves cannot move a compiled
+/// direct arm. The runtime's `(class, name)` dispatch caches and element-shape
+/// proofs still restart.
+pub(crate) fn retire_prototype_caches_without_direct_arms() {
+    retire_prototype_dependent_caches();
+}
+
 pub(crate) fn class_prototype_method_root_store(class_id: u32, name: String, value_bits: u64) {
     CLASS_PROTOTYPE_METHODS.with(|table| {
         let mut guard = table.write().unwrap();

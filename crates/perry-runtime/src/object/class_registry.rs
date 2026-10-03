@@ -154,6 +154,7 @@ pub(crate) use prototype_methods::{
     class_prototype_method_root_remove, class_prototype_method_root_store,
     class_prototype_relinked, invalidate_class_prototype_fast_guards,
     invalidate_class_prototype_fast_guards_for_method, mirror_prototype_method_on_object,
+    prototype_relink_may_retarget_direct_arms, retire_prototype_caches_without_direct_arms,
     synthetic_class_id_for_function,
 };
 pub use prototype_methods::{
