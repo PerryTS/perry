@@ -93,6 +93,12 @@ pub(crate) struct ArrayUse {
     pub(super) counter: bool,
     /// Some access stores.
     pub(super) store: bool,
+    /// Element receivers: some access loads an element by the loop counter
+    /// for its VALUE (`const o = xs[i]`), not as a Number operand. That needs
+    /// no dense facts: the guard proves `bound <= capacity` (the S0 invariant
+    /// fills `[length, capacity)` with holes, and a hole reads `undefined`),
+    /// and the loaded value's own shape guard is the proof of what it is.
+    pub(super) element: bool,
 }
 
 impl ArrayUse {
@@ -200,6 +206,44 @@ pub(super) fn declared_plain_array(ctx: &FnCtx<'_>, r: Recv) -> bool {
         Some(HirType::Generic { ref base, .. }) => base == "Array",
         _ => false,
     }
+}
+
+/// The binding is DECLARED a typed array whose elements are not raw `f64`
+/// slots: any kind but `Float64Array` (`Buffer` included). No guard of an
+/// array region can pass for one (the dense guard needs an `Array`, the typed
+/// guard an owning `Float64Array`), and its elements are Numbers, never
+/// element receivers, so it is no candidate: its region would add only a
+/// guard that fails on every entry and a second copy of the loop. A hint
+/// like [`declared_plain_array`]: a binding whose declaration is wrong only
+/// keeps today's loop.
+fn declared_typed_array_without_f64_slots(ctx: &FnCtx<'_>, r: Recv) -> bool {
+    use perry_hir::types::Type as HirType;
+    let Recv::Local(id) = r else {
+        return false;
+    };
+    if ctx.reassigned_locals.contains(&id) {
+        return false;
+    }
+    let name = match crate::type_analysis::static_type_of(ctx, &Expr::LocalGet(id)) {
+        Some(HirType::Named(name)) => name,
+        Some(HirType::Generic { base, .. }) => base,
+        _ => return false,
+    };
+    matches!(
+        name.as_str(),
+        "Int8Array"
+            | "Uint8Array"
+            | "Uint8ClampedArray"
+            | "Int16Array"
+            | "Uint16Array"
+            | "Int32Array"
+            | "Uint32Array"
+            | "Float16Array"
+            | "Float32Array"
+            | "BigInt64Array"
+            | "BigUint64Array"
+            | "Buffer"
+    )
 }
 
 /// A local whose value only this function's visible writes can change.
@@ -327,6 +371,14 @@ pub(super) fn loop_env(
     Env { counter, aliases }
 }
 
+/// `PERRY_REGION_ELEMENTS=0` (compile time): no element-receiver loads (A/B).
+pub(super) fn element_loads_enabled() -> bool {
+    !matches!(
+        std::env::var("PERRY_REGION_ELEMENTS").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    )
+}
+
 /// `[0, c]` when `e` is `x & c` / `c & x` (`c >= 0`, the result of ToInt32
 /// masking) or the literal `c`.
 pub(super) fn static_index_max(e: &Expr) -> Option<u32> {
@@ -378,6 +430,9 @@ pub(super) fn candidates(
 ) -> HashMap<Recv, ArrayUse> {
     let mut out: HashMap<Recv, ArrayUse> = HashMap::new();
     if cond.is_some_and(|c| !quiet(ctx, c)) || update.is_some_and(|u| !quiet(ctx, u)) {
+        if std::env::var("PERRY_REGION_DIAG").as_deref() == Ok("6") {
+            eprintln!("[perry region] array candidates: loop control not quiet in {}", ctx.func.name);
+        }
         return out;
     }
     // (binding, static max or counter, store, a Number operand)
@@ -399,9 +454,11 @@ pub(super) fn candidates(
             };
             if let Some((object, index, store)) = access {
                 if let (Some(Recv::Local(id)), Some(ix)) = (env.array(object), env.index(index)) {
-                    if ix.is_some() || store || numeric {
-                        out.push((id, ix, store, numeric));
-                    }
+                    // Recorded for every counter/static-indexed access: a
+                    // counter-indexed load for its value (`const o = xs[i]`)
+                    // is an ELEMENT receiver's load and asks for no dense
+                    // facts (see `candidates`).
+                    out.push((id, ix, store, numeric));
                 }
             }
             let consumes = match e {
@@ -441,31 +498,58 @@ pub(super) fn candidates(
     // or, in a body that runs no JS, any read at a proven index (one load in
     // place of the guarded tier, on facts that stay valid across iterations).
     // A body that calls out sets the dirty flag and re-checks the guard every
-    // iteration, which an array only read for its element VALUES
-    // (`const o = xs[i & 63]; o.m()`) does not pay back: such an array is no
-    // candidate there, though its reads ride along once some other access
-    // makes it one.
+    // iteration, which an array only read for its element VALUES at a STATIC
+    // index (`const o = xs[i & 63]; o.m()`) does not pay back: such an array
+    // is no candidate there, though its reads ride along once some other
+    // access makes it one. A counter-indexed element load (`const o = xs[i]`)
+    // is the element-receiver case and is served wherever it appears.
     let calls = body
         .iter()
         .any(|s| perry_hir::walker::stmt_any_expr(s, &mut may_call));
     let served: HashSet<u32> = uses
         .iter()
-        .filter(|&&(_, _, store, numeric)| store || numeric || !calls)
+        .filter(|&&(_, ix, store, numeric)| store || numeric || !calls || ix.is_none())
         .map(|&(id, ..)| id)
         .collect();
-    for (id, ix, store, _) in uses {
+    for (id, ix, store, numeric) in uses {
         let r = Recv::Local(id);
+        // `dense`: the access asks for dense facts (not an element-only load).
+        let dense = ix.is_some() || store || numeric;
+        if std::env::var("PERRY_REGION_DIAG").as_deref() == Ok("6") {
+            eprintln!(
+                "[perry region] array use id={id} ix={ix:?} dense={dense} served={} written={} keyed={} eligible={}",
+                served.contains(&id), written.contains(&id), keyed.contains(&r), receiver_eligible(ctx, r)
+            );
+        }
         if !served.contains(&id)
             || written.contains(&id)
             || keyed.contains(&r)
             || !receiver_eligible(ctx, r)
+            || declared_typed_array_without_f64_slots(ctx, r)
         {
+            continue;
+        }
+        if !dense && !element_loads_enabled() {
+            continue;
+        }
+        // An element-only use of a module-level binding is not admitted. The
+        // region keeps the element base in a slot across the loop's poll and
+        // re-derives it on the poll arm while the region is valid
+        // (`emit_poll_refresh`). For a base derived from a module global,
+        // gc-root-dominance's unrooted-alloca check treats the global's load
+        // as a movable source and does not correlate that refresh with the
+        // valid flag, so it reports the slot; the dense regions main already
+        // forms over module globals trip it the same way outside its corpus.
+        // Until the check can see the refresh, element regions stay off
+        // module-level arrays.
+        if !dense && ctx.module_globals.contains_key(&id) {
             continue;
         }
         let u = out.entry(r).or_default();
         match ix {
             Some(c) => u.max_index = u.max_index.max(c),
-            None => u.counter = true,
+            None if dense => u.counter = true,
+            None => u.element = true,
         }
         u.store |= store;
     }
@@ -518,8 +602,16 @@ pub(super) fn emit_guard(ctx: &mut FnCtx<'_>, a: &ArrayRecv) -> Result<String> {
         store: a.store,
         len_bound: bound.as_deref(),
     });
-    let mut pass =
-        crate::expr::emit_array_region_guard(ctx, &recv_box, a.max_index, dense, &a.base_slot);
+    // An element-only counter: `bound <= capacity` (see `ArrayUse::element`).
+    let cap_bound = if a.dense { None } else { bound.as_deref() };
+    let mut pass = crate::expr::emit_array_region_guard(
+        ctx,
+        &recv_box,
+        a.max_index,
+        dense,
+        cap_bound,
+        &a.base_slot,
+    );
     if a.typed {
         // Not a dense array: an owning Float64Array serves the same raw slots.
         let ta = ctx.new_block("rloop.ta");

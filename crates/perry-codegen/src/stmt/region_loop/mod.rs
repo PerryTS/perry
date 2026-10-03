@@ -319,6 +319,9 @@ thread_local! {
     static CONST_MODULE_GLOBALS: std::cell::RefCell<HashSet<u32>> =
         std::cell::RefCell::new(HashSet::new());
     static NEXT_TOKEN: std::cell::Cell<u64> = const { std::cell::Cell::new(1) };
+    /// Loop region token -> the bound's Number scope (see `begin_with`).
+    static BOUND_SCOPES: std::cell::RefCell<HashMap<u64, u32>> =
+        std::cell::RefCell::new(HashMap::new());
     static STATS: std::cell::RefCell<[u64; 6]> = const { std::cell::RefCell::new([0; 6]) };
 }
 
@@ -421,14 +424,48 @@ fn begin_with(
     }
     // A loop region; failing that, a body region (per-iteration receiver).
     let cands = candidates_for_loop(ctx, cond, body, update);
+    // The loop's invariant receivers join a body region's own binding: one
+    // walk plans them together, so a read of one does not stale the other's
+    // facts (`bi.x - bj.x`, `bi` loop-invariant, `bj` per iteration).
+    let cands_for_body = if joint_body_enabled() {
+        cands.clone()
+    } else {
+        HashSet::new()
+    };
     let env = arrays::loop_env(ctx, cond, body, update);
+    // The counter bound `B` of `i < B`: an array guard with the counter
+    // checks `B <= capacity` (or `<= length`) as an `f64` compare, which a
+    // non-Number fails (a NaN-boxed non-double is a NaN). In the split loop,
+    // entered only on a passing guard, a `B` the loop never writes is
+    // therefore a Number: it is planned and lowered as one there (a scope
+    // closed before the plain copy is lowered, and at once if no array
+    // region with the counter forms).
+    let bound_scope = match env.counter {
+        Some(arrays::Counter {
+            bound: arrays::Bound::Local(b),
+            ..
+        }) if arrays::element_loads_enabled()
+            && !crate::type_analysis::is_numeric_expr(ctx, &Expr::LocalGet(b)) =>
+        {
+            let sc = ctx.next_loop_proof_scope_id();
+            ctx.receiver_descriptors.materialize_number_locals(sc, &[b]);
+            Some(sc)
+        }
+        _ => None,
+    };
     let arrs = arrays::candidates(ctx, cond, body, update, &env);
+    if std::env::var("PERRY_REGION_DIAG").as_deref() == Ok("6") {
+        eprintln!(
+            "[perry region] begin in {}: counter={:?} aliases={:?} arrs={:?} cands={}",
+            ctx.func.name, env.counter, env.aliases, arrs, cands.len()
+        );
+    }
     // Array receivers (S3): the loop region, with the body region nested in
     // its F-body when there is one. Without a bare element read, today's
     // choice below.
     let mut nested: Option<(Plan, Option<(usize, Plan)>)> = None;
     if !arrs.is_empty() {
-        let inner = body_region_plan(ctx, body);
+        let inner = body_region_plan(ctx, body, &cands_for_body);
         let p = plan(
             ctx,
             body,
@@ -456,6 +493,17 @@ fn begin_with(
             }
         }
     }
+    // The bound scope stands only for a region whose guard checks the bound.
+    if let Some(sc) = bound_scope {
+        let guarded = nested
+            .as_ref()
+            .is_some_and(|(p, _)| p.arrays.iter().any(|(_, u)| u.counter || u.element));
+        if !guarded {
+            nested = None;
+            ctx.receiver_descriptors.dematerialize_scope(sc);
+        }
+    }
+    let bound_scope = bound_scope.filter(|_| nested.is_some());
     if nested.is_none() && arrays_only {
         return Ok(None);
     }
@@ -521,7 +569,7 @@ fn begin_with(
                 dense: u.dense(),
                 store: u.store,
                 typed: u.dense() && !arrays::declared_plain_array(ctx, *r),
-                counter: env.counter.filter(|_| u.counter),
+                counter: env.counter.filter(|_| u.counter || u.element),
                 aliases: env
                     .aliases
                     .iter()
@@ -581,11 +629,14 @@ fn begin_with(
             parent_valid: None,
             retry: None,
         });
+        if let Some(sc) = bound_scope {
+            BOUND_SCOPES.with(|m| m.borrow_mut().insert(token, sc));
+        }
         return Ok(Some(token));
     }
     // Body region: the first `const o = <expr>` whose binding the rest of the
     // body reads or writes by static key.
-    if let Some((k, p)) = body_region_plan(ctx, body) {
+    if let Some((k, p)) = body_region_plan(ctx, body, &cands_for_body) {
         let pending = body_pending(p, body, k);
         let token = pending.token;
         ctx.region_loops.push(pending);
@@ -597,7 +648,24 @@ fn begin_with(
 
 /// The body region of `body`: the first `const o = <expr>` whose binding the
 /// rest of the body reads or writes by static key, and its plan.
-fn body_region_plan(ctx: &FnCtx<'_>, body: &[Stmt]) -> Option<(usize, Plan)> {
+/// `PERRY_REGION_JOINT=0` (compile time): a body region plans its own
+/// binding alone (A/B).
+fn joint_body_enabled() -> bool {
+    !matches!(
+        std::env::var("PERRY_REGION_JOINT").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    )
+}
+
+/// `extra`: the enclosing loop's invariant receivers (eligible, never written
+/// in the loop), planned together with the per-iteration binding. Each is
+/// guarded at the split with the binding; the facts of all of them hold
+/// until the first operation that may run JS.
+fn body_region_plan(
+    ctx: &FnCtx<'_>,
+    body: &[Stmt],
+    extra: &HashSet<Recv>,
+) -> Option<(usize, Plan)> {
     for (i, s) in body.iter().enumerate() {
         let Stmt::Let {
             id, init: Some(_), ..
@@ -626,6 +694,7 @@ fn body_region_plan(ctx: &FnCtx<'_>, body: &[Stmt]) -> Option<(usize, Plan)> {
         }
         let mut cands = HashSet::new();
         cands.insert(Recv::Local(*id));
+        cands.extend(extra.iter().copied());
         if let Some(p) = plan(
             ctx,
             tail,
@@ -891,6 +960,7 @@ pub(crate) fn lower_loop(
         .position(|p| p.token == t)
         .expect("the region is still registered");
     let pending = ctx.region_loops.remove(pos);
+    close_bound_scope(ctx, t);
     ctx.current_block = plain;
     note(ctx, Route::RloopPlain);
     let r = lower(ctx);
@@ -928,8 +998,15 @@ pub(crate) fn after_stmt(ctx: &mut FnCtx<'_>, s: &Stmt) {
     }
 }
 
+fn close_bound_scope(ctx: &mut FnCtx<'_>, token: u64) {
+    if let Some(sc) = BOUND_SCOPES.with(|m| m.borrow_mut().remove(&token)) {
+        ctx.receiver_descriptors.dematerialize_scope(sc);
+    }
+}
+
 pub(crate) fn end(ctx: &mut FnCtx<'_>, token: Option<u64>) {
     if let Some(t) = token {
+        close_bound_scope(ctx, t);
         ctx.region_loops.retain(|p| p.token != t);
     }
 }

@@ -171,6 +171,28 @@ fn probe_blocks(ir: &str) -> Vec<(String, Vec<String>)> {
     out
 }
 
+/// The IR of each function compiled from `probe` (its specialised and
+/// generic clones and the entry), one string each: block labels repeat
+/// across clones, so a count over [`f_body`] of the whole module counts
+/// every clone that formed the region.
+fn probe_fn_irs(ir: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut cur: Option<String> = None;
+    for line in ir.lines() {
+        if line.starts_with("define ") && line.contains("probe") {
+            cur = Some(String::new());
+        }
+        if let Some(c) = cur.as_mut() {
+            c.push_str(line);
+            c.push('\n');
+            if line.starts_with('}') {
+                out.extend(cur.take());
+            }
+        }
+    }
+    out
+}
+
 /// Lines of the blocks reachable from an F-body entry (`rloop.fast*`)
 /// without leaving through the split's join.
 fn f_body(ir: &str) -> Vec<String> {
@@ -283,12 +305,12 @@ fn a_typed_region_guard_names_only_symbols_that_exist() {
     // typed array header's own storage byte. The typed region guard, merged
     // after it (#10741), still loaded the removed global, and the text
     // assertions above cannot see a reference to a symbol nothing declares.
-    // Any receiver not declared a plain Array takes this guard -- OpenCode's
-    // id.ts loops over Buffers -- so ask LLVM, the one check that sees an
+    // Any receiver not declared a plain Array (or a typed array without raw
+    // f64 slots) takes this guard, so ask LLVM, the one check that sees an
     // undefined value.
     for (name, elem) in [
         ("rarr_typed_verify", Type::Named("Float64Array".to_string())),
-        ("rarr_buffer_verify", Type::Named("Buffer".to_string())),
+        ("rarr_untyped_verify", Type::Any),
     ] {
         let ir = probe_ir(name, elem, physics_body(), None);
         assert!(
@@ -301,6 +323,33 @@ fn a_typed_region_guard_names_only_symbols_that_exist() {
         );
         crate::testing::verify_ir(&ir, name)
             .unwrap_or_else(|e| panic!("{name}: LLVM rejected the module: {e}\n{ir}"));
+    }
+}
+
+#[test]
+fn a_typed_array_without_f64_slots_forms_no_region() {
+    // `perm[i] = perm1[i]` over two `Int32Array`s (fannkuch's copy loop):
+    // neither the dense guard nor the Float64Array guard can pass for an
+    // integer typed array, so a region there is a guard that fails on every
+    // entry plus a second copy of the loop. With `n` an untyped bound, the
+    // counter-bound scope would otherwise admit it. A Float64Array, and a
+    // receiver with no declared type, still form one.
+    let copy = || vec![set(A, at(B))];
+    for kind in ["Int32Array", "Uint8Array", "Float32Array", "Buffer"] {
+        let ir = probe_ir("rarr_int_copy", Type::Named(kind.to_string()), copy(), None);
+        assert!(
+            !ir.contains("rloop.fast"),
+            "{kind}: no region guard can pass for it, so none may form:\n{ir}"
+        );
+        crate::testing::verify_ir(&ir, "rarr_int_copy")
+            .unwrap_or_else(|e| panic!("{kind}: LLVM rejected the module: {e}\n{ir}"));
+    }
+    for elem in [Type::Named("Float64Array".to_string()), Type::Any] {
+        let ir = probe_ir("rarr_f64_copy", elem.clone(), copy(), None);
+        assert!(
+            ir.contains("rloop.fast") && ir.contains("rloop.ta"),
+            "{elem:?}: a Float64Array is served by the typed guard:\n{ir}"
+        );
     }
 }
 
@@ -401,29 +450,37 @@ fn a_store_of_a_value_not_proven_a_number_is_not_bare() {
         set(A, Expr::String("s".to_string())),
     ];
     let ir = probe_ir("rarr_string_store", number_array(), body, None);
-    let f = f_body(&ir);
-    let f_text = f.join("\n");
-    assert!(!f.is_empty(), "the loop formed no region:\n{ir}");
-    // Bare stores are emitted in the F-body's own blocks; today's store
-    // lowers inside its `idxset.*` blocks.
-    let mut label = "";
-    let mut bare_stores = 0;
-    for l in &f {
-        if l.ends_with(':') {
-            label = l;
-        } else if l.starts_with("store double") && !label.starts_with("idxset") {
-            bare_stores += 1;
+    // Each clone of `probe` (specialised, generic) that forms the region has
+    // its own F-body; each is checked on its own.
+    let fs: Vec<Vec<String>> = probe_fn_irs(&ir)
+        .iter()
+        .map(|f| f_body(f))
+        .filter(|f| !f.is_empty())
+        .collect();
+    assert!(!fs.is_empty(), "the loop formed no region:\n{ir}");
+    for f in &fs {
+        let f_text = f.join("\n");
+        // Bare stores are emitted in the F-body's own blocks; today's store
+        // lowers inside its `idxset.*` blocks.
+        let mut label = "";
+        let mut bare_stores = 0;
+        for l in f {
+            if l.ends_with(':') {
+                label = l;
+            } else if l.starts_with("store double") && !label.starts_with("idxset") {
+                bare_stores += 1;
+            }
         }
+        assert_eq!(
+            bare_stores, 1,
+            "only `b[i] = b[i] + 1` may be a bare raw store:\n{f_text}"
+        );
+        assert!(
+            f.iter()
+                .any(|l| l.contains("index_set") && l.contains("call ")),
+            "the string store must take today's store:\n{f_text}"
+        );
     }
-    assert_eq!(
-        bare_stores, 1,
-        "only `b[i] = b[i] + 1` may be a bare raw store:\n{f_text}"
-    );
-    assert!(
-        f.iter()
-            .any(|l| l.contains("index_set") && l.contains("call ")),
-        "the string store must take today's store:\n{f_text}"
-    );
 }
 
 /// `a[i & 63]`, a static index in `[0, 63]`.
