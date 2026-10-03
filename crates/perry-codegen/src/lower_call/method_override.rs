@@ -27,6 +27,13 @@ const GC_TYPE_OBJECT: &str = "2";
 // 0x0000_00ff (the complete gtype byte). The exact class/ShapeId comparison
 // rejects the numeric-proof sibling.
 const GC_OBJECT_METHOD_GUARD_MASK_I32: &str = "134250751"; // 0x0800_80ff
+                                                           // The learned-word arms test only the kind and the forwarding bit. Every
+                                                           // descriptor install on a `GC_TYPE_OBJECT` changes its ShapeId (RULE 1,
+                                                           // `perry-runtime` `descriptor_state::note_descriptor_target_edits`), so the
+                                                           // exact word compare already subsumes the descriptor bit; the runtime only
+                                                           // learns a word whose key list lacks the method name, and an accessor or
+                                                           // attribute for that name would have to add the key.
+const GC_OBJECT_LEARNED_GUARD_MASK_I32: &str = "33023"; // 0x0000_80ff
 const SHAPE_ID_BASE_NEG_I32: &str = "-2147483648"; // subtract 0x8000_0000
 const SHAPE_ID_RANGE_LEN: &str = "1073741824"; // 0x4000_0000
 
@@ -268,6 +275,11 @@ pub(crate) fn emit_inline_direct_method_shape_guard(
     // the heap address range (a positive subnormal) can never reach the
     // header load — it misses to the runtime guard instead.
     accept_raw_ptr: bool,
+    // The site's learned receiver word and the block that calls the method
+    // body for it (see [`emit_direct_method_site_word`]). A receiver whose
+    // exact pair is not the birth pair is compared against the word before
+    // `fallback_label` is taken.
+    learned: Option<(&str, &str)>,
 ) {
     let deref_idx = ctx.new_block("method_direct.inline_deref");
     let deref_label = ctx.block_label(deref_idx);
@@ -349,8 +361,93 @@ pub(crate) fn emit_inline_direct_method_shape_guard(
 
         let pass = blk.and(I1, &gc_header_ok, &class_shape_ok);
         let pass = blk.and(I1, &pass, &shape_valid);
-        blk.cond_br(&pass, fast_label, fallback_label);
+        match learned {
+            None => blk.cond_br(&pass, fast_label, fallback_label),
+            Some((site_word, learned_label)) => {
+                let learned_idx = ctx.new_block("method_direct.learned_check");
+                let check_label = ctx.block_label(learned_idx);
+                ctx.block().cond_br(&pass, fast_label, &check_label);
+                ctx.current_block = learned_idx;
+                let blk = ctx.block();
+                // The word is a fact of one exact `(class_id, ShapeId)` pair
+                // (`perry-runtime` `native_call_method/direct_site.rs`); the
+                // header bits are re-proved here exactly as for the birth pair.
+                let learned_gc_bits = blk.and(I32, &gc_header, GC_OBJECT_LEARNED_GUARD_MASK_I32);
+                let learned_gc_ok = blk.icmp_eq(I32, &learned_gc_bits, GC_TYPE_OBJECT);
+                let word = blk.load_atomic_monotonic(I64, site_word, 8);
+                let word_ok = blk.icmp_eq(I64, &class_shape, &word);
+                let hit = blk.and(I1, &learned_gc_ok, &word_ok);
+                blk.cond_br(&hit, learned_label, fallback_label);
+            }
+        }
     }
+}
+
+/// One zero-initialized `i64` owned by a compiled class-method site: the last
+/// receiver word (`class_id | ShapeId << 32`) the runtime proved carries no
+/// own property of the method name and belongs to the declared class
+/// (`js_native_call_method_by_id_learn`, `js_object_get_own_field_or_undef_learn`).
+/// Zero never matches a live receiver (a ShapeId is never zero). Scalars only,
+/// so it is not a GC root.
+pub(crate) fn emit_direct_method_site_word(ctx: &mut FnCtx<'_>) -> String {
+    let site_id = ctx.ic_site_counter;
+    ctx.ic_site_counter += 1;
+    let prefix = ctx.strings.module_prefix();
+    let slot_name = if prefix.is_empty() {
+        format!("perry_mdirect_site_{site_id}")
+    } else {
+        format!("perry_mdirect_site_{prefix}__{site_id}")
+    };
+    ctx.typed_parse_rodata
+        .push(format!("@{slot_name} = private global i64 0, align 8"));
+    format!("@{slot_name}")
+}
+
+/// `i1`: `recv_box` is a heap object of `GC_TYPE_OBJECT`, not forwarded, whose
+/// exact receiver word equals the site's learned word. Emits
+/// its own pointer gate, so it is safe for any value.
+fn emit_learned_word_hit(ctx: &mut FnCtx<'_>, recv_box: &str, site_word: &str) -> String {
+    let deref_idx = ctx.new_block("learned_word.deref");
+    let merge_idx = ctx.new_block("learned_word.merge");
+    let deref_label = ctx.block_label(deref_idx);
+    let merge_label = ctx.block_label(merge_idx);
+    let heap_floor =
+        crate::target_layout::heap_addr_lower_bound_inclusive(ctx.target_triple).to_string();
+    let heap_ceiling =
+        crate::target_layout::heap_addr_upper_bound_exclusive(ctx.target_triple).to_string();
+    let gate_label = {
+        let blk = ctx.block();
+        let recv_bits = blk.bitcast_double_to_i64(recv_box);
+        let recv_handle = blk.and(I64, &recv_bits, crate::nanbox::POINTER_MASK_I64);
+        let tag = blk.lshr(I64, &recv_bits, "48");
+        let is_ptr = blk.icmp_eq(I64, &tag, POINTER_TAG_HI16);
+        let above_floor = blk.icmp_uge(I64, &recv_handle, &heap_floor);
+        let below_ceiling = blk.icmp_ult(I64, &recv_handle, &heap_ceiling);
+        let in_heap_range = blk.and(I1, &above_floor, &below_ceiling);
+        let can_deref = blk.and(I1, &is_ptr, &in_heap_range);
+        blk.cond_br(&can_deref, &deref_label, &merge_label);
+        blk.label.clone()
+    };
+    ctx.current_block = deref_idx;
+    let (hit, deref_end) = {
+        let blk = ctx.block();
+        let recv_bits = blk.bitcast_double_to_i64(recv_box);
+        let recv_handle = blk.and(I64, &recv_bits, crate::nanbox::POINTER_MASK_I64);
+        let obj_ptr = blk.inttoptr(I64, &recv_handle);
+        let gc_header_ptr = blk.gep(I8, &obj_ptr, &[(I64, "-8")]);
+        let gc_header = blk.load(I32, &gc_header_ptr);
+        let guarded_gc_bits = blk.and(I32, &gc_header, GC_OBJECT_LEARNED_GUARD_MASK_I32);
+        let gc_header_ok = blk.icmp_eq(I32, &guarded_gc_bits, GC_TYPE_OBJECT);
+        let class_shape = blk.load(I64, &obj_ptr);
+        let word = blk.load_atomic_monotonic(I64, site_word, 8);
+        let word_ok = blk.icmp_eq(I64, &class_shape, &word);
+        let hit = blk.and(I1, &gc_header_ok, &word_ok);
+        blk.br(&merge_label);
+        (hit, blk.label.clone())
+    };
+    ctx.current_block = merge_idx;
+    ctx.block()
+        .phi(I1, &[("false", &gate_label), (&hit, &deref_end)])
 }
 
 /// Inline form of the runtime probe `js_method_direct_shape_class`: resolve
@@ -791,27 +888,36 @@ pub(super) fn emit_own_method_override_check(
     let bytes_global = format!("@{}", entry.bytes_global);
     let name_len_str = entry.byte_len.to_string();
 
-    let blk = ctx.block();
-    let own_method = blk.call(
+    // A receiver whose exact word the runtime already proved has no own
+    // property of this name skips the by-name probe (the probe scanned every
+    // own key on every call; an `EventEmitter` subclass carries ~30).
+    let site_word = emit_direct_method_site_word(ctx);
+    let learned_hit = emit_learned_word_hit(ctx, recv_box, &site_word);
+    let probe_idx = ctx.new_block("ovrcheck.probe");
+    let override_idx = ctx.new_block("ovrcheck.override");
+    let static_idx = ctx.new_block("ovrcheck.static");
+    let merge_idx = ctx.new_block("ovrcheck.merge");
+    let probe_label = ctx.block_label(probe_idx);
+    let override_label = ctx.block_label(override_idx);
+    let static_label = ctx.block_label(static_idx);
+    let merge_label = ctx.block_label(merge_idx);
+    ctx.block()
+        .cond_br(&learned_hit, &static_label, &probe_label);
+
+    ctx.current_block = probe_idx;
+    let own_method = ctx.block().call(
         DOUBLE,
-        "js_object_get_own_field_or_undef",
+        "js_object_get_own_field_or_undef_learn",
         &[
             (DOUBLE, recv_box),
             (crate::types::PTR, &bytes_global),
             (I64, &name_len_str),
+            (crate::types::PTR, &site_word),
         ],
     );
     let own_bits = ctx.block().bitcast_double_to_i64(&own_method);
     let undef_bits_str = format!("{}", crate::nanbox::TAG_UNDEFINED as i64);
     let is_undef = ctx.block().icmp_eq(I64, &own_bits, &undef_bits_str);
-
-    let override_idx = ctx.new_block("ovrcheck.override");
-    let static_idx = ctx.new_block("ovrcheck.static");
-    let merge_idx = ctx.new_block("ovrcheck.merge");
-    let override_label = ctx.block_label(override_idx);
-    let static_label = ctx.block_label(static_idx);
-    let merge_label = ctx.block_label(merge_idx);
-
     ctx.block()
         .cond_br(&is_undef, &static_label, &override_label);
 
@@ -1081,6 +1187,12 @@ pub(super) fn emit_guarded_direct_method_call(
     // single-arm sites retain the runtime helper.
     let multi_arm = !subclass_arms.is_empty();
     let inline_single_arm = shape_only_guard && !multi_arm;
+    // Every single-arm form whose guard is emitted inline also compares the
+    // site's learned word: a receiver of the declared class whose exact pair
+    // is not the birth pair (a field added on one constructor path, a private
+    // brand, a native base's own method surface) is proved once by the
+    // runtime and then called directly. The learned arm calls the ordinary
+    // body, never a clone that assumes the birth layout.
     // #9105's dispensation, applied to METHOD sites: normal builds do not
     // collect typed feedback, so the runtime guard's observation half is
     // inert — yet every monomorphic hit still paid its full contract check
@@ -1097,6 +1209,16 @@ pub(super) fn emit_guarded_direct_method_call(
         && !multi_arm
         && !crate::expr::typed_feedback_emission_enabled()
         && method_inline_probe_enabled();
+    let learned_site: Option<(String, usize)> = (inline_single_arm || probe_before_runtime_guard)
+        .then(|| {
+            let word = emit_direct_method_site_word(ctx);
+            (word, ctx.new_block("method_direct.learned"))
+        });
+    let learned_label = learned_site.as_ref().map(|(_, idx)| ctx.block_label(*idx));
+    let learned_arg = learned_site
+        .as_ref()
+        .zip(learned_label.as_ref())
+        .map(|((word, _), label)| (word.as_str(), label.as_str()));
     if multi_arm {
         let (cid, shape_id) =
             emit_inline_direct_method_shape_probe(ctx, recv_box, &method_guard_slot_str);
@@ -1141,6 +1263,7 @@ pub(super) fn emit_guarded_direct_method_call(
             &fast_label,
             &fallback_label,
             true,
+            learned_arg,
         );
     }
     if probe_before_runtime_guard {
@@ -1155,6 +1278,7 @@ pub(super) fn emit_guarded_direct_method_call(
             &fast_label,
             &runtime_guard_label,
             false,
+            learned_arg,
         );
         ctx.current_block = runtime_guard_idx;
     }
@@ -1867,6 +1991,22 @@ pub(super) fn emit_guarded_direct_method_call(
         sub_values.push((value, after));
     }
 
+    // The learned arm: the receiver is an instance of the declared class whose
+    // exact word the runtime proved shadows nothing (`learned_check` above),
+    // and the prototype guard bytes were re-checked on the way in. The
+    // ordinary body runs its own receiver guards, so no layout is assumed.
+    let learned_value = learned_site.as_ref().map(|(_, idx)| {
+        ctx.current_block = *idx;
+        let target = direct_call_fn.unwrap_or(direct_fn);
+        let value = ctx.block().call(DOUBLE, target, direct_arg_slices);
+        let truthy = truthy_result_kind.map(|kind| constructive_truthy(ctx, kind, &value));
+        let after = ctx.block().label.clone();
+        if !ctx.block().is_terminated() {
+            ctx.block().br(&merge_label);
+        }
+        (value, truthy, after)
+    });
+
     ctx.current_block = fallback_idx;
     let (args_ptr, args_len) = if fallback_user_args.is_empty() {
         ("null".to_string(), "0".to_string())
@@ -1894,16 +2034,30 @@ pub(super) fn emit_guarded_direct_method_call(
         );
     }
     let method_id = crate::strings::emit_static_dispatch_id(ctx.block(), &dispatch_global);
-    let fallback_value = ctx.block().call(
-        DOUBLE,
-        "js_native_call_method_by_id",
-        &[
-            (DOUBLE, recv_box),
-            (I64, &method_id),
-            (crate::types::PTR, &args_ptr),
-            (I64, &args_len),
-        ],
-    );
+    let fallback_value = match learned_site.as_ref() {
+        Some((word, _)) => ctx.block().call(
+            DOUBLE,
+            "js_native_call_method_by_id_learn",
+            &[
+                (DOUBLE, recv_box),
+                (I64, &method_id),
+                (crate::types::PTR, &args_ptr),
+                (I64, &args_len),
+                (crate::types::PTR, word),
+                (I32, &expected_class_id_str),
+            ],
+        ),
+        None => ctx.block().call(
+            DOUBLE,
+            "js_native_call_method_by_id",
+            &[
+                (DOUBLE, recv_box),
+                (I64, &method_id),
+                (crate::types::PTR, &args_ptr),
+                (I64, &args_len),
+            ],
+        ),
+    };
     let fallback_truthy = truthy_result_kind.map(|_| total_value_truthy(ctx, &fallback_value));
     let after_fallback = ctx.block().label.clone();
     if !ctx.block().is_terminated() {
@@ -1914,6 +2068,9 @@ pub(super) fn emit_guarded_direct_method_call(
     let mut phi_inputs: Vec<(&str, &str)> = Vec::with_capacity(sub_values.len() + 2);
     phi_inputs.push((fast_value.as_str(), after_fast.as_str()));
     for (value, label) in &sub_values {
+        phi_inputs.push((value.as_str(), label.as_str()));
+    }
+    if let Some((value, _, label)) = learned_value.as_ref() {
         phi_inputs.push((value.as_str(), label.as_str()));
     }
     phi_inputs.push((fallback_value.as_str(), after_fallback.as_str()));
@@ -1928,6 +2085,14 @@ pub(super) fn emit_guarded_direct_method_call(
         ));
         for (value, label) in &sub_truthy_values {
             truthy_inputs.push((value.as_str(), label.as_str()));
+        }
+        if let Some((_, truthy, label)) = learned_value.as_ref() {
+            truthy_inputs.push((
+                truthy
+                    .as_deref()
+                    .expect("truthy mode constructs a learned-arm truthiness value"),
+                label.as_str(),
+            ));
         }
         truthy_inputs.push((
             fallback_truthy
