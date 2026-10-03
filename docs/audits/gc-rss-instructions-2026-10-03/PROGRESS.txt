@@ -320,3 +320,26 @@ python3 summarize-gc-comparison.py /root/rss-header-20261002/gc-auto-main69 \
 Do not declare acceptance from an average across workloads: inspect each
 case's RSS/instruction tradeoff and investigate regressions. The summarizer
 deliberately makes no automatic performance-acceptance verdict.
+
+COMPLETED: v2 normal-auto scan/bookkeeping comparison (old production base)
+204/204 executions match Node. Successful terminal receipt, exact 17 x 2 x
+2 x 3 cell coverage, build-to-workload bindings and current binary digests
+were checked by the published summarizer. See scan-comparison.json.
+This validates v2 only; page release/visitors/page compaction and main69
+acceptance are still pending. The existing driver has advanced to v3 build.
+
+RSS mostly unchanged; document replacement falls 145.062 -> 142.273 MiB
+(-1.92%). TypeScript falls 244.598 -> 243.992 MiB (-0.25%), instructions
+-1.82%. Large live-set instructions -2.74%; retain/release -1.66%.
+Open regressions/tradeoffs: Zod RSS 24.215 -> 24.508 MiB (+1.21%); string
+build instructions +0.53% (all three candidate counts exceed all baseline
+counts). Do not call this an across-the-board win. TypeScript plain CPU
+time +12.89% despite instructions -1.82% and median perf cycles -1.47%;
+shared-host timings/cycles vary widely across several cases. Keep both
+measurements and investigate; do not discard the slower CPU result.
+
+Next: assess whether the visitor revision removes the string instruction
+regression, and whether the consolidated memory changes improve Zod. If
+not, isolate those costs before accepting the combined candidate. Quantify
+the pool release's fault/CPU cost across all workloads and the page-table
+census savings. No performance-acceptance verdict has been made.
