@@ -1,3 +1,30 @@
+COLLECTION-ENTRY EXPERIMENT AND REBASED MOVING ACCEPTANCE — 2026-10-03 21:53Z
+New-main linked acceptance is COMPLETE and independently verified: 44 Node-
+correct executions, all22 moving runs actually copy/protect from-space. Sources,
+six compiler/static products, outputs, raw cycle counters and the three-GC
+class derivation are checked. 165 raw files copied/rehashed locally. Runtime
+source stays6c761801fa onmain2026ecfe. Test registration now409files passes.
+
+New PRIVATE6e311851fa tests advice at actual collection entry (full state
+constructor and minor entry), including budgeted full cycles once, not each
+slice. Eligibility: already-empty mapped Eden block with a pre-existing idle
+count, outside current-4..current. This keeps the previous mutator interval,
+retains mapping/bitmap/age/accounting, and adds no layout field or GC knob.
+The original moving-only private probe remains rejected/unapplied.
+Six private paths: 34 net production lines and55Linux residency-test lines.
+Mac fullruntime4877/0/5passes;5000tracked Rust/Cargo/toolchain inputs matched
+while compilation ran and after terminal0. Linux mincore test is not claimed
+by a Mac pass. Linux build/tests wrapper768100 is running in own source/target.
+Review patch, Mac proof and build/application drivers are published, UNAPPLIED.
+
+Fresh main/proposal/private72-run four-case full-runtime comparison776931 and
+fresh main/proposal30-build/204-run normal-auto17-case comparison799887 queued
+under the shared lock, not acceptance yet. Compile workers limited to2; no GC
+runtime settings changed. Own completed Cargo target caches reclaimed after
+checking for live references; source/exports/products/raw evidence retained.
+Further private linked/moving acceptance depends on Linux/tests and measured
+application benefit. No peak saving claimed for collection-entry policy yet.
+
 VERIFIED STATUS — 2026-10-03 21:38Z
 Draft #11781 is rebased onto fetched main 2026ecfe6d. Runtime source 6c761801fa;
 22 authored GC/arena paths; object/header/shape/codegen/ABI untouched.
