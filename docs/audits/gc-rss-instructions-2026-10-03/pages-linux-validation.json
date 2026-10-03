@@ -1,0 +1,91 @@
+{
+  "scope": "Isolated page compaction v5 on earlier production base; not current shared-visitor/window HEAD acceptance.",
+  "runtime_counts": {
+    "tests": [
+      4830,
+      0,
+      5
+    ],
+    "ffi": [
+      75,
+      0,
+      0
+    ],
+    "events": [
+      15,
+      0,
+      0
+    ]
+  },
+  "logs": {
+    "/root/rss-header-20261002/logs/gc-runtime-pages-v5r2-linux-tests.log": "f090de044a397a8a0c4c6cc89d447a644c1f65b5355311d8bbc46ea43564d3b7",
+    "/root/rss-header-20261002/logs/gc-runtime-pages-v5r2-linux-ffi.log": "e26fd6561370d037aabc766973831c54a8ae7ec7b3c730f3bca2b4079eb8ce00",
+    "/root/rss-header-20261002/logs/gc-runtime-pages-v5r2-linux-events.log": "cf6bdebf495446af342e7f16e03f94d23e395e21f6f7b301895a8750e82eb7f7"
+  },
+  "receipts": {
+    "gc-runtime-pages-v5r2-build.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "gc-runtime-pages-v5r2-linked.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "gc-runtime-pages-v5r2-noauto.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "gc-runtime-pages-v5r2-census.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "gc-runtime-pages-v5r2-auto.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "gc-runtime-pages-v5r2-run.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+  },
+  "products": {
+    "perry": "ef33dcaf0827e81e93da85421367aaa854ac332e13f64863b69fe518e224d75e",
+    "libperry_runtime.a": "84048a9c64ea1f07cd1d3ae52465eed19b19ec9890945b2f99df46815f7090ec",
+    "libperry_stdlib.a": "3e9ddec3ed86f16b6e767797434d9359d6dbd900887f7335c35ec80cbf072326"
+  },
+  "artifact_verification_sha256": "e7c747df00707a655c2a22525d0480a5607100a6eddb58198e8004df3666d0ce",
+  "linked": [
+    {
+      "case": "test_gap_gc_container_value_rooting",
+      "mode": "default",
+      "binary_sha256": "87bbc9d6cf7cd6f6f3109a59e1d42e58e2b4c07ea02dedf0b039db05db9ff587",
+      "oracle_sha256": "d104449b3fb457fd59f108da1f8beb8b590df8e8121e79ec774087946e7fce24"
+    },
+    {
+      "case": "test_gap_gc_container_value_rooting",
+      "mode": "moving",
+      "binary_sha256": "87bbc9d6cf7cd6f6f3109a59e1d42e58e2b4c07ea02dedf0b039db05db9ff587",
+      "oracle_sha256": "d104449b3fb457fd59f108da1f8beb8b590df8e8121e79ec774087946e7fce24",
+      "copied_objects": 12442,
+      "protected": true
+    },
+    {
+      "case": "test_gap_gc_define_properties_key_rooting",
+      "mode": "default",
+      "binary_sha256": "cb06ce8b23faefd8870c877b405069995ecdbb66718de5946616a9a020b98a3c",
+      "oracle_sha256": "7da333dfbc6dad00fec9e81ecf27ee56e864cdf5f4566c316a7c445c0bf01d82"
+    },
+    {
+      "case": "test_gap_gc_define_properties_key_rooting",
+      "mode": "moving",
+      "binary_sha256": "cb06ce8b23faefd8870c877b405069995ecdbb66718de5946616a9a020b98a3c",
+      "oracle_sha256": "7da333dfbc6dad00fec9e81ecf27ee56e864cdf5f4566c316a7c445c0bf01d82",
+      "copied_objects": 5689,
+      "protected": true
+    },
+    {
+      "case": "test_gap_gc_store_ic_old_to_young",
+      "mode": "default",
+      "binary_sha256": "b5bf92ddc4e62370d0bc68fe7de0cbc8324c8bdb184ef3820b1217b4d22ca77d",
+      "oracle_sha256": "a514f9a4e5f5239ef08132cd610377279a9cf361cc955abb948c444cdcfc6295"
+    },
+    {
+      "case": "test_gap_gc_store_ic_old_to_young",
+      "mode": "moving",
+      "binary_sha256": "b5bf92ddc4e62370d0bc68fe7de0cbc8324c8bdb184ef3820b1217b4d22ca77d",
+      "oracle_sha256": "a514f9a4e5f5239ef08132cd610377279a9cf361cc955abb948c444cdcfc6295",
+      "copied_objects": 63625,
+      "protected": true
+    }
+  ],
+  "inputs": {
+    "gc-pages-v5-census-runs.json": "603bb4adfb0c902bae67a7e4403e258118abd54e4924eea7431e15c3e3159552",
+    "gc-pages-v5-census-observations.json": "594906810bd25e55f47d96fa1026322aaf7dd18b2d5171cf0a5e10d2a4ef9039",
+    "gc-auto-v5-summary.json": "e58d041839724a56dbe693847731ebe6235cdb1c60ee2af658b8705235e621fe",
+    "gc-pages-v5-noauto-summary.json": "6f2e39b910f02b54fe1bafadd6eb3174974d387a2bd5f0f642e69a1690ac9537",
+    "gc-pages-v5-linked-runs.json": "ddde40ebb083ff7fc317d76e2599e6d5cd5d09ad8cfa9b66835ea4151202ef9c"
+  },
+  "normal_auto": "204/204; comparison verifier passed"
+}
