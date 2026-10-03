@@ -45,6 +45,16 @@ for (const mode of ["ordinary", "unscanned", "scanned"]) {
     } catch (error) {
         rejected = error instanceof TypeError;
     }
+    let reflectRejected = false;
+    try {
+        reflectRejected = Reflect.defineProperty(locked, 1, {get: function () { return 92; }}) === false;
+    } catch (error) {
+        redefineFailures += mode + ":reflect-threw;";
+    }
+    if (!reflectRejected || locked[1] !== 61) redefineFailures += mode + ":reflect-locked;";
+    const reflectDeleted = Reflect.deleteProperty(locked, 1);
+    if (reflectDeleted || locked[1] !== 61) redefineFailures += mode + ":reflect-delete;";
+    console.log("reflect-redefine-index", mode, reflectRejected, reflectDeleted, locked[1]);
     const lockedValue = locked[1];
     if (!rejected || lockedValue !== 61) redefineFailures += mode + ":locked;";
 
