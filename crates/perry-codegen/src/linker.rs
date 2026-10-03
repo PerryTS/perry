@@ -1290,6 +1290,15 @@ pub(crate) fn merge_unit_objects(objs: &[Vec<u8>]) -> Result<Vec<u8>> {
     cmd.arg(format!("/OUT:{}", combined.display()));
     #[cfg(not(target_os = "windows"))]
     cmd.arg("-r").arg("-o").arg(&combined);
+    // Apple's ld64 turns private-extern (hidden) symbols into local ones in a
+    // relocatable link unless told to keep them. A hidden definition must stay
+    // visible to the other objects of the final link: the static shape-seed
+    // object (`_perry_static_shape_seeds.o`) references ConstFn bodies'
+    // `$info` records, which are emitted `hidden` for exactly that reason.
+    // Without this flag a module split into codegen units links only when it
+    // is not split. GNU ld and lld already keep hidden symbols global.
+    #[cfg(target_os = "macos")]
+    cmd.arg("-keep_private_externs");
     for p in &obj_paths {
         cmd.arg(p);
     }
