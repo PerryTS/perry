@@ -61,6 +61,7 @@ fn emit(classes: bool, objects: bool) -> String {
     let opts = CompileOptions {
         emit_ir_only: true,
         short_spread_method_candidates: Arc::new(short),
+        program_class_accessor_names: Default::default(),
         object_literal_method_candidates: Arc::new(object),
         ..Default::default()
     };

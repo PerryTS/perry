@@ -871,6 +871,9 @@ pub(crate) struct FnCtx<'a> {
     /// calls. See `CompileOptions::object_literal_method_candidates`.
     pub object_literal_method_candidates:
         &'a std::collections::HashMap<String, Vec<crate::ObjectLiteralMethodCandidate>>,
+    /// The whole program's class accessor names. See
+    /// `CompileOptions::program_class_accessor_names`.
+    pub program_class_accessor_names: Option<&'a crate::ClassAccessorNames>,
     /// FFI manifest: `name -> (params, return)` from `package.json`
     /// `nativeLibrary.functions`. Descriptors use the shared native-library
     /// ABI vocabulary. `lower_call` consults
@@ -2675,6 +2678,13 @@ mod inline_cache_name_tests {
 }
 
 impl<'a> FnCtx<'a> {
+    /// May some compiled class of the program declare a setter named `name`?
+    /// Where this is false a store site emits no class-setter arm.
+    pub(crate) fn program_may_declare_setter(&self, name: &str) -> bool {
+        self.program_class_accessor_names
+            .is_none_or(|names| names.may_set(name))
+    }
+
     /// Is `e` the `this` of a STATIC class member — i.e. a receiver that holds
     /// the class CONSTRUCTOR (an INT32 class ref) rather than an instance?
     ///

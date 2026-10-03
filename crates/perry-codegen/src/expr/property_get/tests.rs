@@ -44,6 +44,7 @@ fn ir_opts(debug_locations: bool, module_source: Option<&str>) -> CompileOptions
         constructor_param_counts: Default::default(),
         imported_classes: Vec::new(),
         short_spread_method_candidates: std::sync::Arc::default(),
+        program_class_accessor_names: Default::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
@@ -1832,3 +1833,49 @@ fn the_generic_slow_read_is_called_only_after_the_front_declines() {
 
 #[path = "array_length_tests.rs"]
 mod array_length;
+
+/// The #10498 class-setter arm only where a compiled class of the program
+/// declares a setter of the store's name: the runtime admits an entry only for
+/// a declared accessor (`class_chain_has_instance_accessor`), so any other
+/// site's arm is code that can never be taken and work on every miss. The
+/// read site's getter arm is not gated.
+#[test]
+fn class_setter_arms_are_emitted_only_for_declared_setter_names() {
+    use crate::ClassAccessorNames;
+    fn module_storing(property: &str) -> Module {
+        let mut m = module_reading(property);
+        m.init.push(Stmt::Expr(Expr::PropertySet {
+            object: Box::new(Expr::LocalGet(1)),
+            property: property.to_string(),
+            value: Box::new(Expr::Number(1.0)),
+        }));
+        m
+    }
+    let emit = |names: Option<ClassAccessorNames>| {
+        let mut opts = ir_opts(false, None);
+        opts.program_class_accessor_names = names.map(std::sync::Arc::new);
+        String::from_utf8(compile_module(&module_storing("price"), opts).unwrap())
+            .expect("LLVM IR should be UTF-8")
+    };
+    let read_arm = "pic.acc.empty";
+    let store_arm = "put.pic.acc";
+    // Names not collected (a standalone compile): the store keeps its arm.
+    let unknown = emit(None);
+    assert!(unknown.contains(store_arm), "{unknown}");
+    // No class declares a setter `price` (a getter alone does not count).
+    let getter_only = emit(Some(ClassAccessorNames::from_names(
+        ["price".to_string()],
+        ["total".to_string()],
+    )));
+    assert!(!getter_only.contains(store_arm), "{getter_only}");
+    assert!(
+        getter_only.contains(read_arm),
+        "the read arm is not gated:\n{getter_only}"
+    );
+    // A declared setter keeps the store arm.
+    let setter = emit(Some(ClassAccessorNames::from_names(
+        Vec::new(),
+        ["price".to_string()],
+    )));
+    assert!(setter.contains(store_arm), "{setter}");
+}
