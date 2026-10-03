@@ -413,6 +413,16 @@ pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
         prune: crate::object::shapes::prune_dead_shape_keys,
         young_prune: Some(crate::object::shapes::prune_dead_shape_keys_young),
     },
+    // A prototype identity's word is traced through its carriers; a word whose
+    // prototype died has none left, so it is cleared.
+    DeadKeyPrune {
+        table: "state().shapes prototype words + identity index",
+        owner: DeadKeyOwner::Any,
+        prune: crate::object::shapes::prune_dead_shape_prototypes,
+        // A minor roots every young word (`scan_shape_prototype_words_mut`),
+        // so only a full trace can find a word's prototype dead.
+        young_prune: None,
+    },
     // #10868 step 2.5 stage 1b: the canonical keys trie holds its arrays
     // WEAKLY, so a node whose array did not survive has to be reaped here or
     // the next probe dereferences freed memory. Runs after the shape prune

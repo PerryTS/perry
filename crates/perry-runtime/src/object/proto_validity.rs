@@ -161,6 +161,24 @@ pub(crate) unsafe fn mark_exotic_read_receiver(obj: usize) {
         ensure_meta_for_mark(obj, crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER)
     });
     if let Some(meta) = meta {
+        // The receiver is leaving every shape that can name its prototype
+        // (`PROTO_ID_PER_OBJECT`): its meta record becomes the authority, so
+        // copy the shape's word there first.
+        if (*meta).prototype == 0 {
+            let word = crate::object::shapes::shape_prototype_word(
+                crate::object::shapes::object_shape_stamp(object),
+            );
+            if word != 0 {
+                (*meta).prototype = word;
+                // GC_STORE_AUDIT(BARRIERED): meta-record prototype slot store
+                // (parent = the meta record), as in the prototype funnel.
+                crate::gc::runtime_write_barrier_slot(
+                    meta as usize,
+                    &(*meta).prototype as *const u64 as usize,
+                    word,
+                );
+            }
+        }
         // GC_STORE_AUDIT(POINTER_FREE): scalar classification bit.
         (*meta).flags |= crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER;
         // The flag makes the receiver's [[Prototype]] identity its own

@@ -117,11 +117,7 @@ unsafe fn class_link(recv: *const crate::ObjectHeader) -> Option<*const crate::O
         return None;
     }
     let holder = if (PROTO_ID_MIXED..PROTO_ID_UNIQUE).contains(&pid) {
-        let meta = (*recv).meta;
-        if meta.is_null() {
-            return None;
-        }
-        let p = crate::JSValue::from_bits((*meta).prototype);
+        let p = crate::JSValue::from_bits(crate::object::shapes::object_prototype_word(recv));
         if !p.is_pointer() {
             return None;
         }

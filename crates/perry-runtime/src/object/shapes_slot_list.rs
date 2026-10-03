@@ -1291,7 +1291,13 @@ pub(crate) fn shape_id_owns_keys_slot(shape_id: u32, slot: *mut u64) -> bool {
         .shapes
         .slab()
         .record_ptr(shape_id)
-        .is_some_and(|record| record as *mut u64 == slot)
+        .is_some_and(|record| {
+            // The keys word is the record's first field; the identity's
+            // [[Prototype]] word (`shapes_prototype`) is the same kind of
+            // shared edge.
+            record as *mut u64 == slot
+                || super::identity_word_slot(unsafe { (*record).proto_id }) == Some(slot)
+        })
 }
 
 #[cfg(test)]

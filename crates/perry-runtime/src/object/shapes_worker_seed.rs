@@ -43,6 +43,10 @@ pub(crate) fn worker_shape_seed() -> WorkerShapeSeed {
             && r.object_kind() == ShapeObjectKind::Ordinary
             && r.semantic_generation == 0
             && r.summary() == 0
+            // A record whose identity names a prototype object holds a
+            // pointer into THIS agent's heap (`shapes_prototype`); a worker
+            // mints its own.
+            && !super::proto_id_carries_word(r.proto_id)
         {
             // Copy key BYTES while the source agent owns the record. A worker
             // builds its own canonical keys, so no moving source key pointer

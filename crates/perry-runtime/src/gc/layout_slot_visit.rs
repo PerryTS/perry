@@ -116,6 +116,11 @@ pub(super) unsafe fn visit_gc_layout_slot_descriptors_inline<F>(
     // `PERRY_GC_VERIFY_EVACUATION` is what established the second half is
     // needed: without it the verifier aborts on a `slot_page_ever_dirty=false`
     // old→young edge through this word.
+    let shape_prototype_edge = if (*header).obj_type == GC_TYPE_OBJECT {
+        crate::object::gc_shape_prototype_edge_slot(child_slots.object_shape, full_trace_active())
+    } else {
+        None
+    };
     let shape_keys_edge = if (*header).obj_type == GC_TYPE_OBJECT {
         // #9726: unlike the minor-rooting gate below, full-trace descriptor
         // liveness is generation-blind. Every reachable shaped receiver must
@@ -142,6 +147,11 @@ pub(super) unsafe fn visit_gc_layout_slot_descriptors_inline<F>(
         visit(fixed_slot(slot).with_layout(HeapChildSlotReadKind::Prefix));
     }
     if let Some(slot) = shape_keys_edge {
+        visit(fixed_slot(slot).with_layout(HeapChildSlotReadKind::Prefix));
+    }
+    // The receiver's [[Prototype]] when its shape names it: the identity's
+    // shared word, marked through like the keys word.
+    if let Some(slot) = shape_prototype_edge {
         visit(fixed_slot(slot).with_layout(HeapChildSlotReadKind::Prefix));
     }
     if let Some(slot) = child_slots.take_meta_child_slot() {

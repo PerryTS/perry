@@ -140,8 +140,9 @@ pub(crate) unsafe fn try_data_get_bytes(receiver: JSValue, key: &[u8]) -> Option
         } else {
             return None;
         }
-        if !meta.is_null() && (*meta).prototype != 0 {
-            let prototype = JSValue::from_bits((*meta).prototype);
+        let recorded = crate::object::shapes::object_prototype_word(object);
+        if recorded != 0 {
+            let prototype = JSValue::from_bits(recorded);
             if !prototype.is_pointer() {
                 return None;
             }

@@ -138,12 +138,7 @@ struct PlanEntry {
 /// `obj` is a live ordinary object.
 #[inline]
 pub(crate) unsafe fn receiver_proto_bits(obj: *const super::ObjectHeader) -> u64 {
-    let meta = (*obj).meta;
-    if meta.is_null() {
-        0
-    } else {
-        (*meta).prototype
-    }
+    super::shapes::object_prototype_word(obj)
 }
 
 // SAFETY: integer fields only; `key_ptr == 0` never matches an interned key,

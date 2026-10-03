@@ -253,6 +253,8 @@ fn lifted_descriptor_mirrors_the_record_and_names_its_address() {
 /// moves to offset 48 behind it.
 /// 56 -> 64 is the record-owned ConstFn extension pointer; no side table
 /// or pointer to a heap closure participates in shape identity.
+/// The [[Prototype]] itself is NOT in the record: it is one word per prototype
+/// identity (`shapes_prototype`), so the record stays one cache line.
 #[test]
 fn the_record_geometry_is_free_and_facts_key_is_o1() {
     assert_eq!(std::mem::size_of::<ShapeRecord>(), 64, "record grew");

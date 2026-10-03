@@ -36,6 +36,20 @@ pub(crate) fn gc_shape_keys_edge_slot(record: Option<shapes::ShapeRecordRef>) ->
     Some(record.keys_slot())
 }
 
+/// The AUTHORITATIVE [[Prototype]] edge of a traced receiver whose shape names
+/// its prototype object (`shapes_prototype`): the shape record's own
+/// `prototype` word, shared by every sibling exactly like the keys edge above
+/// (a young carrier emits it; a minor also roots every word naming a young
+/// object, which covers the old carriers it never traces). In a full trace
+/// only the first carrier of each identity emits it (`identity_edge_slot`).
+#[inline]
+pub(crate) fn gc_shape_prototype_edge_slot(
+    record: Option<shapes::ShapeRecordRef>,
+    full_trace: bool,
+) -> Option<*mut u64> {
+    record?.prototype_slot(full_trace)
+}
+
 /// The object's inline field-slot range, given the receiver's shape record
 /// resolved once by the collector.
 pub(crate) unsafe fn gc_field_slot_range(
