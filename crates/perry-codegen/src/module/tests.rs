@@ -805,6 +805,33 @@ fn split_unit_declares_local_function_used_as_pointer_argument() {
 }
 
 #[test]
+fn external_decl_keeps_hidden_visibility_of_closure_info() {
+    // Closure-info records are emitted `hidden constant` (fn_info.rs). On ELF
+    // and COFF every cross-unit reference to one is declared through
+    // `external_decl_for_global`, which only stripped LINKAGE keywords and so
+    // returned `None` for a VISIBILITY keyword — a panic while splitting
+    // effect's Schema.ts into codegen units on Linux.
+    use crate::module::linkage::external_decl_for_global;
+    assert_eq!(
+        external_decl_for_global(
+            "@perry_closure_m__247$info = hidden constant { ptr, i16, i16 } { ptr @perry_closure_m__247, i16 2, i16 0 }"
+        )
+        .as_deref(),
+        Some("@perry_closure_m__247$info = external hidden constant { ptr, i16, i16 }")
+    );
+    // The preemption specifier precedes visibility and is kept too.
+    assert_eq!(
+        external_decl_for_global("@g = dso_local hidden global i32 0").as_deref(),
+        Some("@g = external dso_local hidden global i32")
+    );
+    // Visibility composes with the TLS specifier in LLVM's order.
+    assert_eq!(
+        external_decl_for_global("@t = hidden thread_local global i8 0").as_deref(),
+        Some("@t = external hidden thread_local global i8")
+    );
+}
+
+#[test]
 fn string_constant_escapes_nonprintable() {
     let mut m = LlModule::new("arm64-apple-macosx15.0.0");
     let (name, len) = m.add_string_constant("a\nb");

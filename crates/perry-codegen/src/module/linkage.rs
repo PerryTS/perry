@@ -187,12 +187,20 @@ pub(crate) fn external_decl_for_global(line: &str) -> Option<String> {
     }
     let (name, rhs) = line.split_once(" = ")?;
     let rhs = strip_leading_linkage(rhs.trim_start());
+    // After the linkage, LLVM orders a global's prefix as
+    //   [preemption] [visibility] [thread_local] [unnamed_addr] global|constant
+    // A declaration in another unit must keep the preemption and visibility of
+    // the definition it names. Closure-info records are emitted
+    // `hidden constant` (fn_info.rs), and on ELF/COFF, where globals are not
+    // replicated, every cross-unit reference to one is declared here.
+    let (preemption, rhs) = take_keyword(rhs, &["dso_local", "dso_preemptable"]);
+    let (visibility, rhs) = take_keyword(rhs, &["default", "hidden", "protected"]);
     // #10399: keep the TLS specifier — `@g = external global i8` and
     // `@g = external thread_local global i8` are different symbols to LLVM.
     let (tls, rhs) = split_thread_local(rhs);
-    let (kind, rest) = if let Some(rest) = rhs.strip_prefix("unnamed_addr constant ") {
-        ("constant", rest)
-    } else if let Some(rest) = rhs.strip_prefix("constant ") {
+    // `unnamed_addr` describes the definition only; the declaration drops it.
+    let (_, rhs) = take_keyword(rhs, &["unnamed_addr", "local_unnamed_addr"]);
+    let (kind, rest) = if let Some(rest) = rhs.strip_prefix("constant ") {
         ("constant", rest)
     } else if let Some(rest) = rhs.strip_prefix("global ") {
         ("global", rest)
@@ -223,12 +231,29 @@ pub(crate) fn external_decl_for_global(line: &str) -> Option<String> {
         }
         _ => rest.find(char::is_whitespace).unwrap_or(rest.len()),
     };
-    let tls = if tls.is_empty() {
-        String::new()
-    } else {
-        format!("{tls} ")
-    };
-    Some(format!("{name} = external {tls}{kind} {}", &rest[..ty_end]))
+    let prefix: String = [preemption, visibility, tls]
+        .iter()
+        .filter(|keyword| !keyword.is_empty())
+        .map(|keyword| format!("{keyword} "))
+        .collect();
+    Some(format!(
+        "{name} = external {prefix}{kind} {}",
+        &rest[..ty_end]
+    ))
+}
+
+/// Take one of `keywords` from the front of `s` when it is followed by
+/// whitespace, returning `(keyword, rest)`, or `("", s)` when none is there.
+fn take_keyword<'a>(s: &'a str, keywords: &[&'static str]) -> (&'static str, &'a str) {
+    let t = s.trim_start();
+    for keyword in keywords {
+        if let Some(rest) = t.strip_prefix(keyword) {
+            if rest.starts_with(char::is_whitespace) {
+                return (keyword, rest.trim_start());
+            }
+        }
+    }
+    ("", t)
 }
 
 /// Attribute-group suffix for a runtime-helper `declare` line, keyed by
