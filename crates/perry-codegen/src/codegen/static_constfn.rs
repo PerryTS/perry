@@ -363,6 +363,19 @@ pub(crate) fn set_module_function_values(module: &Module, prefix: &str) {
     MODULE_FUNCTION_VALUES.with(|m| *m.borrow_mut() = map);
 }
 
+thread_local! {
+    /// The module's candidate prototype classes of `Object.create` values
+    /// (`collectors::object_create_protos`): candidates, never proofs.
+    static MODULE_OBJECT_CREATE_PROTOS: std::cell::RefCell<crate::collectors::ObjectCreateProtos> =
+        std::cell::RefCell::new(Default::default());
+}
+
+/// Install the module's `Object.create` candidates before lowering reads them.
+pub(crate) fn set_module_object_create_protos(module: &Module) {
+    let protos = crate::collectors::object_create_protos(module);
+    MODULE_OBJECT_CREATE_PROTOS.with(|m| *m.borrow_mut() = protos);
+}
+
 fn module_function_value_body(func_id: u32) -> Option<(String, usize)> {
     MODULE_FUNCTION_VALUES.with(|m| m.borrow().get(&func_id).cloned())
 }
@@ -386,6 +399,11 @@ pub(crate) struct StaticMethodLane {
     pub body: String,
     /// The body's declared parameter count.
     pub arity: usize,
+    /// The receiver may itself carry `word`, so the site compares it. False
+    /// for a value made by `Object.create(P)`: it inherits the method, so the
+    /// lanes of P's class only name candidate bodies for the learned
+    /// inherited hit.
+    pub own: bool,
 }
 
 /// The completed shapes a method site may compare for `object.property(...)`.
@@ -415,8 +433,14 @@ pub(crate) fn static_method_lanes(
             Expr::This => ctx.guarded_this_class.clone(),
             _ => None,
         });
-    let Some(class_name) = candidate else {
-        return Vec::new();
+    // A value made by `Object.create(P)` (directly, through a const binding or
+    // a factory's return) inherits from P: P's literal class is its candidate.
+    let (class_name, own) = match candidate {
+        Some(name) => (name, true),
+        None => match MODULE_OBJECT_CREATE_PROTOS.with(|m| m.borrow().of(object).cloned()) {
+            Some(name) => (name, false),
+            None => return Vec::new(),
+        },
     };
     let Some(class) = ctx.classes.get(&class_name) else {
         return Vec::new();
@@ -457,6 +481,7 @@ pub(crate) fn static_method_lanes(
             slot: slot as u32,
             body: body.to_string(),
             arity,
+            own,
         });
     }
     if lanes.len() > MAX_STATIC_METHOD_LANES {
