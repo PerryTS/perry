@@ -21,8 +21,12 @@
 //!    property; a mismatch proves nothing (a non-atom string of the same text)
 //!    and falls through.
 //! 2. **The megamorphic read stub**, on the key's CONTENT bits: the own slots
-//!    the generic lane primes (spill and overflow slots, non-atom keys), and
-//!    the confirmed ABSENT verdicts this entry primes (below).
+//!    the generic lane and this entry prime (spill and overflow slots,
+//!    non-atom keys), and the confirmed ABSENT verdicts this entry primes
+//!    (below).
+//! 3. **The receiver's own key list, once.** The same lookup that proves a key
+//!    absent finds a present one: its slot is read and filed in the stub, so
+//!    the generic Get never repeats the lookup for an own data key.
 //!
 //! # Absent keys
 //!
@@ -101,22 +105,79 @@ pub(crate) unsafe fn shape_answer(obj_box: u64, key_bits: u64) -> Option<f64> {
     super::read_stub::read_stub_lookup_or_absent(obj, content)
 }
 
-/// What a confirmed `undefined` may file: `(receiver token, key content
-/// bits, terminal ShapeId)`, all values, computed before the Get.
+/// What the receiver's shapes answered before the generic Get.
+enum Prepass {
+    /// The receiver's own data slot held the property: the read's value.
+    Value(f64),
+    /// What a confirmed `undefined` may file: `(receiver token, key content
+    /// bits, terminal ShapeId)`, all values, computed before the Get.
+    Absent(u64, u64, u32),
+    /// Nothing proved; the generic Get answers alone.
+    Unknown,
+}
+
+/// The receiver's own-key verdict for `key_bits`, from one lookup of its
+/// shape's key list (`read_holder::dynamic_own_or_absent`).
+///
+/// An own DATA hit is read straight from its slot and filed in the read stub
+/// under the receiver's token, as the generic by-name lane files the own
+/// slots it resolves (`get_field_by_name::prime_read_stub`): the next read of
+/// the key on a receiver with this shape is answered by the stub, and the
+/// lookup is not repeated by the generic Get. An absent verdict is returned
+/// for the caller to file once the Get confirms it.
+///
+/// Only receivers the stub may answer for are asked ([`read_stub_token`]:
+/// an object with a real class id, no descriptors, a live shape), and the
+/// `process.env` object, whose reads have their own semantics, is refused.
 ///
 /// # Safety
 /// As [`shape_answer`].
-unsafe fn absent_candidate(obj_box: u64, key_bits: u64) -> Option<(u64, u64, u32)> {
+///
+/// [`read_stub_token`]: super::read_stub::read_stub_token
+unsafe fn own_or_absent(obj_box: u64, key_bits: u64) -> Prepass {
+    use super::method_site::read_holder::{dynamic_own_or_absent, DynamicKeyVerdict};
     if obj_box >> 48 != 0x7FFD || key_bits >> 48 != 0x7FFF && key_bits >> 48 != 0x7FF9 {
-        return None;
+        return Prepass::Unknown;
     }
-    let content = stub_key_bits(key_bits)?;
-    let obj = (obj_box & crate::value::POINTER_MASK) as *const ObjectHeader;
-    let token = super::read_stub::read_stub_token(obj)?;
+    let Some(content) = stub_key_bits(key_bits) else {
+        return Prepass::Unknown;
+    };
+    let addr = (obj_box & crate::value::POINTER_MASK) as usize;
+    let obj = addr as *const ObjectHeader;
+    let Some(token) = super::read_stub::read_stub_token(obj) else {
+        return Prepass::Unknown;
+    };
+    if crate::process::is_process_env_ptr(addr) {
+        return Prepass::Unknown;
+    }
     let mut buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-    let name = crate::string::js_string_key_bytes(crate::JSValue::from_bits(content), &mut buf)?;
-    let terminal = super::method_site::read_holder::dynamic_absent_terminal(obj, name)?;
-    Some((token, content, terminal))
+    let Some(name) =
+        crate::string::js_string_key_bytes(crate::JSValue::from_bits(content), &mut buf)
+    else {
+        return Prepass::Unknown;
+    };
+    match dynamic_own_or_absent(obj, name) {
+        Some(DynamicKeyVerdict::Own { slot, live }) => {
+            let value = super::field_get_set::object_field_at_with_live(obj, slot, live);
+            // A tombstoned slot (#9064) continues the lookup past the
+            // receiver, and an `undefined` read under a native-handle alias
+            // is the generic entry's to resolve.
+            if value.bits() == crate::value::TAG_HOLE
+                || (value.is_undefined() && super::native_this_alias::alias_active())
+            {
+                return Prepass::Unknown;
+            }
+            let slot_word = if slot < live {
+                slot
+            } else {
+                slot | crate::proxy::IC_SLOT_OVERFLOW_BIT
+            };
+            super::read_stub::read_stub_prime(obj, content, slot_word);
+            Prepass::Value(f64::from_bits(value.bits()))
+        }
+        Some(DynamicKeyVerdict::Absent(terminal)) => Prepass::Absent(token, content, terminal),
+        None => Prepass::Unknown,
+    }
 }
 
 /// `o[k]` for a string `k` (the computed-read lowering's string arm): the
@@ -139,10 +200,13 @@ pub extern "C" fn js_typed_feedback_object_get_field_by_key_f64(
             return v;
         }
     }
-    let candidate = unsafe { absent_candidate(obj_bits, key_bits) };
+    let prepass = unsafe { own_or_absent(obj_bits, key_bits) };
+    if let Prepass::Value(v) = prepass {
+        return v;
+    }
     let value =
         crate::typed_feedback::js_typed_feedback_object_get_field_by_value_f64(site_id, obj, key);
-    if let Some((token, content, terminal)) = candidate {
+    if let Prepass::Absent(token, content, terminal) = prepass {
         if value.to_bits() == crate::value::TAG_UNDEFINED {
             super::read_stub::read_stub_prime_absent(token, content, terminal);
         }

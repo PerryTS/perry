@@ -856,26 +856,42 @@ unsafe fn walk(recv: *const ObjectHeader, name: &[u8], class_first: bool) -> Opt
     None
 }
 
-/// The shape facts behind a computed-key read's ABSENT verdict (#10753):
-/// `Some(terminal)` when `obj`'s shapes prove that an ordinary Get of `name`
-/// on it reaches no property, where `terminal` is the ShapeId of
-/// `%Object.prototype%` that proof rests on, or 0 when the receiver's shape
-/// links to null and nothing past it is consulted.
+/// What the receiver's shapes prove about a computed-key read of one name
+/// (#10753); see [`dynamic_own_or_absent`].
+pub(crate) enum DynamicKeyVerdict {
+    /// The name is an own DATA key of the receiver at `slot`: an inline slot
+    /// when `slot < live`, an overflow slot otherwise.
+    Own { slot: u32, live: u32 },
+    /// An ordinary Get of the name reaches no property. The payload is the
+    /// ShapeId of `%Object.prototype%` the proof rests on, or 0 when the
+    /// receiver's shape links to null and nothing past it is consulted.
+    Absent(u32),
+}
+
+/// The shape facts behind a computed-key read (#10753), from ONE lookup of the
+/// name in the receiver's own key list: the own data slot that holds it, or
+/// the proof that an ordinary Get reaches no property.
 ///
-/// The same facts a depth-1 ABSENT holder entry is primed from: an ordinary
-/// receiver ([`ordinary_receiver`]), an admitted name (no index-like or
-/// synthesized key), no accessor for the name on the receiver, the name in
-/// none of the receiver's own keys, and a [`walk`] that ends absent at
-/// `%Object.prototype%` with no hop between. It is a pre-check only: the
-/// caller files the verdict (`object::read_stub::read_stub_prime_absent`)
-/// after the generic Get has answered `undefined`, as `prime_read_holder`
-/// files its entries only after the getter agreed.
+/// Both verdicts rest on the facts a depth-1 ABSENT holder entry is primed
+/// from: an ordinary receiver ([`ordinary_receiver`]: not a dictionary, no
+/// indexed elements, no exotic read semantics, a live ShapeId), an admitted
+/// name (no index-like or synthesized key) and no accessor for the name on the
+/// receiver. Found among the receiver's own keys, the key's slot IS the answer:
+/// an own data property shadows everything behind it. Not found, the read is
+/// absent only when a [`walk`] ends at `%Object.prototype%` with no hop
+/// between. The caller files an absent verdict
+/// (`object::read_stub::read_stub_prime_absent`) only after the generic Get
+/// has answered `undefined`, as `prime_read_holder` files its entries only
+/// after the getter agreed.
 ///
 /// Allocation-free and never calls user code.
 ///
 /// # Safety
 /// `obj` is a plausible object address; `name` stays valid for the call.
-pub(crate) unsafe fn dynamic_absent_terminal(obj: *const ObjectHeader, name: &[u8]) -> Option<u32> {
+pub(crate) unsafe fn dynamic_own_or_absent(
+    obj: *const ObjectHeader,
+    name: &[u8],
+) -> Option<DynamicKeyVerdict> {
     if !holder_name_admitted(name) {
         return None;
     }
@@ -888,19 +904,36 @@ pub(crate) unsafe fn dynamic_absent_terminal(obj: *const ObjectHeader, name: &[u
         return None;
     }
     let keys = shape.keys as usize as *const crate::array::ArrayHeader;
-    if !keys.is_null()
-        && crate::object::keys_find_slot_by_bytes_resolved(keys, shape.logical_key_count, name)
-            .is_some()
-    {
-        return None;
+    if !keys.is_null() {
+        if let Some(slot) =
+            crate::object::keys_find_slot_by_bytes_resolved(keys, shape.logical_key_count, name)
+        {
+            return Some(DynamicKeyVerdict::Own {
+                slot,
+                live: shape.live_inline_slot_count,
+            });
+        }
     }
     if admitted_proto_id(recv)? == PROTO_ID_NULL {
-        return Some(0);
+        return Some(DynamicKeyVerdict::Absent(0));
     }
     let w = walk(recv, name, false)?;
     let object_prototype = crate::array::object_prototype_addr_if_resolved();
     (w.slot.is_none() && w.depth == 1 && object_prototype != 0 && w.holder == object_prototype)
-        .then_some(w.holder_shape)
+        .then_some(DynamicKeyVerdict::Absent(w.holder_shape))
+}
+
+/// [`dynamic_own_or_absent`]'s ABSENT verdict alone: `Some(terminal)` when
+/// `obj`'s shapes prove that an ordinary Get of `name` reaches no property.
+///
+/// # Safety
+/// As [`dynamic_own_or_absent`].
+#[cfg(test)]
+pub(crate) unsafe fn dynamic_absent_terminal(obj: *const ObjectHeader, name: &[u8]) -> Option<u32> {
+    match dynamic_own_or_absent(obj, name)? {
+        DynamicKeyVerdict::Absent(terminal) => Some(terminal),
+        DynamicKeyVerdict::Own { .. } => None,
+    }
 }
 
 /// The walk for a FUNCTION receiver (#10497): `f.k` on a plain function on
