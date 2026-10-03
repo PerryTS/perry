@@ -404,12 +404,6 @@ pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
     // it needs a death story of its own -- otherwise a recycled holder address
     // becomes a false hit that reads a live object's slot for the wrong key
     // (rewrite_raw_addr's #8174 note).
-    DeadKeyPrune {
-        table: "INHERITED_READ_CACHE",
-        owner: DeadKeyOwner::Any,
-        prune: crate::object::inherited_read_cache::prune_dead_inherited_cache_entries,
-        young_prune: None,
-    },
     // #6759 C1: shape records are keyed on keys_array addresses; drop the
     // ones whose keys_array died (memory only — per-hit validation covers
     // correctness for anything this misses).

@@ -79,6 +79,12 @@ pub(crate) fn lower_native_method_call(
     object: Option<&Expr>,
     args: &[Expr],
 ) -> Result<String> {
+    if module == "array" && method == "push_field_single" {
+        let (Some(receiver), [value]) = (object, args) else {
+            bail!("push_field_single requires one receiver and argument");
+        };
+        return crate::expr::class_field_push::lower(ctx, receiver, value);
+    }
     include!("native_runtime_branch.rs");
     include!("native_tui_layout_branch.rs");
     include!("native_ui_widgets_branch.rs");

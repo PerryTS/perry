@@ -134,3 +134,20 @@ fn inputs_it_cannot_answer_exactly_are_declined() {
     );
     assert_eq!(split_string_by_string(1.0, inline(","), UNDEFINED), None);
 }
+
+#[test]
+fn limited_split_ignores_non_ascii_tail_but_keeps_part_metadata() {
+    assert_eq!(
+        fast("header.😀\u{00E9}", inline("."), 1.0),
+        Some(vec!["header".into()])
+    );
+    assert_eq!(fast("😀.tail", inline("."), 1.0), Some(vec!["😀".into()]));
+    let receiver = heap("no delimiter 😀");
+    let result = split_string_by_string(receiver, inline("."), UNDEFINED).unwrap();
+    let arr = crate::value::js_nanbox_get_pointer(result) as *const crate::array::ArrayHeader;
+    assert_eq!(
+        crate::array::js_array_get_f64(arr, 0).to_bits(),
+        receiver.to_bits(),
+        "a split with no match should reuse its immutable receiver"
+    );
+}

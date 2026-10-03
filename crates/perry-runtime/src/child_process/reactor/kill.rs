@@ -10,8 +10,7 @@ use super::*;
 /// — kills on that child then report undelivered rather than falling back to
 /// a racy pid-based kill.
 #[cfg(windows)]
-pub(super) fn cp_win_dup_proc_handle(child: &Child) -> isize {
-    use std::os::windows::io::AsRawHandle;
+pub(super) fn cp_win_dup_proc_handle(child: &impl std::os::windows::io::AsRawHandle) -> isize {
     cp_win_dup_raw_proc_handle(child.as_raw_handle())
 }
 

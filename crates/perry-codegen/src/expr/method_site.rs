@@ -1,6 +1,6 @@
 //! The method-call site: `recv.m(args)` as ONE path — the property read's
-//! receiver test and shape compare, one slot load (or the memoized inherited
-//! closure), then a direct call of the method body with `recv` as `this`.
+//! receiver test and shape compare, a slot load (from the receiver or a
+//! shape-guarded direct holder), then a direct call with `recv` as `this`.
 //!
 //! The site's memo is a runtime `MethodSite`
 //! (`perry-runtime/src/object/method_site.rs`, which states what an entry
@@ -12,8 +12,8 @@
 //!   w   = load [recv]           ; (class_id | ShapeId)
 //!         w == site.word                                     else MISS
 //!   s   = site.slot
-//!   s < 0 (inherited):  PERRY_PROTO_VALIDITY == site.gen     else MISS
-//!                       h = site.closure ; f = site.code
+//!   s < 0 (inherited):  [site.holder] == site.holder_word     else MISS
+//!                       v = load [site.holder + HDR + 8*i]
 //!   own:  v = load [recv + HDR + 8*s] ; v is a heap pointer  else MISS
 //!   fn:   v = load [[recv + PROPS] + HDR + 8*s]  (bit 61: a function's
 //!         own-property object; same checks as own)
@@ -24,13 +24,24 @@
 //!   PRIMITIVE: js_typed_feedback_native_call_method_by_id(feedback_site, recv, method_id, args)
 //! ```
 //!
+//! Step 5C (ConstFn lanes): a completed shape whose lane at the key's slot
+//! names body B proves "this receiver's slot holds a closure of B". So
+//!
+//! * a STATIC lane (the receiver's candidate class has a completed shape F,
+//!   known at compile time) is tested before the memo:
+//!   `[recv] == (cid | F<<32)` -> `call @B(slot closure, recv, args)`, a
+//!   direct call; the slot value is only the callee environment, unchecked;
+//! * a learned ConstFn entry (own, or inherited through a holder whose shape
+//!   carries the lane) is decoded first and calls `site.code` with no kind or
+//!   info check of the slot value.
+//!
 //! The miss primes the entry when its facts hold and otherwise performs the
 //! universal by-name dispatch, so every receiver the memo cannot describe —
 //! primitives, native handles, Proxy, accessors, bound functions — keeps
 //! exactly the behaviour it had.
 
 use super::FnCtx;
-use crate::types::{DOUBLE, I1, I32, I64, PTR};
+use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 
 /// Is the One Path method site available for this call?
 /// `PERRY_METHOD_SITE=0` at compile time keeps the old dispatcher (A/B).
@@ -42,7 +53,11 @@ pub(crate) fn method_site_enabled(ctx: &FnCtx<'_>, property: &str, argc: usize) 
     // 64-bit targets only: the site addresses 8-byte slots behind a 16-byte
     // header and compares an 8-byte receiver word.
     let triple = ctx.target_triple;
-    if !(triple.starts_with("x86_64") || triple.starts_with("aarch64")) || triple.contains("32") {
+    if !(triple.starts_with("x86_64")
+        || triple.starts_with("aarch64")
+        || triple.starts_with("arm64"))
+        || triple.contains("32")
+    {
         return false;
     }
     // A typed-feedback (profiling) build records every method call in the
@@ -61,6 +76,7 @@ pub(crate) fn method_site_enabled(ctx: &FnCtx<'_>, property: &str, argc: usize) 
 /// Emit the site. `recv_box` and `lowered_args` are already evaluated and
 /// re-read from their roots; `feedback_site` is the typed-feedback site id the
 /// miss hands to the dispatcher; `method_id` the static dispatch id.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn emit_method_site(
     ctx: &mut FnCtx<'_>,
     recv_box: &str,
@@ -69,6 +85,7 @@ pub(crate) fn emit_method_site(
     method_id: &str,
     args_ptr: &str,
     argc: &str,
+    lanes: &[crate::codegen::static_constfn::StaticMethodLane],
 ) -> String {
     use crate::expr::receiver_range::{
         emit_field_ptr, emit_fused_receiver_test, emit_handle, RECEIVER_BIAS, RECEIVER_SPAN,
@@ -108,8 +125,10 @@ pub(crate) fn emit_method_site(
     let kind_idx = ctx.new_block("msite.kind");
     let own_idx = ctx.new_block("msite.own");
     let own_fn_idx = ctx.new_block("msite.own_fn");
+    let constfn_idx = ctx.new_block("msite.constfn");
     let value_idx = ctx.new_block("msite.value");
     let inh_idx = ctx.new_block("msite.inherited");
+    let inh_value_idx = ctx.new_block("msite.inherited_value");
     let call_idx = ctx.new_block("msite.call");
     let miss_idx = ctx.new_block("msite.miss");
     let merge_idx = ctx.new_block("msite.merge");
@@ -117,8 +136,10 @@ pub(crate) fn emit_method_site(
     let kind_l = ctx.block_label(kind_idx);
     let own_l = ctx.block_label(own_idx);
     let own_fn_l = ctx.block_label(own_fn_idx);
+    let constfn_l = ctx.block_label(constfn_idx);
     let value_l = ctx.block_label(value_idx);
     let inh_l = ctx.block_label(inh_idx);
+    let inh_value_l = ctx.block_label(inh_value_idx);
     let call_l = ctx.block_label(call_idx);
     let miss_l = ctx.block_label(miss_idx);
     let merge_l = ctx.block_label(merge_idx);
@@ -128,20 +149,101 @@ pub(crate) fn emit_method_site(
     // takes the universal dispatcher directly, with its string and primitive
     // arms, exactly as without a site. A heap object takes the site: its memo
     // if the site has one, else the miss, which primes it.
-    let ic = crate::expr::emit_inline_cache_slot(ctx, &cache_name);
+    // The runtime publishes this process-global slot with an AtomicPtr CAS.
+    // A worker may enter the site just as the primary agent first publishes
+    // it, before the sticky worker gate below is loaded. Pair the load with
+    // that publication even though the worker will then take the miss path.
+    let slot_ref = format!("@{cache_name}");
+    let cache = ctx.block().load_atomic_acquire(PTR, &slot_ref, 8);
+    let present = ctx.block().icmp_ne(PTR, &cache, "null");
+    let ic = crate::expr::InlineCacheSlot {
+        slot_ref,
+        cache,
+        present,
+    };
     let prim_idx = ctx.new_block("msite.primitive");
     let object_idx = ctx.new_block("msite.object");
     let prim_l = ctx.block_label(prim_idx);
     let object_l = ctx.block_label(object_idx);
+    let lanes_idx = (!lanes.is_empty()).then(|| ctx.new_block("msite.static"));
+    let first_l = match lanes_idx {
+        Some(idx) => ctx.block_label(idx),
+        None => object_l.clone(),
+    };
     let biased = {
         let blk = ctx.block();
         let bits = blk.bitcast_double_to_i64(recv_box);
         let fused = emit_fused_receiver_test(blk, &bits);
-        blk.cond_br(&fused.is_object_pointer, &object_l, &prim_l);
+        blk.cond_br(&fused.is_object_pointer, &first_l, &prim_l);
         fused.biased
     };
+    // Static ConstFn lanes: the receiver's completed shape names the body, so
+    // the hit is a direct call. The slot value is the callee environment only
+    // (factory objects share a body, not captures); the shape proves it is a
+    // closure of that body, so it is neither checked nor called through.
+    // Static ids and their ConstFn records exist in every agent, so no worker
+    // gate is needed; a receiver that is not on a lane falls to the memo.
+    let mut lane_hits: Vec<(String, String)> = Vec::new();
+    if let Some(idx) = lanes_idx {
+        ctx.current_block = idx;
+        let w = {
+            let blk = ctx.block();
+            let wp = emit_field_ptr(blk, &biased, 0);
+            blk.load(I64, &wp)
+        };
+        let undefined = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+        for (i, lane) in lanes.iter().enumerate() {
+            let hit_idx = ctx.new_block("msite.static_hit");
+            let hit_l = ctx.block_label(hit_idx);
+            let next_l = if i + 1 < lanes.len() {
+                let n = ctx.new_block("msite.static");
+                (Some(n), ctx.block_label(n))
+            } else {
+                (None, object_l.clone())
+            };
+            {
+                let blk = ctx.block();
+                let eq = blk.icmp_eq(I64, &w, &lane.word.to_string());
+                blk.cond_br(&eq, &hit_l, &next_l.1);
+            }
+            ctx.current_block = hit_idx;
+            let mut call_args: Vec<String> =
+                lowered_args.iter().take(lane.arity).cloned().collect();
+            call_args.resize(lane.arity, undefined.clone());
+            let blk = ctx.block();
+            let vp = emit_field_ptr(blk, &biased, header + 8 * i64::from(lane.slot));
+            let v = blk.load(I64, &vp);
+            let ub = blk.sub(I64, &v, &(RECEIVER_BIAS as i64).to_string());
+            let env = emit_handle(blk, &ub);
+            let recv_bits = blk.bitcast_double_to_i64(recv_box);
+            let r = crate::expr::body_call::emit_js_body_call(
+                blk,
+                crate::expr::body_call::JsBody::Symbol(&lane.body),
+                &env,
+                &recv_bits,
+                &call_args,
+            );
+            let end = blk.label.clone();
+            if !blk.is_terminated() {
+                blk.br(&merge_l);
+            }
+            lane_hits.push((r, end));
+            if let Some(n) = next_l.0 {
+                ctx.current_block = n;
+            }
+        }
+    }
     ctx.current_block = object_idx;
-    ctx.block().cond_br(&ic.present, &deref_l, &miss_l);
+    // Site records are process-global, and inherited holders belong to the
+    // primary heap. A worker's first startup publishes this sticky gate
+    // before executing user code; afterward every agent takes the generic
+    // path. No worker reads a primary holder or races a primary site update.
+    let workers = ctx
+        .block()
+        .load_atomic_seq_cst(I8, "@PERRY_METHOD_SITE_WORKERS_PRESENT", 1);
+    let no_workers = ctx.block().icmp_eq(I8, &workers, "0");
+    let site_enabled = ctx.block().and(I1, &no_workers, &ic.present);
+    ctx.block().cond_br(&site_enabled, &deref_l, &miss_l);
 
     // deref: the receiver word against each entry's word, in order.
     ctx.current_block = deref_idx;
@@ -183,8 +285,8 @@ pub(crate) fn emit_method_site(
             ctx.current_block = idx;
         }
     }
-    // kind: an own inline slot (top two bits clear), else inherited (bit 63)
-    // or an own spill slot (bit 62).
+    // kind: an own inline slot when bits 59..63 are clear; otherwise route
+    // inherited, spill, function-bag and ConstFn tags explicitly.
     ctx.current_block = kind_idx;
     let entry = {
         let incoming: Vec<(&str, &str)> = found
@@ -196,6 +298,7 @@ pub(crate) fn emit_method_site(
     let other_idx = ctx.new_block("msite.other");
     let other2_idx = ctx.new_block("msite.other2");
     let other3_idx = ctx.new_block("msite.other3");
+    let other4_idx = ctx.new_block("msite.other4");
     let bag_idx = ctx.new_block("msite.fn_bag");
     let bag2_idx = ctx.new_block("msite.fn_bag_load");
     let spill_idx = ctx.new_block("msite.spill");
@@ -205,23 +308,51 @@ pub(crate) fn emit_method_site(
     let other_l = ctx.block_label(other_idx);
     let other2_l = ctx.block_label(other2_idx);
     let other3_l = ctx.block_label(other3_idx);
+    let other4_l = ctx.block_label(other4_idx);
     let bag_l = ctx.block_label(bag_idx);
     let bag2_l = ctx.block_label(bag2_idx);
     let spill_l = ctx.block_label(spill_idx);
     let spill2_l = ctx.block_label(spill2_idx);
     let spill3_l = ctx.block_label(spill3_idx);
     let spill4_l = ctx.block_label(spill4_idx);
-    let slot = {
+    let cf_kind_idx = ctx.new_block("msite.kind_constfn");
+    let icf_kind_idx = ctx.new_block("msite.kind_inherited_constfn");
+    let icf_idx = ctx.new_block("msite.inherited_constfn");
+    let icf_hit_idx = ctx.new_block("msite.inherited_constfn_hit");
+    let cf_kind_l = ctx.block_label(cf_kind_idx);
+    let icf_kind_l = ctx.block_label(icf_kind_idx);
+    let icf_l = ctx.block_label(icf_idx);
+    let icf_hit_l = ctx.block_label(icf_hit_idx);
+    let cf_call_idx = ctx.new_block("msite.call_constfn");
+    let cf_call_l = ctx.block_label(cf_call_idx);
+    let (slot, top) = {
         let blk = ctx.block();
         let sp = blk.gep(crate::types::I8, &entry, &[(I64, &abi_slot)]);
         let s = blk.load(I64, &sp);
-        let top = blk.lshr(I64, &s, "61");
+        let top = blk.lshr(I64, &s, "59");
         let tagged = blk.icmp_ne(I64, &top, "0");
-        blk.cond_br(&tagged, &other_l, &own_l);
-        s
+        blk.cond_br(&tagged, &cf_kind_l, &own_l);
+        (s, top)
     };
-    // other: inherited (bit 63), own spill (bit 62) or function bag (bit 61);
-    // any other kind bit is not one this site knows, and misses.
+    // The ConstFn kinds are decoded before the older tags: own ConstFn is
+    // exactly bit 59, inherited ConstFn exactly bits 63 and 59.
+    ctx.current_block = cf_kind_idx;
+    {
+        let blk = ctx.block();
+        let is_constfn = blk.icmp_eq(I64, &top, "1");
+        blk.cond_br(&is_constfn, &constfn_l, &icf_kind_l);
+    }
+    ctx.current_block = icf_kind_idx;
+    {
+        let blk = ctx.block();
+        let inherited_constfn = (crate::runtime_abi::METHOD_SITE_INHERITED
+            | crate::runtime_abi::METHOD_SITE_CONSTFN)
+            >> 59;
+        let is_icf = blk.icmp_eq(I64, &top, &inherited_constfn.to_string());
+        blk.cond_br(&is_icf, &icf_l, &other_l);
+    }
+    // other: inherited (bit 63), own spill (bit 62) or function bag (bit 61).
+    // Bit 60 is reserved; unknown tags miss.
     ctx.current_block = other_idx;
     {
         let blk = ctx.block();
@@ -242,8 +373,12 @@ pub(crate) fn emit_method_site(
         let blk = ctx.block();
         let bag_bit = blk.lshr(I64, &slot, "61");
         let is_bag = blk.icmp_ne(I64, &bag_bit, "0");
-        blk.cond_br(&is_bag, &bag_l, &miss_l);
+        blk.cond_br(&is_bag, &bag_l, &other4_l);
     }
+    // Every remaining tag (bit 60 is reserved) misses: an unknown entry must
+    // never become an unchecked call.
+    ctx.current_block = other4_idx;
+    ctx.block().br(&miss_l);
     // function bag: the receiver's own-property object, then its inline slot.
     // The keyed Function ShapeId the word matched is canonical per that
     // object's key list, so the object exists; the null test is a guard.
@@ -267,7 +402,7 @@ pub(crate) fn emit_method_site(
         blk.br(&value_l);
         (v, end)
     };
-    // own inline: load the slot.
+    // own inline: load the slot (an untagged entry, the slot index itself).
     ctx.current_block = own_idx;
     let (inline_v, inline_end) = {
         let blk = ctx.block();
@@ -277,6 +412,56 @@ pub(crate) fn emit_method_site(
         let end = blk.label.clone();
         blk.br(&value_l);
         (v, end)
+    };
+    // ConstFn: the shape compare proves the current slot is a closure of this
+    // body's info. Load that closure as the callee environment (its captures);
+    // no heap-kind or info load occurs on this hit path.
+    ctx.current_block = constfn_idx;
+    let (constfn_handle, constfn_func, constfn_end) = {
+        let blk = ctx.block();
+        let base = emit_field_ptr(blk, &biased, header);
+        let own_index = blk.and(I64, &slot, &index_mask);
+        let vp = blk.gep(I64, &base, &[(I64, &own_index)]);
+        let v = blk.load(I64, &vp);
+        let ub = blk.sub(I64, &v, &(RECEIVER_BIAS as i64).to_string());
+        let h = emit_handle(blk, &ub);
+        let fp = blk.gep(crate::types::I8, &entry, &[(I64, &abi_code)]);
+        let f = blk.load(I64, &fp);
+        let end = blk.label.clone();
+        blk.br(&cf_call_l);
+        (h, f, end)
+    };
+    // Inherited ConstFn: the receiver word pins the direct holder, the
+    // holder's word pins ITS shape, and that shape's lane names the body the
+    // entry's code is. The holder slot is loaded as the callee environment.
+    ctx.current_block = icf_idx;
+    let icf_holder = {
+        let blk = ctx.block();
+        let hp = blk.gep(crate::types::I8, &entry, &[(I64, &abi_closure)]);
+        let holder = blk.load(I64, &hp);
+        let holder_ptr = blk.inttoptr(I64, &holder);
+        let word = blk.load(I64, &holder_ptr);
+        let wp = blk.gep(crate::types::I8, &entry, &[(I64, &abi_gen)]);
+        let saved = blk.load(I64, &wp);
+        let valid = blk.icmp_eq(I64, &word, &saved);
+        blk.cond_br(&valid, &icf_hit_l, &miss_l);
+        holder
+    };
+    ctx.current_block = icf_hit_idx;
+    let (icf_handle, icf_func, icf_end) = {
+        let blk = ctx.block();
+        let holder_ptr = blk.inttoptr(I64, &icf_holder);
+        let base = blk.gep(crate::types::I8, &holder_ptr, &[(I64, &header.to_string())]);
+        let idx = blk.and(I64, &slot, &index_mask);
+        let vp = blk.gep(I64, &base, &[(I64, &idx)]);
+        let v = blk.load(I64, &vp);
+        let ub = blk.sub(I64, &v, &(RECEIVER_BIAS as i64).to_string());
+        let h = emit_handle(blk, &ub);
+        let fp = blk.gep(crate::types::I8, &entry, &[(I64, &abi_code)]);
+        let f = blk.load(I64, &fp);
+        let end = blk.label.clone();
+        blk.br(&cf_call_l);
+        (h, f, end)
     };
     // own spill: meta -> spill buffer -> element, bounds-checked.
     ctx.current_block = spill_idx;
@@ -318,6 +503,33 @@ pub(crate) fn emit_method_site(
         blk.br(&value_l);
         (v, end)
     };
+    // The receiver's shape pins the direct holder. Its word pins the slot;
+    // the slot value itself is loaded on every hit, just like an own method.
+    ctx.current_block = inh_idx;
+    let holder = {
+        let blk = ctx.block();
+        let hp = blk.gep(crate::types::I8, &entry, &[(I64, &abi_closure)]);
+        let holder = blk.load(I64, &hp);
+        let holder_ptr = blk.inttoptr(I64, &holder);
+        let word = blk.load(I64, &holder_ptr);
+        let wp = blk.gep(crate::types::I8, &entry, &[(I64, &abi_gen)]);
+        let saved = blk.load(I64, &wp);
+        let valid = blk.icmp_eq(I64, &word, &saved);
+        blk.cond_br(&valid, &inh_value_l, &miss_l);
+        holder
+    };
+    ctx.current_block = inh_value_idx;
+    let (inh_v, inh_end) = {
+        let blk = ctx.block();
+        let holder_ptr = blk.inttoptr(I64, &holder);
+        let base = blk.gep(crate::types::I8, &holder_ptr, &[(I64, &header.to_string())]);
+        let idx = blk.and(I64, &slot, &index_mask);
+        let vp = blk.gep(I64, &base, &[(I64, &idx)]);
+        let v = blk.load(I64, &vp);
+        let end = blk.label.clone();
+        blk.br(&value_l);
+        (v, end)
+    };
     // value: it must hold a closure running the memoized body.
     ctx.current_block = value_idx;
     let own_ub = {
@@ -328,6 +540,7 @@ pub(crate) fn emit_method_site(
                 (&inline_v, &inline_end),
                 (&spill_v, &spill_end),
                 (&bag_v, &bag_end),
+                (&inh_v, &inh_end),
             ],
         );
         let u = blk.sub(I64, &v, &(RECEIVER_BIAS as i64).to_string());
@@ -336,7 +549,8 @@ pub(crate) fn emit_method_site(
         u
     };
     ctx.current_block = own_fn_idx;
-    let (own_handle, own_func, own_end) = {
+    // The plain call block's only predecessor is this own-function check.
+    let (own_handle, own_func) = {
         let blk = ctx.block();
         let kp = emit_field_ptr(blk, &own_ub, kind_offset);
         let kind = blk.load(crate::types::I16, &kp);
@@ -351,7 +565,6 @@ pub(crate) fn emit_method_site(
         let mf = blk.load(I64, &mf_p);
         let hit = blk.and(I1, &is_closure, &same);
         let h = emit_handle(blk, &own_ub);
-        let end = blk.label.clone();
         let retry_idx = ctx.new_block("msite.next_way");
         let retry_l = ctx.block_label(retry_idx);
         ctx.block().cond_br(&hit, &call_l, &retry_l);
@@ -385,33 +598,12 @@ pub(crate) fn emit_method_site(
         if way_labels.is_empty() {
             ctx.block().br(&miss_l);
         }
-        (h, mf, end)
-    };
-    // inherited: the memoized closure, valid while the validity word holds.
-    ctx.current_block = inh_idx;
-    let (inh_handle, inh_func, inh_end) = {
-        let blk = ctx.block();
-        let g = blk.load(I64, "@PERRY_PROTO_VALIDITY");
-        let mg_p = blk.gep(crate::types::I8, &entry, &[(I64, &abi_gen)]);
-        let mg = blk.load(I64, &mg_p);
-        let valid = blk.icmp_eq(I64, &g, &mg);
-        let hp = blk.gep(crate::types::I8, &entry, &[(I64, &abi_closure)]);
-        let h = blk.load(I64, &hp);
-        let fp_p = blk.gep(crate::types::I8, &entry, &[(I64, &abi_code)]);
-        let f = blk.load(I64, &fp_p);
-        let end = blk.label.clone();
-        blk.cond_br(&valid, &call_l, &miss_l);
-        (h, f, end)
+        (h, mf)
     };
     // call: the body directly, with the receiver as its `this` parameter.
     ctx.current_block = call_idx;
-    let handle = ctx
-        .block()
-        .phi(I64, &[(&own_handle, &own_end), (&inh_handle, &inh_end)]);
-    let func = ctx
-        .block()
-        .phi(I64, &[(&own_func, &own_end), (&inh_func, &inh_end)]);
-    let fptr = ctx.block().inttoptr(I64, &func);
+    let handle = own_handle;
+    let fptr = ctx.block().inttoptr(I64, &own_func);
     let mut call_args: Vec<String> = lowered_args.to_vec();
     // Pad with `undefined` up to the arity the prime admits, so a body that
     // declares a few more parameters than this call passes is entered
@@ -430,6 +622,71 @@ pub(crate) fn emit_method_site(
         &call_args,
     );
     let hit_end = ctx.block().label.clone();
+    if !ctx.block().is_terminated() {
+        ctx.block().br(&merge_l);
+    }
+
+    // ConstFn call: the prime admits a ConstFn entry only for a body that
+    // declares at most this call's argument count, so the call passes exactly
+    // the call's arguments (no `undefined` padding).
+    ctx.current_block = cf_call_idx;
+    let cf_handle = ctx.block().phi(
+        I64,
+        &[(&constfn_handle, &constfn_end), (&icf_handle, &icf_end)],
+    );
+    let cf_func = ctx
+        .block()
+        .phi(I64, &[(&constfn_func, &constfn_end), (&icf_func, &icf_end)]);
+    let cf_recv_bits = ctx.block().bitcast_double_to_i64(recv_box);
+    // The entry's code is a body the compared shape names. When it is one of
+    // this site's compile-time candidate bodies (the static lanes' bodies; a
+    // `this` in a literal method also reaches inheriting receivers), call that
+    // body DIRECTLY, so the call can be inlined; otherwise call the entry's
+    // code. The ConstFn prime admits only bodies declaring at most `argc`, so
+    // a candidate's own arity never needs more arguments than the call has.
+    let mut cf_results: Vec<(String, String)> = Vec::new();
+    let mut seen: Vec<&str> = Vec::new();
+    for lane in lanes {
+        if seen.contains(&lane.body.as_str()) || lane.arity > lowered_args.len() {
+            continue;
+        }
+        seen.push(&lane.body);
+        let direct_idx = ctx.new_block("msite.constfn_direct");
+        let next_idx = ctx.new_block("msite.constfn_body");
+        let direct_l = ctx.block_label(direct_idx);
+        let next_l = ctx.block_label(next_idx);
+        {
+            let blk = ctx.block();
+            let body_addr = blk.ptrtoint(&format!("@{}", lane.body), I64);
+            let same = blk.icmp_eq(I64, &cf_func, &body_addr);
+            blk.cond_br(&same, &direct_l, &next_l);
+        }
+        ctx.current_block = direct_idx;
+        let blk = ctx.block();
+        let args: Vec<String> = lowered_args.iter().take(lane.arity).cloned().collect();
+        let r = crate::expr::body_call::emit_js_body_call(
+            blk,
+            crate::expr::body_call::JsBody::Symbol(&lane.body),
+            &cf_handle,
+            &cf_recv_bits,
+            &args,
+        );
+        let end = blk.label.clone();
+        if !blk.is_terminated() {
+            blk.br(&merge_l);
+        }
+        cf_results.push((r, end));
+        ctx.current_block = next_idx;
+    }
+    let cf_fptr = ctx.block().inttoptr(I64, &cf_func);
+    let cf_value = crate::expr::body_call::emit_js_body_call(
+        ctx.block(),
+        crate::expr::body_call::JsBody::Pointer(&cf_fptr),
+        &cf_handle,
+        &cf_recv_bits,
+        lowered_args,
+    );
+    let cf_end = ctx.block().label.clone();
     if !ctx.block().is_terminated() {
         ctx.block().br(&merge_l);
     }
@@ -472,12 +729,13 @@ pub(crate) fn emit_method_site(
     }
 
     ctx.current_block = merge_idx;
-    ctx.block().phi(
-        DOUBLE,
-        &[
-            (&hit_value, &hit_end),
-            (&miss_value, &miss_end),
-            (&prim_value, &prim_end),
-        ],
-    )
+    let mut incoming: Vec<(&str, &str)> = vec![
+        (&hit_value, &hit_end),
+        (&cf_value, &cf_end),
+        (&miss_value, &miss_end),
+        (&prim_value, &prim_end),
+    ];
+    incoming.extend(lane_hits.iter().map(|(v, l)| (v.as_str(), l.as_str())));
+    incoming.extend(cf_results.iter().map(|(v, l)| (v.as_str(), l.as_str())));
+    ctx.block().phi(DOUBLE, &incoming)
 }

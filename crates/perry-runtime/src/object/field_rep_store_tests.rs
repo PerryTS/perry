@@ -12,6 +12,20 @@ use super::shapes::{
 };
 use super::ObjectHeader;
 
+extern "C" fn constfn_body_a(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
+    11.0
+}
+
+extern "C" fn constfn_body_b(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
+    22.0
+}
+
 fn key(name: &str) -> *mut crate::StringHeader {
     crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32)
 }
@@ -55,6 +69,115 @@ fn rep_of(id: u32) -> u64 {
 unsafe fn slot_bits(obj: *mut ObjectHeader, index: usize) -> u64 {
     let fields = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64;
     *fields.add(index)
+}
+
+#[test]
+fn constfn_same_body_keeps_shape_and_different_body_deprecates_on_store() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    unsafe {
+        let _no_move = crate::gc::GcSuppressScope::new();
+        let body_a =
+            crate::fn_info!(constfn_body_a, 0; with_flags(crate::codegen_abi::FN_PERMANENT_IMAGE));
+        let first = crate::closure::js_closure_alloc(body_a, 0);
+        let second = crate::closure::js_closure_alloc(body_a, 0);
+        let other = crate::closure::js_closure_alloc(
+            crate::fn_info!(constfn_body_b, 0; with_flags(crate::codegen_abi::FN_PERMANENT_IMAGE)),
+            0,
+        );
+        let bits = |c: *mut crate::closure::ClosureHeader| {
+            crate::value::js_nanbox_pointer(c as i64).to_bits()
+        };
+        let obj = crate::object::js_object_alloc(0, 4);
+        crate::object::js_object_set_field_by_name(
+            obj,
+            key("constfn_method"),
+            f64::from_bits(bits(first)),
+        );
+        let constfn = object_shape_stamp(obj);
+        let d = shape_descriptor_by_id(constfn).expect("keyed shape");
+        assert_eq!(d.special_constfn_mask, 1, "runtime key-add minted ConstFn");
+        assert!(!super::field_rep_store::shape_slot_is_f64(constfn, 0));
+        assert_eq!(d.constfn_infos()[0].info, (*first).info as usize as u64);
+        let any = with_rep(constfn, REP_ANY);
+        assert_ne!(any, constfn);
+        // A cached edge cannot publish SPECIAL until its store is ordered
+        // before the shape stamp; it deliberately takes the slow path.
+        assert!(!super::field_rep_store::cached_key_add_admits(
+            constfn,
+            0,
+            Some(bits(second))
+        ));
+        let sibling = crate::object::js_object_alloc(0, 4);
+        crate::object::js_object_set_field_by_name(
+            sibling,
+            key("constfn_method"),
+            f64::from_bits(bits(second)),
+        );
+        assert_eq!(
+            object_shape_stamp(sibling),
+            constfn,
+            "fresh closures share body shape"
+        );
+        assert_eq!(slot_bits(sibling, 0), bits(second));
+        let other_obj = crate::object::js_object_alloc(0, 4);
+        crate::object::js_object_set_field_by_name(
+            other_obj,
+            key("constfn_method"),
+            f64::from_bits(bits(other)),
+        );
+        assert_ne!(
+            object_shape_stamp(other_obj),
+            constfn,
+            "different bodies split"
+        );
+        crate::object::store_object_field_slot(obj, 0, bits(second));
+        assert_eq!(object_shape_stamp(obj), constfn);
+        assert_eq!(slot_bits(obj, 0), bits(second), "load current closure");
+
+        crate::object::store_object_field_slot(obj, 0, bits(other));
+        assert_eq!(object_shape_stamp(obj), any, "different body goes to Any");
+        assert_eq!(slot_bits(obj, 0), bits(other));
+        assert_eq!(object_shape_stamp(sibling), constfn);
+        assert!(migrate_deprecated_receiver(sibling));
+        assert_eq!(object_shape_stamp(sibling), any);
+        assert_eq!(slot_bits(sibling, 0), bits(second));
+    }
+}
+
+#[test]
+fn unloadable_body_stays_any_on_runtime_key_add() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    unsafe {
+        let closure = crate::closure::js_closure_alloc(crate::fn_info!(constfn_body_b, 0), 0);
+        let obj = crate::object::js_object_alloc(0, 4);
+        crate::object::js_object_set_field_by_name(
+            obj,
+            key("unloadable_method"),
+            crate::value::js_nanbox_pointer(closure as i64),
+        );
+        let d = shape_descriptor_by_id(object_shape_stamp(obj)).expect("keyed shape");
+        assert_eq!(d.special_constfn_mask, 0);
+        assert_eq!(slot_rep(d.rep, 0), REP_ANY);
+    }
+}
+
+#[test]
+fn rebindable_this_closure_stays_any_on_runtime_key_add() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    unsafe {
+        let info =
+            crate::fn_info!(constfn_body_a, 0; with_flags(crate::codegen_abi::FN_PERMANENT_IMAGE));
+        let closure = crate::closure::js_closure_alloc(info, crate::closure::CAPTURES_THIS_FLAG);
+        let obj = crate::object::js_object_alloc(0, 4);
+        crate::object::js_object_set_field_by_name(
+            obj,
+            key("rebindable_method"),
+            crate::value::js_nanbox_pointer(closure as i64),
+        );
+        let d = shape_descriptor_by_id(object_shape_stamp(obj)).expect("keyed shape");
+        assert_eq!(d.special_constfn_mask, 0);
+        assert_eq!(slot_rep(d.rep, 0), REP_ANY);
+    }
 }
 
 /// T3: a Number keeps an `F64` lane `F64`, and the funnel stores its
@@ -363,7 +486,7 @@ fn the_invariant_check_fires_on_a_non_number_under_an_f64_lane() {
         let f64_a = with_rep(id, with_slot_rep(REP_ANY, 0, REP_F64));
         stamp_object_shape_id_with_carrier_note(obj, f64_a);
         let fields = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
-        super::field_rep_store::assert_f64_lanes_hold_numbers(
+        super::field_rep_store::assert_field_rep_lanes(
             obj,
             super::shapes::object_shape_record(obj),
             3,
@@ -371,7 +494,7 @@ fn the_invariant_check_fires_on_a_non_number_under_an_f64_lane() {
         // GC_STORE_AUDIT(INIT): the deliberate unchecked store this test
         // exists to catch; nothing collects before the check below.
         *fields = boxed("not a number").to_bits();
-        super::field_rep_store::assert_f64_lanes_hold_numbers(
+        super::field_rep_store::assert_field_rep_lanes(
             obj,
             super::shapes::object_shape_record(obj),
             3,
@@ -407,7 +530,7 @@ fn delete_publishes_any_lanes_before_its_raw_moves() {
             REP_ANY,
             "the delete successor carries no lane"
         );
-        super::field_rep_store::assert_f64_lanes_hold_numbers(
+        super::field_rep_store::assert_field_rep_lanes(
             obj,
             super::shapes::object_shape_record(obj),
             3,
@@ -432,12 +555,85 @@ fn a_class_instance_key_add_earns_the_lane_too() {
             REP_F64,
             "a plain object earns the lane"
         );
-        let inst = crate::object::js_object_alloc(0, 4);
-        (*inst).class_id = 0x00C0_FFEE;
+        let inst = crate::object::js_object_alloc(0x00C0_FFEE, 4);
         assert!(!crate::object::is_anon_shape_class_id((*inst).class_id));
         crate::object::js_object_set_field_by_name(inst, key("n"), 1.5);
         let inst_rep = super::field_rep_store::shape_rep(object_shape_stamp(inst));
         assert_ne!(object_shape_stamp(inst), 0, "the instance is shaped");
         assert_eq!(slot_rep(inst_rep, 0), REP_F64);
+    }
+}
+
+/// The diagnostic validates old carriers too: deprecation grants no permission
+/// for an unchecked store to replace their recorded body.
+#[test]
+fn constfn_verifier_valid_stale_deprecated_and_lifecycle() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _no_move = crate::gc::GcSuppressScope::new();
+    unsafe {
+        let a = crate::closure::js_closure_alloc(
+            crate::fn_info!(constfn_body_a, 0; with_flags(crate::codegen_abi::FN_PERMANENT_IMAGE)),
+            0,
+        );
+        let b = crate::closure::js_closure_alloc(
+            crate::fn_info!(constfn_body_b, 0; with_flags(crate::codegen_abi::FN_PERMANENT_IMAGE)),
+            0,
+        );
+        let obj = crate::object::js_object_alloc(0, 4);
+        let name = key("constfn_verifier_body");
+        crate::object::js_object_set_field_by_name(
+            obj,
+            name,
+            f64::from_bits(crate::JSValue::object_ptr(a.cast()).bits()),
+        );
+        let record = super::shapes::object_shape_record(obj).unwrap();
+        assert_eq!(
+            record.special_constfn_mask(),
+            1,
+            "fixture must carry SPECIAL"
+        );
+        let verify = || super::field_rep_store::assert_field_rep_lanes(obj, Some(record), 1);
+        verify();
+        assert!(record.deprecate_special_to_any(0));
+        verify(); // An unchanged old carrier still satisfies its old body.
+        let fields = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
+        for bits in [
+            crate::JSValue::object_ptr(b.cast()).bits(),
+            crate::value::TAG_UNDEFINED,
+        ] {
+            // GC_STORE_AUDIT(INIT): deliberate sabotage, no collection before verification.
+            *fields = bits;
+            let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(verify));
+            let message = failure.expect_err("stale SPECIAL must fail");
+            let text = message
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .unwrap_or("");
+            assert!(
+                text.contains("field-rep invariant: SPECIAL ConstFn"),
+                "{text}"
+            );
+        }
+        // Restore before the checked store; its Any successor relinquishes the
+        // image-body fact, so revocation requires no metadata dereference.
+        // GC_STORE_AUDIT(INIT): restore the live body before leaving deliberate sabotage.
+        *fields = crate::JSValue::object_ptr(a.cast()).bits();
+        crate::object::js_object_set_field_by_name(
+            obj,
+            name,
+            f64::from_bits(crate::value::TAG_UNDEFINED),
+        );
+        assert_eq!(
+            super::shapes::object_shape_record(obj)
+                .unwrap()
+                .special_constfn_mask(),
+            0
+        );
+        (*a).info = std::ptr::null();
+        super::field_rep_store::assert_field_rep_lanes(
+            obj,
+            super::shapes::object_shape_record(obj),
+            1,
+        );
     }
 }

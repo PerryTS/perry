@@ -26,6 +26,7 @@ pub(crate) struct ModuleGlobals {
     pub module_global_types: HashMap<u32, perry_hir::types::Type>,
     pub module_global_proven_types: HashMap<u32, perry_hir::types::Type>,
     pub static_field_globals: HashMap<(String, String), String>,
+    pub module_global_transfers: HashMap<u32, super::global_transfer::GlobalTransfer>,
 }
 
 /// Runtime kinds established without consulting a TypeScript annotation.
@@ -161,6 +162,7 @@ pub(crate) fn emit_module_globals(
     compile_time_constants: &HashMap<u32, f64>,
     module_prefix: &str,
     cjs_property_exports: &super::cjs_exports::PropertyExports,
+    thread_transfer: bool,
 ) -> ModuleGlobals {
     // Module-level globals registry. Pre-walk:
     //   1. Collect every LocalId referenced from any function or method
@@ -407,6 +409,13 @@ pub(crate) fn emit_module_globals(
         counts
     });
     let reassigned = crate::collectors::reassigned_locals_in_module(hir);
+    let mut module_global_transfers: HashMap<u32, super::global_transfer::GlobalTransfer> =
+        HashMap::new();
+    // The same plans in slot order: their entries in the module's per-agent block.
+    let mut transfer_slots: Vec<super::global_transfer::GlobalTransfer> = Vec::new();
+    // CJS live getters read the namespace object, not the binding's slot.
+    let cjs_live_ids: std::collections::HashSet<u32> =
+        cjs_property_exports.values().map(|(id, _)| *id).collect();
     for s in init_lets {
         if let perry_hir::Stmt::Let {
             id, name, ty, init, ..
@@ -460,6 +469,35 @@ pub(crate) fn emit_module_globals(
                 // program has a Worker.
                 llmod.add_module_state_global(&global_name, DOUBLE, &init_value);
                 module_globals.insert(*id, global_name.clone());
+
+                // Immutable-leaf transfer (perry/thread): exactly one
+                // initializer, no later write anywhere in the module (the same
+                // facts that gate `module_global_proven_types`), the ordinary
+                // `undefined` initial value, and an initializer that can
+                // structurally produce a String/BigInt.
+                let transfer = (thread_transfer
+                    && let_counts.get(id) == Some(&1)
+                    && !reassigned.contains(id)
+                    && !compile_time_constants.contains_key(id)
+                    && !cjs_live_ids.contains(id)
+                    && !hir.classic_for_lexical_bindings.contains(id)
+                    && init.as_ref().is_some_and(|init| {
+                        super::global_transfer::may_hold_leaf(
+                            init,
+                            module_global_proven_types.get(id),
+                        )
+                    }))
+                .then(|| {
+                    super::global_transfer::GlobalTransfer::new(
+                        module_prefix,
+                        *id,
+                        transfer_slots.len() as u32,
+                    )
+                });
+                if let Some(transfer) = &transfer {
+                    transfer_slots.push(transfer.clone());
+                    module_global_transfers.insert(*id, transfer.clone());
+                }
 
                 // For exported variables, also emit a trivial getter
                 // function `perry_fn_<prefix>__<name>` that returns
@@ -530,7 +568,10 @@ pub(crate) fn emit_module_globals(
                                 let getter = llmod.define_function(&getter_name, DOUBLE, vec![]);
                                 let _ = getter.create_block("entry");
                                 let blk = getter.block_mut(0).unwrap();
-                                let val = blk.load(DOUBLE, &format!("@{}", global_name));
+                                let val = match &transfer {
+                                    Some(transfer) => blk.call(DOUBLE, &transfer.accessor, &[]),
+                                    None => blk.load(DOUBLE, &format!("@{}", global_name)),
+                                };
                                 blk.ret(DOUBLE, &val);
                             }
                         }
@@ -570,6 +611,7 @@ pub(crate) fn emit_module_globals(
             }
         }
     }
+    super::global_transfer::emit_storage(llmod, &transfer_slots);
 
     // Phase E: register and emit static class fields as module globals.
     // Each `static foo: T = init` becomes `@perry_static_<modprefix>__
@@ -725,6 +767,7 @@ pub(crate) fn emit_module_globals(
         module_global_types,
         module_global_proven_types,
         static_field_globals,
+        module_global_transfers,
     }
 }
 

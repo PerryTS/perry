@@ -1,0 +1,9 @@
+- **chore: pure-relocation splits of the 14 compile-checkable files within 10 lines of the 2,000-line cap (#10750).** No behaviour change: whole items moved into new sibling modules, with only visibility and `use`/`mod` lines adjusted. Every parent now has at least 150 lines of headroom.
+  - Nothing that a path-keyed ratchet baseline names or counts was moved: no `static` or `thread_local!` holder, raw-handle site, store site, or `#[no_mangle]` export. So `gc_runtime_root_holders.json`, `raw_handle_debt_files.txt`, `unrooted_local_shape_baseline.json`, `thread_exit_address_globals.json`, `global_sink_asserted_baseline.txt` and the other baselines need no edits.
+  - The new `expr/index_get/runtime_key.rs` is registered in `rooting/ledger.rs`'s migrated-module list, alongside its siblings.
+  - Split files:
+    - `optimized_libs/tests.rs`, `gc/tests/barrier.rs`, `expr/index_get.rs`, `readline/mod.rs`, `object/native_module.rs`;
+    - `os_process_streams.rs`, `node_submodules/diagnostics.rs`, `cjs_wrap/tests.rs`, `lower/const_fold_fn.rs`;
+    - `native_module/module_keys.rs`, `gc/roots/stack_maps.rs`, `lower_call/new.rs`, `node_vm.rs`, `gc/barrier/mod.rs`.
+  - `perry-ui-watchos/src/lib.rs` (1995) is left as-is: it is almost entirely top-level FFI exports and cannot be compile-checked off-Apple.
+  - The Windows-only `stack_maps` unwind body was moved and formatted but not compiled, since no Windows target was available.

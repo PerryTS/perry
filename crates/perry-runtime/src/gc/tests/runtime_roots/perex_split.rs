@@ -1269,6 +1269,43 @@ fn forward_splits() -> usize {
     split::FORWARD_SPLITS.with(Cell::get)
 }
 
+#[test]
+fn perex_split_short_ascii_captures_are_inline_and_survive_collection() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _scan = ConservativeScanDisabledGuard::new();
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _force = ForcedEvacuationTestGuard::on();
+    super::perex_public::register_host_roots();
+    let scope = RuntimeHandleScope::new();
+    let input = text(&scope, b"a\0b,12345,123456,");
+    let separator = regex(&scope, b"(,)(x)?", b"");
+    let before = forward_splits();
+    let out = run(&scope, &input, &separator, -1.0);
+    assert_eq!(forward_splits(), before + 1);
+    for index in [0, 1, 3, 4, 7, 9] {
+        assert!(crate::value::JSValue::from_bits(item(&out, index).to_bits()).is_short_string());
+    }
+    assert!(crate::value::JSValue::from_bits(item(&out, 6).to_bits()).is_string());
+    let cycles = copying_minor_cycles();
+    gc_collect_minor();
+    assert!(copying_minor_cycles() > cycles);
+    check(
+        &out,
+        &[
+            Some(b"a\0b"),
+            Some(b","),
+            None,
+            Some(b"12345"),
+            Some(b","),
+            None,
+            Some(b"123456"),
+            Some(b","),
+            None,
+            Some(b""),
+        ],
+    );
+}
+
 /// Split's forward search (#10165) returns exactly the specification's
 /// per-position sticky result. Each expectation below was derived by running
 /// the sticky algorithm by hand, not by observing either implementation.
@@ -1291,6 +1328,35 @@ fn perex_split_forward_search_matches_the_sticky_specification() {
         ),
         // An unmatched group is undefined, and a match at the end leaves "".
         (b"ab", r"(x)?b", b"", -1.0, &[Some(b"a"), None, Some(b"")]),
+        // Captures can lie outside the full match. Copy their own spans,
+        // including a backwards seek from a later Unicode capture.
+        (
+            "ä,中;".as_bytes(),
+            "(?<=(ä|中))([,;])(?=(中)?)(x)?",
+            b"u",
+            -1.0,
+            &[
+                Some(b"\xc3\xa4"),
+                Some(b"\xc3\xa4"),
+                Some(b","),
+                Some(b"\xe4\xb8\xad"),
+                None,
+                Some(b"\xe4\xb8\xad"),
+                Some(b"\xe4\xb8\xad"),
+                Some(b";"),
+                None,
+                None,
+                Some(b""),
+            ],
+        ),
+        // Stop in the captures of a named group without materializing groups.
+        (
+            b"a,b",
+            "(?<sep>,)(x)?",
+            b"d",
+            2.0,
+            &[Some(b"a"), Some(b",")],
+        ),
         // Empty matches everywhere: every position is stepped past once.
         (
             b"abc",

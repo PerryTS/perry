@@ -106,11 +106,67 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 .ok_or_else(|| anyhow!("super.{}() outside any method body", method))?;
             let this_box = ctx.block().load(DOUBLE, &this_slot);
             let mut lowered: Vec<String> = Vec::with_capacity(args.len() + 1);
-            lowered.push(this_box);
+            lowered.push(this_box.clone());
             let mut user_vals: Vec<String> = Vec::with_capacity(args.len());
             for a in args {
                 user_vals.push(lower_expr(ctx, a)?);
             }
+            // The body above was resolved along the declared `extends` chain.
+            // `super` is the home object's CURRENT `[[Prototype]]`, so a
+            // relinked class prototype (or other prototype surgery on this
+            // name) sends the call to the runtime, which reads that chain.
+            let home_cid = ctx.class_ids.get(&current_class_name).copied().unwrap_or(0);
+            let guarded_merge = if home_cid != 0 {
+                let key_idx = ctx.strings.intern(method);
+                let slot = (ctx.strings.entry(key_idx).dispatch_hash & 0xffff).to_string();
+                let direct_idx = ctx.new_block("super_m.direct");
+                let dynamic_idx = ctx.new_block("super_m.dynamic");
+                let merge_idx = ctx.new_block("super_m.merge");
+                let direct_label = ctx.block_label(direct_idx);
+                let dynamic_label = ctx.block_label(dynamic_idx);
+                let merge_label = ctx.block_label(merge_idx);
+                let ok = crate::lower_call::method_override::emit_prototype_method_guard_ok(
+                    ctx.block(),
+                    &slot,
+                );
+                ctx.block().cond_br(&ok, &direct_label, &dynamic_label);
+                ctx.current_block = dynamic_idx;
+                let (args_ptr, args_len) = if user_vals.is_empty() {
+                    ("null".to_string(), "0".to_string())
+                } else {
+                    let n = user_vals.len();
+                    let buf = ctx.func.alloca_entry_array(DOUBLE, n);
+                    for (i, v) in user_vals.iter().enumerate() {
+                        let slot = ctx.block().gep(DOUBLE, &buf, &[(I64, &i.to_string())]);
+                        ctx.block().store(DOUBLE, v, &slot);
+                    }
+                    let ptr_reg = ctx.block().next_reg();
+                    ctx.block().emit_raw(format!(
+                        "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
+                        ptr_reg, n, buf
+                    ));
+                    (ptr_reg, n.to_string())
+                };
+                let name_global = emit_string_literal_global(ctx, method);
+                let dynamic_value = ctx.block().call(
+                    DOUBLE,
+                    "js_super_method_call_dynamic",
+                    &[
+                        (I32, &home_cid.to_string()),
+                        (PTR, &name_global),
+                        (I64, &method.len().to_string()),
+                        (DOUBLE, &this_box),
+                        (PTR, &args_ptr),
+                        (I64, &args_len),
+                    ],
+                );
+                let dynamic_end = ctx.block().label.clone();
+                ctx.block().br(&merge_label);
+                ctx.current_block = direct_idx;
+                Some((merge_idx, merge_label, dynamic_value, dynamic_end))
+            } else {
+                None
+            };
             // #8040: this arm passed every argument POSITIONALLY, which is wrong
             // whenever the resolved parent method ends in an array-shaped slot.
             // A body reading `arguments` gets one synthesized trailing parameter
@@ -185,7 +241,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             }
             let arg_slices: Vec<(crate::types::LlvmType, &str)> =
                 lowered.iter().map(|s| (DOUBLE, s.as_str())).collect();
-            Ok(ctx.block().call(DOUBLE, &fn_name, &arg_slices))
+            let direct_value = ctx.block().call(DOUBLE, &fn_name, &arg_slices);
+            let Some((merge_idx, merge_label, dynamic_value, dynamic_end)) = guarded_merge else {
+                return Ok(direct_value);
+            };
+            let direct_end = ctx.block().label.clone();
+            ctx.block().br(&merge_label);
+            ctx.current_block = merge_idx;
+            Ok(ctx.block().phi(
+                DOUBLE,
+                &[(&direct_value, &direct_end), (&dynamic_value, &dynamic_end)],
+            ))
         }
 
         // -------- super.method(...spread) --------

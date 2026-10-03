@@ -3,14 +3,15 @@
 //!
 //! `this.x` inside a class or object-literal method compiles to a class-field
 //! read: an inline pre-check of the receiver against the class's birth shape
-//! and its `GC_OBJ_TYPED_LAYOUT_INTACT` bit, then a slot load. Two things sent
+//! (the exact ShapeId, which carries the slots' `F64` lanes), then a slot load. Two things sent
 //! ordinary receivers past it, on every read, into a site-less by-name walk
 //! (~1,300 instructions where the same read elsewhere costs ~100-300):
 //!
 //! * a by-name overwrite of an existing key (`o.d = k` at a site that meets the
 //!   object through a parameter or a module `const`) declared the object's
-//!   whole layout unknown, which cleared the intact bit, so the pre-check of
-//!   every later `this.a` missed;
+//!   whole layout unknown, which cleared the layout the pre-check reads, so
+//!   the pre-check of every later `this.a` missed (the layout is now the
+//!   ShapeId itself; an overwrite must keep it);
 //! * a receiver of another shape reading the method's key (an `Object.create`
 //!   child of the literal, reading through `this`) is never the pre-check's,
 //!   and the miss arm walked by name instead of asking the receiver's shape.
@@ -75,9 +76,12 @@ fn run_census(source: &str) -> (String, impl Fn(&str) -> u64) {
     )
 }
 
-/// Sabotage: restore `mark_object_dynamic_shape_unknown` ahead of the
-/// in-bounds overwrite in `try_existing_own_data_overwrite` -> every call's
-/// `this.a` misses the pre-check on every call (misses ~= 3000).
+/// Sabotage: generalize the slot's lane
+/// (`field_rep_store::object_store_generalize(obj, idx)`) ahead of the
+/// in-bounds overwrite in `try_existing_own_data_overwrite`, so the receiver
+/// leaves the birth shape -> `this.a` misses the pre-check on every call
+/// (misses = 3000). The premise route `rt_overwrite_kept_typed` counts that
+/// overwrite on a receiver whose ShapeId carries an `F64` lane.
 #[test]
 fn a_by_name_overwrite_keeps_the_layout_a_method_body_reads() {
     let (stdout, count) = run_census(

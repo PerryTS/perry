@@ -1421,28 +1421,32 @@ pub(crate) unsafe fn compact_if_holey(map: *mut MapHeader) {
 /// paths into one body, and the register pressure of those cold paths costs
 /// every lookup the full prologue/epilogue (eight callee-saved GPRs and four
 /// FP registers on arm64 — the profile put a third of the function's self
-/// time there). The lane here answers the two shapes the numeric side-table
-/// exists for — a plain (untagged, non-NaN, non-zero) number key against a
-/// small map's entries by bit identity, or against the dense integer range
-/// table — and returns `None` for everything else so [`find_key_index_cold`]
-/// decides it. A dense-range miss is definitive for its span (every insert,
+/// time there). The lane here answers a small map's lookup by bit identity for
+/// any key, a plain (untagged, non-NaN, non-zero) number key's miss there, and
+/// a plain number against the dense integer range table, and returns `None`
+/// for everything else so [`find_key_index_cold`] decides it. A dense-range miss is definitive for its span (every insert,
 /// delete, clear and GC rewrite keeps the table exact), exactly as in the cold
 /// path; a key outside the span goes to the hashed index there.
 #[inline(always)]
 unsafe fn find_key_index_hot(map: *const MapHeader, key: f64) -> Option<i32> {
     let used = (*map).used;
     let key_bits = key.to_bits();
+    if used <= SIDE_TABLE_THRESHOLD {
+        // A bit-identical entry is THE match for a key of any type: a Map
+        // never holds two SameValueZero-equal keys, and both sides are already
+        // normalized (see `find_identical_key`). The common string-keyed shape
+        // looks a key up with the very value it was inserted with, so it is
+        // answered here without the out-of-line call (#10697). A miss is
+        // definitive only for a plain number; any other key may still be
+        // content-equal to an entry, which the cold path decides.
+        let entries = entries_ptr(map);
+        if let Some(i) = find_identical_key(entries, used, key_bits) {
+            return Some(i);
+        }
+        return is_plain_nonzero_number_bits(key_bits).then_some(-1);
+    }
     if !is_plain_nonzero_number_bits(key_bits) {
         return None;
-    }
-    if used <= SIDE_TABLE_THRESHOLD {
-        let entries = entries_ptr(map);
-        for i in 0..used {
-            if ptr::read(entries.add((i as usize) * 2)).to_bits() == key_bits {
-                return Some(i as i32);
-            }
-        }
-        return Some(-1);
     }
     let index = (*map).store.as_ref().map(|store| &store.numeric)?;
     let dense = index.dense.as_ref()?;
@@ -1466,12 +1470,21 @@ pub(crate) unsafe fn find_key_index(map: *const MapHeader, key: f64) -> i32 {
     find_key_index_cold(map, key)
 }
 
+#[cfg(test)]
+crate::perry_thread_local! {
+    /// Test-only: lookups [`find_key_index_hot`] handed to the cold path, so a
+    /// test can assert which lane answered (#10697).
+    pub(crate) static COLD_LOOKUPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Every lookup shape [`find_key_index_hot`] declines: tagged, zero and NaN
 /// keys, string content hashing, the pointer-identity index, the hashed
 /// numeric index, and the generic linear compare. Out of line on purpose —
 /// see the hot lane.
 #[inline(never)]
 unsafe fn find_key_index_cold(map: *const MapHeader, key: f64) -> i32 {
+    #[cfg(test)]
+    COLD_LOOKUPS.with(|n| n.set(n.get() + 1));
     let used = (*map).used;
     let key_bits = key.to_bits();
 
@@ -3533,17 +3546,39 @@ mod tests {
 
     #[test]
     fn ordered_delete_repairs_mixed_side_indexes_and_preserves_order() {
-        let map = js_map_alloc(32);
         let scope = crate::gc::RuntimeHandleScope::new();
-        let string_keys = (0..12)
-            .map(|i| {
-                let bytes = format!("key-{i:02}").into_bytes();
-                scope.root_nanbox_f64(boxed_heap_string_key(js_string_from_bytes(
-                    bytes.as_ptr(),
-                    bytes.len() as u32,
-                )))
-            })
+        let map_handle = scope.root_raw_mut_ptr(js_map_alloc(32));
+        // String and object allocation may move the Map and earlier keys.
+        // Root every key immediately, then reload all addresses after the
+        // allocating phase. Pointer keys must have genuine GC headers: key
+        // classification reads them and cannot accept arbitrary Rust boxes.
+        let ((string_keys, pointer_keys), map) = map_handle.across_mut::<MapHeader, _>(|| {
+            let string_keys = (0..12)
+                .map(|i| {
+                    let bytes = format!("key-{i:02}").into_bytes();
+                    scope.root_nanbox_f64(boxed_heap_string_key(js_string_from_bytes(
+                        bytes.as_ptr(),
+                        bytes.len() as u32,
+                    )))
+                })
+                .collect::<Vec<_>>();
+            let pointer_keys = (0..4)
+                .map(|_| {
+                    scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+                        crate::object::js_object_alloc(0, 0) as i64,
+                    ))
+                })
+                .collect::<Vec<_>>();
+            (string_keys, pointer_keys)
+        });
+        let pointer_keys = pointer_keys
+            .iter()
+            .map(|key| key.get_nanbox_f64())
             .collect::<Vec<_>>();
+        // The setters below append 28 entries, delete three, then append
+        // three more: raw extent 31 < capacity 32. Their ensure_capacity
+        // therefore returns before its GC-triggering external-allocation path.
+        assert_eq!(unsafe { (*map).capacity }, 32);
 
         let string_key_ptr = |i: usize| {
             (string_keys[i].get_nanbox_f64().to_bits() & crate::value::POINTER_MASK)
@@ -3556,20 +3591,6 @@ mod tests {
                 as *const StringHeader;
             js_map_set_string_number(map, string_key, (i * 10 + 1) as f64);
         }
-        // Keep the backing allocations alive while using their tagged
-        // addresses as identity keys. They deliberately are not GC objects:
-        // this exercises the pointer-key index without introducing an
-        // allocation/collection point into the ordered-delete fixture.
-        let pointer_owners = (0..4).map(Box::new).collect::<Vec<_>>();
-        let pointer_keys = pointer_owners
-            .iter()
-            .map(|owner| {
-                f64::from_bits(
-                    crate::value::POINTER_TAG
-                        | ((owner.as_ref() as *const i32 as u64) & crate::value::POINTER_MASK),
-                )
-            })
-            .collect::<Vec<_>>();
         for (i, key) in pointer_keys.iter().copied().enumerate() {
             js_map_set(map, key, (1_000 + i) as f64);
         }

@@ -7,7 +7,13 @@
 //! See `docs/turnloop/p2-report.md` for what this deletes: two threads per
 //! child with piped stdio, plus one per extra `stdio` descriptor.
 
+#[cfg(windows)]
+use std::fs::File as ChildStdout;
+#[cfg(windows)]
+use std::fs::File as ChildStderr;
 use std::io::Read;
+#[cfg(not(windows))]
+use std::process::{ChildStderr, ChildStdout};
 
 use super::{cp_live_lock, cp_push_event, CpEvent, CpReader};
 
@@ -54,7 +60,7 @@ impl CpPipe {
 /// `ChildStdout` / `ChildStderr` / a raw `stdio` fd, as the descriptor the
 /// loop can adopt. `std` owns these conversions on both platforms, so nothing
 /// here duplicates a descriptor or guesses at its ownership.
-pub(super) fn cp_pipe_from_child_stdout(pipe: std::process::ChildStdout) -> CpPipe {
+pub(super) fn cp_pipe_from_child_stdout(pipe: ChildStdout) -> CpPipe {
     #[cfg(unix)]
     {
         CpPipe::Fd(std::os::fd::OwnedFd::from(pipe))
@@ -69,7 +75,7 @@ pub(super) fn cp_pipe_from_child_stdout(pipe: std::process::ChildStdout) -> CpPi
     }
 }
 
-pub(super) fn cp_pipe_from_child_stderr(pipe: std::process::ChildStderr) -> CpPipe {
+pub(super) fn cp_pipe_from_child_stderr(pipe: ChildStderr) -> CpPipe {
     #[cfg(unix)]
     {
         CpPipe::Fd(std::os::fd::OwnedFd::from(pipe))

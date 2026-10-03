@@ -745,6 +745,29 @@ pub(crate) fn emit_native_method_str_dispatch(
         recv_box,
         lowered_args,
         true,
+        &[],
+    )
+}
+
+/// [`emit_native_method_str_dispatch`] whose site first compares the
+/// receiver against the completed shapes in `lanes` and calls their bodies
+/// directly (step 5C static ConstFn lanes).
+fn emit_native_method_str_dispatch_lanes(
+    ctx: &mut FnCtx<'_>,
+    property: &str,
+    call_byte_offset: u32,
+    recv_box: &str,
+    lowered_args: &[String],
+    lanes: &[crate::codegen::static_constfn::StaticMethodLane],
+) -> String {
+    emit_native_method_str_dispatch_with(
+        ctx,
+        property,
+        call_byte_offset,
+        recv_box,
+        lowered_args,
+        true,
+        lanes,
     )
 }
 
@@ -766,6 +789,7 @@ pub(crate) fn emit_native_method_str_dispatch_plain(
         recv_box,
         lowered_args,
         false,
+        &[],
     )
 }
 
@@ -782,6 +806,7 @@ fn emit_native_method_str_dispatch_with(
     recv_box: &str,
     lowered_args: &[String],
     site: bool,
+    lanes: &[crate::codegen::static_constfn::StaticMethodLane],
 ) -> String {
     // Pass a tagged pointer to the immutable StringPool dispatch descriptor.
     // A GC-backed string handle belongs to the main thread's arena and cannot
@@ -823,6 +848,7 @@ fn emit_native_method_str_dispatch_with(
             &method_id,
             &args_ptr,
             &args_len_str,
+            lanes,
         );
     }
     ctx.block().call(
@@ -1082,15 +1108,20 @@ pub fn try_lower_native_method_str_dispatch(
             let operand_exprs: Vec<&Expr> = std::iter::once(object.as_ref())
                 .chain(args.iter())
                 .collect();
+            // Step 5C: completed shapes of the receiver's candidate class whose
+            // ConstFn lane names this method's body (compile-time facts; the
+            // emitted shape compare is the proof).
+            let lanes = crate::codegen::static_constfn::static_method_lanes(ctx, object, property);
             return with_operands_rooted(ctx, &operand_exprs, |ctx, rereads| {
                 let recv_box = rereads[0].clone();
                 let lowered_args: Vec<String> = rereads[1..].to_vec();
-                let result = emit_native_method_str_dispatch(
+                let result = emit_native_method_str_dispatch_lanes(
                     ctx,
                     property,
                     call_byte_offset,
                     &recv_box,
                     &lowered_args,
+                    &lanes,
                 );
                 // The group is released AFTER the dispatch, not before: the
                 // dispatcher allocates while it reads these values. That is the

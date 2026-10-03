@@ -44,29 +44,7 @@ pub extern "C" fn js_child_process_exec_sync(
     validate::cp_validate_no_null_bytes("command", &cmd_str);
 
     // Execute the command using the shell, honoring `cwd`/`env` options.
-    #[cfg(unix)]
-    let mut command = {
-        // Absolute path (Node's `exec` shell) keeps std on `posix_spawn`
-        // instead of the `fork`+`exec` fallback a bare "sh" + `env` triggers
-        // (the macOS fork/dyld deadlock fix — see `cp_command_for_program`).
-        let mut c = Command::new("/bin/sh");
-        c.arg("-c").arg(&cmd_str);
-        c
-    };
-    #[cfg(windows)]
-    let mut command = {
-        let mut c = Command::new("cmd");
-        c.arg("/C").arg(&cmd_str);
-        c
-    };
-    // WASI has no process spawning (#11377): std's `spawn` returns
-    // `Unsupported`, which surfaces through the ordinary spawn-error path.
-    #[cfg(target_os = "wasi")]
-    let mut command = {
-        let mut c = Command::new("/bin/sh");
-        c.arg("-c").arg(&cmd_str);
-        c
-    };
+    let mut command = options::cp_shell_command(&cmd_str, opts_val);
     cp_apply_options(&mut command, opts_val);
 
     let run_options = cp_read_sync_stdio_run_options(opts_val);
@@ -288,29 +266,7 @@ pub extern "C" fn js_child_process_exec(cmd_ptr: *const StringHeader, arg1: f64,
     // `arg1` slot (`exec(cmd, options, cb)`); when `arg1` is the callback
     // (`exec(cmd, cb)`) it's a closure, so `cp_apply_options` no-ops. `cwd`/
     // `env` from the options are applied here.
-    #[cfg(unix)]
-    let mut command = {
-        // Absolute path (Node's `exec` shell) keeps std on `posix_spawn`
-        // instead of the `fork`+`exec` fallback a bare "sh" + `env` triggers
-        // (the macOS fork/dyld deadlock fix — see `cp_command_for_program`).
-        let mut c = Command::new("/bin/sh");
-        c.arg("-c").arg(&cmd_str);
-        c
-    };
-    #[cfg(windows)]
-    let mut command = {
-        let mut c = Command::new("cmd");
-        c.arg("/C").arg(&cmd_str);
-        c
-    };
-    // WASI has no process spawning (#11377): std's `spawn` returns
-    // `Unsupported`, which surfaces through the ordinary spawn-error path.
-    #[cfg(target_os = "wasi")]
-    let mut command = {
-        let mut c = Command::new("/bin/sh");
-        c.arg("-c").arg(&cmd_str);
-        c
-    };
+    let mut command = options::cp_shell_command(&cmd_str, arg1);
     cp_apply_options(&mut command, arg1);
     let run_options = cp_read_async_run_options(arg1);
 
@@ -528,29 +484,7 @@ extern "C" fn cp_promisified_exec(
 ) -> f64 {
     validate::cp_validate_command(cmd_val, "command");
     let cmd = cp_value_to_string(cmd_val).unwrap_or_default();
-    #[cfg(unix)]
-    let mut command = {
-        // Absolute path (Node's `exec` shell) keeps std on `posix_spawn`
-        // instead of the `fork`+`exec` fallback a bare "sh" + `env` triggers
-        // (the macOS fork/dyld deadlock fix — see `cp_command_for_program`).
-        let mut c = Command::new("/bin/sh");
-        c.arg("-c").arg(&cmd);
-        c
-    };
-    #[cfg(windows)]
-    let mut command = {
-        let mut c = Command::new("cmd");
-        c.arg("/C").arg(&cmd);
-        c
-    };
-    // WASI has no process spawning (#11377): std's `spawn` returns
-    // `Unsupported`, which surfaces through the ordinary spawn-error path.
-    #[cfg(target_os = "wasi")]
-    let mut command = {
-        let mut c = Command::new("/bin/sh");
-        c.arg("-c").arg(&cmd);
-        c
-    };
+    let mut command = options::cp_shell_command(&cmd, opts);
     cp_apply_options(&mut command, opts);
     cp_promisified_run(command, cmd, None, opts)
 }

@@ -11,6 +11,14 @@ use super::*;
 /// `var arrayProto = Array.prototype` chained read inside
 /// `runInContext`.
 pub(crate) fn populate_global_this_builtins(singleton_at_entry: *mut ObjectHeader) {
+    // Every install below is a builtin definition, which arms the own-override
+    // guard only on a Map, Set or Date owner (#10697).
+    super::super::own_override::as_builtin_definition(|| {
+        populate_global_this_builtins_inner(singleton_at_entry)
+    })
+}
+
+fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
     if singleton_at_entry.is_null() {
         return;
     }

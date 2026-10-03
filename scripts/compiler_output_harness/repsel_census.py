@@ -156,6 +156,8 @@ CONSUMPTION_SITES: dict[str, str] = {
     "ptr_shape_set": "expr/property_set.rs",
     "ptr_shape_update": "expr/instance_misc1.rs",
     "ptr_shape_method": "lower_call/property_get/dynamic_dispatch.rs",
+    "ptr_shape_region_get": "stmt/region_loop/bare.rs",
+    "ptr_shape_region_set": "stmt/region_loop/bare.rs",
 }
 
 #: `SlotRep` debug spelling -> census key, for the `canonical-slot` analysis.
@@ -193,6 +195,9 @@ LIVENESS_FLOORS: dict[str, dict[str, int]] = {
     # Its value is the SITE coverage it provides (checked separately); the
     # count floor here just keeps it honest as a promotion too.
     "fixture_ptr_shape_sites": {"ptr-shape": 1, "ptr-shape-consumed": 1},
+    # P8's guarded region owns loop accesses; the surviving guard-free numeric
+    # load/update sites retain independent coverage outside a loop.
+    "fixture_ptr_shape_straight_line": {"ptr-shape": 1, "ptr-shape-consumed": 1},
     # #7034 §3 (array-element escape). The other two `ptr_shape` fixtures never
     # touch an array, and the 18 real workloads promote zero element locals, so
     # without this entry `collectors/ptr_shape_elements.rs` could stop issuing

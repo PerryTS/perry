@@ -182,6 +182,25 @@ pub fn lower_native_module_dispatch(
             arg_types.push(DOUBLE);
         }
 
+        let thread_launch = matches!(
+            sig.runtime,
+            "js_thread_spawn" | "js_thread_parallel_map" | "js_thread_parallel_filter"
+        );
+        let runtime = if thread_launch {
+            let prepare = format!(
+                "__perry_prepare_thread_strings_{}",
+                ctx.strings.thread_literal_callback_prefix()
+            );
+            ctx.pending_declares
+                .push((prepare.clone(), crate::types::VOID, vec![]));
+            llvm_args.push((I64, format!("ptrtoint (ptr @{} to i64)", prepare)));
+            arg_types.push(I64);
+            format!("{}_with_literals", sig.runtime)
+        } else {
+            sig.runtime.to_string()
+        };
+        let runtime = runtime.as_str();
+
         // Determine return type for the declare
         let ret_type = match sig.ret {
             NativeRetKind::GcPtr
@@ -200,7 +219,7 @@ pub fn lower_native_module_dispatch(
         };
 
         ctx.pending_declares
-            .push((sig.runtime.to_string(), ret_type, arg_types));
+            .push((runtime.to_string(), ret_type, arg_types));
 
         let arg_slices: Vec<(crate::types::LlvmType, &str)> =
             llvm_args.iter().map(|(t, s)| (*t, s.as_str())).collect();
@@ -295,7 +314,7 @@ pub fn lower_native_module_dispatch(
                 let raw = blk.call(I64, sig.runtime, &arg_slices);
                 Ok(nanbox_bigint_inline(blk, &raw))
             }
-            NativeRetKind::F64 => Ok(ctx.block().call(DOUBLE, sig.runtime, &arg_slices)),
+            NativeRetKind::F64 => Ok(ctx.block().call(DOUBLE, runtime, &arg_slices)),
             NativeRetKind::BoolI1 | NativeRetKind::BoolI32 => {
                 let blk = ctx.block();
                 let raw = blk.call(ret_type, sig.runtime, &arg_slices);
