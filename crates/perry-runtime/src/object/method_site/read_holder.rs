@@ -83,7 +83,7 @@ pub const HOLDER_SHAPE: usize = crate::codegen_abi::PIC_HOLDER_SHAPE_WORD;
 /// | `0 ..= u32::MAX` | depth 1, the value is the holder's slot word ([`HOLDER_SLOT_SPILL`]) |
 /// | [`HOLDER_ABSENT_DEPTH1`] | depth 1, absent: the answer is `undefined` |
 /// | [`HOLDER_ACCESSOR`] + slot | direct class-prototype accessor; collecting hit only |
-/// | [`HOLDER_MULTI_ABSENT`] | depth-1 absent for up to ten receiver shapes |
+/// | [`HOLDER_MULTI_ABSENT`] | depth 1 for up to ten receiver shapes: absent ([`HOLDER_ABSENT_BIT`]) or the holder's slot word ([`multi_slot`]) |
 /// | negative | [`HOLDER_STUB`] set: depth 2..=4 and/or a deep absent entry |
 pub const HOLDER_KIND: usize = crate::codegen_abi::PIC_HOLDER_KIND_WORD;
 /// First of three intermediate hop addresses (depth 2..=4).
@@ -123,6 +123,15 @@ const _: () = assert!(HOLDER_HOP_SHAPES == crate::codegen_abi::PIC_HOLDER_GETTER
 const HOLDER_MULTI_ABSENT: u64 = 1 << 60;
 const MULTI_ABSENT_EXTRA_IDS: usize = 9;
 const MULTI_ABSENT_NEXT_MASK: u64 = 0xf;
+/// A multi-shape DATA entry keeps its holder slot word above the next-way
+/// index.
+const MULTI_SLOT_SHIFT: u32 = 8;
+
+/// The holder slot word of a multi-shape data entry's kind.
+#[inline]
+fn multi_slot(kind: u64) -> u32 {
+    (kind >> MULTI_SLOT_SHIFT) as u32
+}
 const HOLDER_DEPTH_SHIFT: u32 = 32;
 /// A holder slot word with this bit set names the holder's SPILL position
 /// (the low bits), not an inline slot: a key past the holder's inline region,
@@ -244,11 +253,10 @@ pub(crate) unsafe fn entry_answer(c: &PicCache, token: i64) -> Option<u64> {
 #[inline(never)]
 unsafe fn entry_answer_other(c: &PicCache, kind: i64) -> Option<u64> {
     if kind as u64 & (HOLDER_ACCESSOR | HOLDER_MULTI_ABSENT) != 0 {
-        if kind as u64 & HOLDER_ACCESSOR != 0 || kind as u64 & HOLDER_ABSENT_BIT == 0 {
+        if kind as u64 & HOLDER_ACCESSOR != 0 {
             return None;
         }
-        return (shape_word(c[HOLDER_OBJ] as usize) == c[HOLDER_SHAPE] as u32)
-            .then_some(crate::value::TAG_UNDEFINED);
+        return multi_answer(c, kind as u64);
     }
     let (depth, absent, slot) = if kind >= 0 {
         (1, kind == HOLDER_ABSENT_DEPTH1, kind as u32)
@@ -281,23 +289,38 @@ unsafe fn entry_answer_other(c: &PicCache, kind: i64) -> Option<u64> {
     holder_slot_value(holder, slot)
 }
 
-/// A second through tenth ABSENT receiver shape is a rare path relative to
-/// one-token data hits. It shares the terminal holder but must still prove the
-/// entry is live and its ShapeId has not changed.
+/// A second through tenth receiver shape of a multi-shape depth-1 entry is a
+/// rare path relative to one-token data hits. It shares the holder (the
+/// terminal object for an absent entry) but must still prove the entry is
+/// live and the holder's ShapeId has not changed.
 #[cold]
 #[inline(never)]
 unsafe fn multi_absent_extra_answer(c: &PicCache, token: i64) -> Option<u64> {
     let kind = c[HOLDER_KIND] as u64;
     if c[HOLDER_RECV] == 0
-        || kind & (HOLDER_MULTI_ABSENT | HOLDER_ABSENT_BIT)
-            != HOLDER_MULTI_ABSENT | HOLDER_ABSENT_BIT
+        || kind & HOLDER_MULTI_ABSENT == 0
         || kind & HOLDER_ACCESSOR != 0
         || !(0..MULTI_ABSENT_EXTRA_IDS).any(|i| multi_absent_id(c, i) == token as u32)
     {
         return None;
     }
-    (shape_word(c[HOLDER_OBJ] as usize) == c[HOLDER_SHAPE] as u32)
-        .then_some(crate::value::TAG_UNDEFINED)
+    multi_answer(c, kind)
+}
+
+/// A multi-shape depth-1 entry's answer once a receiver token matched: the
+/// holder's ShapeId, then `undefined` or the holder's slot. Every receiver
+/// shape it names was admitted on its own walk and getter confirmation, with
+/// this holder and holder ShapeId and (for data) this slot word.
+#[inline]
+unsafe fn multi_answer(c: &PicCache, kind: u64) -> Option<u64> {
+    let holder = c[HOLDER_OBJ] as usize;
+    if shape_word(holder) != c[HOLDER_SHAPE] as u32 {
+        return None;
+    }
+    if kind & HOLDER_ABSENT_BIT != 0 {
+        return Some(crate::value::TAG_UNDEFINED);
+    }
+    holder_slot_value(holder, multi_slot(kind))
 }
 
 /// Spare depth-1 ABSENT words: the upper half of the holder-shape word and
@@ -482,6 +505,20 @@ unsafe fn key_may_be_accessor(obj: *const ObjectHeader, name: &[u8]) -> bool {
         }
     }
     false
+}
+
+/// [`holder_name_admitted`] for an ordinary read site's receiver. The
+/// method-site name refusals cover `constructor` because a CLASS instance's
+/// `constructor` is synthesized from the class registry (`instance_constructor_value`)
+/// rather than read off its chain. A receiver whose shape links to the realm's
+/// `%Object.prototype%` has no class prototype to synthesize from: its
+/// `constructor` is the chain's data slot like any other key, and the prime
+/// still admits it only after the getter's answer agreed with the walk.
+unsafe fn read_name_admitted(recv: *const ObjectHeader, name: &[u8]) -> bool {
+    if name == b"constructor" {
+        return admitted_proto_id(recv) == Some(PROTO_ID_DEFAULT);
+    }
+    holder_name_admitted(name)
 }
 
 /// The answer the shapes give, found by a walk that allocates nothing.
@@ -1053,7 +1090,7 @@ pub(crate) unsafe fn prime_read_holder(
     // does not decide the pre-walk; the walk after the getter does.
     let realm_pending = crate::array::object_prototype_addr_if_resolved() == 0;
     if !pending_class_accessor
-        && (!holder_name_admitted(name)
+        && (!read_name_admitted(recv, name)
             || key_may_be_accessor(recv, name)
             || (walk(recv, name, false).is_none() && !realm_pending))
     {
@@ -1121,13 +1158,29 @@ unsafe fn publish(cache: *mut PicCache, recv: *const ObjectHeader, w: &Walk, acc
     // words when they all share the same terminal object and terminal shape.
     // Every new token is admitted only after the caller's generic getter
     // returned `undefined` and `walk` proved the complete chain absent.
+    //
+    // The same holds for an inherited DATA key read off several receiver
+    // shapes that all reach it on the same holder (`o.constructor` on plain
+    // objects of many shapes): the holder, its ShapeId and the slot word are
+    // shared, only the receiver token differs.
     let old_kind = c[HOLDER_KIND] as u64;
+    let old_multi = old_kind & (HOLDER_MULTI_ABSENT | HOLDER_ACCESSOR | HOLDER_STUB)
+        == HOLDER_MULTI_ABSENT;
+    let same_answer = match w.slot {
+        None => {
+            old_kind == HOLDER_ABSENT_DEPTH1 as u64
+                || (old_multi && old_kind & HOLDER_ABSENT_BIT != 0)
+        }
+        Some(s) => {
+            old_kind == u64::from(s)
+                || (old_multi && old_kind & HOLDER_ABSENT_BIT == 0 && multi_slot(old_kind) == s)
+        }
+    };
     if !accessor
         && w.depth == 1
-        && w.slot.is_none()
+        && same_answer
         && c[HOLDER_RECV] != 0
         && c[HOLDER_RECV] != token
-        && (old_kind == HOLDER_ABSENT_DEPTH1 as u64 || old_kind & HOLDER_MULTI_ABSENT != 0)
         && c[HOLDER_OBJ] as usize == w.holder
         && c[HOLDER_SHAPE] as u32 == w.holder_shape
     {
@@ -1140,11 +1193,19 @@ unsafe fn publish(cache: *mut PicCache, recv: *const ObjectHeader, w: &Walk, acc
         let previous = c[HOLDER_RECV] as u32;
         c[HOLDER_RECV] = 0;
         set_multi_absent_id(c, next, previous);
-        c[HOLDER_KIND] = (HOLDER_ABSENT_BIT
+        let answer = match w.slot {
+            None => HOLDER_ABSENT_BIT,
+            Some(s) => u64::from(s) << MULTI_SLOT_SHIFT,
+        };
+        c[HOLDER_KIND] = (answer
             | HOLDER_MULTI_ABSENT
             | ((next + 1) % MULTI_ABSENT_EXTRA_IDS) as u64) as i64;
         c[HOLDER_RECV] = token;
-        PRIMES_ABSENT.fetch_add(1, Ordering::Relaxed);
+        if w.slot.is_some() {
+            PRIMES_HOLDER.fetch_add(1, Ordering::Relaxed);
+        } else {
+            PRIMES_ABSENT.fetch_add(1, Ordering::Relaxed);
+        }
         super::stats_report_enabled();
         return;
     }
