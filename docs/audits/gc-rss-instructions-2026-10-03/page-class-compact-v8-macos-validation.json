@@ -1,0 +1,82 @@
+{
+  "scope": "Private prototype; not production PR source or app-performance acceptance",
+  "base": "4c73576fb88248c4d33d5f1f2bb314adc034a707",
+  "source_sha256": "df41a2065a858dd32bdd90bb60613a6b12208f4f8d925c243ad424608d9a4d85",
+  "entry_bytes": {
+    "control": 40,
+    "prototype": 32
+  },
+  "initial_entries": 4096,
+  "requested_storage_delta_bytes": -32768,
+  "limitations": "32 KiB per-thread table-capacity saving is requested storage, not measured peak RSS. Ranges larger than u32 remain authoritative-map hits. Application instructions/RSS and Linux validation pending. Initial focused log precedes comment-only cleanup; off-focused and full logs compile final source.",
+  "logs": {
+    "focused": {
+      "sha256": "c971da1fb77fbac6f49bdbd67939babdc8ddb9defe8a3fd9d8d025dd02da5427",
+      "counts": [
+        6,
+        0,
+        0
+      ],
+      "child_counts": []
+    },
+    "off-focused": {
+      "sha256": "1fc0da073e851e3e216a821c5d1747f7b36382ee4736643515b9ce32d088a79e",
+      "counts": [
+        6,
+        0,
+        0
+      ],
+      "child_counts": []
+    },
+    "full": {
+      "sha256": "aab1a591c3833e238eb312dc6ccb7e81d469ed3527f2ac3480b9eb97be7d378a",
+      "counts": [
+        4852,
+        0,
+        5
+      ],
+      "child_counts": [
+        [
+          1,
+          0,
+          0
+        ],
+        [
+          1,
+          0,
+          0
+        ],
+        [
+          1,
+          0,
+          0
+        ],
+        [
+          1,
+          0,
+          0
+        ],
+        [
+          1,
+          0,
+          0
+        ],
+        [
+          1,
+          0,
+          0
+        ],
+        [
+          1,
+          0,
+          0
+        ],
+        [
+          1,
+          0,
+          0
+        ]
+      ]
+    }
+  }
+}
