@@ -361,7 +361,7 @@ impl Planner<'_, '_> {
                     return st;
                 }
                 if ibare.contains(&key) {
-                    if let Expr::PutValueSet { value, .. } = e {
+                    if let Expr::PutValueSet { value, .. } | Expr::PropertySet { value, .. } = e {
                         return self.expr(value, st);
                     }
                     return st;
@@ -403,6 +403,29 @@ impl Planner<'_, '_> {
                     }
                     _ if arrays::element_store(e).is_some() => self.element_store(e, &mut st),
                     _ => self.stale(e, &mut st),
+                }
+                st
+            }
+            // A static-key store through a binding: `o.p = v` in the forms
+            // that lower to `PropertySet`, and `o.p op= v` on a `const`
+            // binding (no base temp). The same bare store as `PutValueSet`'s.
+            Expr::PropertySet {
+                object,
+                property,
+                value,
+            } => {
+                st = self.expr(object, st);
+                let outer_rhs = self.in_store_rhs;
+                self.in_store_rhs = true;
+                st = self.expr(value, st);
+                self.in_store_rhs = outer_rhs;
+                match Recv::of(object) {
+                    Some(r) => {
+                        let boxed =
+                            !crate::type_analysis::expr_produces_canonical_raw_f64(self.ctx, value);
+                        self.access(e, r, property, true, boxed, &mut st)
+                    }
+                    None => self.stale(e, &mut st),
                 }
                 st
             }
@@ -981,6 +1004,15 @@ pub(super) fn accesses(ss: &[Stmt]) -> Vec<(Recv, String, bool, usize, Option<&E
                     if Recv::of(receiver) == Some(r) {
                         out.push((r, k.clone(), true, e as *const Expr as usize, Some(value)));
                     }
+                }
+            }
+            Expr::PropertySet {
+                object,
+                property,
+                value,
+            } => {
+                if let Some(r) = Recv::of(object) {
+                    out.push((r, property.clone(), true, e as *const Expr as usize, Some(value)));
                 }
             }
             _ => {}

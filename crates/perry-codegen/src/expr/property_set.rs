@@ -484,6 +484,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
             {
                 return super::private_field_site::lower_set(ctx, site, property, value);
             }
+            // Step 4b: a planned-bare store inside a region's F-body.
+            if let Some(v) =
+                crate::stmt::region_loop::try_lower_bare_put(ctx, expr, object, property, value)?
+            {
+                return Ok(v);
+            }
             if let Expr::LocalGet(id) = object.as_ref() {
                 if ctx.pod_records.get(id).is_some_and(|local| {
                     local

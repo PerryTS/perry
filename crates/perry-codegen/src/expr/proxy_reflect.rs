@@ -1417,10 +1417,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             }
             // Step 4b: a planned-bare store inside a region's F-body.
             if same_put_value_receiver_expr(target, receiver) {
-                if let Some(v) =
-                    crate::stmt::region_loop::try_lower_bare_put(ctx, expr, target, key, value)?
-                {
-                    return Ok(v);
+                if let Expr::String(k) = key.as_ref() {
+                    if let Some(v) =
+                        crate::stmt::region_loop::try_lower_bare_put(ctx, expr, target, k, value)?
+                    {
+                        return Ok(v);
+                    }
                 }
                 // #10741: a planned-bare element store (`a[i] = v`).
                 if let Some(v) = crate::stmt::region_loop::try_lower_bare_index_set(ctx, expr)? {
