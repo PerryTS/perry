@@ -1025,6 +1025,21 @@ pub(super) fn emit_guarded_direct_method_call(
     // then called directly. The learned arm calls the declared class's
     // ordinary body, never a clone that assumes the birth layout; a multi-arm
     // site compares it after every subclass arm.
+    //
+    // When the declared-class arm is an argument-typed dispatch (typed f64,
+    // i32, i1 or string parameters) and no proven-`this` clone is in play,
+    // that arm assumes nothing about the receiver: it guards only the
+    // arguments, then calls the parameter-typed clone or the internal generic
+    // body. The public wrapper is exactly that dispatch behind one more call,
+    // and the vtable reaches it for every receiver of the class. So the learned
+    // arm joins the declared-class arm instead of re-entering the method
+    // through its public wrapper.
+    let learned_joins_fast_arm = typed_f64_receiver_direct_fn.is_none()
+        && pshape_fn.is_none()
+        && (typed_direct_fn.is_some()
+            || typed_i32_direct_fn.is_some()
+            || typed_i1_direct_fn.is_some()
+            || typed_string_direct_fn.is_some());
     let learned_site: Option<(String, usize)> =
         (inline_single_arm || probe_before_runtime_guard || multi_arm).then(|| {
             let word = emit_direct_method_site_word(ctx);
@@ -1835,8 +1850,12 @@ pub(super) fn emit_guarded_direct_method_call(
     // exact word the runtime proved shadows nothing (`learned_check` above),
     // and the prototype guard bytes were re-checked on the way in. The
     // ordinary body runs its own receiver guards, so no layout is assumed.
-    let learned_value = learned_site.as_ref().map(|(_, idx)| {
+    let learned_value = learned_site.as_ref().and_then(|(_, idx)| {
         ctx.current_block = *idx;
+        if learned_joins_fast_arm {
+            ctx.block().br(&fast_label);
+            return None;
+        }
         let target = direct_call_fn.unwrap_or(direct_fn);
         let value = ctx.block().call(DOUBLE, target, direct_arg_slices);
         let truthy = truthy_result_kind.map(|kind| constructive_truthy(ctx, kind, &value));
@@ -1844,7 +1863,7 @@ pub(super) fn emit_guarded_direct_method_call(
         if !ctx.block().is_terminated() {
             ctx.block().br(&merge_label);
         }
-        (value, truthy, after)
+        Some((value, truthy, after))
     });
 
     ctx.current_block = fallback_idx;
