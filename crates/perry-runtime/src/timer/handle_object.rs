@@ -240,8 +240,9 @@ pub(crate) unsafe fn try_timer_method_fast_dispatch(object: f64, name: &[u8]) ->
     if proto.is_null() {
         return None;
     }
-    // `timer_handle_parts` proved `meta` non-null.
-    if (*(*obj).meta).prototype != crate::value::js_nanbox_pointer(proto as i64).to_bits() {
+    if crate::object::shapes::object_prototype_word(obj)
+        != crate::value::js_nanbox_pointer(proto as i64).to_bits()
+    {
         return None;
     }
     let name_str = std::str::from_utf8_unchecked(name);

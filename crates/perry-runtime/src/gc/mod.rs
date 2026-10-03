@@ -1036,6 +1036,9 @@ pub fn gc_init() {
     // ordered-keys slot; this scanner only follows existing forwarding records
     // for descriptors and the pointer-keyed slot accelerator after evacuation.
     reg_scanner!(crate::object::shapes::scan_shape_table_rekey_mut);
+    // The shape records' [[Prototype]] words and their identity index are
+    // strong roots (object::shapes_prototype).
+    reg_scanner!(crate::object::shapes::scan_shape_prototype_words_mut);
     reg_scanner!(crate::proxy::scan_proxy_roots_mut);
     // Object/string-valued `err.<prop> = v` user props live as raw bits in
     reg_scanner!(exception_mutable_root_scanner);

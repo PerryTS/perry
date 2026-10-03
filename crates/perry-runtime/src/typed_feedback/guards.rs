@@ -1606,10 +1606,12 @@ pub unsafe extern "C" fn js_object_own_method_cache_miss(
     {
         return 0;
     }
+    if crate::object::shapes::object_prototype_word(object) != 0 {
+        return 0;
+    }
     let meta = (*object).meta;
     if !meta.is_null()
-        && ((*meta).prototype != 0
-            || (*meta).attr_key_bits != 0
+        && ((*meta).attr_key_bits != 0
             || (*meta).accessor_key_bits != 0
             || (*meta).flags != 0
             || (*meta).private_evaluation_brand != 0)

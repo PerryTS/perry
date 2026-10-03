@@ -36,12 +36,18 @@ use std::cell::RefCell;
 
 #[path = "shapes_birth_width.rs"]
 mod shapes_birth_width;
+#[path = "shapes_prototype.rs"]
+mod shapes_prototype;
 #[path = "shapes_slot_list.rs"]
 mod shapes_slot_list;
 #[path = "shapes_store.rs"]
 mod shapes_store;
 #[path = "shapes_worker_seed.rs"]
 mod shapes_worker_seed;
+pub(crate) use shapes_prototype::{
+    identity_word_slot, note_full_trace_begin, proto_id_carries_word, prune_dead_shape_prototypes,
+    scan_shape_prototype_words_mut, shape_prototype_word,
+};
 #[path = "shapes_store_kind.rs"]
 pub(crate) mod store_kind;
 pub(crate) use shapes_birth_width::{keyless_birth_width, note_spill_width};
@@ -271,6 +277,16 @@ impl ShapeRecordRef {
     #[inline]
     pub(crate) fn keys_slot(self) -> *mut u64 {
         self.0.as_ptr() as *mut u64
+    }
+
+    /// The record's [[Prototype]] identity word as a GC edge
+    /// (`shapes_prototype`): its address when the identity names a heap
+    /// object, else `None`. Every shape of one prototype hands the collector
+    /// the same word to mark through and rewrite in place.
+    #[inline]
+    pub(crate) fn prototype_slot(self, dedupe: bool) -> Option<*mut u64> {
+        // SAFETY: a live slab record (type docs).
+        shapes_prototype::identity_edge_slot(unsafe { (*self.0.as_ptr()).proto_id }, dedupe)
     }
 
     /// The record's field-representation word (`field_rep`), deprecated
@@ -3703,6 +3719,7 @@ pub(crate) unsafe fn transition_object_shape_semantics_keeping_constfn(
 pub(crate) unsafe fn transition_object_shape_prototype(
     obj: *mut crate::object::ObjectHeader,
     proto_id: u64,
+    proto_bits: u64,
 ) -> u32 {
     if obj.is_null() || !shape_word_is_writable(obj) {
         return 0;
@@ -3711,6 +3728,10 @@ pub(crate) unsafe fn transition_object_shape_prototype(
         synchronize_object_shape_descriptor(obj);
         object_shape_descriptor(obj).expect("shape synchronization must publish a descriptor")
     });
+    // The identity's word names the prototype before any shape names the
+    // identity (`shapes_prototype`). The word is a root of every rewrite, so
+    // a mint below that collects repairs it with everything else.
+    shapes_prototype::write_identity_word(proto_id, proto_bits);
     if current.proto_id == proto_id {
         return object_shape_stamp(obj);
     }
@@ -3745,7 +3766,7 @@ pub(crate) unsafe fn restamp_object_proto_id(obj: *mut crate::object::ObjectHead
     if obj.is_null() || !shape_word_is_writable(obj) || object_shape_stamp(obj) == 0 {
         return 0;
     }
-    transition_object_shape_prototype(obj, object_proto_id(obj));
+    transition_object_shape_prototype(obj, object_proto_id(obj), object_prototype_word(obj));
     // A `class_id` rewrite is also an F-A input (charter step 3, R4): a
     // prototype transition re-derives it, but an unchanged prototype
     // identity mints nothing, so re-derive explicitly.
@@ -3884,6 +3905,95 @@ pub(crate) unsafe fn stable_linked_proto_id(class_id: u32, bits: u64) -> Option<
 /// # Safety
 /// `obj` is a live `ObjectHeader`.
 pub(crate) unsafe fn object_proto_id(obj: *const crate::object::ObjectHeader) -> u64 {
+    object_proto_id_for(obj, object_prototype_word(obj))
+}
+
+/// Does `id` name a present, keyless, generation-0, hole-free shape at
+/// prototype identity `proto_id` with `slots` live inline slots — the facts
+/// of a construction's birth shape (#10507's birth record)? One directory
+/// read; no descriptor copy.
+#[inline]
+pub(crate) fn shape_is_keyless_birth(id: u32, proto_id: u64, slots: u32) -> bool {
+    let Some(record) = ShapeSlab::agent_record_present(id) else {
+        return false;
+    };
+    // SAFETY: a present record of this agent, read immediately.
+    unsafe {
+        (*record).proto_id == proto_id
+            && (*record).logical_key_count == 0
+            && (*record).semantic_generation == 0
+            && (*record).hole_count == 0
+            && (*record).live_inline_slot_count == slots
+    }
+}
+
+/// A synthetic class id: a plain function constructor's (or
+/// `Object.create`'s historical) class, the only receivers the prototype
+/// funnel links without a meta record.
+#[inline]
+pub(crate) fn is_synthetic_class_id(class_id: u32) -> bool {
+    (SYNTHETIC_CLASS_ID_BASE
+        ..crate::object::class_registry::prototype_objects::SYNTHETIC_CLASS_ID_END)
+        .contains(&class_id)
+}
+
+/// The first synthetic class id (`class_registry::prototype_objects`), for
+/// the receivers [`is_synthetic_class_id`] admits.
+pub(crate) const SYNTHETIC_CLASS_ID_BASE: u32 =
+    crate::object::class_registry::prototype_objects::SYNTHETIC_CLASS_ID_BASE;
+
+/// `obj`'s recorded [[Prototype]] bits, 0 when nothing is recorded (the
+/// prototype is the default or the class's). A receiver that has a meta
+/// record has it there (the prototype funnel writes both, and a
+/// `PROTO_ID_PER_OBJECT` receiver's shape answers nothing); a meta-less
+/// function-constructor instance reads it from its shape's identity word
+/// (`shapes_prototype`). Allocation-free.
+///
+/// # Safety
+/// `obj` is a live `ObjectHeader`.
+///
+/// A null [[Prototype]] is the identity `PROTO_ID_NULL` and reads back as
+/// `TAG_NULL` — except on a cell BORN null (`Object.create(null)`,
+/// `OBJ_FLAG_NULL_PROTO`), which answers 0 as it always has: every reader
+/// tests that header bit for the born-null case, and a recorded null would
+/// send it down the re-prototyped-receiver paths instead.
+#[inline]
+pub(crate) unsafe fn object_prototype_word(obj: *const crate::object::ObjectHeader) -> u64 {
+    let meta = (*obj).meta;
+    if !meta.is_null() && (*meta).prototype != 0 {
+        return (*meta).prototype;
+    }
+    // Only a function constructor's instance (a synthetic class) is linked
+    // without writing a meta record's word
+    // (`prototype_chain::object_set_static_prototype_impl`); it may have
+    // gained a record for something else since. Any other receiver without a
+    // recorded word recorded nothing, which one compare says.
+    if !is_synthetic_class_id((*obj).class_id) {
+        return 0;
+    }
+    // The agent directory read: never null, an absent id reads the empty
+    // record (identity 0, the default).
+    let proto_id = (*ShapeSlab::agent_record(object_shape_stamp(obj))).proto_id;
+    if proto_id != PROTO_ID_NULL {
+        return shapes_prototype::identity_prototype_word(proto_id);
+    }
+    match crate::value::addr_class::try_read_gc_header(obj as usize) {
+        Some(header) if header._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 => 0,
+        _ => crate::value::TAG_NULL,
+    }
+}
+
+/// The prototype identity `obj` has when its recorded [[Prototype]] is
+/// `recorded` (0 = none recorded): [`object_proto_id`] for a prototype being
+/// linked, before any shape names it.
+///
+/// # Safety
+/// `obj` is a live `ObjectHeader`; `recorded` is 0, `TAG_NULL` or a value's
+/// bits.
+pub(crate) unsafe fn object_proto_id_for(
+    obj: *const crate::object::ObjectHeader,
+    recorded: u64,
+) -> u64 {
     // A namespace's vtable/override registry can answer before its physical
     // own slots. Project that read classification into the shape, as for
     // process.env and arguments below; an own-slot region cannot admit it.
@@ -3898,16 +4008,35 @@ pub(crate) unsafe fn object_proto_id(obj: *const crate::object::ObjectHeader) ->
     {
         return PROTO_ID_PER_OBJECT;
     }
-    if let Some(header) = crate::value::addr_class::try_read_gc_header(obj as usize) {
-        if header._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 {
-            return PROTO_ID_NULL;
+    // A recorded prototype outranks the born-null header bit, which is
+    // sticky: `Object.setPrototypeOf(Object.create(null), p)` keeps the bit
+    // and its shape must still name `p`.
+    if recorded == 0 {
+        if let Some(header) = crate::value::addr_class::try_read_gc_header(obj as usize) {
+            if header._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 {
+                return PROTO_ID_NULL;
+            }
         }
     }
     let class_id = (*obj).class_id;
     let class = vtable_class(class_id);
-    if !meta.is_null() && (*meta).prototype != 0 {
-        return stable_linked_proto_id(class_id, (*meta).prototype)
-            .unwrap_or_else(fresh_unique_proto_id);
+    if recorded != 0 {
+        if let Some(id) = stable_linked_proto_id(class_id, recorded) {
+            return id;
+        }
+        // A prototype with no stable identity gets one per link, carried by
+        // lineage: the receiver's own shape already has one for these bits
+        // when they are the ones its word holds.
+        let stamp = object_shape_stamp(obj);
+        let current = shape_proto_id(stamp).unwrap_or(PROTO_ID_DEFAULT);
+        if class == 0
+            && current & PROTO_ID_UNIQUE == PROTO_ID_UNIQUE
+            && proto_id_carries_word(current)
+            && shape_prototype_word(stamp) == recorded
+        {
+            return current;
+        }
+        return fresh_unique_proto_id();
     }
     if class != 0 {
         return PROTO_ID_CLASS | u64::from(class);

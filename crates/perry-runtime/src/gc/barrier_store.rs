@@ -191,6 +191,18 @@ pub(crate) fn runtime_store_jsvalue_slot(
     runtime_write_barrier_slot(parent_user, slot_addr, value_bits);
 }
 
+/// Shade `value_bits` for an in-progress incremental mark: an edge that now
+/// lives outside the heap on behalf of an owner the mark may already have
+/// traced (a shape record's [[Prototype]] word, `object::shapes_prototype`).
+/// The minor-collection half of such an edge is the shape table's
+/// old-carrier gate, so no remembered-set entry is recorded.
+pub(crate) fn runtime_shade_external_edge(value_bits: u64) {
+    if barrier_scalar_child_skips(value_bits) {
+        return;
+    }
+    let _ = incremental_mark_barrier_value(value_bits);
+}
+
 pub(crate) fn runtime_write_barrier_external_slot(
     parent_addr: usize,
     slot_addr: usize,

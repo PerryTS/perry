@@ -61,13 +61,14 @@ fn construction_is_born_from_the_prototype_birth_record() {
             synthetic_class_id_for_function(func),
             "a construction carries its function's class"
         );
-        let second_meta = (*second).meta;
+        // The birth shape names the prototype; a replayed construction
+        // carries no per-instance record.
         assert!(
-            !second_meta.is_null(),
-            "the class-default link's meta record"
+            (*second).meta.is_null(),
+            "a replayed construction allocates no meta record"
         );
         assert_eq!(
-            (*second_meta).prototype,
+            crate::object::shapes::object_prototype_word(second),
             crate::value::js_nanbox_pointer(proto as i64).to_bits()
         );
         assert_eq!(

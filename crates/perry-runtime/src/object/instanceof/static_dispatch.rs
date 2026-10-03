@@ -170,11 +170,22 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
     // has `Function.prototype` in its prototype chain. Keep `CLASS_ID_FUNCTION`
     // in sync with perry-codegen/src/expr/instance_misc1.rs.
     if class_id == CLASS_ID_FUNCTION {
-        return if value_is_callable(value) {
-            true_val
-        } else {
-            false_val
-        };
+        if value_is_callable(value) {
+            return true_val;
+        }
+        // An ordinary object whose recorded chain reaches a function
+        // (`Object.create(fn)`) has `Function.prototype` on it too.
+        let addr = value_addr(value);
+        if addr != 0
+            && unsafe { crate::object::prototype_chain::meta_capable_object(addr) }.is_some()
+            && crate::object::prototype_chain::object_static_prototype(addr).is_some()
+        {
+            let function = js_get_global_this_builtin_value(b"Function".as_ptr(), 8);
+            if ordinary_has_instance_prototype_walk(value, function) {
+                return true_val;
+            }
+        }
+        return false_val;
     }
     if class_id == CLASS_ID_URL {
         let addr = value_addr(value);
@@ -592,6 +603,24 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
                     {
                         return if answer { true_val } else { false_val };
                     }
+                }
+            }
+            // An ordinary object whose chain ends in null before it reaches
+            // `Object.prototype` (`Object.create(null)`) is not an instance.
+            // Only a cell born null, a receiver with a recorded prototype, or
+            // a program that ever replaced one can have such a chain.
+            let addr = jsval.as_pointer::<u8>() as usize;
+            if let Some(obj) = unsafe { crate::object::prototype_chain::meta_capable_object(addr) }
+            {
+                let born_null =
+                    unsafe { crate::value::addr_class::try_read_gc_header(obj as usize) }
+                        .is_some_and(|h| h._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0);
+                if (born_null
+                    || crate::object::prototype_chain::any_user_prototype_override()
+                    || crate::object::prototype_chain::object_static_prototype(addr).is_some())
+                    && crate::object::prototype_chain::prototype_chain_ends_in_null_before_object_prototype(addr)
+                {
+                    return false_val;
                 }
             }
             // Covers every heap object, including a Date (now a NaN-boxed

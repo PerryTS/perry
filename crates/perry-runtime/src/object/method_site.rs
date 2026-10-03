@@ -1093,9 +1093,9 @@ unsafe fn prime_inherited(
 /// record's `[[Prototype]]`, else a synthetic class's (`Object.create`, an ES5
 /// constructor) registered prototype. Null for a default builtin prototype.
 unsafe fn next_prototype(obj: *const ObjectHeader) -> *const ObjectHeader {
-    let meta = (*obj).meta;
-    if !meta.is_null() && (*meta).prototype != 0 {
-        let p = crate::value::JSValue::from_bits((*meta).prototype);
+    let recorded = crate::object::shapes::object_prototype_word(obj);
+    if recorded != 0 {
+        let p = crate::value::JSValue::from_bits(recorded);
         if !p.is_pointer() {
             return std::ptr::null();
         }

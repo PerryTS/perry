@@ -1027,6 +1027,8 @@ pub(crate) struct ShapeSlab {
     /// publishes its directories into [`AGENT_SHAPE_DIR`]. A slab a test
     /// builds on its own does not.
     agent: bool,
+    /// The agent's identity -> [[Prototype]] words (`shapes_prototype`).
+    pub(super) protos: super::shapes_prototype::ProtoWords,
 }
 
 impl Drop for ShapeSlab {
@@ -1036,6 +1038,7 @@ impl Drop for ShapeSlab {
                 band.pages.set(std::ptr::null());
                 band.len.set(0);
             }
+            self.protos.unpublish();
         }
         // Retired records release on removal; live records release at agent
         // teardown. Rekeys transfer one pointer, never duplicate ownership.
@@ -1055,6 +1058,7 @@ impl ShapeSlab {
             exotic_pages: Vec::new(),
             len: 0,
             agent: false,
+            protos: Default::default(),
         }
     }
 
@@ -1064,6 +1068,7 @@ impl ShapeSlab {
         let mut slab = Self::new();
         slab.agent = true;
         slab.publish_dir();
+        slab.protos.make_agent();
         slab
     }
 
@@ -1399,6 +1404,7 @@ impl ShapeSlab {
         }
         self.publish_dir();
         self.len = 0;
+        self.protos.reset();
     }
 
     /// Bytes held: the page directory, every allocated page and every
