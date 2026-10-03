@@ -84,6 +84,16 @@ pub const PACKED_SET_EMPTY: u64 = 0xFFFF_FFFF;
 /// `expr/put_value_store_ic.rs` (the word's sign bit).**
 pub const PACKED_SET_F64_SLOT: u64 = 1 << 63;
 
+/// The word's (and a way's) bit for an inline slot whose lane is ConstFn in
+/// the word's ShapeId (`perry_abi::PACKED_SET_CONSTFN_SLOT`). The emitted hit
+/// then stores only a closure whose info word is the site's ConstFn body
+/// (`PackedSetSite::constfn_info`), which keeps the shape's body claim true;
+/// any other value takes the miss, whose checked funnel deprecates the lane.
+/// Published only with a site record (`packed` non-null) whose body it is.
+pub const PACKED_SET_CONSTFN_SLOT: u64 = crate::codegen_abi::PACKED_SET_CONSTFN_SLOT;
+/// The flag bits of a word's slot half.
+const PACKED_SET_FLAGS: u64 = PACKED_SET_F64_SLOT | PACKED_SET_CONSTFN_SLOT;
+
 /// Ways in a site's cache. The first [`PACKED_SET_INLINE_WAYS`] are compared by
 /// the emitted code (**must equal `PACKED_SET_INLINE_WAYS` in
 /// `perry-codegen/src/expr/put_value_store_ic.rs`**); the rest by this entry.
@@ -335,7 +345,7 @@ unsafe fn packed_ways_store_impl(
     for (way, word) in ways.iter().enumerate() {
         let word = word.load(Ordering::Relaxed);
         let stamp = word as u32;
-        let index = ((word & !PACKED_SET_F64_SLOT) >> 32) as u32;
+        let index = ((word & !PACKED_SET_FLAGS) >> 32) as u32;
         if stamp == sid && way >= first_way {
             // Charter step 3: the matched id is an `Ordinary` shape (the only
             // kind `prime_packed_set` publishes), which proves the receiver
@@ -450,13 +460,37 @@ unsafe fn prime_packed_set(
     let Some(idx) = own_idx else {
         return;
     };
-    // The emitted hit stores raw bits and cannot invalidate a ConstFn body
-    // fact. Keep only this SPECIAL slot on the checked miss path; other
-    // Any/F64 slots in the same completed shape remain cacheable.
-    if crate::object::field_rep::slot_rep(shape.rep, idx) == crate::object::field_rep::REP_SPECIAL {
-        return;
-    }
     let inline = idx < shape.live_inline_slot_count;
+    // The emitted hit stores raw bits, so a ConstFn slot is published only
+    // flagged: the hit then admits only a closure of the site's one body,
+    // which keeps the shape's body claim (any other value takes the miss and
+    // its checked funnel). Without a site record, or with another body
+    // already claimed by the site, the slot keeps the checked miss path.
+    let constfn_slot = if crate::object::field_rep::slot_rep(shape.rep, idx)
+        == crate::object::field_rep::REP_SPECIAL
+    {
+        let body = shape
+            .constfn_infos()
+            .iter()
+            .find(|entry| u32::from(entry.slot) == idx)
+            .map(|entry| entry.info);
+        let site = packed as *const super::packed_add::PackedSetSite;
+        match body {
+            Some(body)
+                if inline
+                    && !site.is_null()
+                    && shape.special_constfn_mask & (1u32 << idx) != 0
+                    && !crate::object::field_rep::has_deprecated(shape.rep)
+                    && shape.deprecation_targets() == (0, 0)
+                    && super::packed_add::claim_constfn_body(site, body) =>
+            {
+                PACKED_SET_CONSTFN_SLOT
+            }
+            _ => return,
+        }
+    } else {
+        0
+    };
     if !inline && !(idx < key_count && idx < IC_SLOT_OVERFLOW_BIT) {
         return;
     }
@@ -481,7 +515,7 @@ unsafe fn prime_packed_set(
     } else {
         0
     };
-    let entry = (u64::from(index) << 32) | u64::from(key32) | f64_slot;
+    let entry = (u64::from(index) << 32) | u64::from(key32) | f64_slot | constfn_slot;
 
     // The way cache: fill the first empty way, never evict.
     if !cache_slot.is_null() {

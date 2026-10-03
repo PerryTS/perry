@@ -114,13 +114,22 @@ pub(crate) const PACKED_SET_INLINE_WAYS: usize = 4;
 const BOXED_TAG_FIRST_TOP16: &str = "32761";
 const BOXED_TAG_SPAN: &str = "7";
 
-/// Words of a site's record `@perry_ic_N_packed_set` (`[4 x i64]`): the
-/// existing-key word, the key-add memo's shapes and guard words, and the
-/// runtime's pointer to further key-add memos (never read here). **Must
+/// Words of a site's record `@perry_ic_N_packed_set` (`[5 x i64]`): the
+/// existing-key word, the key-add memo's shapes and guard words, the
+/// runtime's pointer to further key-add memos, and the site's ConstFn body
+/// (`perry_abi::PACKED_SET_CONSTFN_INFO_WORD`). **Must
 /// equal `perry_runtime::proxy::put_value::packed_add::{PACKED_SET_SITE_WORDS,
 /// ADD_SHAPES_WORD, ADD_GUARD_WORD, ADD_SLOT_BITS}`**; pinned by the runtime's
 /// `packed_set_site_layout_matches_codegen`.
-pub(crate) const PACKED_SET_SITE_WORDS: usize = 4;
+pub(crate) const PACKED_SET_SITE_WORDS: usize = crate::runtime_abi::PACKED_SET_SITE_WORDS;
+/// The site word naming its ConstFn body (a `JsFunctionInfo` address, 0 =
+/// none); a ConstFn-flagged entry hits only for a closure whose info word
+/// equals it.
+const CONSTFN_INFO_WORD: usize = crate::runtime_abi::PACKED_SET_CONSTFN_INFO_WORD;
+/// The existing-key word's ConstFn bit (`perry_abi::PACKED_SET_CONSTFN_SLOT`).
+const PACKED_SET_CONSTFN_SLOT: u64 = crate::runtime_abi::PACKED_SET_CONSTFN_SLOT;
+/// The key-add guard's ConstFn bit (`perry_abi::PACKED_ADD_CONSTFN_SLOT`).
+const ADD_CONSTFN_SLOT: u64 = crate::runtime_abi::PACKED_ADD_CONSTFN_SLOT;
 pub(crate) const ADD_SHAPES_WORD: usize = 1;
 pub(crate) const ADD_GUARD_WORD: usize = 2;
 pub(crate) const ADD_SLOT_BITS: u32 = 16;
@@ -144,10 +153,13 @@ pub(crate) const ADD_WAY_PROBES: usize = 2;
 /// whose lane at the slot is not `Any`. **Must equal
 /// `perry_runtime::proxy::put_value::packed_add::ADD_F64_SLOT`.**
 const ADD_F64_SLOT: u64 = 1 << (ADD_SLOT_BITS - 1);
-const ADD_SLOT_MASK: u64 = ADD_F64_SLOT - 1;
-/// The store word's slot half without its top bit, the runtime's
-/// `packed_set::PACKED_SET_F64_SLOT` (the word's sign bit).
-const PACKED_SLOT_INDEX_MASK: &str = "2147483647";
+const ADD_SLOT_MASK: u64 = ADD_CONSTFN_SLOT - 1;
+const _: () = assert!(ADD_CONSTFN_SLOT == 1 << (ADD_SLOT_BITS - 2));
+/// The store word's slot half without its two flag bits: the runtime's
+/// `packed_set::PACKED_SET_F64_SLOT` (the word's sign bit) and
+/// `PACKED_SET_CONSTFN_SLOT` (bit 62).
+const PACKED_SLOT_INDEX_MASK: &str = "1073741823";
+const _: () = assert!(PACKED_SET_CONSTFN_SLOT == 1 << 62);
 /// A double's exponent field: all ones = an INT32/tagged box, an infinity or
 /// a NaN, the values an `F64` lane refuses inline (DESIGN §3.2).
 const F64_EXP_MASK: &str = "9218868437227405312"; // 0x7FF0_0000_0000_0000
@@ -256,7 +268,7 @@ pub(crate) fn emit_static_store_ic(
     );
     ctx.typed_parse_rodata.push(format!(
         "@{packed_name} = private global [{PACKED_SET_SITE_WORDS} x i64] \
-         [i64 {PACKED_SET_EMPTY}, i64 {PACKED_SET_EMPTY}, i64 0, i64 0], align 8"
+         [i64 {PACKED_SET_EMPTY}, i64 {PACKED_SET_EMPTY}, i64 0, i64 0, i64 0], align 8"
     ));
     let packed_ref = format!("@{packed_name}");
 
@@ -460,12 +472,28 @@ pub(crate) fn emit_static_store_ic(
     // a finite double, stored inline as is; anything else (a box, an
     // infinity, a NaN) takes the miss, whose store is the checked funnel
     // (canonicalize, or generalize the lane with the shape word first).
+    //
+    // A word with bit 62 set names a ConstFn lane: only a closure of the
+    // site's one body is stored inline (`emit_constfn_value_check`).
     ctx.current_block = rep_idx;
+    let flags = ctx.block().lshr(I64, &word, "62");
+    let plain = ctx.block().icmp_eq(I64, &flags, "0");
+    let lane_idx = ctx.new_block(&format!("{STORE_IC_STEM}.hit.lane"));
+    let lane_label = ctx.block_label(lane_idx);
+    ctx.block().cond_br(&plain, &store_label, &lane_label);
+    ctx.current_block = lane_idx;
     let f64_slot = ctx.block().icmp_slt(I64, &word, "0");
+    let f64_idx = ctx.new_block(&format!("{STORE_IC_STEM}.hit.f64"));
+    let f64_label = ctx.block_label(f64_idx);
+    let constfn_idx = ctx.new_block(&format!("{STORE_IC_STEM}.hit.constfn"));
+    let constfn_label = ctx.block_label(constfn_idx);
+    ctx.block().cond_br(&f64_slot, &f64_label, &constfn_label);
+    ctx.current_block = f64_idx;
     let exponent = ctx.block().and(I64, value_bits, F64_EXP_MASK);
     let boxed = ctx.block().icmp_eq(I64, &exponent, F64_EXP_MASK);
-    let refuse = ctx.block().and(I1, &f64_slot, &boxed);
-    ctx.block().cond_br(&refuse, &miss_label, &store_label);
+    ctx.block().cond_br(&boxed, &miss_label, &store_label);
+    ctx.current_block = constfn_idx;
+    emit_constfn_value_check(ctx, &packed_ref, value_bits, &store_label, &miss_label);
 
     // The store, then the GC's obligations for the bits actually stored.
     ctx.current_block = store_idx;
@@ -500,6 +528,7 @@ pub(crate) fn emit_static_store_ic(
     };
     let add_end_label = emit_key_add_hit(
         ctx,
+        &packed_ref,
         &shapes,
         &pair_ptr,
         &handle,
@@ -575,6 +604,7 @@ mod setter_arm;
 #[allow(clippy::too_many_arguments)]
 fn emit_key_add_hit(
     ctx: &mut FnCtx<'_>,
+    packed_ref: &str,
     shapes: &str,
     pair_ptr: &str,
     handle: &str,
@@ -608,13 +638,29 @@ fn emit_key_add_hit(
     // Charter step 5 (P2c): a memo whose successor has an `F64` lane at the
     // slot admits only a value whose exponent is not all ones (a finite
     // double); the miss serves the rest, before anything is stamped.
+    // A memo whose successor's lane is ConstFn admits only a closure of the
+    // site's one body (`emit_constfn_value_check`), also before any stamp.
     ctx.current_block = rep_idx;
-    let flag = ctx.block().and(I64, &guard, &ADD_F64_SLOT.to_string());
-    let f64_slot = ctx.block().icmp_ne(I64, &flag, "0");
+    let flags = ctx
+        .block()
+        .and(I64, &guard, &(ADD_F64_SLOT | ADD_CONSTFN_SLOT).to_string());
+    let plain = ctx.block().icmp_eq(I64, &flags, "0");
+    let lane_idx = ctx.new_block(&format!("{ADD_STEM}.lane"));
+    let lane_label = ctx.block_label(lane_idx);
+    ctx.block().cond_br(&plain, &obj_label, &lane_label);
+    ctx.current_block = lane_idx;
+    let f64_slot = ctx.block().icmp_eq(I64, &flags, &ADD_F64_SLOT.to_string());
+    let f64_idx = ctx.new_block(&format!("{ADD_STEM}.f64"));
+    let f64_label = ctx.block_label(f64_idx);
+    let constfn_idx = ctx.new_block(&format!("{ADD_STEM}.constfn"));
+    let constfn_label = ctx.block_label(constfn_idx);
+    ctx.block().cond_br(&f64_slot, &f64_label, &constfn_label);
+    ctx.current_block = f64_idx;
     let exponent = ctx.block().and(I64, value_bits, F64_EXP_MASK);
     let boxed = ctx.block().icmp_eq(I64, &exponent, F64_EXP_MASK);
-    let refuse = ctx.block().and(I1, &f64_slot, &boxed);
-    ctx.block().cond_br(&refuse, miss_label, &obj_label);
+    ctx.block().cond_br(&boxed, miss_label, &obj_label);
+    ctx.current_block = constfn_idx;
+    emit_constfn_value_check(ctx, packed_ref, value_bits, &obj_label, miss_label);
 
     // The GcHeader's first word (obj_type | gc_flags << 8 | _reserved << 16).
     // No receiver-kind admission: the memo's pre-shape is an `Ordinary` shape
@@ -679,6 +725,79 @@ fn emit_key_add_hit(
     let end = ctx.block().label.clone();
     ctx.block().br(merge_label);
     end
+}
+
+/// The ConstFn store check (a word or memo flagged ConstFn): `value_bits` is
+/// a function object of the site's one body, so storing it keeps the
+/// ShapeId's body claim. Branches to `ok_label` or `miss_label`; nothing is
+/// written, nothing can collect.
+///
+/// ```text
+///   POINTER tag, payload above the handle band   the fused receiver test
+///   GcHeader (type, flags)                       GC_TYPE_CLOSURE, not FORWARDED
+///   ClosureHeader::info                          == site word CONSTFN_INFO_WORD (!= 0)
+///   ClosureHeader::capture_count flags           not a rebindable `this` clone
+/// ```
+///
+/// The same three loads as the method site's closure test
+/// (`expr/method_site.rs`) and the guarded direct call
+/// (`lower_call/early_branches.rs`); the shape, not the closure, owns the
+/// body fact, so a factory closure (same body, other captures) is admitted.
+/// An arrow capturing `this` is refused here although the runtime admits it
+/// (`field_rep_store::constfn_store_info`): its miss stores it correctly.
+fn emit_constfn_value_check(
+    ctx: &mut FnCtx<'_>,
+    packed_ref: &str,
+    value_bits: &str,
+    ok_label: &str,
+    miss_label: &str,
+) {
+    use crate::expr::receiver_range::{emit_field_ptr, emit_fused_receiver_test};
+    let header_idx = ctx.new_block(&format!("{STORE_IC_STEM}.constfn.header"));
+    let header_label = ctx.block_label(header_idx);
+    let fused = emit_fused_receiver_test(ctx.block(), value_bits);
+    ctx.block()
+        .cond_br(&fused.is_object_pointer, &header_label, miss_label);
+    ctx.current_block = header_idx;
+    let kind_mask = u16::from(crate::runtime_abi::GC_FLAG_FORWARDED) << 8 | 0xFF;
+    let blk = ctx.block();
+    let kind_ptr = emit_field_ptr(
+        blk,
+        &fused.biased,
+        -(crate::runtime_abi::GC_HEADER_SIZE as i64),
+    );
+    let kind_flags = blk.load(crate::types::I16, &kind_ptr);
+    let masked = blk.and(crate::types::I16, &kind_flags, &kind_mask.to_string());
+    let kind_ok = blk.icmp_eq(
+        crate::types::I16,
+        &masked,
+        &crate::runtime_abi::GC_TYPE_CLOSURE.to_string(),
+    );
+    let info_ptr = emit_field_ptr(
+        blk,
+        &fused.biased,
+        crate::runtime_abi::CLOSURE_INFO_OFFSET as i64,
+    );
+    let info = blk.load(I64, &info_ptr);
+    let body_ptr = blk.gep(I64, packed_ref, &[(I64, &CONSTFN_INFO_WORD.to_string())]);
+    let body = blk.load_atomic_monotonic(I64, &body_ptr, 8);
+    let info_eq = blk.icmp_eq(I64, &info, &body);
+    let body_set = blk.icmp_ne(I64, &body, "0");
+    let count_ptr = emit_field_ptr(blk, &fused.biased, 0);
+    let count = blk.load(I32, &count_ptr);
+    let this_flags = crate::runtime_abi::CLOSURE_CAPTURES_THIS_FLAG
+        | crate::runtime_abi::CLOSURE_NO_THIS_REBIND_FLAG;
+    let count_flags = blk.and(I32, &count, &(this_flags as i32).to_string());
+    let rebindable = blk.icmp_eq(
+        I32,
+        &count_flags,
+        &(crate::runtime_abi::CLOSURE_CAPTURES_THIS_FLAG as i32).to_string(),
+    );
+    let not_rebindable = blk.xor(I1, &rebindable, "true");
+    let body_ok = blk.and(I1, &info_eq, &body_set);
+    let closure_ok = blk.and(I1, &kind_ok, &not_rebindable);
+    let ok = blk.and(I1, &body_ok, &closure_ok);
+    blk.cond_br(&ok, ok_label, miss_label);
 }
 
 /// The GC obligations after an object slot store. Plain doubles and scalar
