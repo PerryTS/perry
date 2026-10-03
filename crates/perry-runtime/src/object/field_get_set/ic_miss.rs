@@ -937,6 +937,18 @@ pub(super) fn get_field_ic_miss_impl(
                 return crate::array::js_array_length(arr) as f64;
             }
             unsafe {
+                // A plain function on its base shape: the site's holder entry
+                // answers a key its shape and `%Function.prototype%`'s chain
+                // prove (`read_holder::prime_function_read`).
+                if gc_kind == Some(crate::gc::GC_TYPE_CLOSURE) {
+                    if let Some(val) = crate::object::method_site::read_holder::prime_function_read(
+                        obj as usize,
+                        key,
+                        cache_slot,
+                    ) {
+                        return val;
+                    }
+                }
                 if let Some(val) = closure_dynamic_prop_by_key(obj as usize, key) {
                     if diag {
                         ic_diag_note(cache_slot, key, R::ClosureProp);

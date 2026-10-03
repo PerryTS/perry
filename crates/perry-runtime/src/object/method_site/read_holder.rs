@@ -813,6 +813,164 @@ pub(crate) unsafe fn dynamic_absent_terminal(obj: *const ObjectHeader, name: &[u
         .then_some(w.holder_shape)
 }
 
+/// The walk for a FUNCTION receiver (#10497): `f.k` on a plain function on
+/// its base shape, whose ShapeId (`closure::shape`) pins that its own keys are
+/// exactly the intrinsic `name`, `length` and `prototype` and that its
+/// [[Prototype]] is the realm's `%Function.prototype%` (any own-key install,
+/// delete, descriptor or `setPrototypeOf` moves it to the FunctionDictionary
+/// shape). The chain from `%Function.prototype%` on is an ordinary [`walk`],
+/// with `%Function.prototype%` as the entry's first hop. The intrinsic names
+/// and the function methods the getter synthesizes are refused, so only a
+/// key that genuinely lives on (or is absent from) the prototype objects is
+/// described. Allocation-free.
+unsafe fn function_walk(closure: usize, name: &[u8]) -> Option<Walk> {
+    if !holder_name_admitted(name)
+        || matches!(
+            name,
+            b"name" | b"length" | b"prototype" | b"caller" | b"arguments" | b"call" | b"apply" | b"bind"
+        )
+        || std::str::from_utf8(name)
+            .ok()
+            .is_none_or(|n| crate::object::reified_function_method_name(n).is_some())
+    {
+        return None;
+    }
+    let header = crate::value::addr_class::try_read_gc_header(closure)?;
+    if header.obj_type != crate::gc::GC_TYPE_CLOSURE
+        || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        || !super::address_is_prime_stable(closure)
+    {
+        return None;
+    }
+    let c = closure as *const crate::closure::ClosureHeader;
+    if !crate::closure::shape::closure_on_base_shape(c)
+        || shape_proto_id((*c).shape_id)? != crate::closure::shape::INTRINSIC_SERIAL_FUNCTION
+    {
+        return None;
+    }
+    let fp = crate::array::function_prototype_addr_if_resolved();
+    if fp == 0 || !hop_admitted(fp, name) {
+        return None;
+    }
+    let fp_obj = fp as *const ObjectHeader;
+    let shape = object_shape_descriptor(fp_obj)?;
+    let fp_shape = object_shape_stamp(fp_obj);
+    if !shape.object_kind.is_ordinary_layout() || fp_shape == 0 {
+        return None;
+    }
+    let mut w = Walk {
+        holder: fp,
+        holder_shape: fp_shape,
+        slot: None,
+        hops: [(0, 0); HOLDER_MAX_DEPTH - 1],
+        depth: 1,
+    };
+    let keys = shape.keys as usize as *const crate::array::ArrayHeader;
+    if !keys.is_null() {
+        if let Some(s) =
+            crate::object::keys_find_slot_by_bytes_resolved(keys, shape.logical_key_count, name)
+        {
+            w.slot = Some(holder_slot_word(fp, s, shape.live_inline_slot_count)?);
+            return Some(w);
+        }
+    }
+    // Absent on `%Function.prototype%`: the rest of the chain, one hop deeper.
+    let inner = walk(fp_obj, name, false)?;
+    if inner.depth >= HOLDER_MAX_DEPTH {
+        return None;
+    }
+    w.holder = inner.holder;
+    w.holder_shape = inner.holder_shape;
+    w.slot = inner.slot;
+    w.depth = inner.depth + 1;
+    w.hops[0] = (fp, fp_shape);
+    w.hops[1] = inner.hops[0];
+    w.hops[2] = inner.hops[1];
+    Some(w)
+}
+
+/// [`prime_read_holder`] for a function receiver (`f.k`, #10497): the site's
+/// holder entry, keyed by the function's base ShapeId, for a key
+/// [`function_walk`] describes. Returns the answer when it ran the read here
+/// (the getter, then the confirmation and the publish); `None`, having
+/// allocated nothing, when the caller's own path must answer.
+///
+/// # Safety
+/// `closure` is the miss handler's receiver address, `key` its key.
+pub(crate) unsafe fn prime_function_read(
+    closure: usize,
+    key: *const crate::StringHeader,
+    cache_slot: *mut PicCacheSlot,
+) -> Option<f64> {
+    if cache_slot.is_null()
+        || key.is_null()
+        || WORKER_AGENTS_EXIST.load(Ordering::SeqCst) != 0
+        || crate::agent::current_agent() != crate::agent::PRIMARY_AGENT
+    {
+        return None;
+    }
+    let existing = crate::object::field_get_set::pic_slot_peek::<PicCache>(cache_slot);
+    let stamp = object_shape_stamp(closure as *const ObjectHeader);
+    if stamp == 0 {
+        return None;
+    }
+    let token = (u64::from(stamp) | PIC_ID_TOKEN_BIT) as i64;
+    if !existing.is_null() {
+        if let Some(bits) = entry_answer(&*existing, token) {
+            return Some(f64::from_bits(bits));
+        }
+        if (*existing)[HOLDER_STATE] & STATE_LATCHED != 0 {
+            return None;
+        }
+    }
+    let name = crate::string::header_str_checked(key)?.as_bytes();
+    function_walk(closure, name)?;
+    // The answer, from the path the miss handler takes for a function
+    // receiver. It can run user code and collect: root across it.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let handle = scope.root_raw_mut_ptr(closure as *mut ObjectHeader);
+    let key_handle = scope.root_string_ptr(key);
+    let (value, closure) = handle.across_mut::<ObjectHeader, _>(|| {
+        crate::object::field_get_set::closure_dynamic_prop_by_key(closure, key).unwrap_or_else(
+            || {
+                f64::from_bits(
+                    crate::object::field_get_set::get_field_by_name_after_site_miss(
+                        closure as *const ObjectHeader,
+                        key,
+                    )
+                    .bits(),
+                )
+            },
+        )
+    });
+    if WORKER_AGENTS_EXIST.load(Ordering::SeqCst) != 0 {
+        return Some(value);
+    }
+    let cache = crate::object::field_get_set::pic_slot_resolve::<PicCache>(cache_slot);
+    key_handle.with_const_ptr::<crate::StringHeader, _>(|key| {
+        let Some(name) = crate::string::header_str_checked(key).map(str::as_bytes) else {
+            return Some(value);
+        };
+        let Some(w) = function_walk(closure as usize, name) else {
+            refuse_and_latch(cache);
+            return Some(value);
+        };
+        let bits = value.to_bits();
+        let confirmed = match w.slot {
+            None => bits == crate::value::TAG_UNDEFINED,
+            Some(s) => {
+                holder_slot_value(w.holder, s) == Some(bits) && bits != crate::value::TAG_HOLE
+            }
+        };
+        if !confirmed {
+            refuse_and_latch(cache);
+        } else if !cache.is_null() {
+            publish(cache, closure, &w, false);
+        }
+        Some(value)
+    })
+}
+
 /// Prime `cache_slot`'s holder entry for `obj.key`, whose key the caller has
 /// proved is not own. Returns the answer (from the generic getter) when the
 /// receiver took the generic read here; `None` when it did not, and the caller
