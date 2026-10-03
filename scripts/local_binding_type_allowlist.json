@@ -34,6 +34,14 @@
       "reason": "This iteration derives the typed-ABI metadata oracle while filtering globals; typed entry paths independently guard live argument and capture values."
     },
     {
+      "path": "crates/perry-codegen/src/codegen/static_constfn.rs",
+      "function": "static_method_lanes",
+      "access": "local_type_hint",
+      "count": 1,
+      "classification": "runtime-validated",
+      "reason": "The class hint only selects which completed ConstFn shapes a method site compares; the emitted full receiver-word compare (class id and ShapeId) is the proof that the slot holds the named body, and every other receiver takes the learned memo or the generic dispatch."
+    },
+    {
       "path": "crates/perry-codegen/src/codegen/typed_abi.rs",
       "function": "typed_arg_is_guard_candidate",
       "access": "local_type_hint",

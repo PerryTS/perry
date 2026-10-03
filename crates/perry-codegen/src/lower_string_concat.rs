@@ -597,6 +597,24 @@ fn coerce_concat_body(
                 &[(DOUBLE, l_box), (DOUBLE, r_box)],
             ));
         }
+        // `"" + n` on a number: the small-integer text is built inline
+        // (#10762); anything else takes the fused call below.
+        if matches!(left, Expr::String(prefix) if prefix.is_empty())
+            && crate::type_analysis::is_numeric_expr(ctx, right)
+        {
+            return crate::expr::number_to_string_inline::emit_number_to_string_inline(
+                ctx,
+                r_box,
+                |ctx| {
+                    let l_handle = str_operand_handle_tag_dispatched(ctx, left, l_box);
+                    Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_string_concat_value_box",
+                        &[(I64, &l_handle), (DOUBLE, r_box)],
+                    ))
+                },
+            );
+        }
         // Literal prefix + proven-small value: the per-site table keeps the
         // hot key off the runtime entirely (`concat_site_cache.rs`).
         if let Some(value) =

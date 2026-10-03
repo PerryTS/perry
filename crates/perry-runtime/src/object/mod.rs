@@ -102,6 +102,7 @@ pub(crate) mod accessor_pair;
 pub(crate) mod attr_census;
 pub(crate) mod canonical_keys;
 mod census;
+mod constfn_key_add;
 pub(crate) mod field_rep;
 pub(crate) mod field_rep_store;
 pub(crate) mod key_attrs;
@@ -209,6 +210,8 @@ pub(crate) mod native_this_alias;
 mod object_literal_ops;
 pub(crate) mod object_ops;
 pub(crate) mod own_override;
+#[cfg(test)]
+mod own_override_builtin_install_tests;
 #[cfg(test)]
 mod own_override_push_tests;
 pub(crate) use object_ops::{ensure_key_in_keys_array, install_builtin_getter};

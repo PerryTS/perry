@@ -454,7 +454,12 @@ pub(crate) fn try_lower_instance_method_call(
                         .unwrap_or_else(|| ctx.block_label(own_idx));
                     let blk = ctx.block();
                     let cid_ok = blk.icmp_eq(I32, &cid, &class_id.to_string());
-                    let shape_ok = blk.icmp_eq(I32, &shape_id, expected_shape);
+                    let shape_ok = crate::typed_shape::emit_compatible_shape_eq(
+                        blk,
+                        &shape_id,
+                        expected_shape,
+                        &[],
+                    );
                     let exact = blk.and(I1, &cid_ok, &shape_ok);
                     blk.cond_br(&exact, &probe_dispatch_label, &miss_label);
                 }
@@ -580,8 +585,22 @@ pub(crate) fn try_lower_instance_method_call(
                 // fallback instead of re-entering this hard-coded tower.
                 probed_cid
             } else {
-                ctx.block()
-                    .call(I32, "js_object_get_class_id", &[(I64, &recv_handle)])
+                // A tower too wide for the shape probe still hard-codes the
+                // body each class id inherits along the declared `extends`
+                // chain. Prototype surgery on that name (an assignment,
+                // delete or redefinition, or a relinked class prototype)
+                // retires the arms: class id 0 matches no case and takes the
+                // runtime default, as the shape probe's miss does.
+                let raw_cid =
+                    ctx.block()
+                        .call(I32, "js_object_get_class_id", &[(I64, &recv_handle)]);
+                let blk = ctx.block();
+                let prototype_ok =
+                    crate::lower_call::method_override::emit_prototype_method_guard_ok(
+                        blk,
+                        &method_guard_slot_str,
+                    );
+                blk.select(I1, &prototype_ok, I32, &raw_cid, "0")
             };
 
             for (i, (case_cid, _)) in implementors.iter().enumerate() {

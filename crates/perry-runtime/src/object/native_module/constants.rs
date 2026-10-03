@@ -404,13 +404,8 @@ pub(crate) unsafe fn get_native_module_constant(
         }
         #[cfg(not(unix))]
         {
-            match prop {
-                "RTLD_LAZY" => Some(1.0),
-                "RTLD_NOW" => Some(2.0),
-                "RTLD_GLOBAL" => Some(8.0),
-                "RTLD_LOCAL" => Some(4.0),
-                _ => None,
-            }
+            let _ = prop;
+            None
         }
     };
 

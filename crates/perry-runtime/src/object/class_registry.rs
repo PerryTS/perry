@@ -112,7 +112,7 @@ pub use state::{
 pub(crate) use prototype_objects::{
     class_decl_prototype_relinked, class_prototype_object, ensure_function_prototype_object,
     function_class_id, function_value_for_class_id, instance_class_prototype_object,
-    object_proto_chain_symbol_slot, resolve_proto_chain_field,
+    object_proto_chain_symbol_slot, relinked_class_prototype_read, resolve_proto_chain_field,
     resolve_proto_chain_field_noting_miss, resolve_proto_chain_field_with_receiver,
     resolve_proto_chain_symbol, synthetic_class_prototype_object, SYNTHETIC_CLASS_ID_BASE,
 };
@@ -152,8 +152,9 @@ pub(crate) use prototype_methods::{
 pub(crate) use prototype_methods::{
     class_prototype_fast_guard_invalidated_for_method, class_prototype_method_guard_slot,
     class_prototype_method_root_remove, class_prototype_method_root_store,
-    invalidate_class_prototype_fast_guards, invalidate_class_prototype_fast_guards_for_method,
-    mirror_prototype_method_on_object, synthetic_class_id_for_function,
+    class_prototype_relinked, invalidate_class_prototype_fast_guards,
+    invalidate_class_prototype_fast_guards_for_method, mirror_prototype_method_on_object,
+    synthetic_class_id_for_function,
 };
 pub use prototype_methods::{
     js_class_register_static_field, js_get_function_prototype_method,
@@ -230,9 +231,9 @@ pub(crate) use parent_static::{
     class_private_instance_getter_value, class_private_instance_setter_apply,
     class_static_accessor_getter_value, class_static_accessor_setter_apply,
     class_symbol_getter_value, class_symbol_setter_apply, dynamic_value_class_id,
-    get_parent_class_id, lookup_class_symbol_method_in_chain, lookup_static_method_in_chain,
-    lookup_static_method_owner, register_class, register_class_dynamic_static_accessor,
-    static_accessor_in_chain,
+    get_parent_class_id, instance_chain_parent_class_id, lookup_class_symbol_method_in_chain,
+    lookup_static_method_in_chain, lookup_static_method_owner, register_class,
+    register_class_dynamic_static_accessor, static_accessor_in_chain,
 };
 pub use parent_static::{
     is_class_object_ptr, is_class_object_value, is_registered_class_prototype_object,

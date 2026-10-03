@@ -384,7 +384,14 @@ fn fork_launch(
 ) -> std::io::Result<()> {
     let clear_environment = cp_object_ptr(cp_get_field(opts_val, b"env")).is_some();
     let detached = cp_get_field(opts_val, b"detached").to_bits() == TAG_TRUE_F64.to_bits();
-    match super::windows_fork::spawn(&command, stdio_kinds, ipc_fd, clear_environment, detached) {
+    match super::windows_fork::spawn(
+        &command,
+        stdio_kinds,
+        Some(ipc_fd),
+        super::options::cp_read_argv0(opts_val).as_deref(),
+        clear_environment,
+        detached,
+    ) {
         Ok((child, parent_pipe)) => {
             cp_set_field(cp, b"connected", TAG_TRUE_F64);
             let channel = cp_build_object(
@@ -405,7 +412,7 @@ fn fork_launch(
                 stdin_obj,
                 extra_pipes,
                 child,
-                parent_pipe,
+                parent_pipe.expect("fork requested an IPC pipe"),
                 advanced,
                 timeout,
                 kill_signal,

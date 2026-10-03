@@ -8,6 +8,7 @@
 
 mod aggregate_scalar;
 pub mod async_to_generator;
+mod class_field_push;
 pub mod closure;
 mod closure_local_inline;
 mod crypto_hash_chain;
@@ -57,6 +58,7 @@ pub fn post_inline_cleanups(module: &mut perry_hir::Module) {
     aggregate_scalar::run(module);
     closure_local_inline::run(module);
     field_push_local_bind::run(module);
+    class_field_push::run(module);
     prop_cse::run(module);
     // Let the shape-specific passes consume their bindings first, then remove
     // plain copies before codegen attaches string-sharing and root barriers.

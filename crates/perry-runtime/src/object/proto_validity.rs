@@ -229,8 +229,14 @@ unsafe fn ensure_meta_for_mark(obj: usize, flag: u64) -> Option<*mut crate::obje
     if (*meta).flags & flag == 0 {
         // The transition may allocate a descriptor, and so move the owner;
         // the meta record is reached through the owner again afterwards.
+        // A prototype mark changes no slot and no descriptor, so the new
+        // shape keeps the ConstFn lanes the object still satisfies.
         let (_, object) = handle.across_mut::<crate::object::ObjectHeader, _>(|| {
-            crate::object::shapes::transition_object_shape_semantics(object)
+            if flag == crate::object::OBJECT_META_FLAG_IS_PROTOTYPE {
+                crate::object::shapes::transition_object_shape_semantics_keeping_constfn(object)
+            } else {
+                crate::object::shapes::transition_object_shape_semantics(object)
+            }
         });
         let meta = (*object).meta;
         return (!meta.is_null()).then_some(meta);

@@ -734,19 +734,22 @@ pub(super) fn lower_guarded_array_index_get(
     }
 
     ctx.current_block = fast_idx;
-    crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_READ_FAST);
-    let fast_blk = ctx.block();
     let arr_handle = match (&inline_fast_handle, &runtime_fast_handle) {
-        (Some((inline_handle, inline_pred)), Some((runtime_handle, runtime_pred))) => fast_blk.phi(
-            I64,
-            &[
-                (inline_handle.as_str(), inline_pred.as_str()),
-                (runtime_handle.as_str(), runtime_pred.as_str()),
-            ],
-        ),
+        (Some((inline_handle, inline_pred)), Some((runtime_handle, runtime_pred))) => {
+            ctx.block().phi(
+                I64,
+                &[
+                    (inline_handle.as_str(), inline_pred.as_str()),
+                    (runtime_handle.as_str(), runtime_pred.as_str()),
+                ],
+            )
+        }
         (Some((handle, _)), None) | (None, Some((handle, _))) => handle.clone(),
         (None, None) => unreachable!("guarded array fast block has no predecessor handle"),
     };
+    // The handle PHI must precede the census load/add/store in this join.
+    crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_READ_FAST);
+    let fast_blk = ctx.block();
     let fast_val = if require_numeric_layout {
         // The guard on the way into this block (inline tier or the runtime
         // `numeric_array_index_get_guard`) already proved: a plain,

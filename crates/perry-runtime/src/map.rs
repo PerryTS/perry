@@ -1421,28 +1421,32 @@ pub(crate) unsafe fn compact_if_holey(map: *mut MapHeader) {
 /// paths into one body, and the register pressure of those cold paths costs
 /// every lookup the full prologue/epilogue (eight callee-saved GPRs and four
 /// FP registers on arm64 — the profile put a third of the function's self
-/// time there). The lane here answers the two shapes the numeric side-table
-/// exists for — a plain (untagged, non-NaN, non-zero) number key against a
-/// small map's entries by bit identity, or against the dense integer range
-/// table — and returns `None` for everything else so [`find_key_index_cold`]
-/// decides it. A dense-range miss is definitive for its span (every insert,
+/// time there). The lane here answers a small map's lookup by bit identity for
+/// any key, a plain (untagged, non-NaN, non-zero) number key's miss there, and
+/// a plain number against the dense integer range table, and returns `None`
+/// for everything else so [`find_key_index_cold`] decides it. A dense-range miss is definitive for its span (every insert,
 /// delete, clear and GC rewrite keeps the table exact), exactly as in the cold
 /// path; a key outside the span goes to the hashed index there.
 #[inline(always)]
 unsafe fn find_key_index_hot(map: *const MapHeader, key: f64) -> Option<i32> {
     let used = (*map).used;
     let key_bits = key.to_bits();
+    if used <= SIDE_TABLE_THRESHOLD {
+        // A bit-identical entry is THE match for a key of any type: a Map
+        // never holds two SameValueZero-equal keys, and both sides are already
+        // normalized (see `find_identical_key`). The common string-keyed shape
+        // looks a key up with the very value it was inserted with, so it is
+        // answered here without the out-of-line call (#10697). A miss is
+        // definitive only for a plain number; any other key may still be
+        // content-equal to an entry, which the cold path decides.
+        let entries = entries_ptr(map);
+        if let Some(i) = find_identical_key(entries, used, key_bits) {
+            return Some(i);
+        }
+        return is_plain_nonzero_number_bits(key_bits).then_some(-1);
+    }
     if !is_plain_nonzero_number_bits(key_bits) {
         return None;
-    }
-    if used <= SIDE_TABLE_THRESHOLD {
-        let entries = entries_ptr(map);
-        for i in 0..used {
-            if ptr::read(entries.add((i as usize) * 2)).to_bits() == key_bits {
-                return Some(i as i32);
-            }
-        }
-        return Some(-1);
     }
     let index = (*map).store.as_ref().map(|store| &store.numeric)?;
     let dense = index.dense.as_ref()?;
@@ -1466,12 +1470,21 @@ pub(crate) unsafe fn find_key_index(map: *const MapHeader, key: f64) -> i32 {
     find_key_index_cold(map, key)
 }
 
+#[cfg(test)]
+crate::perry_thread_local! {
+    /// Test-only: lookups [`find_key_index_hot`] handed to the cold path, so a
+    /// test can assert which lane answered (#10697).
+    pub(crate) static COLD_LOOKUPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Every lookup shape [`find_key_index_hot`] declines: tagged, zero and NaN
 /// keys, string content hashing, the pointer-identity index, the hashed
 /// numeric index, and the generic linear compare. Out of line on purpose —
 /// see the hot lane.
 #[inline(never)]
 unsafe fn find_key_index_cold(map: *const MapHeader, key: f64) -> i32 {
+    #[cfg(test)]
+    COLD_LOOKUPS.with(|n| n.set(n.get() + 1));
     let used = (*map).used;
     let key_bits = key.to_bits();
 

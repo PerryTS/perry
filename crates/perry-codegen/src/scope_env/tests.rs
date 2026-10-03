@@ -186,6 +186,78 @@ fn the_map_follows_the_group_statements() {
     assert_eq!(map.members(10), &[10, 12]);
 }
 
+/// `switch (2) { case 1: <case1>; case 2: return typeof v7 }` — the
+/// #4926 / #11771 shape: case 2 is in `v7`'s scope, but entering at case 2
+/// skips case 1's `let`, so the home never ran there.
+fn switch_read_from_next_case(case1: Vec<Stmt>) -> Vec<Stmt> {
+    vec![Stmt::Switch {
+        discriminant: Expr::Number(2.0),
+        cases: vec![
+            perry_hir::SwitchCase {
+                test: Some(Expr::Number(1.0)),
+                body: case1,
+            },
+            perry_hir::SwitchCase {
+                test: Some(Expr::Number(2.0)),
+                body: vec![Stmt::Return(Some(Expr::TypeOf(Box::new(Expr::LocalGet(
+                    7,
+                )))))],
+            },
+        ],
+    }]
+}
+
+#[test]
+fn the_first_statement_of_the_next_case_is_outside_the_home_list() {
+    // The statement right after the home list is numbered exactly `end`; an
+    // inclusive bound let it through and case 2 read a scope object that was
+    // never allocated (#11771).
+    let mut module = module_with(switch_read_from_next_case(vec![
+        let_num(7, 5.0),
+        Stmt::Expr(mutating_closure(100, &[7])),
+    ]));
+    group_scope_boxes(&mut module);
+    assert!(preallocs(&module.functions[0].body).is_empty());
+    let boxed = crate::codegen::boxed_locals::collect_module_boxed_vars(&module);
+    assert!(ScopeMap::build(&module, &boxed, &Default::default()).is_empty());
+}
+
+#[test]
+fn a_lowered_case_preallocation_read_from_the_next_case_keeps_its_cell() {
+    // The HIR lowering's own shape: the case body opens with the binding's
+    // preallocation. The map must still refuse it, so the binding keeps its
+    // entry-initialized per-binding cell and the skipped read is `undefined`.
+    let mut module = module_with(switch_read_from_next_case(vec![
+        Stmt::PreallocateBoxes(vec![7]),
+        let_num(7, 5.0),
+        Stmt::Expr(mutating_closure(100, &[7])),
+    ]));
+    group_scope_boxes(&mut module);
+    let boxed = crate::codegen::boxed_locals::collect_module_boxed_vars(&module);
+    assert!(boxed.contains(&7));
+    let map = ScopeMap::build(&module, &boxed, &Default::default());
+    assert!(map.slot(7).is_none(), "{map:?}");
+}
+
+#[test]
+fn a_reference_in_the_last_statement_of_the_home_list_still_groups() {
+    // Control for the bound: the home list's own last statement is inside it.
+    let mut module = module_with(switch_read_from_next_case(vec![
+        Stmt::PreallocateBoxes(vec![7]),
+        let_num(7, 5.0),
+        Stmt::Expr(mutating_closure(100, &[7])),
+        Stmt::Return(Some(Expr::LocalGet(7))),
+    ]));
+    // Drop case 2's read: only the in-list references remain.
+    if let Stmt::Switch { cases, .. } = &mut module.functions[0].body[0] {
+        cases[1].body = vec![Stmt::Return(None)];
+    }
+    group_scope_boxes(&mut module);
+    let boxed = crate::codegen::boxed_locals::collect_module_boxed_vars(&module);
+    let map = ScopeMap::build(&module, &boxed, &Default::default());
+    assert!(map.slot(7).is_some(), "{map:?}");
+}
+
 fn compile_ir(module: &Module) -> String {
     let options = crate::CompileOptions {
         emit_ir_only: true,

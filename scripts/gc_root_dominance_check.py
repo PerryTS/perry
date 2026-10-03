@@ -90,6 +90,7 @@ import io
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -646,6 +647,9 @@ ALLOC_RE = re.compile(
     # fresh objects/collections handed back as a whole
     r"object_keys\w*|object_values\w*|object_entries\w*|object_from_entries|"
     r"object_assign\w*|object_group_by|object_coerce|"
+    # A rooted finalizer returns the refreshed heap receiver. Its result is
+    # a new SSA snapshot and must not cross later collectors without a root.
+    r"object_finalize_constfn_static|"
     r"object_get_own_property_descriptor\w*|object_get_own_property_names|"
     r"object_get_own_property_symbols|"
     r"map_from_iterable|set_from_iterable|map_group_by|"
@@ -818,19 +822,108 @@ def macro_generated_symbols(roots=SYMBOL_ROOTS):
     return syms - written
 
 
-def nm_exported_symbols(archives):
-    """`js_*` symbols `nm -gj` reports as defined in `archives`.
+def _nm_candidates():
+    """Symbol readers to try, most bitcode-capable first (#11496).
+
+    Plain `nm` is the LAST resort, not the first: the runtime archives are
+    thin-LTO, i.e. LLVM bitcode, which GNU nm reads as zero symbols without the
+    LLVM plugin and Apple `nm` reads as zero on rustc's LTO output. `llvm-nm`
+    reads bitcode natively; rustup's `llvm-tools` copy is tried before any
+    other because it is the one whose bitcode reader matches rustc's LLVM.
+    `PERRY_NM` pins a reader outright.
+    """
+    pinned = os.environ.get("PERRY_NM")
+    if pinned:
+        return [pinned]
+    cands = []
+    try:
+        sysroot = subprocess.run(["rustc", "--print", "sysroot"],
+                                 capture_output=True, text=True).stdout.strip()
+        host = subprocess.run(["rustc", "-vV"], capture_output=True,
+                              text=True).stdout
+        host = next((l.split(":", 1)[1].strip() for l in host.splitlines()
+                     if l.startswith("host:")), "")
+        if sysroot and host:
+            cands.append(os.path.join(sysroot, "lib", "rustlib", host, "bin",
+                                      "llvm-nm"))
+    except OSError:
+        pass
+    prefix = os.environ.get("LLVM_SYS_221_PREFIX")
+    if prefix:
+        cands.append(os.path.join(prefix, "bin", "llvm-nm"))
+    cands += ["llvm-nm-22", "/opt/homebrew/opt/llvm/bin/llvm-nm",
+              "/usr/local/opt/llvm/bin/llvm-nm", "llvm-nm", "nm"]
+    seen, out = set(), []
+    for c in cands:
+        path = c if os.sep in c else shutil.which(c)
+        if path and os.path.isfile(path) and path not in seen:
+            seen.add(path)
+            out.append(path)
+    return out
+
+
+def parse_nm_posix(text):
+    """Defined, external `js_*` names in `nm -g -P` output.
+
+    POSIX format (`name type value size`) is the one layout GNU nm, llvm-nm
+    and Apple nm all emit, and its type column separates definitions from
+    `U` references without relying on `--defined-only` spellings that differ
+    between them. Mach-O prefixes C symbols with `_`; ELF and COFF do not, so
+    the bare `js_` form is what a Linux archive reports -- matching only
+    `_js_` is what made every Linux run read zero symbols (#11496).
+    """
+    syms = set()
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) < 2 or parts[1] in ("U", "u", "w", "v"):
+            continue
+        name = parts[0]
+        if name.startswith("_js_"):
+            name = name[1:]
+        if name.startswith("js_"):
+            syms.add(name)
+    return syms
+
+
+def nm_exported_symbols(archives, readers=None):
+    """`js_*` symbols defined in `archives`, and the reader that found them.
 
     Ground truth, and a LOWER bound only: an archive built for one target omits
     every symbol the other targets' cfgs define, so the invariant to assert is
     `nm <= scanner`, never equality.
+
+    Readers are tried in `_nm_candidates` order. A reader must successfully
+    report definitions from every requested archive: a large readable runtime
+    must not hide an unreadable stdlib behind the combined non-vacuity floor.
+    Incomplete readers fall through; the caller reports all attempts if none
+    can read the complete archive set.
     """
-    syms = set()
-    for archive in archives:
-        out = subprocess.run(["nm", "-gj", archive],
-                             capture_output=True, text=True).stdout
-        syms.update(tok[1:] for tok in out.split() if tok.startswith("_js_"))
-    return syms
+    archives = tuple(archives)
+    tried = []
+    for reader in (readers if readers is not None else _nm_candidates()):
+        syms = set()
+        notes = []
+        complete = bool(archives)
+        for archive in archives:
+            try:
+                proc = subprocess.run([reader, "-g", "-P", archive],
+                                      capture_output=True, text=True)
+            except OSError as e:
+                complete = False
+                notes.append(f"{archive}: {e}")
+                continue
+            definitions = parse_nm_posix(proc.stdout)
+            syms |= definitions
+            if proc.returncode != 0 or not definitions:
+                complete = False
+                detail = (proc.stderr.strip().splitlines()[0]
+                          if proc.stderr.strip() else
+                          f"exit {proc.returncode}, {len(definitions)} js_* definitions")
+                notes.append(f"{archive}: {detail}")
+        tried.append((reader, len(syms), notes))
+        if complete:
+            return syms, reader, tried
+    return set(), None, tried
 
 
 def alloc_re_alternatives():
@@ -982,14 +1075,22 @@ def verify_symbols_against_archives(archives, roots=SYMBOL_ROOTS):
     if missing:
         print("error: no such archive: " + ", ".join(missing), file=sys.stderr)
         return 2
-    nm = nm_exported_symbols(archives)
+    nm, reader, tried = nm_exported_symbols(archives)
     if len(nm) < 500:
         # Same non-vacuity floor the other audits carry: an empty or
         # unreadable archive would otherwise report a serene clean.
         print(f"error: nm reported only {len(nm)} `js_*` symbols across "
               f"{len(archives)} archive(s). That is not a runtime build, so "
               "this check would pass having compared nothing.", file=sys.stderr)
+        for r, n, notes in tried:
+            print(f"  {r}: {n} js_* symbol(s)"
+                  + (f" ({'; '.join(notes[:2])})" if notes else ""),
+                  file=sys.stderr)
+        if not tried:
+            print("  no symbol reader found: install llvm-nm (rustup component "
+                  "add llvm-tools, or LLVM 22) or set PERRY_NM", file=sys.stderr)
         return 2
+    print(f"=== verify-symbols: read with {reader}")
     scanner = runtime_symbols(roots)
     unseen = sorted(nm - scanner)
     macro = macro_generated_symbols(roots)
@@ -1678,7 +1779,7 @@ POLL_CAPABLE_RUNTIME = {
     #
     # Measured when added: the ONLY window this reclassifies over the curated
     # corpus is that one, which the same PR fixes in
-    # `lower_call/new.rs::construction_runs_user_code`.
+    # `lower_call/new/instance.rs::construction_runs_user_code`.
     "js_private_brand_add",
 }
 
@@ -5373,6 +5474,37 @@ def self_test():
     that has not been shown to work.
     """
     ok = True
+    # A finalizer hands back its current rooted receiver, a heap-valued SSA
+    # source even though it did not allocate that object. Prove both the late
+    # store detector and stale-register detector still see that return value.
+    finalizer = """define i64 @perry_fn_selftest__constfn(i64 %receiver) {
+entry.0:
+  %slot = alloca i64
+  call void @js_shadow_frame_enter(i32 1)
+  %obj = call i64 @js_object_finalize_constfn_static(i64 %receiver, i32 1, ptr null, i32 1, i32 1, i32 1, i32 0, i64 3, ptr null, i32 1)
+  %poll = call double @js_gc_loop_safepoint(double 0.0)
+  store i64 %obj, ptr %slot
+  call void @js_shadow_slot_bind(i32 0, ptr %slot)
+  ret i64 %obj
+}
+"""
+    rooted_finalizer = finalizer.replace(
+        "  %poll = call double @js_gc_loop_safepoint(double 0.0)\n", ""
+    ).replace(
+        "  ret i64 %obj", "  %poll = call double @js_gc_loop_safepoint(double 0.0)\n"
+        "  %fresh = load i64, ptr %slot\n  ret i64 %fresh"
+    )
+    with tempfile.TemporaryDirectory() as td:
+        for name, fixture, expected in [("late", finalizer, 1), ("rooted", rooted_finalizer, 0)]:
+            path = os.path.join(td, name + ".ll")
+            with open(path, "w") as fh:
+                fh.write(fixture)
+            hits, _ = _scan([path], False, "alloc")
+            stale = check_func_stale(path, parse_file(path)[0], moving_only=True)
+            if len(hits) != expected or bool(stale) != bool(expected):
+                print(f"self-test FAIL: ConstFn {name} return: late roots={len(hits)}, "
+                      f"stale={len(stale)}, expected {expected}", file=sys.stderr)
+                ok = False
     with tempfile.TemporaryDirectory() as td:
         planted = os.path.join(td, "planted.ll")
         clean = os.path.join(td, "clean.ll")
@@ -6081,8 +6213,63 @@ def self_test():
     if not poll_reach_self_test():
         ok = False
 
+    if not nm_parse_self_test():
+        ok = False
+
     print("self-test OK" if ok else "self-test FAILED")
     return 0 if ok else 1
+
+
+# #11496: `--verify-symbols` read zero symbols on every Linux host because it
+# matched only Mach-O's `_js_` spelling. Both object-format spellings, and a
+# `U` reference that must NOT count as a definition, are planted here.
+_NM_POSIX_FIXTURE = """\
+libperry_runtime.a[a.o]:
+js_elf_defined T 0000000000000010 0000000000000008
+js_elf_referenced U
+_js_macho_defined T 0000000000000020 0000000000000004
+_js_macho_referenced U
+js_elf_data D 0000000000000030 0000000000000008
+not_js_symbol T 0000000000000040 0000000000000004
+"""
+
+
+def nm_parse_self_test():
+    got = parse_nm_posix(_NM_POSIX_FIXTURE)
+    want = {"js_elf_defined", "js_macho_defined", "js_elf_data"}
+    if got != want:
+        print(f"self-test FAIL: parse_nm_posix read {sorted(got)}, expected "
+              f"{sorted(want)} (ELF names carry no `_` prefix; `U` is a "
+              "reference, not a definition)", file=sys.stderr)
+        return False
+    # More than the combined floor in one archive must not hide a second
+    # unreadable/empty archive, even when nm emits partial stdout before failing.
+    from unittest.mock import patch
+    from types import SimpleNamespace
+    runtime = "".join(f"js_runtime_{i} T 0 1\n" for i in range(550))
+    for result in (SimpleNamespace(returncode=1, stdout="js_partial T 0 1\n",
+                                   stderr="bad bitcode"),
+                   SimpleNamespace(returncode=0, stdout="", stderr=""),
+                   OSError("reader unavailable")):
+        with patch.object(subprocess, "run", side_effect=[
+                SimpleNamespace(returncode=0, stdout=runtime, stderr=""), result]):
+            symbols, reader, _ = nm_exported_symbols(["runtime.a", "stdlib.a"],
+                                                    readers=["partial-nm"])
+        if symbols or reader is not None:
+            print("self-test FAIL: partial archive read was accepted", file=sys.stderr)
+            return False
+    # A complete later reader must still work, and include BOTH archives.
+    with patch.object(subprocess, "run", side_effect=[
+            SimpleNamespace(returncode=0, stdout=runtime, stderr=""),
+            SimpleNamespace(returncode=0, stdout="", stderr=""),
+            SimpleNamespace(returncode=0, stdout=runtime, stderr=""),
+            SimpleNamespace(returncode=0, stdout="js_stdlib T 0 1\n", stderr="")]):
+        symbols, reader, _ = nm_exported_symbols(["runtime.a", "stdlib.a"],
+                                                readers=["partial-nm", "complete-nm"])
+    if reader != "complete-nm" or len(symbols) != 551 or "js_stdlib" not in symbols:
+        print("self-test FAIL: complete fallback reader lost an archive", file=sys.stderr)
+        return False
+    return True
 
 
 # The `--audit-poll-reach` half of `--self-test`. Planted, not merely
@@ -6271,7 +6458,7 @@ def main():
                          "would be invisible to every audit here. Takes no "
                          "corpus and needs no build.")
     ap.add_argument("--verify-symbols", nargs="+", metavar="ARCHIVE",
-                    help="cross-check `runtime_symbols()` against `nm -gj` on "
+                    help="cross-check `runtime_symbols()` against `llvm-nm`/`nm` on "
                          "one or more built archives (libperry_runtime.a, "
                          "libperry_stdlib.a). The scanner is a REGEX and the "
                          "tree keeps growing macro families that define "

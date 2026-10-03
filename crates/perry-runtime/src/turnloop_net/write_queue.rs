@@ -52,6 +52,13 @@ fn submit_shutdown(
     entry: &mut Entry,
     user: u64,
 ) -> Result<(), Error> {
+    #[cfg(windows)]
+    if windows_pipe::is_pipe(driver, entry) {
+        windows_pipe::submit(driver, id, entry)?;
+    } else {
+        driver.shutdown(entry.handle, token(OP_SHUTDOWN, id))?;
+    }
+    #[cfg(not(windows))]
     driver.shutdown(entry.handle, token(OP_SHUTDOWN, id))?;
     census::note_submit(OP_SHUTDOWN);
     // The user token rides the pending-write queue's tail slot so the
@@ -198,6 +205,14 @@ pub(super) fn flush(
                 });
             }
         }
+    }
+    #[cfg(windows)]
+    if failure.is_none()
+        && backlog.shutdown.is_some()
+        && entry.inflight > 0
+        && windows_pipe::is_pipe(driver, entry)
+    {
+        return None;
     }
     if failure.is_none() {
         if let Some(user) = backlog.shutdown.take() {

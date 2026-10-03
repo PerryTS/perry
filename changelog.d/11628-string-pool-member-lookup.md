@@ -1,0 +1,6 @@
+- **perf(codegen): string-pool member lookups are O(1) instead of a linear scan (#11504).** `emit_string_pool` resolved each class method, static method, getter and setter name with `strings.iter().find(|e| e.value == name)`. That is one full pool scan per member, so O(pool × members), which is quadratic on large bundles.
+  - A new `StringPool::lookup` goes through the intern index that `intern`/`intern_wtf8` already maintain. That index is shared by both key spaces, so no two entries carry the same `value`, and `lookup` returns exactly what the scan returned. The emitted IR is unchanged.
+  - Validation:
+    - `--trace llvm` IR is byte-identical before and after on 80 class/getter/static-heavy `test_gap_*` programs (sampled one in four), plus a 500-class × 50-method probe (130 MB of IR, 5 codegen units).
+    - Compile time on that probe (`--no-link --no-cache`, perry-dev build, 4-core Linux box, 3 paired runs): 157.7/157.6/150.8 s before and 152.3/153.2/145.3 s after. That is about 5.3 s (~3.4%) saved per compile. The rest of the time is spent elsewhere in codegen, and the saving grows with pool size × member count.
+    - `lookup_matches_linear_scan` checks `lookup` against the old scan for every entry, a WTF-8 key and an absent name. Sabotage-checked: a wrong `lookup` fails it.

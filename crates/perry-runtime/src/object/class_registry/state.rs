@@ -768,7 +768,9 @@ pub(crate) fn class_static_prototype_root_clear(class_id: u32) {
 }
 
 fn class_recorded_prototype_bits(class_id: u32) -> Option<u64> {
-    if class_id == 0 {
+    // Constructor-chain reads can reach builtin/synthetic parents. Their
+    // prototypes are handled by builtin dispatch, not compiled-class closures.
+    if class_id == 0 || class_id >= 0x7FFF_FF00 {
         return None;
     }
     let class_id = crate::object::class_generic_origin(class_id).unwrap_or(class_id);

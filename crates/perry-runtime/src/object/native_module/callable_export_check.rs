@@ -29,6 +29,25 @@ pub(crate) fn is_native_module_callable_export_reference(module: &str, prop: &st
     let module = cjs_default_base_module(module).unwrap_or(module);
     let module = assert_instance_base_module(module).unwrap_or(module);
     let prop = canonical_native_callable_property(module, prop);
+    if cfg!(windows)
+        && module == "process"
+        && matches!(
+            prop,
+            "getuid"
+                | "geteuid"
+                | "getgid"
+                | "getegid"
+                | "getgroups"
+                | "setuid"
+                | "seteuid"
+                | "setgid"
+                | "setegid"
+                | "setgroups"
+                | "initgroups"
+        )
+    {
+        return false;
+    }
     if module == "vm" && matches!(prop, "Module" | "SourceTextModule" | "SyntheticModule") {
         return crate::node_vm::vm_modules_enabled();
     }
@@ -1080,6 +1099,25 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
     let module = cjs_default_base_module(module).unwrap_or(module);
     let module = assert_instance_base_module(module).unwrap_or(module);
     let prop = canonical_native_callable_property(module, prop);
+    if cfg!(windows)
+        && module == "process"
+        && matches!(
+            prop,
+            "getuid"
+                | "geteuid"
+                | "getgid"
+                | "getegid"
+                | "getgroups"
+                | "setuid"
+                | "seteuid"
+                | "setgid"
+                | "setegid"
+                | "setgroups"
+                | "initgroups"
+        )
+    {
+        return false;
+    }
     if module == "vm" && matches!(prop, "Module" | "SourceTextModule" | "SyntheticModule") {
         return crate::node_vm::vm_modules_enabled();
     }
