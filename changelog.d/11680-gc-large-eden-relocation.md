@@ -1,0 +1,1 @@
+Keep large-nursery relocation coverage live alongside the GC policy ratchet. The unchanged survivor-graph workload now also runs with in-place promotion disabled, requiring actual copied objects and bytes plus parity with the pinned Node oracle. Retain both traces and separate verdicts; the normal measurements, baseline, and counter tolerances remain unchanged.

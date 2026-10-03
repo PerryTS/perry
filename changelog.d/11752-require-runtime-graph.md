@@ -1,0 +1,1 @@
+Keep CI require-provider prebuilds on the same default feature graph as the standalone require helper. The extra external-net adapter feature made unrelated Request probes fail to link provider symbols. Full and scoped integration setup retain one coherent eleven-package build and the existing prepared-mode/archive checks.

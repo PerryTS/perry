@@ -87,7 +87,17 @@ fn poison_region_in_place(arena: &mut Arena) {
     }
 }
 
-fn reset_region_to_zero(arena: &mut Arena) -> (usize, usize) {
+/// What a from-space reset does with each block's idle-cycle count.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DeadCycles {
+    /// Survivor semispaces: start every block's count afresh.
+    Clear,
+    /// Eden: [`release_idle_eden_blocks`] has just counted this collection,
+    /// and the reset must not erase what it counted.
+    Keep,
+}
+
+fn reset_region_to_zero(arena: &mut Arena, dead_cycles: DeadCycles) -> (usize, usize) {
     crate::gc::heap_generation::debug_assert_heap_change_open();
     let mut reset_blocks = 0usize;
     let mut reusable_bytes = 0usize;
@@ -101,7 +111,9 @@ fn reset_region_to_zero(arena: &mut Arena) -> (usize, usize) {
         }
         block.clear_object_starts();
         block.offset = 0;
-        block.dead_cycles = 0;
+        if dead_cycles == DeadCycles::Clear {
+            block.dead_cycles = 0;
+        }
     }
     // Delta-maintain the cached old-gen in-use counter. Only Eden and
     // the survivor semispaces are reset through here today, but this
@@ -117,7 +129,7 @@ fn reset_region_to_zero(arena: &mut Arena) -> (usize, usize) {
 /// Reset the inactive survivor semispace before a copying minor starts.
 pub(crate) fn copying_prepare_to_space() -> usize {
     let idx = inactive_survivor_index();
-    with_survivor_arena_mut(idx, reset_region_to_zero).0
+    with_survivor_arena_mut(idx, |arena| reset_region_to_zero(arena, DeadCycles::Clear)).0
 }
 
 /// Bytes currently allocated in the active survivor from-space.
@@ -209,14 +221,18 @@ pub(crate) fn copying_reset_from_spaces_and_flip() -> ArenaResetStats {
     sync_inline_arena_state();
     let mut reset_blocks = 0usize;
     let mut reusable_bytes = 0usize;
+    let mut released = ArenaResetStats::default();
     ARENA.with(|arena| unsafe {
         let arena = &mut *arena.get();
         if poison {
             poison_region_in_place(arena);
         }
-        let (blocks, bytes) = reset_region_to_zero(arena);
+        // #11736: before the reset erases which blocks the mutator touched.
+        released = release_idle_eden_blocks(arena);
+        let (blocks, bytes) = reset_region_to_zero(arena, DeadCycles::Keep);
         reset_blocks += blocks;
         reusable_bytes = reusable_bytes.saturating_add(bytes);
+        point_eden_at_first_mapped_block(arena);
         crate::gc::ARENA_FREE_LIST.with(|fl| fl.borrow_mut().clear());
         crate::gc::ARENA_FREE_LIST_NONEMPTY.with(|c| c.set(false));
         INLINE_STATE.with(|s| {
@@ -237,7 +253,9 @@ pub(crate) fn copying_reset_from_spaces_and_flip() -> ArenaResetStats {
             (0usize, 0usize)
         });
     }
-    let (blocks, bytes) = with_survivor_arena_mut(active, reset_region_to_zero);
+    let (blocks, bytes) = with_survivor_arena_mut(active, |arena| {
+        reset_region_to_zero(arena, DeadCycles::Clear)
+    });
     reset_blocks += blocks;
     reusable_bytes = reusable_bytes.saturating_add(bytes);
     ACTIVE_SURVIVOR.with(|active_cell| active_cell.set(1 - active));
@@ -245,7 +263,86 @@ pub(crate) fn copying_reset_from_spaces_and_flip() -> ArenaResetStats {
     ArenaResetStats {
         reset_blocks,
         reusable_bytes,
-        ..ArenaResetStats::default()
+        ..released
+    }
+}
+
+/// #11736: age Eden's blocks for a moving minor by the rule the non-moving
+/// reclaim ages them, and release the ones idle for
+/// [`GENERAL_DEALLOC_DEAD_CYCLES`] consecutive collections.
+///
+/// Without this the layout a collection leaves behind depended on which
+/// collector ran. The non-moving reclaim releases an Eden block that two
+/// collections in a row found empty; the moving minor's from-space reset
+/// zeroed every count and kept every block. The whole-arena trigger re-arms
+/// from `arena_total_bytes()`, so the same heap re-armed a block's worth higher
+/// for every idle block the moving minor kept: 62 MB on TypeScript, where the
+/// first collection after a full was a coin flip between the two collectors.
+///
+/// The count is of collections that found the block **idle** — not allocated
+/// into since the previous collection, `offset == 0` on entry. A block the
+/// mutator filled this cycle is the moving minor's working nursery: its count
+/// starts over, so a steady copying workload, which fills the same blocks
+/// every cycle, never releases or re-maps any of them. The window
+/// `current-4..=current` is kept for the same reason the non-moving reclaim
+/// keeps it: those are the blocks allocation is about to use again.
+///
+/// Must run before the reset, which is what erases `offset`. A released block
+/// leaves the tombstone every walker already skips, through the same
+/// pool-or-deallocate funnel and the same `ARENA_TOTAL_BYTES` delta as the
+/// non-moving reclaim. The caller drops Eden's free list wholesale, so no
+/// entry can point into a released block.
+pub(super) fn release_idle_eden_blocks(arena: &mut Arena) -> ArenaResetStats {
+    crate::gc::heap_generation::debug_assert_heap_change_open();
+    debug_assert!(
+        matches!(arena.space, HeapSpace::NurseryEden),
+        "only Eden's idle blocks are aged by the moving minor"
+    );
+    let current = arena.current;
+    let keep_low = current.saturating_sub(4);
+    let mut stats = ArenaResetStats::default();
+    for (i, block) in arena.blocks.iter_mut().enumerate() {
+        if block.data.is_null() {
+            continue;
+        }
+        if (keep_low..=current).contains(&i) || block.offset != 0 {
+            block.dead_cycles = 0;
+            continue;
+        }
+        block.dead_cycles = block.dead_cycles.saturating_add(1);
+        if block.dead_cycles < GENERAL_DEALLOC_DEAD_CYCLES {
+            continue;
+        }
+        let size = block.size;
+        unregister_block_generation(block.data as usize, size);
+        let release = release_arena_block(block.data, size);
+        ARENA_TOTAL_BYTES.with(|total| total.set(total.get().saturating_sub(size)));
+        stats.record_block_release(size, release);
+        block.data = std::ptr::null_mut();
+        block.size = 0;
+        block.object_starts = Box::new([]);
+        block.offset = 0;
+        block.dead_cycles = 0;
+    }
+    if stats.removed_blocks > 0 && crate::gc::gc_diag_enabled() {
+        eprintln!(
+            "[gc-block-release] moving_minor removed {} idle Eden blocks ({} bytes): pooled={} bytes, deallocated={} bytes",
+            stats.removed_blocks, stats.removed_bytes, stats.pooled_bytes, stats.deallocated_bytes
+        );
+    }
+    stats
+}
+
+/// After a whole-Eden reset, point allocation at the first block that is still
+/// mapped. `reset_region_to_zero` points it at slot 0, which a release may have
+/// tombstoned; allocating there would map a fresh block while empty ones sit
+/// behind it.
+pub(super) fn point_eden_at_first_mapped_block(arena: &mut Arena) {
+    if !arena.blocks[arena.current].data.is_null() {
+        return;
+    }
+    if let Some(first) = arena.blocks.iter().position(|block| !block.data.is_null()) {
+        arena.set_current(first);
     }
 }
 
