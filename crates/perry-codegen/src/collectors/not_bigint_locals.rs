@@ -392,7 +392,7 @@ pub(super) fn collect_writes<'a>(
     }
 }
 
-fn collect_writes_expr<'a>(
+pub(super) fn collect_writes_expr<'a>(
     e: &'a Expr,
     writes: &mut HashMap<u32, Vec<Option<&'a Expr>>>,
     candidates: &mut HashSet<u32>,

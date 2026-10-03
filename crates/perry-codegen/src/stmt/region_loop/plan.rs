@@ -956,9 +956,13 @@ pub(super) fn plan(
     if proof_reads.is_empty() {
         return Some(seed);
     }
+    let loop_control: Vec<&Expr> = loop_ctl
+        .map(|(cond, update)| cond.into_iter().chain(update).collect())
+        .unwrap_or_default();
     let (locals, _) = number_facts_from_reads(
         ctx,
         tail,
+        &loop_control,
         &proof_reads,
         &seed.number_local_uses,
         &seed.declared_locals,
@@ -991,8 +995,14 @@ pub(super) fn plan(
                     })
             })
             .collect();
-        let (locals, _) =
-            number_facts_from_reads(ctx, tail, &reads, &p.number_local_uses, &p.declared_locals);
+        let (locals, _) = number_facts_from_reads(
+            ctx,
+            tail,
+            &loop_control,
+            &reads,
+            &p.number_local_uses,
+            &p.declared_locals,
+        );
         let locals: HashSet<u32> = locals.into_iter().collect();
         if !reads.is_subset(&proof_reads) || !locals.is_subset(&proof_locals) {
             return None;
