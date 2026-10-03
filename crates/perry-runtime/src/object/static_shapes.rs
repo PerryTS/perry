@@ -85,7 +85,7 @@ pub extern "C" fn js_shape_seed_plain(
     }
     // SAFETY: compiler-owned static data of `packed_len` bytes.
     let bytes = unsafe { std::slice::from_raw_parts(packed, packed_len as usize) };
-    let names: Vec<&[u8]> = bytes.split(|&b| b == 0).filter(|s| !s.is_empty()).collect();
+    let names: Vec<&[u8]> = crate::object::packed_key_names(bytes);
     if names.len() != count as usize {
         return 0;
     }
@@ -134,7 +134,7 @@ pub extern "C" fn js_shape_seed_plain_constfn(
     }
     // SAFETY: compiler-owned static data of `packed_len` bytes.
     let bytes = unsafe { std::slice::from_raw_parts(packed, packed_len as usize) };
-    let names: Vec<&[u8]> = bytes.split(|&b| b == 0).filter(|s| !s.is_empty()).collect();
+    let names: Vec<&[u8]> = crate::object::packed_key_names(bytes);
     if names.len() != count as usize {
         invalid_constfn_static_seed();
     }

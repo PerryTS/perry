@@ -479,10 +479,7 @@ pub extern "C" fn js_build_class_keys_array(
         return keys.arr();
     }
     let keys_bytes = unsafe { std::slice::from_raw_parts(packed_keys, packed_keys_len as usize) };
-    let keys: Vec<&[u8]> = keys_bytes
-        .split(|&b| b == 0)
-        .filter(|s| !s.is_empty())
-        .collect();
+    let keys: Vec<&[u8]> = crate::object::packed_key_names(keys_bytes);
     // This array is long-lived and never dies. Without the scope, the per-slot
     // notes in the builder mint a per-object pointer mask for any class with
     // enough keys, which arms `PERRY_PER_OBJECT_LAYOUTS_ANY` and puts the
@@ -575,10 +572,7 @@ pub extern "C" fn js_object_alloc_class_with_keys(
     } else {
         let keys_bytes =
             unsafe { std::slice::from_raw_parts(packed_keys, packed_keys_len as usize) };
-        let keys: Vec<&[u8]> = keys_bytes
-            .split(|&b| b == 0)
-            .filter(|s| !s.is_empty())
-            .collect();
+        let keys: Vec<&[u8]> = crate::object::packed_key_names(keys_bytes);
         // Issue #179: shape-cache keys_array lives in the longlived arena
         // (see `js_build_class_keys_array` for the rationale).
         let arr = unsafe { build_longlived_keys_array(ptr::null_mut(), 0, &keys) };
@@ -686,7 +680,7 @@ pub extern "C" fn js_object_alloc_class_dynamic_parent(
             let bytes = unsafe {
                 std::slice::from_raw_parts(own_packed_keys, own_packed_keys_len as usize)
             };
-            bytes.split(|&b| b == 0).filter(|s| !s.is_empty()).collect()
+            crate::object::packed_key_names(bytes)
         };
         let merged_len = parent_len as usize + own_keys.len();
         // `parent_arr` was read from the memo with no allocation since; the
@@ -790,10 +784,7 @@ pub extern "C" fn js_object_alloc_with_shape(
     } else {
         let keys_bytes =
             unsafe { std::slice::from_raw_parts(packed_keys, packed_keys_len as usize) };
-        let keys: Vec<&[u8]> = keys_bytes
-            .split(|&b| b == 0)
-            .filter(|s| !s.is_empty())
-            .collect();
+        let keys: Vec<&[u8]> = crate::object::packed_key_names(keys_bytes);
         // Issue #179: shape-cache keys_array lives in the longlived arena.
         // The builder roots the unfinished array across its key allocations;
         // the object is already held in `obj_scope`.
