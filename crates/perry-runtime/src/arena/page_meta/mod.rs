@@ -1,3 +1,6 @@
+mod maintenance;
+pub(crate) use maintenance::shrink_page_tables;
+
 use super::*;
 
 pub(crate) const GENERATION_PAGE_SHIFT: usize = 12;
@@ -138,6 +141,10 @@ impl PageGenerationCache {
 // that — an 8.6% regression on the same row (0/7 pairs). Keep the scan short.
 const PAGE_GENERATION_CACHE_WAYS: usize = 4;
 
+mod compact;
+use compact::{page_count, PageObjects};
+mod storage;
+use storage::PageMetaMap;
 mod page_class;
 mod sweep_tally;
 pub(crate) use page_class::*;
@@ -165,8 +172,8 @@ mod tests;
 /// `first_key..=last_key` loops walk key *ranges*, not the map), so iteration
 /// order is not observable and this carries no determinism exposure.
 type PageGenerationMap = crate::fast_hash::PtrHashMap<usize, PageGenerationSlot>;
-type OldGenPageObjectMap = crate::fast_hash::PtrHashMap<usize, Vec<usize>>;
-type OldGenPageMetaMap = crate::fast_hash::PtrHashMap<usize, OldPageMeta>;
+type OldGenPageObjectMap = crate::fast_hash::PtrHashMap<usize, PageObjects>;
+type OldGenPageMetaMap = PageMetaMap;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct OldPageMeta {
@@ -193,64 +200,6 @@ pub(crate) struct OldPageMeta {
     pub(crate) dirty_slots_epoch: u64,
     pub(crate) dirty: bool,
     pub(crate) evacuation_eligible: bool,
-}
-
-impl OldPageMeta {
-    #[inline]
-    fn zero_for_page(page: usize) -> Self {
-        let page_base = generation_page_base(page);
-        Self {
-            page_base,
-            page_end: page_base + GENERATION_PAGE_SIZE,
-            allocated_bytes: 0,
-            live_bytes: 0,
-            dead_bytes: 0,
-            object_count: 0,
-            live_object_count: 0,
-            dead_object_count: 0,
-            pinned_bytes: 0,
-            pinned_object_count: 0,
-            dirty_slots: 0,
-            // Epoch 0 never matches a live cycle epoch (which starts at 1), so
-            // a freshly materialized page reads zero dirty slots until it is
-            // stamped by the remembered-set scan (#6181).
-            dirty_slots_epoch: 0,
-            dirty: false,
-            evacuation_eligible: false,
-        }
-    }
-
-    /// `dirty_slots` scoped to `current_epoch`: a page last stamped in an
-    /// earlier cycle (its `dirty_slots_epoch` is stale) has no dirty slots
-    /// this cycle. This is what makes the O(1) epoch bump in
-    /// `old_pages_begin_gc_cycle` equivalent to the old per-page reset (#6181).
-    #[inline]
-    pub(crate) fn effective_dirty_slots(&self, current_epoch: u64) -> usize {
-        if self.dirty_slots_epoch == current_epoch {
-            self.dirty_slots
-        } else {
-            0
-        }
-    }
-
-    #[inline]
-    fn reset_cycle_sweep_accounting(&mut self) {
-        self.live_bytes = 0;
-        self.dead_bytes = 0;
-        self.pinned_bytes = 0;
-        self.live_object_count = 0;
-        self.dead_object_count = 0;
-        self.pinned_object_count = 0;
-        self.evacuation_eligible = false;
-    }
-
-    #[inline]
-    fn refresh_policy_bits(&mut self) {
-        self.evacuation_eligible = self.allocated_bytes > 0
-            && self.live_bytes > 0
-            && self.dead_bytes > 0
-            && self.pinned_bytes == 0;
-    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -297,7 +246,7 @@ crate::perry_thread_local! {
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
 
     static OLD_GEN_PAGE_META: RefCell<OldGenPageMetaMap> =
-        RefCell::new(crate::fast_hash::new_ptr_hash_map());
+        RefCell::new(OldGenPageMetaMap::default());
 
     /// Promoted-block pages whose object list is DESCRIBED rather than stored —
     /// see [`register_promoted_page_run`].
@@ -316,7 +265,7 @@ crate::perry_thread_local! {
     /// Monotonic per-cycle epoch for old-page `dirty_slots` (#6181). Bumped
     /// once per GC cycle by `old_pages_begin_gc_cycle` instead of walking every
     /// old page to zero its `dirty_slots`. Starts at 1 so a freshly allocated
-    /// page (stamp 0, see `OldPageMeta::zero_for_page`) reads as having no
+    /// page (stamp 0, see `StoredPageMeta::default`) reads as having no
     /// dirty slots. `u64` never wraps in practice (one bump per collection).
     static OLD_GEN_PAGE_DIRTY_EPOCH: Cell<u64> = const { Cell::new(1) };
 }
@@ -391,8 +340,7 @@ fn register_old_block_pages(base: usize, size: usize) {
     OLD_GEN_PAGE_META.with(|meta| {
         let mut meta = meta.borrow_mut();
         for page in first_page..=last_page {
-            meta.entry(page)
-                .or_insert_with(|| OldPageMeta::zero_for_page(page));
+            meta.get_or_insert(page);
         }
     });
 }
@@ -654,13 +602,13 @@ pub(crate) fn register_promoted_page_run(
     OLD_GEN_PAGE_PROMOTED_RUNS_NONEMPTY.with(|flag| flag.set(true));
     OLD_GEN_PAGE_META.with(|meta| {
         let mut meta = meta.borrow_mut();
-        let page_meta = meta
-            .entry(page)
-            .or_insert_with(|| OldPageMeta::zero_for_page(page));
-        page_meta.allocated_bytes = page_meta.allocated_bytes.saturating_add(bytes);
-        page_meta.object_count = page_meta.object_count.saturating_add(count);
-        page_meta.live_bytes = page_meta.live_bytes.saturating_add(bytes);
-        page_meta.live_object_count = page_meta.live_object_count.saturating_add(count);
+        let page_meta = meta.get_or_insert(page);
+        page_meta.allocated_bytes = page_meta.allocated_bytes.saturating_add(page_count(bytes));
+        page_meta.object_count = page_meta.object_count.saturating_add(page_count(count));
+        page_meta.live_bytes = page_meta.live_bytes.saturating_add(page_count(bytes));
+        page_meta.live_object_count = page_meta
+            .live_object_count
+            .saturating_add(page_count(count));
         page_meta.refresh_policy_bits();
     });
 }
@@ -704,7 +652,7 @@ struct PromotedPageRun {
 fn expand_promoted_run(page: usize, run: PromotedPageRun) {
     use crate::gc::GcHeader;
 
-    let mut headers = Vec::with_capacity(run.count);
+    let mut headers = PageObjects::with_capacity(run.count);
     let mut addr = run.first_header;
     while addr <= run.last_header {
         let header = addr as *const GcHeader;
@@ -716,7 +664,7 @@ fn expand_promoted_run(page: usize, run: PromotedPageRun) {
         // hopped OVER, not indexed. Without this the expansion would hand
         // readers headers the eager list never contained.
         if crate::gc::gc_type_is_arena_walkable(unsafe { (*header).obj_type }) {
-            headers.push(addr);
+            headers.push(page, addr);
         }
         addr += total;
     }
@@ -732,11 +680,13 @@ fn expand_promoted_run(page: usize, run: PromotedPageRun) {
     );
     OLD_GEN_PAGE_OBJECTS.with(|index| {
         let mut index = index.borrow_mut();
-        let slot = index.entry(page).or_insert_with(Vec::new);
+        let slot = index.entry(page).or_default();
         if slot.is_empty() {
             *slot = headers;
         } else {
-            slot.extend_from_slice(&headers);
+            for header in headers.iter(page) {
+                slot.push(page, header);
+            }
         }
     });
 }
@@ -812,20 +762,19 @@ pub(crate) fn register_promoted_page_headers(page: usize, headers: &[usize], byt
     }
     OLD_GEN_PAGE_OBJECTS.with(|index| {
         let mut index = index.borrow_mut();
-        index
-            .entry(page)
-            .or_insert_with(Vec::new)
-            .extend_from_slice(headers);
+        index.entry(page).or_default().extend(page, headers);
     });
     OLD_GEN_PAGE_META.with(|meta| {
         let mut meta = meta.borrow_mut();
-        let page_meta = meta
-            .entry(page)
-            .or_insert_with(|| OldPageMeta::zero_for_page(page));
-        page_meta.allocated_bytes = page_meta.allocated_bytes.saturating_add(bytes);
-        page_meta.object_count = page_meta.object_count.saturating_add(headers.len());
-        page_meta.live_bytes = page_meta.live_bytes.saturating_add(bytes);
-        page_meta.live_object_count = page_meta.live_object_count.saturating_add(headers.len());
+        let page_meta = meta.get_or_insert(page);
+        page_meta.allocated_bytes = page_meta.allocated_bytes.saturating_add(page_count(bytes));
+        page_meta.object_count = page_meta
+            .object_count
+            .saturating_add(page_count(headers.len()));
+        page_meta.live_bytes = page_meta.live_bytes.saturating_add(page_count(bytes));
+        page_meta.live_object_count = page_meta
+            .live_object_count
+            .saturating_add(page_count(headers.len()));
         page_meta.refresh_policy_bits();
     });
 }
@@ -1091,14 +1040,14 @@ fn update_old_page_meta_for_object(page_updates: &[(usize, usize)], adding: bool
     OLD_GEN_PAGE_META.with(|meta| {
         let mut meta = meta.borrow_mut();
         for &(page, bytes) in page_updates {
-            let page_meta = meta
-                .entry(page)
-                .or_insert_with(|| OldPageMeta::zero_for_page(page));
+            let page_meta = meta.get_or_insert(page);
             if adding {
-                page_meta.allocated_bytes = page_meta.allocated_bytes.saturating_add(bytes);
+                page_meta.allocated_bytes =
+                    page_meta.allocated_bytes.saturating_add(page_count(bytes));
                 page_meta.object_count = page_meta.object_count.saturating_add(1);
             } else {
-                page_meta.allocated_bytes = page_meta.allocated_bytes.saturating_sub(bytes);
+                page_meta.allocated_bytes =
+                    page_meta.allocated_bytes.saturating_sub(page_count(bytes));
                 page_meta.object_count = page_meta.object_count.saturating_sub(1);
                 if page_meta.allocated_bytes == 0 && page_meta.object_count == 0 {
                     page_meta.reset_cycle_sweep_accounting();
@@ -1118,9 +1067,9 @@ pub(crate) fn register_old_object_pages(header_addr: usize, total_size: usize) {
     OLD_GEN_PAGE_OBJECTS.with(|index| {
         let mut index = index.borrow_mut();
         for &(page, bytes) in &overlaps {
-            let headers = index.entry(page).or_insert_with(Vec::new);
-            if !headers.contains(&header_addr) {
-                headers.push(header_addr);
+            let headers = index.entry(page).or_default();
+            if !headers.contains_prefix(page, header_addr, headers.len()) {
+                headers.push(page, header_addr);
                 added_pages.push((page, bytes));
             }
         }
@@ -1267,23 +1216,21 @@ fn flush_deferred_old_page_registrations_batch() {
                     if overlap_start >= overlap_end {
                         continue;
                     }
-                    let headers = index.entry(page).or_insert_with(Vec::new);
+                    let headers = index.entry(page).or_default();
                     if run_page != Some(page) {
                         run_page = Some(page);
                         run_base_len = headers.len();
                     }
-                    if headers[..run_base_len.min(headers.len())].contains(&header_addr) {
+                    if headers.contains_prefix(page, header_addr, run_base_len) {
                         continue;
                     }
-                    headers.push(header_addr);
+                    headers.push(page, header_addr);
                     // Identical to `update_old_page_meta_for_object(.., true)`
                     // for this one page, applied here so no staging Vec exists.
-                    let page_meta = meta
-                        .entry(page)
-                        .or_insert_with(|| OldPageMeta::zero_for_page(page));
+                    let page_meta = meta.get_or_insert(page);
                     page_meta.allocated_bytes = page_meta
                         .allocated_bytes
-                        .saturating_add(overlap_end - overlap_start);
+                        .saturating_add(page_count(overlap_end - overlap_start));
                     page_meta.object_count = page_meta.object_count.saturating_add(1);
                     page_meta.refresh_policy_bits();
                 }
@@ -1325,7 +1272,8 @@ pub(crate) fn unregister_old_object_pages(header_addr: usize, total_size: usize)
         for &(page, bytes) in &overlaps {
             let mut remove_page = false;
             if let Some(headers) = index.get_mut(&page) {
-                if let Some(pos) = headers.iter().position(|&addr| addr == header_addr) {
+                let position = headers.iter(page).position(|addr| addr == header_addr);
+                if let Some(pos) = position {
                     headers.swap_remove(pos);
                     removed_pages.push((page, bytes));
                 }
@@ -1415,7 +1363,7 @@ pub(crate) fn unregister_old_objects_batch(
                 let mut removed_objects = 0usize;
                 let mut remove_page = false;
                 if let Some(headers) = index.get_mut(&page) {
-                    headers.retain(|&addr| {
+                    headers.retain(page, |addr| {
                         match group.binary_search_by_key(&addr, |&(_, header, _)| header) {
                             Ok(i) => {
                                 removed_bytes = removed_bytes.saturating_add(group[i].2);
@@ -1431,12 +1379,13 @@ pub(crate) fn unregister_old_objects_batch(
                     index.remove(&page);
                 }
                 if removed_objects != 0 {
-                    let page_meta = meta
-                        .entry(page)
-                        .or_insert_with(|| OldPageMeta::zero_for_page(page));
-                    page_meta.allocated_bytes =
-                        page_meta.allocated_bytes.saturating_sub(removed_bytes);
-                    page_meta.object_count = page_meta.object_count.saturating_sub(removed_objects);
+                    let page_meta = meta.get_or_insert(page);
+                    page_meta.allocated_bytes = page_meta
+                        .allocated_bytes
+                        .saturating_sub(page_count(removed_bytes));
+                    page_meta.object_count = page_meta
+                        .object_count
+                        .saturating_sub(page_count(removed_objects));
                     if page_meta.allocated_bytes == 0 && page_meta.object_count == 0 {
                         page_meta.reset_cycle_sweep_accounting();
                     }
@@ -1495,18 +1444,17 @@ pub(crate) fn old_page_account_swept_object(
     OLD_GEN_PAGE_META.with(|meta| {
         let mut meta = meta.borrow_mut();
         for (page, bytes) in overlaps {
-            let page_meta = meta
-                .entry(page)
-                .or_insert_with(|| OldPageMeta::zero_for_page(page));
+            let page_meta = meta.get_or_insert(page);
             if live {
-                page_meta.live_bytes = page_meta.live_bytes.saturating_add(bytes);
+                page_meta.live_bytes = page_meta.live_bytes.saturating_add(page_count(bytes));
                 page_meta.live_object_count = page_meta.live_object_count.saturating_add(1);
                 if pinned {
-                    page_meta.pinned_bytes = page_meta.pinned_bytes.saturating_add(bytes);
+                    page_meta.pinned_bytes =
+                        page_meta.pinned_bytes.saturating_add(page_count(bytes));
                     page_meta.pinned_object_count = page_meta.pinned_object_count.saturating_add(1);
                 }
             } else {
-                page_meta.dead_bytes = page_meta.dead_bytes.saturating_add(bytes);
+                page_meta.dead_bytes = page_meta.dead_bytes.saturating_add(page_count(bytes));
                 page_meta.dead_object_count = page_meta.dead_object_count.saturating_add(1);
             }
             page_meta.refresh_policy_bits();
@@ -1529,13 +1477,11 @@ pub(crate) fn old_page_account_promoted_object(
     OLD_GEN_PAGE_META.with(|meta| {
         let mut meta = meta.borrow_mut();
         for (page, bytes) in overlaps {
-            let page_meta = meta
-                .entry(page)
-                .or_insert_with(|| OldPageMeta::zero_for_page(page));
-            page_meta.live_bytes = page_meta.live_bytes.saturating_add(bytes);
+            let page_meta = meta.get_or_insert(page);
+            page_meta.live_bytes = page_meta.live_bytes.saturating_add(page_count(bytes));
             page_meta.live_object_count = page_meta.live_object_count.saturating_add(1);
             if pinned {
-                page_meta.pinned_bytes = page_meta.pinned_bytes.saturating_add(bytes);
+                page_meta.pinned_bytes = page_meta.pinned_bytes.saturating_add(page_count(bytes));
                 page_meta.pinned_object_count = page_meta.pinned_object_count.saturating_add(1);
             }
             page_meta.refresh_policy_bits();
@@ -1591,20 +1537,28 @@ pub(crate) fn old_page_summary() -> OldPageSummary {
         for page_meta in meta.values() {
             summary.allocated_bytes = summary
                 .allocated_bytes
-                .saturating_add(page_meta.allocated_bytes);
-            summary.live_bytes = summary.live_bytes.saturating_add(page_meta.live_bytes);
-            summary.dead_bytes = summary.dead_bytes.saturating_add(page_meta.dead_bytes);
-            summary.pinned_bytes = summary.pinned_bytes.saturating_add(page_meta.pinned_bytes);
-            summary.object_count = summary.object_count.saturating_add(page_meta.object_count);
+                .saturating_add(page_meta.allocated_bytes as usize);
+            summary.live_bytes = summary
+                .live_bytes
+                .saturating_add(page_meta.live_bytes as usize);
+            summary.dead_bytes = summary
+                .dead_bytes
+                .saturating_add(page_meta.dead_bytes as usize);
+            summary.pinned_bytes = summary
+                .pinned_bytes
+                .saturating_add(page_meta.pinned_bytes as usize);
+            summary.object_count = summary
+                .object_count
+                .saturating_add(page_meta.object_count as usize);
             summary.live_object_count = summary
                 .live_object_count
-                .saturating_add(page_meta.live_object_count);
+                .saturating_add(page_meta.live_object_count as usize);
             summary.dead_object_count = summary
                 .dead_object_count
-                .saturating_add(page_meta.dead_object_count);
+                .saturating_add(page_meta.dead_object_count as usize);
             summary.pinned_object_count = summary
                 .pinned_object_count
-                .saturating_add(page_meta.pinned_object_count);
+                .saturating_add(page_meta.pinned_object_count as usize);
             let dirty_slots = page_meta.effective_dirty_slots(current_epoch);
             if page_meta.dirty || dirty_slots > 0 {
                 summary.dirty_pages = summary.dirty_pages.saturating_add(1);
@@ -1635,9 +1589,8 @@ pub(crate) fn old_page_meta_snapshot() -> Vec<OldPageMeta> {
     OLD_GEN_PAGE_META.with(|meta| {
         let mut snapshot = meta
             .borrow()
-            .values()
-            .copied()
-            .map(|page_meta| normalize_dirty_slots_for_epoch(page_meta, current_epoch))
+            .iter()
+            .map(|(page, page_meta)| page_meta.snapshot(page, current_epoch))
             .collect::<Vec<_>>();
         crate::cold_sort::sort_by_u64_key(&mut snapshot, |page_meta| page_meta.page_base as u64);
         snapshot
@@ -1652,16 +1605,6 @@ pub(crate) fn old_page_meta_snapshot_calls_for_tests() -> usize {
 #[cfg(test)]
 pub(crate) fn reset_old_page_meta_snapshot_calls_for_tests() {
     OLD_PAGE_META_SNAPSHOT_CALLS.with(|calls| calls.set(0));
-}
-
-/// Fold a stale `dirty_slots` stamp down to the effective value so a copied
-/// `OldPageMeta` handed to a caller always reports this cycle's dirty-slot
-/// count directly in `dirty_slots`, without the caller needing the epoch (#6181).
-#[inline]
-fn normalize_dirty_slots_for_epoch(mut page_meta: OldPageMeta, current_epoch: u64) -> OldPageMeta {
-    page_meta.dirty_slots = page_meta.effective_dirty_slots(current_epoch);
-    page_meta.dirty_slots_epoch = current_epoch;
-    page_meta
 }
 
 /// Address ranges of the live old-generation blocks, as
@@ -1755,7 +1698,7 @@ pub(crate) fn old_arena_walk_objects_on_pages(
         let index = index.borrow();
         for page in pages {
             if let Some(page_headers) = index.get(page) {
-                for &header_addr in page_headers {
+                for header_addr in page_headers.iter(*page) {
                     if seen.insert(header_addr) {
                         headers.push(header_addr);
                     }
@@ -1811,7 +1754,7 @@ impl OldArenaPageObjectCursor {
                 index
                     .borrow()
                     .get(&page)
-                    .and_then(|headers| headers.get(self.header_cursor).copied())
+                    .and_then(|headers| headers.get(page, self.header_cursor))
             });
             if let Some(header) = header {
                 self.header_cursor += 1;
@@ -1846,7 +1789,7 @@ pub(crate) fn old_arena_page_index_remove_object(header_addr: usize, total_size:
         for (page, _) in overlaps {
             let mut remove_page = false;
             if let Some(headers) = index.get_mut(&page) {
-                headers.retain(|&addr| addr != header_addr);
+                headers.retain(page, |addr| addr != header_addr);
                 remove_page = headers.is_empty();
             }
             if remove_page {
@@ -1910,13 +1853,13 @@ pub(crate) fn old_page_meta_for_tests(page: usize) -> Option<OldPageMeta> {
         meta.borrow()
             .get(&page)
             .copied()
-            .map(|page_meta| normalize_dirty_slots_for_epoch(page_meta, current_epoch))
+            .map(|page_meta| page_meta.snapshot(page, current_epoch))
     })
 }
 
 /// `PERRY_GC_CENSUS`: estimated bytes held by the per-page side tables.
 pub(crate) fn page_meta_census() -> Vec<crate::gc::census::SideTableRow> {
-    use crate::gc::census::{hash_table_bytes, vec_bytes};
+    use crate::gc::census::hash_table_bytes;
     let mut rows = Vec::new();
     PAGE_GENERATIONS.with(|m| {
         let m = m.borrow();
@@ -1931,20 +1874,16 @@ pub(crate) fn page_meta_census() -> Vec<crate::gc::census::SideTableRow> {
     });
     OLD_GEN_PAGE_OBJECTS.with(|m| {
         let m = m.borrow();
-        let inner: usize = m.values().map(vec_bytes).sum();
+        let inner: usize = m.values().map(PageObjects::heap_bytes).sum();
         rows.push((
             "arena.old_gen_page_objects",
             m.len(),
-            hash_table_bytes(m.capacity(), std::mem::size_of::<(usize, Vec<usize>)>()) + inner,
+            hash_table_bytes(m.capacity(), std::mem::size_of::<(usize, PageObjects)>()) + inner,
         ));
     });
     OLD_GEN_PAGE_META.with(|m| {
         let m = m.borrow();
-        rows.push((
-            "arena.old_gen_page_meta",
-            m.len(),
-            hash_table_bytes(m.capacity(), std::mem::size_of::<(usize, OldPageMeta)>()),
-        ));
+        rows.push(("arena.old_gen_page_meta", m.len(), m.allocated_bytes()));
     });
     OLD_GEN_PAGE_PROMOTED_RUNS.with(|m| {
         let m = m.borrow();
