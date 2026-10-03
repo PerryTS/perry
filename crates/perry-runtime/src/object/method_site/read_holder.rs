@@ -61,8 +61,8 @@
 
 use super::{next_prototype, ordinary_receiver, WORKER_AGENTS_EXIST};
 use crate::object::shapes::{
-    object_proto_id, object_shape_descriptor, object_shape_stamp, shape_proto_id, PIC_ID_TOKEN_BIT,
-    PROTO_ID_CLASS, PROTO_ID_DEFAULT, PROTO_ID_MIXED, PROTO_ID_NULL, PROTO_ID_UNIQUE,
+    object_shape_descriptor, object_shape_stamp, shape_proto_id, PIC_ID_TOKEN_BIT, PROTO_ID_CLASS,
+    PROTO_ID_DEFAULT, PROTO_ID_MIXED, PROTO_ID_NULL, PROTO_ID_UNIQUE,
 };
 use crate::object::{ObjectHeader, PicCache, PicCacheSlot};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -568,15 +568,46 @@ unsafe fn hop_admitted(addr: usize, name: &[u8]) -> bool {
     !key_may_be_accessor(obj, name)
 }
 
-/// The prototype identity `obj`'s shape records, if it admits: a serial, the
-/// default link or null — and equal to what the object says it is.
-pub(super) unsafe fn admitted_proto_id(obj: *const ObjectHeader) -> Option<u64> {
+/// What `obj` says its prototype identity is
+/// ([`crate::object::shapes::object_proto_id`]), and the
+/// recorded [[Prototype]] word that says it: one read of the word serves
+/// both the identity check and the hop ([`next_from_word`]).
+#[inline]
+pub(super) unsafe fn stated_link(obj: *const ObjectHeader) -> (u64, u64) {
+    let word = crate::object::shapes::object_prototype_word(obj);
+    (crate::object::shapes::object_proto_id_for(obj, word), word)
+}
+
+/// [`next_prototype`] of `obj`, given its recorded word as [`stated_link`]
+/// read it.
+#[inline]
+pub(super) unsafe fn next_from_word(obj: *const ObjectHeader, word: u64) -> *const ObjectHeader {
+    if word == 0 {
+        return next_prototype(obj);
+    }
+    let p = crate::value::JSValue::from_bits(word);
+    if p.is_pointer() {
+        p.as_pointer()
+    } else {
+        std::ptr::null()
+    }
+}
+
+/// [`admitted_proto_id`], with `obj`'s recorded word.
+unsafe fn admitted_link(obj: *const ObjectHeader) -> Option<(u64, u64)> {
     let pid = shape_proto_id(object_shape_stamp(obj))?;
     let serial = pid != PROTO_ID_DEFAULT && pid < crate::object::shapes::PROTO_ID_CLASS;
     if !(serial || pid == PROTO_ID_DEFAULT || pid == PROTO_ID_NULL) {
         return None;
     }
-    (object_proto_id(obj) == pid).then_some(pid)
+    let (stated, word) = stated_link(obj);
+    (stated == pid).then_some((pid, word))
+}
+
+/// The prototype identity `obj`'s shape records, if it admits: a serial, the
+/// default link or null — and equal to what the object says it is.
+pub(super) unsafe fn admitted_proto_id(obj: *const ObjectHeader) -> Option<u64> {
+    admitted_link(obj).map(|(pid, _)| pid)
 }
 
 /// A MIXED identity records an explicit serial link. A bare CLASS identity
@@ -585,11 +616,12 @@ pub(super) unsafe fn admitted_proto_id(obj: *const ObjectHeader) -> Option<u64> 
 /// ShapeId (see the module docs), which the hit's holder compare sees.
 unsafe fn class_link(recv: *const ObjectHeader) -> Option<*const ObjectHeader> {
     let pid = shape_proto_id(object_shape_stamp(recv))?;
-    if object_proto_id(recv) != pid {
+    let (stated, word) = stated_link(recv);
+    if stated != pid {
         return None;
     }
     let holder = if (PROTO_ID_MIXED..PROTO_ID_UNIQUE).contains(&pid) {
-        next_prototype(recv)
+        next_from_word(recv, word)
     } else if (PROTO_ID_CLASS..PROTO_ID_MIXED).contains(&pid) {
         crate::object::class_decl_prototype_object((*recv).class_id)
     } else {
@@ -734,6 +766,8 @@ unsafe fn walk(recv: *const ObjectHeader, name: &[u8], class_first: bool) -> Opt
         // [[Prototype]] is null for its whole life, whatever its shape's
         // identity word says, so reaching it ends the chain.
         let terminal = depth > 1 && current as usize == object_prototype;
+        // `current`'s recorded word, once read for its identity check.
+        let mut word = None;
         let pid = if terminal {
             PROTO_ID_NULL
         } else if depth == 1 && class_first {
@@ -741,15 +775,27 @@ unsafe fn walk(recv: *const ObjectHeader, name: &[u8], class_first: bool) -> Opt
             // C.prototype. The collecting class-read hit compares that
             // pointer on every use; this walk records it as the first hop.
             crate::object::shapes::PROTO_ID_CLASS
-        } else if class_first {
-            let pid = shape_proto_id(object_shape_stamp(current))?;
-            if (PROTO_ID_MIXED..PROTO_ID_UNIQUE).contains(&pid) && object_proto_id(current) == pid {
-                pid
-            } else {
-                admitted_proto_id(current)?
-            }
         } else {
-            admitted_proto_id(current)?
+            let mixed = if class_first {
+                let pid = shape_proto_id(object_shape_stamp(current))?;
+                if (PROTO_ID_MIXED..PROTO_ID_UNIQUE).contains(&pid) {
+                    let (stated, w) = stated_link(current);
+                    word = Some(w);
+                    (stated == pid).then_some(pid)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            match mixed {
+                Some(pid) => pid,
+                None => {
+                    let (pid, w) = admitted_link(current)?;
+                    word = Some(w);
+                    pid
+                }
+            }
         };
         if pid == PROTO_ID_NULL {
             // `current` is the terminal object, and it lacks `name`.
@@ -768,7 +814,10 @@ unsafe fn walk(recv: *const ObjectHeader, name: &[u8], class_first: bool) -> Opt
         } else if pid == PROTO_ID_DEFAULT {
             object_prototype as *const ObjectHeader
         } else {
-            next_prototype(current)
+            match word {
+                Some(w) => next_from_word(current, w),
+                None => next_prototype(current),
+            }
         };
         if next.is_null() || next == current || next == recv || !hop_admitted(next as usize, name) {
             return None;
@@ -1606,7 +1655,10 @@ mod tests {
             crate::object::js_object_alloc_class_inline_keys_stamped(CID, 0, 1, keys, shape_id, 0);
         let claimed = shape_proto_id(shape_id).expect("class shape must be stamped");
         assert_eq!(claimed, crate::object::shapes::class_proto_id(CID));
-        assert_eq!(unsafe { object_proto_id(obj) }, claimed);
+        assert_eq!(
+            unsafe { crate::object::shapes::object_proto_id(obj) },
+            claimed
+        );
         assert!(claimed >= crate::object::shapes::PROTO_ID_CLASS);
         assert_eq!(unsafe { admitted_proto_id(obj) }, None);
     }

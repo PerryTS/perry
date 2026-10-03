@@ -701,16 +701,34 @@ pub(crate) fn relinked_instance_chain_answer(value: f64, start: u32, want: u32) 
     if obj.is_null() {
         return None;
     }
+    relinked_object_chain_answer(obj, value, start, want)
+}
+
+/// [`relinked_instance_chain_answer`] for a caller that already holds the
+/// receiver `obj` (`value`'s live `GC_TYPE_OBJECT`).
+#[inline(always)]
+pub(crate) fn relinked_object_chain_answer(
+    obj: *const ObjectHeader,
+    value: f64,
+    start: u32,
+    want: u32,
+) -> Option<bool> {
     // SAFETY: every caller has proved a live `GC_TYPE_OBJECT` receiver.
-    let identity = unsafe { crate::object::shapes::object_shape_identity(obj) };
-    // The common receiver stands on its own class's prototype: one compare
-    // decides, before any registry is asked what `start` implies.
-    if identity != (crate::object::shapes::PROTO_ID_CLASS | u64::from(start))
-        && identity != crate::object::shapes::class_proto_id(start)
-        && identity != crate::object::shapes::PROTO_ID_PER_OBJECT
-        && super::prototype_chain::object_prototype_is_foreign(obj as usize)
-    {
-        return live_chain_answer(value, want);
+    // The common receiver's ShapeId names an unlinked identity: the default,
+    // its own class's or a per-object one, none of them foreign (a class
+    // instance linked anywhere but its class's declaration prototype has a
+    // linked identity). One compare of the header word decides, before the
+    // shape record or any registry is read.
+    if unsafe { crate::object::shapes::shape_word_may_be_linked((*obj).parent_class_id) } {
+        // SAFETY: as above.
+        let identity = unsafe { crate::object::shapes::object_shape_identity(obj) };
+        if identity != (crate::object::shapes::PROTO_ID_CLASS | u64::from(start))
+            && identity != crate::object::shapes::class_proto_id(start)
+            && identity != crate::object::shapes::PROTO_ID_PER_OBJECT
+            && super::prototype_chain::object_prototype_is_foreign(obj as usize)
+        {
+            return live_chain_answer(value, want);
+        }
     }
     if !super::prototype_chain::any_class_chain_relinked() {
         return None;

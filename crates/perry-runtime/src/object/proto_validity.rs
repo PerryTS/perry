@@ -264,9 +264,47 @@ unsafe fn ensure_meta_for_mark(obj: usize, flag: u64) -> Option<*mut crate::obje
             }
         });
         let meta = (*object).meta;
-        return (!meta.is_null()).then_some(meta);
+        if meta.is_null() {
+            return None;
+        }
+        if flag == crate::object::OBJECT_META_FLAG_IS_PROTOTYPE {
+            keep_prototype_in_record(object, meta);
+        }
+        return Some(meta);
     }
     Some(meta)
+}
+
+/// A prototype is read on every inherited walk through it, so it keeps its
+/// own [[Prototype]] bits in its meta record, the cheaper read
+/// (`shapes::object_prototype_word`). The prototype funnel writes both while
+/// a record exists; an object linked before it had one (a class declaration
+/// prototype, linked to its parent's when it is created) starts its record
+/// from the shape's word when it becomes a prototype. Only a linked
+/// identity has a word.
+///
+/// # Safety
+/// `object` is a live `ObjectHeader` and `meta` its record.
+unsafe fn keep_prototype_in_record(
+    object: *mut crate::object::ObjectHeader,
+    meta: *mut crate::object::ObjectMeta,
+) {
+    if (*meta).prototype != 0
+        || !crate::object::shapes::shape_word_may_be_linked((*object).parent_class_id)
+    {
+        return;
+    }
+    let word = crate::object::shapes::object_prototype_word(object);
+    if word != 0 {
+        (*meta).prototype = word;
+        // GC_STORE_AUDIT(BARRIERED): meta-record prototype slot store (parent
+        // = the meta record), as in the prototype funnel.
+        crate::gc::runtime_write_barrier_slot(
+            meta as usize,
+            &(*meta).prototype as *const u64 as usize,
+            word,
+        );
+    }
 }
 
 /// # Safety

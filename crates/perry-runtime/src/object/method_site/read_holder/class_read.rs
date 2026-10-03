@@ -99,7 +99,8 @@ fn hop_identity_pins_link(pid: u64) -> bool {
 /// shape/prototype rule the prime walk used. A changed or exotic link declines.
 unsafe fn admitted_next(hop: *const ObjectHeader) -> Option<usize> {
     let pid = shape_proto_id(object_shape_stamp(hop))?;
-    if object_proto_id(hop) != pid {
+    let (stated, word) = super::stated_link(hop);
+    if stated != pid {
         return None;
     }
     if !(pid == PROTO_ID_DEFAULT
@@ -114,7 +115,7 @@ unsafe fn admitted_next(hop: *const ObjectHeader) -> Option<usize> {
     } else if pid == PROTO_ID_NULL {
         0
     } else {
-        next_prototype(hop) as usize
+        super::next_from_word(hop, word) as usize
     };
     (next != 0).then_some(next)
 }
