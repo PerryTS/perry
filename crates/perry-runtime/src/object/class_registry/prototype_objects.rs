@@ -636,9 +636,36 @@ unsafe fn evaluated_parent_instance_field(
 /// names the next hop of an instance chain, and walks over the class
 /// registry must stop at `cid` (the recorded link continues the chain).
 pub(crate) fn class_decl_prototype_relinked(cid: u32) -> bool {
+    if !super::super::prototype_chain::any_class_chain_relinked() {
+        return false;
+    }
     let decl_proto = class_decl_prototype_object(cid);
-    !decl_proto.is_null()
-        && super::super::prototype_chain::object_has_user_prototype_override(decl_proto as usize)
+    !decl_proto.is_null() && unsafe { decl_prototype_relinked(cid, decl_proto) }
+}
+
+/// Is `decl_proto` (class `cid`'s declaration prototype) standing on
+/// anything but what its declaration links it to — the parent class's
+/// declaration prototype, or `Object.prototype` for a base class? Read from
+/// its recorded `[[Prototype]]` (a fact of its shape), not from history: a
+/// relink back to the declared parent is not a relink. A declaration this
+/// cannot name (a runtime-valued or native parent, `extends null`) answers
+/// `true`, which only sends the caller down the exact prototype walk.
+///
+/// # Safety
+/// `decl_proto` is class `cid`'s live declaration prototype.
+pub(crate) unsafe fn decl_prototype_relinked(cid: u32, decl_proto: *mut ObjectHeader) -> bool {
+    let recorded = super::super::prototype_chain::object_static_prototype(decl_proto as usize);
+    let declared = match super::get_parent_class_id(cid) {
+        Some(parent) if parent != 0 && parent != cid => {
+            let parent_proto = class_decl_prototype_object(parent);
+            if parent_proto.is_null() {
+                return true;
+            }
+            Some(crate::value::js_nanbox_pointer(parent_proto as i64).to_bits())
+        }
+        _ => super::global_object_prototype_bits(),
+    };
+    recorded != declared
 }
 
 /// `key` read on the rest of class `cid`'s instance chain past its declared
@@ -660,7 +687,7 @@ pub(crate) unsafe fn relinked_class_prototype_read(
     if decl_proto.is_null() {
         return None;
     }
-    match relinked_decl_prototype_field(decl_proto, key, receiver) {
+    match relinked_decl_prototype_field(cid, decl_proto, key, receiver) {
         RelinkedRead::NotRelinked => None,
         RelinkedRead::Answered(value) => Some(Some(value)),
         RelinkedRead::Missed => Some(None),
@@ -689,12 +716,14 @@ enum RelinkedRead {
 /// facts a read site validates decline on their own; this is the generic read
 /// those sites fall back to and confirm their prime against.
 unsafe fn relinked_decl_prototype_field(
+    cid: u32,
     decl_proto: *mut ObjectHeader,
     key: *const crate::StringHeader,
     receiver: f64,
 ) -> RelinkedRead {
     if key.is_null()
-        || !super::super::prototype_chain::object_has_user_prototype_override(decl_proto as usize)
+        || !super::super::prototype_chain::any_class_chain_relinked()
+        || !decl_prototype_relinked(cid, decl_proto)
     {
         return RelinkedRead::NotRelinked;
     }
@@ -935,7 +964,7 @@ unsafe fn resolve_proto_chain_field_inner(
         // prototype. The registered parent class id no longer names the next
         // hop: the recorded link does, and the rest of the chain is X's.
         if let (false, Some(receiver)) = (decl_proto.is_null(), receiver) {
-            match relinked_decl_prototype_field(decl_proto, key, receiver) {
+            match relinked_decl_prototype_field(cid, decl_proto, key, receiver) {
                 RelinkedRead::NotRelinked => {}
                 RelinkedRead::Answered(value) => return Some(value),
                 RelinkedRead::Missed => return None,

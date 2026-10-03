@@ -348,7 +348,13 @@ unsafe fn finalized_constfn_facts(
     infos: &[shapes::ConstFnSlotInfo],
     rebuilt: bool,
 ) -> Option<shapes::ShapeDescriptor> {
-    if obj.is_null() || !shapes::shape_word_is_writable(obj) || !(*obj).meta.is_null() {
+    if obj.is_null()
+        || !shapes::shape_word_is_writable(obj)
+        || !(*obj).meta.is_null()
+        // A receiver whose shape names a recorded prototype keeps it: a
+        // static class shape names the class's.
+        || shapes::object_prototype_word(obj) != 0
+    {
         return None;
     }
     let current = shapes::object_shape_descriptor(obj)?;

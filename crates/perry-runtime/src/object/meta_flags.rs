@@ -5,8 +5,6 @@
 //! bit, and the "last free bit" warning below is only useful next to the
 //! constants it constrains.
 
-pub(crate) const OBJECT_META_FLAG_USER_PROTO_OVERRIDE: u64 = 1 << 3;
-pub(crate) const OBJECT_META_FLAG_CLASS_EVALUATION_PROTO: u64 = 1 << 4;
 /// This object is used as somebody's `[[Prototype]]`, so a STRUCTURAL mutation
 /// of it (key add, delete, descriptor install, attribute change,
 /// `setPrototypeOf`) is invisible to everything that inherits from it and must
@@ -38,8 +36,8 @@ pub(crate) const OBJECT_META_FLAG_EXOTIC_READ_RECEIVER: u64 = 1 << 6;
 //              is a different ShapeId now, `shapes::object_prototype_word`)
 //   bit 1      packed-numeric payload valid       (#8690)
 //   bit 2      packed-numeric u32 entity proof    (#8690)
-//   bit 3      user-origin prototype signal       (OBJECT_META_FLAG_USER_PROTO_OVERRIDE)
-//   bit 4      class-evaluation prototype         (post-dates #8690's comment)
+//   bit 3      free (was the user-override bit)   \ how a prototype was linked
+//   bit 4      free (was the class-evaluation bit) / is not a fact: its shape is
 //   bit 5      this object is a prototype         (here)
 //   bit 6      exotic read receiver               (here)
 //   bit 7      *** THE LAST FREE BIT IN THIS WORD ***

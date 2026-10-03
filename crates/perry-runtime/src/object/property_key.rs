@@ -365,7 +365,7 @@ pub unsafe extern "C" fn js_super_accessor_get(home_class_id: u32, key: f64, rec
             .ok()
             .map(|s| s.to_string())
     };
-    let base = if super::prototype_chain::any_user_prototype_override() {
+    let base = if super::prototype_chain::any_class_chain_relinked() {
         super::class_super_chain::super_get_live_base(home_class_id, parent_class_id, receiver)
     } else {
         None

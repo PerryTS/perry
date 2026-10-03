@@ -77,7 +77,7 @@ pub(crate) unsafe fn class_super_base(
 /// static lookup no longer describes it? One latch load answers `false` in a
 /// process that never set a user prototype.
 pub(super) fn static_chain_relinked(home_cid: u32, owner_cid: u32) -> bool {
-    if !super::prototype_chain::any_user_prototype_override() {
+    if !super::prototype_chain::any_class_chain_relinked() {
         return false;
     }
     let mut cur = home_cid;
