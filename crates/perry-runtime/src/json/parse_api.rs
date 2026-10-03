@@ -1011,10 +1011,7 @@ pub(crate) unsafe fn build_shape_hint(
     let packed = std::slice::from_raw_parts(packed_keys, packed_keys_len as usize);
     // Same parsing as `js_build_class_keys_array`: split on `\0`,
     // drop empties.
-    let keys: Vec<&[u8]> = packed
-        .split(|&b| b == 0)
-        .filter(|s| !s.is_empty())
-        .collect();
+    let keys: Vec<&[u8]> = crate::object::packed_key_names(packed);
     if keys.len() != field_count as usize {
         return None;
     }
