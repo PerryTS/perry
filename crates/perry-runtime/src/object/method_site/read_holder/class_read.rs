@@ -198,15 +198,16 @@ unsafe fn value_of(e: &Entry) -> Option<u64> {
 /// `c` is a live site cache; `recv` an object whose ShapeId the caller read
 /// as `token`'s.
 #[inline]
-pub(super) unsafe fn leaf_answer(c: &PicCache, recv: *const ObjectHeader, token: i64) -> Option<u64> {
+pub(super) unsafe fn leaf_answer(
+    c: &PicCache,
+    recv: *const ObjectHeader,
+    token: i64,
+) -> Option<u64> {
     let s = site(c)?;
     let generation = crate::object::class_lookup_surface_generation();
     let class_id = (*recv).class_id;
     for e in &s.entries {
-        if e.token == token
-            && e.class_id == class_id
-            && e.generation == generation
-            && e.pinned_hops
+        if e.token == token && e.class_id == class_id && e.generation == generation && e.pinned_hops
         {
             return pinned_answer(e);
         }

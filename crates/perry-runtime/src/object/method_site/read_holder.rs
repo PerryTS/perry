@@ -868,7 +868,14 @@ unsafe fn function_walk(closure: usize, name: &[u8]) -> Option<Walk> {
     if !holder_name_admitted(name)
         || matches!(
             name,
-            b"name" | b"length" | b"prototype" | b"caller" | b"arguments" | b"call" | b"apply" | b"bind"
+            b"name"
+                | b"length"
+                | b"prototype"
+                | b"caller"
+                | b"arguments"
+                | b"call"
+                | b"apply"
+                | b"bind"
         )
         || std::str::from_utf8(name)
             .ok()
@@ -1168,8 +1175,8 @@ unsafe fn publish(cache: *mut PicCache, recv: *const ObjectHeader, w: &Walk, acc
     // objects of many shapes): the holder, its ShapeId and the slot word are
     // shared, only the receiver token differs.
     let old_kind = c[HOLDER_KIND] as u64;
-    let old_multi = old_kind & (HOLDER_MULTI_ABSENT | HOLDER_ACCESSOR | HOLDER_STUB)
-        == HOLDER_MULTI_ABSENT;
+    let old_multi =
+        old_kind & (HOLDER_MULTI_ABSENT | HOLDER_ACCESSOR | HOLDER_STUB) == HOLDER_MULTI_ABSENT;
     let same_answer = match w.slot {
         None => {
             old_kind == HOLDER_ABSENT_DEPTH1 as u64
@@ -1201,9 +1208,8 @@ unsafe fn publish(cache: *mut PicCache, recv: *const ObjectHeader, w: &Walk, acc
             None => HOLDER_ABSENT_BIT,
             Some(s) => u64::from(s) << MULTI_SLOT_SHIFT,
         };
-        c[HOLDER_KIND] = (answer
-            | HOLDER_MULTI_ABSENT
-            | ((next + 1) % MULTI_ABSENT_EXTRA_IDS) as u64) as i64;
+        c[HOLDER_KIND] =
+            (answer | HOLDER_MULTI_ABSENT | ((next + 1) % MULTI_ABSENT_EXTRA_IDS) as u64) as i64;
         c[HOLDER_RECV] = token;
         if w.slot.is_some() {
             PRIMES_HOLDER.fetch_add(1, Ordering::Relaxed);
