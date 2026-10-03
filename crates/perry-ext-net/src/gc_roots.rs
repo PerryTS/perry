@@ -61,8 +61,10 @@ pub(crate) fn scan_net_roots(visitor: &mut GcRootVisitor<'_>) {
         }
     }
     if let Ok(mut completions) = crate::lifecycle::socket_completions().lock() {
-        for (_, callback) in completions.values_mut() {
-            visitor.visit_i64_slot(callback);
+        for (_, callbacks) in completions.values_mut() {
+            for callback in callbacks {
+                visitor.visit_i64_slot(callback);
+            }
         }
     }
     crate::bun_tcp::scan_roots(visitor);

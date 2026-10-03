@@ -3015,6 +3015,7 @@ pub(crate) mod call_spread;
 pub(crate) mod calls;
 mod child_proc;
 pub(crate) mod class_env;
+pub(crate) mod class_field_push;
 mod closure;
 mod compare;
 pub(crate) mod region_guard;
@@ -3084,6 +3085,9 @@ mod math_simple;
 pub(crate) mod method_site;
 mod misc_methods;
 mod new_dynamic;
+pub(crate) mod number_to_string_inline;
+#[cfg(test)]
+mod number_to_string_inline_tests;
 mod objects_arrays_lit;
 pub(crate) mod os_uri_dates;
 pub(crate) mod property_get;

@@ -1129,7 +1129,28 @@ pub(crate) fn typeof_compile_time_answer(ctx: &FnCtx<'_>, operand: &Expr) -> Opt
                 // real, so the generic typeof already reports the right
                 // primitive/object kind (`process.pid` → "number",
                 // `os.EOL` → "string", `crypto.constants` → "object").
-                if matches!(module.as_str(), "fs" | "node:fs")
+                if ctx.target_triple.contains("windows")
+                    && matches!(
+                        module.as_str(),
+                        "process" | "node:process" | "process.namespace" | "process.default"
+                    )
+                    && matches!(
+                        property.as_str(),
+                        "getuid"
+                            | "geteuid"
+                            | "getgid"
+                            | "getegid"
+                            | "getgroups"
+                            | "setuid"
+                            | "seteuid"
+                            | "setgid"
+                            | "setegid"
+                            | "setgroups"
+                            | "initgroups"
+                    )
+                {
+                    None
+                } else if matches!(module.as_str(), "fs" | "node:fs")
                     && matches!(property.as_str(), "lchmod" | "lchmodSync")
                     && !fs_lchmod_callable_on_target(ctx.target_triple)
                 {

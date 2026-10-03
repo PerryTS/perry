@@ -108,17 +108,9 @@ mod tests {
     use super::resolve_path_to_file_url_posix;
 
     fn cwd() -> String {
-        std::env::current_dir()
-            .expect("current dir")
-            .to_string_lossy()
-            .trim_end_matches('/')
-            .to_string()
+        crate::path::posix_cwd().trim_end_matches('/').to_string()
     }
 
-    /// Unix-only: the `../` case needs a `/`-separated cwd for the posix
-    /// resolver to pop a segment — on a Windows host the backslashed cwd is
-    /// a single opaque segment to the pinned posix machinery.
-    #[cfg(not(windows))]
     #[test]
     fn path_to_file_url_posix_preserves_relative_trailing_slash() {
         // The expectation reads `current_dir()` here and the resolver reads
@@ -127,13 +119,7 @@ mod tests {
         // between the two (#6965). Hold the crate-wide cwd lock.
         let _cwd_lock = crate::test_support::process_cwd_test_lock();
         let cwd = cwd();
-        let parent = std::env::current_dir()
-            .expect("current dir")
-            .parent()
-            .unwrap_or_else(|| std::path::Path::new("/"))
-            .to_string_lossy()
-            .trim_end_matches('/')
-            .to_string();
+        let parent = crate::path::resolve_posix_str("..");
 
         assert_eq!(
             resolve_path_to_file_url_posix("relative/"),

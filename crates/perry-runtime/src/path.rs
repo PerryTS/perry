@@ -138,11 +138,22 @@ fn optional_suffix_from_header_or_throw(ptr: *const StringHeader) -> String {
     }
 }
 
+pub(crate) fn posix_cwd() -> String {
+    let cwd = std::env::current_dir()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    #[cfg(windows)]
+    {
+        let cwd = cwd.replace('\\', "/");
+        return cwd[cwd.find('/').unwrap_or(cwd.len())..].to_string();
+    }
+    #[cfg(not(windows))]
+    cwd
+}
+
 pub(crate) fn resolve_posix_str(path_str: &str) -> String {
     let mut resolved = if path_str.is_empty() {
-        std::env::current_dir()
-            .map(|cwd| cwd.to_string_lossy().to_string())
-            .unwrap_or_default()
+        posix_cwd()
     // POSIX absoluteness is lexical (a leading `/`). `Path::is_absolute()`
     // is byte-identical on Unix hosts but host-dependent on Windows (it
     // would treat `C:\x` as absolute and `/x` as relative), which would
@@ -150,10 +161,7 @@ pub(crate) fn resolve_posix_str(path_str: &str) -> String {
     } else if path_str.starts_with('/') {
         normalize_str(path_str)
     } else {
-        match std::env::current_dir() {
-            Ok(cwd) => normalize_str(&format!("{}/{}", cwd.to_string_lossy(), path_str)),
-            Err(_) => normalize_str(path_str),
-        }
+        normalize_str(&format!("{}/{}", posix_cwd(), path_str))
     };
     while resolved.len() > 1 && resolved.ends_with('/') {
         resolved.pop();
@@ -472,6 +480,11 @@ pub(crate) fn resolve_win32_str(path_str: &str) -> String {
 fn win32_resolve_inner(path_str: &str) -> String {
     let split = split_win32(path_str);
     if split.is_absolute {
+        if split.prefix.is_empty() {
+            let cwd = posix_cwd_as_win32_path();
+            let device = split_win32(&cwd).prefix;
+            return normalize_win32_str(&format!("{}{}", device, path_str));
+        }
         return normalize_win32_str(path_str);
     }
 
@@ -1614,6 +1627,9 @@ fn current_dir_as_win32() -> Option<String> {
 }
 
 fn resolve_win32_for_namespace(path_str: &str) -> String {
+    if cfg!(windows) {
+        return win32_resolve_inner(path_str);
+    }
     let normalized = normalize_win32_str(path_str);
     let split = split_win32(&normalized);
     if split.is_absolute {
@@ -1713,8 +1729,9 @@ pub extern "C" fn js_path_win32_delimiter_get() -> *mut StringHeader {
 }
 
 /// `path.win32.resolve(...)` chains via this binary helper, mirroring the
-/// POSIX `js_path_resolve_join` rule: if `b` is absolute, drop `a` entirely;
-/// else concatenate with `\` and normalize. Drive-relative segments (`C:foo`)
+/// POSIX `js_path_resolve_join` rule: if `b` is absolute, reset the directory;
+/// retain `a`'s device when `b` has none. Else concatenate with `\` and normalize.
+/// Drive-relative segments (`C:foo`)
 /// inherit the prior absolute prefix only if the drives match Node's rule
 /// (we treat them as restart-of-drive for simplicity — see test fixtures).
 #[no_mangle]
@@ -1726,7 +1743,14 @@ pub extern "C" fn js_path_win32_resolve_join(
     let b = string_from_header_or_throw(b_ptr);
     let b_split = split_win32(&b);
     let joined = if b_split.is_absolute {
-        b.clone()
+        // A rooted RHS resets the directory, but keeps an earlier device.
+        // `resolve('D:\\base', '\\leaf')` must remain on D:, even if cwd is C:.
+        let a_split = split_win32(&a);
+        if b_split.prefix.is_empty() && !a_split.prefix.is_empty() {
+            format!("{}{}", a_split.prefix, b)
+        } else {
+            b.clone()
+        }
     } else if b.is_empty() {
         a.clone()
     } else if is_win32_drive_prefix(b_split.prefix) {

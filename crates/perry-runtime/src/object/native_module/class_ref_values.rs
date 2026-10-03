@@ -87,7 +87,7 @@ pub(crate) fn class_has_own_method(class_id: u32, method_name: &str) -> bool {
 /// class metadata ("may this chain resolve `name`?") for paths that must not
 /// materialize a prototype; it never answers a property query itself.
 pub(crate) fn class_instance_has_member(class_id: u32, name: &str) -> bool {
-    class_chain_declares(class_id, name, true)
+    class_chain_declares(class_id, name, true, false)
 }
 
 /// Wall 10 — `name in instance` for a class instance whose walk found nothing:
@@ -97,11 +97,20 @@ pub(crate) fn class_instance_has_member(class_id: u32, name: &str) -> bool {
 /// see, which made `'method' in instance` wrongly `false` (NestJS's app Proxy
 /// gates routing on `'listen' in receiver`). Accessors are not consulted: they
 /// are real properties of the class prototype, which that walk visits.
+///
+/// It answers for an instance's chain, so it stops where that chain leaves the
+/// declared classes: past a class whose prototype a user relinked, the parent's
+/// methods are not inherited (`instance_chain_parent_class_id`), and the
+/// ordinary walk has already read the recorded link.
 pub(crate) fn class_instance_has_method(class_id: u32, name: &str) -> bool {
-    class_chain_declares(class_id, name, false)
+    class_chain_declares(class_id, name, false, true)
 }
 
-fn class_chain_declares(class_id: u32, name: &str, accessors: bool) -> bool {
+/// `instance_chain`: the walk answers for an instance's `[[Prototype]]` chain
+/// and stops at a relinked class prototype. The member filter keeps the
+/// declared chain: it serves constructor-side reads, whose chain is the
+/// constructor's own and does not change when `C.prototype` is relinked.
+fn class_chain_declares(class_id: u32, name: &str, accessors: bool, instance_chain: bool) -> bool {
     if class_id == 0 {
         return false;
     }
@@ -125,7 +134,12 @@ fn class_chain_declares(class_id: u32, name: &str, accessors: bool) -> bool {
                 return true;
             }
         }
-        match super::class_registry::get_parent_class_id(cid) {
+        let parent = if instance_chain {
+            super::class_registry::instance_chain_parent_class_id(cid)
+        } else {
+            super::class_registry::get_parent_class_id(cid)
+        };
+        match parent {
             Some(p) if p != 0 && p != cid => {
                 cid = p;
                 depth += 1;

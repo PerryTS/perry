@@ -632,7 +632,8 @@ mod repeated_evaluation_tests {
             let second = private_field_marker_key(62_531, b"#v".as_ptr(), 2);
             private_lexical_brand_pop();
             assert_ne!(
-                first, second,
+                first.as_ref().map(|key| key.spelling.as_str()),
+                second.as_ref().map(|key| key.spelling.as_str()),
                 "each evaluation creates a fresh private name"
             );
         }

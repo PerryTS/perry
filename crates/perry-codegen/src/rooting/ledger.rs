@@ -382,6 +382,10 @@ const MIGRATED_MODULES: &[(&str, &str)] = &[
         include_str!("../expr/index_get/inline_dyn_typed_array.rs"),
     ),
     (
+        "crates/perry-codegen/src/expr/index_get/runtime_key.rs",
+        include_str!("../expr/index_get/runtime_key.rs"),
+    ),
+    (
         "crates/perry-codegen/src/expr/index_set.rs",
         include_str!("../expr/index_set.rs"),
     ),

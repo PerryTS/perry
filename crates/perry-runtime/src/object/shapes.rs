@@ -3543,6 +3543,90 @@ pub(crate) unsafe fn transition_object_shape_semantics(
     id
 }
 
+/// [`transition_object_shape_semantics`] for a change that writes no slot and
+/// no descriptor: marking an object as a prototype. The fresh semantic
+/// generation still says "a structural change happened here" to every memo
+/// keyed on the old ShapeId; what it must not do is forget a ConstFn lane the
+/// object still satisfies, because a prototype whose methods are ConstFn lanes
+/// is exactly what an inherited method site wants to call directly (step 5C).
+///
+/// A lane is carried only after re-reading its slot: the inline value must be
+/// a closure whose permanent body is the lane's body
+/// (`field_rep_store::constfn_store_info`, the store check's own test). F64
+/// lanes are not carried (as before, the new shape's other lanes are `Any`).
+/// Anything unusual (no lane survives, a dictionary, holes, a deprecated
+/// record, a refused mint) takes the plain transition.
+///
+/// # Safety
+/// `obj` is a live `ObjectHeader`, or null.
+pub(crate) unsafe fn transition_object_shape_semantics_keeping_constfn(
+    obj: *mut crate::object::ObjectHeader,
+) -> u32 {
+    if obj.is_null()
+        || !shape_word_is_writable(obj)
+        || crate::object::dictionary::is_dictionary(obj)
+    {
+        return transition_object_shape_semantics(obj);
+    }
+    let Some(current) = object_shape_descriptor(obj) else {
+        return transition_object_shape_semantics(obj);
+    };
+    if current.special_constfn_mask == 0
+        || current.hole_count != 0
+        || current.deprecation_targets() != (0, 0)
+    {
+        return transition_object_shape_semantics(obj);
+    }
+    let base = (obj as *const u8).add(std::mem::size_of::<crate::object::ObjectHeader>());
+    let infos: Vec<shapes_store::ConstFnSlotInfo> = current
+        .constfn_infos()
+        .iter()
+        .copied()
+        .filter(|i| {
+            u32::from(i.slot) < current.live_inline_slot_count
+                && super::field_rep_store::constfn_store_info(std::ptr::read(
+                    base.add(usize::from(i.slot) * 8) as *const u64,
+                )) == Some(i.info)
+        })
+        .collect();
+    if infos.is_empty() {
+        return transition_object_shape_semantics(obj);
+    }
+    let rep = infos.iter().fold(super::field_rep::REP_ANY, |rep, i| {
+        super::field_rep::with_slot_rep(rep, u32::from(i.slot), super::field_rep::REP_SPECIAL)
+    });
+    crate::array::clear_array_subclass_named_prefix_token(obj);
+    let keys = current.keys as usize as *const ArrayHeader;
+    let generation = SHAPE_SEMANTIC_NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if generation == 0 {
+        shape_id_exhausted_abort();
+    }
+    let summary = receiver_extra_summary(obj)
+        | if keys.is_null() {
+            0
+        } else {
+            crate::object::key_attrs::keys_summary_checked(keys, current.logical_key_count)
+        };
+    let Ok(id) = shape_descriptor_intern_with_special(
+        keys,
+        current.logical_key_count,
+        current.live_inline_slot_count,
+        generation,
+        store_kind::mint_kind(current.object_kind, obj),
+        0,
+        current.proto_id,
+        summary,
+        rep,
+        &infos,
+        None,
+    ) else {
+        return transition_object_shape_semantics(obj);
+    };
+    stamp_object_shape_id_with_carrier_note(obj, id);
+    debug_assert_object_shape_parity(obj);
+    id
+}
+
 /// [`transition_object_shape_semantics`] for a PROTOTYPE divergence whose
 /// prototype has a stable serial. Falls back to the unique-generation
 /// transition, which is always correct, when there is no predecessor.

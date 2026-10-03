@@ -1349,32 +1349,8 @@ fn ensure_reader_started() {
     start_shared_stdin_reader();
 }
 
-// ---------------------------------------------------------------------------
-// Raw-mode toggle (Unix termios; Windows / non-Unix is currently a no-op
-// since iOS/Android stdlib stubs handle those targets and Windows raw mode
-// needs the windows-rs `Console` API which isn't a stdlib dep yet).
-// ---------------------------------------------------------------------------
-
-#[cfg(unix)]
-#[path = "termios_unix.rs"]
-mod termios_impl;
-
-#[cfg(all(windows, not(unix)))]
-#[path = "termios_windows.rs"]
-mod termios_impl;
-
-#[cfg(not(any(unix, windows)))]
-mod termios_impl {
-    pub fn enable() -> bool {
-        // Raw mode unsupported on this platform (e.g. wasm32). The
-        // flag still flips so the reader switches to byte-chunk
-        // dispatch, but stdin remains line-cooked.
-        false
-    }
-    pub fn disable() -> bool {
-        false
-    }
-}
+mod raw_mode;
+use raw_mode::termios_impl;
 
 // ---------------------------------------------------------------------------
 // Public FFI — readline interface (Phase 1)

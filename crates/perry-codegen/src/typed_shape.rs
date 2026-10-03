@@ -508,6 +508,11 @@ pub(crate) fn ensure_class_shape_slot(
 
 /// One receiver shape load admits ordinary construction and compatible completed
 /// facts. Each extra static final id adds one comparison and OR, no heap load.
+///
+/// The completed (ConstFn) ids are compared FIRST and the birth id last: a
+/// literal whose finalizer ran carries its final id for the rest of its life,
+/// so the leftmost operand of the `or` is the one that hits, and isel's split
+/// of a branch on an `or` of compares tests it before the birth id.
 pub(crate) fn emit_compatible_shape_eq(
     blk: &mut crate::block::LlBlock,
     actual: &str,
@@ -515,12 +520,19 @@ pub(crate) fn emit_compatible_shape_eq(
     written_slots: &[u32],
 ) -> String {
     use crate::types::{I1, I32};
-    let mut ok = blk.icmp_eq(I32, actual, expected);
+    let mut ok: Option<String> = None;
     for id in crate::codegen::compatible_final_shape_ids(expected, written_slots) {
         let compatible = blk.icmp_eq(I32, actual, &id.to_string());
-        ok = blk.or(I1, &ok, &compatible);
+        ok = Some(match ok {
+            Some(prev) => blk.or(I1, &prev, &compatible),
+            None => compatible,
+        });
     }
-    ok
+    let birth = blk.icmp_eq(I32, actual, expected);
+    match ok {
+        Some(prev) => blk.or(I1, &prev, &birth),
+        None => birth,
+    }
 }
 
 /// Packed (class, shape) form of the same guard. A final shape preserves the
@@ -534,7 +546,8 @@ pub(crate) fn emit_compatible_class_shape_eq(
     written_slots: &[u32],
 ) -> String {
     use crate::types::{I1, I32, I64};
-    let mut ok = blk.icmp_eq(I64, actual, expected_packed);
+    // Completed ids first, birth id last (see `emit_compatible_shape_eq`).
+    let mut ok: Option<String> = None;
     for id in crate::codegen::compatible_final_shape_ids(expected_shape, written_slots) {
         let packed = if let Ok(cid) = class_id.parse::<u32>() {
             ((u64::from(id) << 32) | u64::from(cid)).to_string()
@@ -543,7 +556,14 @@ pub(crate) fn emit_compatible_class_shape_eq(
             blk.or(I64, &class_bits, &(u64::from(id) << 32).to_string())
         };
         let compatible = blk.icmp_eq(I64, actual, &packed);
-        ok = blk.or(I1, &ok, &compatible);
+        ok = Some(match ok {
+            Some(prev) => blk.or(I1, &prev, &compatible),
+            None => compatible,
+        });
     }
-    ok
+    let birth = blk.icmp_eq(I64, actual, expected_packed);
+    match ok {
+        Some(prev) => blk.or(I1, &prev, &birth),
+        None => birth,
+    }
 }

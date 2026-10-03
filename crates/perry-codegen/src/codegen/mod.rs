@@ -261,7 +261,7 @@ pub use static_shape_ids::{
     TypedMasks, STATIC_SEED_FORMAT,
 };
 pub(crate) use static_shape_ids::{
-    compatible_final_shape_ids, slot_may_be_constfn, static_region_slots,
+    compatible_final_shape_ids, compatible_final_shapes, slot_may_be_constfn, static_region_slots,
     static_shape_id_for_foreign_global, static_shape_id_for_keys_global,
 };
 mod string_pool;
@@ -2478,6 +2478,9 @@ fn compile_module_impl(
         }
         reps
     };
+    // Step 5C: a literal's method slot holding a module function's value is a
+    // ConstFn lane too; births and lowering read the same admitted set.
+    static_constfn::set_module_function_values(hir, &module_prefix);
     if let Some(births) = births {
         *births = static_shape_ids::module_births(
             &module_prefix,
@@ -2487,7 +2490,7 @@ fn compile_module_impl(
             &class_birth_reps_map,
             &class_ids,
         );
-        if static_constfn::enabled(&opts) {
+        if static_constfn::enabled(&opts.output_type) {
             let reps = class_keys_globals_map
                 .iter()
                 .filter_map(|(name, keys)| {
@@ -2521,7 +2524,7 @@ fn compile_module_impl(
         &opts.static_shape_ids,
         &opts.program_class_shape_ids,
     );
-    if !static_constfn::enabled(&opts) {
+    if !static_constfn::enabled(&opts.output_type) {
         static_shape_ids::disable_static_final_shapes();
     }
     let class_header_images_map: std::collections::HashMap<String, (String, u64, u32)> =
@@ -3058,6 +3061,9 @@ fn compile_module_impl(
         closure_lengths,
         closure_arrow_functions,
     } = closure_collect::collect_module_closures(hir);
+    // Step 5C: a method site whose static lane names one of these bodies
+    // calls it directly, so it needs each body's exact parameter count.
+    static_constfn::set_module_body_arities(&module_prefix, &closure_arities);
 
     // #8103: closure bodies are emitted before their enclosing regions. Prove
     // inline array-callback element shapes module-wide now, while both sides
@@ -3920,10 +3926,9 @@ fn compile_module_impl(
 
     // One `JsFunctionInfo` per body a function object runs (`crate::fn_info`),
     // after every function — and so every allocation site — exists.
-    // Step 5C is opt-in until its GC/image and performance gates pass.
+    // Executables admit permanent ConstFn bodies unless explicitly disabled.
     // A dylib never advertises a permanent body, even with the knob set.
-    let constfn_body_metadata = opts.output_type == "executable"
-        && std::env::var("PERRY_CONSTFN_SHAPE").as_deref() == Ok("1");
+    let constfn_body_metadata = static_constfn::enabled(&opts.output_type);
     if constfn_body_metadata {
         // Omitted/dead literals must not leave body-info relocations behind.
         static_constfn::emit_final_entries(

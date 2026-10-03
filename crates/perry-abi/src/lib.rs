@@ -563,6 +563,9 @@ pub const fn method_site_padded_argc(argc: usize) -> usize {
         padded
     }
 }
+/// The entry `slot` bit for an inherited entry (the direct holder's slot).
+/// Combined with [`METHOD_SITE_CONSTFN`] the holder's shape fixes the body.
+pub const METHOD_SITE_INHERITED: u64 = 1 << 63;
 /// The entry `slot` bit for an own key in the receiver's spill buffer.
 pub const METHOD_SITE_SPILL: u64 = 1 << 62;
 /// The entry `slot` bit for an own key of a function-object receiver: an

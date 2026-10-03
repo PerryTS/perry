@@ -1,10 +1,12 @@
 //! Static ConstFn describes a completed object. Allocation ids remain Any/F64.
-use super::{BirthProto, BirthShape, CompileOptions, ConstFnBirth, ModuleBirth};
+use super::{BirthProto, BirthShape, ConstFnBirth, ModuleBirth};
 use perry_hir::{Class, Expr, Module, Stmt};
 use std::collections::{BTreeSet, HashMap};
 
-pub(crate) fn enabled(opts: &CompileOptions) -> bool {
-    opts.output_type == "executable" && std::env::var("PERRY_CONSTFN_SHAPE").as_deref() == Ok("1")
+/// Executables build ConstFn lanes unless `PERRY_CONSTFN_SHAPE=0`; a dylib
+/// never does.
+pub(crate) fn enabled(output_type: &str) -> bool {
+    output_type == "executable" && std::env::var("PERRY_CONSTFN_SHAPE").as_deref() != Ok("0")
 }
 
 pub(crate) fn literal_final(
@@ -52,6 +54,22 @@ pub(crate) fn literal_final(
                 symbol: crate::fn_info::info_symbol(&crate::fn_info::closure_body_symbol(
                     prefix, *func_id,
                 )),
+            });
+        } else if let Expr::FuncRef(func_id) = value {
+            // A method shorthand that never reads `this` is hoisted to a
+            // module function and stored as that function's value: its
+            // singleton closure, whose body is the `__perry_wrap_` JS-ABI
+            // wrapper. That body is as permanent as a closure body.
+            let Some((body, _)) = module_function_value_body(*func_id) else {
+                continue;
+            };
+            if (base_rep >> (slot * 2)) & 3 != 0 {
+                return None;
+            }
+            rep |= 3 << (slot * 2);
+            constfn.push(ConstFnBirth {
+                slot: slot as u8,
+                symbol: crate::fn_info::info_symbol(&body),
             });
         }
     }
@@ -283,6 +301,168 @@ pub(crate) fn emit_final_entries(
 
 pub(crate) fn has_final_shapes() -> bool {
     super::static_shape_ids::has_static_final_shapes()
+}
+
+thread_local! {
+    /// Parameter count of every non-rest closure body of the module being
+    /// compiled, by body symbol. A static method lane calls its body directly,
+    /// and a direct call must match the definition's signature exactly.
+    static MODULE_BODY_ARITIES: std::cell::RefCell<HashMap<String, usize>> =
+        std::cell::RefCell::new(HashMap::new());
+}
+
+/// Install the current module's body arities (from closure collection, and
+/// the function-value wrappers [`set_module_function_values`] admitted).
+pub(crate) fn set_module_body_arities(prefix: &str, closure_arities: &HashMap<u32, u32>) {
+    let mut map: HashMap<String, usize> = closure_arities
+        .iter()
+        .map(|(&fid, &arity)| {
+            (
+                crate::fn_info::closure_body_symbol(prefix, fid),
+                arity as usize,
+            )
+        })
+        .collect();
+    MODULE_FUNCTION_VALUES.with(|m| {
+        map.extend(m.borrow().values().cloned());
+    });
+    MODULE_BODY_ARITIES.with(|m| *m.borrow_mut() = map);
+}
+
+thread_local! {
+    /// The module's functions whose VALUE (`Expr::FuncRef`) a ConstFn lane may
+    /// name: function id -> (wrapper body symbol, declared parameter count).
+    static MODULE_FUNCTION_VALUES: std::cell::RefCell<HashMap<u32, (String, usize)>> =
+        std::cell::RefCell::new(HashMap::new());
+}
+
+/// Install the module's admissible function values before any birth or
+/// lowering reads them. A function qualifies when its value's body (the
+/// `__perry_wrap_` wrapper, JS body ABI, one double per declared parameter)
+/// can be entered directly: not async, not a generator, no rest parameter and
+/// no `arguments` object. Symbol names come from the same registry the
+/// wrapper emission uses.
+pub(crate) fn set_module_function_values(module: &Module, prefix: &str) {
+    let names = super::func_registry::build_func_registry(module, prefix).func_names;
+    let map = module
+        .functions
+        .iter()
+        .filter(|f| {
+            !f.is_async
+                && !f.is_generator
+                && !f
+                    .params
+                    .iter()
+                    .any(|p| p.is_rest || p.arguments_object.is_some())
+        })
+        .filter_map(|f| {
+            let name = names.get(&f.id)?;
+            Some((f.id, (format!("__perry_wrap_{name}"), f.params.len())))
+        })
+        .collect();
+    MODULE_FUNCTION_VALUES.with(|m| *m.borrow_mut() = map);
+}
+
+fn module_function_value_body(func_id: u32) -> Option<(String, usize)> {
+    MODULE_FUNCTION_VALUES.with(|m| m.borrow().get(&func_id).cloned())
+}
+
+fn module_body_arity(body: &str) -> Option<usize> {
+    MODULE_BODY_ARITIES.with(|m| m.borrow().get(body).copied())
+}
+
+/// The most completed shapes one site compares before its learned memo.
+const MAX_STATIC_METHOD_LANES: usize = 2;
+
+/// One completed shape whose ConstFn lane answers `recv.key(...)`: a receiver
+/// whose header word equals `word` holds, in inline slot `slot`, a closure of
+/// `body` (the shape's invariant), so the site calls `body` directly.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct StaticMethodLane {
+    /// `(ShapeId << 32) | class_id`, the receiver's first header word.
+    pub word: u64,
+    pub slot: u32,
+    /// The body's symbol (JS body ABI), defined in this module.
+    pub body: String,
+    /// The body's declared parameter count.
+    pub arity: usize,
+}
+
+/// The completed shapes a method site may compare for `object.property(...)`.
+///
+/// The receiver's candidate class is the one the guarded field sites already
+/// use: a proven class, the local's declared/inferred hint, or the guarded
+/// `this` of a closed-shape literal method. A candidate is only a guess the
+/// emitted shape compare checks, so any candidate is sound; only a
+/// literal-shape class has completed ConstFn shapes. Its birth id's compatible
+/// completed shapes (the ids the body guards also accept) that carry a ConstFn
+/// lane at `property`'s slot give the lanes.
+pub(crate) fn static_method_lanes(
+    ctx: &crate::expr::FnCtx<'_>,
+    object: &Expr,
+    property: &str,
+) -> Vec<StaticMethodLane> {
+    if property.is_empty() || !has_final_shapes() {
+        return Vec::new();
+    }
+    let named = |t: Option<&perry_hir::types::Type>| match t? {
+        perry_hir::types::Type::Named(name) => Some(name.clone()),
+        _ => None,
+    };
+    let candidate =
+        crate::type_analysis::receiver_class_name(ctx, object).or_else(|| match object {
+            Expr::LocalGet(id) => named(ctx.local_type_hint(id)),
+            Expr::This => ctx.guarded_this_class.clone(),
+            _ => None,
+        });
+    let Some(class_name) = candidate else {
+        return Vec::new();
+    };
+    let Some(class) = ctx.classes.get(&class_name) else {
+        return Vec::new();
+    };
+    if !class.is_literal_shape() {
+        return Vec::new();
+    }
+    let (Some(&class_id), Some(keys_global)) = (
+        ctx.class_ids.get(&class_name),
+        ctx.class_keys_globals.get(&class_name),
+    ) else {
+        return Vec::new();
+    };
+    let Some(birth) = super::static_shape_ids::static_shape_id_for_keys_global(keys_global) else {
+        return Vec::new();
+    };
+    let mut lanes = Vec::new();
+    for (id, shape) in super::compatible_final_shapes(&birth.to_string(), &[]) {
+        let Some(slot) = shape
+            .keys
+            .split(|&b| b == 0)
+            .take(shape.key_count as usize)
+            .position(|k| k == property.as_bytes())
+        else {
+            continue;
+        };
+        let Some(entry) = shape.constfn.iter().find(|e| e.slot as usize == slot) else {
+            continue;
+        };
+        let Some(body) = entry.symbol.strip_suffix("$info") else {
+            continue;
+        };
+        let Some(arity) = module_body_arity(body) else {
+            continue;
+        };
+        lanes.push(StaticMethodLane {
+            word: (u64::from(id) << 32) | u64::from(class_id),
+            slot: slot as u32,
+            body: body.to_string(),
+            arity,
+        });
+    }
+    if lanes.len() > MAX_STATIC_METHOD_LANES {
+        lanes.clear();
+    }
+    lanes
 }
 
 /// Called only below the last store/this patch. The runtime owns a root during

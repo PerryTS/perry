@@ -3,6 +3,23 @@
 //! private helpers (`parse_posix_components`, `string_to_js`, the win32
 //! inners, …) are directly accessible.
 
+#[test]
+fn win32_rooted_resolve_join_keeps_explicit_device() {
+    use super::*;
+    let _suppress = crate::gc::GcSuppressScope::new();
+    for (base, rooted, expected) in [
+        (r"D:\base", r"\leaf", r"D:\leaf"),
+        (r"\\server\share\base", r"\leaf", r"\\server\share\leaf"),
+        (r"D:\base", r"E:\leaf", r"E:\leaf"),
+    ] {
+        let result = js_path_win32_resolve_join(string_to_js(base), string_to_js(rooted));
+        assert_eq!(
+            unsafe { string_from_header(result) }.as_deref(),
+            Some(expected)
+        );
+    }
+}
+
 mod posix_parse_tests {
     use super::super::parse_posix_components;
 
@@ -280,7 +297,17 @@ mod win32_normalize_tests {
             resolved_relative
         };
         assert_eq!(win32_to_namespaced_path("foo"), expected_relative);
-        assert_eq!(win32_to_namespaced_path("/tmp/x"), "\\tmp\\x");
+        let expected_rooted = if cfg!(windows) {
+            let device = super::super::split_win32(&cwd).prefix;
+            if let Some(unc) = device.strip_prefix("\\\\") {
+                format!("\\\\?\\UNC\\{}\\tmp\\x", unc)
+            } else {
+                format!("\\\\?\\{}\\tmp\\x", device)
+            }
+        } else {
+            "\\tmp\\x".to_string()
+        };
+        assert_eq!(win32_to_namespaced_path("/tmp/x"), expected_rooted);
         assert_eq!(win32_to_namespaced_path("C:\\foo"), "\\\\?\\C:\\foo");
         assert_eq!(
             win32_to_namespaced_path("\\\\server\\share\\file"),
