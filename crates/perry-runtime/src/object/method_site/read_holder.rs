@@ -911,6 +911,7 @@ unsafe fn function_walk(closure: usize, name: &[u8]) -> Option<Walk> {
         holder_shape: fp_shape,
         slot: None,
         hops: [(0, 0); HOLDER_MAX_DEPTH - 1],
+        raw_get: 0,
         depth: 1,
     };
     let keys = shape.keys as usize as *const crate::array::ArrayHeader;
