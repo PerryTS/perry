@@ -1814,7 +1814,7 @@ pub(super) unsafe fn trace_heap_rewrite_slots(
     #[cfg(test)]
     let weak_holder =
         crate::weakref::is_weak_holder_header(header) && !mark_hoist_sabotage::forgetting_weak();
-    visit_gc_rewrite_slot_descriptors(header, |descriptor| unsafe {
+    visit_gc_rewrite_slot_descriptors_inline(header, |descriptor| unsafe {
         let mut visit_slot = |slot: *mut u64, layout_kind: Option<HeapChildSlotReadKind>| {
             if weak_holder && crate::weakref::is_weak_target_trace_slot(header, slot) {
                 return;
