@@ -211,3 +211,107 @@ console.log(run(0));
         "a rebinding loop is not versioned:\n{ir}"
     );
 }
+
+/// The bodies of every emitted copy of the module function `name`.
+fn function_bodies(ir: &str, name: &str) -> String {
+    let mut out = String::new();
+    let mut inside = false;
+    for line in ir.lines() {
+        if line.starts_with("define ") {
+            inside = line.contains(&format!("@perry_fn_main_ts__{name}("))
+                || line.contains(&format!("@perry_fn_main_ts__{name}$"));
+        }
+        if inside {
+            out.push_str(line);
+            out.push('\n');
+            if line == "}" {
+                inside = false;
+            }
+        }
+    }
+    out
+}
+
+/// Which fields of an instance hold a Number is a fact of the class
+/// template, so `t += c.x` keeps `t` a Number in both copies of a versioned
+/// loop: the first-evaluation copy reads the scalar of the replaced `new`, the
+/// later-evaluation copy reads a later evaluation's instance, and neither
+/// routes the add through the dynamic `+`.
+#[test]
+fn an_accumulator_over_a_repeatable_class_field_stays_a_number() {
+    let (ir, out) = compile(
+        r#"
+function run(n: number) {
+  class C { x: number; constructor(x: number) { this.x = x * 0.5; } }
+  let t = 0;
+  for (let i = 0; i < n; i++) { const c = new C(i); t += c.x; }
+  return t;
+}
+console.log(run(4));
+console.log(run(4));
+"#,
+    );
+    assert_eq!(out, "3\n3\n");
+    let run = function_bodies(&ir, "run");
+    assert!(
+        run.contains("classloop.later"),
+        "the loop is versioned:\n{run}"
+    );
+    assert!(
+        !run.contains("@js_dynamic_string_or_number_add("),
+        "the accumulator is a Number in both copies:\n{run}"
+    );
+}
+
+/// The rest of a function body after `const c = new C()` tests the first
+/// evaluation once and lowers twice; in the first-evaluation copy `c` is an
+/// instance of the shared class, so its method call is the direct one. A
+/// later evaluation still runs its own methods.
+#[test]
+fn the_rest_of_a_body_after_new_tests_the_first_evaluation_once() {
+    let (ir, out) = compile(
+        r#"
+function run(n: number, k: number) {
+  class C { x: number; constructor(x: number) { this.x = x; } m() { return this.x + k; } }
+  const c = new C(1);
+  let t = 0;
+  for (let i = 0; i < n; i++) { t += c.m(); }
+  return t;
+}
+console.log(run(3, 1));
+console.log(run(3, 2));
+"#,
+    );
+    assert_eq!(out, "6\n9\n");
+    let run = function_bodies(&ir, "run");
+    assert!(
+        run.contains("classtail.first"),
+        "the tail is versioned:\n{run}"
+    );
+    assert!(
+        run.contains("classtail.later"),
+        "the tail is versioned:\n{run}"
+    );
+}
+
+/// A tail that defines code (here a closure) is not versioned: its copies
+/// would define it twice.
+#[test]
+fn a_tail_that_defines_a_closure_is_not_versioned() {
+    let (ir, out) = compile(
+        r#"
+function run(k: number) {
+  class C { x: number; constructor(x: number) { this.x = x; } }
+  const c = new C(k);
+  const f = () => c.x + 1;
+  return f;
+}
+const fs = [run(1), run(2)];
+console.log(fs[0]());
+console.log(fs[1]());
+"#,
+    );
+    assert_eq!(out, "2\n3\n");
+    let run = function_bodies(&ir, "run");
+    assert!(!run.contains("classtail.first"), "not versioned:\n{run}");
+}

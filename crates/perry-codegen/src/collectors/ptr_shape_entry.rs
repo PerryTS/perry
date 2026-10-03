@@ -25,7 +25,7 @@ pub(crate) fn collect_shape_proven_ptr_locals(
         element_facts,
         &HashSet::new(),
     )
-    .0
+    .exact
 }
 
 /// Collect pointer-local facts plus group-wide numeric layouts of proven
@@ -40,7 +40,7 @@ pub(crate) fn collect_shape_proven_ptr_locals_and_element_fields(
     not_bigint_locals: &HashSet<u32>,
     element_facts: &ElementShapeFacts,
     numeric_param_seeds: &HashSet<u32>,
-) -> (HashMap<u32, PtrShapeLocal>, HashMap<u32, HashSet<String>>) {
+) -> ShapeProof {
     collect_shape_proven_ptr_locals_impl(
         stmts,
         boxed_vars,
@@ -75,7 +75,7 @@ pub(crate) fn collect_guarded_argument_route_locals(
     // This second pass is a proof query, not a guard-free representation
     // selection. Suppress report rows for the broader optimization.
     let _quiet = report::SuppressScope::new();
-    let (mut facts, _) = collect_shape_proven_ptr_locals_impl(
+    let mut facts = collect_shape_proven_ptr_locals_impl(
         stmts,
         boxed_vars,
         module_globals,
@@ -85,7 +85,8 @@ pub(crate) fn collect_guarded_argument_route_locals(
         element_facts,
         numeric_param_seeds,
         CollectionPurpose::GuardedArgumentRoute,
-    );
+    )
+    .exact;
     // The guarded route consumes class/containment only, never a raw numeric
     // field representation claim.
     for fact in facts.values_mut() {
