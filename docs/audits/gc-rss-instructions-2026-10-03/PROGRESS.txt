@@ -550,3 +550,54 @@ results remain useful isolated evidence, never proofs about the new v7 HEAD.
 The v6 window comparison must finish before deciding the final pool policy and
 scheduling the final shared-visitor acceptance measurement. Linux now runs the
 page-compaction v5r2 stage; the earlier v4 stage completed successfully.
+
+PAGE COMPACTION v5: isolated measurements complete (earlier production base)
+All 204/204 normal-auto executions match Node and passed the comparison verifier,
+including source/build/current executable identities and all four counters.
+Peak RSS decreases in 16 cases and is unchanged for the empty program. This
+isolates page compaction against the frozen immediate-discard/specialized-visitor
+control; it does not validate current v7 shared-visitor/reuse-window combination.
+
+Normal-auto median RSS MiB / instruction change:
+TS 244.457 -> 239.344 (-2.09%) / -3.84%;
+Zod 24.492 -> 24.441 (-0.21%) / -0.19%;
+pipeline 270.230 -> 254.738 (-5.73%) / -0.33%;
+document retain 349.074 -> 311.711 (-10.70%) / -0.23%;
+document transition 188.078 -> 167.926 (-10.71%) / +0.12%;
+retain/release 271.781 -> 246.504 (-9.30%) / +0.08%;
+large live set 103.137 -> 96.465 (-6.47%) / +1.25%.
+Other open instruction costs: document replacement +0.33%, JSON +0.23%,
+empty-program startup +2.83%. CPU/cycles are retained for every case; shared-host
+short-run timing remains variable. All repetitions are in pages-comparison.json.
+
+The paired full-runtime (--no-auto-optimize) 24/24 comparison also passed:
+TS 247.629 -> 242.039 MiB (-2.26%), instructions -3.82%, minor faults +0.59%;
+Zod 28.930 -> 28.707 MiB (-0.77%), instructions +0.31%.
+All three TS candidate instruction counts are below all control counts; all three
+Zod candidate counts are above all control counts. The Zod instruction cost
+remains reported, despite its opposite direction in the normal-auto build.
+See pages-vs-visitor-full-runtime.json.
+
+Linux v5: 4,830 runtime + 75 FFI + 15 events passed. Five required tests ran,
+including wide metadata/epoch preservation, page-boundary reuse and real kernel
+page release. Six linked default/moving runs match exact Node 26.5.1; all three
+moving fixtures copied objects (12,442 / 5,689 / 63,625) and protected from-space.
+Current archive, executable, logs, completed receipts and app inputs are bound
+in pages-linux-validation.json. verify-gc-pages-v5-evidence.py rechecks them on
+the measurement host and derives the two-table boundary ledger.
+
+At the third natural synchronous full, the two old-generation page tables use
+7,607,056 -> 3,121,036 median requested bytes, a 4,486,020-byte (4.28 MiB) decrease.
+TS snapshot live graphs differ by two objects / 22,808 bytes; they are not
+claimed identical. Zod's separate explicit-collection diagnostic has the same
+602,360-byte/10,209-object live graph and tables 177,152 -> 52,736 requested
+bytes (-124,416). These requested native byte counts are not allocator usable
+bytes or peak RSS; they cannot be added to peak-RSS savings. Details and repeated
+snapshots are in pages-boundary-accounting.json.
+
+The serialized Linux job advanced to the fresh main69 build. The v6 reuse-window
+and user/kernel attribution drivers remain queued under the same benchmark lock.
+Private 32-byte page-class cache prototype: six focused default tests passed,
+including exact bitmap origin, epoch/bounds and >u32 authoritative-map fallback.
+Control-arm/full-suite validation is running separately. That prototype has not
+been accepted or added to production source in this draft.
