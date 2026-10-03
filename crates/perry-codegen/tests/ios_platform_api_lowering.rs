@@ -11,6 +11,7 @@ fn options(target: Option<&str>) -> CompileOptions {
         target: target.map(str::to_string),
         is_entry_module: false,
         non_entry_module_prefixes: Vec::new(),
+        thread_literal_module_prefixes: Vec::new(),
         import_function_prefixes: Default::default(),
         import_function_ffi_aliases: Default::default(),
         import_function_origin_names: Default::default(),

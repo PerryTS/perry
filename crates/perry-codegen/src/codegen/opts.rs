@@ -136,6 +136,15 @@ pub struct CompileOptions {
     /// order matches Perry's existing topological sort (set up by the
     /// CLI driver in `crates/perry/src/commands/compile.rs`).
     pub non_entry_module_prefixes: Vec<String>,
+    /// Complete native module graph, supplied identically to every module when
+    /// perry/thread can launch agents. The first prefix owns the graph's single
+    /// preparation callback (the CLI chooses the actual entry module); remaining
+    /// prefixes are unique and sorted, excluding the owner. Owner order affects
+    /// symbols and object cache identity. Every compiled module must be included.
+    /// Empty permits a direct local launcher to prepare only its own pool.
+    /// String preparation has no module-evaluation effects; deferred bodies and
+    /// declared-class registration remain lazy.
+    pub thread_literal_module_prefixes: Vec<String>,
     /// For each imported function name in this module, the prefix of the
     /// source module that exports it. Used by `ExternFuncRef` lowering
     /// in `lower_call` to generate the correct cross-module call to
@@ -873,6 +882,10 @@ pub(crate) struct CrossModuleCtx {
     /// invalidated by any module-wide write. Used by the worker-thread safety
     /// check; declared module types are intentionally excluded (#7846).
     pub module_global_proven_types: std::collections::HashMap<u32, perry_hir::types::Type>,
+    /// Immutable String/BigInt candidates read through per-agent replicas
+    /// (`codegen/global_transfer.rs`). Empty unless perry/thread agents exist.
+    pub module_global_transfers:
+        std::collections::HashMap<u32, super::global_transfer::GlobalTransfer>,
     /// FuncIds of locally-defined plain functions whose body reads the
     /// dynamic `this` binding (directly or via a this-capturing arrow).
     /// Bare `f()` call sites to these must reset the runtime IMPLICIT_THIS

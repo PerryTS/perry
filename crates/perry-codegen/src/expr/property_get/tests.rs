@@ -14,6 +14,10 @@
 use crate::{compile_module, AppMetadata, CompileOptions};
 use perry_hir::{Expr, Module, ModuleInitKind, Stmt};
 
+#[path = "front_contract_tests.rs"]
+mod front_contract;
+use front_contract::{front_call_block, verify_front_directory};
+
 fn ir_opts(debug_locations: bool, module_source: Option<&str>) -> CompileOptions {
     CompileOptions {
         static_shape_ids: Vec::new(),
@@ -21,6 +25,7 @@ fn ir_opts(debug_locations: bool, module_source: Option<&str>) -> CompileOptions
         target: None,
         is_entry_module: true,
         non_entry_module_prefixes: Vec::new(),
+        thread_literal_module_prefixes: Vec::new(),
         nextjs_path_init_modules: Vec::new(),
         import_function_prefixes: std::collections::HashMap::new(),
         import_function_ffi_aliases: std::collections::HashMap::new(),
@@ -570,7 +575,7 @@ fn generic_property_get_tries_ways_before_calling_the_miss_handler() {
         on_miss.starts_with("pic.miss.front"),
         "the compare's miss edge must reach the front (the ways) first: {token:?}"
     );
-    let (front_label, front) = tower_block(&blocks, "pic.miss.front");
+    let (front_label, front) = front_call_block(&blocks);
     assert!(
         front
             .iter()
@@ -707,7 +712,7 @@ fn a_spill_entry_is_served_by_the_leaf_front_before_the_slow_call() {
     use crate::expr::property_get::generic_dispatch::PACKED_SPILL_FLIP;
     let ir = emit(false, None);
     let blocks = tower_blocks(&ir);
-    let (front_label, front) = tower_block(&blocks, "pic.miss.front");
+    let (front_label, front) = front_call_block(&blocks);
     let call = front
         .iter()
         .find(|l| l.contains("@js_object_get_field_ic_front("))
@@ -1176,11 +1181,9 @@ fn generic_property_get_slot_load_is_reached_only_through_every_guard() {
         !blocks.iter().any(|(l, _)| l.starts_with("pic.way")),
         "no way block may be expanded per site:\n{func}"
     );
-    let front_body = blocks
-        .iter()
-        .find(|(l, _)| l.starts_with("pic.miss.front"))
-        .map(|(_, body)| body.join("\n"))
-        .expect("the miss front block");
+    let front_blocks = tower_blocks(&ir);
+    let (_, front) = front_call_block(&front_blocks);
+    let front_body = front.join("\n");
     let term = front_body
         .lines()
         .rev()
@@ -1505,6 +1508,9 @@ fn the_front_reads_its_directory_without_a_call_where_the_target_allows() {
             .split("\ndefine ")
             .find(|f| f.contains("\npic.miss.front"))
             .unwrap_or_else(|| panic!("{target}: no function contains the front:\n{ir}"));
+        let blocks = tower_blocks(&ir);
+        front_call_block(&blocks);
+        verify_front_directory(&blocks).unwrap_or_else(|e| panic!("{target}: {e}\n{func}"));
         let dir_call = func.contains("call ptr @perry_shape_dir_cell(");
         match inline_form {
             Some(form) => {
@@ -1637,18 +1643,15 @@ fn the_generic_tower_is_one_leaf_call_two_exits_and_a_bounded_number_of_blocks()
         fronts[0].contains(" = call double "),
         "the front is nounwind, a plain call:\n{func}"
     );
-    // A non-`length` site confirms from this agent's own directory: the dir
-    // operand is slot 0 of `PERRY_AGENT_PTRS` (one initial-exec load in this
-    // ELF executable), never the empty directory a `length` site passes.
+    // A non-`length` site confirms from this agent's own directory: slot 0
+    // of the target's per-agent block, or the empty directory when Apple's
+    // direct TLS lookup is unavailable. Follow the actual call operand.
     assert!(
         !fronts[0].contains("@PERRY_EMPTY_SHAPE_DIR"),
         "only a `length` site passes the empty directory:\n{}",
         fronts[0]
     );
-    assert!(
-        func.contains("getelementptr i8, ptr @PERRY_AGENT_PTRS, i64 0"),
-        "the dir operand is PERRY_AGENT_PTRS slot 0:\n{func}"
-    );
+    verify_front_directory(&tower_blocks(&ir)).unwrap_or_else(|e| panic!("{e}\n{func}"));
 
     let blocks: Vec<&str> = func
         .lines()
@@ -1769,7 +1772,7 @@ fn the_generic_slow_read_is_called_only_after_the_front_declines() {
          slot and the packed word:\n{slow_line}"
     );
     // 3.
-    let (_, front) = tower_block(&blocks, "pic.miss.front");
+    let (_, front) = front_call_block(&blocks);
     let (cond, served, declined) = tower_cond_br(front);
     assert!(
         front
