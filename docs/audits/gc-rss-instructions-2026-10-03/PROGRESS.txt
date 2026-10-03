@@ -1,28 +1,52 @@
-Current implementation: reuse-window proposal plus shared full-mark/retained
-visitors (v7). Added visitor specialization was rejected by both full-runtime
-and 17-workload normal-auto A/Bs and reverted. Current-combination macOS tests
-passed 4,850 / 0 failures / 5 ignored; Linux and application acceptance remain pending. Historic v6
-measurements are immutable and cannot validate this new source revision.
-
 GC RSS and instruction work — draft progress, 2026-10-03
 
-LATEST STATE
-Draft rebased onto main 69de7f3526134fabb8ee5c87c23fe9ba71d4de69, including
-the campaign's #11783 rooting fixes and #11785 API manifest repair.
-Current implementation adds compact GC page metadata/object lists and sparse
-page-directory shrink after full reclaim. Shape/header formats stay unchanged.
-The prior visitor revision passed 4,835 macOS tests; the page-table revision
-initially passed 4,846 with one capacity-test assertion failure. The test now
-samples capacity after removals, isolating our helper from HashMap tombstones.
-Prior immediate-discard main69 macOS runtime: 4,849 passed.
-Current reuse-window proposal: 4,850 passed, 0 failed, 5 ignored.
-See the v6 section and source-and-validation manifest below.
-Consolidated Linux/application acceptance remains open. V2 isolated results
-and the pool build-freshness correction are documented below.
-Running isolated comparisons retain the original f6c873/ebc858 production base.
-Those results cannot serve as final latest-main acceptance; a fresh baseline
-and consolidated candidate comparison is required after them. Source hashes:
-pages-source-and-validation.json (latest main), earlier manifests (frozen arms).
+LATEST STATE (2026-10-03)
+Published source is based on main334, with shared full-mark/retained visitors,
+compact page indices and the proposed pool reuse window. Main was fetched again
+and has advanced to e532bf3d0e; rebase and fresh validation are next. No GC branch
+codegen, shape/header layout or ABI changes are authored.
+
+Frozen main69 normal-auto comparison is COMPLETE and independently reverified:
+204/204 executions, all 17 workloads, three plain and three perf repeats per arm,
+with exact Node output, build/current-binary identity and all fault counters.
+TS RSS 243.992 -> 239.461 MiB (-1.86%), instructions +7.18%, minor faults +653.46%.
+Request-processing RSS -5.78%, instructions +7.33%. Document retain RSS -12.32%,
+transition -11.55%, replacement -10.95%, pipeline -10.81%. This frozen candidate
+has immediate discard and rejected visitor specialization; these results do NOT
+validate the current shared-visitor/window source. Its instruction regressions
+remain disqualifying. See main69-normal-auto-comparison.json for every case and
+repetition; main69-full-runtime-comparison.json contains the separate 24 cells.
+
+The exact-binary instruction profile also finished: 16 user-instruction samples
+across TS/Zod/string and two isolated arms, zero lost samples. Raw report/data,
+source/build/oracle/product hashes and text sections were independently checked.
+On main69 TS, GC accounts for 74.64-75.08% of baseline self samples and
+79.53-79.80% in the frozen immediate/inline candidate. These are sampled shares,
+NOT exact GC instruction deltas or new-main measurements. See instruction-profile-
+summary.json, instruction-profile-verification.json and its verifier.
+
+The Linux v6 reuse-window pipeline has acquired the benchmark lock and is
+actively building/testing. It retains the rejected visitor specialization to
+isolate pool policy. The paired user/kernel diagnostic is queued behind it.
+Current source still requires its own Linux/app acceptance after that decision.
+
+Private capture-by-value callback candidate: one trace.rs change, based on
+239651/main334; macOS runtime 4,861 passed, 0 failed, 5 ignored. Production
+arm64 rlib assembly confirms two fewer loads on the usual slot path (whole
+callback 113 -> 109 static instructions); linked application counters remain
+unmeasured. Source and assembly excerpts are reviewable in callback-capture-
+v11.patch and callback-capture-v11-validation.json. It keeps shared enumeration and the same
+slots, captures stable per-object facts by value, and reborrows the worklist.
+No application instruction saving or RSS change is established. It is separate
+from production PR source and from the rejected visitor specialization.
+
+Private compact-cache patch remains unapplied: 4,852 Mac tests passed on its
+older pinned base, Linux/app acceptance pending. Historical attribution used
+160-byte header-inclusive ObjectMeta allocations; main added instance_birth,
+so that ledger must not be relabeled as current-main attribution.
+
+All following sections are chronological evidence with their original scope.
+Statements that a now-completed run is queued/live describe that older stage.
 
 
 Objective
