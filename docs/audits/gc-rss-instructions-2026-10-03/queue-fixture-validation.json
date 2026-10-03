@@ -128,5 +128,8 @@
       "repeat": 29,
       "returncode": 0
     }
-  ]
+  ],
+  "macos_pool_plus_fixture_result": "4835 passed; 0 failed; 5 ignored",
+  "macos_log_sha256": "f9fc90a615a85350154b24cf86fb603edacdf709dccb38d5cc805c9521cdc324",
+  "linux_ffi_scan_plus_fixture_result": "75 passed; 0 failed"
 }

@@ -56,7 +56,7 @@ A queue saturation race is suspected but not yet established against baseline.
 Do not count this run as a Linux pass. Linked checks and application A/B did
 not run because the driver stopped at this failure.
 
-Current eight-file revision, including pool release: macOS 4,835 passed,
+Pool-release revision before visitor specialization: macOS 4,835 passed,
 0 failed, 5 ignored; isolated Linux kernel helper 3 passed. Hashes and log
 receipts are in pool-source-and-validation.json. Whole Linux validation of
 this revision is pending. Earlier six-file hashes remain separately recorded.
@@ -174,7 +174,8 @@ comparator-scriptc-retry.exit, gc-runtime-scan-v2-build.exit,
 gc-runtime-scan-v2-linked.exit, gc-runtime-scan-v2-auto.exit.
 Absent exit files are not proof that a process is alive: inspect its PID.
 The raw logs, source/binary hashes, harnesses and frozen experimental reports
-are retained there; current PR source hashes match pool-source-and-validation.json.
+are retained there; pool-stage source hashes match pool-source-and-validation.json; the current
+visitor experiment is pinned by inline-source-and-validation.json.
 
 Validation update: queue fixture repaired
 The baseline and scan-revision queue test were byte-identical. Thirty fresh
@@ -191,12 +192,33 @@ coherent build, moving fixtures and normal-auto matrix follow in the existing
 serialized driver. The invalid earlier pool-only waiter was stopped while
 confirmed childless; the replacement scan-pool-resume driver runs scan then
 pool stages in order, with unchanged source hashes for both production arms.
-The pool revision's macOS suite with the fixture repair is still running.
+The pool revision with the fixture repair also passed macOS: 4,835 passed,
+0 failed, 5 ignored. Linux scan-revision FFI passed all 75 tests.
 See queue-fixture-validation.json for hashes and the original repeat results.
 
-Next GC instruction experiment is prepared separately (not yet in this draft):
+Next GC instruction experiment is now included (validation pending):
 instantiate the existing shared visitor body for full marking and retained-old
 parent rebuilding, removing per-slot indirect callbacks without changing the
 slots visited. Compare instructions, code size and RSS before accepting it.
 GC page-table compaction remains the next independent metadata candidate;
 prototype/brand/flags, shape facts and canonical indices stay campaign-owned.
+
+Visitor experiment validation plan
+Current head adds two hot caller instantiations of the existing enumeration:
+trace_heap_rewrite_slots and remember_retained_old_to_young_slots. No slot,
+weak-edge rule, descriptor case, collection threshold or shape fact changes.
+The macOS runtime suite is running; these changes are NOT covered by the
+previous 4,835-pass pool-revision result. Linux driver is queued behind the
+scan/pool sequence and will stop if its predecessor fails.
+The follow-up driver first compares frozen scan and pool arms on original
+TS/Zod full-runtime programs (24 runs), including instructions, cycles and
+minor/major faults. It then builds/tests the visitor revision coherently,
+runs linked moving fixtures, compares pool versus visitor (24 diagnostic runs),
+and runs the separate 17-case normal-auto A/B using verified pool binaries.
+Both diagnostic comparisons record binary section sizes; more inlining may
+trade fewer executed instructions for larger text, so it is not accepted as
+an unconditional improvement before the measurements finish.
+Drivers: gc-runtime-scan-pool-resume.sh and gc-runtime-inline-v4-run.sh.
+New receipts: gc-runtime-scan-v2r1-build.exit,
+gc-runtime-scan-pool-resume.exit, gc-runtime-inline-v4-run.exit.
+Original failure and all preceding source manifests remain immutable.

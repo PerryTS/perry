@@ -83,11 +83,10 @@ pub(super) unsafe fn visit_gc_layout_slot_descriptors(
 }
 
 /// The ONE body of [`visit_gc_layout_slot_descriptors`], generic over the
-/// visitor. Every caller but the copying minor's drain goes through the `dyn`
-/// wrapper above (one copy of this body); the drain instantiates it directly
-/// (`visit_gc_rewrite_slots_inline`) so its per-slot closure inlines instead of
-/// paying two indirect calls per visited slot. Same enumeration either way:
-/// there is no second copy of the slot logic to drift.
+/// visitor. Cold callers share the `dyn` wrapper above. The copying drain,
+/// full mark and retained-parent rebuild instantiate this body for their
+/// visitors so their per-slot closures inline instead of paying indirect calls.
+/// Same enumeration either way: no second copy of the slot logic can drift.
 #[inline(always)]
 pub(super) unsafe fn visit_gc_layout_slot_descriptors_inline<F>(
     header: *mut GcHeader,
@@ -252,6 +251,16 @@ pub(super) unsafe fn visit_gc_rewrite_slot_descriptors(
     visit: impl FnMut(GcMutableSlotDescriptor),
 ) {
     visit_gc_rewrite_slot_descriptors_with::<false>(header, visit);
+}
+
+/// Instantiate the shared descriptor walk for a hot tracing visitor. This
+/// changes callback dispatch only; descriptor enumeration stays in one body.
+#[inline(always)]
+pub(super) unsafe fn visit_gc_rewrite_slot_descriptors_inline(
+    header: *mut GcHeader,
+    visit: impl FnMut(GcMutableSlotDescriptor),
+) {
+    visit_gc_rewrite_slot_descriptors_with::<true>(header, visit);
 }
 
 /// The one body of [`visit_gc_rewrite_slot_descriptors`]. `INLINE_LAYOUT`
@@ -546,8 +555,8 @@ pub(super) unsafe fn visit_gc_rewrite_slots(
 }
 
 /// [`visit_gc_rewrite_slots`] with the whole enumeration instantiated for
-/// `visit`: the copying minor's drain, where the two per-slot indirect calls
-/// (descriptor visitor, slot visitor) were a measured share of the per-object
+/// `visit`: used by the copying drain and retained-parent rebuild. Indirect
+/// descriptor and slot visitor calls were a measured share of the per-object
 /// trace cost. Enumerates exactly the same slots, in the same order.
 #[inline(always)]
 pub(super) unsafe fn visit_gc_rewrite_slots_inline(
