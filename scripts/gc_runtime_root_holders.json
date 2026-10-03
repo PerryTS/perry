@@ -2766,6 +2766,12 @@
       "name": "BUILTIN_INTRINSIC_INSTALL",
       "verdict": "not_a_gc_pointer",
       "why": "Cell<bool> set while the runtime runs its own builtin definitions (as_builtin_definition, #10697), so installs onto non-Map/Set/Date owners do not arm PERRY_OWN_NAMED_PROP_INSTALLED. A flag, never an address."
+    },
+    {
+      "file": "crates/perry-runtime/src/string/compare.rs",
+      "name": "KEY_BYTE_READS",
+      "verdict": "test_only",
+      "why": "#10502: cfg(test) thread-local count of stored-key byte reads/comparisons. The Cell holds only an incremented u64 counter, never a heap pointer or NaN-boxed value; it is absent from production builds."
     }
   ],
   "_FRONTIER_README": "Identity-pinned debt ratchet over new perry-ui* candidates and otherwise-unclassified core raw/Perry TLS declarations (see the census docstring, \u201cThe identity-pinned frontier\u201d). A new uncovered holder fails until it is scanned, receives a researched holders verdict, or is deliberately pinned as debt. Moving a researched false positive to holders graduates it from this list. A fixed or classified holder makes its old frontier pin stale, so the receipt must be deleted.",
