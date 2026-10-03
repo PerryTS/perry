@@ -13,9 +13,10 @@
 //!
 //!   * `PERRY_ROOT_SPILL_RELOCATIONS=0` — spilling disabled, every function on
 //!     native statepoints (the pre-#8583 lowering);
-//!   * `PERRY_ROOT_SPILL_RELOCATIONS=1` — spill anything with a root and a
-//!     call, so `run`/`make`/`main` take the shadow frame while the call-free
-//!     accessor `leaf` stays on statepoints — a genuinely mixed stack.
+//!   * `PERRY_ROOT_SPILL_RELOCATIONS=1` — spill anything RS4GC would give
+//!     more than one relocation (the exact count, RFC deferred collection
+//!     S4), so `run` takes the shadow frame while the call-free accessor
+//!     `leaf` stays on statepoints — a genuinely mixed stack.
 //!
 //! Both binaries run under every moving-collector configuration and must
 //! produce byte-identical output. If the spilled frame's roots were invisible
@@ -33,8 +34,8 @@ fn perry_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_perry"))
 }
 
-/// `leaf` reads a field and makes no call: at `PERRY_ROOT_SPILL_RELOCATIONS=1`
-/// its estimate is `slots × 0 = 0`, so it stays on native statepoints while its
+/// `leaf` reads a field and makes no call: RS4GC gives it no relocation, so at
+/// `PERRY_ROOT_SPILL_RELOCATIONS=1` it stays on native statepoints while its
 /// callers spill. `run` holds `a`/`b`/`keep` live across allocating calls, so a
 /// minor that fires inside `make` must find those roots in `run`'s shadow frame
 /// and the `leaf` argument in `leaf`'s statepoint frame on the same stack.

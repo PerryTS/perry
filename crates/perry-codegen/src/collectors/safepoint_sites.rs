@@ -7,15 +7,15 @@
 //! body of the Claude Code bundle measured 795 root slots × ~106k safepoints
 //! and grew 439k → 6.5M instructions under RS4GC, and a single `-Os` pass on
 //! the result did not finish in practical time (#8583).
-//! `codegen/helpers::maybe_spill_roots_to_shadow_frame` multiplies this count
-//! by the function's root-slot count and, past a threshold, keeps that
-//! function's roots in a shadow frame instead of statepoints.
+//! Entry outlining (#8595, `codegen/entry_outline.rs`) uses this count to cut
+//! a huge entry body into chunks before any of it is lowered. It is a
+//! source-level proxy only: whether a function keeps its roots on statepoints
+//! is decided on the exact relocation count of the lowered IR
+//! (`inprocess::gc_liveness`, RFC deferred collection S4), which replaced the
+//! `(slots + sites) × sites` estimate this count used to feed.
 //!
 //! A safepoint is any call-like expression: a call can re-enter the runtime
-//! and collect. The count is an over-approximation biased toward spilling —
-//! a false positive is a shadow frame on a function that would have been fine
-//! (cheap; the shadow lowering is the pre-#7370 default), while a false
-//! negative would let relocation fan-out reach the optimizer. Nested closures
+//! and collect. The count over-approximates what RS4GC will see. Nested closures
 //! are NOT counted: each compiles to its own `LlFunction` with its own frame,
 //! so its safepoints belong to it (`walk_expr_children` does not descend into
 //! a closure's body, only its parameter defaults).
