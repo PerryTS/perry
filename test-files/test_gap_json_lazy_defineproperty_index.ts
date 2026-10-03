@@ -1,8 +1,5 @@
-// Object.defineProperty on an index of a JSON.parse array must be honoured by
-// later reads. Passes with PERRY_JSON_TAPE=0 (direct parse) and fails in the
-// default lazy route: the accessor is installed but indexed reads keep
-// returning the element, in both the sparse and the materialized state.
-// Known gap: #10097.
+// Object.defineProperty on a JSON.parse array index must be honoured whether
+// the lazy array was unscanned or already materialized before the definition.
 const pieces: string[] = [];
 for (let i = 0; i < 200; i++) {
     pieces.push('{"id":' + i + ',"name":"heap string for record ' + i + '"}');
@@ -10,7 +7,7 @@ for (let i = 0; i < 200; i++) {
 const text = "[" + pieces.join(",") + "]";
 let sum = 0;
 for (let round = 0; round < 4; round++) {
-    // sparse (never scanned) and materialized (scanned) both must honour it
+    // Both unscanned and previously scanned arrays must honour the accessor.
     for (const scan of [false, true]) {
         const rows: any = JSON.parse(text);
         if (scan) { let seen = 0; for (let i = 0; i < rows.length; i++) seen += rows[i].id; sum += seen; }
