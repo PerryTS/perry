@@ -817,3 +817,128 @@ fn declared_class_final_mint_keeps_birth_ordinary_and_uses_each_current_closure(
         })
     });
 }
+
+const ALIAS_KEYS_CHILD_ENV: &str = "PERRY_TEST_CONSTFN_ALIAS_KEYS_CHILD";
+
+/// Store a fresh closure of `info` into slot 0 of the rooted receiver and run
+/// the finalizer for the one-method shape seeded under `requested`.
+fn finalize_one_method(
+    scope: &crate::gc::RuntimeHandleScope,
+    raw: *mut crate::object::ObjectHeader,
+    info: *const crate::closure::JsFunctionInfo,
+    requested: u32,
+    packed: &[u8],
+    entries: &[ConstFnStaticEntry],
+) -> (u32, u32) {
+    let obj = scope.root_raw_mut_ptr(raw);
+    let closure = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(info, 0));
+    let before = unsafe {
+        obj.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj_ptr| {
+            crate::object::store_object_field_slot(
+                obj_ptr,
+                0,
+                closure
+                    .with_mut_ptr::<u8, _>(|closure_ptr| crate::JSValue::object_ptr(closure_ptr))
+                    .bits(),
+            );
+            shapes::object_shape_stamp(obj_ptr)
+        })
+    };
+    let after = obj.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj_ptr| {
+        js_object_finalize_constfn_static(
+            obj_ptr as usize as u64,
+            requested,
+            packed.as_ptr(),
+            packed.len() as u32,
+            1,
+            1,
+            0,
+            3,
+            entries.as_ptr(),
+            entries.len() as u32,
+        )
+    });
+    (before, unsafe {
+        shapes::object_shape_stamp(after as usize as *mut _)
+    })
+}
+
+/// M1 (#11680 audit): a receiver whose keys array holds the same NAMES as the
+/// record already seeded under the requested id, but is a different array,
+/// passes every name-level check. The mint then misses by facts and finds the
+/// id taken; before the fix that was `static_shape_id_refused_abort`. The
+/// finalizer must refuse instead and leave the receiver untouched. Runs in a
+/// child so the pre-fix abort fails this test rather than the test binary.
+#[test]
+fn constfn_finalizer_refuses_equal_names_in_a_different_keys_array() {
+    const NAME: &str = "object::static_shapes::tests::constfn_finalizer_refuses_equal_names_in_a_different_keys_array";
+    if std::env::var_os(ALIAS_KEYS_CHILD_ENV).is_none() {
+        let out = std::process::Command::new(std::env::current_exe().expect("test binary"))
+            .arg(NAME)
+            .arg("--exact")
+            .arg("--nocapture")
+            .arg("--test-threads=1")
+            .env(ALIAS_KEYS_CHILD_ENV, "1")
+            .output()
+            .expect("launch the child");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            out.status.success(),
+            "the finalizer must refuse, not abort: {stderr}"
+        );
+        assert!(
+            stdout.contains("alias-keys refusal checked"),
+            "the child must actually run the scenario: {stdout}"
+        );
+        return;
+    }
+    let _lock = crate::gc::global_side_table_test_lock();
+    let info = crate::fn_info!(seeded_constfn_body_a, 0; with_flags(crate::codegen_abi::FN_PERMANENT_IMAGE));
+    let entries = [ConstFnStaticEntry { slot: 0, info }];
+    let packed = b"ltcf_alias_m\0";
+    let requested = SHAPE_ID_BASE + 0x7872;
+    let seeded = js_shape_seed_plain_constfn(
+        requested,
+        packed.as_ptr(),
+        packed.len() as u32,
+        1,
+        1,
+        3,
+        entries.as_ptr(),
+        1,
+    );
+    assert_eq!(seeded, requested);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    // Control: the canonical-keys receiver finalizes, so the refusal below
+    // is the keys identity and nothing else.
+    let control = alloc_constfn_plain_fixture(&[b"ltcf_alias_m"]);
+    let (_, control_after) =
+        finalize_one_method(&scope, control, info, requested, packed, &entries);
+    assert_eq!(control_after, requested, "control must finalize");
+    // Same names, a different (non-canonical) keys array.
+    let keys = unsafe {
+        let _immortal = crate::gc::ImmortalLayoutScope::new();
+        let arr = crate::object::alloc::build_longlived_keys_array(
+            std::ptr::null_mut(),
+            0,
+            &[b"ltcf_alias_m"],
+        );
+        crate::gc::layout_init_all_pointer_slots(arr as *mut u8);
+        crate::object::ObjectKeys::new(arr, 1)
+    };
+    let alias = crate::object::alloc_plain::alloc_plain_record_with_keys(1, keys);
+    let birth = shapes::shape_descriptor_by_id(unsafe { shapes::object_shape_stamp(alias) })
+        .expect("alias birth descriptor");
+    let record = shapes::shape_descriptor_by_id(requested).expect("seeded record");
+    assert_ne!(
+        birth.keys, record.keys,
+        "the fixture must use a different keys array"
+    );
+    assert_eq!(birth.object_kind, shapes::ShapeObjectKind::Ordinary);
+    assert_eq!(birth.rep, crate::object::field_rep::REP_ANY);
+    let (before, after) = finalize_one_method(&scope, alias, info, requested, packed, &entries);
+    assert_ne!(before, requested);
+    assert_eq!(after, before, "refusal must leave the receiver untouched");
+    println!("alias-keys refusal checked");
+}
