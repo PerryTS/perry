@@ -1053,3 +1053,57 @@ pub fn select_linker_command(
 
     Ok(cmd)
 }
+
+/// Whether a native glibc Linux link may use `-z pack-relative-relocs`
+/// (DT_RELR: relative relocations stored as a compact bitmap instead of 24-byte
+/// RELA entries). Every method slot on a class prototype is a load-time
+/// relative relocation, so packing them keeps the binary and startup flat.
+///
+/// Both halves must hold, so this is decided by linking a probe program with
+/// the flag and inspecting the result: the linker must accept the flag, and
+/// the libc it linked against must define `GLIBC_ABI_DT_RELR` (glibc >= 2.36),
+/// which the linker records as a version requirement of the output. A linker
+/// that accepts the flag against an older libc would emit DT_RELR with no such
+/// marker, and that binary crashes in the loader. Any failure answers false and
+/// the link proceeds exactly as before. Cached for the process.
+pub(super) fn linux_pack_relative_relocs_supported() -> bool {
+    static CACHE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *CACHE.get_or_init(|| {
+        if !cfg!(target_os = "linux") {
+            return false;
+        }
+        probe_pack_relative_relocs().unwrap_or(false)
+    })
+}
+
+fn probe_pack_relative_relocs() -> Option<bool> {
+    use std::io::Write;
+    let dir = std::env::temp_dir().join(format!("perry-relr-probe-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).ok()?;
+    let out = dir.join("probe");
+    let result = (|| {
+        let mut child = Command::new("cc")
+            .args(["-x", "c", "-", "-o"])
+            .arg(&out)
+            .arg("-Wl,-z,pack-relative-relocs")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .ok()?;
+        // A pointer in data forces a relative relocation in a PIE.
+        child
+            .stdin
+            .take()?
+            .write_all(b"int x; int *p = &x; int main(void){return p == 0;}\n")
+            .ok()?;
+        if !child.wait().ok()?.success() {
+            return Some(false);
+        }
+        let bytes = std::fs::read(&out).ok()?;
+        let needle = b"GLIBC_ABI_DT_RELR";
+        Some(bytes.windows(needle.len()).any(|w| w == needle))
+    })();
+    let _ = std::fs::remove_dir_all(&dir);
+    result
+}
