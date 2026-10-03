@@ -385,3 +385,11 @@ suffixes identify repaired execution. Full pipeline success requires all
 runtime/FFI/events, linked moving checks and workload matrices to complete.
 The final summary receipt is gc-runtime-main69r1-auto.exit (not the superseded
 main69-auto receipt shown in the historical command above).
+
+Pool retry advanced: the coherent compiler/runtime/stdlib build completed and
+verify-gc-runtime-build.py accepted the changed archive plus decommit symbol
+(pool-retry-artifact-verification.json / pool-retry-products.json). All three
+linked fixtures passed in default and moving modes; copied-object counts were
+12,442 / 5,689 / 63,625, with protected from-space. Compact observations are in
+pool-retry-linux-validation.json. The guarded normal-auto matrix is now running;
+RSS/instruction/fault tradeoffs remain unmeasured for this repaired revision.
