@@ -1,0 +1,550 @@
+{
+  "base": "ebc858cb9806845998cee28decc666c3ea226fd2",
+  "scope": "Historical frozen main campaign binaries; not the main69 acceptance comparison",
+  "limitation": "Diagnostic collection boundaries, not peak RSS. ELF bytes are not resident bytes.",
+  "observations": [
+    {
+      "case": "tscwork",
+      "repeat": 0,
+      "selected_full": 3,
+      "observation_kind": "third natural synchronous full; diagnostic snapshot, not peak RSS; ordinal chosen early because debugger and plain-run total counts differ",
+      "binary_sha256": "0b335b8f7736dc5f522155387156401882d9dc5483bc69c50062dc7c75665c4d",
+      "smaps_sha256": "2fc04497e8f181cf5c533b1e7040a99b0c4a17acfba0f8911fe3f3e130863ebd",
+      "process_rss_bytes": 245030912,
+      "executable_backed_rss_bytes": 89960448,
+      "executable_permission_rss_bytes": 74207232,
+      "executable_mappings": [
+        {
+          "permissions": "r--p",
+          "rss_bytes": 1929216,
+          "anonymous_bytes": 0,
+          "lazyfree_bytes": 0,
+          "intersecting_file_sections": [
+            ".interp",
+            ".note.gnu.property",
+            ".note.gnu.build-id",
+            ".note.ABI-tag",
+            ".gnu.hash",
+            ".dynsym",
+            ".dynstr",
+            ".gnu.version",
+            ".gnu.version_r",
+            ".rela.dyn",
+            ".rela.plt"
+          ]
+        },
+        {
+          "permissions": "r-xp",
+          "rss_bytes": 74207232,
+          "anonymous_bytes": 16384,
+          "lazyfree_bytes": 0,
+          "intersecting_file_sections": [
+            ".init",
+            ".plt",
+            ".plt.got",
+            ".text",
+            ".fini"
+          ]
+        },
+        {
+          "permissions": "r--p",
+          "rss_bytes": 10366976,
+          "anonymous_bytes": 0,
+          "lazyfree_bytes": 0,
+          "intersecting_file_sections": [
+            ".rodata",
+            ".perry_gcmap",
+            ".eh_frame_hdr",
+            ".eh_frame",
+            ".gcc_except_table"
+          ]
+        },
+        {
+          "permissions": "r--p",
+          "rss_bytes": 2756608,
+          "anonymous_bytes": 2723840,
+          "lazyfree_bytes": 0,
+          "intersecting_file_sections": [
+            ".tdata",
+            ".init_array",
+            ".fini_array",
+            ".data.rel.ro",
+            ".dynamic",
+            ".got"
+          ]
+        },
+        {
+          "permissions": "rw-p",
+          "rss_bytes": 700416,
+          "anonymous_bytes": 663552,
+          "lazyfree_bytes": 0,
+          "intersecting_file_sections": [
+            ".data"
+          ]
+        }
+      ],
+      "largest_text_symbols": [
+        {
+          "bytes": 8667528,
+          "name": "perry_closure_node_modules_typescript_lib_typescript_js__15"
+        },
+        {
+          "bytes": 2631074,
+          "name": "perry_closure_node_modules_typescript_lib_typescript_js__1"
+        },
+        {
+          "bytes": 2626223,
+          "name": "perry_closure_node_modules_typescript_lib_typescript_js__0"
+        },
+        {
+          "bytes": 976456,
+          "name": "perry_fn_node_modules_typescript_lib_typescript_js__u__5f__5f_perry_5f_entry_5f_chunk_5f_node_5f_modules_2f_typescript_2f_lib_2f_typescript_2e_js_5f_0"
+        },
+        {
+          "bytes": 596389,
+          "name": "perry_closure_node_modules_typescript_lib_typescript_js__2732"
+        }
+      ],
+      "allocated_section_bytes": {
+        ".interp": 28,
+        ".note.gnu.property": 32,
+        ".note.gnu.build-id": 36,
+        ".note.ABI-tag": 32,
+        ".gnu.hash": 260,
+        ".dynsym": 7224,
+        ".dynstr": 3518,
+        ".gnu.version": 602,
+        ".gnu.version_r": 592,
+        ".rela.dyn": 1911912,
+        ".rela.plt": 744,
+        ".init": 27,
+        ".plt": 512,
+        ".plt.got": 320,
+        ".text": 109252738,
+        ".fini": 13,
+        ".rodata": 14503810,
+        ".perry_gcmap": 4989817,
+        ".eh_frame_hdr": 465660,
+        ".eh_frame": 2510872,
+        ".gcc_except_table": 282300,
+        ".tdata": 40280,
+        ".tbss": 242944,
+        ".init_array": 48,
+        ".fini_array": 16,
+        ".data.rel.ro": 2636936,
+        ".dynamic": 544,
+        ".got": 76472,
+        ".data": 699064,
+        ".bss": 1459632
+      }
+    },
+    {
+      "case": "tscwork",
+      "repeat": 1,
+      "selected_full": 3,
+      "observation_kind": "third natural synchronous full; diagnostic snapshot, not peak RSS; ordinal chosen early because debugger and plain-run total counts differ",
+      "binary_sha256": "0b335b8f7736dc5f522155387156401882d9dc5483bc69c50062dc7c75665c4d",
+      "smaps_sha256": "94b33ba3e0c58c8757eba39403eaf08587129dd077f7c01992158e0112e1543d",
+      "process_rss_bytes": 244510720,
+      "executable_backed_rss_bytes": 89960448,
+      "executable_permission_rss_bytes": 74207232,
+      "executable_mappings": [
+        {
+          "permissions": "r--p",
+          "rss_bytes": 1929216,
+          "anonymous_bytes": 0,
+          "lazyfree_bytes": 0,
+          "intersecting_file_sections": [
+            ".interp",
+            ".note.gnu.property",
+            ".note.gnu.build-id",
+            ".note.ABI-tag",
+            ".gnu.hash",
+            ".dynsym",
+            ".dynstr",
+            ".gnu.version",
+            ".gnu.version_r",
+            ".rela.dyn",
+            ".rela.plt"
+          ]
+        },
+        {
+          "permissions": "r-xp",
+          "rss_bytes": 74207232,
+          "anonymous_bytes": 16384,
+          "lazyfree_bytes": 0,
+          "intersecting_file_sections": [
+            ".init",
+            ".plt",
+            ".plt.got",
+            ".text",
+            ".fini"
+          ]
+        },
+        {
+          "permissions": "r--p",
+          "rss_bytes": 10366976,
+          "anonymous_bytes": 0,
+          "lazyfree_bytes": 0,
+          "intersecting_file_sections": [
+            ".rodata",
+            ".perry_gcmap",
+            ".eh_frame_hdr",
+            ".eh_frame",
+            ".gcc_except_table"
+          ]
+        },
+        {
+          "permissions": "r--p",
+          "rss_bytes": 2756608,
+          "anonymous_bytes": 2723840,
+          "lazyfree_bytes": 0,
+          "intersecting_file_sections": [
+            ".tdata",
+            ".init_array",
+            ".fini_array",
+            ".data.rel.ro",
+            ".dynamic",
+            ".got"
+          ]
+        },
+        {
+          "permissions": "rw-p",
+          "rss_bytes": 700416,
+          "anonymous_bytes": 663552,
+          "lazyfree_bytes": 0,
+          "intersecting_file_sections": [
+            ".data"
+          ]
+        }
+      ],
+      "largest_text_symbols": [
+        {
+          "bytes": 8667528,
+          "name": "perry_closure_node_modules_typescript_lib_typescript_js__15"
+        },
+        {
+          "bytes": 2631074,
+          "name": "perry_closure_node_modules_typescript_lib_typescript_js__1"
+        },
+        {
+          "bytes": 2626223,
+          "name": "perry_closure_node_modules_typescript_lib_typescript_js__0"
+        },
+        {
+          "bytes": 976456,
+          "name": "perry_fn_node_modules_typescript_lib_typescript_js__u__5f__5f_perry_5f_entry_5f_chunk_5f_node_5f_modules_2f_typescript_2f_lib_2f_typescript_2e_js_5f_0"
+        },
+        {
+          "bytes": 596389,
+          "name": "perry_closure_node_modules_typescript_lib_typescript_js__2732"
+        }
+      ],
+      "allocated_section_bytes": {
+        ".interp": 28,
+        ".note.gnu.property": 32,
+        ".note.gnu.build-id": 36,
+        ".note.ABI-tag": 32,
+        ".gnu.hash": 260,
+        ".dynsym": 7224,
+        ".dynstr": 3518,
+        ".gnu.version": 602,
+        ".gnu.version_r": 592,
+        ".rela.dyn": 1911912,
+        ".rela.plt": 744,
+        ".init": 27,
+        ".plt": 512,
+        ".plt.got": 320,
+        ".text": 109252738,
+        ".fini": 13,
+        ".rodata": 14503810,
+        ".perry_gcmap": 4989817,
+        ".eh_frame_hdr": 465660,
+        ".eh_frame": 2510872,
+        ".gcc_except_table": 282300,
+        ".tdata": 40280,
+        ".tbss": 242944,
+        ".init_array": 48,
+        ".fini_array": 16,
+        ".data.rel.ro": 2636936,
+        ".dynamic": 544,
+        ".got": 76472,
+        ".data": 699064,
+        ".bss": 1459632
+      }
+    },
+    {
+      "case": "zodwork",
+      "repeat": 0,
+      "selected_full": 1,
+      "observation_kind": "explicit diagnostic GC at iteration100 before safeParse, schema live; original 200-iteration workload has no full GC; not peak RSS",
+      "binary_sha256": "e98356583b6f69fec829797aa33c38efaf8c5c174b22adf0df5450a7b6437f99",
+      "smaps_sha256": "f5ac4123b02498e76ca7d49254de4056db959d6ec88be76e603acb1919778ed8",
+      "process_rss_bytes": 30576640,
+      "executable_backed_rss_bytes": 14794752,
+      "executable_permission_rss_bytes": 11001856,
+      "executable_mappings": [
+        {
+          "permissions": "r--p",
+          "rss_bytes": 843776,
+          "anonymous_bytes": 0,
+          "lazyfree_bytes": 0,
+          "intersecting_file_sections": [
+            ".interp",
+            ".note.gnu.property",
+            ".note.gnu.build-id",
+            ".note.ABI-tag",
+            ".gnu.hash",
+            ".dynsym",
+            ".dynstr",
+            ".gnu.version",
+            ".gnu.version_r",
+            ".rela.dyn",
+            ".rela.plt"
+          ]
+        },
+        {
+          "permissions": "r-xp",
+          "rss_bytes": 11001856,
+          "anonymous_bytes": 16384,
+          "lazyfree_bytes": 0,
+          "intersecting_file_sections": [
+            ".init",
+            ".plt",
+            ".plt.got",
+            ".text",
+            ".fini"
+          ]
+        },
+        {
+          "permissions": "r--p",
+          "rss_bytes": 2023424,
+          "anonymous_bytes": 0,
+          "lazyfree_bytes": 0,
+          "intersecting_file_sections": [
+            ".rodata",
+            ".perry_gcmap",
+            ".eh_frame_hdr",
+            ".eh_frame",
+            ".gcc_except_table"
+          ]
+        },
+        {
+          "permissions": "r--p",
+          "rss_bytes": 843776,
+          "anonymous_bytes": 819200,
+          "lazyfree_bytes": 0,
+          "intersecting_file_sections": [
+            ".tdata",
+            ".init_array",
+            ".fini_array",
+            ".data.rel.ro",
+            ".dynamic",
+            ".got"
+          ]
+        },
+        {
+          "permissions": "rw-p",
+          "rss_bytes": 81920,
+          "anonymous_bytes": 73728,
+          "lazyfree_bytes": 0,
+          "intersecting_file_sections": [
+            ".data"
+          ]
+        }
+      ],
+      "largest_text_symbols": [
+        {
+          "bytes": 117971,
+          "name": "perry_method_node_modules_zod_lib_index_mjs__ZodString___parse"
+        },
+        {
+          "bytes": 75111,
+          "name": "_RNvMsa_NtNtCsc9JJGAyR4gi_13perry_runtime2gc9telemetryNtB5_12GcCycleTrace9into_json"
+        },
+        {
+          "bytes": 67040,
+          "name": "perry_method_node_modules_zod_lib_index_mjs__ZodObject___parse"
+        },
+        {
+          "bytes": 51658,
+          "name": "perry_method_node_modules_zod_lib_index_mjs__ZodArray___parse"
+        },
+        {
+          "bytes": 46179,
+          "name": "perry_fn_node_modules_zod_lib_index_mjs__deepPartialify.__arena"
+        }
+      ],
+      "allocated_section_bytes": {
+        ".interp": 28,
+        ".note.gnu.property": 32,
+        ".note.gnu.build-id": 36,
+        ".note.ABI-tag": 32,
+        ".gnu.hash": 168,
+        ".dynsym": 5904,
+        ".dynstr": 2910,
+        ".gnu.version": 492,
+        ".gnu.version_r": 560,
+        ".rela.dyn": 831792,
+        ".rela.plt": 360,
+        ".init": 27,
+        ".plt": 256,
+        ".plt.got": 136,
+        ".text": 13958130,
+        ".fini": 13,
+        ".rodata": 2224917,
+        ".perry_gcmap": 148987,
+        ".eh_frame_hdr": 136068,
+        ".eh_frame": 751688,
+        ".gcc_except_table": 27248,
+        ".tdata": 37512,
+        ".tbss": 240200,
+        ".init_array": 40,
+        ".fini_array": 16,
+        ".data.rel.ro": 778256,
+        ".dynamic": 544,
+        ".got": 24656,
+        ".data": 78644,
+        ".bss": 692376
+      }
+    },
+    {
+      "case": "zodwork",
+      "repeat": 1,
+      "selected_full": 1,
+      "observation_kind": "explicit diagnostic GC at iteration100 before safeParse, schema live; original 200-iteration workload has no full GC; not peak RSS",
+      "binary_sha256": "e98356583b6f69fec829797aa33c38efaf8c5c174b22adf0df5450a7b6437f99",
+      "smaps_sha256": "7f53b8c1287fe329a75078bb8002833fe93f647bc1dbc82c6f047cf02933e36b",
+      "process_rss_bytes": 30576640,
+      "executable_backed_rss_bytes": 14794752,
+      "executable_permission_rss_bytes": 11001856,
+      "executable_mappings": [
+        {
+          "permissions": "r--p",
+          "rss_bytes": 843776,
+          "anonymous_bytes": 0,
+          "lazyfree_bytes": 0,
+          "intersecting_file_sections": [
+            ".interp",
+            ".note.gnu.property",
+            ".note.gnu.build-id",
+            ".note.ABI-tag",
+            ".gnu.hash",
+            ".dynsym",
+            ".dynstr",
+            ".gnu.version",
+            ".gnu.version_r",
+            ".rela.dyn",
+            ".rela.plt"
+          ]
+        },
+        {
+          "permissions": "r-xp",
+          "rss_bytes": 11001856,
+          "anonymous_bytes": 16384,
+          "lazyfree_bytes": 0,
+          "intersecting_file_sections": [
+            ".init",
+            ".plt",
+            ".plt.got",
+            ".text",
+            ".fini"
+          ]
+        },
+        {
+          "permissions": "r--p",
+          "rss_bytes": 2023424,
+          "anonymous_bytes": 0,
+          "lazyfree_bytes": 0,
+          "intersecting_file_sections": [
+            ".rodata",
+            ".perry_gcmap",
+            ".eh_frame_hdr",
+            ".eh_frame",
+            ".gcc_except_table"
+          ]
+        },
+        {
+          "permissions": "r--p",
+          "rss_bytes": 843776,
+          "anonymous_bytes": 819200,
+          "lazyfree_bytes": 0,
+          "intersecting_file_sections": [
+            ".tdata",
+            ".init_array",
+            ".fini_array",
+            ".data.rel.ro",
+            ".dynamic",
+            ".got"
+          ]
+        },
+        {
+          "permissions": "rw-p",
+          "rss_bytes": 81920,
+          "anonymous_bytes": 73728,
+          "lazyfree_bytes": 0,
+          "intersecting_file_sections": [
+            ".data"
+          ]
+        }
+      ],
+      "largest_text_symbols": [
+        {
+          "bytes": 117971,
+          "name": "perry_method_node_modules_zod_lib_index_mjs__ZodString___parse"
+        },
+        {
+          "bytes": 75111,
+          "name": "_RNvMsa_NtNtCsc9JJGAyR4gi_13perry_runtime2gc9telemetryNtB5_12GcCycleTrace9into_json"
+        },
+        {
+          "bytes": 67040,
+          "name": "perry_method_node_modules_zod_lib_index_mjs__ZodObject___parse"
+        },
+        {
+          "bytes": 51658,
+          "name": "perry_method_node_modules_zod_lib_index_mjs__ZodArray___parse"
+        },
+        {
+          "bytes": 46179,
+          "name": "perry_fn_node_modules_zod_lib_index_mjs__deepPartialify.__arena"
+        }
+      ],
+      "allocated_section_bytes": {
+        ".interp": 28,
+        ".note.gnu.property": 32,
+        ".note.gnu.build-id": 36,
+        ".note.ABI-tag": 32,
+        ".gnu.hash": 168,
+        ".dynsym": 5904,
+        ".dynstr": 2910,
+        ".gnu.version": 492,
+        ".gnu.version_r": 560,
+        ".rela.dyn": 831792,
+        ".rela.plt": 360,
+        ".init": 27,
+        ".plt": 256,
+        ".plt.got": 136,
+        ".text": 13958130,
+        ".fini": 13,
+        ".rodata": 2224917,
+        ".perry_gcmap": 148987,
+        ".eh_frame_hdr": 136068,
+        ".eh_frame": 751688,
+        ".gcc_except_table": 27248,
+        ".tdata": 37512,
+        ".tbss": 240200,
+        ".init_array": 40,
+        ".fini_array": 16,
+        ".data.rel.ro": 778256,
+        ".dynamic": 544,
+        ".got": 24656,
+        ".data": 78644,
+        ".bss": 692376
+      }
+    }
+  ],
+  "raw_report_sha256": "8de976c0781d1d4d13c111d22ac94efb83523fe90e065c35d9e50a42d4b4508e",
+  "analyzer_sha256": "620f4eaae08754ce507130a781607f4cddf667620ccb0734632926766e46f768",
+  "method": "Parse ELF64 allocated sections and pre-observer /proc/PID/smaps from the already verified campaign observations. Confirm each executable SHA against its successful original run. RSS is mapping-level only; symbol sizes do not imply symbol residency."
+}
