@@ -305,7 +305,14 @@ pub(crate) fn emit_inline_direct_method_shape_guard(
         let expected_shape_i64 = blk.zext(I32, expected_shape_id, I64);
         let expected_shape_high = blk.shl(I64, &expected_shape_i64, "32");
         let expected_class_shape = blk.or(I64, &expected_shape_high, expected_class_id);
-        let class_shape_ok = blk.icmp_eq(I64, &class_shape, &expected_class_shape);
+        let class_shape_ok = crate::typed_shape::emit_compatible_class_shape_eq(
+            blk,
+            &class_shape,
+            expected_class_id,
+            expected_shape_id,
+            &expected_class_shape,
+            &[],
+        );
 
         // `is_shape_id` is `[0x8000_0000, 0xC000_0000)`. Subtract the base
         // modulo i32 and compare with the range length, matching the runtime
@@ -477,7 +484,14 @@ fn emit_inline_exact_argument_shape_guard(
         let expected_shape_high = blk.shl(I64, &expected_shape_i64, "32");
         let expected_class_shape =
             blk.or(I64, &expected_shape_high, &expected_class_id.to_string());
-        let class_shape_ok = blk.icmp_eq(I64, &class_shape, &expected_class_shape);
+        let class_shape_ok = crate::typed_shape::emit_compatible_class_shape_eq(
+            blk,
+            &class_shape,
+            &expected_class_id.to_string(),
+            expected_shape_id,
+            &expected_class_shape,
+            &[],
+        );
         let shape_id_rel = blk.add(I32, expected_shape_id, SHAPE_ID_BASE_NEG_I32);
         let shape_valid = blk.icmp_ult(I32, &shape_id_rel, SHAPE_ID_RANGE_LEN);
         let pass = blk.and(I1, &gc_header_ok, &class_shape_ok);
@@ -1063,7 +1077,12 @@ pub(super) fn emit_guarded_direct_method_call(
             let next = sub_test_labels[0].clone();
             let blk = ctx.block();
             let cid_ok = blk.icmp_eq(I32, &cid, &expected_class_id_str);
-            let shape_ok = blk.icmp_eq(I32, &shape_id, &expected_shape_id);
+            let shape_ok = crate::typed_shape::emit_compatible_shape_eq(
+                blk,
+                &shape_id,
+                &expected_shape_id,
+                &[],
+            );
             let pass = blk.and(I1, &cid_ok, &shape_ok);
             blk.cond_br(&pass, &fast_label, &next);
         }
@@ -1078,7 +1097,8 @@ pub(super) fn emit_guarded_direct_method_call(
             let arm_shape_id = subclass_shape_ids[i].clone();
             let blk = ctx.block();
             let cid_ok = blk.icmp_eq(I32, &cid, &class_id_str);
-            let shape_ok = blk.icmp_eq(I32, &shape_id, &arm_shape_id);
+            let shape_ok =
+                crate::typed_shape::emit_compatible_shape_eq(blk, &shape_id, &arm_shape_id, &[]);
             let pass = blk.and(I1, &cid_ok, &shape_ok);
             blk.cond_br(&pass, &case_label, &next);
         }

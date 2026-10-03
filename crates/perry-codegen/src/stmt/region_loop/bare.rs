@@ -159,6 +159,19 @@ pub(super) fn note_emitted(ctx: &mut FnCtx<'_>) {
     }
 }
 
+/// Count the selected receiver only at an emitted access served by the static
+/// supplier its class proof selected. Learned words and type guesses do not
+/// consume that proof, nor does merely constructing a guard.
+fn note_ptr_shape_access(ctx: &FnCtx<'_>, r: Recv, site: &'static str) {
+    if ctx.region_loop_facts.last().is_some_and(|a| {
+        a.receivers
+            .iter()
+            .any(|rv| rv.recv == r && rv.uses_ptr_shape_class)
+    }) {
+        ctx.note_ptr_shape_consumed(&r.expr(), site);
+    }
+}
+
 /// The address a bare READ loads. In an all-inline copy (and for every store,
 /// whose key the runtime publishes only when inline) it is the inline slot.
 /// In a spill copy the key's field says where the value lives: `< 32` is an
@@ -256,6 +269,7 @@ pub(crate) fn try_lower_bare_get(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<Option
     let p = bare_read_ptr(ctx, &h, &slot);
     note_emitted(ctx);
     let v = ctx.block().load(DOUBLE, &p);
+    note_ptr_shape_access(ctx, r, "ptr_shape_region_get");
     stat(2, 1);
     Ok(Some(v))
 }
@@ -292,11 +306,13 @@ pub(crate) fn try_lower_bare_put(
     if raw_double {
         // GC_STORE_AUDIT(POINTER_FREE): a proven canonical raw double carries no pointer.
         ctx.block().store(DOUBLE, &val_double, &p);
+        note_ptr_shape_access(ctx, r, "ptr_shape_region_set");
         stat(3, 1);
         return Ok(Some(val_double));
     }
     // GC_STORE_AUDIT(BARRIERED): the obligations follow, from the stored bits.
     ctx.block().store(DOUBLE, &val_double, &p);
+    note_ptr_shape_access(ctx, r, "ptr_shape_region_set");
     crate::expr::put_value_store_ic::emit_static_store_ic_bookkeeping(
         ctx,
         &h,
@@ -359,6 +375,7 @@ pub(crate) fn try_lower_fact_add_tree(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<O
             let p = bare_read_ptr(ctx, &h, &slot);
             note_emitted(ctx);
             values[i] = Some(ctx.block().load(DOUBLE, &p));
+            note_ptr_shape_access(ctx, r, "ptr_shape_region_get");
             stat(2, 1);
         }
     }

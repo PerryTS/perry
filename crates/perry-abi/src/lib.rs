@@ -20,7 +20,7 @@ pub const ARRAY_HEADER_SIZE: usize = 8;
 /// `agent_ptrs::PERRY_AGENT_PTRS`: the number of per-agent pointer slots.
 pub const AGENT_PTR_SLOTS: usize = 4;
 /// Slot 0: the address of this agent's ordinary shape-directory mirror
-/// (`shapes_store::ORDINARY_DIR`), which a generic read site passes to its
+/// (`shapes_store::AGENT_SHAPE_DIR[0]`), which a generic read site passes to its
 /// GC-leaf miss front (`js_object_get_field_ic_front`) so the front reads no
 /// thread-local. Slot 1 held the implicit-`this` cell's address until
 /// this-as-a-parameter deleted the cell, and is free; slot 2 is the stack limit.
@@ -344,6 +344,10 @@ pub const FN_NON_CONSTRUCTOR: u32 = 1 << 9;
 pub const FN_BUILTIN: u32 = 1 << 10;
 /// `declared` is valid.
 pub const FN_HAS_DECLARED: u32 = 1 << 11;
+/// Body metadata and code are linked into a permanent executable image.
+/// Dylib bodies omit this bit: a shape must not retain their info address
+/// beyond `dlclose` or mistake a reused address for the same body.
+pub const FN_PERMANENT_IMAGE: u32 = 1 << 12;
 
 /// Byte offsets of the fields codegen emits and emitted code reads.
 pub const JS_FUNCTION_INFO_CODE_OFFSET: usize = 0;
@@ -564,8 +568,12 @@ pub const METHOD_SITE_SPILL: u64 = 1 << 62;
 /// The entry `slot` bit for an own key of a function-object receiver: an
 /// inline slot of the object at `ClosureHeader::props`.
 pub const METHOD_SITE_FUNCTION_BAG: u64 = 1 << 61;
-/// The index bits of an entry's `slot` word (bit 60 is reserved for the
-/// accessor entry kind).
-pub const METHOD_SITE_INDEX_MASK: u64 = (1 << 60) - 1;
+/// An own inline method whose ShapeId fixes one static body. The hit loads
+/// the receiver's current closure slot for captures, but needs no closure
+/// kind or info load after the shape compare.
+pub const METHOD_SITE_CONSTFN: u64 = 1 << 59;
+/// The index bits of an entry's `slot` word (bit 60 remains reserved for the
+/// accessor entry kind; bit 59 is ConstFn).
+pub const METHOD_SITE_INDEX_MASK: u64 = (1 << 59) - 1;
 /// `object::ObjectMeta::spill` (the object-owned overflow buffer).
 pub const OBJECT_META_SPILL_OFFSET: usize = 32;

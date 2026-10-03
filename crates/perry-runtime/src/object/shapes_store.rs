@@ -37,6 +37,42 @@ use super::{
 };
 use std::cell::UnsafeCell;
 
+/// Static body identity of a ConstFn slot. This is image metadata, never a
+/// closure pointer or a GC edge. Entries are sorted by slot in a shape.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ConstFnSlotInfo {
+    pub slot: u8,
+    pub info: u64,
+}
+
+/// Optional, record-owned extension. It has no keyed lookup: a method-site
+/// hit reads only the receiver's shape and current closure slot. The learned
+/// masks are not shape identity, so record copies/rekeys transfer this box.
+#[derive(Debug)]
+pub(super) struct ShapeExtras {
+    pub(super) constfn_infos: Box<[ConstFnSlotInfo]>,
+    pub(super) to_nopointer: std::sync::atomic::AtomicU32,
+    pub(super) to_any: std::sync::atomic::AtomicU32,
+}
+
+/// The exact mask of a sorted body list, or `None` for a duplicate, absent
+/// body, or slot outside the 32 inline representation lanes.
+pub(crate) fn constfn_mask(infos: &[ConstFnSlotInfo]) -> Option<u32> {
+    let mut mask = 0u32;
+    let mut previous = None;
+    for entry in infos {
+        if entry.slot >= crate::object::field_rep::REP_SLOTS as u8
+            || entry.info == 0
+            || previous.is_some_and(|slot| entry.slot <= slot)
+        {
+            return None;
+        }
+        mask |= 1 << entry.slot;
+        previous = Some(entry.slot);
+    }
+    Some(mask)
+}
+
 pub(super) const RECORD_FLAG_PRESENT: u8 = 1 << 0;
 pub(super) const RECORD_FLAG_FACTS_INDEXED: u8 = 1 << 1;
 pub(super) const RECORD_FLAG_OLD_CARRIER: u8 = 1 << 2;
@@ -95,14 +131,22 @@ pub(crate) struct ShapeRecord {
     /// ONE field so the megamorphic read confirm (`js_object_read_confirm`)
     /// answers "is the guess a position of this shape" with one compare —
     /// `guess < position_bound` — instead of a flag test and a `min`.
-    /// Offset 40; `rep` follows at 48 (4 bytes of padding between), so the
-    /// record is 56 bytes.
+    /// Offset 40; the special-lane mask uses the former padding at 44, and
+    /// `rep` follows at 48. The owned extension pointer at 56 makes the
+    /// record 64 bytes; ordinary shapes keep that pointer null.
     position_bound: u32,
+    /// For a `REP_SPECIAL` lane, one means ConstFn and zero reserves the
+    /// NoPointer interpretation for P5. This uses the old padding at 44;
+    /// with no special lanes it is zero and old shape identity is unchanged.
+    special_constfn_mask: u32,
     /// Charter step 5: the per-slot field representation, two bits per inline
     /// slot 0..32 (`field_rep`). An identity fact under
     /// [`field_rep::identity`](crate::object::field_rep::identity), folded into the
     /// facts key only when nonzero.
     pub(super) rep: u64,
+    /// Null for an ordinary shape. Otherwise a record-owned [`ShapeExtras`]
+    /// address, stored at fixed width so the slab layout agrees on ILP32/LP64.
+    extras: u64,
 }
 
 const RECORD_KIND_SHIFT: u32 = 8;
@@ -154,10 +198,12 @@ const _: () = assert!(
     super::shapes_birth_width::TRACKING_BIRTHS <= RECORD_BIRTHS_MASK >> RECORD_BIRTHS_SHIFT
 );
 
-const _: () = assert!(std::mem::size_of::<ShapeRecord>() == 56);
+const _: () = assert!(std::mem::size_of::<ShapeRecord>() == 64);
 const _: () = assert!(std::mem::align_of::<ShapeRecord>() == 8);
 const _: () = assert!(std::mem::offset_of!(ShapeRecord, position_bound) == 40);
+const _: () = assert!(std::mem::offset_of!(ShapeRecord, special_constfn_mask) == 44);
 const _: () = assert!(std::mem::offset_of!(ShapeRecord, rep) == 48);
+const _: () = assert!(std::mem::offset_of!(ShapeRecord, extras) == 56);
 
 impl ShapeRecord {
     const EMPTY: ShapeRecord = ShapeRecord {
@@ -169,7 +215,9 @@ impl ShapeRecord {
         hole_count: 0,
         flags_and_kind: 0,
         position_bound: 0,
+        special_constfn_mask: 0,
         rep: 0,
+        extras: 0,
     };
 
     #[inline]
@@ -288,7 +336,9 @@ impl ShapeRecord {
             hole_count,
             flags_and_kind: u32::from(flags) | kind_bits,
             position_bound: 0,
+            special_constfn_mask: 0,
             rep: 0,
+            extras: 0,
         };
         record.refresh_positional();
         record
@@ -382,11 +432,94 @@ impl ShapeRecord {
     }
 
     /// The same record carrying field representation `rep` (`field_rep`).
+    #[cfg(test)]
     #[inline]
     pub(super) fn with_rep(mut self, rep: u64) -> ShapeRecord {
         debug_assert!(crate::object::field_rep::is_valid(rep), "reserved rep lane");
         self.rep = rep;
         self
+    }
+
+    /// Install a SPECIAL rep with its exact ConstFn body identities. A `11`
+    /// lane absent from `infos` is reserved for optional NoPointer. The old
+    /// `with_rep` keeps rejecting `11`, so no legacy mint silently omits the
+    /// identity fact. Called only after the interner misses.
+    #[inline]
+    pub(super) fn with_special_facts(mut self, rep: u64, infos: &[ConstFnSlotInfo]) -> ShapeRecord {
+        assert_eq!(self.extras, 0, "special facts replace a fresh record only");
+        let mask = constfn_mask(infos).expect("invalid ConstFn slot list");
+        assert!(crate::object::field_rep::is_valid_with_special(rep, mask));
+        assert_eq!(mask & !crate::object::field_rep::special_lane_slots(rep), 0);
+        self.rep = rep;
+        self.special_constfn_mask = mask;
+        if !infos.is_empty() {
+            let extras = Box::new(ShapeExtras {
+                constfn_infos: infos.into(),
+                to_nopointer: std::sync::atomic::AtomicU32::new(0),
+                to_any: std::sync::atomic::AtomicU32::new(0),
+            });
+            self.extras = Box::into_raw(extras) as usize as u64;
+        }
+        self
+    }
+
+    /// ConstFn slots; a `REP_SPECIAL` slot outside this mask is the reserved
+    /// NoPointer representation. GC must visit ConstFn slots.
+    #[inline]
+    pub(crate) fn special_constfn_mask(&self) -> u32 {
+        self.special_constfn_mask
+    }
+
+    #[inline]
+    pub(crate) fn constfn_infos(&self) -> &[ConstFnSlotInfo] {
+        if self.extras == 0 {
+            &[]
+        } else {
+            // SAFETY: the live slab record owns this allocation; copies of
+            // the record borrow it and a rekey transfers its ownership.
+            unsafe { &(*(self.extras as usize as *const ShapeExtras)).constfn_infos }
+        }
+    }
+
+    #[inline]
+    pub(crate) fn deprecation_targets(&self) -> (u32, u32) {
+        if self.extras == 0 {
+            (0, 0)
+        } else {
+            // SAFETY: the extension is owned by this live record.
+            let extras = unsafe { &*(self.extras as usize as *const ShapeExtras) };
+            (
+                extras
+                    .to_nopointer
+                    .load(std::sync::atomic::Ordering::Acquire),
+                extras.to_any.load(std::sync::atomic::Ordering::Acquire),
+            )
+        }
+    }
+
+    /// A ConstFn lineage learned a different function or a nonfunction. It
+    /// keeps its old body invariant for existing carriers, but migrates them
+    /// to an Any successor on miss. NoPointer can use the same target later.
+    pub(crate) fn deprecate_special_to_any(&self, slot: u32) -> bool {
+        assert!(slot < crate::object::field_rep::REP_SLOTS);
+        let bit = 1u32 << slot;
+        assert_ne!(self.special_constfn_mask & bit, 0);
+        assert_ne!(self.extras, 0);
+        // SAFETY: the record owns the extension for its entire live span.
+        let extras = unsafe { &*(self.extras as usize as *const ShapeExtras) };
+        extras
+            .to_any
+            .fetch_or(bit, std::sync::atomic::Ordering::AcqRel)
+            & bit
+            == 0
+    }
+
+    /// Called only when a record is retired, not when it is copied or rekeyed.
+    /// The returned slab record owns the pointer until this call consumes it.
+    pub(super) unsafe fn release_extras(self) {
+        if self.extras != 0 {
+            drop(Box::from_raw(self.extras as usize as *mut ShapeExtras));
+        }
     }
 
     /// The same record for a receiver whose [[Prototype]] identity is
@@ -413,10 +546,44 @@ impl ShapeRecord {
         summary: u8,
         rep: u64,
     ) -> bool {
+        self.facts_match_proto_with_special(
+            keys,
+            logical_key_count,
+            live_inline_slot_count,
+            semantic_generation,
+            object_kind,
+            hole_count,
+            proto_id,
+            summary,
+            rep,
+            &[],
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[inline]
+    pub(super) fn facts_match_proto_with_special(
+        &self,
+        keys: u64,
+        logical_key_count: u32,
+        live_inline_slot_count: u32,
+        semantic_generation: u64,
+        object_kind: ShapeObjectKind,
+        hole_count: u32,
+        proto_id: u64,
+        summary: u8,
+        rep: u64,
+        infos: &[ConstFnSlotInfo],
+    ) -> bool {
+        let Some(mask) = constfn_mask(infos) else {
+            return false;
+        };
         self.proto_id == proto_id
             && self.summary() == summary
-            && crate::object::field_rep::identity(self.rep)
-                == crate::object::field_rep::identity(rep)
+            && crate::object::field_rep::identity_with_special(self.rep)
+                == crate::object::field_rep::identity_with_special(rep)
+            && self.special_constfn_mask == mask
+            && self.constfn_infos() == infos
             && self.facts_match(
                 keys,
                 logical_key_count,
@@ -455,7 +622,7 @@ impl ShapeRecord {
     /// re-indexes it.
     #[inline]
     pub(super) fn facts_key_with_keys(&self, keys: u64) -> u64 {
-        facts_key_proto(
+        facts_key_proto_with_special(
             keys,
             self.logical_key_count,
             self.live_inline_slot_count,
@@ -465,6 +632,7 @@ impl ShapeRecord {
             self.proto_id,
             self.summary(),
             self.rep,
+            self.constfn_infos(),
         )
     }
 
@@ -486,6 +654,8 @@ impl ShapeRecord {
             hole_count: self.hole_count,
             summary: self.summary(),
             rep: self.rep,
+            special_constfn_mask: self.special_constfn_mask,
+            extras: self.extras,
         }
     }
 }
@@ -535,6 +705,37 @@ pub(super) fn facts_key_proto(
     summary: u8,
     rep: u64,
 ) -> u64 {
+    facts_key_proto_with_special(
+        keys,
+        logical_key_count,
+        live_inline_slot_count,
+        semantic_generation,
+        object_kind,
+        hole_count,
+        proto_id,
+        summary,
+        rep,
+        &[],
+    )
+}
+
+/// Extended exact-facts hash. Old shapes take the wrapper above and get the
+/// exact old fold; ConstFn adds a domain-separated ordered body list. Address
+/// values are process-local identities, never serialized as static seed keys.
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub(super) fn facts_key_proto_with_special(
+    keys: u64,
+    logical_key_count: u32,
+    live_inline_slot_count: u32,
+    semantic_generation: u64,
+    object_kind: ShapeObjectKind,
+    hole_count: u32,
+    proto_id: u64,
+    summary: u8,
+    rep: u64,
+    infos: &[ConstFnSlotInfo],
+) -> u64 {
     const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
     const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
     let fold = |acc: u64, word: u64| (acc ^ word).wrapping_mul(FNV_PRIME);
@@ -557,10 +758,17 @@ pub(super) fn facts_key_proto(
     // The same rule for the field representation: an all-`Any` shape keeps
     // the key it had before the word existed. The deprecated state is not
     // identity, so it is masked here as it is in `facts_match_proto`.
-    let rep = crate::object::field_rep::identity(rep);
+    let rep = crate::object::field_rep::identity_with_special(rep);
     if rep != 0 {
         h = fold(h, 0x6_0000);
         h = fold(h, rep);
+    }
+    if !infos.is_empty() {
+        h = fold(h, 0x7_4346_4e);
+        for entry in infos {
+            h = fold(h, u64::from(entry.slot));
+            h = fold(h, entry.info);
+        }
     }
     // Final avalanche: FNV keeps most of its entropy in the high bits and
     // hashbrown's probe sequence starts from the LOW bits.
@@ -599,11 +807,12 @@ type PageSlots = [Slot<ChunkCells>; PAGE_LEN];
 /// A directory or page entry: an allocation this slab owns, or the SHARED
 /// all-empty one of its level ([`EMPTY_CHUNK`], [`EMPTY_PAGE`]) — never null.
 /// An absent run therefore reads exactly like a present run of absent
-/// records (`ShapeRecord::EMPTY`: not present, position bound 0), so a
-/// reader walks page → chunk → record with no null test at either level
-/// (the megamorphic read confirm, `ordinary_record_in`). Nothing is ever
-/// written through a shared empty: every writer asks [`Slot::is_shared`]
-/// first and allocates. The slab frees what it owns ([`ShapeSlab::free_dir`]).
+/// records (`ShapeRecord::EMPTY`: not present, position bound 0, every lane
+/// `Any`), so a reader walks page → chunk → record with no null test at
+/// either level ([`ShapeSlab::agent_record`], [`ShapeSlab::ordinary_record_in`]).
+/// Nothing is ever written
+/// through a shared empty: every writer asks [`Slot::is_shared`] first and
+/// allocates. The slab frees what it owns ([`ShapeSlab::free_dir`]).
 #[repr(transparent)]
 struct Slot<T>(std::ptr::NonNull<T>);
 
@@ -628,6 +837,13 @@ static EMPTY_PAGE: SharedEmpty<PageSlots> = SharedEmpty(
         std::ptr::NonNull::new_unchecked(std::ptr::addr_of!(EMPTY_CHUNK.0) as *mut ChunkCells)
     }); PAGE_LEN],
 );
+/// The directory entry a lookup reads for a page index past its band's
+/// directory: the shared empty page. Lets [`ShapeSlab::agent_record`] turn
+/// the bounds test into a select instead of an early return.
+static EMPTY_PAGE_ENTRY: SharedEmpty<Page> = SharedEmpty(Slot(
+    // SAFETY: the address of a static is never null.
+    unsafe { std::ptr::NonNull::new_unchecked(std::ptr::addr_of!(EMPTY_PAGE.0) as *mut PageSlots) },
+));
 
 trait Level: Sized + 'static {
     fn shared() -> std::ptr::NonNull<Self>;
@@ -704,53 +920,93 @@ impl<T: Level> Slot<T> {
 
 type Page = Slot<PageSlots>;
 
-/// The ordinary directory mirror's type: `(page pointers, page count)`.
-#[repr(C)]
-pub(crate) struct OrdinaryDir {
+/// Band-relative starts: the dictionary band, the exotic band, and the end of
+/// the ShapeId range, each relative to `SHAPE_ID_BASE`.
+const DICT_REL: u32 = DICTIONARY_SHAPE_ID_BASE - SHAPE_ID_BASE;
+const EXOTIC_REL: u32 = EXOTIC_SHAPE_ID_BASE - SHAPE_ID_BASE;
+const END_REL: u32 = super::SHAPE_ID_END - SHAPE_ID_BASE;
+
+/// The band boundaries are multiples of `1 << BAND_SHIFT` (relative to
+/// `SHAPE_ID_BASE`): the ordinary band is segments 0-5, the dictionary band
+/// segment 6, the exotic band segment 7, and segment 8 on is not a ShapeId.
+const BAND_SHIFT: u32 = 27;
+const _: () = assert!(DICT_REL == 6 << BAND_SHIFT);
+const _: () = assert!(EXOTIC_REL == 7 << BAND_SHIFT);
+const _: () = assert!(END_REL == 8 << BAND_SHIFT);
+/// Each band's first id, relative to `SHAPE_ID_BASE`, by band.
+const BAND_BASE_REL: [u32; 4] = [0, DICT_REL, EXOTIC_REL, END_REL];
+
+/// The band of `rel = id - SHAPE_ID_BASE` (wrapping): 0 ordinary, 1
+/// dictionary, 2 exotic receivers, and 3 "not a ShapeId" (an id below
+/// `SHAPE_ID_BASE` wraps past `END_REL`), whose directory is always empty.
+/// A shift, a saturating subtract and a min: no branch, because every
+/// lookup starts here.
+#[inline(always)]
+fn band_of(rel: u32) -> usize {
+    (rel >> BAND_SHIFT).saturating_sub(5).min(3) as usize
+}
+
+/// Where `id` lives: `(band, index within that band's directory)`. Total:
+/// band 3's index is meaningless and its directory empty.
+#[inline(always)]
+fn locate(id: u32) -> (usize, usize) {
+    let rel = id.wrapping_sub(SHAPE_ID_BASE);
+    let band = band_of(rel);
+    (band, rel.wrapping_sub(BAND_BASE_REL[band]) as usize)
+}
+
+/// One band's directory as published for [`ShapeSlab::agent_record`]: the
+/// element pointer and length of that band's `Vec<Page>`, and the band's
+/// first id relative to `SHAPE_ID_BASE` (a constant, kept beside the pair so
+/// the lookup reads it from the same line). 32 bytes, so the band indexes
+/// the directory with a shift. The ordinary band's entry is also what the
+/// megamorphic read confirm reads through its address
+/// ([`ShapeSlab::ordinary_dir_addr`]).
+#[repr(C, align(32))]
+pub(crate) struct BandDir {
     pages: std::cell::Cell<*const Page>,
     len: std::cell::Cell<usize>,
+    base_rel: u32,
 }
 
-impl OrdinaryDir {
-    const fn empty() -> Self {
-        OrdinaryDir {
+impl BandDir {
+    const fn empty(band: usize) -> BandDir {
+        BandDir {
             pages: std::cell::Cell::new(std::ptr::null()),
             len: std::cell::Cell::new(0),
+            base_rel: BAND_BASE_REL[band],
         }
-    }
-    #[inline(always)]
-    fn get(&self) -> (*const Page, usize) {
-        (self.pages.get(), self.len.get())
-    }
-    #[inline]
-    fn set(&self, (pages, len): (*const Page, usize)) {
-        self.pages.set(pages);
-        self.len.set(len);
     }
 }
 
-/// A directory of no pages, never written: the value of the agent's
-/// shape-directory pointer slot until the agent publishes its own mirror
-/// (`agent_ptrs::PERRY_AGENT_PTRS`), and what a `length` read site passes
-/// (`perry-codegen` `generic_dispatch.rs`). Every id indexes past its length,
-/// so a reader never needs a null test for the directory itself.
-#[no_mangle]
-pub static PERRY_EMPTY_SHAPE_DIR: SharedEmpty<OrdinaryDir> = SharedEmpty(OrdinaryDir::empty());
-
-/// This thread's ordinary page directory as `(page pointers, page count)`:
-/// `ShapeSlab::pages`' element pointer and length, republished after every
-/// change to `pages` (`ShapeSlab::publish_dir`) and cleared before the slab
-/// is dropped. The megamorphic read's slot-guess confirm
-/// ([`ShapeSlab::ordinary_record_in`]) reads it through its ADDRESS, which
-/// emitted code passes from the agent's pointer block, instead of resolving
-/// the runtime state and walking `record_ptr`: the confirm itself then
-/// touches no thread-local (a runtime thread-local access is a
-/// `__tls_get_addr` call on ELF and a TLV thunk call on Darwin, which would
-/// give the stub a frame). `#[thread_local]` (const, no destructor) rather
-/// than `thread_local!`: the address is stable for the thread's life, and a
-/// late read during thread teardown sees the cleared pair.
+/// THIS agent's shape directory: the page pointers and page count of each
+/// band of its slab (the `RuntimeState` shape table's), republished by the
+/// slab after every change to a band's page vector and reset to all-empty
+/// when the slab is dropped. Band 3 ("not a ShapeId") is never written.
+///
+/// It is what makes the by-id lookup free of the runtime state: a const
+/// `#[thread_local]` with no destructor is valid from the thread's first
+/// instruction, so [`ShapeSlab::agent_record`] reads an always-valid
+/// directory with one thread-pointer-relative load — no `state()` fetch, no
+/// lazy-init branch. An agent that has not built its runtime state yet has
+/// no shapes, and its all-empty directory says exactly that. Per agent by
+/// construction: every agent is its own thread with its own directory.
 #[thread_local]
-static ORDINARY_DIR: OrdinaryDir = OrdinaryDir::empty();
+static AGENT_SHAPE_DIR: [BandDir; 4] = [
+    BandDir::empty(0),
+    BandDir::empty(1),
+    BandDir::empty(2),
+    BandDir::empty(3),
+];
+
+/// An ordinary-band directory of no pages, never written: the value of the
+/// agent's shape-directory pointer slot until the agent publishes its own
+/// (`agent_ptrs::PERRY_AGENT_PTRS`), and what a `length` read site passes
+/// (`perry-codegen` `generic_dispatch.rs`). Every id indexes past its length
+/// and reads the shared empty record, so a reader never needs a null test for
+/// the directory itself.
+#[no_mangle]
+pub static PERRY_EMPTY_SHAPE_DIR: SharedEmpty<BandDir> = SharedEmpty(BandDir::empty(0));
 
 /// The by-id descriptor store. See the module docs.
 /// Two page directories: ordinary ShapeIds index from `SHAPE_ID_BASE`, and the
@@ -760,17 +1016,6 @@ static ORDINARY_DIR: OrdinaryDir = OrdinaryDir::empty();
 /// that one ~196 KB allocation moved the GC arena's pages relative to the
 /// page-class table window and cost +2.3% instructions (1.65 M vs 0.20 M
 /// registered-page misses in `classify_heap_generation`).
-impl Drop for ShapeSlab {
-    fn drop(&mut self) {
-        if ORDINARY_DIR.get().0 == self.pages.as_ptr() {
-            ORDINARY_DIR.set((std::ptr::null(), 0));
-        }
-        for band in [0u8, 1, 2] {
-            Self::free_dir(self.dir_mut(band));
-        }
-    }
-}
-
 pub(crate) struct ShapeSlab {
     pages: Vec<Page>,
     dict_pages: Vec<Page>,
@@ -778,32 +1023,48 @@ pub(crate) struct ShapeSlab {
     exotic_pages: Vec<Page>,
     /// Present records.
     len: usize,
+    /// This is the agent's slab (the runtime state's shape table), so it
+    /// publishes its directories into [`AGENT_SHAPE_DIR`]. A slab a test
+    /// builds on its own does not.
+    agent: bool,
+}
+
+impl Drop for ShapeSlab {
+    fn drop(&mut self) {
+        if self.agent {
+            for band in &AGENT_SHAPE_DIR[..3] {
+                band.pages.set(std::ptr::null());
+                band.len.set(0);
+            }
+        }
+        // Retired records release on removal; live records release at agent
+        // teardown. Rekeys transfer one pointer, never duplicate ownership.
+        self.for_each(|_, ptr| unsafe { (*ptr).release_extras() });
+        for band in [0u8, 1, 2] {
+            Self::free_dir(self.dir_mut(band));
+        }
+    }
 }
 
 impl ShapeSlab {
+    /// A slab that publishes nothing (tests).
     pub(super) fn new() -> Self {
         ShapeSlab {
             pages: Vec::new(),
             dict_pages: Vec::new(),
             exotic_pages: Vec::new(),
             len: 0,
+            agent: false,
         }
     }
 
-    /// `(band, index within that band's directory)`: band 0 is ordinary,
-    /// 1 dictionary, 2 exotic receivers.
-    #[inline]
-    fn index_of(id: u32) -> Option<(u8, usize)> {
-        if !super::is_shape_id(id) {
-            return None;
-        }
-        Some(if id >= EXOTIC_SHAPE_ID_BASE {
-            (2, (id - EXOTIC_SHAPE_ID_BASE) as usize)
-        } else if id >= DICTIONARY_SHAPE_ID_BASE {
-            (1, (id - DICTIONARY_SHAPE_ID_BASE) as usize)
-        } else {
-            (0, (id - SHAPE_ID_BASE) as usize)
-        })
+    /// The agent's slab: the one [`Self::agent_record`] reads. One per
+    /// agent (the runtime state's shape table).
+    pub(super) fn new_agent() -> Self {
+        let mut slab = Self::new();
+        slab.agent = true;
+        slab.publish_dir();
+        slab
     }
 
     #[inline]
@@ -834,13 +1095,32 @@ impl ShapeSlab {
     }
 
     /// `(page, chunk within page, record within chunk)` of a slab index.
-    #[inline]
+    #[inline(always)]
     fn split(index: usize) -> (usize, usize, usize) {
         (
             index >> (CHUNK_SHIFT + PAGE_SHIFT),
             (index >> CHUNK_SHIFT) & PAGE_MASK,
             index & CHUNK_MASK,
         )
+    }
+
+    /// The cell `index` names in a directory of `len` pages at `pages`: two
+    /// dependent loads and no test — a page past the directory is the shared
+    /// empty page, and an absent page or chunk is the shared empty one.
+    ///
+    /// # Safety
+    /// `pages` holds `len` live entries (or `len` is 0).
+    #[inline(always)]
+    unsafe fn walk(pages: *const Page, len: usize, index: usize) -> *mut ShapeRecord {
+        let (page, chunk, slot) = Self::split(index);
+        let entry: *const Page = if page < len {
+            pages.add(page)
+        } else {
+            &EMPTY_PAGE_ENTRY.0
+        };
+        let page = (*entry).0.as_ref();
+        let chunk = page[chunk].0.as_ref();
+        chunk[slot].get()
     }
 
     /// Present records.
@@ -850,17 +1130,24 @@ impl ShapeSlab {
     }
 
     /// The record for `id`, or `None` when the id names no descriptor in this
-    /// agent. The pointer stays valid until the record is removed; a removal
+    /// slab. The pointer stays valid until the record is removed; a removal
     /// only ever happens through the table's own retirement paths.
     #[inline]
     pub(super) fn record_ptr(&self, id: u32) -> Option<*mut ShapeRecord> {
-        let (dict, index) = Self::index_of(id)?;
-        let (page, chunk, slot) = Self::split(index);
-        let chunk = self.dir(dict).get(page)?.owned()?[chunk].owned()?;
-        let cell = chunk[slot].get();
-        // SAFETY: the cell belongs to a live chunk owned by this slab; reads
-        // and writes are serialized by the single-threaded agent discipline
-        // every other shape-table access already relies on.
+        let (band, index) = locate(id);
+        let cell = match band {
+            // SAFETY: a band's `Vec` holds `len()` live entries.
+            0..=2 => unsafe {
+                let dir = self.dir(band as u8);
+                Self::walk(dir.as_ptr(), dir.len(), index)
+            },
+            _ => return None,
+        };
+        // The published directory is this slab's, entry for entry.
+        debug_assert!(!self.agent || cell == Self::agent_record(id));
+        // SAFETY: `walk` returns a cell of a live chunk of this slab or of the
+        // shared empty chunk; reads are serialized by the single-threaded
+        // agent discipline every other shape-table access already relies on.
         if unsafe { (*cell).present() } {
             Some(cell)
         } else {
@@ -885,17 +1172,15 @@ impl ShapeSlab {
     /// Install `record` under `id`, allocating the page and chunk on first
     /// touch. Returns the record it replaced, if the id was already present.
     pub(super) fn insert(&mut self, id: u32, mut record: ShapeRecord) -> Option<ShapeRecord> {
-        let (band, index) =
-            Self::index_of(id).expect("ShapeSlab::insert: id outside the ShapeId range");
+        let (band, index) = locate(id);
+        assert!(band < 3, "ShapeSlab::insert: id outside the ShapeId range");
+        let band = band as u8;
         record.set(RECORD_FLAG_PRESENT, true);
         let (page, chunk, slot) = Self::split(index);
         let dir = self.dir_mut(band);
         if page >= dir.len() {
             dir.resize_with(page + 1, Slot::empty);
-            // Only the ordinary band is mirrored (`ORDINARY_DIR`).
-            if band == 0 {
-                self.publish_dir();
-            }
+            self.publish_dir();
         }
         let dir = self.dir_mut(band);
         let page = dir[page].owned_or_alloc();
@@ -914,9 +1199,12 @@ impl ShapeSlab {
 
     /// Clear the record under `id`, returning it if it was present.
     pub(super) fn remove(&mut self, id: u32) -> Option<ShapeRecord> {
-        let (dict, index) = Self::index_of(id)?;
+        let (band, index) = locate(id);
+        if band >= 3 {
+            return None;
+        }
         let (page, chunk, slot) = Self::split(index);
-        let chunk = self.dir_mut(dict).get_mut(page)?.owned_mut()?[chunk].owned_mut()?;
+        let chunk = self.dir_mut(band as u8).get_mut(page)?.owned_mut()?[chunk].owned_mut()?;
         let cell = chunk[slot].get_mut();
         if !cell.present() {
             return None;
@@ -995,35 +1283,56 @@ impl ShapeSlab {
         self.publish_dir();
     }
 
-    /// Publish `pages` for [`Self::ordinary_record_in`] (see [`ORDINARY_DIR`]).
+    /// Publish every band's page vector into [`AGENT_SHAPE_DIR`], if this is
+    /// the agent's slab. Called after every change to a page vector (a
+    /// resize or shrink moves its buffer); a page or chunk allocated or
+    /// released in place is visible through the published buffer already.
     fn publish_dir(&self) {
-        ORDINARY_DIR.set((self.pages.as_ptr(), self.pages.len()));
-        // Emitted read sites hand the mirror's address to the miss front
-        // from the agent's pointer block; publish it with the directory.
+        if !self.agent {
+            return;
+        }
+        for (band, dir) in [&self.pages, &self.dict_pages, &self.exotic_pages]
+            .into_iter()
+            .enumerate()
+        {
+            AGENT_SHAPE_DIR[band].pages.set(dir.as_ptr());
+            AGENT_SHAPE_DIR[band].len.set(dir.len());
+        }
+        // Emitted read sites hand the ordinary entry's address to the miss
+        // front from the agent's pointer block; publish it with the directory.
         crate::agent_ptrs::publish(
             crate::agent_ptrs::AGENT_PTR_SHAPE_DIR,
             Self::ordinary_dir_addr(),
         );
     }
 
-    /// The address of THIS thread's [`ORDINARY_DIR`] mirror, as an opaque
-    /// pointer for [`Self::ordinary_record_in`]. Stable for the thread's
-    /// life (a const-initialised `#[thread_local]` with no destructor), so an
-    /// agent publishes it once into its `PERRY_AGENT_PTRS` slot
-    /// (`agent_ptrs::perry_shape_dir_cell`) and emitted code hands it to the
-    /// megamorphic read confirm, which then reads no thread-local at all.
+    /// The address of THIS thread's ordinary-band directory
+    /// (`AGENT_SHAPE_DIR[0]`), as an opaque pointer for
+    /// [`Self::ordinary_record_in`]. Stable for the thread's life (a
+    /// const-initialised `#[thread_local]` with no destructor), so the agent
+    /// publishes it into its `PERRY_AGENT_PTRS` slot and emitted code hands it
+    /// to the megamorphic read confirm, which then reads no thread-local at
+    /// all (a runtime thread-local access is a `__tls_get_addr` call on ELF
+    /// and a TLV thunk call on Darwin, which would give the stub a frame).
     #[inline]
     pub(crate) fn ordinary_dir_addr() -> *const u8 {
-        &ORDINARY_DIR as *const OrdinaryDir as *const u8
+        &AGENT_SHAPE_DIR[0] as *const BandDir as *const u8
     }
 
-    /// The record of ordinary ShapeId `id` in the slab whose [`ORDINARY_DIR`]
-    /// mirror is at `dir` (an [`Self::ordinary_dir_addr`] of this thread, or
-    /// `PERRY_EMPTY_SHAPE_DIR`), or `None` — the fast twin of [`Self::record_ptr`] for the
-    /// megamorphic read: two dependent directory loads, no `state()`, no
-    /// thread-local access. A dictionary- or exotic-band id indexes past the
-    /// ordinary directory's length. The record may be absent (`EMPTY`): its
-    /// position bound is 0.
+    /// The record of ShapeId `id` in the ordinary directory at `dir` (this
+    /// thread's [`Self::ordinary_dir_addr`], or `PERRY_EMPTY_SHAPE_DIR`), or
+    /// `None` past its pages: the ordinary band of [`Self::agent_record`], for
+    /// the megamorphic read, with no band select and no thread-local access.
+    /// Any other id (dictionary, exotic, not a ShapeId) indexes past the
+    /// ordinary directory, whose pages stop below the dictionary band. Inside
+    /// the pages the record may be absent (the shared `ShapeRecord::EMPTY`):
+    /// its position bound is 0, the confirm's answer for it anyway.
+    ///
+    /// The page bound is a branch here, not [`Self::walk`]'s select: the
+    /// megamorphic read's ids are the receivers' own, all inside the pages,
+    /// so the branch is predicted and costs less than the select's address
+    /// arithmetic (lead_mega1: 138.4 instructions/read with it, 139.9 with the
+    /// select).
     ///
     /// # Safety
     /// `dir` is this thread's [`Self::ordinary_dir_addr`] or
@@ -1033,19 +1342,54 @@ impl ShapeSlab {
         dir: *const u8,
         id: u32,
     ) -> Option<&'a ShapeRecord> {
-        let (pages, len) = (*(dir as *const OrdinaryDir)).get();
-        let index = id.wrapping_sub(SHAPE_ID_BASE) as usize;
-        let (page, chunk, slot) = Self::split(index);
-        if page >= len {
+        let dir = &*(dir as *const BandDir);
+        debug_assert_eq!(dir.base_rel, 0);
+        let (page, chunk, slot) = Self::split(id.wrapping_sub(SHAPE_ID_BASE) as usize);
+        if page >= dir.len.get() {
             return None;
         }
-        // SAFETY: `pages` holds `len` entries of this thread's slab, current
-        // as of the last change to it; nothing here can change it. An absent
-        // page or chunk is the shared empty one (`Slot`), never null, so
-        // both levels are plain loads and the record is never null.
-        let page = (*pages.add(page)).0.as_ref();
+        // SAFETY: the published pair is the ordinary band's page vector,
+        // current as of its last change; nothing here can change it. An
+        // absent page or chunk is the shared empty one (`Slot`), never null.
+        let page = (*dir.pages.get().add(page)).0.as_ref();
         let chunk = page[chunk].0.as_ref();
         Some(&*chunk[slot].get())
+    }
+
+    /// The record `id` names in THIS agent's slab — never null. An id that
+    /// names no record here (never minted, retired, not a ShapeId at all, or
+    /// read before the agent built its runtime state) reads the shared
+    /// `ShapeRecord::EMPTY`: not present, position bound 0, every lane `Any`.
+    /// A caller whose answer for "no record" is exactly that reads the fields
+    /// with no presence test; any other caller tests `present()`.
+    ///
+    /// The whole lookup: one thread-local load of the band's directory, the
+    /// band select, and two dependent loads (page, chunk). No `state()`.
+    ///
+    /// The pointer must not be written unless the record is present (the
+    /// shared empty is never written), and stays valid until the record is
+    /// removed.
+    #[inline(always)]
+    pub(super) fn agent_record(id: u32) -> *mut ShapeRecord {
+        let rel = id.wrapping_sub(SHAPE_ID_BASE);
+        let band = band_of(rel);
+        debug_assert!(band < AGENT_SHAPE_DIR.len());
+        // SAFETY: `band_of` is at most 3; the published pair is the agent slab's page vector,
+        // current as of its last change; nothing between here and the read
+        // changes it.
+        unsafe {
+            let dir = AGENT_SHAPE_DIR.get_unchecked(band);
+            let index = rel.wrapping_sub(dir.base_rel) as usize;
+            Self::walk(dir.pages.get(), dir.len.get(), index)
+        }
+    }
+
+    /// [`Self::agent_record`], or `None` when the record is absent.
+    #[inline(always)]
+    pub(super) fn agent_record_present(id: u32) -> Option<*mut ShapeRecord> {
+        let record = Self::agent_record(id);
+        // SAFETY: `agent_record` never returns null or a dead cell.
+        unsafe { (*record).present() }.then_some(record)
     }
 
     #[cfg(test)]
@@ -1513,468 +1857,5 @@ impl IdList {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Every kind survives the record field, and the two store-fact kinds
-    /// (charter step 3) occupy codes 5 and 6 — distinct values, so distinct
-    /// ShapeIds for otherwise identical facts.
-    #[test]
-    fn kind_codes_round_trip() {
-        for kind in [
-            ShapeObjectKind::Ordinary,
-            ShapeObjectKind::Class,
-            ShapeObjectKind::Dictionary,
-            ShapeObjectKind::Function,
-            ShapeObjectKind::FunctionDictionary,
-            ShapeObjectKind::OrdinaryUnmarked,
-            ShapeObjectKind::OrdinaryNumericProof,
-        ] {
-            assert!(kind.code() as u32 <= RECORD_KIND_MAX_CODE);
-            let r = ShapeRecord::new(0x1000, 1, 1, 0, kind, 0);
-            assert_eq!(r.object_kind(), kind);
-            for other in [ShapeObjectKind::Ordinary, ShapeObjectKind::OrdinaryUnmarked] {
-                if other != kind {
-                    assert!(!r.facts_match(0x1000, 1, 1, 0, other, 0));
-                    assert_ne!(
-                        facts_key(0x1000, 1, 1, 0, kind, 0),
-                        facts_key(0x1000, 1, 1, 0, other, 0)
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn slab_records_are_addressed_by_id_and_keep_their_address() {
-        let mut slab = ShapeSlab::new();
-        let id_a = SHAPE_ID_BASE + 5;
-        let id_b = SHAPE_ID_BASE + 5 + (CHUNK_LEN * PAGE_LEN) as u32 * 3;
-        assert_eq!(slab.get(id_a), None);
-        assert_eq!(
-            slab.insert(
-                id_a,
-                ShapeRecord::new(0x1000, 1, 1, 0, ShapeObjectKind::Ordinary, 0)
-            )
-            .map(|r| r.keys),
-            None
-        );
-        let a_ptr = slab.record_ptr(id_a).expect("present");
-        // A later insert into another chunk must not move the first record.
-        slab.insert(
-            id_b,
-            ShapeRecord::new(0x2000, 2, 2, 7, ShapeObjectKind::Class, 1),
-        );
-        assert_eq!(slab.record_ptr(id_a), Some(a_ptr));
-        assert_eq!(slab.len(), 2);
-        assert_eq!(slab.chunk_count(), 2);
-        let b = slab.get(id_b).unwrap();
-        assert_eq!(b.object_kind(), ShapeObjectKind::Class);
-        assert_eq!(b.semantic_generation, 7);
-        assert_eq!(b.hole_count, 1);
-        assert!(b.facts_match(0x2000, 2, 2, 7, ShapeObjectKind::Class, 1));
-        assert!(!b.facts_match(0x2000, 2, 2, 7, ShapeObjectKind::Ordinary, 1));
-        // Ids outside the range and never-minted ids resolve to nothing.
-        assert_eq!(slab.get(0), None);
-        assert_eq!(slab.get(SHAPE_ID_BASE + 6), None);
-        assert_eq!(slab.get(super::super::SHAPE_ID_END - 1), None);
-        assert_eq!(slab.ids(), vec![id_a, id_b]);
-        // Removal clears the record and, once a chunk is empty, the chunk.
-        assert_eq!(slab.remove(id_a).map(|r| r.keys), Some(0x1000));
-        assert_eq!(slab.remove(id_a), None);
-        assert_eq!(slab.len(), 1);
-        slab.release_empty_chunks();
-        assert_eq!(slab.chunk_count(), 1);
-        assert_eq!(slab.get(id_b).map(|r| r.keys), Some(0x2000));
-        assert_eq!(slab.remove(id_b).map(|r| r.keys), Some(0x2000));
-        slab.release_empty_chunks();
-        assert_eq!(slab.chunk_count(), 0);
-        assert_eq!(slab.estimated_bytes(), 0);
-    }
-
-    #[test]
-    fn lifted_descriptor_mirrors_the_record_and_names_its_address() {
-        let mut slab = ShapeSlab::new();
-        let id = SHAPE_ID_BASE + 42;
-        let mut record = ShapeRecord::new(0x3000, 4, 6, 9, ShapeObjectKind::Ordinary, 2);
-        record.set(RECORD_FLAG_OLD_CARRIER, true);
-        record.set(RECORD_FLAG_CACHE_CARRIER, true);
-        record.set(RECORD_FLAG_FACTS_INDEXED, false);
-        slab.insert(id, record);
-        let ptr = slab.record_ptr(id).unwrap();
-        let lifted = slab.lift(id).unwrap();
-        assert_eq!(lifted.record, ptr as usize);
-        assert_eq!(lifted.keys, 0x3000);
-        assert_eq!(lifted.logical_key_count, 4);
-        assert_eq!(lifted.live_inline_slot_count, 6);
-        assert_eq!(lifted.semantic_generation, 9);
-        assert_eq!(lifted.hole_count, 2);
-        assert!(lifted.old_carrier);
-        assert!(lifted.cache_carrier);
-        assert!(!slab.get(id).unwrap().has(RECORD_FLAG_FACTS_INDEXED));
-        assert_eq!(lifted.keys_slot(), Some(ptr as *mut u64));
-        // Writing through the slot is what an evacuating visitor does.
-        unsafe { *lifted.keys_slot().unwrap() = 0x4000 };
-        assert_eq!(slab.get(id).unwrap().keys, 0x4000);
-    }
-
-    /// The geometry that makes the object kind FREE, and the O(1) property of
-    /// the probe path, asserted together on purpose: the kind fits only
-    /// because it lives in bytes that were already padding, so a future field
-    /// that grows the record silently takes that away. Fail here rather than
-    /// discovering it as RSS.
-    ///
-    /// 32 -> 40 bytes is deliberate: [[Prototype]] is a shape fact
-    /// (`proto_id`), and a 64-bit prototype identity does not fit the padding.
-    /// 40 -> 48 is deliberate too: the per-slot field representation (charter
-    /// step 5, `rep`) is a shape fact with no free bits left to live in.
-    /// 48 -> 56 is deliberate: POSBOUND (`position_bound`, offset 40) is the
-    /// one-compare position fact the megamorphic read confirm needs; `rep`
-    /// moves to offset 48 behind it.
-    #[test]
-    fn the_record_geometry_is_free_and_facts_key_is_o1() {
-        assert_eq!(std::mem::size_of::<ShapeRecord>(), 56, "record grew");
-        assert_eq!(std::mem::align_of::<ShapeRecord>(), 8, "record realigned");
-
-        // `facts_key` folds the keys ADDRESS; it must never dereference it.
-        // A wild, unmapped address must be folded, not read. If the probe
-        // path is ever changed to walk key strings (an O(N) content fold),
-        // this reads garbage and the test dies -- which is the assertion.
-        let wild: u64 = 0xDEAD_BEEF_DEAD_BEEF;
-        let a = facts_key(wild, 3, 4, 7, ShapeObjectKind::Ordinary, 0);
-        let b = facts_key(wild, 3, 4, 7, ShapeObjectKind::Ordinary, 0);
-        assert_eq!(a, b, "facts_key must be a pure fold of its arguments");
-    }
-
-    /// Every kind must reach the fold distinctly. The predecessor of this
-    /// test folded `object_kind == Class` as a BOOL, which gave Ordinary and
-    /// Dictionary the same contribution; `facts_match` re-checked the full
-    /// enum so it was never a wrong answer, but the two kinds differ in every
-    /// consumer and must not share a hash slot by construction.
-    #[test]
-    fn every_object_kind_reaches_the_facts_fold() {
-        let w: u64 = 0x1234_5678;
-        let o = facts_key(w, 3, 4, 7, ShapeObjectKind::Ordinary, 0);
-        let c = facts_key(w, 3, 4, 7, ShapeObjectKind::Class, 0);
-        let d = facts_key(w, 3, 4, 7, ShapeObjectKind::Dictionary, 0);
-        assert_ne!(o, c, "Ordinary and Class collide");
-        assert_ne!(
-            o, d,
-            "Ordinary and Dictionary collide -- the bool fold is back"
-        );
-        assert_ne!(c, d, "Class and Dictionary collide");
-    }
-
-    /// A record must report the kind it was built with. Storing the kind in a
-    /// single flag bit could represent only two, so a Dictionary record read
-    /// back as Ordinary -- and because `facts_match` compares the full enum,
-    /// that is a WRONG IDENTITY MATCH, not a hash collision.
-    #[test]
-    fn a_record_round_trips_all_three_kinds_beside_its_flags() {
-        for kind in [
-            ShapeObjectKind::Ordinary,
-            ShapeObjectKind::Class,
-            ShapeObjectKind::Dictionary,
-        ] {
-            let mut r = ShapeRecord::new(0x4000, 2, 2, 11, kind, 1);
-            assert_eq!(r.object_kind(), kind, "kind did not round-trip");
-            assert!(r.has(RECORD_FLAG_PRESENT));
-            assert!(r.has(RECORD_FLAG_FACTS_INDEXED));
-            // flags and kind share one word: moving a flag must not move the
-            // kind, and vice versa.
-            r.set(RECORD_FLAG_OLD_CARRIER, true);
-            assert_eq!(r.object_kind(), kind, "setting a flag moved the kind");
-            r.set(RECORD_FLAG_OLD_CARRIER, false);
-            r.set(RECORD_FLAG_CACHE_CARRIER, true);
-            assert_eq!(r.object_kind(), kind, "clearing a flag moved the kind");
-            assert!(
-                !r.has(RECORD_FLAG_OLD_CARRIER),
-                "clear leaked into another flag"
-            );
-        }
-    }
-
-    /// Charter step 5, P1 is inert: an all-`Any` record's facts key is
-    /// EXACTLY the fold it had before the `rep` word existed (recomputed here
-    /// without it), so no existing shape changes bucket.
-    #[test]
-    fn an_all_any_rep_keeps_the_pre_rep_facts_key() {
-        const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
-        const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
-        let fold = |acc: u64, word: u64| (acc ^ word).wrapping_mul(FNV_PRIME);
-        for kind in [ShapeObjectKind::Ordinary, ShapeObjectKind::Class] {
-            let mut h = fold(FNV_OFFSET_BASIS, 0x1111_2222_3333_4444);
-            for word in [7, 3, 9, 2, kind.code(), 0x77] {
-                h = fold(h, word);
-            }
-            let pre_rep = h ^ (h >> 32);
-            let key = facts_key_proto(0x1111_2222_3333_4444, 7, 3, 9, kind, 2, 0x77, 0, 0);
-            assert_eq!(key, pre_rep, "an all-Any shape must keep its key");
-        }
-    }
-
-    /// `rep` is compared on every bucket hit, not only hashed: a 64-bit fold
-    /// collision must never hand an F64 shape to an all-`Any` request.
-    #[test]
-    fn facts_match_compares_the_rep_identity() {
-        use crate::object::field_rep::{with_slot_rep, REP_F64, REP_F64_DEPRECATED};
-        let f64_at_0 = with_slot_rep(0, 0, REP_F64);
-        let record =
-            ShapeRecord::new(0x40, 1, 1, 0, ShapeObjectKind::Ordinary, 0).with_rep(f64_at_0);
-        let facts =
-            |rep| record.facts_match_proto(0x40, 1, 1, 0, ShapeObjectKind::Ordinary, 0, 0, 0, rep);
-        assert!(facts(f64_at_0));
-        assert!(!facts(0), "same facts, all-Any rep: not this shape");
-        assert!(
-            facts(with_slot_rep(0, 0, REP_F64_DEPRECATED)),
-            "deprecated is not identity"
-        );
-    }
-
-    /// Varying any ONE fact must change the key: a fold that dropped a field
-    /// would send two different shapes to one bucket for every value of it.
-    #[test]
-    fn facts_key_folds_every_field() {
-        let base = facts_key(0x1111_2222_3333_4444, 7, 3, 9, ShapeObjectKind::Ordinary, 0);
-        let variants = [
-            (
-                "keys",
-                facts_key(0x5555_6666_7777_8888, 7, 3, 9, ShapeObjectKind::Ordinary, 0),
-            ),
-            (
-                "logical",
-                facts_key(0x1111_2222_3333_4444, 8, 3, 9, ShapeObjectKind::Ordinary, 0),
-            ),
-            (
-                "live",
-                facts_key(0x1111_2222_3333_4444, 7, 4, 9, ShapeObjectKind::Ordinary, 0),
-            ),
-            (
-                "generation",
-                facts_key(
-                    0x1111_2222_3333_4444,
-                    7,
-                    3,
-                    10,
-                    ShapeObjectKind::Ordinary,
-                    0,
-                ),
-            ),
-            (
-                "kind",
-                facts_key(0x1111_2222_3333_4444, 7, 3, 9, ShapeObjectKind::Class, 0),
-            ),
-            (
-                "holes",
-                facts_key(0x1111_2222_3333_4444, 7, 3, 9, ShapeObjectKind::Ordinary, 1),
-            ),
-        ];
-        for (field, key) in variants {
-            assert_ne!(
-                key, base,
-                "changing `{field}` alone must change the facts key"
-            );
-        }
-        let rep = facts_key_proto(
-            0x1111_2222_3333_4444,
-            7,
-            3,
-            9,
-            ShapeObjectKind::Ordinary,
-            0,
-            0,
-            0,
-            crate::object::field_rep::REP_F64,
-        );
-        assert_ne!(rep, base, "changing `rep` alone must change the facts key");
-        let record = ShapeRecord::new(0x1111_2222_3333_4444, 7, 3, 9, ShapeObjectKind::Ordinary, 0);
-        assert_eq!(record.facts_key_with_keys(0x1111_2222_3333_4444), base);
-        assert_eq!(
-            record.facts_key_with_keys(0x5555_6666_7777_8888),
-            variants[0].1
-        );
-    }
-
-    #[test]
-    fn id_list_keeps_order_across_the_inline_to_spill_boundary() {
-        let mut list = IdList::default();
-        assert!(list.is_empty());
-        list.push_back(2);
-        list.push_back(3);
-        list.push_front(1);
-        list.push_back(2); // duplicate ignored
-        assert_eq!(list.as_slice(), &[1, 2, 3]);
-        assert!(matches!(list, IdList::Inline { .. }));
-        list.push_back(4);
-        assert!(matches!(list, IdList::Spill(_)));
-        assert_eq!(list.as_slice(), &[1, 2, 3, 4]);
-        list.push_front(0);
-        assert_eq!(list.as_slice(), &[0, 1, 2, 3, 4]);
-        // The ORDERED removal keeps this list's order, which is what
-        // `by_facts` depends on.
-        assert!(list.remove_ordered(2));
-        assert!(!list.remove_ordered(2));
-        assert_eq!(list.as_slice(), &[0, 1, 3, 4]);
-        assert!(list.replace(3, 30));
-        assert!(!list.replace(3, 300));
-        assert_eq!(list.as_slice(), &[0, 1, 30, 4]);
-        assert!(list.heap_bytes() >= 4 * 4);
-
-        let mut inline = IdList::default();
-        inline.push_back(7);
-        inline.push_back(8);
-        inline.push_back(9);
-        assert!(inline.remove_ordered(8));
-        assert_eq!(inline.as_slice(), &[7, 9]);
-        assert!(inline.replace(9, 10));
-        assert_eq!(inline.as_slice(), &[7, 10]);
-        assert!(inline.remove_ordered(7));
-        assert!(inline.remove_ordered(10));
-        assert!(inline.is_empty());
-        assert_eq!(inline.heap_bytes(), 0);
-    }
-
-    /// THE GUARD for this change, and it is an asymmetric one: the unordered
-    /// removal must move O(1) elements per call, and the ordered one is
-    /// allowed to move O(n) because that is what preserving the order costs.
-    ///
-    /// Front removal is the measured shape of the defect — removals sit at
-    /// position ~0.31 of a list up to 514,030 long — so the test removes from
-    /// the front, which is the worst case for `Vec::remove` and the best case
-    /// for nothing.
-    ///
-    /// **Sabotage: point `remove_unordered` at `remove_ordered`.** The bound
-    /// below is `4 * N`; the O(n) path moves `N * (N - 1) / 2` = 1,999,000
-    /// elements for N = 2,000, i.e. 250x the bound, and this fails. A bound
-    /// expressed as a MULTIPLE of N rather than an absolute is what makes the
-    /// assertion about the complexity class instead of about one N.
-    #[test]
-    fn unordered_removal_moves_o1_elements_and_scans_o1_entries() {
-        const N: u32 = 2_000;
-
-        let baseline = ID_LIST_OP_STATS.with(std::cell::Cell::get);
-        let mut list = IdList::default();
-        for id in 1..=N {
-            // The interning sites' entry point: no membership probe.
-            list.append_unchecked(id);
-        }
-        assert_eq!(list.len(), N as usize);
-        assert!(matches!(list, IdList::Spill(_)));
-
-        // Remove every id from the FRONT of the list, in insertion order.
-        for id in 1..=N {
-            assert!(list.remove_unordered(id), "id {id} was not present");
-        }
-        assert!(list.is_empty());
-
-        let after = ID_LIST_OP_STATS.with(std::cell::Cell::get);
-        let moved = after.elems_moved - baseline.elems_moved;
-        let scanned = after.positions_scanned - baseline.positions_scanned;
-        let removals = after.removals - baseline.removals;
-        assert_eq!(removals, u64::from(N));
-
-        // O(1) per removal, with room for the swap itself.
-        assert!(
-            moved <= 4 * u64::from(N),
-            "unordered removal moved {moved} elements for {N} removals — that \
-             is the O(n) tail shift this structure exists to remove \
-             (the ordered path would move {})",
-            u64::from(N) * (u64::from(N) - 1) / 2
-        );
-        // The index answers `position`, so no linear scan may be charged for
-        // a list this long. Sabotage: raise SPILL_INDEX_MIN above N and this
-        // fails with ~N*N/2 scanned entries.
-        assert!(
-            scanned <= 4 * u64::from(N),
-            "unordered removal scanned {scanned} entries for {N} removals — \
-             the spill index is not answering `position`"
-        );
-    }
-
-    /// The index must agree with the vector after every operation, including
-    /// the swap that moves a third element nobody named. Checked exhaustively
-    /// against a plain `Vec` oracle, because an index that drifts is a wrong
-    /// ANSWER (a descriptor that cannot be found, or one found under the wrong
-    /// id), not a slow one.
-    ///
-    /// Sabotage: drop the `self.pos.insert(self.ids[pos], pos as u32)` fixup
-    /// in `remove_unordered` — the element the swap relocated keeps a stale
-    /// index and the `contains` check below fails.
-    #[test]
-    fn the_spill_index_agrees_with_the_vector_after_every_operation() {
-        let mut list = IdList::default();
-        let mut oracle: Vec<u32> = Vec::new();
-        for id in 1..=200u32 {
-            list.append_unchecked(id);
-            oracle.push(id);
-        }
-        // Remove a scattered third of them, front, middle and back.
-        for &id in &[1u32, 2, 3, 100, 101, 199, 200, 50, 150, 7] {
-            assert!(list.remove_unordered(id));
-            oracle.retain(|&x| x != id);
-        }
-        // Same SET, whatever the order.
-        let mut got = list.as_slice().to_vec();
-        got.sort_unstable();
-        let mut want = oracle.clone();
-        want.sort_unstable();
-        assert_eq!(got, want);
-        // And every survivor is still findable through the index.
-        for &id in &want {
-            assert!(list.contains(id), "id {id} lost its index entry");
-        }
-        for &id in &[1u32, 2, 3, 100, 101, 199, 200, 50, 150, 7] {
-            assert!(!list.contains(id), "removed id {id} is still findable");
-        }
-        // `replace` must keep the index coherent too.
-        let survivor = want[0];
-        assert!(list.replace(survivor, 9_999));
-        assert!(!list.contains(survivor));
-        assert!(list.contains(9_999));
-    }
-
-    /// A list that never reaches `SPILL_INDEX_MIN` must not allocate an index
-    /// — the map is the structure's memory cost and it is only worth paying
-    /// where the scan hurts. `by_facts` lists, measured at length 1 on cc,
-    /// live entirely in this regime.
-    #[test]
-    fn a_short_spilled_list_builds_no_index() {
-        let mut list = IdList::default();
-        for id in 1..=8u32 {
-            list.append_unchecked(id);
-        }
-        assert!(matches!(list, IdList::Spill(_)));
-        match &list {
-            IdList::Spill(v) => assert!(
-                !v.indexed(),
-                "a list of 8 built an index; SPILL_INDEX_MIN is {SPILL_INDEX_MIN}"
-            ),
-            IdList::Inline { .. } => unreachable!(),
-        }
-        // Still correct without one.
-        assert!(list.remove_unordered(4));
-        assert!(!list.contains(4));
-        assert!(list.contains(8));
-    }
-
-    /// A dictionary-band id lives in its own directory: inserting one must not
-    /// grow the ordinary directory to the band's offset (~24,577 page slots),
-    /// which moved the GC arena's pages and cost tsc +2.3% instructions.
-    #[test]
-    fn a_dictionary_band_id_does_not_grow_the_ordinary_directory() {
-        let mut slab = ShapeSlab::new();
-        let ordinary = super::super::SHAPE_ID_BASE + 3;
-        let dict = super::super::DICTIONARY_SHAPE_ID_BASE + 5;
-        slab.insert(ordinary, ShapeRecord::EMPTY);
-        slab.insert(dict, ShapeRecord::EMPTY);
-        assert_eq!(
-            slab.pages.len(),
-            1,
-            "one ordinary page slot, not the band offset"
-        );
-        assert_eq!(slab.dict_pages.len(), 1);
-        assert!(slab.record_ptr(ordinary).is_some() && slab.record_ptr(dict).is_some());
-        assert_eq!(slab.ids(), vec![ordinary, dict]);
-        assert!(slab.remove(dict).is_some() && slab.record_ptr(dict).is_none());
-    }
-}
+#[path = "shapes_store_tests.rs"]
+mod tests;

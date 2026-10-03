@@ -272,3 +272,16 @@ fn scans_member_writes_through_a_namespace_alias() {
     assert!(s.contains(&pair("console", "info")), "{s:?}");
     assert_eq!(s.len(), 2, "{s:?}");
 }
+
+/// #11772: patching `Symbol.iterator` is not patching `push`/"any member".
+#[test]
+fn symbol_iterator_patch_is_not_any_member() {
+    let s = scan(
+        r#"
+        (Array.prototype as any)[Symbol.iterator] = function* () { yield 1; };
+        "#,
+    );
+    assert!(s.contains(&pair("Array.prototype", "@@iterator")), "{s:?}");
+    assert!(!s.contains(&pair("Array.prototype", "*")), "{s:?}");
+    assert!(!s.contains(&pair("Array.prototype", "push")), "{s:?}");
+}
