@@ -6,15 +6,34 @@ use crate::object::{keys_lookup, shapes};
 /// Resolve a method name without an O(own keys) scan on every call (#10502).
 ///
 /// Unlike mutation-heavy property lookups, method dispatch builds the shared
-/// key index on first use, including for small receivers. The index validates
-/// candidate contents and proves absence when complete. It stores slot numbers,
-/// not callees: overwriting a method still loads the current receiver's value.
-/// Existing shape mutation and GC maintenance invalidate/rekey the index.
+/// key index on first use for any receiver wider than
+/// [`DIRECT_SCAN_MAX_KEYS`]; a narrower one is compared directly. The index
+/// validates candidate contents and proves absence when complete. It stores
+/// slot numbers, not callees: overwriting a method still loads the current
+/// receiver's value. Existing shape mutation and GC maintenance
+/// invalidate/rekey the index.
 ///
 /// Only Rust storage is allocated; this lookup cannot collect or invoke JS.
-/// `keys` must be a validated live keys array, and `key_count` its logical bound.
-#[inline]
+/// `keys` must be a validated live keys array read from the receiver's shape
+/// on this straight-line path with no allocation since (the
+/// `keys_array_dense_slots_resolved` contract), and `key_count` its logical
+/// bound.
+#[inline(always)]
 pub(super) unsafe fn find_method_slot(
+    keys: *const ArrayHeader,
+    key_count: u32,
+    name: &[u8],
+) -> Option<u32> {
+    if key_count <= DIRECT_SCAN_MAX_KEYS {
+        return scan_method_slot(keys, key_count, name);
+    }
+    find_method_slot_indexed(keys, key_count, name)
+}
+
+/// [`find_method_slot`] for a receiver wider than [`DIRECT_SCAN_MAX_KEYS`]:
+/// the shared index, out of line so the direct compare stays in its callers.
+#[inline(never)]
+unsafe fn find_method_slot_indexed(
     keys: *const ArrayHeader,
     key_count: u32,
     name: &[u8],
@@ -29,6 +48,34 @@ pub(super) unsafe fn find_method_slot(
             keys_lookup::keys_find_slot_by_bytes(keys, key_count, name)
         }
     }
+}
+
+/// Own key lists up to this length are compared directly. A byte compare per
+/// key is cheaper than hashing the name and probing the shared index for a
+/// receiver of a few fields (a class instance with one field paid ~270
+/// instructions per call through the index against ~25 for the compare), and
+/// the index still answers for every wider receiver.
+const DIRECT_SCAN_MAX_KEYS: u32 = 8;
+
+/// The direct form of [`find_method_slot`]: the RAW dense slots of `keys`,
+/// last occurrence first so a duplicate resolves as the index does. A keys
+/// array is dense and holds only strings, so a hole or non-string slot simply
+/// fails the byte compare.
+///
+/// # Safety
+/// As [`find_method_slot`]: `keys` is a validated live keys array.
+#[inline(always)]
+unsafe fn scan_method_slot(keys: *const ArrayHeader, key_count: u32, name: &[u8]) -> Option<u32> {
+    let (slots, slot_len) = keys_lookup::keys_array_dense_slots_resolved(keys);
+    let mut i = (key_count as usize).min(slot_len);
+    while i > 0 {
+        i -= 1;
+        let key = crate::JSValue::from_bits((*slots.add(i)).to_bits());
+        if crate::string::js_string_key_matches_bytes(key, name) {
+            return Some(i as u32);
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -78,6 +125,26 @@ mod tests {
     }
 
     #[test]
+    fn method_lookup_wide_receivers_take_the_index_narrow_ones_the_scan() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let names: Vec<String> = (0..12).map(|i| format!("w{i}")).collect();
+        let mut wide: Vec<&str> = names.iter().map(String::as_str).collect();
+        wide.push("w3");
+        let wide = object(&wide);
+        let narrow = object(&["n0", "n1", "n0"]);
+        unsafe {
+            // 13 keys: past DIRECT_SCAN_MAX_KEYS, the index answers.
+            assert_eq!(lookup(wide, b"w3"), Some(12));
+            assert_eq!(lookup(wide, b"w11"), Some(11));
+            assert_eq!(lookup(wide, b"missing"), None);
+            // 3 keys: the direct compare answers, last occurrence first.
+            assert_eq!(lookup(narrow, b"n0"), Some(2));
+            assert_eq!(lookup(narrow, b"n1"), Some(1));
+            assert_eq!(lookup(narrow, b"missing"), None);
+        }
+    }
+
+    #[test]
     fn method_lookup_10502_mutations_invalidate_slot_answers() {
         let _lock = crate::gc::global_side_table_test_lock();
         let scope = RuntimeHandleScope::new();
@@ -113,7 +180,8 @@ mod tests {
     fn method_lookup_10502_dispatch_reloads_method_and_binds_receiver() {
         let _lock = crate::gc::global_side_table_test_lock();
         let scope = RuntimeHandleScope::new();
-        for width in [4, 64] {
+        // Both sides of `DIRECT_SCAN_MAX_KEYS`: the direct compare and the index.
+        for width in [4, 16, 64] {
             let names: Vec<String> = (0..width).map(|i| format!("f{i:03}")).collect();
             let keys: Vec<&str> = names.iter().map(String::as_str).collect();
             let recv = scope.root_nanbox_f64(value::js_nanbox_pointer(object(&keys) as i64));
@@ -177,7 +245,8 @@ mod tests {
         crate::gc::gc_register_mutable_root_scanner(crate::object::scan_transition_cache_roots_mut);
         crate::gc::gc_register_mutable_root_scanner(shapes::scan_shape_table_rekey_mut);
         let scope = RuntimeHandleScope::new();
-        for width in [4, 64] {
+        // Past `DIRECT_SCAN_MAX_KEYS`: a narrower list is compared directly.
+        for width in [16, 64] {
             let names: Vec<String> = (0..width).map(|i| format!("f{i:03}")).collect();
             let keys: Vec<&str> = names.iter().map(String::as_str).collect();
             let recv = scope.root_raw_mut_ptr(object(&keys));
