@@ -242,7 +242,7 @@ const CLASS_EVALUATION_STATE_SLOT: usize = crate::codegen_abi::CLASS_EVALUATION_
 /// never minted has no evaluation to protect.
 pub(crate) fn class_value_is_first_evaluation(class_id: u32) -> bool {
     class_value_cached(class_id).is_some_and(|closure| {
-        // SAFETY: a live class function object minted with two capture slots.
+        // SAFETY: a live class function object minted with its capture slots.
         unsafe {
             *crate::closure::closure_capture_slots_mut(closure).add(CLASS_EVALUATION_STATE_SLOT)
                 == crate::codegen_abi::CLASS_FIRST_EVALUATION_STATE
@@ -254,11 +254,8 @@ pub(crate) fn class_value_is_first_evaluation(class_id: u32) -> bool {
 /// old generation and pinned (it lives as long as the agent and never moves),
 /// code pointer
 /// [`js_class_constructor_called`], capture slot 0 = the class id as INT32,
-<<<<<<< 07fa0cd9d0e1faa312e5aeddb7155bd773cb945a
-/// capture slot 1 = its evaluation state ([`CLASS_EVALUATION_STATE_SLOT`]).
-=======
-/// capture slot 1 = the class's `prototype` object once it exists.
->>>>>>> f5aaf5308057b887dc30478f6116f585715b43a8
+/// capture slot 1 = its evaluation state ([`CLASS_EVALUATION_STATE_SLOT`]),
+/// capture slot 2 = the class's `prototype` object once it exists.
 ///
 /// Never collects: callers hold raw receiver pointers across the lookup, so
 /// the old-arena allocation runs under a [`crate::gc::GcSuppressScope`].
@@ -270,29 +267,19 @@ fn class_value_mint(class_id: u32) -> *mut ClosureHeader {
         "a class function object belongs to a compiled class id, never a builtin or synthetic band: {class_id:#x}"
     );
     let _no_collect = crate::gc::GcSuppressScope::new();
-<<<<<<< 07fa0cd9d0e1faa312e5aeddb7155bd773cb945a
-    let payload = crate::closure::closure_payload_size(2);
-=======
     let payload = crate::closure::closure_payload_size(CLASS_VALUE_CAPTURES);
->>>>>>> f5aaf5308057b887dc30478f6116f585715b43a8
     let ptr = crate::arena::arena_alloc_gc_old_born_tenured(
         payload,
         std::mem::align_of::<ClosureHeader>(),
         crate::gc::GC_TYPE_CLOSURE,
     ) as *mut ClosureHeader;
     unsafe {
-<<<<<<< 07fa0cd9d0e1faa312e5aeddb7155bd773cb945a
-        // GC_STORE_AUDIT(INIT): fresh class function object; both captures
-        // are INT32s (class id, evaluation state) and the props edge is null —
-        // pointer-free.
-        (*ptr).capture_count = 2;
-=======
-        // GC_STORE_AUDIT(INIT): fresh class function object; capture 0 is an
-        // INT32 class id, capture 1 (the prototype link) starts `undefined`
-        // and the props edge is null — pointer-free. The link's later pointer
-        // is a root slot of the class-value scan, like `props`.
+        // GC_STORE_AUDIT(INIT): fresh class function object; captures 0 and 1
+        // are INT32s (class id, evaluation state), capture 2 (the prototype
+        // link) starts `undefined` and the props edge is null — pointer-free.
+        // The link's later pointer is a root slot of the class-value scan,
+        // like `props`.
         (*ptr).capture_count = CLASS_VALUE_CAPTURES as u32;
->>>>>>> f5aaf5308057b887dc30478f6116f585715b43a8
         (*ptr).shape_id = crate::closure::shape::function_class_shape();
         (*ptr).info = &CLASS_CONSTRUCTOR_INFO;
         (*ptr).props = std::ptr::null_mut();
@@ -829,11 +816,15 @@ pub(crate) fn class_value_ptr(class_id: u32) -> *mut ClosureHeader {
     }
 }
 
-/// Captures of a class function object: the class id, then the prototype link.
-const CLASS_VALUE_CAPTURES: usize = 2;
+/// Captures of a class function object: the class id, the evaluation state
+/// ([`CLASS_EVALUATION_STATE_SLOT`]), then the prototype link.
+const CLASS_VALUE_CAPTURES: usize = 3;
 /// The capture holding the class's `prototype` object (NaN-boxed), or
 /// `undefined` before it exists.
-const CLASS_PROTOTYPE_LINK_CAPTURE: usize = 1;
+const CLASS_PROTOTYPE_LINK_CAPTURE: usize = 2;
+const _: () = assert!(CLASS_PROTOTYPE_LINK_CAPTURE != CLASS_EVALUATION_STATE_SLOT);
+const _: () = assert!(CLASS_EVALUATION_STATE_SLOT < CLASS_VALUE_CAPTURES);
+const _: () = assert!(CLASS_PROTOTYPE_LINK_CAPTURE < CLASS_VALUE_CAPTURES);
 
 /// The prototype-link word of class function object `closure`.
 ///
