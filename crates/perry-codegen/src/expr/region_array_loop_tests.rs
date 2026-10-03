@@ -425,3 +425,86 @@ fn a_store_of_a_value_not_proven_a_number_is_not_bare() {
         "the string store must take today's store:\n{f_text}"
     );
 }
+
+/// `a[i & 63]`, a static index in `[0, 63]`.
+fn masked(arr: u32) -> Expr {
+    Expr::IndexGet {
+        object: Box::new(Expr::LocalGet(arr)),
+        index: Box::new(Expr::Binary {
+            op: BinaryOp::BitAnd,
+            left: Box::new(Expr::LocalGet(I)),
+            right: Box::new(Expr::Integer(63)),
+        }),
+    }
+}
+
+/// An array the loop only reads element VALUES from (`const o = a[i & 63];
+/// f(o)`) in a body that calls out is no region array: the region would save
+/// one load per read and re-check its guard on every iteration. A read a
+/// Number consumer takes makes it one, and so does the value read in a body
+/// that runs no JS (`const o = a[i & 63]; o.d = i`), where the facts hold
+/// across iterations.
+#[test]
+fn an_array_only_read_for_element_values_is_not_a_region_array() {
+    let call = |arg: Expr| {
+        Stmt::Expr(Expr::Call {
+            callee: Box::new(Expr::LocalGet(F)),
+            args: vec![arg],
+            type_args: Vec::new(),
+            byte_offset: 0,
+        })
+    };
+    const O: u32 = 10;
+    let body = vec![
+        Stmt::Let {
+            id: O,
+            name: "o".to_string(),
+            ty: Type::Any,
+            mutable: false,
+            init: Some(masked(A)),
+        },
+        call(Expr::LocalGet(O)),
+    ];
+    let ir = probe_ir(
+        "rarr_value_only",
+        Type::Array(Box::new(Type::Any)),
+        body,
+        None,
+    );
+    assert!(
+        !ir.contains("rloop.arr."),
+        "a value-only read must not make its array a region array:\n{ir}"
+    );
+    // Control: the same read consumed by a Number operator does.
+    let body = vec![call(add(masked(A), Expr::Number(1.0)))];
+    let ir = probe_ir("rarr_value_numeric", number_array(), body, None);
+    assert!(
+        ir.contains("rloop.arr."),
+        "a Number-consumed read keeps its array a region array:\n{ir}"
+    );
+    // Control: a value read in a body without a call does too.
+    let body = vec![
+        Stmt::Let {
+            id: O,
+            name: "o".to_string(),
+            ty: Type::Any,
+            mutable: false,
+            init: Some(masked(A)),
+        },
+        Stmt::Expr(Expr::PropertySet {
+            object: Box::new(Expr::LocalGet(O)),
+            property: "d".to_string(),
+            value: Box::new(Expr::LocalGet(I)),
+        }),
+    ];
+    let ir = probe_ir(
+        "rarr_value_no_call",
+        Type::Array(Box::new(Type::Any)),
+        body,
+        None,
+    );
+    assert!(
+        ir.contains("rloop.arr."),
+        "a value read in a call-free body keeps its array a region array:\n{ir}"
+    );
+}
