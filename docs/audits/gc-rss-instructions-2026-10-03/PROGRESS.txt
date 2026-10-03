@@ -1,3 +1,14 @@
+PRIVATE ENTRY MOVING ACCEPTANCE VERIFIED (2026-10-03 23:56Z)
+44default/moving executions match Node26.5.1on GCcontrol/privateentry;
+all22moving cells copied objects and protected retired from-space.
+66records (22build+44run), sources4999each, six actual products, raw
+outputs/counters and exact fresh-class derivation verified independently.
+165 evidence files copied locally/rehashed. Base2026ecfe, not newmain07.
+Correctness does not cancel TS+1.979%instructions in full17normal builds;
+private policy remains UNAPPLIED. User/kernel instruction diagnostic1362738
+queues18measurements on exact verified TS/tree/request binaries, no rebuild
+or runtime knobs. Repeated advice is a hypothesis pending that evidence.
+
 PRIVATE ENTRY FULL17 MATRIX VERIFIED (2026-10-03 23:53Z)
 All45build records (30exact reused controls +15fresh entry builds),306fresh
 measurements/17cases pass source/product/raw output/RSS/perf/auto archive
