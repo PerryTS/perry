@@ -415,3 +415,34 @@ instruction-profile-plan.json for the pinned host harness dependencies.
 Independent serialized follow-up: gc-final-instruction-profile-run.sh;
 receipt gc-final-instruction-profile-v1.exit. It requires the whole preceding
 pipeline to succeed and cannot silently profile a partial/failed build.
+
+COMPLETED: repaired v3r1 pool comparison (204/204 correct)
+The complete normal-auto 17-case comparison passed coverage, Node stdout,
+receipt/build/binary checks and all four perf counters. pool-comparison.json
+contains every repetition and input digests. This is pool + scan/lazy changes
+versus original mainrefresh-base, NOT an isolated pool-versus-scan comparison
+and NOT final main69 acceptance.
+
+Immediate page discard is NOT accepted as the final policy. TS peak RSS was
+243.777 -> 243.574 MiB (-0.08%), but minor faults 109,561 -> 811,105 (+640%),
+instructions +4.74%, and plain CPU +15.28%. Earlier v2 scan-only TS instructions
+were -1.82%; those separate runs are supporting evidence, not a paired v3/v2
+measurement. The new discard behavior plausibly explains the fault increase;
+its reuse dynamics need direct attribution before selecting a replacement.
+JSON RSS -0.10%, instructions +2.11%, faults 119,803 -> 231,235. String RSS
+-0.71%, instructions +1.82%, faults 100,283 -> 144,122. Document replacement
+RSS -3.71%, instructions +1.64%, faults 71,253 -> 135,860.
+
+There are useful savings to retain: pipeline RSS 285.543 -> 270.113 MiB
+(-5.40%), instructions -0.17%, faults 79,117 -> 79,354. Grow/churn RSS -3.14%
+with instructions +1.00%. Small ring/request/Zod RSS regressions remain visible
+in the table, not rounded into an across-the-board success. CPU medians are
+shared-host observations and carry the reported timing limitations.
+
+Next policy requirement: retain rapidly reused pool blocks without repeatedly
+faulting them back, while returning cold/excess blocks and preserving the
+observed RSS reductions. The alignment/boundary fix remains required. Candidate
+criteria must derive from allocation/reuse demand and GC/idle boundaries, not
+workload names or benchmark-only settings. Existing v4/v5/main69 measurements
+continue with immutable sources to isolate visitor/page-table effects; their
+results cannot automatically accept the immediate-discard policy.
