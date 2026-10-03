@@ -261,7 +261,7 @@ pub use static_shape_ids::{
     TypedMasks, STATIC_SEED_FORMAT,
 };
 pub(crate) use static_shape_ids::{
-    compatible_final_shape_ids, slot_may_be_constfn, static_region_slots,
+    compatible_final_shape_ids, compatible_final_shapes, slot_may_be_constfn, static_region_slots,
     static_shape_id_for_foreign_global, static_shape_id_for_keys_global,
 };
 mod string_pool;
@@ -2478,6 +2478,9 @@ fn compile_module_impl(
         }
         reps
     };
+    // Step 5C: a literal's method slot holding a module function's value is a
+    // ConstFn lane too; births and lowering read the same admitted set.
+    static_constfn::set_module_function_values(hir, &module_prefix);
     if let Some(births) = births {
         *births = static_shape_ids::module_births(
             &module_prefix,
@@ -3058,6 +3061,9 @@ fn compile_module_impl(
         closure_lengths,
         closure_arrow_functions,
     } = closure_collect::collect_module_closures(hir);
+    // Step 5C: a method site whose static lane names one of these bodies
+    // calls it directly, so it needs each body's exact parameter count.
+    static_constfn::set_module_body_arities(&module_prefix, &closure_arities);
 
     // #8103: closure bodies are emitted before their enclosing regions. Prove
     // inline array-callback element shapes module-wide now, while both sides

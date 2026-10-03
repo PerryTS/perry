@@ -12,6 +12,13 @@
 //! * **inherited entry** ([`METHOD_SITE_INHERITED`] in `slot`) — compares the
 //!   direct holder's word with [`MethodEntry::gen`], loads its slot, proves
 //!   the loaded closure has [`MethodEntry::info`], and calls it directly.
+//! * **ConstFn entry** ([`METHOD_SITE_CONSTFN`], own or inherited) — the
+//!   compared shape (the receiver's, or for an inherited entry the holder's)
+//!   carries a ConstFn lane for the slot, so the slot holds a closure of the
+//!   recorded body: the hit loads it only as the callee environment and calls
+//!   [`MethodEntry::code`] with exactly the call's arguments, with no kind or
+//!   info check. Primed only for a body declaring at most the call's argument
+//!   count (a body that wants `undefined` padding keeps a plain entry).
 //!
 //! Everything else calls [`js_method_site_miss`], which primes the entry when
 //! the facts below hold and then performs the ordinary dispatch.
@@ -91,7 +98,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// `word` of a site no prime has touched: no receiver word is all-ones.
 pub const METHOD_SITE_EMPTY: u64 = u64::MAX;
 /// The `slot` bit that marks an inherited entry.
-pub const METHOD_SITE_INHERITED: u64 = 1 << 63;
+pub const METHOD_SITE_INHERITED: u64 = crate::codegen_abi::METHOD_SITE_INHERITED;
 /// The `slot` bit that marks an own entry whose key lives in the receiver's
 /// spill buffer (`ObjectMeta::spill`) at the index in the low bits.
 pub const METHOD_SITE_SPILL: u64 = 1 << 62;
@@ -662,7 +669,13 @@ unsafe fn prime(slot: *mut MethodSiteSlot, recv: f64, name: &[u8], argc: usize) 
                 refuse(17);
                 return;
             }
-            slot_word | METHOD_SITE_CONSTFN
+            if declares_at_most(info, argc) {
+                slot_word | METHOD_SITE_CONSTFN
+            } else {
+                // The ConstFn hit passes exactly the call's arguments; a body
+                // that wants padding keeps the info-checked plain entry.
+                slot_word
+            }
         } else {
             slot_word
         };
@@ -853,6 +866,16 @@ fn is_user_method(value_bits: u64, name: &[u8]) -> bool {
     }
 }
 
+/// A ConstFn hit calls the body with exactly the call's `argc` arguments (the
+/// plain hit pads with `undefined`, see `method_site_padded_argc`), so a
+/// ConstFn entry is admitted only for a body declaring at most `argc`.
+fn declares_at_most(info: &crate::closure::JsFunctionInfo, argc: usize) -> bool {
+    matches!(
+        crate::closure::resolve_strategy(info).kind(),
+        crate::closure::DispatchKind::Arity(declared) if declared as usize <= argc
+    )
+}
+
 /// The body info whose code a site may call for `value` with `argc`
 /// arguments, when the call `js_native_call_value(value, args)` would reach
 /// `code(closure, this, args...)` with nothing in between.
@@ -1025,9 +1048,33 @@ unsafe fn prime_inherited(
                     refuse(13);
                     return;
                 }
+                // A holder whose shape owns this slot's body (ConstFn) lets
+                // the hit call the body after the two word compares, with no
+                // kind or info check of the slot value: the holder word pins
+                // the holder's shape and that shape pins the body.
+                let constfn = if s < crate::object::field_rep::REP_SLOTS
+                    && shape.special_constfn_mask & (1 << s) != 0
+                {
+                    let body = shape
+                        .constfn_infos()
+                        .iter()
+                        .find(|entry| u32::from(entry.slot) == s)
+                        .map(|entry| entry.info);
+                    if body != Some(info as *const crate::closure::JsFunctionInfo as u64) {
+                        refuse(17);
+                        return;
+                    }
+                    if declares_at_most(info, argc) {
+                        METHOD_SITE_CONSTFN
+                    } else {
+                        0
+                    }
+                } else {
+                    0
+                };
                 let entry = MethodEntry {
                     word,
-                    slot: METHOD_SITE_INHERITED | u64::from(s),
+                    slot: METHOD_SITE_INHERITED | constfn | u64::from(s),
                     info: info as *const crate::closure::JsFunctionInfo as u64,
                     code: info.code as u64,
                     closure: next_addr,
@@ -1035,6 +1082,9 @@ unsafe fn prime_inherited(
                 };
                 if publish(slot, entry) {
                     PRIMES_INHERITED.fetch_add(1, Ordering::Relaxed);
+                    if constfn != 0 {
+                        PRIMES_CONSTFN.fetch_add(1, Ordering::Relaxed);
+                    }
                 }
                 return;
             }
