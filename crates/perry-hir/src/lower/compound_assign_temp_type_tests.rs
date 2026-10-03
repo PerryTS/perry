@@ -150,3 +150,100 @@ fn a_string_array_compound_assign_does_not_gain_a_numeric_type() {
     let temps = cmpd_temps(&module.init);
     assert_eq!(temp(&temps, "base"), Type::Array(Box::new(Type::String)));
 }
+
+// A read of an immutable binding is already evaluated once, so the statement
+// form names the binding itself instead of spilling a copy. The copy was a
+// second pointer-typed local: a string-addref test, a shadow-slot bind and an
+// incremental-mark root-shading gate per compound assignment, for a value that
+// the binding's own slot already roots. A mutable binding must keep its copy,
+// because the RHS may reassign it.
+
+/// The `object` of the first top-level `PropertySet` / `IndexSet` statement.
+fn written_object(stmts: &[Stmt]) -> crate::ir::Expr {
+    use crate::ir::Expr;
+    stmts
+        .iter()
+        .find_map(|stmt| match stmt {
+            Stmt::Expr(Expr::PropertySet { object, .. })
+            | Stmt::Expr(Expr::IndexSet { object, .. }) => Some(object.as_ref().clone()),
+            _ => None,
+        })
+        .expect("a top-level member write")
+}
+
+/// The `LocalId` of the top-level `Let` named `name`.
+fn let_id(stmts: &[Stmt], name: &str) -> u32 {
+    stmts
+        .iter()
+        .find_map(|stmt| match stmt {
+            Stmt::Let { id, name: n, .. } if n == name => Some(*id),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no top-level let {name}"))
+}
+
+#[test]
+fn a_const_receiver_is_written_through_the_binding_itself() {
+    let module = lower(
+        "const o = { x: 1 };\n\
+         o.x += 2;\n",
+    );
+    assert!(
+        cmpd_temps(&module.init).is_empty(),
+        "a const receiver needs no base temp, got {:?}",
+        cmpd_temps(&module.init)
+    );
+    let o = let_id(&module.init, "o");
+    let written = written_object(&module.init);
+    assert!(
+        matches!(written, crate::ir::Expr::LocalGet(id) if id == o),
+        "the write must target the const binding, got {written:?}"
+    );
+}
+
+#[test]
+fn a_mutable_receiver_keeps_its_snapshot() {
+    // `o.x += (o = p, 1)` must write the OLD `o`; only the temp guarantees it.
+    let module = lower(
+        "let o = { x: 1 };\n\
+         const p = { x: 10 };\n\
+         o.x += ((o = p), 1);\n",
+    );
+    let temps = cmpd_temps(&module.init);
+    temp(&temps, "base");
+    let o = let_id(&module.init, "o");
+    let written = written_object(&module.init);
+    assert!(
+        !matches!(written, crate::ir::Expr::LocalGet(id) if id == o),
+        "a mutable receiver must be written through its snapshot, got {written:?}"
+    );
+}
+
+#[test]
+fn a_const_receiver_and_const_key_need_no_temps() {
+    let module = lower(
+        "const t: Record<string, number> = { a: 1 };\n\
+         const k = \"a\";\n\
+         t[k] += 1;\n",
+    );
+    assert!(
+        cmpd_temps(&module.init).is_empty(),
+        "const base and const key need no temps, got {:?}",
+        cmpd_temps(&module.init)
+    );
+}
+
+#[test]
+fn a_spilled_key_keeps_the_base_spilled_ahead_of_it() {
+    // The key has side effects and is spilled. The base read has to stay
+    // ahead of it (a `const` read in its TDZ throws), so it keeps its temp
+    // even though the binding is immutable.
+    let module = lower(
+        "const a = [1, 2, 3];\n\
+         let i = 0;\n\
+         a[i++] += 1;\n",
+    );
+    let temps = cmpd_temps(&module.init);
+    temp(&temps, "base");
+    temp(&temps, "key");
+}

@@ -1595,24 +1595,56 @@ pub(crate) fn hoist_compound_member_assign(
             id
         };
 
-    // Base — always spilled (evaluated once).
+    // Base and computed key, each evaluated once.
+    //
+    // A read of an immutable binding (`const`, a `const` for-of/for-in head)
+    // already IS evaluated once: nothing can assign the binding between the
+    // spill and the write, so the read and the write may name the binding
+    // itself. Spilling it anyway is not free. The copy is a second
+    // pointer-typed local, so every `bi.vx -= e` paid a string-addref test,
+    // a shadow-slot bind and an incremental-mark root-shading gate for a value
+    // that was already rooted in `bi`'s own slot, and the receiver reached
+    // codegen as a fresh temp instead of the binding the shape facts are
+    // keyed on.
+    //
+    // A mutable binding keeps its temp: the RHS may assign it
+    // (`o.x += (o = p, 1)` must write the old `o`). So does a base whose
+    // computed key is spilled: the base read then has to stay ahead of the
+    // key's side effects, because reading a `const` in its TDZ throws.
+    let immutable_binding = |ctx: &LoweringContext, e: &Expr| match e {
+        Expr::LocalGet(id) if ctx.is_local_immutable(*id) => Some(*id),
+        _ => None,
+    };
     let base = lower_expr(ctx, &member.obj)?;
-    let base_id = spill(ctx, &mut stmts, "base", base);
+    let key = match &member.prop {
+        ast::MemberProp::Computed(c) => Some(lower_expr(ctx, &c.expr)?),
+        _ => None,
+    };
+    let key_binding = key.as_ref().and_then(|k| immutable_binding(ctx, k));
+    let base_binding =
+        immutable_binding(ctx, &base).filter(|_| key.is_none() || key_binding.is_some());
+    let base_id = match base_binding {
+        Some(id) => id,
+        None => spill(ctx, &mut stmts, "base", base),
+    };
 
     // Property name (static) or computed key spilled to its own temp.
     let prop: Option<String>;
     let key_id: Option<LocalId>;
-    match &member.prop {
-        ast::MemberProp::Ident(i) => {
+    match (&member.prop, key) {
+        (ast::MemberProp::Ident(i), _) => {
             prop = Some(i.sym.to_string());
             key_id = None;
         }
-        ast::MemberProp::Computed(c) => {
-            let key = lower_expr(ctx, &c.expr)?;
-            key_id = Some(spill(ctx, &mut stmts, "key", key));
+        (ast::MemberProp::Computed(_), Some(key)) => {
+            key_id = Some(match key_binding {
+                Some(id) => id,
+                None => spill(ctx, &mut stmts, "key", key),
+            });
             prop = None;
         }
-        ast::MemberProp::PrivateName(_) => unreachable!("guarded above"),
+        (ast::MemberProp::Computed(_), None) => unreachable!("computed key lowered above"),
+        (ast::MemberProp::PrivateName(_), _) => unreachable!("guarded above"),
     }
 
     let read = match (&prop, key_id) {
