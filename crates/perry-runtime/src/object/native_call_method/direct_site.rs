@@ -8,8 +8,9 @@
 //! base such as `EventEmitter` installs — missed that compare on every call and
 //! paid the whole dispatch tower, which then re-proved the same facts by name.
 //!
-//! Each such site owns one `i64` (zero = empty; no live receiver word is zero,
-//! because a ShapeId is never zero). The site's miss edge calls one of the two
+//! Each such site owns one `i64`, all-ones while empty (no header word is
+//! all-ones: a ShapeId is below `0xC000_0000`). A stored word always has a
+//! non-zero class id and a non-zero ShapeId. The site's miss edge calls one of the two
 //! entries below, which store the receiver's word when the receiver's SHAPE
 //! proves what the site needs, and then perform the unchanged dispatch. A later
 //! receiver with the same word takes the direct call after one more compare.

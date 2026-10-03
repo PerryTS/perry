@@ -8,15 +8,18 @@
 // times per `new Q()`, because after `super()` the instance is no longer on the
 // layout the compiler's inline field stores assume.
 //
-// For the common receiver the specification's answer is fixed: on an ordinary,
-// extensible object that has no own property `key`, OrdinaryDefineOwnProperty
-// creates `key` as a data property with `{ writable, enumerable, configurable }`
-// all true, consulting nothing on the prototype chain. That is exactly what
-// `define_property_force_store_value` does (add the key, store the value) when
-// no descriptor entry exists for the key, and all-true attributes are the
-// default that needs no entry. Anything this file cannot prove — a Proxy, an
-// exotic or non-extensible object, an existing own key, a possible descriptor
-// entry, a prototype object — takes the general route unchanged.
+// For the common receiver the specification's answer is fixed, and it consults
+// nothing on the prototype chain: on an ordinary, extensible object,
+// OrdinaryDefineOwnProperty either creates `key` as a data property with
+// `{ writable, enumerable, configurable }` all true, or — when `key` is already
+// an own data property with exactly those attributes (a declared field the
+// constructor pre-allocated, a key a base constructor assigned) — replaces its
+// value and leaves the attributes as they are. Both are what
+// `define_property_force_store_value` does (ensure the key, store the value);
+// all-true attributes are the default that needs no attribute entry. Anything
+// this file cannot prove — a Proxy, an exotic or non-extensible object, an own
+// key with any attribute or accessor entry, a prototype object — takes the
+// general route unchanged.
 
 /// Define `key = value` on `receiver` per DefineField when the receiver and key
 /// qualify; `false` means "not handled", never "failed".
@@ -89,11 +92,15 @@ pub(super) fn try_define_new_class_field(receiver: f64, key: f64, value: f64) ->
                 return false;
             }
         }
-        // The key must be absent: the shape's key list names every own key,
-        // inline or overflow, data or accessor.
+        // The shape's key list names every own key, inline or overflow, data or
+        // accessor. An absent key is created; a present one must be a data
+        // property with the default attributes (the constructor allocated the
+        // declared field, or a base constructor assigned it), which the define
+        // only overwrites.
         let Some(descriptor) = crate::object::shapes::object_shape_descriptor(obj) else {
             return false;
         };
+        let mut present = false;
         let keys = descriptor.keys as usize as *mut crate::array::ArrayHeader;
         if !keys.is_null() {
             let keys_ptr = keys as usize;
@@ -110,8 +117,19 @@ pub(super) fn try_define_new_class_field(receiver: f64, key: f64, value: f64) ->
             for i in 0..key_count {
                 let stored = crate::JSValue::from_bits((*slots.add(i)).to_bits());
                 if crate::string::js_string_key_matches_bytes(stored, key_bytes) {
-                    return false;
+                    present = true;
+                    break;
                 }
+            }
+        }
+        if present {
+            let Ok(name) = std::str::from_utf8(key_bytes) else {
+                return false;
+            };
+            if crate::object::descriptor_state::get_property_attrs(addr, name).is_some()
+                || crate::object::descriptor_state::get_accessor_descriptor(addr, name).is_some()
+            {
+                return false;
             }
         }
         crate::object::object_ops::define_property_force_store_value(

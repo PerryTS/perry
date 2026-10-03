@@ -72,6 +72,34 @@ let mixedOut = "";
 for (let i = 0; i < 5; i++) mixedOut += callTag(new Mixed(text, i % 2 === 0)) + ",";
 console.log("mixin subclass", mixedOut, callTag(warm));
 
+// The same facts at a site whose class has no declared subclass, so the site
+// compares exactly one class: a learned word is the only route off its birth
+// shape. Every receiver below has left the birth shape before its first call.
+class Lone {
+  [key: string]: any;
+  constructor(many: boolean) {
+    this.n = 1;
+    if (many) { this.p = 1; this.q = 2; this.r = 3; this.s = 4; this.t = 5; this.u = 6; }
+  }
+  who(): string { return "lone"; }
+}
+function callWho(x: Lone): string { return x.who(); }
+const loneWarm = new Lone(true);
+for (let i = 0; i < 1000; i++) s = callWho(loneWarm);
+const loneOwn = new Lone(true);
+(loneOwn as any).who = () => "lone-own";
+let loneOut = "";
+for (let i = 0; i < 4; i++) loneOut += callWho(loneOwn) + ",";
+const loneGetter = new Lone(true);
+Object.defineProperty(loneGetter, "who", { get() { return () => "lone-getter"; }, configurable: true });
+for (let i = 0; i < 2; i++) loneOut += callWho(loneGetter) + ",";
+const loneProto = new Lone(true);
+Object.setPrototypeOf(loneProto, { who() { return "lone-proto"; } });
+for (let i = 0; i < 2; i++) loneOut += callWho(loneProto) + ",";
+const LoneMixed = mixin(Lone);
+for (let i = 0; i < 4; i++) loneOut += callWho(new LoneMixed(i % 2 === 0)) + ",";
+console.log("lone", s, loneOut, callWho(loneWarm), callWho(new Lone(false)));
+
 // Moving collections between calls: the learned word holds no address.
 let keep: any[] = [];
 let acc = 0;
@@ -87,3 +115,6 @@ console.log("after churn", acc, callTag(warm));
 const before = callTag(warm);
 Tok.prototype.tag = function () { return "replaced"; };
 console.log("replaced", before, callTag(warm), callTag(new Tok(text, false)), callTag(sub));
+const loneBefore = callWho(loneWarm);
+Lone.prototype.who = function () { return "lone-replaced"; };
+console.log("lone replaced", loneBefore, callWho(loneWarm), callWho(new Lone(false)));
