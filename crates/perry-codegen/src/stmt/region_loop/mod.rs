@@ -497,9 +497,11 @@ fn begin_with(
             all = ctx.block().and(I1, &all, &pass);
             arrs.push(a);
         }
+        let loop_control: Vec<&Expr> = cond.into_iter().chain(update).collect();
         let (number_locals, entry_tests) = number_facts(
             ctx,
             body,
+            &loop_control,
             &receivers,
             &p.bare_reads,
             &p.number_local_uses,
@@ -601,6 +603,7 @@ fn body_region_plan(ctx: &FnCtx<'_>, body: &[Stmt]) -> Option<(usize, Plan)> {
 fn number_facts(
     ctx: &FnCtx<'_>,
     tail: &[Stmt],
+    loop_control: &[&Expr],
     receivers: &[Receiver],
     bare_reads: &[(usize, Recv, String)],
     number_local_uses: &HashSet<u32>,
@@ -618,14 +621,25 @@ fn number_facts(
             })
         })
         .collect();
-    number_facts_from_reads(ctx, tail, &f64_reads, number_local_uses, declared_locals)
+    number_facts_from_reads(
+        ctx,
+        tail,
+        loop_control,
+        &f64_reads,
+        number_local_uses,
+        declared_locals,
+    )
 }
 
 /// The same 5L fixed point is used while planning and while lowering. The
 /// planner supplies only exact fresh bare reads protected by its proposed R.
+/// `loop_control` is a loop region's condition and update: they run between
+/// F iterations, after the one preheader test, so their writes are judged
+/// with the body's.
 fn number_facts_from_reads(
     ctx: &FnCtx<'_>,
     tail: &[Stmt],
+    loop_control: &[&Expr],
     f64_reads: &HashSet<usize>,
     number_local_uses: &HashSet<u32>,
     declared_locals: &HashSet<u32>,
@@ -651,6 +665,7 @@ fn number_facts_from_reads(
         entry_candidates: &entry_candidates,
         static_numbers: ctx.number_by_construction_locals,
         f64_reads,
+        loop_control,
     };
     let numeric = crate::collectors::collect_numeric_by_construction_locals_in_region(
         tail,
@@ -1050,9 +1065,12 @@ pub(crate) fn lower_split(
     let (number_locals, entry_tests) = if valid_slot.is_some() {
         (planned_number_locals, planned_entry_tests)
     } else {
+        // Only a body region gets here: it has no loop control of its own,
+        // and its tests run at the split on every entry.
         number_facts(
             ctx,
             tail,
+            &[],
             &receivers,
             &bare_reads,
             &number_local_uses,
