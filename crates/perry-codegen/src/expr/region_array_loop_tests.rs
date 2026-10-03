@@ -278,6 +278,33 @@ fn a_float64array_receiver_reads_canonicalise_nan() {
 }
 
 #[test]
+fn a_typed_region_guard_names_only_symbols_that_exist() {
+    // #10516 removed the process-wide `PERRY_TA_VIEW_GUARD` in favour of the
+    // typed array header's own storage byte. The typed region guard, merged
+    // after it (#10741), still loaded the removed global, and the text
+    // assertions above cannot see a reference to a symbol nothing declares.
+    // Any receiver not declared a plain Array takes this guard -- OpenCode's
+    // id.ts loops over Buffers -- so ask LLVM, the one check that sees an
+    // undefined value.
+    for (name, elem) in [
+        ("rarr_typed_verify", Type::Named("Float64Array".to_string())),
+        ("rarr_buffer_verify", Type::Named("Buffer".to_string())),
+    ] {
+        let ir = probe_ir(name, elem, physics_body(), None);
+        assert!(
+            ir.contains("rloop.ta"),
+            "{name}: the loop must take the typed region guard for this test to mean anything:\n{ir}"
+        );
+        assert!(
+            !ir.contains("@PERRY_TA_VIEW_GUARD"),
+            "{name}: the guard reads the receiver's storage byte, not a removed global:\n{ir}"
+        );
+        crate::testing::verify_ir(&ir, name)
+            .unwrap_or_else(|e| panic!("{name}: LLVM rejected the module: {e}\n{ir}"));
+    }
+}
+
+#[test]
 fn a_call_in_the_body_sets_the_dirty_flag_and_the_next_iteration_rechecks() {
     let mut body = physics_body();
     body.insert(
