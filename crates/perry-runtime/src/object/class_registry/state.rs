@@ -799,11 +799,12 @@ pub(crate) fn class_decl_prototype_object_root_store(class_id: u32, proto_ptr: *
     if class_id == 0 || proto_ptr.is_null() {
         return;
     }
-    CLASS_DECL_PROTOTYPE_OBJECTS.with(|table| {
+    let displaced = CLASS_DECL_PROTOTYPE_OBJECTS.with(|table| {
         let mut guard = table.write().unwrap();
-        guard
-            .get_or_insert_with(DeclPrototypeTable::default)
-            .insert(class_id, proto_ptr as usize);
+        let table = guard.get_or_insert_with(DeclPrototypeTable::default);
+        let previous = table.get(class_id).unwrap_or(0);
+        table.insert(class_id, proto_ptr as usize);
+        previous
     });
     crate::gc::runtime_write_barrier_root_raw_ptr(proto_ptr);
     // Its sole caller, `class_decl_prototype_value`, argues at length against
@@ -811,6 +812,33 @@ pub(crate) fn class_decl_prototype_object_root_store(class_id: u32, proto_ptr: *
     // whole class hierarchy). The lookup-surface generation is the separate
     // counter that exists for exactly this store (#10696).
     super::class_lookup_surface_gen_bump();
+    if displaced != 0 && displaced != proto_ptr as usize {
+        retire_displaced_decl_prototype(displaced as *mut ObjectHeader);
+    }
+}
+
+/// A bare CLASS prototype identity (`shapes::PROTO_ID_CLASS | class`) names
+/// its holder through this registry, so the link `class -> C.prototype` is a
+/// fact of every receiver ShapeId that carries the identity. The link is
+/// written once per class identity; a write that REPLACES it (or a
+/// generic-origin redirect that changes what it answers) must leave no site
+/// trusting the old holder. The displaced prototype takes a semantic shape
+/// transition: a process-unique ShapeId no site was trained on. Every site
+/// that names that holder compares its ShapeId on each hit, so the relink is
+/// seen through shapes alone, without a global generation word.
+pub(crate) fn retire_displaced_decl_prototype(old: *mut ObjectHeader) {
+    if old.is_null() {
+        return;
+    }
+    // The mint is a no-move window here: `old` is a raw registry address.
+    let _no_move = crate::gc::GcSuppressScope::new();
+    // SAFETY: `old` was a registered (rooted) prototype object until the
+    // store above, and nothing between that read and here can collect.
+    unsafe {
+        if crate::object::shapes::object_shape_stamp(old) != 0 {
+            crate::object::shapes::transition_object_shape_semantics(old);
+        }
+    }
 }
 
 pub(crate) fn class_parent_closure_root_store(class_id: u32, closure_addr: usize) {

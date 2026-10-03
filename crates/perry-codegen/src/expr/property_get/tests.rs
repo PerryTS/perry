@@ -16,7 +16,7 @@ use perry_hir::{Expr, Module, ModuleInitKind, Stmt};
 
 #[path = "front_contract_tests.rs"]
 mod front_contract;
-use front_contract::{front_call_block, verify_front_directory};
+use front_contract::{front_call_block, verify_accessor_arm, verify_front_directory};
 
 fn ir_opts(debug_locations: bool, module_source: Option<&str>) -> CompileOptions {
     CompileOptions {
@@ -571,9 +571,13 @@ fn generic_property_get_tries_ways_before_calling_the_miss_handler() {
     let (_, token) = tower_block(&blocks, "pic.token");
     let (_, on_hit, on_miss) = tower_cond_br(token);
     assert!(on_hit.starts_with("pic.hit"), "{token:?}");
+    // #10498: the class-accessor arm sits on the miss edge; every one of its
+    // guards declines to the front, so the front (the ways) is still asked
+    // before anything that collects except a proven accessor hit.
+    let arm = verify_accessor_arm(&blocks).unwrap_or_else(|e| panic!("{e}: {blocks:?}"));
     assert!(
-        on_miss.starts_with("pic.miss.front"),
-        "the compare's miss edge must reach the front (the ways) first: {token:?}"
+        on_miss == arm[0],
+        "the compare's miss edge must reach the accessor arm, then the front          (the ways): {token:?}"
     );
     let (front_label, front) = front_call_block(&blocks);
     assert!(
@@ -648,13 +652,28 @@ fn pic_miss_reuses_the_token_blocks_values_instead_of_re_deriving_them() {
         })
         .map(|(l, _)| l.as_str())
         .collect();
+    // #10498: the front's predecessors are the class-accessor arm's guards,
+    // a chain the token compare's false edge enters and dominates.
+    let arm = verify_accessor_arm(&blocks).unwrap_or_else(|e| panic!("{e}: {blocks:?}"));
     assert_eq!(
-        preds,
-        vec![token_label],
-        "the front must have exactly one predecessor (pic.token), or it is no \
-         longer dominated by it: {blocks:?}"
+        tower_cond_br(token).2,
+        arm[0],
+        "the token compare's false edge must enter the arm: {token:?}"
+    );
+    assert_eq!(
+        preds, arm,
+        "the front must be reached only through the accessor arm's guards, \
+         or it is no longer dominated by pic.token: {blocks:?}"
     );
     let all: Vec<&String> = blocks.iter().flat_map(|(_, b)| b.iter()).collect();
+    // The arm re-reads the receiver's ShapeId on the miss edge on purpose
+    // (pinned by `verify_accessor_arm`); the predicate counts below are about
+    // the token path.
+    let token_path: Vec<&String> = blocks
+        .iter()
+        .filter(|(l, _)| !l.starts_with("pic.acc."))
+        .flat_map(|(_, b)| b.iter())
+        .collect();
     assert!(
         !all.iter().any(|l| l.contains("@PERRY_IC_EPOCH")),
         "the removed keys-pointer epoch global must not appear"
@@ -670,7 +689,7 @@ fn pic_miss_reuses_the_token_blocks_values_instead_of_re_deriving_them() {
         ("icmp eq i8 ", "the GC_TYPE_OBJECT compare", 0),
         ("icmp eq i32 %", "the ShapeId identity compare", 1),
     ] {
-        let n = all.iter().filter(|l| l.contains(needle)).count();
+        let n = token_path.iter().filter(|l| l.contains(needle)).count();
         assert_eq!(
             n, expect,
             "{what} appears {n} times, expected {expect} — a receiver \
@@ -1598,6 +1617,11 @@ fn compact_get_mru_is_atomic_and_full_cache_remains_lazy() {
 /// false edge makes ONE plain call to the GC-leaf front
 /// (`js_object_get_field_ic_front`), whose `TAG_HOLE` decline continues to the
 /// collecting slow call.
+///
+/// #10498: ahead of the front, the class-accessor arm may make one more call,
+/// an indirect call of a compiled getter it has proved (`verify_accessor_arm`);
+/// it calls no runtime property entry, so the property-GET family below is
+/// unchanged.
 #[test]
 fn the_generic_tower_is_one_leaf_call_two_exits_and_a_bounded_number_of_blocks() {
     let ir = emit(false, None);
@@ -1684,6 +1708,16 @@ fn the_generic_tower_is_one_leaf_call_two_exits_and_a_bounded_number_of_blocks()
         // the one exit, and the join
         "pic.miss.call",
         "pget.recv_merge",
+        // #10498: the class-accessor arm on the compare's false edge, ahead of
+        // the front: six guards that decline to the front, and the direct
+        // getter call (`verify_accessor_arm` pins the chain).
+        "pic.acc.empty",
+        "pic.acc.cache",
+        "pic.acc.recv",
+        "pic.acc.kind",
+        "pic.acc.holder",
+        "pic.acc.lane",
+        "pic.acc.call",
     ];
     // Labels carry a numeric suffix (`pic.token.6`); strip it for comparison.
     let mut normalized: Vec<String> = blocks
@@ -1734,10 +1768,13 @@ fn a_spill_entry_is_recognised_by_the_front_and_nowhere_at_the_site() {
     }
     let (_, token) = tower_block(&blocks, "pic.token");
     let (_, _, on_miss) = tower_cond_br(token);
+    // #10498: through the class-accessor arm, every guard of which declines
+    // to the front.
+    let arm = verify_accessor_arm(&blocks).unwrap_or_else(|e| panic!("{e}: {blocks:?}"));
     assert!(
-        on_miss.starts_with("pic.miss.front"),
+        on_miss == arm[0],
         "the compare's false edge must reach the front, which recognises a \
-         spill entry: {token:?}"
+         spill entry, through the accessor arm: {token:?}"
     );
 }
 

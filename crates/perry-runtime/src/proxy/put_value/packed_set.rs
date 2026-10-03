@@ -145,6 +145,13 @@ pub extern "C" fn js_put_value_set_packed_miss(
     packed: *const AtomicU64,
 ) -> f64 {
     let site = packed as *const super::packed_add::PackedSetSite;
+    // The site's compiled-setter entry: a store whose key the receiver
+    // inherits as a class accessor misses the emitted ways by construction.
+    // Its hit is two ShapeId compares and one lane load (`setter_site`), so it
+    // is asked before any other miss work re-derives what it already proves.
+    if let Some(stored) = unsafe { setter_site::try_hit(cache_slot, target, key, value) } {
+        return stored;
+    }
     // Charter step 5: migrate a receiver whose shape the lineage generalized
     // before the key-add memo or a way is keyed by it.
     let target_bits = target.to_bits();

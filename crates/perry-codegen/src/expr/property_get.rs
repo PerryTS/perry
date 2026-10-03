@@ -44,6 +44,7 @@ use super::property_get_names::{
     is_net_native_method_value, is_url_pattern_data_property,
 };
 
+mod accessor_arm;
 pub(crate) mod generic_dispatch;
 pub(crate) mod globalget;
 mod helpers;

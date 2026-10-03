@@ -107,6 +107,30 @@ pub(crate) fn emit_js_body_call_gc_leaf(
     blk.call_indirect_gc_leaf(DOUBLE, code_ptr, &native)
 }
 
+/// Call a compiled class INSTANCE getter through its code address (a site's
+/// class-accessor entry, `perry_abi::PIC_HOLDER_GETTER_WORD`): a method body
+/// `double get(double this)`, the convention the runtime calls the same entry
+/// with (`perry-runtime/src/closure/body_call.rs`, `js_method_body_fn!`).
+/// `code_ptr` is a `ptr`, `this_box` the NaN-boxed receiver as a `double`.
+/// The getter can run any JS: this is a collecting, possibly throwing call.
+pub(crate) fn emit_class_getter_call(blk: &mut LlBlock, code_ptr: &str, this_box: &str) -> String {
+    blk.call_indirect(DOUBLE, code_ptr, &[(DOUBLE, this_box)])
+}
+
+/// Call a compiled class INSTANCE setter through its code address (a store
+/// site's compiled-setter entry, `perry_abi::SETTER_SITE_CODE_OFFSET`): a
+/// method body `double set(double this, double v)`, the convention the runtime
+/// calls the same entry with. Its result is ignored: the assignment's value
+/// is `v`. A collecting, possibly throwing call.
+pub(crate) fn emit_class_setter_call(
+    blk: &mut LlBlock,
+    code_ptr: &str,
+    this_box: &str,
+    value: &str,
+) -> String {
+    blk.call_indirect(DOUBLE, code_ptr, &[(DOUBLE, this_box), (DOUBLE, value)])
+}
+
 /// The receiver bits for a call whose callee binds `this` to `undefined`
 /// (or whose callee is an arrow and never reads it).
 pub(crate) const JS_THIS_UNDEFINED: &str = crate::nanbox::TAG_UNDEFINED_I64;

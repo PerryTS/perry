@@ -2730,7 +2730,7 @@ js_register_class_constructor_flags	Leaf
 js_register_class_extends_data_view	Leaf
 js_register_class_extends_error	Leaf
 js_register_class_extends_typed_array	Leaf
-js_register_class_generic_origin	Leaf
+js_register_class_generic_origin	Reenters
 js_register_class_getter	Reenters
 js_register_class_has_instance	Leaf
 js_register_class_id	Leaf
