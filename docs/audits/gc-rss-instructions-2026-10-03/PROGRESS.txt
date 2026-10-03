@@ -1129,3 +1129,21 @@ runtime control/ELF archives and the same11currentc170fixtures. Moving cases
 must show copied_objects>0 and protected retired from-space, not just exit0.
 All source/compiler/runtime/binary hashes and Node26.5.1outputs are retained.
 No production source adoption occurs merely because these jobs were queued.
+
+CURRENT PRIVATE MATRIX/ARENA OBSERVERS (2026-10-03 19:20Z)
+All34normal-auto builds and102plain repetitions passed; perf repetitions live.
+Early pipeline instruction delta is positive; do not adopt root-scope probe
+from its four-case result. Full signed ranges remain required. Generic driver
+document builds have workload-mode labels; its source validator expects stem
+70-documents. Independent verifier retains original records/failure receipt
+and derives source bindings with original workload labels. No rerun/exclusion.
+Owned28238 queues a test-only arena geometry probe2571f4839e in a fourth
+source/target, preserving control and private app products. It measures actual
+field offsets and opaque std Vec/Box words for external reads; before use,
+shipping access offsets/source geometry must also agree. No production change.
+Owned41764 queues12external peak-mapping observations on verifiedc170full-
+runtime binaries. Reads smaps only on RSS growth; no debugger, forced GC,
+workload edit or process stop. Exact wait4 max RSS and signed sampling gap
+are separate. Smaps is non-atomic; near-peak categories are diagnosis and do
+not replace acceptance. This first separates anonymous from executable/other
+file-backed residency, rather than subtracting a non-peak live census from RSS.
