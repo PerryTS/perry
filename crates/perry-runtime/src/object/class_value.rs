@@ -8,8 +8,9 @@
 //!   It is bit-identical to the int32 number equal to the class id, which is
 //!   #11414; the lane deletes it;
 //! * a class FUNCTION OBJECT: a `GC_TYPE_CLOSURE` cell whose code pointer is
-//!   [`js_class_constructor_called`] (its [[Call]], which throws) and whose
-//!   capture slot 0 holds the class id as an INT32 value.
+//!   [`js_class_constructor_called`] (its [[Call]], which throws), whose
+//!   capture slot 0 holds the class id as an INT32 value, and whose capture
+//!   slot 1 holds the class's `prototype` object ([`class_decl_prototype_link`]).
 //!
 //! Every decoder asks [`class_value_id`] (or [`class_value_id_bits`] /
 //! [`class_closure_id`] for the raw-word and raw-pointer spellings). Nothing
@@ -253,7 +254,11 @@ pub(crate) fn class_value_is_first_evaluation(class_id: u32) -> bool {
 /// old generation and pinned (it lives as long as the agent and never moves),
 /// code pointer
 /// [`js_class_constructor_called`], capture slot 0 = the class id as INT32,
+<<<<<<< 07fa0cd9d0e1faa312e5aeddb7155bd773cb945a
 /// capture slot 1 = its evaluation state ([`CLASS_EVALUATION_STATE_SLOT`]).
+=======
+/// capture slot 1 = the class's `prototype` object once it exists.
+>>>>>>> f5aaf5308057b887dc30478f6116f585715b43a8
 ///
 /// Never collects: callers hold raw receiver pointers across the lookup, so
 /// the old-arena allocation runs under a [`crate::gc::GcSuppressScope`].
@@ -265,23 +270,37 @@ fn class_value_mint(class_id: u32) -> *mut ClosureHeader {
         "a class function object belongs to a compiled class id, never a builtin or synthetic band: {class_id:#x}"
     );
     let _no_collect = crate::gc::GcSuppressScope::new();
+<<<<<<< 07fa0cd9d0e1faa312e5aeddb7155bd773cb945a
     let payload = crate::closure::closure_payload_size(2);
+=======
+    let payload = crate::closure::closure_payload_size(CLASS_VALUE_CAPTURES);
+>>>>>>> f5aaf5308057b887dc30478f6116f585715b43a8
     let ptr = crate::arena::arena_alloc_gc_old_born_tenured(
         payload,
         std::mem::align_of::<ClosureHeader>(),
         crate::gc::GC_TYPE_CLOSURE,
     ) as *mut ClosureHeader;
     unsafe {
+<<<<<<< 07fa0cd9d0e1faa312e5aeddb7155bd773cb945a
         // GC_STORE_AUDIT(INIT): fresh class function object; both captures
         // are INT32s (class id, evaluation state) and the props edge is null —
         // pointer-free.
         (*ptr).capture_count = 2;
+=======
+        // GC_STORE_AUDIT(INIT): fresh class function object; capture 0 is an
+        // INT32 class id, capture 1 (the prototype link) starts `undefined`
+        // and the props edge is null — pointer-free. The link's later pointer
+        // is a root slot of the class-value scan, like `props`.
+        (*ptr).capture_count = CLASS_VALUE_CAPTURES as u32;
+>>>>>>> f5aaf5308057b887dc30478f6116f585715b43a8
         (*ptr).shape_id = crate::closure::shape::function_class_shape();
         (*ptr).info = &CLASS_CONSTRUCTOR_INFO;
         (*ptr).props = std::ptr::null_mut();
+        let captures = crate::closure::closure_capture_slots_mut(ptr);
+        std::ptr::write(captures, crate::value::INT32_TAG | class_id as u64);
         std::ptr::write(
-            crate::closure::closure_capture_slots_mut(ptr),
-            crate::value::INT32_TAG | class_id as u64,
+            captures.add(CLASS_PROTOTYPE_LINK_CAPTURE),
+            crate::value::TAG_UNDEFINED,
         );
         std::ptr::write(
             crate::closure::closure_capture_slots_mut(ptr).add(CLASS_EVALUATION_STATE_SLOT),
@@ -810,6 +829,87 @@ pub(crate) fn class_value_ptr(class_id: u32) -> *mut ClosureHeader {
     }
 }
 
+/// Captures of a class function object: the class id, then the prototype link.
+const CLASS_VALUE_CAPTURES: usize = 2;
+/// The capture holding the class's `prototype` object (NaN-boxed), or
+/// `undefined` before it exists.
+const CLASS_PROTOTYPE_LINK_CAPTURE: usize = 1;
+
+/// The prototype-link word of class function object `closure`.
+///
+/// # Safety
+/// `closure` is a live class function object minted by [`class_value_mint`].
+#[inline]
+unsafe fn prototype_link_slot(closure: *mut ClosureHeader) -> *mut u64 {
+    crate::closure::closure_capture_slots_mut(closure).add(CLASS_PROTOTYPE_LINK_CAPTURE)
+}
+
+/// `C.prototype` of class `class_id` in this agent, or null when it does not
+/// exist yet: the link the class's own function object carries.
+///
+/// `prototype` is an own property of the class constructor
+/// (MakeConstructor: `{ [[Writable]]: false, [[Enumerable]]: false,
+/// [[Configurable]]: false }`), so the class→prototype link is a fact of the
+/// class object, fixed for the agent's life once made. The function object
+/// keeps it in a capture next to the class id, so the read is the class-value
+/// table's indexed loads plus one: no lock, no hash, no side table. A class
+/// whose function object was never minted has no prototype object either
+/// (minting builds it, see [`class_value_mint`]).
+///
+/// `class_id` is the prototype's identity id
+/// ([`super::class_registry::decl_prototype_identity_id`]).
+#[inline]
+pub(crate) fn class_decl_prototype_link(class_id: u32) -> *mut super::ObjectHeader {
+    let Some(closure) = class_value_cached(class_id) else {
+        return std::ptr::null_mut();
+    };
+    // SAFETY: a live class function object of this agent.
+    let bits = unsafe { *prototype_link_slot(closure) };
+    if crate::value::JSValue::from_bits(bits).is_pointer() {
+        (bits & crate::value::POINTER_MASK) as *mut super::ObjectHeader
+    } else {
+        std::ptr::null_mut()
+    }
+}
+
+/// Make `proto` class `class_id`'s prototype link and return the object it
+/// replaced (null when none). The class's function object is minted if
+/// needed; `proto` must be live and rooted by the caller.
+pub(crate) fn class_decl_prototype_link_store(
+    class_id: u32,
+    proto: *mut super::ObjectHeader,
+) -> *mut super::ObjectHeader {
+    let previous = class_decl_prototype_link(class_id);
+    let closure = class_value_ptr(class_id);
+    let bits = crate::value::POINTER_TAG | (proto as u64 & crate::value::POINTER_MASK);
+    // GC_STORE_AUDIT(ROOT): the class function object is pinned and its link
+    // slot is a root of `scan_class_value_roots_mut`; the root barrier below
+    // shades the new edge for an in-progress incremental mark.
+    unsafe { *prototype_link_slot(closure) = bits };
+    crate::gc::runtime_write_barrier_root_raw_ptr(proto);
+    previous
+}
+
+/// Clear every minted class's prototype link (a test resetting the registry).
+#[cfg(test)]
+pub(crate) fn test_clear_class_decl_prototype_links() {
+    let (pages, len) = CLASS_VALUES.with(std::cell::Cell::get);
+    for i in 0..len {
+        // SAFETY: `pages` holds `len` page pointers (null or a live page).
+        let page = unsafe { *pages.add(i) };
+        if page.is_null() {
+            continue;
+        }
+        // SAFETY: a live leaked page of this agent.
+        for slot in unsafe { (*page).iter() } {
+            if !slot.is_null() {
+                // SAFETY: a live class function object of this agent.
+                unsafe { *prototype_link_slot(*slot) = crate::value::TAG_UNDEFINED };
+            }
+        }
+    }
+}
+
 /// The VALUE of class `class_id`'s constructor: its function object, NaN-boxed.
 #[inline]
 pub(crate) fn class_value(class_id: u32) -> f64 {
@@ -855,6 +955,14 @@ pub(crate) fn scan_class_value_roots_mut(visitor: &mut crate::gc::RuntimeRootVis
             let props = unsafe { &mut (**slot).props };
             if !props.is_null() {
                 visitor.visit_raw_mut_ptr_slot(props);
+            }
+            // The prototype link: the class's second heap edge, visited for
+            // the same reason as `props` (a pinned header's slots are never
+            // enumerated by marking).
+            // SAFETY: a live class function object of this agent.
+            let link = unsafe { prototype_link_slot(*slot) };
+            if crate::value::JSValue::from_bits(unsafe { *link }).is_pointer() {
+                visitor.visit_nanbox_u64_slot(unsafe { &mut *link });
             }
         }
     }

@@ -323,16 +323,11 @@ mod tests {
     fn decl_prototype_heap_object_folds_onto_constructor_key() {
         let cid = 0x5151;
         register_test_class(cid);
-        let fake_proto_ptr: usize = 0x1_0000; // arbitrary; only used as a map key
-        crate::object::CLASS_DECL_PROTOTYPE_OBJECTS.with(|table| {
-            table
-                .write()
-                .unwrap()
-                .get_or_insert_with(Default::default)
-                .insert(cid, fake_proto_ptr);
-        });
-        crate::object::class_lookup_surface_gen_bump();
-        let target = f64::from_bits(POINTER_TAG | (fake_proto_ptr as u64 & POINTER_MASK));
+        // A declared prototype is an object of its class's id that the
+        // class's link names.
+        let proto_ptr = crate::object::js_object_alloc(cid, 1) as usize;
+        crate::object::test_seed_class_decl_prototype_object_root(cid, proto_ptr);
+        let target = f64::from_bits(POINTER_TAG | (proto_ptr as u64 & POINTER_MASK));
         assert_eq!(
             normalize_target_bits(target),
             crate::object::class_constructor_key_bits(cid)

@@ -6,9 +6,7 @@
 //! holds the GC scanner (and its test seeds) that root + relocate their
 //! pointer values.
 
-use super::class_registry::{
-    CLASS_DECL_PROTOTYPE_OBJECTS, CLASS_PARENT_CLOSURES, CLASS_PROTOTYPE_OBJECTS,
-};
+use super::class_registry::{CLASS_PARENT_CLOSURES, CLASS_PROTOTYPE_OBJECTS};
 
 /// GC mutable-root scanner for the class static-inheritance side-tables
 /// (issue #1790, epic #1785 / design #1772).
@@ -55,15 +53,6 @@ pub fn scan_class_inheritance_roots_mut(visitor: &mut crate::gc::RuntimeRootVisi
             }
         }
     });
-    CLASS_DECL_PROTOTYPE_OBJECTS.with(|table| {
-        if let Ok(mut guard) = table.write() {
-            if let Some(map) = guard.as_mut() {
-                map.visit_root_slots(|ptr| {
-                    visitor.visit_usize_slot(ptr);
-                });
-            }
-        }
-    });
     CLASS_PARENT_CLOSURES.with(|table| {
         if let Ok(mut guard) = table.write() {
             if let Some(map) = guard.as_mut() {
@@ -91,18 +80,6 @@ pub(crate) fn test_seed_class_inheritance_roots(proto_cid: u32, proto_ptr: usize
 }
 
 #[cfg(test)]
-pub(crate) fn test_seed_decl_class_prototype_root(class_id: u32, proto_ptr: usize) {
-    CLASS_DECL_PROTOTYPE_OBJECTS.with(|table| {
-        table
-            .write()
-            .unwrap()
-            .get_or_insert_with(Default::default)
-            .insert(class_id, proto_ptr);
-    });
-    super::class_lookup_surface_gen_bump();
-}
-
-#[cfg(test)]
 pub(crate) fn test_seed_class_parent_closure_root(closure_cid: u32, closure_ptr: usize) {
     // GC_STORE_AUDIT(ROOT): test seed mirrors CLASS_PARENT_CLOSURES values scanned by scan_class_inheritance_roots_mut.
     CLASS_PARENT_CLOSURES.with(|table| {
@@ -126,18 +103,6 @@ pub(crate) fn test_class_prototype_object_root(proto_cid: u32) -> usize {
 }
 
 #[cfg(test)]
-pub(crate) fn test_decl_class_prototype_root(class_id: u32) -> usize {
-    CLASS_DECL_PROTOTYPE_OBJECTS.with(|table| {
-        table
-            .read()
-            .unwrap()
-            .as_ref()
-            .and_then(|m| m.get(class_id))
-            .unwrap_or(0)
-    })
-}
-
-#[cfg(test)]
 pub(crate) fn test_class_parent_closure_root(closure_cid: u32) -> usize {
     CLASS_PARENT_CLOSURES.with(|table| {
         table
@@ -154,11 +119,6 @@ pub(crate) fn test_clear_class_inheritance_roots(proto_cid: u32, closure_cid: u3
     CLASS_PROTOTYPE_OBJECTS.with(|table| {
         if let Some(m) = table.write().unwrap().as_mut() {
             m.remove(&proto_cid);
-        }
-    });
-    CLASS_DECL_PROTOTYPE_OBJECTS.with(|table| {
-        if let Some(m) = table.write().unwrap().as_mut() {
-            m.remove(proto_cid);
         }
     });
     CLASS_PARENT_CLOSURES.with(|table| {
