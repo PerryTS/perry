@@ -189,7 +189,7 @@ fn class_chain_overrides(class_id: u32, name: &str) -> bool {
 pub(crate) fn install_methods_on_existing_object(
     obj: *mut ObjectHeader,
     this_value: f64,
-    methods: &[(&str, StubFn)],
+    methods: &[(&'static str, StubFn)],
     skip_names: &[&str],
 ) {
     // `js_closure_alloc` and the key interning below both allocate and can
@@ -241,7 +241,7 @@ pub(crate) fn install_methods_on_existing_object(
 
 /// The key an installed base method lands on: its plain name normally, or the
 /// reserved super-only key when the subclass overrides it (#6316).
-fn native_or_plain_key(name: &str, overridden: bool) -> *mut crate::string::StringHeader {
+fn native_or_plain_key(name: &'static str, overridden: bool) -> *mut crate::string::StringHeader {
     if overridden {
         native_base_super_key(name)
     } else {
@@ -509,7 +509,7 @@ extern "C" fn ns_ee_async_resource_getter(
 pub(crate) unsafe fn install_event_emitter_async_resource_prototype(proto: *mut ObjectHeader) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let proto = scope.root_raw_mut_ptr(proto);
-    let install_method = |name: &str, function: *const crate::closure::JsFunctionInfo| {
+    let install_method = |name: &'static str, function: *const crate::closure::JsFunctionInfo| {
         let closure = js_closure_alloc(function, 1);
         crate::closure::js_closure_set_capture_ptr(closure, 0, crate::value::TAG_UNDEFINED as i64);
         let closure = scope.root_raw_mut_ptr(closure);

@@ -157,9 +157,9 @@ fn readable_field(stream: f64, field: &str) -> f64 {
         // own flag (a Duplex's writable `end()` must not set it).
         "ended" => bool_bits(has_truthy_hidden(stream, hidden_key(b"readableEnded"))),
         "endEmitted" => bool_bits(has_truthy_hidden(stream, hidden_end_emitted_key())),
-        "readableListening" => {
-            bool_bits(stream_listener_count_for_event(stream, string_value(b"readable")) > 0)
-        }
+        "readableListening" => bool_bits(
+            stream_listener_count_for_event(stream, literal_string_value(b"readable")) > 0,
+        ),
         "resumeScheduled" => bool_bits(has_truthy_hidden(
             stream,
             hidden_readable_resume_scheduled_key(),
@@ -185,7 +185,7 @@ fn writable_field(stream: f64, field: &str) -> f64 {
         "decodeStrings" => get_hidden_value(stream, hidden_writable_decode_strings_key())
             .unwrap_or_else(|| bool_bits(true)),
         "defaultEncoding" => get_hidden_value(stream, hidden_writable_default_encoding_key())
-            .unwrap_or_else(|| string_value(b"utf8")),
+            .unwrap_or_else(|| literal_string_value(b"utf8")),
         _ => common_field(stream, field),
     }
 }
@@ -335,7 +335,7 @@ fn state_proto(kind: usize) -> f64 {
 }
 
 /// Attach a fresh `_readableState` / `_writableState` view to `stream`.
-fn install_state_view(stream: f64, kind: usize, property: &[u8]) {
+fn install_state_view(stream: f64, kind: usize, property: &'static [u8]) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let stream = scope.root_nanbox_f64(stream);
     let proto = scope.root_nanbox_f64(state_proto(kind));

@@ -32,10 +32,10 @@ fn cleanup_pipe_listeners_from_closure(closure: *const ClosureHeader) {
     let error = js_closure_get_capture_f64(closure, 3);
     let close = js_closure_get_capture_f64(closure, 4);
     let finish = js_closure_get_capture_f64(closure, 5);
-    let _ = remove_stream_listener_for_event(dest, string_value(b"unpipe"), unpipe);
-    let _ = remove_stream_listener_for_event(dest, string_value(b"error"), error);
-    let _ = remove_stream_listener_for_event(dest, string_value(b"close"), close);
-    let _ = remove_stream_listener_for_event(dest, string_value(b"finish"), finish);
+    let _ = remove_stream_listener_for_event(dest, literal_string_value(b"unpipe"), unpipe);
+    let _ = remove_stream_listener_for_event(dest, literal_string_value(b"error"), error);
+    let _ = remove_stream_listener_for_event(dest, literal_string_value(b"close"), close);
+    let _ = remove_stream_listener_for_event(dest, literal_string_value(b"finish"), finish);
 }
 
 pub(super) extern "C" fn pipe_unpipe_callback(
@@ -66,7 +66,7 @@ pub(super) extern "C" fn pipe_error_callback(
     if !unpipe_destination(src, dest) {
         cleanup_pipe_listeners_from_closure(closure);
     }
-    if stream_listener_count_for_event(dest, string_value(b"error")) == 0 {
+    if stream_listener_count_for_event(dest, literal_string_value(b"error")) == 0 {
         crate::exception::js_throw(err);
     }
     f64::from_bits(TAG_UNDEFINED)
@@ -112,7 +112,7 @@ pub(super) extern "C" fn pipe_drain_callback(
     let src = js_closure_get_capture_f64(closure, 0);
     let dest = js_closure_get_capture_f64(closure, 1);
     let listener = js_closure_get_capture_f64(closure, 2);
-    let _ = remove_stream_listener_for_event(dest, string_value(b"drain"), listener);
+    let _ = remove_stream_listener_for_event(dest, literal_string_value(b"drain"), listener);
     if pipe_destination_contains(src, dest) && !stream_destroyed(src) {
         if stream_hidden_ended(src) && pending_readable_chunk_count(src) == 0 {
             set_readable_flowing(src, f64::from_bits(TAG_TRUE));

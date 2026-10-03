@@ -48,8 +48,27 @@ pub(super) unsafe fn own_field_by_key_bytes(obj: *const ObjectHeader, key: &[u8]
     None
 }
 
-pub(super) fn hidden_key(bytes: &[u8]) -> *mut crate::string::StringHeader {
-    crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
+thread_local! {
+    /// This thread's string for each hidden-key literal, by the literal's address.
+    static HIDDEN_KEYS: std::cell::RefCell<std::collections::HashMap<(usize, usize), usize>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// The string for a hidden-field name. Callers read the stream before they take
+/// the key (`set_hidden_value(stream, hidden_key(K), v)`), so taking a key must
+/// never collect (#11828). Each literal gets one longlived string per thread,
+/// which the collector never moves or frees, made with collection held off.
+pub(super) fn hidden_key(bytes: &'static [u8]) -> *mut crate::string::StringHeader {
+    let id = (bytes.as_ptr() as usize, bytes.len());
+    if let Some(key) = HIDDEN_KEYS.with(|keys| keys.borrow().get(&id).copied()) {
+        return key as *mut crate::string::StringHeader;
+    }
+    let key = {
+        let _no_gc = crate::gc::GcSuppressScope::new();
+        crate::string::js_string_from_bytes_longlived(bytes.as_ptr(), bytes.len() as u32)
+    };
+    HIDDEN_KEYS.with(|keys| keys.borrow_mut().insert(id, key as usize));
+    key
 }
 
 pub(super) fn string_value_eq(value: f64, expected: &[u8]) -> bool {
@@ -188,7 +207,7 @@ pub(super) fn mark_stream_closed_and_emit_close(stream: f64) {
     mark_stream_closed(stream);
     note_close_emitted(stream);
     if stream_emit_close_enabled(stream) {
-        let _ = emit_stream_event(stream, string_value(b"close"), &[]);
+        let _ = emit_stream_event(stream, literal_string_value(b"close"), &[]);
     }
 }
 
@@ -227,17 +246,22 @@ pub(super) fn ensure_hidden_array(stream: f64, key: *mut crate::string::StringHe
     if let Some(value) = get_hidden_value(stream, key) {
         return value;
     }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let stream = scope.root_nanbox_f64(stream);
     let arr = box_pointer(crate::array::js_array_alloc(0) as *const u8);
-    set_hidden_value(stream, key, arr);
+    set_hidden_value(stream.get_nanbox_f64(), key, arr);
     arr
 }
 
 pub(super) fn buffer_pending_readable_chunk(stream: f64, chunk: f64) {
-    let pending = ensure_hidden_array(stream, hidden_readable_pending_key());
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let stream = scope.root_nanbox_f64(stream);
+    let chunk = scope.root_nanbox_f64(chunk);
+    let pending = ensure_hidden_array(stream.get_nanbox_f64(), hidden_readable_pending_key());
     let arr = raw_ptr_from_value(pending) as *mut crate::array::ArrayHeader;
-    let arr = crate::array::js_array_push_f64(arr, chunk);
+    let arr = crate::array::js_array_push_f64(arr, chunk.get_nanbox_f64());
     set_hidden_value(
-        stream,
+        stream.get_nanbox_f64(),
         hidden_readable_pending_key(),
         box_pointer(arr as *const u8),
     );
@@ -257,47 +281,58 @@ pub(super) fn emit_readable_data(stream: f64, chunk: f64) {
 }
 
 pub(super) fn emit_readable_data_unchecked(stream: f64, chunk: f64) {
-    let Some(chunk) = super::decode_readable_chunk_for_encoding(stream, chunk) else {
+    // The `data` listeners can collect; the pipe writes after them need the
+    // moved stream and chunk (#11828).
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let stream = scope.root_nanbox_f64(stream);
+    let chunk = scope.root_nanbox_f64(chunk);
+    let Some(decoded) =
+        super::decode_readable_chunk_for_encoding(stream.get_nanbox_f64(), chunk.get_nanbox_f64())
+    else {
         return;
     };
-    mark_disturbed(stream);
-    let _ = emit_stream_event(stream, string_value(b"data"), &[chunk]);
-    write_chunk_to_pipe_destinations(stream, chunk);
+    chunk.set_nanbox_f64(decoded);
+    mark_disturbed(stream.get_nanbox_f64());
+    let _ = emit_stream_event(
+        stream.get_nanbox_f64(),
+        literal_string_value(b"data"),
+        &[chunk.get_nanbox_f64()],
+    );
+    write_chunk_to_pipe_destinations(stream.get_nanbox_f64(), chunk.get_nanbox_f64());
 }
 
 pub(super) fn flush_pending_readable_chunks(stream: f64) {
-    if !readable_is_flowing(stream) || stream_destroyed(stream) {
+    // `data` listeners can collect between chunks (#11828).
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let stream = scope.root_nanbox_f64(stream);
+    let s = || stream.get_nanbox_f64();
+    if !readable_is_flowing(s()) || stream_destroyed(s()) {
         return;
     }
-    let pending = ensure_hidden_array(stream, hidden_readable_pending_key());
-    let arr = raw_ptr_from_value(pending) as *const crate::array::ArrayHeader;
-    let len = crate::array::js_array_length(arr);
+    let pending = scope.root_nanbox_f64(ensure_hidden_array(s(), hidden_readable_pending_key()));
+    let arr = || raw_ptr_from_value(pending.get_nanbox_f64()) as *const crate::array::ArrayHeader;
+    let len = crate::array::js_array_length(arr());
     if len == 0 {
         return;
     }
-    let mut chunks = Vec::with_capacity(len as usize);
+    // The old queue is ours from here; a fresh one takes chunks pushed meanwhile.
+    let fresh = box_pointer(crate::array::js_array_alloc(0) as *const u8);
+    set_hidden_value(s(), hidden_readable_pending_key(), fresh);
     for i in 0..len {
-        chunks.push(crate::array::js_array_get_f64(arr, i));
-    }
-    set_hidden_value(
-        stream,
-        hidden_readable_pending_key(),
-        box_pointer(crate::array::js_array_alloc(0) as *const u8),
-    );
-    for chunk in chunks {
-        if !readable_is_flowing(stream) {
-            buffer_pending_readable_chunk(stream, chunk);
+        let chunk = crate::array::js_array_get_f64(arr(), i);
+        if !readable_is_flowing(s()) {
+            buffer_pending_readable_chunk(s(), chunk);
             continue;
         }
-        super::readable_from_promises::consume_readable_buffered_front(stream, chunk);
-        emit_readable_data_unchecked(stream, chunk);
+        super::readable_from_promises::consume_readable_buffered_front(s(), chunk);
+        emit_readable_data_unchecked(s(), crate::array::js_array_get_f64(arr(), i));
     }
-    if stream_hidden_ended(stream)
-        && pending_readable_chunk_count(stream) == 0
-        && !readable_is_paused(stream)
-        && !stream_destroyed(stream)
+    if stream_hidden_ended(s())
+        && pending_readable_chunk_count(s()) == 0
+        && !readable_is_paused(s())
+        && !stream_destroyed(s())
     {
-        schedule_readable_end(stream);
+        schedule_readable_end(s());
     }
 }
 
@@ -338,7 +373,7 @@ pub(super) fn pause_readable_stream(stream: f64) -> f64 {
     if get_hidden_value(stream, hidden_readable_flag_key()).is_some() && !readable_is_paused(stream)
     {
         set_readable_flowing(stream, f64::from_bits(TAG_FALSE));
-        let _ = emit_stream_event(stream, string_value(b"pause"), &[]);
+        let _ = emit_stream_event(stream, literal_string_value(b"pause"), &[]);
     }
     stream
 }
@@ -371,7 +406,7 @@ pub(super) fn resume_readable_stream_from_pipe(stream: f64) -> f64 {
         let was_paused = readable_is_paused(stream);
         set_readable_flowing(stream, f64::from_bits(TAG_TRUE));
         if was_paused {
-            let _ = emit_stream_event(stream, string_value(b"resume"), &[]);
+            let _ = emit_stream_event(stream, literal_string_value(b"resume"), &[]);
         }
         flush_pending_readable_chunks(stream);
         schedule_readable_from_drain(stream);
@@ -451,9 +486,9 @@ pub(super) fn pipe_stream_to_destination(stream: f64, dest: f64, end_dest: bool)
         add_pipe_no_end_destination(stream, dest);
     }
     install_pipe_destination_listeners(stream, dest);
-    let _ = emit_stream_event(dest, string_value(b"pipe"), &[stream]);
+    let _ = emit_stream_event(dest, literal_string_value(b"pipe"), &[stream]);
     set_readable_flowing(stream, f64::from_bits(TAG_TRUE));
-    let _ = emit_stream_event(stream, string_value(b"resume"), &[]);
+    let _ = emit_stream_event(stream, literal_string_value(b"resume"), &[]);
     flush_pending_readable_chunks(stream);
     schedule_readable_from_drain(stream);
     dest
@@ -525,7 +560,7 @@ pub(super) fn unpipe_destination(stream: f64, dest: f64) -> bool {
             box_pointer(out as *const u8),
         );
         remove_pipe_no_end_destination_once(stream, dest);
-        let _ = emit_stream_event(dest, string_value(b"unpipe"), &[stream]);
+        let _ = emit_stream_event(dest, literal_string_value(b"unpipe"), &[stream]);
         if crate::array::js_array_length(out) == 0 {
             let _ = pause_readable_stream_after_unpipe(stream);
         }
@@ -553,38 +588,52 @@ pub(super) fn unpipe_all_destinations(stream: f64) {
     );
     let _ = pause_readable_stream_after_unpipe(stream);
     for dest in dests {
-        let _ = emit_stream_event(dest, string_value(b"unpipe"), &[stream]);
+        let _ = emit_stream_event(dest, literal_string_value(b"unpipe"), &[stream]);
     }
 }
 
 pub(super) fn write_chunk_to_pipe_destinations(stream: f64, chunk: f64) {
-    let arr_value = pipe_destinations(stream);
-    let arr = raw_ptr_from_value(arr_value) as *const crate::array::ArrayHeader;
-    let len = crate::array::js_array_length(arr);
-    let mut dests = Vec::with_capacity(len as usize);
-    for i in 0..len {
-        dests.push(crate::array::js_array_get_f64(arr, i));
+    // Each write runs the destination's own code, which can collect (#11828).
+    // Walk a copy of the destinations so an unpipe from a write cannot skip one.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let stream = scope.root_nanbox_f64(stream);
+    let chunk = scope.root_nanbox_f64(chunk);
+    let live = || {
+        raw_ptr_from_value(pipe_destinations(stream.get_nanbox_f64()))
+            as *const crate::array::ArrayHeader
+    };
+    let dests = scope.root_raw_mut_ptr(crate::array::js_array_alloc(0));
+    for i in 0..crate::array::js_array_length(live()) {
+        let dest = crate::array::js_array_get_f64(live(), i);
+        dests.set_raw_mut_ptr(crate::array::js_array_push_f64(
+            dests.get_raw_mut_ptr(),
+            dest,
+        ));
     }
-    for dest in dests {
+    let len = crate::array::js_array_length(dests.get_raw_const_ptr());
+    for i in 0..len {
+        let dest = crate::array::js_array_get_f64(dests.get_raw_const_ptr(), i);
         if is_small_native_handle_destination(dest) {
-            let ret = call_small_native_pipe_method(dest, b"write", &[chunk]);
+            let ret = call_small_native_pipe_method(dest, b"write", &[chunk.get_nanbox_f64()]);
             if ret.to_bits() == TAG_FALSE {
-                let _ = pause_readable_stream(stream);
+                let _ = pause_readable_stream(stream.get_nanbox_f64());
             }
             continue;
         }
+        let dest_scope = crate::gc::RuntimeHandleScope::new();
+        let dest = dest_scope.root_nanbox_f64(dest);
         let ret = write_writable_chunk(
-            dest,
-            chunk,
+            dest.get_nanbox_f64(),
+            chunk.get_nanbox_f64(),
             f64::from_bits(TAG_UNDEFINED),
             f64::from_bits(TAG_UNDEFINED),
         );
         if ret.to_bits() == TAG_FALSE {
-            let _ = pause_readable_stream(stream);
-            if writable_length(dest) == 0.0 {
-                let _ = resume_readable_stream(stream);
+            let _ = pause_readable_stream(stream.get_nanbox_f64());
+            if writable_length(dest.get_nanbox_f64()) == 0.0 {
+                let _ = resume_readable_stream(stream.get_nanbox_f64());
             } else {
-                add_pipe_drain_listener(stream, dest);
+                add_pipe_drain_listener(stream.get_nanbox_f64(), dest.get_nanbox_f64());
             }
         }
     }
@@ -630,8 +679,10 @@ pub(super) fn schedule_readable_from_drain(stream: f64) {
         hidden_drain_scheduled_key(),
         f64::from_bits(TAG_TRUE),
     );
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let stream = scope.root_nanbox_f64(stream);
     let closure = js_closure_alloc(crate::fn_info!(ns_readable_from_drain, 0), 1);
-    js_closure_set_capture_ptr(closure, 0, stream.to_bits() as i64);
+    js_closure_set_capture_ptr(closure, 0, stream.get_nanbox_f64().to_bits() as i64);
     crate::builtins::js_queue_microtask(closure as i64);
 }
 
@@ -646,7 +697,7 @@ pub(super) fn schedule_readable_event(stream: f64) {
 
 pub(super) fn queue_readable_event(stream: f64) {
     if has_truthy_hidden(stream, hidden_readable_scheduled_key())
-        || stream_listener_count_for_event(stream, string_value(b"readable")) == 0
+        || stream_listener_count_for_event(stream, literal_string_value(b"readable")) == 0
     {
         return;
     }
@@ -773,31 +824,35 @@ pub(super) fn schedule_pending_writable_finish_if_ready(stream: f64) {
 }
 
 pub(super) fn emit_readable_end_once(stream: f64) {
-    if !has_truthy_hidden(stream, hidden_end_emitted_key()) {
-        if pending_readable_chunk_count(stream) > 0 {
-            if !readable_is_paused(stream) {
-                flush_pending_readable_chunks(stream);
+    // `end` listeners can collect before the pipes are ended (#11828).
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let stream = scope.root_nanbox_f64(stream);
+    let s = || stream.get_nanbox_f64();
+    if !has_truthy_hidden(s(), hidden_end_emitted_key()) {
+        if pending_readable_chunk_count(s()) > 0 {
+            if !readable_is_paused(s()) {
+                flush_pending_readable_chunks(s());
             }
-            if pending_readable_chunk_count(stream) > 0 || readable_is_paused(stream) {
+            if pending_readable_chunk_count(s()) > 0 || readable_is_paused(s()) {
                 return;
             }
-        } else if readable_is_paused(stream) {
+        } else if readable_is_paused(s()) {
             return;
         }
-        set_hidden_value(stream, hidden_end_emitted_key(), f64::from_bits(TAG_TRUE));
-        mark_stream_ended(stream);
-        refresh_readable_aborted_flag(stream);
-        let _ = emit_stream_event(stream, string_value(b"end"), &[]);
-        end_pipe_destinations(stream);
+        set_hidden_value(s(), hidden_end_emitted_key(), f64::from_bits(TAG_TRUE));
+        mark_stream_ended(s());
+        refresh_readable_aborted_flag(s());
+        let _ = emit_stream_event(s(), literal_string_value(b"end"), &[]);
+        end_pipe_destinations(s());
         // autoDestroy tears readable-only streams down after 'end'. Duplex
         // streams defer `close` until both readable `end` and writable
         // `finish` have fired; whichever side finishes second performs the
         // close. Refs node-suite/stream/readable/closed-flag.
-        if stream_auto_destroy_enabled(stream) {
-            let writable_pending = get_hidden_value(stream, hidden_writable_flag_key()).is_some()
-                && !has_truthy_hidden(stream, hidden_finish_emitted_key());
+        if stream_auto_destroy_enabled(s()) {
+            let writable_pending = get_hidden_value(s(), hidden_writable_flag_key()).is_some()
+                && !has_truthy_hidden(s(), hidden_finish_emitted_key());
             if !writable_pending {
-                destroy_stream(stream, f64::from_bits(TAG_UNDEFINED));
+                destroy_stream(s(), f64::from_bits(TAG_UNDEFINED));
             }
         }
     }
@@ -859,67 +914,85 @@ pub(super) fn clear_pending_readable_chunks(stream: f64) {
 }
 
 pub(super) fn drain_readable_from_events(stream: f64) {
-    if !readable_is_flowing(stream) || stream_destroyed(stream) {
+    // Listeners, pipe writes and the source iterator all run user code, which
+    // can collect, so hold the stream and every chunk in handles (#11828).
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let stream = scope.root_nanbox_f64(stream);
+    let s = || stream.get_nanbox_f64();
+    if !readable_is_flowing(s()) || stream_destroyed(s()) {
         return;
     }
-    let data_event = string_value(b"data");
-    let end_event = string_value(b"end");
-    if stream_listener_count_for_event(stream, data_event) == 0
-        && stream_listener_count_for_event(stream, end_event) == 0
+    if stream_listener_count_for_event(s(), literal_string_value(b"data")) == 0
+        && stream_listener_count_for_event(s(), literal_string_value(b"end")) == 0
         && crate::array::js_array_length(
-            raw_ptr_from_value(pipe_destinations(stream)) as *const crate::array::ArrayHeader
+            raw_ptr_from_value(pipe_destinations(s())) as *const crate::array::ArrayHeader
         ) == 0
     {
         return;
     }
-    if !readable_chunks_nonempty(stream) {
+    if !readable_chunks_nonempty(s()) {
         if let Some(source_iterator) =
-            get_hidden_value(stream, hidden_key(READABLE_SOURCE_ITERATOR_KEY))
+            get_hidden_value(s(), hidden_key(READABLE_SOURCE_ITERATOR_KEY))
         {
             match collect_pipeline_iterator_chunks(source_iterator) {
                 Ok(Some(chunks)) => {
-                    set_hidden_value(stream, hidden_chunks_key(), chunks);
-                    initialize_readable_from_buffered_length(stream, chunks);
+                    let chunks = scope.root_nanbox_f64(chunks);
+                    set_hidden_value(s(), hidden_chunks_key(), chunks.get_nanbox_f64());
+                    initialize_readable_from_buffered_length(s(), chunks.get_nanbox_f64());
                 }
                 Ok(None) => {}
                 Err(err) => {
-                    destroy_stream(stream, err);
+                    destroy_stream(s(), err);
                     return;
                 }
             }
         }
     }
-    if let Some(chunks) = readable_hidden_chunks(stream) {
-        let mut values = Vec::new();
-        push_chunk_values(chunks, &mut values, 0);
+    if let Some(chunks) = readable_hidden_chunks(s()) {
+        let mut found = Vec::new();
+        push_chunk_values(chunks, &mut found, 0);
+        // `found` holds raw values, so copy them into an array before anything
+        // can collect: one allocation, sized up front, with collection held off.
+        let values = {
+            let _no_gc = crate::gc::GcSuppressScope::new();
+            let mut arr = crate::array::js_array_alloc(found.len() as u32);
+            for value in found {
+                arr = crate::array::js_array_push_f64(arr, value);
+            }
+            scope.root_raw_mut_ptr(arr)
+        };
         let mut emit_destroyed_tail = false;
-        for chunk in values {
-            if !readable_is_flowing(stream) {
+        for i in 0..crate::array::js_array_length(values.get_raw_const_ptr()) {
+            let chunk = crate::array::js_array_get_f64(values.get_raw_const_ptr(), i);
+            if !readable_is_flowing(s()) {
                 return;
             }
-            if stream_destroyed(stream) {
+            if stream_destroyed(s()) {
                 if !emit_destroyed_tail {
                     return;
                 }
-                super::readable_from_promises::consume_readable_buffered_front(stream, chunk);
-                emit_readable_data_unchecked(stream, chunk);
+                super::readable_from_promises::consume_readable_buffered_front(s(), chunk);
+                let chunk = crate::array::js_array_get_f64(values.get_raw_const_ptr(), i);
+                emit_readable_data_unchecked(s(), chunk);
                 return;
             }
-            if super::readable_from_promises::attach_readable_from_promise_chunk(stream, chunk) {
+            if super::readable_from_promises::attach_readable_from_promise_chunk(s(), chunk) {
                 return;
             }
-            super::readable_from_promises::consume_readable_buffered_front(stream, chunk);
-            emit_readable_data_unchecked(stream, chunk);
-            if stream_destroyed(stream) {
+            let chunk = crate::array::js_array_get_f64(values.get_raw_const_ptr(), i);
+            super::readable_from_promises::consume_readable_buffered_front(s(), chunk);
+            let chunk = crate::array::js_array_get_f64(values.get_raw_const_ptr(), i);
+            emit_readable_data_unchecked(s(), chunk);
+            if stream_destroyed(s()) {
                 emit_destroyed_tail = true;
             }
         }
     }
-    if !stream_destroyed(stream)
-        && !has_truthy_hidden(stream, hidden_transform_finishing_key())
-        && readable_drain_may_end(stream)
+    if !stream_destroyed(s())
+        && !has_truthy_hidden(s(), hidden_transform_finishing_key())
+        && readable_drain_may_end(s())
     {
-        emit_readable_end_once(stream);
+        emit_readable_end_once(s());
     }
 }
 
@@ -1148,7 +1221,7 @@ pub(super) fn writev_record_chunk(chunk: f64, enc: f64) -> (f64, f64) {
     } else {
         let raw = raw_ptr_from_value(chunk);
         if raw >= 0x10000 && crate::buffer::is_registered_buffer(raw) {
-            (chunk, string_value(b"buffer"))
+            (chunk, literal_string_value(b"buffer"))
         } else {
             (chunk, enc)
         }

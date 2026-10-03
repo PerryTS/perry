@@ -619,31 +619,44 @@ pub extern "C" fn js_node_stream_readable_from_options(iterable: f64, opts: f64)
     if is_invalid_readable_from_input(iterable) {
         throw_readable_from_invalid_iterable(iterable);
     }
-    let readable = js_node_stream_readable_new(readable_from_options(opts));
-    let raw = raw_ptr_from_value(readable);
-    if raw >= 0x10000 {
+    // Normalizing can run the iterable's own code, so hold everything across
+    // it in handles (#11828).
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let iterable = scope.root_nanbox_f64(iterable);
+    let options = readable_from_options(opts);
+    let readable = scope.root_nanbox_f64(js_node_stream_readable_new(options));
+    if raw_ptr_from_value(readable.get_nanbox_f64()) >= 0x10000 {
         // Armed in a C trampoline frame (#9305); both continuations run
         // after the trap is popped, as before.
-        match crate::exception::catch_js_throw(|| normalize_readable_from_input(iterable)) {
+        match crate::exception::catch_js_throw(|| {
+            normalize_readable_from_input(iterable.get_nanbox_f64())
+        }) {
             Ok(normalized) => {
-                js_object_set_field_by_name(
-                    raw as *mut ObjectHeader,
+                let chunks = scope.root_nanbox_f64(normalized.chunks);
+                let source_iterator = normalized
+                    .source_iterator
+                    .map(|source_iterator| scope.root_nanbox_f64(source_iterator));
+                set_hidden_value(
+                    readable.get_nanbox_f64(),
                     hidden_chunks_key(),
-                    normalized.chunks,
+                    chunks.get_nanbox_f64(),
                 );
-                initialize_readable_from_buffered_length(readable, normalized.chunks);
-                if let Some(source_iterator) = normalized.source_iterator {
-                    js_object_set_field_by_name(
-                        raw as *mut ObjectHeader,
+                initialize_readable_from_buffered_length(
+                    readable.get_nanbox_f64(),
+                    chunks.get_nanbox_f64(),
+                );
+                if let Some(source_iterator) = source_iterator {
+                    set_hidden_value(
+                        readable.get_nanbox_f64(),
                         hidden_key(READABLE_SOURCE_ITERATOR_KEY),
-                        source_iterator,
+                        source_iterator.get_nanbox_f64(),
                     );
                 }
             }
             Err(err) => {
-                destroy_stream(readable, err);
+                destroy_stream(readable.get_nanbox_f64(), err);
             }
         }
     }
-    readable
+    readable.get_nanbox_f64()
 }

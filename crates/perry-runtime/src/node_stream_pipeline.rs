@@ -200,8 +200,8 @@ pub(super) fn add_pipeline_callback_listeners(
 ) {
     let state = new_pipeline_callback_state();
     let stage_array = pipeline_stage_array(stages);
-    let error_event = string_value(b"error");
-    let close_event = string_value(b"close");
+    let error_event = literal_string_value(b"error");
+    let close_event = literal_string_value(b"close");
     for stage in stages {
         let listener = js_closure_alloc(
             crate::fn_info!(pipeline_error_callback, 1; with_declared(1)),
@@ -239,9 +239,9 @@ pub(super) fn add_pipeline_callback_listeners(
     let success_event = if get_hidden_value(success_stage, hidden_writable_flag_key()).is_some()
         && options.end_final
     {
-        string_value(b"finish")
+        literal_string_value(b"finish")
     } else {
-        string_value(b"end")
+        literal_string_value(b"end")
     };
     let success = js_closure_alloc(
         crate::fn_info!(pipeline_success_callback, 0; with_declared(0)),
@@ -262,9 +262,9 @@ pub(super) fn wire_pipeline_pair(src: f64, dest: f64, end_dest: bool) {
         add_pipe_no_end_destination(src, dest);
     }
     install_pipe_destination_listeners(src, dest);
-    let _ = emit_stream_event(dest, string_value(b"pipe"), &[src]);
+    let _ = emit_stream_event(dest, literal_string_value(b"pipe"), &[src]);
     set_readable_flowing(src, f64::from_bits(TAG_TRUE));
-    let _ = emit_stream_event(src, string_value(b"resume"), &[]);
+    let _ = emit_stream_event(src, literal_string_value(b"resume"), &[]);
 }
 
 pub(super) fn pipeline_stage_has_next(value: f64) -> bool {
@@ -562,7 +562,7 @@ extern "C" fn collected_pipeline_error_noop(
 fn install_collected_pipeline_error_guards(stages: &[f64]) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let stages = scope.root_nanbox_f64_slice(stages);
-    let error = scope.root_nanbox_f64(string_value(b"error"));
+    let error = scope.root_nanbox_f64(literal_string_value(b"error"));
     for stage in &stages {
         if is_pipeline_stream(stage.get_nanbox_f64()) {
             let listener = js_closure_alloc(
@@ -1050,7 +1050,7 @@ fn install_compose_stage_error_listeners(composite: f64, source: f64, stages: f6
     let stages = scope.root_nanbox_f64(stages);
     let stage_values = compose_stage_values(stages.get_nanbox_f64());
     let stage_values = scope.root_nanbox_f64_slice(&stage_values);
-    let error_event = scope.root_nanbox_f64(string_value(b"error"));
+    let error_event = scope.root_nanbox_f64(literal_string_value(b"error"));
     for stage in &stage_values {
         if !is_pipeline_stream(stage.get_nanbox_f64()) {
             continue;
@@ -1087,7 +1087,7 @@ fn install_compose_source_listeners(composite: f64, source: f64, stages: f64) {
     js_closure_set_capture_f64(data.get_raw_mut_ptr(), 0, composite.get_nanbox_f64());
     add_stream_listener_for_event(
         source.get_nanbox_f64(),
-        string_value(b"data"),
+        literal_string_value(b"data"),
         box_pointer(data.get_raw_const_ptr()),
     );
 
@@ -1099,7 +1099,7 @@ fn install_compose_source_listeners(composite: f64, source: f64, stages: f64) {
     js_closure_set_capture_f64(end.get_raw_mut_ptr(), 0, composite.get_nanbox_f64());
     add_stream_listener_for_event(
         source.get_nanbox_f64(),
-        string_value(b"end"),
+        literal_string_value(b"end"),
         box_pointer(end.get_raw_const_ptr()),
     );
 
@@ -1127,7 +1127,7 @@ fn install_compose_source_error_listener(composite: f64, source: f64, stages: f6
     js_closure_set_capture_f64(error.get_raw_mut_ptr(), 2, stages.get_nanbox_f64());
     add_stream_listener_for_event(
         source.get_nanbox_f64(),
-        string_value(b"error"),
+        literal_string_value(b"error"),
         box_pointer(error.get_raw_const_ptr()),
     );
 }

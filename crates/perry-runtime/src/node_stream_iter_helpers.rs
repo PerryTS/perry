@@ -76,17 +76,27 @@ pub(super) fn string_value(bytes: &[u8]) -> f64 {
     f64::from_bits(JSValue::string_ptr(ptr).bits())
 }
 
+/// NaN-box a literal (an event name, say) without allocating; see `hidden_key`.
+#[inline]
+pub(super) fn literal_string_value(bytes: &'static [u8]) -> f64 {
+    f64::from_bits(JSValue::string_ptr(hidden_key(bytes)).bits())
+}
+
 /// Build the rejection reason used when an operation is aborted — a
 /// plain `{ name: "AbortError", message }` object. Node rejects with a
 /// DOMException whose `.name` is `"AbortError"`; callers only inspect
 /// `.name`, so a plain object is byte-equivalent for parity.
 pub(super) fn abort_error() -> f64 {
     let obj = crate::object::js_object_alloc(0, 2);
-    js_object_set_field_by_name(obj, hidden_key(b"name"), string_value(b"AbortError"));
+    js_object_set_field_by_name(
+        obj,
+        hidden_key(b"name"),
+        literal_string_value(b"AbortError"),
+    );
     js_object_set_field_by_name(
         obj,
         hidden_key(b"message"),
-        string_value(b"The operation was aborted"),
+        literal_string_value(b"The operation was aborted"),
     );
     box_pointer(obj as *const u8)
 }
@@ -327,7 +337,7 @@ fn register_to_array_abort(stream: f64, opts: f64, result: f64) {
     js_closure_set_capture_f64(abort_cl, 1, stream);
     crate::url::js_abort_signal_add_listener(
         sig_obj,
-        string_value(b"abort"),
+        literal_string_value(b"abort"),
         box_pointer(abort_cl as *const u8),
     );
 }
@@ -741,7 +751,7 @@ fn register_consume_abort(stream: f64, opts: f64, state: *const ClosureHeader) {
     js_closure_set_capture_ptr(abort_cl, 0, state as i64);
     crate::url::js_abort_signal_add_listener(
         sig_obj,
-        string_value(b"abort"),
+        literal_string_value(b"abort"),
         box_pointer(abort_cl as *const u8),
     );
 }

@@ -1230,5 +1230,5 @@ pub(super) fn emit_stream_event(stream: f64, event: f64, args: &[f64]) -> f64 {
 }
 
 fn error_monitor_event() -> f64 {
-    unsafe { crate::symbol::js_symbol_for(super::string_value(b"events.errorMonitor")) }
+    unsafe { crate::symbol::js_symbol_for(super::literal_string_value(b"events.errorMonitor")) }
 }

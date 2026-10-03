@@ -159,10 +159,10 @@ pub(super) fn add_finished_once_listeners(
     js_closure_set_capture_f64(listener, 2, f64::from_bits(TAG_FALSE));
     let listener_value = box_pointer(listener as *const u8);
     if watch_finish {
-        add_stream_listener_for_event(stream, string_value(b"finish"), listener_value);
+        add_stream_listener_for_event(stream, literal_string_value(b"finish"), listener_value);
     }
     if watch_close {
-        add_stream_listener_for_event(stream, string_value(b"close"), listener_value);
+        add_stream_listener_for_event(stream, literal_string_value(b"close"), listener_value);
     }
 }
 
@@ -184,7 +184,7 @@ pub(super) fn add_finished_signal_abort_listener(stream: f64, signal: f64, callb
     };
     crate::url::js_abort_signal_add_listener(
         signal_obj,
-        string_value(b"abort"),
+        literal_string_value(b"abort"),
         box_pointer(listener as *const u8),
     );
 }
@@ -198,9 +198,9 @@ pub(super) fn add_finished_cleanup_completion_listener(stream: f64, callback: f6
     js_closure_set_capture_f64(listener, 1, callback);
     js_closure_set_capture_f64(listener, 2, f64::from_bits(TAG_FALSE));
     let listener_value = box_pointer(listener as *const u8);
-    add_stream_listener_for_event(stream, string_value(b"end"), listener_value);
-    add_stream_listener_for_event(stream, string_value(b"finish"), listener_value);
-    add_stream_listener_for_event(stream, string_value(b"close"), listener_value);
+    add_stream_listener_for_event(stream, literal_string_value(b"end"), listener_value);
+    add_stream_listener_for_event(stream, literal_string_value(b"finish"), listener_value);
+    add_stream_listener_for_event(stream, literal_string_value(b"close"), listener_value);
 }
 
 /// `stream.finished(stream, [options], cb)` callback form. This slice covers

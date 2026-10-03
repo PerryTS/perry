@@ -103,7 +103,7 @@ fn settle_readable_from_promise_rejected(stream: f64, chunk: f64, reason: f64) {
     );
     if !stream_destroyed(stream) {
         consume_readable_buffered_front(stream, chunk);
-        let _ = emit_stream_event(stream, string_value(b"error"), &[reason]);
+        let _ = emit_stream_event(stream, literal_string_value(b"error"), &[reason]);
         destroy_stream(stream, f64::from_bits(TAG_UNDEFINED));
     }
 }

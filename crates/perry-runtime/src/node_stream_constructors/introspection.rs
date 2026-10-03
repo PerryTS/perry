@@ -215,7 +215,7 @@ pub(crate) fn attach_abort_signal(signal: f64, stream: f64) {
     js_closure_set_capture_ptr(listener, 0, stream.to_bits() as i64);
     crate::url::js_abort_signal_add_listener(
         signal_obj,
-        string_value(b"abort"),
+        literal_string_value(b"abort"),
         box_pointer(listener as *const u8),
     );
 }
