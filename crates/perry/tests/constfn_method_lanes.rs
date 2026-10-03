@@ -383,3 +383,123 @@ main();
         assert_eq!(out, "624750 624750 624750", "{envs:?}\n{stderr}");
     }
 }
+
+const OBJECT_CREATE: &str = r#"
+const PROTO: any = { pa: 9, m(x: number) { return this.a + this.pa + x; } };
+const OTHER: any = { pa: 5, m(x: number) { return this.a * 100 + this.pa + x; } };
+function mkc(a: number): any {
+  const t: any = Object.create(PROTO);
+  t.a = a;
+  if (a === 3) Object.setPrototypeOf(t, OTHER);
+  return t;
+}
+const g: any = mkc(4);
+function local(n: number): number {
+  const o: any = mkc(1);
+  let h = 0;
+  for (let k = 0; k < n; k++) h += o.m(k);
+  return h;
+}
+function captured(n: number): number {
+  const o: any = mkc(2);
+  const go = (m: number): number => {
+    let h = 0;
+    for (let k = 0; k < m; k++) h += o.m(k);
+    return h;
+  };
+  return go(n);
+}
+function modconst(n: number): number {
+  let h = 0;
+  for (let k = 0; k < n; k++) h += g.m(k);
+  return h;
+}
+function wrong(n: number): number {
+  const o: any = mkc(3);
+  const p: any = mkc(5);
+  let h = 0;
+  for (let k = 0; k < n; k++) {
+    if (k === 40) p.m = (x: number) => 7 * x;
+    h += o.m(k) + p.m(k);
+  }
+  return h;
+}
+function replaced(n: number): number {
+  const o: any = mkc(6);
+  let h = 0;
+  for (let k = 0; k < n; k++) {
+    if (k === 50) PROTO.m = function (this: any, x: number) { return this.a * 1000 + x; };
+    h += o.m(k);
+  }
+  return h;
+}
+console.log(local(100), captured(100), modconst(100), wrong(100), replaced(100));
+"#;
+/// node v22 on the program above.
+const OBJECT_CREATE_NODE: &str = "5950 6050 6250 65980 305700";
+
+/// A value made by `Object.create(PROTO)` and returned from a factory (into a
+/// local, a captured local, a module const) has PROTO's literal class as its
+/// candidate: the learned inherited ConstFn hit calls PROTO's `m` body
+/// directly, and no static compare is emitted (the receiver inherits `m`, so
+/// it never carries PROTO's own shape). The candidate is only a guess: a
+/// receiver whose prototype was replaced (`wrong`'s `o`), one with an own `m`
+/// (`wrong`'s `p`), and a write to PROTO.m (`replaced`) all give node's result.
+///
+/// Sabotage (2026-10-03): with the candidate called without comparing the
+/// recorded body (`msite.constfn_direct` taken unconditionally), `wrong`
+/// calls PROTO's body for an OTHER receiver and this test fails on the output.
+#[test]
+fn object_create_values_call_the_prototype_body_directly_and_a_wrong_candidate_misses() {
+    let dir = tempfile::tempdir().unwrap();
+    let (exe, ll) = compile(dir.path(), OBJECT_CREATE, None);
+    for name in ["local", "modconst", "wrong", "replaced"] {
+        let ir = function_ir(&ll, &format!("@perry_fn_main_ts__{name}("));
+        assert!(
+            !ir.iter().any(|l| l.starts_with("msite.static_hit")),
+            "{name}: an Object.create receiver must not compare PROTO's own shape"
+        );
+        let direct = ir
+            .iter()
+            .position(|l| l.starts_with("msite.constfn_direct"))
+            .unwrap_or_else(|| {
+                panic!(
+                    "{name}: the learned ConstFn hit must dispatch to PROTO's body:\n{}",
+                    ir.join("\n")
+                )
+            });
+        assert!(
+            ir[direct..]
+                .iter()
+                .find(|l| l.contains(" = call "))
+                .is_some_and(|l| l.contains("call double @perry_closure_main_ts__")),
+            "{name}: the candidate dispatch must be a direct call"
+        );
+    }
+    for envs in [
+        &[][..],
+        &[
+            ("PERRY_GC_FORCE_EVACUATE", "1"),
+            ("PERRY_GC_VERIFY_EVACUATION", "1"),
+            ("PERRY_GC_POISON_FROMSPACE", "1"),
+        ][..],
+    ] {
+        let (out, stderr) = run(&exe, envs);
+        assert_eq!(out, OBJECT_CREATE_NODE, "{envs:?}\n{stderr}");
+        assert!(
+            stat(&stderr, "primes_constfn") >= 4,
+            "the inherited entries must be ConstFn entries: {stderr}"
+        );
+    }
+
+    let off_dir = tempfile::tempdir().unwrap();
+    let (off_exe, off_ll) = compile(off_dir.path(), OBJECT_CREATE, Some("0"));
+    assert!(
+        !off_ll
+            .lines()
+            .any(|l| l.starts_with("msite.constfn_direct")),
+        "PERRY_CONSTFN_SHAPE=0 has no candidate bodies"
+    );
+    let (off, stderr) = run(&off_exe, &[]);
+    assert_eq!(off, OBJECT_CREATE_NODE, "{stderr}");
+}
