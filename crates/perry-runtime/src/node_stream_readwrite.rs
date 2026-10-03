@@ -1515,7 +1515,11 @@ pub(super) fn normalize_readable_from_input(iterable: f64) -> NormalizedReadable
         }
     }
     if is_array_like_value(iterable) {
-        return normalized_readable_chunks(iterable);
+        // #11827: the stream shifts chunks off its queue as they are read;
+        // Node only iterates the caller's array, so queue a copy of it.
+        let copy =
+            crate::array::js_array_slice(raw as *const crate::array::ArrayHeader, 0, i32::MAX);
+        return normalized_readable_chunks(box_pointer(copy as *const u8));
     }
     if is_single_chunk_value(iterable) {
         let arr = crate::array::js_array_alloc(1);
