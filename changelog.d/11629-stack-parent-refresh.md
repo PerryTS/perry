@@ -1,0 +1,1 @@
+Preserve both the parent feature-installer and child release-instrument snapshot audits while refreshing the stacked parent. The five snapshot source files and pins are unchanged from the reviewed child; no runtime code or collector behavior changes.

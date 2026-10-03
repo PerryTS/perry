@@ -106,7 +106,7 @@
 // constant "off" (inlined, so every caller's guarded branch folds away and the
 // instrument links nothing); the rest of the module stays compiled so it
 // cannot rot, hence the allow.
-#![cfg_attr(not(feature = "gc-instruments"), allow(dead_code, unused_imports))]
+#![cfg_attr(not(perry_gc_instruments), allow(dead_code, unused_imports))]
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -245,13 +245,13 @@ thread_local! {
 
 /// Resolved `(seed, threshold)`, or `None` when the mode is off. Cached: the
 /// environment is read exactly once per process.
-#[cfg(not(feature = "gc-instruments"))]
+#[cfg(not(perry_gc_instruments))]
 #[inline(always)]
 fn resolved() -> Option<(u64, u64)> {
     None
 }
 
-#[cfg(feature = "gc-instruments")]
+#[cfg(perry_gc_instruments)]
 fn resolved() -> Option<(u64, u64)> {
     #[cfg(test)]
     if let Some(over) = SCHEDULE_OVERRIDE.with(std::cell::Cell::get) {

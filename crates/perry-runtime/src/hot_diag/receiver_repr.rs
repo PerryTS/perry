@@ -5,7 +5,7 @@
 //! relaxed load and enters none of the range, registry, or ownership probes.
 
 // See the parent module: without `hot-diag` nothing arms these probes.
-#![cfg_attr(not(feature = "hot-diag"), allow(dead_code, unused_imports))]
+#![cfg_attr(not(perry_hot_diag), allow(dead_code, unused_imports))]
 
 use super::{sink_from_env, write_sink, Sink};
 use std::fmt::Write as _;
@@ -125,9 +125,9 @@ pub fn receiver_repr_on() -> bool {
     if TEST_FORCE_ON.load(Ordering::Relaxed) {
         return true;
     }
-    #[cfg(not(feature = "hot-diag"))]
+    #[cfg(not(perry_hot_diag))]
     return false;
-    #[cfg(feature = "hot-diag")]
+    #[cfg(perry_hot_diag)]
     {
         if RECEIVER_REPR_SINK.get().is_none() {
             receiver_repr_sink();

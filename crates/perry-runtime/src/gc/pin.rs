@@ -598,7 +598,7 @@ pub(super) fn pinned_young_move_report(
 
 /// Human-readable name for a `GcHeader::obj_type`.
 ///
-/// `types::gc_type_name` is `#[cfg(feature = "diagnostics")]`, and this abort
+/// `types::gc_type_name` is `#[cfg(perry_diagnostics)]`, and this abort
 /// has to print the same text in every build — a fault report that degrades
 /// with the feature set is a fault report nobody can compare against.
 fn gc_type_label(obj_type: u8) -> &'static str {

@@ -184,11 +184,7 @@ use copying_first_cycle::*;
 // Named rather than glob-imported: a glob does not propagate through the
 // transitive re-exports the gc submodules reach these through.
 use copying_pointer_set::{plausible_gc_header, CopyingPointer, CopyingPointerKind};
-#[cfg(any(
-    debug_assertions,
-    feature = "field-rep-assert",
-    feature = "gc-instruments"
-))]
+#[cfg(any(debug_assertions, feature = "field-rep-assert", perry_gc_instruments))]
 pub(crate) use forwarding::field_rep_live_address;
 use forwarding::*;
 use sticky_remembered::*;
@@ -285,12 +281,12 @@ pub use verify::*;
 /// Env-gated heap census (`PERRY_GC_CENSUS`); off by default.
 pub(crate) mod census;
 mod census_field_repr;
-#[cfg(feature = "diagnostics")]
+#[cfg(perry_diagnostics)]
 mod heap_snapshot;
 mod heap_stats;
 mod regex_census;
 pub use census::{census_poll_signal, gc_census_enabled};
-#[cfg(feature = "diagnostics")]
+#[cfg(perry_diagnostics)]
 pub use heap_snapshot::gc_build_v8_heap_snapshot_json;
 pub(crate) use heap_stats::heap_stats;
 
@@ -984,9 +980,9 @@ pub fn gc_init() {
         return;
     }
     crate::perf_hooks::init_time_origin();
-    #[cfg(not(feature = "gc-instruments"))]
+    #[cfg(not(perry_gc_instruments))]
     instruments::refuse_instrument_knobs_without_instruments();
-    #[cfg(not(feature = "hot-diag"))]
+    #[cfg(not(perry_hot_diag))]
     crate::hot_diag::refuse_knobs_without_hot_diag();
     // `PERRY_GC_CENSUS`: remember the main thread and install the SIGUSR2
     // trigger. No-op (one OnceLock read) when the env var is unset.

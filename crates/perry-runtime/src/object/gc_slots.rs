@@ -60,11 +60,7 @@ pub(crate) unsafe fn gc_field_slot_range(
     if field_count > 1_000_000 {
         return None;
     }
-    #[cfg(any(
-        debug_assertions,
-        feature = "field-rep-assert",
-        feature = "gc-instruments"
-    ))]
+    #[cfg(any(debug_assertions, feature = "field-rep-assert", perry_gc_instruments))]
     if super::field_rep_store::field_rep_verify_enabled() {
         super::field_rep_store::assert_field_rep_lanes(obj, record, field_count);
     }

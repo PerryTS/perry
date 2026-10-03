@@ -567,6 +567,23 @@ pub(crate) fn build_optimized_libs(
     let workspace_root = match find_perry_workspace_root() {
         Some(p) => p,
         None => {
+            // Release packages build their runtime archives with
+            // PERRY_RELEASE_STRIP_INSTRUMENTS=1, so a prebuilt link cannot
+            // honor an instrument request, and the knob then refuses at
+            // startup with advice to recompile. Say here why recompiling
+            // alone does not help. Not verbose-gated: it answers a request
+            // the user just made.
+            if matches!(format, OutputFormat::Text)
+                && (super::freshness::gc_instruments_requested()
+                    || super::freshness::hot_diag_requested())
+            {
+                eprintln!(
+                    "  note: GC instruments / hot-path diagnostics were requested, but \
+                     Perry workspace source was not found, so the prebuilt runtime is \
+                     linked; release builds of it carry no instruments. Set \
+                     PERRY_WORKSPACE_ROOT to a perry source checkout to build them in."
+                );
+            }
             if super::prebuilt_core::eligible(ctx, cli_features) {
                 if let Some(runtime) =
                     super::super::library_search::find_runtime_core_library(target)
