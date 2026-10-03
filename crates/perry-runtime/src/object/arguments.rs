@@ -44,6 +44,18 @@ crate::perry_thread_local! {
     // belong to each individual arguments object.
     static ARGUMENTS_KEYS: RefCell<[*mut ArrayHeader; 130]> =
         RefCell::new([std::ptr::null_mut(); 130]);
+    // The accessor pair every restricted `callee` holds: the %ThrowTypeError%
+    // singleton as both getter and setter. A pair is immutable once built
+    // (`accessor_pair::pair_new` is its only writer) and `callee` is
+    // non-configurable, so one pair serves every strict arguments object.
+    static RESTRICTED_CALLEE_PAIR: RefCell<*mut ArrayHeader> =
+        RefCell::new(std::ptr::null_mut());
+    // The ShapeId an arguments object of each `ARGUMENTS_KEYS` slot was last
+    // born with (0 = none yet). A ShapeId is a number, never reused, and
+    // `shapes::try_birth_stamp_preinstalled_shape` re-checks every structural
+    // fact against the live descriptor, so a stale or pruned id only costs
+    // one publish: nothing here needs rooting.
+    static ARGUMENTS_SHAPES: RefCell<[u32; 130]> = RefCell::new([0; 130]);
 }
 
 /// Latched by the one and only writer of `ObjectMeta::arguments`
@@ -157,11 +169,34 @@ pub fn scan_arguments_object_roots_mut(visitor: &mut crate::gc::RuntimeRootVisit
             visitor.visit_raw_mut_ptr_slot(keys);
         }
     });
+    RESTRICTED_CALLEE_PAIR.with(|pair| visitor.visit_raw_mut_ptr_slot(&mut *pair.borrow_mut()));
 }
 
 #[cfg(test)]
 pub(crate) fn test_clear_arguments_object_roots() {
     ARGUMENTS_KEYS.with(|cache| cache.borrow_mut().fill(std::ptr::null_mut()));
+    ARGUMENTS_SHAPES.with(|ids| *ids.borrow_mut() = [0; 130]);
+    RESTRICTED_CALLEE_PAIR.with(|pair| *pair.borrow_mut() = std::ptr::null_mut());
+}
+
+/// The shared restricted-`callee` accessor pair, built on first use.
+fn restricted_callee_pair() -> *mut ArrayHeader {
+    let cached = RESTRICTED_CALLEE_PAIR.with(|pair| *pair.borrow());
+    if !cached.is_null() {
+        return cached;
+    }
+    let thrower = thrower_closure_value();
+    let pair = unsafe {
+        super::accessor_pair::pair_new(super::accessor_pair::pair_from(&AccessorDescriptor {
+            get: thrower.to_bits(),
+            set: thrower.to_bits(),
+        }))
+    };
+    RESTRICTED_CALLEE_PAIR.with(|slot| {
+        // GC_STORE_AUDIT(ROOT): the arguments scanner traces and rewrites this slot.
+        unsafe { crate::gc::runtime_store_root_raw_mut_ptr_slot(&mut *slot.borrow_mut(), pair) };
+    });
+    pair
 }
 
 /// Test-only: the box parameter `index` of `obj` aliases, as its metadata
@@ -347,6 +382,31 @@ pub extern "C" fn js_arguments_object_alloc_mapped(
     arguments_object_alloc(raw_args, callee, false, mapped_count)
 }
 
+/// A fresh arguments object with `slots` inline slots, every slot
+/// `undefined`, no metadata record and NO shape yet: the same raw birth
+/// `js_object_alloc_with_shape` performs, so the caller can stamp the shape
+/// the object is born with instead of publishing an empty one first.
+fn unstamped_arguments_object(slots: u32) -> *mut ObjectHeader {
+    let header_size = std::mem::size_of::<ObjectHeader>();
+    let alloc_slots = std::cmp::max(slots as usize, crate::object::INLINE_SLOT_FLOOR);
+    let obj =
+        crate::arena::arena_alloc_gc(header_size + alloc_slots * 8, 8, crate::gc::GC_TYPE_OBJECT)
+            as *mut ObjectHeader;
+    unsafe {
+        (*obj).class_id = 0;
+        (*obj).parent_class_id = 0;
+        // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record.
+        (*obj).meta = std::ptr::null_mut();
+        let fields = (obj as *mut u8).add(header_size) as *mut JSValue;
+        for i in 0..alloc_slots {
+            // GC_STORE_AUDIT(INIT): freshly allocated slot, initialized pointer-free.
+            std::ptr::write(fields.add(i), JSValue::undefined());
+        }
+        crate::gc::layout_init_pointer_free(obj as *mut u8);
+    }
+    obj
+}
+
 fn arguments_object_alloc(
     raw_args: f64,
     callee: f64,
@@ -366,16 +426,52 @@ fn arguments_object_alloc(
     };
 
     let keys = scope.root_raw_mut_ptr(arguments_keys(len, restricted_callee));
-    let obj = scope.root_raw_mut_ptr(js_object_alloc(0, len.saturating_add(2)));
+    // The restricted `callee` pair, built (once per thread) before the
+    // newborn is stamped: nothing may allocate between a birth stamp and the
+    // initialization of the fields.
+    let pair = restricted_callee.then(restricted_callee_pair);
+    let slots = len.saturating_add(2);
+    let obj = scope.root_raw_mut_ptr(unstamped_arguments_object(slots));
+    // The per-OBJECT half of the latch below, set in the same breath as the
+    // state word so that "is an arguments object" and "carries the flag" are
+    // one statement. A shape-keyed read cache refuses this object on the flag
+    // alone, without decoding the state word — which emitted code could not
+    // do. Set on the still-unshaped newborn, so the shape it is born with
+    // already carries the exotic receiver's prototype identity
+    // (`PROTO_ID_PER_OBJECT`): no transition afterwards (#10509).
+    let (meta, _) = obj.across_mut::<ObjectHeader, _>(|| {
+        obj.with_mut_ptr(|obj: *mut ObjectHeader| unsafe { object_meta_ensure(obj) })
+    });
+    unsafe {
+        // GC_STORE_AUDIT(POINTER_FREE): scalar classification bit.
+        (*meta).flags |= crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER;
+    }
+    let cache_index = len as usize + if restricted_callee { 65 } else { 0 };
     obj.with_mut_ptr(|obj| {
         keys.with_mut_ptr(|keys| unsafe {
             // The cached list is canonical: its own count is `len + 2`, and a
             // longer list may share its backing, so the count is stated.
-            set_object_keys_with_live(
-                obj,
-                crate::object::ObjectKeys::new(keys, len.saturating_add(2)),
-                len.saturating_add(2),
-            );
+            let keys = crate::object::ObjectKeys::new(keys, slots);
+            let cached = ARGUMENTS_SHAPES
+                .with(|ids| ids.borrow().get(cache_index).copied())
+                .unwrap_or(0);
+            // One arity and callee kind is one shape: stamp it straight from
+            // its descriptor, which re-checks keys, count, width, kind and
+            // prototype identity. A miss (first birth, a pruned id) publishes
+            // and remembers the id.
+            if cached == 0
+                || !crate::object::shapes::try_birth_stamp_preinstalled_shape(
+                    obj, cached, keys, slots,
+                )
+            {
+                set_object_keys_with_live(obj, keys, slots);
+                let id = crate::object::shapes::object_shape_stamp(obj);
+                ARGUMENTS_SHAPES.with(|ids| {
+                    if let Some(entry) = ids.borrow_mut().get_mut(cache_index) {
+                        *entry = id;
+                    }
+                });
+            }
         });
     });
     for i in 0..len {
@@ -395,24 +491,18 @@ fn arguments_object_alloc(
         js_object_set_field(obj, len, JSValue::number(len as f64));
     });
 
-    if restricted_callee {
-        let thrower = thrower_closure_value();
+    if let Some(pair) = pair {
         obj.with_mut_ptr::<ObjectHeader, _>(|obj| {
             // Both attributes were born in the canonical key layout. The
             // restricted callee's getter and setter live in its own value
-            // slot, as they do for ordinary accessor properties. Installing
-            // descriptors here would re-edit that layout on every call and
-            // leave entries in the address-keyed descriptor tables.
-            unsafe {
-                super::accessor_pair::store_own_accessor(
-                    obj as usize,
-                    "callee",
-                    Some(super::accessor_pair::pair_from(&AccessorDescriptor {
-                        get: thrower.to_bits(),
-                        set: thrower.to_bits(),
-                    })),
-                );
-            }
+            // slot (`len + 1`), as they do for ordinary accessor properties,
+            // so the shared pair is stored there directly: no key search, no
+            // descriptor install, no per-call pair.
+            js_object_set_field(
+                obj,
+                len + 1,
+                JSValue::from_bits(crate::value::js_nanbox_pointer(pair as i64).to_bits()),
+            );
             super::descriptor_state::note_accessor_born_with_keys(obj as usize);
         });
     } else {
@@ -441,21 +531,11 @@ fn arguments_object_alloc(
         map.set_raw_mut_ptr(crate::array::js_array_alloc_with_length_exact(map_len));
     }
 
-    // The per-OBJECT half of the latch below, set in the same breath as the
-    // state word so that "is an arguments object" and "carries the flag" are
-    // one statement. A shape-keyed read cache refuses this object on the flag
-    // alone, without decoding the state word — which emitted code could not
-    // do. This allocates the metadata record the state word lives in.
-    obj.with_mut_ptr(|obj: *mut ObjectHeader| {
-        unsafe { crate::object::proto_validity::mark_exotic_read_receiver(obj as usize) };
-        obj
-    });
-
     // Latch BEFORE the store, so no probe can observe an arguments object
     // through a `false` flag.
     ARGUMENTS_OBJECTS_EVER_USED.store(true, std::sync::atomic::Ordering::Relaxed);
-    // The mark above allocated the record, so this is a load; should it ever
-    // have to allocate, `object_meta_ensure` roots the owner itself.
+    // The flag store above allocated the record, so this is a load; should it
+    // ever have to allocate, `object_meta_ensure` roots the owner itself.
     let (meta, obj) = obj.across_mut::<ObjectHeader, _>(|| {
         obj.with_mut_ptr(|obj: *mut ObjectHeader| unsafe { object_meta_ensure(obj) })
     });
