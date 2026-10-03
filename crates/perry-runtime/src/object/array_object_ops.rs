@@ -372,12 +372,20 @@ pub(crate) unsafe fn define_array_property(
     key_name: Option<&str>,
     descriptor_value: f64,
 ) -> Option<bool> {
-    if !is_array_object(obj) {
-        return None;
-    }
     let Some(key_name) = key_name else {
-        return Some(true);
+        return is_array_object(obj).then_some(true);
     };
+    if !is_array_object(obj) {
+        let is_lazy_index = !obj.is_null()
+            && (obj as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000
+            && (*gc_header_for(obj)).obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
+            && super::canonical_array_index(key_name).is_some();
+        if !is_lazy_index {
+            return None;
+        }
+    }
+    // Route a lazy index through its materialized ArrayHeader, so descriptor
+    // storage and later indexed reads use the same canonical owner.
     // The caller roots these values, but a root in an outer stack frame does
     // not rewrite raw locals in this callee. Descriptor field probes and
     // closure rebinding below allocate (and may run user code), so keep local

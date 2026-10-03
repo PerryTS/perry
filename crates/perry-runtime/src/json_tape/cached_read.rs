@@ -425,4 +425,41 @@ mod tests {
             assert_eq!(ROOTED_READS.load(Ordering::Relaxed), 1);
         }
     }
+
+    #[test]
+    fn unscanned_lazy_descriptor_invokes_getter_without_losing_neighbour() {
+        let _hook = HookGuard::install_counting_hook();
+        unsafe {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let hdr = scope.root_raw_mut_ptr::<LazyArrayHeader>(fixture(b"[10,20,30]"));
+            assert_eq!(hdr.with_mut_ptr(|hdr| lazy_get(hdr, 1)).as_number(), 20.0);
+            assert!(hdr.with_mut_ptr::<LazyArrayHeader, _>(|hdr| (*hdr).materialized.is_null()));
+            let getter = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+                crate::closure::js_closure_alloc(crate::fn_info!(descriptor_getter, 0), 0) as i64,
+            ));
+            let desc = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
+            let key = crate::string::js_string_from_bytes(b"get".as_ptr(), 3);
+            desc.with_mut_ptr(|desc| {
+                crate::object::js_object_set_field_by_name(desc, key, getter.get_nanbox_f64())
+            });
+            let key = crate::string::js_string_from_bytes(b"1".as_ptr(), 1);
+            hdr.with_mut_ptr::<LazyArrayHeader, _>(|hdr| {
+                desc.with_mut_ptr::<crate::ObjectHeader, _>(|desc| {
+                    crate::object::js_object_define_property(
+                        crate::value::js_nanbox_pointer(hdr as i64),
+                        f64::from_bits(JSValue::string_ptr(key).bits()),
+                        crate::value::js_nanbox_pointer(desc as i64),
+                    )
+                })
+            });
+            assert!(hdr.with_mut_ptr::<LazyArrayHeader, _>(|hdr| {
+                let arr = resolve_materialized_array(hdr);
+                !arr.is_null()
+                    && crate::object::get_accessor_descriptor(arr as usize, "1").is_some()
+            }));
+            assert_eq!(hdr.with_mut_ptr(|hdr| probe(hdr, 1)), MISS);
+            assert_eq!(hdr.with_mut_ptr(|hdr| lazy_get(hdr, 1)).as_number(), 61.0);
+            assert_eq!(hdr.with_mut_ptr(|hdr| lazy_get(hdr, 2)).as_number(), 30.0);
+        }
+    }
 }
