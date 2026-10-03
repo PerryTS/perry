@@ -1002,12 +1002,6 @@ pub(super) fn emit_guarded_direct_method_call(
     // single-arm sites retain the runtime helper.
     let multi_arm = !subclass_arms.is_empty();
     let inline_single_arm = shape_only_guard && !multi_arm;
-    // Every single-arm form whose guard is emitted inline also compares the
-    // site's learned word: a receiver of the declared class whose exact pair
-    // is not the birth pair (a field added on one constructor path, a private
-    // brand, a native base's own method surface) is proved once by the
-    // runtime and then called directly. The learned arm calls the ordinary
-    // body, never a clone that assumes the birth layout.
     // #9105's dispensation, applied to METHOD sites: normal builds do not
     // collect typed feedback, so the runtime guard's observation half is
     // inert — yet every monomorphic hit still paid its full contract check
@@ -1024,8 +1018,15 @@ pub(super) fn emit_guarded_direct_method_call(
         && !multi_arm
         && !crate::expr::typed_feedback_emission_enabled()
         && method_inline_probe_enabled();
-    let learned_site: Option<(String, usize)> = (inline_single_arm || probe_before_runtime_guard)
-        .then(|| {
+    // Every site whose guard is emitted inline also compares the site's
+    // learned word: a receiver of the DECLARED class whose exact pair is not
+    // the birth pair (a field added on one constructor path, a private brand,
+    // a native base's own method surface) is proved once by the runtime and
+    // then called directly. The learned arm calls the declared class's
+    // ordinary body, never a clone that assumes the birth layout; a multi-arm
+    // site compares it after every subclass arm.
+    let learned_site: Option<(String, usize)> =
+        (inline_single_arm || probe_before_runtime_guard || multi_arm).then(|| {
             let word = emit_direct_method_site_word(ctx);
             (word, ctx.new_block("method_direct.learned"))
         });
@@ -1050,12 +1051,21 @@ pub(super) fn emit_guarded_direct_method_call(
             let pass = blk.and(I1, &cid_ok, &shape_ok);
             blk.cond_br(&pass, &fast_label, &next);
         }
+        // The probe's `(0, 0)` decline never equals the word: it starts
+        // all-ones and the runtime only stores real receiver words, whose
+        // class id and ShapeId are both non-zero.
+        let multi_learned_idx = learned_site
+            .as_ref()
+            .map(|_| ctx.new_block("method_direct.learned_check"));
+        let after_arms = multi_learned_idx
+            .map(|idx| ctx.block_label(idx))
+            .unwrap_or_else(|| fallback_label.clone());
         for (i, arm) in subclass_arms.iter().enumerate() {
             ctx.current_block = sub_test_idxs[i];
             let next = sub_test_labels
                 .get(i + 1)
                 .cloned()
-                .unwrap_or_else(|| fallback_label.clone());
+                .unwrap_or_else(|| after_arms.clone());
             let case_label = sub_case_labels[i].clone();
             let class_id_str = arm.class_id.to_string();
             let arm_shape_id = subclass_shape_ids[i].clone();
@@ -1065,6 +1075,21 @@ pub(super) fn emit_guarded_direct_method_call(
                 crate::typed_shape::emit_compatible_shape_eq(blk, &shape_id, &arm_shape_id, &[]);
             let pass = blk.and(I1, &cid_ok, &shape_ok);
             blk.cond_br(&pass, &case_label, &next);
+        }
+        if let (Some(idx), Some((word, _)), Some(label)) = (
+            multi_learned_idx,
+            learned_site.as_ref(),
+            learned_label.as_ref(),
+        ) {
+            ctx.current_block = idx;
+            let blk = ctx.block();
+            let shape_wide = blk.zext(I32, &shape_id, I64);
+            let shape_high = blk.shl(I64, &shape_wide, "32");
+            let class_wide = blk.zext(I32, &cid, I64);
+            let packed = blk.or(I64, &shape_high, &class_wide);
+            let learned = blk.load_atomic_monotonic(I64, word, 8);
+            let hit = blk.icmp_eq(I64, &packed, &learned);
+            blk.cond_br(&hit, label, &fallback_label);
         }
         ctx.current_block = guard_idx;
     }

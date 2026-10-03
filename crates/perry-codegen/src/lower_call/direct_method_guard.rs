@@ -137,11 +137,13 @@ pub(crate) fn emit_inline_direct_method_shape_guard(
     }
 }
 
-/// One zero-initialized `i64` owned by a compiled class-method site: the last
-/// receiver word (`class_id | ShapeId << 32`) the runtime proved carries no
-/// own property of the method name and belongs to the declared class
+/// One `i64` owned by a compiled class-method site: the last receiver word
+/// (`class_id | ShapeId << 32`) the runtime proved carries no own property of
+/// the method name and belongs to the declared class
 /// (`js_native_call_method_by_id_learn`, `js_object_get_own_field_or_undef_learn`).
-/// Zero never matches a live receiver (a ShapeId is never zero). Scalars only,
+/// It starts all-ones, which no header word can equal (a ShapeId is below
+/// `0xC000_0000`), and which differs from the `(0, 0)` a declining multi-arm
+/// probe yields and from the header word of an unshaped object. Scalars only,
 /// so it is not a GC root.
 pub(crate) fn emit_direct_method_site_word(ctx: &mut FnCtx<'_>) -> String {
     let site_id = ctx.ic_site_counter;
@@ -153,7 +155,7 @@ pub(crate) fn emit_direct_method_site_word(ctx: &mut FnCtx<'_>) -> String {
         format!("perry_mdirect_site_{prefix}__{site_id}")
     };
     ctx.typed_parse_rodata
-        .push(format!("@{slot_name} = private global i64 0, align 8"));
+        .push(format!("@{slot_name} = private global i64 -1, align 8"));
     format!("@{slot_name}")
 }
 
