@@ -17,7 +17,7 @@ use super::class_field_barrier_tests::ir_opts;
 use crate::{compile_module, CompileOptions};
 use perry_hir::types::Type;
 use perry_hir::{
-    BinaryOp, CompareOp, Expr, Function, Module, ModuleInitKind, Param, Stmt, UpdateOp,
+    BinaryOp, CompareOp, Expr, Function, Module, ModuleInitKind, Param, Stmt, UnaryOp, UpdateOp,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -560,6 +560,72 @@ fn a_receiver_read_beneath_a_property_access_requests_no_number_lane() {
         "`o.x` is `.length`'s receiver, not a Number operand: {masks:?}"
     );
     assert!(!ir.contains("rloop.guard.value"), "no R, so no value test");
+}
+
+/// A value only tested for truthiness is not a Number operand: neither a
+/// conditional's test (`h += o.x ? 1 : 0`; the arms are the values) nor a `!`
+/// operand asks the region for R, directly or through the accumulator's
+/// value flow. A string `x` would otherwise fail the value test on every
+/// iteration and the loop would pay the guard for nothing.
+#[test]
+fn a_truthiness_test_requests_no_number_lane() {
+    let ternary = |test: Expr| Expr::Conditional {
+        condition: Box::new(test),
+        then_expr: Box::new(Expr::Integer(1)),
+        else_expr: Box::new(Expr::Integer(0)),
+    };
+    for (name, test) in [
+        ("region_loop_truthy_cond", get("x")),
+        (
+            "region_loop_truthy_not",
+            Expr::Unary {
+                op: UnaryOp::Not,
+                operand: Box::new(get("x")),
+            },
+        ),
+    ] {
+        let ir = loop_ir(
+            name,
+            vec![Stmt::Expr(Expr::LocalSet(
+                H,
+                Box::new(Expr::Binary {
+                    op: BinaryOp::Add,
+                    left: Box::new(Expr::LocalGet(H)),
+                    right: Box::new(ternary(test)),
+                }),
+            ))],
+        );
+        let masks = prime_rep_masks(&ir);
+        assert!(
+            masks.iter().all(|&m| m == 0),
+            "{name}: a truthiness test is not a Number operand: {masks:?}\n{ir}"
+        );
+        assert!(
+            !ir.contains("rloop.guard.value"),
+            "{name}: no R, so no value test"
+        );
+    }
+    // Control: the same read as an arm IS the value, and asks for R.
+    let ir = loop_ir(
+        "region_loop_truthy_arm",
+        vec![Stmt::Expr(Expr::LocalSet(
+            H,
+            Box::new(Expr::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(Expr::LocalGet(H)),
+                right: Box::new(Expr::Conditional {
+                    condition: Box::new(Expr::LocalGet(N)),
+                    then_expr: Box::new(get("x")),
+                    else_expr: Box::new(Expr::Integer(0)),
+                }),
+            }),
+        ))],
+    );
+    let masks = prime_rep_masks(&ir);
+    assert!(
+        !masks.is_empty() && masks.iter().all(|&m| m == 1),
+        "an arm is a Number operand: {masks:?}\n{ir}"
+    );
 }
 
 /// The F-local fixed point follows the fresh F64 read through a temporary and
