@@ -484,7 +484,9 @@ pub(super) fn try_native_module_methods(
             // the `Symbol` receiver and lowered the callee as `globalThis.for`
             // (undefined) → `TypeError: value is not a function` at buffer's
             // module eval (the safer-buffer/iconv-lite/body-parser/express chain).
-            if obj_name == "Symbol" {
+            // A spread call declines (here and for `Proxy` / `Array` below):
+            // see `call_has_spread_arg`.
+            if obj_name == "Symbol" && !super::call_has_spread_arg(call) {
                 let method_name: Option<&str> = match &member.prop {
                     ast::MemberProp::Ident(method_ident) => Some(method_ident.sym.as_ref()),
                     ast::MemberProp::Computed(c) => match c.expr.as_ref() {
@@ -538,7 +540,7 @@ pub(super) fn try_native_module_methods(
                 Err(rest) => rest,
             };
 
-            if obj_name == "Proxy" {
+            if obj_name == "Proxy" && !super::call_has_spread_arg(call) {
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
                     if method_ident.sym.as_ref() == "revocable" {
                         let mut it = args.into_iter();
@@ -553,7 +555,7 @@ pub(super) fn try_native_module_methods(
             }
 
             // Check for Array static methods. #6677: computed form too.
-            if obj_name == "Array" {
+            if obj_name == "Array" && !super::call_has_spread_arg(call) {
                 if let Some(method_name) = super::static_call_prop_name(&member.prop) {
                     match method_name {
                         "isArray" => {

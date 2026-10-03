@@ -68,6 +68,21 @@ mod module_static;
 mod name_fold;
 mod native_module;
 mod native_module_spread_tests;
+
+/// Does this call pass any argument with `...`?
+///
+/// Lowered call arguments are flat: a spread operand arrives as ONE argument
+/// holding the whole array. An intrinsic arm that consumes `args`
+/// positionally therefore computes the wrong thing for a spread call —
+/// `Object.assign({}, ...sources)` copied the array's indices ("0", "1")
+/// instead of each source's properties (prettier's option table, which then
+/// threw `Unexpected type undefined`), `JSON.stringify(...[v])` printed `[v]`,
+/// `parseInt(...["ff", 16])` was NaN. Such an arm declines a spread call, and
+/// the generic tail builds an `Expr::CallSpread` over the callee, which
+/// materializes the arguments and calls the real built-in.
+pub(super) fn call_has_spread_arg(call: &ast::CallExpr) -> bool {
+    call.args.iter().any(|arg| arg.spread.is_some())
+}
 mod nested_namespace;
 mod object_static;
 mod os;
