@@ -292,8 +292,120 @@ fn fold_expr(expr: &mut Expr, consts: &HashMap<LocalId, Expr>) {
 /// no new fast path here and no new guard — the rewrite moves a read onto a
 /// lowering the whole test suite already exercises.
 fn rewrite_literal_index_gets(module: &mut Module) {
-    for_each_function(module, &mut |f| rewrite_stmts(&mut f.body));
-    rewrite_stmts(&mut module.init);
+    for_each_function(module, &mut |f| {
+        let consts = local_string_consts(&f.body);
+        rewrite_stmts(&mut f.body, &consts, &HashSet::new());
+    });
+    rewrite_stmts(&mut module.init, &HashMap::new(), &HashSet::new());
+}
+
+/// A function-local `const K = "<literal>"` used as a key: `o[K]`.
+///
+/// Phase 1 substitutes MODULE consts only, so the same read spelled with a
+/// binding declared inside the function (`function f() { const K = "c"; …
+/// o[K] … }`) stayed an `IndexGet` on a `LocalGet` and resolved the key by
+/// name at runtime on every read — 834 instructions against 9 for `o.c`
+/// (#10753). The binding IS the literal: it is immutable, its initializer is
+/// a string literal, and nothing in the function writes it. So the key
+/// position is rewritten exactly as phase 2 rewrites a literal key, and the
+/// read lands on the `PropertyGet` lowering `o["c"]` and `o.c` share.
+///
+/// Only the key position is rewritten; every other read of the binding stays
+/// a read, so the function's typing, captures and closure layout are what they
+/// were. A read is rewritten only where the declaration has already run: in a
+/// statement AFTER the `Let` in the same list, or anywhere nested inside such
+/// a statement (blocks, closures created there). A read before it is in the
+/// temporal dead zone and must keep throwing, so it keeps its `LocalGet`.
+///
+/// The map is `id -> literal` for every candidate in the function; whether a
+/// given read may use it is decided by the `visible` set the walk carries.
+fn local_string_consts(body: &[Stmt]) -> HashMap<LocalId, String> {
+    let mut consts = HashMap::new();
+    collect_local_string_consts(body, &mut consts);
+    if consts.is_empty() {
+        return consts;
+    }
+    let mut written = HashSet::new();
+    collect_written_deep(body, &mut written);
+    consts.retain(|id, _| !written.contains(id));
+    consts
+}
+
+fn collect_local_string_consts(stmts: &[Stmt], out: &mut HashMap<LocalId, String>) {
+    fn visit_expr(expr: &Expr, out: &mut HashMap<LocalId, String>) {
+        if let Expr::Closure { body, .. } = expr {
+            collect_local_string_consts(body, out);
+        }
+        perry_hir::walker::walk_expr_children(expr, &mut |child| visit_expr(child, out));
+    }
+    for stmt in stmts {
+        if let Stmt::Let {
+            id,
+            mutable: false,
+            init: Some(Expr::String(lit)),
+            ..
+        } = stmt
+        {
+            out.insert(*id, lit.clone());
+        }
+        walk_stmt_exprs(stmt, &mut |expr| visit_expr(expr, out));
+        for inner in nested_stmt_lists_shared(stmt) {
+            collect_local_string_consts(inner, out);
+        }
+    }
+}
+
+/// Every local written anywhere in `stmts`, closure bodies included (a write
+/// from a closure makes the binding non-constant just as a direct one does).
+fn collect_written_deep(stmts: &[Stmt], written: &mut HashSet<LocalId>) {
+    fn visit(expr: &Expr, written: &mut HashSet<LocalId>) {
+        match expr {
+            Expr::LocalSet(id, _) | Expr::Update { id, .. } => {
+                written.insert(*id);
+            }
+            Expr::Closure { body, .. } => collect_written_deep(body, written),
+            _ => {}
+        }
+        perry_hir::walker::walk_expr_children(expr, &mut |child| visit(child, written));
+    }
+    for stmt in stmts {
+        walk_stmt_exprs(stmt, &mut |expr| visit(expr, written));
+    }
+}
+
+/// `nested_stmt_lists` for a shared borrow: `walk_stmt_exprs` already visits
+/// every nested list's expressions, but the `Let`s that declare candidates sit
+/// in those lists as statements.
+fn nested_stmt_lists_shared(stmt: &Stmt) -> Vec<&Vec<Stmt>> {
+    match stmt {
+        Stmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            let mut v = vec![then_branch];
+            v.extend(else_branch.iter());
+            v
+        }
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+            vec![body]
+        }
+        Stmt::Labeled { body, .. } => nested_stmt_lists_shared(body),
+        Stmt::Switch { cases, .. } => cases.iter().map(|c| &c.body).collect(),
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            let mut v = vec![body];
+            if let Some(c) = catch {
+                v.push(&c.body);
+            }
+            v.extend(finally.iter());
+            v
+        }
+        _ => Vec::new(),
+    }
 }
 
 /// A key that JavaScript resolves as an array index rather than a name.
@@ -307,29 +419,48 @@ fn is_numeric_index_string(key: &str) -> bool {
         && !(key.len() > 1 && key.starts_with('0'))
 }
 
-fn rewrite_stmts(stmts: &mut [Stmt]) {
+/// Rewrite one statement list. `visible` holds the function-local constants
+/// whose declaration has already run where this list starts; each `Let` of a
+/// candidate in the list makes it visible to the statements after it.
+fn rewrite_stmts(
+    stmts: &mut [Stmt],
+    consts: &HashMap<LocalId, String>,
+    visible: &HashSet<LocalId>,
+) {
+    let mut visible = visible.clone();
     for stmt in stmts.iter_mut() {
-        rewrite_stmt(stmt);
+        rewrite_stmt(stmt, consts, &visible);
+        if let Stmt::Let { id, .. } = stmt {
+            if consts.contains_key(id) {
+                visible.insert(*id);
+            }
+        }
     }
 }
 
-fn rewrite_stmt(stmt: &mut Stmt) {
+fn rewrite_stmt(stmt: &mut Stmt, consts: &HashMap<LocalId, String>, visible: &HashSet<LocalId>) {
     for inner in nested_stmt_lists(stmt) {
-        rewrite_stmts(inner);
+        rewrite_stmts(inner, consts, visible);
     }
-    for_each_expr_in_stmt_mut(stmt, &mut rewrite_expr);
+    for_each_expr_in_stmt_mut(stmt, &mut |e| rewrite_expr(e, consts, visible));
 }
 
-fn rewrite_expr(expr: &mut Expr) {
+fn rewrite_expr(expr: &mut Expr, consts: &HashMap<LocalId, String>, visible: &HashSet<LocalId>) {
     if let Expr::IndexGet { object, index } = expr {
         let property = match index.as_ref() {
             Expr::String(key) if !is_numeric_index_string(key) => Some(key.clone()),
+            Expr::LocalGet(id) if visible.contains(id) => consts
+                .get(id)
+                .filter(|key| !is_numeric_index_string(key))
+                .cloned(),
             _ => None,
         };
         if let Some(property) = property {
-            // The index is a literal, so there is no key expression to keep
-            // alive and no evaluation-order obligation: `o[k]` evaluates `o`
-            // then `k`, and a literal `k` is already a value.
+            // The index is a literal (or a constant binding whose declaration
+            // has run, so reading it has no effect and cannot throw), so there
+            // is no key expression to keep alive and no evaluation-order
+            // obligation: `o[k]` evaluates `o` then `k`, and `k` is already a
+            // value.
             let object = std::mem::replace(object.as_mut(), Expr::Integer(0));
             *expr = Expr::PropertyGet {
                 // Synthesized: the literal was not written at a source span
@@ -346,9 +477,9 @@ fn rewrite_expr(expr: &mut Expr) {
     // `walk_expr_children_mut` does not descend into a closure's STATEMENT
     // body; phase 1 has the same explicit arm for the same reason.
     if let Expr::Closure { body, .. } = expr {
-        rewrite_stmts(body);
+        rewrite_stmts(body, consts, visible);
     }
-    walk_expr_children_mut(expr, &mut rewrite_expr);
+    walk_expr_children_mut(expr, &mut |e| rewrite_expr(e, consts, visible));
 }
 
 #[cfg(test)]
@@ -592,6 +723,168 @@ mod tests {
             &m.init[0],
             Stmt::Expr(Expr::PropertyGet { property, .. }) if property == "name"
         ));
+    }
+
+    // ---- #10753: a function-local const key ------------------------------
+
+    fn local_const_k(id: u32, lit: &str) -> Stmt {
+        Stmt::Let {
+            id,
+            name: "K".to_string(),
+            ty: Type::String,
+            mutable: false,
+            init: Some(Expr::String(lit.to_string())),
+        }
+    }
+
+    fn read_k(id: u32) -> Expr {
+        Expr::IndexGet {
+            object: Box::new(Expr::LocalGet(8)),
+            index: Box::new(Expr::LocalGet(id)),
+        }
+    }
+
+    fn is_property_get(stmt: &Stmt, name: &str) -> bool {
+        matches!(stmt, Stmt::Return(Some(Expr::PropertyGet { property, .. })) | Stmt::Expr(Expr::PropertyGet { property, .. }) if property == name)
+    }
+
+    /// `function f(o) { const K = "c"; return o[K]; }` reads `o.c`.
+    #[test]
+    fn a_function_local_const_key_read_becomes_a_property_get() {
+        let mut m = Module::new("k.ts");
+        m.functions.push(func(
+            1,
+            vec![local_const_k(5, "c"), Stmt::Return(Some(read_k(5)))],
+        ));
+        run(&mut m);
+        assert!(
+            is_property_get(&m.functions[0].body[1], "c"),
+            "{:?}",
+            m.functions[0].body[1]
+        );
+        // The declaration itself is kept: other reads of K still name it.
+        assert!(matches!(&m.functions[0].body[0], Stmt::Let { id: 5, .. }));
+    }
+
+    /// A read the declaration has not reached yet is in the temporal dead
+    /// zone and must keep throwing; one nested in a later block or closure
+    /// folds.
+    #[test]
+    fn a_local_const_key_read_before_its_declaration_keeps_its_tdz() {
+        let mut m = Module::new("k.ts");
+        let closure = Expr::Closure {
+            func_id: 78,
+            params: Vec::new(),
+            return_type: Type::Number,
+            body: vec![Stmt::Return(Some(read_k(5)))],
+            captures: vec![5],
+            mutable_captures: Vec::new(),
+            captures_this: false,
+            captures_new_target: false,
+            enclosing_class: None,
+            is_arrow: true,
+            is_async: false,
+            is_generator: false,
+            is_strict: true,
+        };
+        m.functions.push(func(
+            1,
+            vec![
+                Stmt::Expr(read_k(5)),
+                Stmt::Expr(closure.clone()),
+                local_const_k(5, "c"),
+                Stmt::If {
+                    condition: Expr::Bool(true),
+                    then_branch: vec![Stmt::Expr(read_k(5))],
+                    else_branch: None,
+                },
+                Stmt::Expr(closure),
+            ],
+        ));
+        run(&mut m);
+        let body = &m.functions[0].body;
+        assert!(
+            matches!(&body[0], Stmt::Expr(Expr::IndexGet { .. })),
+            "{:?}",
+            body[0]
+        );
+        let Stmt::Expr(Expr::Closure { body: early, .. }) = &body[1] else {
+            panic!("closure expected");
+        };
+        assert!(
+            matches!(&early[0], Stmt::Return(Some(Expr::IndexGet { .. }))),
+            "{early:?}"
+        );
+        let Stmt::If { then_branch, .. } = &body[3] else {
+            panic!("if expected");
+        };
+        assert!(
+            is_property_get(&then_branch[0], "c"),
+            "{:?}",
+            then_branch[0]
+        );
+        let Stmt::Expr(Expr::Closure { body: late, .. }) = &body[4] else {
+            panic!("closure expected");
+        };
+        assert!(is_property_get(&late[0], "c"), "{late:?}");
+    }
+
+    /// A binding something writes (here from a closure), a mutable one, a
+    /// non-literal initializer and an array-index literal are not keys this
+    /// fold may claim.
+    #[test]
+    fn a_written_mutable_or_index_local_key_is_left_alone() {
+        let write_in_closure = Stmt::Expr(Expr::Closure {
+            func_id: 79,
+            params: Vec::new(),
+            return_type: Type::Void,
+            body: vec![Stmt::Expr(Expr::LocalSet(
+                5,
+                Box::new(Expr::String("d".to_string())),
+            ))],
+            captures: Vec::new(),
+            mutable_captures: vec![5],
+            captures_this: false,
+            captures_new_target: false,
+            enclosing_class: None,
+            is_arrow: true,
+            is_async: false,
+            is_generator: false,
+            is_strict: true,
+        });
+        let mutable = Stmt::Let {
+            id: 5,
+            name: "K".to_string(),
+            ty: Type::String,
+            mutable: true,
+            init: Some(Expr::String("c".to_string())),
+        };
+        let computed = Stmt::Let {
+            id: 5,
+            name: "K".to_string(),
+            ty: Type::String,
+            mutable: false,
+            init: Some(Expr::LocalGet(8)),
+        };
+        for body in [
+            vec![
+                local_const_k(5, "c"),
+                write_in_closure,
+                Stmt::Return(Some(read_k(5))),
+            ],
+            vec![mutable, Stmt::Return(Some(read_k(5)))],
+            vec![computed, Stmt::Return(Some(read_k(5)))],
+            vec![local_const_k(5, "0"), Stmt::Return(Some(read_k(5)))],
+        ] {
+            let mut m = Module::new("k.ts");
+            m.functions.push(func(1, body));
+            run(&mut m);
+            let last = m.functions[0].body.last().unwrap();
+            assert!(
+                matches!(last, Stmt::Return(Some(Expr::IndexGet { .. }))),
+                "{last:?}"
+            );
+        }
     }
 
     /// The receiver subtree is moved, not dropped: a nested read rewrites at

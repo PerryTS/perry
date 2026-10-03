@@ -719,6 +719,7 @@ mod keys_lookup;
 mod object_keys;
 pub(crate) mod shaped_symbols;
 pub(crate) use object_keys::ObjectKeys;
+pub(crate) mod dynamic_key_read;
 pub(crate) mod read_stub;
 pub(crate) use keys_lookup::*;
 

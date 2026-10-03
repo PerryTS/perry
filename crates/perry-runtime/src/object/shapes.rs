@@ -573,6 +573,34 @@ pub(crate) unsafe fn positional_key_words(
     ))
 }
 
+/// [`positional_key_words`] for the computed-key read
+/// (`object::dynamic_key_read`), which also refuses a shape whose
+/// [[Prototype]] identity is PER-OBJECT.
+///
+/// A read site's front is reached only past its own receiver tests; the
+/// computed-key read has no site, so it takes this exclusion from the shape
+/// itself. A per-object identity is how an exotic read receiver
+/// (`process.env`, an arguments object) and a module namespace project "its
+/// reads are not answered by its key list" into their shape
+/// ([`object_proto_id`]), so such a list naming the key proves nothing.
+///
+/// # Safety
+/// As [`positional_key_words`].
+#[inline]
+pub(crate) unsafe fn plain_positional_key_words(
+    dir: *const u8,
+    shape_id: u32,
+) -> Option<(PositionalKeys, usize)> {
+    let r = ShapeSlab::ordinary_record_in(dir, shape_id)?;
+    if r.proto_id == PROTO_ID_PER_OBJECT {
+        return None;
+    }
+    Some((
+        PositionalKeys(r.keys as usize as *const ArrayHeader),
+        r.position_bound_raw() as usize,
+    ))
+}
+
 /// A record's canonical keys array, for [`positional_key_words`]: its words
 /// are asked only once POSBOUND is known to be nonzero, so the front-offset
 /// arithmetic runs only on the path that reads a key.

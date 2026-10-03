@@ -661,6 +661,14 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         DOUBLE,
         &[I64, I64, DOUBLE],
     );
+    // #10753: the computed string-key read. `(site, receiver handle, key
+    // value, receiver value)`: answered from the receiver's shape, else the
+    // by-value read above.
+    module.declare_function(
+        "js_typed_feedback_object_get_field_by_key_f64",
+        DOUBLE,
+        &[I64, I64, DOUBLE, DOUBLE],
+    );
     module.declare_function("js_dyn_index_get", DOUBLE, &[DOUBLE, DOUBLE]);
     // #8655: guarded packed-array / dense Array-subclass read before the
     // fully generic dynamic dispatcher. Used by unknown-receiver loop reads,
