@@ -79,8 +79,13 @@ pub(super) fn load(specifier: &str, options: f64) -> Result<Option<f64>, f64> {
                 unsafe { crate::json::js_json_parse_result(source) }
                     .map(|value| f64::from_bits(value.bits()))?
             }
-            #[cfg(feature = "bun-cli-utils")]
-            "toml" => crate::bun_compat::toml_parse_result(&source)?,
+            // TOML is parsed only when `bun-cli-utils` is installed (see
+            // `bun_compat::cli_utils_hooks`); otherwise this takes the
+            // deferred-error path below, as a runtime without it always has.
+            "toml" => match crate::bun_compat::toml_parse_result(&source) {
+                Some(parsed) => parsed?,
+                None => return Ok(None),
+            },
             // Optimized builds retain bun-cli-utils for sites with options.
             // A deliberately minimal runtime still uses the deferred error.
             _ => return Ok(None),

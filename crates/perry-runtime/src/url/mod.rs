@@ -190,16 +190,47 @@ pub(crate) fn object_prop_f64(obj: *mut ObjectHeader, key: &str) -> f64 {
 /// means for them (the hostname setter leaves the host unchanged; the
 /// `domainTo*` helpers return `""`), matching Node.
 pub(crate) fn whatwg_canonicalize_host(host: &str) -> Option<String> {
-    #[cfg(feature = "url-engine")]
-    {
+    match CANONICALIZE_HOST.get() {
+        Some(canonicalize) => canonicalize(host),
+        // URL engine not installed: no WHATWG host parser, so pass the host
+        // through unchanged (the hand-rolled URL paths handle the common cases).
+        None => Some(host.to_string()),
+    }
+}
+
+// The WHATWG host parser and IDNA (`url` / `idna`) are reached only through
+// slots the `url-engine` install fills (see `crate::feature_hooks`): URL
+// property setters, `domainTo*` and TLS servername handling are live in every
+// program, and naming the crates directly would keep their tables in all of
+// them. Each caller keeps the fallback a build without the feature has.
+static CANONICALIZE_HOST: crate::feature_hooks::Hook<fn(&str) -> Option<String>> =
+    crate::feature_hooks::Hook::empty();
+static DOMAIN_TO_ASCII: crate::feature_hooks::Hook<fn(&str) -> Option<String>> =
+    crate::feature_hooks::Hook::empty();
+static DOMAIN_TO_UNICODE: crate::feature_hooks::Hook<fn(&str) -> String> =
+    crate::feature_hooks::Hook::empty();
+
+/// IDNA `domain_to_ascii`: `None` when the engine is not installed,
+/// `Some(None)` when IDNA rejects the domain.
+pub(crate) fn idna_domain_to_ascii(domain: &str) -> Option<Option<String>> {
+    DOMAIN_TO_ASCII.get().map(|f| f(domain))
+}
+
+/// IDNA `domain_to_unicode`; `None` when the engine is not installed.
+pub(crate) fn idna_domain_to_unicode(domain: &str) -> Option<String> {
+    DOMAIN_TO_UNICODE.get().map(|f| f(domain))
+}
+
+/// The `url-engine` install.
+#[cfg(feature = "url-engine")]
+pub(crate) fn install_engine() {
+    CANONICALIZE_HOST.set(|host| {
         url::Url::parse(&format!("http://{host}/"))
             .ok()
             .and_then(|u| u.host_str().map(str::to_string))
-    }
-    // URL engine gated off: no WHATWG host parser, so pass the host through
-    // unchanged (the hand-rolled URL paths handle the common cases).
-    #[cfg(not(feature = "url-engine"))]
-    Some(host.to_string())
+    });
+    DOMAIN_TO_ASCII.set(|domain| idna::domain_to_ascii(domain).ok());
+    DOMAIN_TO_UNICODE.set(|domain| idna::domain_to_unicode(domain).0);
 }
 
 /// True when `host` is a canonical dotted-quad IPv4 literal. Used by

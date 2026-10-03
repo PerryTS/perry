@@ -125,7 +125,8 @@ pub extern "C" fn js_fetch_unwrap_handle(value: f64) -> f64 {
 /// instance (a plain heap object) can only reach its members through this
 /// stashed cell. Stored as a real pointer-valued field so GC keeps the cell
 /// alive and rewrites the slot on evacuation. (#5587)
-#[cfg(feature = "temporal")]
+// Ungated: always-live property lookup compares against it (see
+// `crate::temporal::hooked`), and a constant keeps nothing alive.
 pub(crate) const TEMPORAL_SUBCLASS_CELL_FIELD: &[u8] = b"__perry_temporal_cell__";
 
 /// Has any `class X extends Temporal.<Type>` instance EVER stashed a cell in

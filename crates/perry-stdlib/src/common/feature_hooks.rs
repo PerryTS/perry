@@ -29,42 +29,9 @@
 //! spell out regardless of the order features are installed in, and every
 //! install is idempotent.
 
-use std::marker::PhantomData;
-use std::sync::atomic::{AtomicUsize, Ordering};
-
-/// One function-pointer slot. `F` must be a plain `fn` pointer type.
-pub(crate) struct Hook<F: Copy> {
-    bits: AtomicUsize,
-    _f: PhantomData<F>,
-}
-
-impl<F: Copy> Hook<F> {
-    pub(crate) const fn empty() -> Self {
-        Self {
-            bits: AtomicUsize::new(0),
-            _f: PhantomData,
-        }
-    }
-
-    #[inline]
-    pub(crate) fn set(&self, f: F) {
-        const { assert!(std::mem::size_of::<F>() == std::mem::size_of::<usize>()) };
-        // SAFETY: `F` is a fn pointer of pointer size (asserted above).
-        let bits: usize = unsafe { std::mem::transmute_copy(&f) };
-        self.bits.store(bits, Ordering::Release);
-    }
-
-    #[inline]
-    pub(crate) fn get(&self) -> Option<F> {
-        let bits = self.bits.load(Ordering::Acquire);
-        if bits == 0 {
-            None
-        } else {
-            // SAFETY: only `set` stores non-zero bits, and it stores an `F`.
-            Some(unsafe { std::mem::transmute_copy(&bits) })
-        }
-    }
-}
+/// The runtime's hook slot type, shared so both crates' hubs use one
+/// implementation.
+pub(crate) use perry_runtime::feature_hooks::Hook;
 
 /// A hub arm that may claim a method call on a native handle.
 pub(crate) type MethodArm = unsafe fn(i64, &str, &[f64]) -> Option<f64>;

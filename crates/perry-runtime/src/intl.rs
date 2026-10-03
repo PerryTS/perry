@@ -26,6 +26,7 @@ use crate::value::{js_jsvalue_to_string, js_nanbox_pointer, JSValue};
 use crate::StringHeader;
 
 mod ctor_guard;
+pub(crate) mod hooked;
 use ctor_guard::{constructor_target_prototype, require_new_target};
 mod display_names;
 mod duration_format;
@@ -1727,18 +1728,14 @@ fn set_proto_to_string_tag(proto: *mut ObjectHeader, tag: &str) {
     );
 }
 
-/// Install the `Intl.*` namespace members. Behind `intl-namespace` (default-on;
-/// the compiler enables it whenever the program mentions `Intl` or any
-/// locale-formatting API): when the feature is off this is a no-op, the
-/// `Intl` global is still a real (empty) namespace object, and `-dead_strip`
-/// reclaims the constructor/option/format machinery that nothing else
-/// reaches. `toLocale*` / `localeCompare` are unaffected — their entry points
-/// and helpers live outside this gate.
-#[cfg(not(feature = "intl-namespace"))]
-pub fn install_intl_namespace(_ns_obj: *mut ObjectHeader) {}
-
+pub use hooked::install_intl_namespace;
 #[cfg(feature = "intl-namespace")]
-pub fn install_intl_namespace(ns_obj: *mut ObjectHeader) {
+pub(crate) use hooked::install_intl_namespace_feature;
+
+/// The `Intl.*` members `install_intl_namespace` adds once the
+/// `intl-namespace` install has filled its slot.
+#[cfg(feature = "intl-namespace")]
+fn install_intl_namespace_members(ns_obj: *mut ObjectHeader) {
     if ns_obj.is_null() {
         return;
     }

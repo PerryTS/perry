@@ -567,12 +567,11 @@ pub unsafe extern "C" fn js_to_primitive(value: f64, hint: i32) -> f64 {
     // `"string"`/`"default"` — which is exactly what `"x" + plainDateTime` and
     // template interpolation need. (Direct `String(x)` already brand-checks; the
     // `+`/template coercion routed here did not.)
-    #[cfg(feature = "temporal")]
     if crate::temporal::is_temporal_value(value) {
         if hint == 1 {
             crate::object::throw_object_type_error(b"Cannot convert a Temporal value to a number");
         }
-        if let Some(s) = crate::temporal::temporal_iso_string(value) {
+        if let Some(s) = crate::temporal::hooked::iso_string(value) {
             let p = js_string_from_bytes(s.as_ptr(), s.len() as u32);
             return crate::value::js_nanbox_string(p as i64);
         }

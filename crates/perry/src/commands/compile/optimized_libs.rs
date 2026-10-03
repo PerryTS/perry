@@ -66,7 +66,11 @@ pub struct OptimizedLibs {
     /// Which stdlib feature installs the generated
     /// `perry_stdlib_feature_installer` calls (see `stdlib_installs.rs`).
     /// `Compiled` unless the link uses the prebuilt full-feature stdlib.
-    pub stdlib_installs: crate::commands::stdlib_installs::StdlibInstalls,
+    pub stdlib_installs: crate::commands::stdlib_installs::FeatureInstalls,
+    /// Which runtime feature installs the generated installer calls; the
+    /// runtime counterpart of `stdlib_installs`. `Compiled` unless the link
+    /// uses a prebuilt full-feature runtime archive.
+    pub runtime_installs: crate::commands::stdlib_installs::FeatureInstalls,
 }
 
 impl OptimizedLibs {
@@ -79,7 +83,8 @@ impl OptimizedLibs {
             extra_bc: Vec::new(),
             well_known_libs: Vec::new(),
             prefer_well_known_before_stdlib: false,
-            stdlib_installs: crate::commands::stdlib_installs::StdlibInstalls::Compiled,
+            stdlib_installs: crate::commands::stdlib_installs::FeatureInstalls::Compiled,
+            runtime_installs: crate::commands::stdlib_installs::FeatureInstalls::Compiled,
         }
     }
 }

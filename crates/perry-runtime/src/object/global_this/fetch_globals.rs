@@ -847,7 +847,6 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
     // Request/Response branch below recovers via the decl-time stash. Mirror that:
     // when the immediate value isn't a Temporal ctor, fall back to the parent
     // value recorded against this instance's class id at declaration time.
-    #[cfg(feature = "temporal")]
     {
         let temporal_parent = if super::temporal_ctor_kind(parent_val).is_some() {
             parent_val
@@ -857,7 +856,7 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
         } else {
             parent_val
         };
-        if temporal_subclass_super(temporal_parent, this_box, args_ptr, args_len) {
+        if crate::temporal::hooked::subclass_super(temporal_parent, this_box, args_ptr, args_len) {
             return undef;
         }
     }
@@ -870,9 +869,8 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
     // Behind `intl-namespace`: with the feature off no Intl constructor value
     // exists, so this probe can never match — and skipping it keeps this
     // always-live construct path from pinning the Intl web.
-    #[cfg(feature = "intl-namespace")]
     {
-        let intl_parent = if crate::intl::is_intl_constructor_value(parent_val) {
+        let intl_parent = if crate::intl::hooked::is_intl_constructor_value(parent_val) {
             parent_val
         } else if let Some(obj) = subclass_this_object_ptr(this_box) {
             let cid = crate::object::js_object_get_class_id(obj);
@@ -880,7 +878,7 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
         } else {
             parent_val
         };
-        if crate::intl::intl_subclass_super(intl_parent, this_box, args_ptr, args_len) {
+        if crate::intl::hooked::intl_subclass_super(intl_parent, this_box, args_ptr, args_len) {
             return undef;
         }
     }
@@ -1285,29 +1283,43 @@ pub(crate) extern "C" fn global_this_eval_thunk(
             let ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
             crate::value::js_nanbox_string(ptr as i64)
         }
-        _ => {
-            #[cfg(feature = "dyn-eval")]
-            {
-                let body = body.to_string();
-                let scope = crate::gc::RuntimeHandleScope::new();
-                let global = scope.root_nanbox_f64(js_get_global_this());
-                let lexical = scope.root_nanbox_f64(crate::dyn_eval::script_environment(
-                    global.get_nanbox_f64(),
-                    &[],
-                ));
-                crate::dyn_eval::eval_script_in(
-                    &body,
-                    global.get_nanbox_f64(),
-                    global.get_nanbox_f64(),
-                    lexical.get_nanbox_f64(),
-                )
-            }
-            #[cfg(not(feature = "dyn-eval"))]
-            {
-                f64::from_bits(crate::value::TAG_UNDEFINED)
-            }
-        }
+        // The script evaluator (the JS parser and everything behind it) is
+        // reached through a slot the `dyn-eval` install fills, so a program
+        // that never evaluates source does not link it (see
+        // `crate::feature_hooks`). Without it this answers `undefined`, as a
+        // build compiled without `dyn-eval` always has.
+        _ => match GLOBAL_EVAL.get() {
+            Some(eval) => eval(body),
+            None => f64::from_bits(crate::value::TAG_UNDEFINED),
+        },
     }
+}
+
+/// Indirect `globalThis.eval(source)` of a body the fast paths above did not
+/// answer; filled by the `dyn-eval` install.
+static GLOBAL_EVAL: crate::feature_hooks::Hook<fn(&str) -> f64> =
+    crate::feature_hooks::Hook::empty();
+
+#[cfg(feature = "dyn-eval")]
+fn global_eval_script(body: &str) -> f64 {
+    let body = body.to_string();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let global = scope.root_nanbox_f64(js_get_global_this());
+    let lexical = scope.root_nanbox_f64(crate::dyn_eval::script_environment(
+        global.get_nanbox_f64(),
+        &[],
+    ));
+    crate::dyn_eval::eval_script_in(
+        &body,
+        global.get_nanbox_f64(),
+        global.get_nanbox_f64(),
+        lexical.get_nanbox_f64(),
+    )
+}
+
+#[cfg(feature = "dyn-eval")]
+pub(crate) fn install_global_eval() {
+    GLOBAL_EVAL.set(global_eval_script);
 }
 
 #[cfg(test)]

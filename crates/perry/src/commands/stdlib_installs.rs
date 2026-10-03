@@ -4,7 +4,7 @@
 //! slots that each feature fills from its own `js_stdlib_install_*` entry point
 //! (perry-stdlib `common::feature_hooks`). Whenever the stdlib is linked, the
 //! link step generates an object (perry-codegen
-//! `stubs::generate_stdlib_installer_object`) whose static constructor
+//! `stubs::generate_feature_installer_object`) whose static constructor
 //! registers an installer calling the entry points chosen here;
 //! `js_stdlib_init_dispatch` runs it.
 //!
@@ -23,7 +23,7 @@ pub const INSTALL_COMPILED_SYMBOL: &str = "js_stdlib_install_compiled";
 
 /// What the generated installer should do.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub enum StdlibInstalls {
+pub enum FeatureInstalls {
     /// Install every compiled feature (auto-optimized or opted-out links, and
     /// programs whose dynamic code the compiler cannot see through).
     #[default]
@@ -135,10 +135,55 @@ pub fn install_symbols(features: &BTreeSet<String>) -> Vec<String> {
 }
 
 /// The install entry points the generated installer calls for `installs`.
-pub fn installer_callees(installs: &StdlibInstalls) -> Vec<String> {
+pub fn installer_callees(installs: &FeatureInstalls) -> Vec<String> {
     match installs {
-        StdlibInstalls::Compiled => vec![INSTALL_COMPILED_SYMBOL.to_string()],
-        StdlibInstalls::Selected(features) => install_symbols(features),
+        FeatureInstalls::Compiled => vec![INSTALL_COMPILED_SYMBOL.to_string()],
+        FeatureInstalls::Selected(features) => install_symbols(features),
+    }
+}
+
+/// Installs every runtime feature the linked `libperry_runtime.a` was
+/// compiled with.
+pub const RUNTIME_INSTALL_COMPILED_SYMBOL: &str = "js_runtime_install_compiled";
+
+/// perry-runtime's installable features, as [`INSTALLS`] is for perry-stdlib:
+/// each entry point and the perry-runtime Cargo features whose `[features]`
+/// closure contains it (checked against `crates/perry-runtime/Cargo.toml` by
+/// `runtime_triggers_match_cargo_feature_closure`). The runtime's always-live
+/// hubs reach these features only through slots the installs fill
+/// (perry-runtime `feature_hooks`).
+const RUNTIME_INSTALLS: &[(&str, &[&str])] = &[
+    ("js_runtime_install_dyn_eval", &["default", "dyn-eval"]),
+    (
+        "js_runtime_install_bun_cli_utils",
+        &["bun-cli-utils", "default"],
+    ),
+    (
+        "js_runtime_install_intl_namespace",
+        &["default", "intl-namespace"],
+    ),
+    ("js_runtime_install_temporal", &["default", "temporal"]),
+    (
+        "js_runtime_install_intl_datetime",
+        &["default", "intl-datetime"],
+    ),
+    (
+        "js_runtime_install_regex_engine",
+        &["default", "regex-engine"],
+    ),
+    ("js_runtime_install_url_engine", &["default", "url-engine"]),
+];
+
+/// The runtime install entry points the generated installer calls for
+/// `installs` (perry-runtime features, without the `perry-runtime/` prefix).
+pub fn runtime_installer_callees(installs: &FeatureInstalls) -> Vec<String> {
+    match installs {
+        FeatureInstalls::Compiled => vec![RUNTIME_INSTALL_COMPILED_SYMBOL.to_string()],
+        FeatureInstalls::Selected(features) => RUNTIME_INSTALLS
+            .iter()
+            .filter(|(_, triggers)| triggers.iter().any(|t| features.contains(*t)))
+            .map(|(symbol, _)| (*symbol).to_string())
+            .collect(),
     }
 }
 
@@ -151,8 +196,12 @@ mod tests {
     /// the workspace copy. Only same-crate entries (no `dep:` / `x/y`) matter
     /// for the closure.
     fn stdlib_feature_table() -> Option<BTreeMap<String, Vec<String>>> {
+        feature_table("perry-stdlib")
+    }
+
+    fn feature_table(krate: &str) -> Option<BTreeMap<String, Vec<String>>> {
         let path =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../perry-stdlib/Cargo.toml");
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../{krate}/Cargo.toml"));
         let text = std::fs::read_to_string(path).ok()?;
         let doc: toml::Table = text.parse().ok()?;
         let features = doc.get("features")?.as_table()?;
@@ -269,8 +318,60 @@ mod tests {
             ]
         );
         assert_eq!(
-            installer_callees(&StdlibInstalls::Compiled),
+            installer_callees(&FeatureInstalls::Compiled),
             vec![INSTALL_COMPILED_SYMBOL.to_string()]
         );
+    }
+
+    #[test]
+    fn runtime_triggers_match_cargo_feature_closure() {
+        let Some(table) = feature_table("perry-runtime") else {
+            return;
+        };
+        for (symbol, triggers) in RUNTIME_INSTALLS {
+            let installed = symbol
+                .strip_prefix("js_runtime_install_")
+                .unwrap()
+                .replace('_', "-");
+            let expected: BTreeSet<String> = table
+                .keys()
+                .filter(|f| closure(&table, f).contains(&installed))
+                .cloned()
+                .collect();
+            let listed: BTreeSet<String> = triggers.iter().map(|t| t.to_string()).collect();
+            assert_eq!(
+                listed, expected,
+                "{symbol}: trigger list must equal every perry-runtime feature whose closure \
+                 contains `{installed}` (update RUNTIME_INSTALLS after changing Cargo.toml [features])"
+            );
+        }
+    }
+
+    #[test]
+    fn every_runtime_install_symbol_is_defined_by_perry_runtime() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../perry-runtime/src/feature_hooks.rs");
+        let Ok(source) = std::fs::read_to_string(path) else {
+            return;
+        };
+        for (symbol, _) in RUNTIME_INSTALLS {
+            assert!(
+                source.contains(&format!("pub extern \"C\" fn {symbol}()")),
+                "{symbol} is listed here but perry-runtime does not define it"
+            );
+        }
+        for line in source.lines() {
+            if let Some(rest) = line
+                .trim()
+                .strip_prefix("pub extern \"C\" fn js_runtime_install_")
+            {
+                let symbol = format!("js_runtime_install_{}", rest.split('(').next().unwrap());
+                assert!(
+                    symbol == RUNTIME_INSTALL_COMPILED_SYMBOL
+                        || RUNTIME_INSTALLS.iter().any(|(s, _)| *s == symbol),
+                    "perry-runtime defines {symbol} but RUNTIME_INSTALLS does not list it"
+                );
+            }
+        }
     }
 }

@@ -23,6 +23,7 @@
 mod ant;
 #[cfg(feature = "bun-cli-utils")]
 mod cli_utils;
+mod cli_utils_hooks;
 #[cfg(not(feature = "bun-cli-utils"))]
 mod cli_utils_stub;
 mod glob;
@@ -49,6 +50,14 @@ use std::io::{Read, Write};
 pub use ant::{js_bun_ant_get_peer_pid, js_bun_ant_get_peer_uid, js_bun_ant_memory_pressure_level};
 #[cfg(feature = "bun-cli-utils")]
 pub use cli_utils::*;
+// The members the always-live runtime reaches go through slots the
+// `bun-cli-utils` install fills; see `cli_utils_hooks`.
+#[cfg(feature = "bun-cli-utils")]
+pub(crate) use cli_utils_hooks::install as install_cli_utils;
+pub(crate) use cli_utils_hooks::toml_parse_result;
+pub use cli_utils_hooks::{
+    decorate_bun_hash, js_bun_jsonl, js_bun_semver, js_bun_toml, js_bun_yaml,
+};
 #[cfg(not(feature = "bun-cli-utils"))]
 pub use cli_utils_stub::*;
 pub use glob::js_bun_glob_new;
