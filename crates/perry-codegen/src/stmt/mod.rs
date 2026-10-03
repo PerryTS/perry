@@ -40,6 +40,9 @@ mod let_stmt_facts;
 mod let_stmt_var_redeclare_tests;
 mod loops;
 mod masked_window_region;
+mod number_local_loop;
+#[cfg(test)]
+mod number_local_loop_tests;
 #[cfg(test)]
 mod packed_range_global_cache_rooting_tests;
 #[cfg(test)]

@@ -30,6 +30,56 @@ use super::{is_known_i32_range, lower_expr, FnCtx};
 /// `lower_bitwise_operand_i32` only produces a value for an operand it can
 /// prove is a Number, and a BigInt-typed operand declines up front, so a
 /// BigInt `~x` (a BigInt result) still reaches the dynamic helper in [`lower`].
+/// `~v` for an operand the compiler cannot prove is a Number (#10511): one
+/// inline test, the numeric arm inline, the dynamic helper cold.
+///
+/// This is the unary twin of the binary bitwise guard
+/// (`binary::lower_guarded_numeric_arith`) and uses the same test,
+/// `|v| < 2^63`. Every NaN-boxed tag is a NaN bit pattern, so a string,
+/// object, boolean, `undefined`, an int32 box or a BigInt fails the ordered
+/// compare and reaches `js_dynamic_bitnot`, which keeps ToNumeric's exact
+/// semantics: a BigInt stays a BigInt (`~1n === -2n`), `valueOf` runs, and
+/// a throwing coercion throws. The Numbers the test turns away — NaN,
+/// ±Infinity, |v| >= 2^63 — are the ones whose ToInt32 needs the helper's
+/// special cases; for every Number that passes, truncating to i64 and keeping
+/// the low 32 bits IS ToInt32, so the numeric arm is one `fptosi`.
+///
+/// `v` is the already-lowered operand: nothing runs between its evaluation
+/// and either arm, so no rooting window opens that the old unconditional
+/// helper call did not already have.
+fn lower_guarded_bitnot(ctx: &mut FnCtx<'_>, v: &str) -> String {
+    let is_num = super::binary::emit_is_int64_exact_number(ctx, v);
+    let fast_idx = ctx.new_block("guarded_bitnot.numeric");
+    let slow_idx = ctx.new_block("guarded_bitnot.dynamic");
+    let merge_idx = ctx.new_block("guarded_bitnot.merge");
+    let fast_label = ctx.block_label(fast_idx);
+    let slow_label = ctx.block_label(slow_idx);
+    let merge_label = ctx.block_label(merge_idx);
+    ctx.block().cond_br(&is_num, &fast_label, &slow_label);
+
+    ctx.current_block = fast_idx;
+    let fast_val = {
+        let blk = ctx.block();
+        let i = blk.toint32_fast(v);
+        let flipped = blk.xor(I32, &i, "-1");
+        blk.sitofp(I32, &flipped, DOUBLE)
+    };
+    let fast_end = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = slow_idx;
+    super::emit_versioned_loop_callback_deopt(ctx);
+    let slow_val = ctx
+        .block()
+        .call(DOUBLE, "js_dynamic_bitnot", &[(DOUBLE, v)]);
+    let slow_end = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = merge_idx;
+    ctx.block()
+        .phi(DOUBLE, &[(&fast_val, &fast_end), (&slow_val, &slow_end)])
+}
+
 pub(crate) fn lower_bitnot_value(
     ctx: &mut FnCtx<'_>,
     operand: &Expr,
@@ -140,6 +190,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         let blk = ctx.block();
                         let flipped = blk.xor(I32, &i, "-1");
                         Ok(blk.sitofp(I32, &flipped, DOUBLE))
+                    } else if super::binary::guarded_bitwise_enabled() {
+                        Ok(lower_guarded_bitnot(ctx, &v))
                     } else {
                         Ok(blk.call(DOUBLE, "js_dynamic_bitnot", &[(DOUBLE, &v)]))
                     }

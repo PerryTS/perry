@@ -415,12 +415,19 @@ fn lower_guarded_numeric_arith(
 /// exponent/mantissa tower. The Numbers it turns away (NaN, ±Infinity,
 /// |v| >= 2^63) are the ones ToInt32 has to special-case, and the cold arm's
 /// helper already does.
-fn emit_is_int64_exact_number(ctx: &mut FnCtx<'_>, value: &str) -> String {
+pub(super) fn emit_is_int64_exact_number(ctx: &mut FnCtx<'_>, value: &str) -> String {
     const TWO_POW_63: &str = "0x43E0000000000000";
     let magnitude = ctx
         .block()
         .call(DOUBLE, "llvm.fabs.f64", &[(DOUBLE, value)]);
     ctx.block().fcmp("olt", &magnitude, TWO_POW_63)
+}
+
+/// Whether an unproven bitwise operand takes the inline guard (#10418,
+/// #10511): both A/B knobs must be on. Unary `~` shares the binary
+/// operators' gate so one switch reverts every bitwise guard together.
+pub(super) fn guarded_bitwise_enabled() -> bool {
+    guarded_arith_enabled() && inline_nonbigint_bitwise_enabled()
 }
 
 /// `PERRY_GUARDED_ARITH=0` restores the unconditional dynamic helper for
