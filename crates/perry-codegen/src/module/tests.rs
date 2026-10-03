@@ -402,6 +402,51 @@ fn owner_only_global_declares_cross_unit_function_from_initializer() {
 }
 
 #[test]
+fn mach_o_split_keeps_an_external_definition_no_function_uses() {
+    // A ConstFn body's `$info` is emitted `hidden` because the static
+    // shape-seed object references it. When the seed set reaches a body only
+    // through a guard, NOTHING in the module references the record. Under the
+    // old rule a sole external definition became `linkonce_odr`, which is
+    // discardable, and LLVM dropped it from its owner: the 13 MB Claude Code
+    // bundle then failed to link with an undefined `$info` referenced from
+    // `_perry_static_shape_seeds.o`. The record must be defined exactly once,
+    // with a linkage LLVM may not discard.
+    let mut m = LlModule::new("arm64-apple-macosx15.0.0");
+    m.declare_function("js_touch", VOID, &[PTR]);
+    m.add_global("perry_shared_m__used", I32, "0");
+    m.add_raw_global(
+        "@perry_closure_m__7$info = hidden constant { ptr, i64 } { ptr @perry_closure_m__7, i64 0 }"
+            .to_string(),
+    );
+    for name in ["perry_closure_m__7", "perry_fn_m__g"] {
+        let f = m.define_function(name, DOUBLE, vec![]);
+        let e = f.create_block("entry");
+        e.call_void("js_touch", &[(PTR, "@perry_shared_m__used")]);
+        e.ret(DOUBLE, "0.0");
+    }
+
+    let units = m.render_codegen_units(2);
+    assert_eq!(units.len(), 2, "two functions → two units");
+    let defining: Vec<&String> = units
+        .iter()
+        .filter(|u| u.contains("@perry_closure_m__7$info = weak_odr hidden constant"))
+        .collect();
+    assert_eq!(
+        defining.len(),
+        1,
+        "the unreferenced external record is defined by exactly one unit, \
+         non-discardably:\n{}",
+        units.join("\n----\n")
+    );
+    assert!(
+        units
+            .iter()
+            .all(|u| !u.contains("@perry_closure_m__7$info = linkonce_odr")),
+        "a discardable linkage lets LLVM drop a record only another object uses"
+    );
+}
+
+#[test]
 fn mach_o_split_promotes_only_globals_two_units_define() {
     // #9610: `linkonce_odr` is weak-for-linker, and
     // `TargetLoweringObjectFileMachO::SelectSectionForGlobal` routes every
@@ -473,13 +518,14 @@ fn mach_o_split_promotes_only_globals_two_units_define() {
         "a global both units reference is defined in both, folded by linkage"
     );
 
-    // A strong EXTERNAL definition keeps the promotion even at one unit:
-    // `linkonce_odr` is what lets ld64 coalesce two modules' same-named
-    // globals rather than report a duplicate symbol, and this change is
-    // about section placement, not about that.
+    // A strong EXTERNAL definition keeps a coalescing linkage even at one
+    // unit, so ld64 folds two modules' same-named globals rather than report
+    // a duplicate symbol. It is `weak_odr`, not `linkonce_odr`: another
+    // object may name it, and a discardable sole copy is dropped by LLVM
+    // when nothing in its own unit uses it.
     let external_defs = units
         .iter()
-        .filter(|u| u.contains("@perry_class_shape_id_m__C = linkonce_odr global i32 0"))
+        .filter(|u| u.contains("@perry_class_shape_id_m__C = weak_odr global i32 0"))
         .count();
     assert_eq!(
         external_defs, 1,
