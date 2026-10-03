@@ -127,13 +127,16 @@ fn unmarked_numeric_read_retains_generation_holes_rep_and_absence_checks() {
         for (id, expected) in [
             (mint(1, 0, d.rep), RegionRefusal::Kind),
             (mint(0, 1, d.rep), RegionRefusal::Kind),
-            (mint(0, 0, REP_ANY), RegionRefusal::Rep),
         ] {
             assert_eq!(
                 region_loop_pack(id, 1, [bits(key), 0, 0, 0, 0], 0, 0, 1),
                 Err(expected)
             );
         }
+        // An Any lane serves the read only through the guard's value test.
+        let word = region_loop_pack(mint(0, 0, REP_ANY), 1, [bits(key), 0, 0, 0, 0], 0, 0, 1)
+            .expect("an Any lane is served with a value test");
+        assert_ne!(word & REGION_LOOP_WORD_VALUE_TEST, 0);
         assert_eq!(
             region_loop_pack(
                 object_shape_stamp(obj),
@@ -149,7 +152,7 @@ fn unmarked_numeric_read_retains_generation_holes_rep_and_absence_checks() {
 }
 
 #[test]
-fn unmarked_numeric_read_refuses_accessors_and_deprecated_lanes() {
+fn unmarked_numeric_read_refuses_accessors_and_value_tests_deprecated_lanes() {
     let _lock = crate::gc::global_side_table_test_lock();
     let _gc = crate::gc::GcSuppressScope::new();
     unsafe {
@@ -172,9 +175,12 @@ fn unmarked_numeric_read_refuses_accessors_and_deprecated_lanes() {
         shape_record_by_id(object_shape_stamp(other))
             .unwrap()
             .deprecate_rep_slot(1);
-        assert_eq!(
-            prime(&site, other, bits(other_key)),
-            REGION_GUARD_WORD_EMPTY
+        let word = prime(&site, other, bits(other_key));
+        assert_ne!(word, REGION_GUARD_WORD_EMPTY);
+        assert_ne!(
+            word & REGION_LOOP_WORD_VALUE_TEST,
+            0,
+            "a deprecated lane is served only through the guard's value test"
         );
     }
 }
@@ -196,7 +202,11 @@ fn unmarked_numeric_read_word_misses_after_mutation_or_exotic_reclassification()
             0,
         );
         assert_ne!(object_shape_stamp(obj), before as u32);
-        assert_eq!(prime(&site, obj, bits(key)), REGION_GUARD_WORD_EMPTY);
+        // The generalized lane is served only through the guard's value test,
+        // which `true` fails.
+        let after = prime(&site, obj, bits(key));
+        assert_ne!(after as u32, before as u32);
+        assert_ne!(after & REGION_LOOP_WORD_VALUE_TEST, 0);
 
         let (proto, proto_key) = record("rnr_proto");
         let before = prime(&site, proto, bits(proto_key));

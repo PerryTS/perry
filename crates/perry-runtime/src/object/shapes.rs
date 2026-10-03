@@ -2492,7 +2492,9 @@ static KEEP_JS_REGION_GUARD_PRIME: unsafe extern "C" fn(
 /// A read-only numeric region may also use `OrdinaryUnmarked`: the missing
 /// birth mark withdraws store permission, not the own-data slot layout.
 /// Receivers with virtual read semantics remain refused by their prototype
-/// classification, and every covered key must be requested as inline F64.
+/// classification, and every covered key must be requested as an inline
+/// Number read. A Number read (R) on a lane that is not an identity F64 lane
+/// sets [`REGION_LOOP_WORD_VALUE_TEST`]: the guard then tests the value.
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn js_region_loop_pack(
@@ -2538,7 +2540,8 @@ enum RegionRefusal {
     Range,
     /// A key a bare store may write a non-double into is not an `Any` lane.
     F64Stored,
-    /// A requested Number read is not on an identity F64 lane, or a bare
+    /// A requested Number read is spill-located, on a SPECIAL lane, or on a
+    /// non-identity lane a bare store may write a non-Number into; or a bare
     /// store targets a SPECIAL lane that requires the checked slot funnel.
     Rep,
 }
@@ -2600,6 +2603,7 @@ fn region_loop_pack(
         shape_id
     };
     let mut word = u64::from(id);
+    let mut value_test = false;
     for (i, &(spilled, n_at)) in at.iter().enumerate().take(n as usize) {
         // A canonical Number cannot preserve a ConstFn body identity. Every
         // SPECIAL write must use the checked slot funnel before storing;
@@ -2612,13 +2616,25 @@ fn region_loop_pack(
         {
             return Err(Rep);
         }
-        if r_mask & (1 << i) != 0
-            && (spilled
-                || n_at >= super::field_rep::REP_SLOTS as usize
-                || super::field_rep::slot_rep(descriptor.rep, n_at as u32)
-                    != super::field_rep::REP_F64)
-        {
-            return Err(Rep);
+        if r_mask & (1 << i) != 0 {
+            // R wants the slot's raw bits to be a canonical Number. An inline
+            // identity F64 lane guarantees it for every carrier. Any other
+            // inline lane that is not SPECIAL (Any, or a deprecated F64) can
+            // hold it per OBJECT: the word then carries
+            // `REGION_LOOP_WORD_VALUE_TEST` and the emitted guard tests each
+            // R slot's value on the object before F runs (and again on every
+            // re-check). Inside F nothing writes such a slot except a bare
+            // store, so a key a bare store may write a non-Number into
+            // (`boxed_mask`) cannot be R.
+            if spilled || n_at >= super::field_rep::REP_SLOTS as usize {
+                return Err(Rep);
+            }
+            match super::field_rep::slot_rep(descriptor.rep, n_at as u32) {
+                super::field_rep::REP_F64 => {}
+                super::field_rep::REP_SPECIAL => return Err(Rep),
+                _ if boxed_mask & (1 << i) != 0 => return Err(Rep),
+                _ => value_test = true,
+            }
         }
         if !spilled
             && boxed_mask & (1 << i) != 0
@@ -2635,6 +2651,9 @@ fn region_loop_pack(
         };
         word |= (field as u64) << (32 + REGION_GUARD_SLOT_BITS * i as u32);
     }
+    if value_test {
+        word |= REGION_LOOP_WORD_VALUE_TEST;
+    }
     Ok(word)
 }
 
@@ -2643,6 +2662,15 @@ fn region_loop_pack(
 /// object carries, so it can never match; the emitted guard tests for it
 /// FIRST and skips the receiver test (DESIGN §4.3).
 pub const REGION_LOOP_WORD_RETIRED: u64 = u64::MAX;
+
+/// Bit 63 of a published loop-region word: some key the region reads as a
+/// Number (R) sits on a lane that does not guarantee one for every carrier
+/// (an `Any` or deprecated lane), so the emitted guard must test each R
+/// slot's value on the object itself before F runs. Field indices occupy
+/// bits 32..62 at most (five 6-bit fields), so the bit is free; the word's
+/// id half is a ShapeId, so a word carrying it is never
+/// [`REGION_LOOP_WORD_RETIRED`].
+pub const REGION_LOOP_WORD_VALUE_TEST: u64 = 1 << 63;
 
 /// Compute a loop region's word ([`js_region_loop_pack`]) and publish it; the
 /// store-side twin of [`js_region_guard_prime`], with its memory ordering.

@@ -134,11 +134,13 @@ fn emit(
         uses_ptr_shape_class: false,
         keys: vec![key.to_string()],
         has_store: false,
-        // This expression never stores. R already requires an inline F64
-        // identity lane, so it also refuses spill words without a store bit.
+        // This expression never stores. R requires an inline lane (an
+        // identity F64 one, or a value-tested one), so it also refuses spill
+        // words without a store bit.
         stored_mask: 0,
         boxed_mask: 0,
         r_mask: 1,
+        vt_mask: 1,
         spill: "false".to_string(),
         sites: None,
         word: String::new(),

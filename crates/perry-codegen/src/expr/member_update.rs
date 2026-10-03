@@ -207,7 +207,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // (Phase 5a's proven `this` never claims numeric fields, so this
             // site remains Phase-3b-local-only in practice.)
             {
-                let fact = ctx.ptr_shape_receiver_fact(object.as_ref()).cloned();
+                let fact = ctx.ptr_shape_store_fact(object.as_ref()).cloned();
                 {
                     if let Some(fact) = fact {
                         if fact.numeric_fields.contains(property.as_str()) {
