@@ -938,3 +938,45 @@ alone. It is not a proved universal migration or an RSS savings forecast.
 Most are the four dominantTS AST classes. Campaign must decide facts placement,
 prototype/private-brand semantics and one-shape-compare/one-load ABI first.
 No cold split or header change is independently applied here.
+
+CURRENT 0ed NORMAL-AUTO PARTIAL MATRIX VERIFIED
+All192executions pass exactNode output, source/build/binary/text/counter checks.
+16cases; both request-processing compilations remain failed. Independent full
+17-case coverage validator rejects this matrix, as required. Original v17
+preflight failure is retained: reused binaries had no renamed ELF text dump.
+Repair v17r1 hashes actual current ELF sections against original build records.
+TS normal RSS237.793->236.074MiB(-0.723%), instructions-2.608%, faults+42.34%.
+Zod RSS24.387->24.0MiB(-1.586%), instructions+0.664%. Strings RSS-1.587%,
+instructions+0.335%; these regressions remain open. Document retention RSS
+-11.794%, pipeline-10.477%, transitions-9.939%, replace-9.525%, large-live-set
+-6.405%, grow/churn-5.462%. Trees RSS+0.107%, instructions-0.377%,faults+25.48%.
+Its cycle distributions overlap widely on the shared host; no stable+46.37%
+time penalty is claimed from medians alone. Full ranges remain in summary.
+
+PRIVATE CURRENT-MAIN TAG-WORD RESULT
+Fresh source differs from production Rust inputs only in trace.rs. Linux4856
+runtime tests and20linked executions pass; all10moving runs copied/protected.
+Both app binaries freshly link separate private archives. All24measurements
+pass. TS instructions-0.0565%, RSS-0.103%; Zod instructions+0.0344%,RSS+0.108%.
+This has no material demonstrated app benefit, remains unapplied, and is not
+presented as an accepted optimization. Original v18 builder failed before a
+source upload completed; v18r1 requires archive SHA before extraction, preserves
+the failure, and completed fresh build/tests. Callback capture is tested next.
+
+MEMORY FLOOR AND 8-BYTE HEADER SCOPE
+At the measuredTS boundary, a16->8B ObjectHeader saves638736B(0.609MiB)
+over79842GC_TYPE_OBJECT cells before alignment/changed backing. This is an
+8-byte OBJECT header; the separate8-byte GC header remains. Common-meta
+elimination targets8.43MiB of retained allocation in this heap, so it deserves
+priority over the header alone. Neither number is a peak RSS prediction.
+Canonical native indices2.50MiB include a node vector(1.25),by_addr(0.4375),
+and edges(0.8125); owner lookup/reverse paths remain needed and campaign-owned.
+The per-object GC slot-map backing2.25MiB belongs to the array-layout lane.
+ObjectHeader/metadata/shape mutations must preserve class/prototype/brand,
+private evaluation identity, GC strong+rewritable edges and fused one-load
+identity guards. Sharing114observed fact groups does not prove those semantic
+transitions correct. No8-byte header or independent facts deletion is applied.
+Largest non-overlapping RSS investigation: retained arena backing at peak,
+release latency/reuse and old-hole compaction cost. Whole free-block advice is
+implemented; intrusive headers/free-chain links prevent blind advice of small
+holes. The measured memory floor is not yet an established absolute minimum.
