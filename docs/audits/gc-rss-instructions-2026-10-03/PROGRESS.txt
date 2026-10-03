@@ -629,3 +629,65 @@ Main freshly fetched again: 69de7f3526 unchanged. The Linux main69 baseline buil
 completed; consolidated immediate-discard main69 runtime tests passed 4,832,
 0 failed, 5 ignored. Its remaining FFI/events/build/application stages are live.
 Those frozen results will not validate current v7 or the private cache prototype.
+
+CURRENT MAIN REBASE (main334; supersedes main69/v7 as current source scope)
+Main advanced through #10498 accessors, #10753 dynamic keys, #10507 function
+constructors, array RMW/bitwise lanes, typed-array/arguments work, function-store
+caches and class super/instanceof relink fixes. The draft rebases cleanly onto
+334217b507e875535648d243fe6d8cf3d2749941; there is no codegen/ABI change authored
+by this GC branch. The GC source keeps the shared visitors, pool-window proposal
+and compact page metadata. Private compact-cache patch remains unapplied.
+
+First fetched intermediate main994 plus GC passed macOS 4,861/0/5. The follow-up
+main334 rebase also rebuilt runtime and passed 4,861/0/5. Source/archive/log
+identities are in current-main334-source-and-validation.json. Main may continue
+advancing; final build inputs must pin the then-fetched source explicitly.
+
+Running main69 jobs remain immutable, with their original comparison scope.
+Main69 full-runtime TS/Zod finished 24 cells; verification/results are being
+processed. Main69 normal-auto compilation is live. Its earlier Linux runtime
+4,832, FFI75/events15 and linked/moving results validate its frozen source only.
+V6 pool-policy and domain-attribution jobs remain queued. Prepared v7/main69
+final-acceptance scripts are now historical preparation: do not run or claim
+them as latest-main334 acceptance. Fresh current-main inputs are prepared.
+
+The campaign added ObjectMeta.instance_birth (POD u64) on main. Prior census
+records used 160-byte header-inclusive metadata allocations; their byte counts
+must remain historical rather than being relabeled as new-main attribution.
+The exact new owner distribution/bytes must be measured on current programs.
+
+Additional old-hole audit: intrusive free lists retain a dead hole's GcHeader
+and first payload word (the next link). Raw walks still step by that header's
+size. Large-hole interior payload pages could be discarded while preserving
+those words; arbitrary free pages cannot be discarded when they contain headers
+or links. Scattered small holes require coalescing/compaction or another traversal
+representation before physical-page release. No hole policy/layout change made;
+its real eligible bytes and reuse/instruction costs remain unmeasured.
+
+MAIN69 FULL-RUNTIME COMPARISON VERIFIED (24/24; frozen immediate-discard source)
+TS 247.312 -> 242.418 MiB (-1.98%), instructions +2.83%, minor faults
+109,161 -> 816,234 (+647.73%), CPU +10.22%. Every candidate instruction count
+exceeds every baseline count. Zod RSS 28.910 -> 29.008 MiB (+0.34%), instructions
++0.015%; its instruction repetitions overlap. All current-binary/build/stdout/
+counter guards passed. main69-full-runtime-comparison.json keeps repetitions.
+This reinforces rejecting immediate discard as the final policy. It does not
+measure the window or the restored shared visitors, and is not new-main334
+acceptance. Normal-auto main69 compilation continues under the shared lock.
+
+CURRENT-MAIN334 ACCEPTANCE INPUTS
+Both pristine source and the 23-path GC overlay are archived and hash-bound.
+New independent source roots/targets are specified. The builder refreshes ALL
+workspace Rust inputs and Cargo manifests, including codegen/HIR/ABI, because
+new-main source archive timestamps can predate reused main69 targets. It requires
+both compilers to rebuild/change, newly landed dynamic-key/arguments/function-
+constructor tests and runtime symbols, Linux page residency/window tests, and
+absence of the rejected visitor helper. It builds both static wrappers.
+
+Default/protected-moving fixtures include the original three GC probes plus
+new-main #10498 accessors, #10753 dynamic keys and #10507 function constructors:
+24 executions (six cases x two arms x two modes). Every moving execution must
+copy objects and protect from-space, as well as match exact Node output. Full-
+runtime TS/Zod is 24 cells; all 17 normal-auto applications total 204 cells.
+All scripts pass Python/bash syntax; source transfer/verification is in progress.
+The job is NOT queued: v6 measurements must first decide the pool window. Its
+prepared script receipt is not a performance-acceptance claim.
