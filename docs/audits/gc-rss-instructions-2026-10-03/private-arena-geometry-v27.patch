@@ -1,0 +1,79 @@
+diff --git a/crates/perry-runtime/src/arena/block.rs b/crates/perry-runtime/src/arena/block.rs
+index 515b8f1592..76843100d6 100644
+--- a/crates/perry-runtime/src/arena/block.rs
++++ b/crates/perry-runtime/src/arena/block.rs
+@@ -1287,3 +1287,7 @@ pub(crate) fn block_pool_bytes() -> usize {
+ #[cfg(test)]
+ #[path = "block/reuse_window_tests.rs"]
+ mod reuse_window_tests;
++
++#[cfg(test)]
++#[path = "block/rss_observer_geometry.rs"]
++mod rss_observer_geometry;
+diff --git a/crates/perry-runtime/src/arena/block/rss_observer_geometry.rs b/crates/perry-runtime/src/arena/block/rss_observer_geometry.rs
+new file mode 100644
+index 0000000000..5807690848
+--- /dev/null
++++ b/crates/perry-runtime/src/arena/block/rss_observer_geometry.rs
+@@ -0,0 +1,61 @@
++//! Private measurement: actual compiler layout for a read-only RSS observer.
++//! No production field, ABI, allocation, tracing or collection change.
++use super::*;
++use std::mem::{align_of, offset_of, size_of};
++
++#[test]
++fn rss_observer_layout_geometry() {
++    let vec: Vec<u64> = Vec::with_capacity(17);
++    let mut vec = vec;
++    vec.extend([1, 2, 3, 4, 5]);
++    let boxed: Box<[u64]> = vec![0u64; 11].into_boxed_slice();
++    let doc = serde_json::json!({
++        "target_arch": std::env::consts::ARCH,
++        "target_os": std::env::consts::OS,
++        "usize_bytes": size_of::<usize>(),
++        "arena": {
++            "size": size_of::<Arena>(), "align": align_of::<Arena>(),
++            "blocks": offset_of!(Arena, blocks), "current": offset_of!(Arena, current),
++            "generation": offset_of!(Arena, generation), "space": offset_of!(Arena, space),
++        },
++        "block": {
++            "size": size_of::<ArenaBlock>(), "align": align_of::<ArenaBlock>(),
++            "data": offset_of!(ArenaBlock, data), "size_field": offset_of!(ArenaBlock, size),
++            "offset": offset_of!(ArenaBlock, offset), "object_starts": offset_of!(ArenaBlock, object_starts),
++            "dead_cycles": offset_of!(ArenaBlock, dead_cycles),
++            "old_free_holes": offset_of!(ArenaBlock, old_free_holes),
++            "pinned_summary": offset_of!(ArenaBlock, pinned_summary),
++        },
++        "vec": {"size": size_of::<Vec<u64>>(), "align": align_of::<Vec<u64>>(),
++            "pointer": vec.as_ptr() as usize, "capacity": vec.capacity(), "length": vec.len()},
++        "box_slice": {"size": size_of::<Box<[u64]>>(), "align": align_of::<Box<[u64]>>(),
++            "pointer": boxed.as_ptr() as usize, "length": boxed.len()},
++    });
++    println!("RSS_OBSERVER_GEOMETRY={doc}");
++    #[cfg(unix)]
++    if let Some(root) = std::env::var_os("RSS_OBSERVER_GEOMETRY_ROOT") {
++        use std::os::fd::AsRawFd;
++        let root = std::path::PathBuf::from(root);
++        std::fs::create_dir_all(&root).unwrap();
++        // Let the kernel copy the opaque representations. Rust never reads
++        // uninitialized padding as values. The external observer maps words
++        // only by comparing with the public pointer/capacity/length above.
++        for (name, address, size) in [
++            (
++                "vec.bin",
++                &vec as *const _ as *const libc::c_void,
++                size_of::<Vec<u64>>(),
++            ),
++            (
++                "box.bin",
++                &boxed as *const _ as *const libc::c_void,
++                size_of::<Box<[u64]>>(),
++            ),
++        ] {
++            let file = std::fs::File::create(root.join(name)).unwrap();
++            let written = unsafe { libc::write(file.as_raw_fd(), address, size) };
++            assert_eq!(written, size as isize);
++        }
++        std::fs::write(root.join("geometry.json"), format!("{doc}\n")).unwrap();
++    }
++}
