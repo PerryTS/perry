@@ -46,6 +46,8 @@ mod packed_range_global_cache_rooting_tests;
 mod prealloc_module_global_tests;
 #[cfg(test)]
 mod prealloc_tdz_path_tests;
+#[cfg(test)]
+mod range_loop_dense_store_tests;
 pub(crate) mod region_loop;
 mod region_read_stmts;
 pub(crate) mod stable_packed_accumulator;

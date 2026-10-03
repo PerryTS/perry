@@ -44,12 +44,9 @@ mod foreign_counter;
 pub(super) mod guarded_array;
 pub(crate) use foreign_counter::{
     affine_counter_occurrences, affine_index_fits_i64, emit_affine_index_i64_with,
-    packed_f64_loop_index_parts,
+    packed_f64_loop_index_parts, packed_f64_loop_offset_read,
 };
-use foreign_counter::{
-    affine_packed_loop_read, emit_affine_index_i64, foreign_packed_loop_read,
-    packed_f64_loop_offset_read,
-};
+use foreign_counter::{affine_packed_loop_read, emit_affine_index_i64, foreign_packed_loop_read};
 pub(crate) use guarded_array::emit_array_region_guard;
 mod inline_dyn_typed_array;
 
