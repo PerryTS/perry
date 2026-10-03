@@ -64,10 +64,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         Some(slot) => ctx.block().load(DOUBLE, &slot),
                         None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
                     };
-                    let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
-                    for a in args {
-                        lowered_args.push(lower_expr(ctx, a)?);
-                    }
+                    let (lowered_args, args_group) =
+                        crate::lower_call::lower_call_args_rooted(ctx, args)?;
                     let (args_ptr, args_len) = if lowered_args.is_empty() {
                         ("null".to_string(), "0".to_string())
                     } else {
@@ -85,7 +83,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         (ptr_reg, n.to_string())
                     };
                     let name_global = emit_string_literal_global(ctx, method);
-                    return Ok(ctx.block().call(
+                    let rooted_result = ctx.block().call(
                         DOUBLE,
                         "js_super_method_call_dynamic",
                         &[
@@ -96,7 +94,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             (PTR, &args_ptr),
                             (I64, &args_len),
                         ],
-                    ));
+                    );
+                    args_group.release(ctx);
+                    return Ok(rooted_result);
                 }
                 for a in args {
                     let _ = lower_expr(ctx, a)?;
@@ -112,10 +112,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let this_box = ctx.block().load(DOUBLE, &this_slot);
             let mut lowered: Vec<String> = Vec::with_capacity(args.len() + 1);
             lowered.push(this_box.clone());
-            let mut user_vals: Vec<String> = Vec::with_capacity(args.len());
-            for a in args {
-                user_vals.push(lower_expr(ctx, a)?);
-            }
+            let (user_vals, args_group) = crate::lower_call::lower_call_args_rooted(ctx, args)?;
             // The body above was resolved along the declared `extends` chain.
             // `super` is the home object's CURRENT `[[Prototype]]`, so a
             // relinked class prototype (or other prototype surgery on this
@@ -248,15 +245,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 lowered.iter().map(|s| (DOUBLE, s.as_str())).collect();
             let direct_value = ctx.block().call(DOUBLE, &fn_name, &arg_slices);
             let Some((merge_idx, merge_label, dynamic_value, dynamic_end)) = guarded_merge else {
-                return Ok(direct_value);
+                let rooted_result = direct_value;
+                args_group.release(ctx);
+                return Ok(rooted_result);
             };
             let direct_end = ctx.block().label.clone();
             ctx.block().br(&merge_label);
             ctx.current_block = merge_idx;
-            Ok(ctx.block().phi(
+            let rooted_result = ctx.block().phi(
                 DOUBLE,
                 &[(&direct_value, &direct_end), (&dynamic_value, &dynamic_end)],
-            ))
+            );
+            args_group.release(ctx);
+            Ok(rooted_result)
         }
 
         // -------- super.method(...spread) --------
@@ -486,10 +487,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             } else {
                 crate::expr::body_call::unbound_this_value(ctx)
             };
-            let key_v = lower_expr(ctx, key)?;
-            let value_v = lower_expr(ctx, value)?;
+            let rooted_operands: [&perry_hir::Expr; 2] = [key, value];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let key_v = rooted_values[0].clone();
+            let value_v = rooted_values[1].clone();
             let parent_cid_s = parent_cid.to_string();
-            Ok(ctx.block().call(
+            let rooted_result = ctx.block().call(
                 DOUBLE,
                 "js_super_put_value_set",
                 &[
@@ -499,7 +503,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     (DOUBLE, &recv_v),
                     (I32, "1"),
                 ],
-            ))
+            );
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
 
         Expr::ObjectSuperPropertyGet {
@@ -507,14 +513,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             key,
             receiver,
         } => {
-            let home_v = lower_expr(ctx, home)?;
-            let key_v = lower_expr(ctx, key)?;
-            let recv_v = lower_expr(ctx, receiver)?;
-            Ok(ctx.block().call(
+            let rooted_operands: [&perry_hir::Expr; 3] = [home, key, receiver];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let home_v = rooted_values[0].clone();
+            let key_v = rooted_values[1].clone();
+            let recv_v = rooted_values[2].clone();
+            let rooted_result = ctx.block().call(
                 DOUBLE,
                 "js_object_super_get",
                 &[(DOUBLE, &home_v), (DOUBLE, &key_v), (DOUBLE, &recv_v)],
-            ))
+            );
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
 
         Expr::ObjectSuperPropertySet {
@@ -523,11 +534,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             value,
             receiver,
         } => {
-            let home_v = lower_expr(ctx, home)?;
-            let key_v = lower_expr(ctx, key)?;
-            let value_v = lower_expr(ctx, value)?;
-            let recv_v = lower_expr(ctx, receiver)?;
-            Ok(ctx.block().call(
+            let rooted_operands: [&perry_hir::Expr; 4] = [home, key, value, receiver];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let home_v = rooted_values[0].clone();
+            let key_v = rooted_values[1].clone();
+            let value_v = rooted_values[2].clone();
+            let recv_v = rooted_values[3].clone();
+            let rooted_result = ctx.block().call(
                 DOUBLE,
                 "js_object_super_put_value_set",
                 &[
@@ -537,7 +551,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     (DOUBLE, &recv_v),
                     (I32, "1"),
                 ],
-            ))
+            );
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
 
         Expr::ObjectSuperMethodCall {
@@ -546,13 +562,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             receiver,
             args,
         } => {
-            let home_v = lower_expr(ctx, home)?;
-            let key_v = lower_expr(ctx, key)?;
-            let recv_v = lower_expr(ctx, receiver)?;
-            let mut lowered_args = Vec::with_capacity(args.len());
-            for arg in args {
-                lowered_args.push(lower_expr(ctx, arg)?);
-            }
+            let rooted_operands: [&perry_hir::Expr; 3] = [home, key, receiver];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let home_v = rooted_values[0].clone();
+            let key_v = rooted_values[1].clone();
+            let recv_v = rooted_values[2].clone();
+            let (lowered_args, args_group) = crate::lower_call::lower_call_args_rooted(ctx, args)?;
             let (args_ptr, args_len) = if lowered_args.is_empty() {
                 ("null".to_string(), "0".to_string())
             } else {
@@ -570,7 +586,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 ));
                 (ptr_reg, lowered_args.len().to_string())
             };
-            Ok(ctx.block().call(
+            let rooted_result = ctx.block().call(
                 DOUBLE,
                 "js_object_super_call",
                 &[
@@ -580,7 +596,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     (PTR, &args_ptr),
                     (I64, &args_len),
                 ],
-            ))
+            );
+            rooted_group.release(ctx);
+            let rooted_result = rooted_result;
+            args_group.release(ctx);
+            Ok(rooted_result)
         }
 
         // -------- fs.readFileSync(path) -> Buffer (no encoding) --------

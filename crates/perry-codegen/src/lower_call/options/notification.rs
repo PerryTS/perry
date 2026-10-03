@@ -41,27 +41,27 @@ pub(in crate::lower_call) fn lower_notification_schedule(
         );
     };
 
-    let mut id_ptr: Option<String> = None;
-    let mut title_ptr: Option<String> = None;
-    let mut body_ptr: Option<String> = None;
+    // #11789 sweep: `id`, `title` and `body` are unboxed to RAW string
+    // pointers for the runtime call, and each is held across the fields after
+    // it and across the trigger's numeric operands. So each is lowered and
+    // rooted here and the pointer is taken from the re-read, below the last
+    // of them, right before the call.
+    let mut note_group = crate::rooting::open_rooted_group(props.len());
+    let mut id_root: Option<usize> = None;
+    let mut title_root: Option<usize> = None;
+    let mut body_root: Option<usize> = None;
     let mut trigger: Option<Vec<(String, Expr)>> = None;
 
     for (key, val) in &props {
         match key.as_str() {
             "id" => {
-                let v = lower_expr(ctx, val)?;
-                let blk = ctx.block();
-                id_ptr = Some(unbox_to_i64(blk, &v));
+                id_root = Some(note_group.lower(ctx, val, true)?);
             }
             "title" => {
-                let v = lower_expr(ctx, val)?;
-                let blk = ctx.block();
-                title_ptr = Some(unbox_to_i64(blk, &v));
+                title_root = Some(note_group.lower(ctx, val, true)?);
             }
             "body" => {
-                let v = lower_expr(ctx, val)?;
-                let blk = ctx.block();
-                body_ptr = Some(unbox_to_i64(blk, &v));
+                body_root = Some(note_group.lower(ctx, val, true)?);
             }
             "trigger" => {
                 let Some(tprops) = extract_options_fields(ctx, val) else {
@@ -73,16 +73,16 @@ pub(in crate::lower_call) fn lower_notification_schedule(
                 trigger = Some(tprops);
             }
             _ => {
-                let _ = lower_expr(ctx, val)?;
+                note_group.lower(ctx, val, true)?;
             }
         }
     }
 
-    let id_ptr = id_ptr
+    let id_root = id_root
         .ok_or_else(|| anyhow::anyhow!("notificationSchedule: missing required field `id`"))?;
-    let title_ptr = title_ptr
+    let title_root = title_root
         .ok_or_else(|| anyhow::anyhow!("notificationSchedule: missing required field `title`"))?;
-    let body_ptr = body_ptr
+    let body_root = body_root
         .ok_or_else(|| anyhow::anyhow!("notificationSchedule: missing required field `body`"))?;
     let trigger = trigger
         .ok_or_else(|| anyhow::anyhow!("notificationSchedule: missing required field `trigger`"))?;
@@ -123,6 +123,18 @@ pub(in crate::lower_call) fn lower_notification_schedule(
                 VOID,
                 vec![I64, I64, I64, DOUBLE, DOUBLE],
             ));
+            let id_ptr = {
+                let v = note_group.reread(ctx, id_root)?;
+                unbox_to_i64(ctx.block(), &v)
+            };
+            let title_ptr = {
+                let v = note_group.reread(ctx, title_root)?;
+                unbox_to_i64(ctx.block(), &v)
+            };
+            let body_ptr = {
+                let v = note_group.reread(ctx, body_root)?;
+                unbox_to_i64(ctx.block(), &v)
+            };
             ctx.block().call_void(
                 "perry_system_notification_schedule_interval",
                 &[
@@ -150,6 +162,18 @@ pub(in crate::lower_call) fn lower_notification_schedule(
                 VOID,
                 vec![I64, I64, I64, DOUBLE],
             ));
+            let id_ptr = {
+                let v = note_group.reread(ctx, id_root)?;
+                unbox_to_i64(ctx.block(), &v)
+            };
+            let title_ptr = {
+                let v = note_group.reread(ctx, title_root)?;
+                unbox_to_i64(ctx.block(), &v)
+            };
+            let body_ptr = {
+                let v = note_group.reread(ctx, body_root)?;
+                unbox_to_i64(ctx.block(), &v)
+            };
             ctx.block().call_void(
                 "perry_system_notification_schedule_calendar",
                 &[
@@ -180,6 +204,18 @@ pub(in crate::lower_call) fn lower_notification_schedule(
                 VOID,
                 vec![I64, I64, I64, DOUBLE, DOUBLE, DOUBLE],
             ));
+            let id_ptr = {
+                let v = note_group.reread(ctx, id_root)?;
+                unbox_to_i64(ctx.block(), &v)
+            };
+            let title_ptr = {
+                let v = note_group.reread(ctx, title_root)?;
+                unbox_to_i64(ctx.block(), &v)
+            };
+            let body_ptr = {
+                let v = note_group.reread(ctx, body_root)?;
+                unbox_to_i64(ctx.block(), &v)
+            };
             ctx.block().call_void(
                 "perry_system_notification_schedule_location",
                 &[
@@ -199,5 +235,6 @@ pub(in crate::lower_call) fn lower_notification_schedule(
         ),
     }
 
+    note_group.release(ctx);
     Ok(double_literal(0.0))
 }

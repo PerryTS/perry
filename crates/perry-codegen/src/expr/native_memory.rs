@@ -10,7 +10,7 @@ use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 
 use super::{
     attach_buffer_view_facts, buffer_access_materialization_reason, buffer_view_lowered_value,
-    effective_alias_state_for_access, lower_expr, lower_expr_native, unbox_to_i64, FnCtx,
+    effective_alias_state_for_access, lower_expr_native, unbox_to_i64, FnCtx,
 };
 
 #[derive(Clone)]
@@ -131,8 +131,11 @@ fn lower_copy(ctx: &mut FnCtx<'_>, dst: &Expr, src: &Expr) -> Result<String> {
 }
 
 fn lower_fill_u32_fallback(ctx: &mut FnCtx<'_>, view: &Expr, value: &Expr) -> Result<String> {
-    let view_value = lower_expr(ctx, view)?;
-    let value = lower_expr(ctx, value)?;
+    let rooted_operands: [&perry_hir::Expr; 2] = [view, value];
+    let (rooted_values, rooted_group) =
+        crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+    let view_value = rooted_values[0].clone();
+    let value = rooted_values[1].clone();
     let handle = unbox_to_i64(ctx.block(), &view_value);
     ctx.block().call_void(
         "js_native_memory_fill_u32",
@@ -144,12 +147,17 @@ fn lower_fill_u32_fallback(ctx: &mut FnCtx<'_>, view: &Expr, value: &Expr) -> Re
         "NativeMemoryFillU32.runtime_fallback",
         buffer_access_materialization_reason(ctx, view),
     );
-    Ok(undefined_value())
+    let rooted_result = undefined_value();
+    rooted_group.release(ctx);
+    Ok(rooted_result)
 }
 
 fn lower_copy_fallback(ctx: &mut FnCtx<'_>, dst: &Expr, src: &Expr) -> Result<String> {
-    let dst_value = lower_expr(ctx, dst)?;
-    let src_value = lower_expr(ctx, src)?;
+    let rooted_operands: [&perry_hir::Expr; 2] = [dst, src];
+    let (rooted_values, rooted_group) =
+        crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+    let dst_value = rooted_values[0].clone();
+    let src_value = rooted_values[1].clone();
     let dst_handle = unbox_to_i64(ctx.block(), &dst_value);
     let src_handle = unbox_to_i64(ctx.block(), &src_value);
     ctx.block().call_void(
@@ -162,7 +170,9 @@ fn lower_copy_fallback(ctx: &mut FnCtx<'_>, dst: &Expr, src: &Expr) -> Result<St
         "NativeMemoryCopy.runtime_fallback",
         buffer_access_materialization_reason(ctx, dst),
     );
-    Ok(undefined_value())
+    let rooted_result = undefined_value();
+    rooted_group.release(ctx);
+    Ok(rooted_result)
 }
 
 fn proven_view(

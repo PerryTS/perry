@@ -21,7 +21,7 @@ use crate::nanbox::double_literal;
 use crate::rooting::{self, RootedGroup};
 use crate::types::{DOUBLE, I32, I64};
 
-use super::{build_headers_from_object, extract_options_fields, get_raw_string_ptr};
+use super::{extract_options_fields, get_raw_string_ptr};
 
 /// Lower `args[idx]` into `group`, rooted across everything from
 /// `args[idx + 1..]` — the same #6969/#6986 discipline `new.rs`'s
@@ -91,6 +91,76 @@ fn adopt_two_leading_args_discard_rest<'a>(
         None => undef(),
     };
     Ok((v0, v1))
+}
+
+/// The shared argument shape of `new ReadableStream` / `WritableStream` /
+/// `TransformStream`: a first argument that is either an inline literal whose
+/// named members are callbacks (`start`, `pull`, ...) or any runtime value
+/// standing for the underlying source/sink/transformer, followed by
+/// `extra_count` strategy arguments.
+///
+/// #11789 sweep: every callback and strategy is lowered and rooted FIRST, in
+/// source order, each across the ones after it (each callback is a closure
+/// allocation), and they are read back together below the last. Returns, in
+/// `names` order, each named callback (`undefined` when absent), the runtime
+/// source object when the first argument was not a literal, and the strategy
+/// arguments that were present. The literal is only ANALYSED before anything
+/// is lowered.
+fn lower_stream_ctor_args(
+    ctx: &mut FnCtx<'_>,
+    args: &[Expr],
+    names: &[&str],
+    extra_count: usize,
+) -> Result<(Vec<String>, Option<String>, Vec<Option<String>>)> {
+    let props_opt = match args.first() {
+        Some(first) => extract_options_fields(ctx, first),
+        None => None,
+    };
+    let mut group =
+        rooting::open_rooted_group(props_opt.as_ref().map_or(1, Vec::len) + extra_count);
+    // (name index | None for a discarded member, root)
+    let mut member_roots: Vec<(Option<usize>, usize)> = Vec::new();
+    let mut object_root: Option<usize> = None;
+    let extras: Vec<&Expr> = args.iter().skip(1).take(extra_count).collect();
+    match (&props_opt, args.first()) {
+        (Some(props), _) => {
+            for (i, (k, vexpr)) in props.iter().enumerate() {
+                let collects = !extras.is_empty()
+                    || rooting::any_operand_may_collect(
+                        ctx,
+                        props[i + 1..].iter().map(|(_, later)| later),
+                    );
+                let root = group.lower(ctx, vexpr, collects)?;
+                member_roots.push((names.iter().position(|n| *n == k.as_str()), root));
+            }
+        }
+        (None, Some(first)) => {
+            object_root = Some(group.lower(ctx, first, !extras.is_empty())?);
+        }
+        (None, None) => {}
+    }
+    let mut extra_roots: Vec<usize> = Vec::with_capacity(extras.len());
+    for (i, extra) in extras.iter().enumerate() {
+        let collects = rooting::any_operand_may_collect(ctx, extras[i + 1..].iter().copied());
+        extra_roots.push(group.lower(ctx, extra, collects)?);
+    }
+    let undef = || double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+    let mut named: Vec<String> = names.iter().map(|_| undef()).collect();
+    for (slot, root) in member_roots {
+        if let Some(slot) = slot {
+            named[slot] = group.reread(ctx, root)?;
+        }
+    }
+    let object = match object_root {
+        Some(root) => Some(group.reread(ctx, root)?),
+        None => None,
+    };
+    let mut extra_values: Vec<Option<String>> = vec![None; extra_count];
+    for (i, root) in extra_roots.into_iter().enumerate() {
+        extra_values[i] = Some(group.reread(ctx, root)?);
+    }
+    group.release(ctx);
+    Ok((named, object, extra_values))
 }
 
 pub(super) fn lower_builtin_new<'a>(
@@ -908,93 +978,20 @@ pub(super) fn lower_builtin_new<'a>(
             } else {
                 "0".to_string()
             };
+            // #11789 sweep: the body is converted BEFORE the init is evaluated
+            // (the BodyInit metadata reset above depends on that order), so
+            // its raw pointer is rooted across the init's evaluation and read
+            // back below it.
+            let body_root =
+                group.adopt_emitted(ctx, rooting::Repr::Ptr, &body_ptr, args.len() >= 2);
 
             // Default init: status=200, statusText=null, headers=0
-            let mut status_val = "200.0".to_string();
-            let mut status_text_ptr = "0".to_string();
-            let mut headers_handle = "0.0".to_string();
-
-            if args.len() >= 2 {
-                if let Some(props) = extract_options_fields(ctx, &args[1]) {
-                    for (k, vexpr) in &props {
-                        match k.as_str() {
-                            "status" => {
-                                status_val = lower_expr(ctx, vexpr)?;
-                            }
-                            "statusText" => {
-                                status_text_ptr = get_raw_string_ptr(ctx, vexpr)?;
-                            }
-                            "headers" => {
-                                // Inline object → build a Headers handle.
-                                // Phase 3 anon-class → same via extract_options.
-                                // Other expressions → use as-is (handle f64).
-                                if let Some(hprops) = extract_options_fields(ctx, vexpr) {
-                                    headers_handle = build_headers_from_object(ctx, &hprops)?;
-                                } else {
-                                    headers_handle = lower_expr(ctx, vexpr)?;
-                                }
-                            }
-                            _ => {
-                                let _ = lower_expr(ctx, vexpr)?;
-                            }
-                        }
-                    }
-                } else {
-                    // Fix #421 (v0.5.575): the second arg is a runtime
-                    // object (not an object literal) — happens when
-                    // user code does `new Response(body, opts)` where
-                    // `opts` is bound from elsewhere. Hono's
-                    // `c.text(body, status)` path builds `{ status,
-                    // headers }` inside `#newResponse` and passes it
-                    // here. Previously perry just evaluated the arg
-                    // for side effects and dropped status/headers,
-                    // so every hono response had perry-default
-                    // status (200) and no headers — `res.status`
-                    // read undefined because the response never
-                    // got a status to begin with. Now we extract
-                    // `.status` / `.statusText` / `.headers` at
-                    // runtime via `js_object_get_field_by_name_f64`
-                    // and feed them to `js_response_new`.
-                    let opts_val = lower_expr(ctx, &args[1])?;
-                    let blk = ctx.block();
-                    let opts_handle = crate::expr::unbox_to_i64(blk, &opts_val);
-
-                    // Helper: intern a key, load its raw string ptr,
-                    // call js_object_get_field_by_name_f64.
-                    let get_field = |ctx_inner: &mut FnCtx<'_>, key: &str| -> Result<String> {
-                        let key_idx = ctx_inner.strings.intern(key);
-                        let key_global =
-                            format!("@{}", ctx_inner.strings.entry(key_idx).handle_global);
-                        let blk = ctx_inner.block();
-                        let key_box = blk.load(DOUBLE, &key_global);
-                        let key_bits = blk.bitcast_double_to_i64(&key_box);
-                        let key_raw = blk.and(I64, &key_bits, crate::nanbox::POINTER_MASK_I64);
-                        let opts_handle_local = opts_handle.clone();
-                        Ok(blk.call(
-                            DOUBLE,
-                            "js_object_get_field_by_name_f64",
-                            &[(I64, &opts_handle_local), (I64, &key_raw)],
-                        ))
-                    };
-
-                    // status: NaN-boxed f64. The runtime treats NaN /
-                    // 0 as "use default 200" so a missing field flows
-                    // through cleanly.
-                    status_val = get_field(ctx, "status")?;
-                    // statusText: NaN-boxed string. Strip to raw ptr
-                    // for the FFI signature.
-                    let st_box = get_field(ctx, "statusText")?;
-                    let blk = ctx.block();
-                    status_text_ptr =
-                        blk.call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &st_box)]);
-                    // headers: NaN-boxed Headers handle (an f64
-                    // numeric id from `js_headers_new`). Pass through
-                    // verbatim — js_response_new accepts the raw f64.
-                    // Defensive: strip NaN-box tag if hono / user code
-                    // wrapped it as a pointer.
-                    headers_handle = get_field(ctx, "headers")?;
-                }
-            }
+            let (status_val, status_text_ptr, headers_handle) = if args.len() >= 2 {
+                super::options::lower_response_init(ctx, &args[1])?
+            } else {
+                ("200.0".to_string(), "0".to_string(), "0.0".to_string())
+            };
+            let body_ptr = group.reread_emitted(ctx, body_root);
 
             let handle = ctx.block().call(
                 DOUBLE,
@@ -1019,62 +1016,111 @@ pub(super) fn lower_builtin_new<'a>(
         // subsequent property/method access dispatches through the
         // `module == "blob"` arm above.
         "Blob" => {
-            let parts = if !args.is_empty() {
-                lower_expr(ctx, &args[0])?
+            // #11789 sweep: `parts` is held across the options' evaluation and
+            // the `type` across the options after it; both are read back below
+            // the last. The options literal is only ANALYSED here, so it can be
+            // destructured before anything is lowered.
+            let props_opt = if args.len() >= 2 {
+                extract_options_fields(ctx, &args[1])
             } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                None
             };
-            let mut type_str = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let mut blob_group =
+                rooting::open_rooted_group(1 + props_opt.as_ref().map_or(1, Vec::len));
+            let parts_root = match args.first() {
+                Some(a) => Some(blob_group.lower(ctx, a, args.len() >= 2)?),
+                None => None,
+            };
+            let mut type_root: Option<usize> = None;
             if args.len() >= 2 {
-                if let Some(props) = extract_options_fields(ctx, &args[1]) {
-                    for (k, vexpr) in &props {
+                if let Some(props) = &props_opt {
+                    for (i, (k, vexpr)) in props.iter().enumerate() {
+                        let collects = rooting::any_operand_may_collect(
+                            ctx,
+                            props[i + 1..].iter().map(|(_, later)| later),
+                        );
+                        let root = blob_group.lower(ctx, vexpr, collects)?;
                         if k == "type" {
-                            type_str = lower_expr(ctx, vexpr)?;
-                        } else {
-                            let _ = lower_expr(ctx, vexpr)?;
+                            type_root = Some(root);
                         }
                     }
                 } else {
-                    let _ = lower_expr(ctx, &args[1])?;
+                    blob_group.lower(ctx, &args[1], false)?;
                 }
             }
+            let parts = match parts_root {
+                Some(root) => blob_group.reread(ctx, root)?,
+                None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
+            };
+            let type_str = match type_root {
+                Some(root) => blob_group.reread(ctx, root)?,
+                None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
+            };
             let handle = ctx.block().call(
                 DOUBLE,
                 "js_blob_new",
                 &[(DOUBLE, &parts), (DOUBLE, &type_str)],
             );
+            blob_group.release(ctx);
             Ok(Some(handle))
         }
 
         "File" => {
-            let parts = if !args.is_empty() {
-                lower_expr(ctx, &args[0])?
+            // #11789 sweep: as for `Blob` above, with the `name` argument and
+            // the `lastModified` option in the same window.
+            let props_opt = if args.len() >= 3 {
+                extract_options_fields(ctx, &args[2])
             } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                None
             };
-            let name = if args.len() >= 2 {
-                lower_expr(ctx, &args[1])?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            let mut file_group =
+                rooting::open_rooted_group(2 + props_opt.as_ref().map_or(1, Vec::len));
+            let parts_root = match args.first() {
+                Some(a) => Some(file_group.lower(ctx, a, args.len() >= 2)?),
+                None => None,
             };
-            let mut type_str = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-            // NaN signals "use Date.now()" inside the runtime helper.
-            let mut last_modified = double_literal(f64::NAN);
+            let name_root = match args.get(1) {
+                Some(a) => Some(file_group.lower(ctx, a, args.len() >= 3)?),
+                None => None,
+            };
+            let mut type_root: Option<usize> = None;
+            let mut last_modified_root: Option<usize> = None;
             if args.len() >= 3 {
-                if let Some(props) = extract_options_fields(ctx, &args[2]) {
-                    for (k, vexpr) in &props {
+                if let Some(props) = &props_opt {
+                    for (i, (k, vexpr)) in props.iter().enumerate() {
+                        let collects = rooting::any_operand_may_collect(
+                            ctx,
+                            props[i + 1..].iter().map(|(_, later)| later),
+                        );
+                        let root = file_group.lower(ctx, vexpr, collects)?;
                         match k.as_str() {
-                            "type" => type_str = lower_expr(ctx, vexpr)?,
-                            "lastModified" => last_modified = lower_expr(ctx, vexpr)?,
-                            _ => {
-                                let _ = lower_expr(ctx, vexpr)?;
-                            }
+                            "type" => type_root = Some(root),
+                            "lastModified" => last_modified_root = Some(root),
+                            _ => {}
                         }
                     }
                 } else {
-                    let _ = lower_expr(ctx, &args[2])?;
+                    file_group.lower(ctx, &args[2], false)?;
                 }
             }
+            let undef = || double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let parts = match parts_root {
+                Some(root) => file_group.reread(ctx, root)?,
+                None => undef(),
+            };
+            let name = match name_root {
+                Some(root) => file_group.reread(ctx, root)?,
+                None => undef(),
+            };
+            let type_str = match type_root {
+                Some(root) => file_group.reread(ctx, root)?,
+                None => undef(),
+            };
+            // NaN signals "use Date.now()" inside the runtime helper.
+            let last_modified = match last_modified_root {
+                Some(root) => file_group.reread(ctx, root)?,
+                None => double_literal(f64::NAN),
+            };
             let handle = ctx.block().call(
                 DOUBLE,
                 "js_file_new",
@@ -1085,6 +1131,7 @@ pub(super) fn lower_builtin_new<'a>(
                     (DOUBLE, &last_modified),
                 ],
             );
+            file_group.release(ctx);
             Ok(Some(handle))
         }
 
@@ -1103,11 +1150,14 @@ pub(super) fn lower_builtin_new<'a>(
                 if let Some(props) = extract_options_fields(ctx, &args[0]) {
                     for (k, vexpr) in &props {
                         let key_expr = Expr::String(k.clone());
-                        let key_ptr = get_raw_string_ptr(ctx, &key_expr)?;
+                        // #11789 sweep: the value is evaluated (and coerced --
+                        // a `toString()` is user code) BEFORE the key's raw
+                        // pointer is taken, so the key is never held across it.
                         let value = lower_expr(ctx, vexpr)?;
                         let val_ptr =
                             ctx.block()
                                 .call(I64, "js_jsvalue_to_string", &[(DOUBLE, &value)]);
+                        let key_ptr = get_raw_string_ptr(ctx, &key_expr)?;
                         let h = group.reread_emitted(ctx, h_root);
                         ctx.block().call(
                             DOUBLE,
@@ -1152,40 +1202,16 @@ pub(super) fn lower_builtin_new<'a>(
         // `abort` / `transform` / `flush` callbacks; missing ones are passed
         // as TAG_UNDEFINED so the runtime can no-op cleanly.
         "ReadableStream" => {
-            let mut start = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-            let mut pull = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-            let mut cancel = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-            let mut source_type = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-            let mut strategy = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-            let mut source_object = None;
-            if !args.is_empty() {
-                if let Some(props) = extract_options_fields(ctx, &args[0]) {
-                    for (k, vexpr) in &props {
-                        match k.as_str() {
-                            "start" => {
-                                start = lower_expr(ctx, vexpr)?;
-                            }
-                            "pull" => {
-                                pull = lower_expr(ctx, vexpr)?;
-                            }
-                            "cancel" => {
-                                cancel = lower_expr(ctx, vexpr)?;
-                            }
-                            "type" => {
-                                source_type = lower_expr(ctx, vexpr)?;
-                            }
-                            _ => {
-                                let _ = lower_expr(ctx, vexpr)?;
-                            }
-                        }
-                    }
-                } else {
-                    source_object = Some(lower_expr(ctx, &args[0])?);
-                }
-            }
-            if args.len() >= 2 {
-                strategy = lower_expr(ctx, &args[1])?;
-            }
+            // #11789 sweep: the callbacks (each a closure allocation) and the
+            // strategy are lowered and rooted in source order, each across the
+            // ones after it, and read back together below the last.
+            let (named, source_object, extra) =
+                lower_stream_ctor_args(ctx, args, &["start", "pull", "cancel", "type"], 1)?;
+            let [start, pull, cancel, source_type]: [String; 4] =
+                named.try_into().expect("four named stream options");
+            let strategy = extra[0]
+                .clone()
+                .unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
             if let Some(source) = source_object {
                 let h = ctx.block().call(
                     DOUBLE,
@@ -1218,48 +1244,19 @@ pub(super) fn lower_builtin_new<'a>(
                     .call(DOUBLE, "js_writable_stream_throw_invalid_sink", &[]);
                 return Ok(Some(h));
             }
-            let mut start = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-            let mut write = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-            let mut close = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-            let mut abort = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-            let mut sink_type = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-            let mut hwm = double_literal(1.0);
-            let mut sink_object = None;
-            if !args.is_empty() {
-                if let Some(props) = extract_options_fields(ctx, &args[0]) {
-                    for (k, vexpr) in &props {
-                        match k.as_str() {
-                            "start" => {
-                                start = lower_expr(ctx, vexpr)?;
-                            }
-                            "write" => {
-                                write = lower_expr(ctx, vexpr)?;
-                            }
-                            "close" => {
-                                close = lower_expr(ctx, vexpr)?;
-                            }
-                            "abort" => {
-                                abort = lower_expr(ctx, vexpr)?;
-                            }
-                            "type" => {
-                                sink_type = lower_expr(ctx, vexpr)?;
-                            }
-                            _ => {
-                                let _ = lower_expr(ctx, vexpr)?;
-                            }
-                        }
-                    }
-                } else {
-                    sink_object = Some(lower_expr(ctx, &args[0])?);
-                }
-            }
-            if args.len() >= 2 {
-                // #4915: pass the whole strategy value through — the runtime
-                // accepts a plain highWaterMark number or a strategy object
-                // (e.g. ByteLengthQueuingStrategy) and reads highWaterMark +
-                // size() from it.
-                hwm = lower_expr(ctx, &args[1])?;
-            }
+            // #11789 sweep: as for `ReadableStream` above. #4915: the whole
+            // strategy value passes through -- the runtime accepts a plain
+            // highWaterMark number or a strategy object (e.g.
+            // ByteLengthQueuingStrategy) and reads highWaterMark + size() from it.
+            let (named, sink_object, extra) = lower_stream_ctor_args(
+                ctx,
+                args,
+                &["start", "write", "close", "abort", "type"],
+                1,
+            )?;
+            let [start, write, close, abort, sink_type]: [String; 5] =
+                named.try_into().expect("five named stream options");
+            let hwm = extra[0].clone().unwrap_or_else(|| double_literal(1.0));
             if let Some(sink) = sink_object {
                 let h = ctx.block().call(
                     DOUBLE,
@@ -1284,44 +1281,16 @@ pub(super) fn lower_builtin_new<'a>(
         }
 
         "TransformStream" => {
-            let mut start = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-            let mut transform = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-            let mut flush = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-            let hwm = double_literal(1.0);
-            let mut transformer_object = None;
-            if !args.is_empty() {
-                if let Some(props) = extract_options_fields(ctx, &args[0]) {
-                    for (k, vexpr) in &props {
-                        match k.as_str() {
-                            "start" => {
-                                start = lower_expr(ctx, vexpr)?;
-                            }
-                            "transform" => {
-                                transform = lower_expr(ctx, vexpr)?;
-                            }
-                            "flush" => {
-                                flush = lower_expr(ctx, vexpr)?;
-                            }
-                            _ => {
-                                let _ = lower_expr(ctx, vexpr)?;
-                            }
-                        }
-                    }
-                } else {
-                    transformer_object = Some(lower_expr(ctx, &args[0])?);
-                }
-            }
-            // #4915: writableStrategy (arg 1) / readableStrategy (arg 2) —
-            // each may be a plain highWaterMark number or a strategy object;
-            // the runtime parses either form.
-            let mut writable_strategy = hwm;
-            let mut readable_strategy = double_literal(0.0);
-            if args.len() >= 2 {
-                writable_strategy = lower_expr(ctx, &args[1])?;
-            }
-            if args.len() >= 3 {
-                readable_strategy = lower_expr(ctx, &args[2])?;
-            }
+            // #11789 sweep: as for `ReadableStream` above. #4915:
+            // writableStrategy (arg 1) / readableStrategy (arg 2) -- each may be
+            // a plain highWaterMark number or a strategy object; the runtime
+            // parses either form.
+            let (named, transformer_object, extra) =
+                lower_stream_ctor_args(ctx, args, &["start", "transform", "flush"], 2)?;
+            let [start, transform, flush]: [String; 3] =
+                named.try_into().expect("three named stream options");
+            let writable_strategy = extra[0].clone().unwrap_or_else(|| double_literal(1.0));
+            let readable_strategy = extra[1].clone().unwrap_or_else(|| double_literal(0.0));
             if let Some(transformer) = transformer_object {
                 let h = ctx.block().call(
                     DOUBLE,

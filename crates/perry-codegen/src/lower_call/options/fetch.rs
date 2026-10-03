@@ -36,11 +36,14 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
     if module == "fetch" && object.is_none() {
         match method {
             "static_json" => {
-                let v = if !args.is_empty() {
-                    lower_expr(ctx, &args[0])?
-                } else {
-                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-                };
+                // #11789 sweep: `data` is held across the whole `init`
+                // evaluation (a callback, a header literal's allocation) and
+                // is read back below it.
+                let mut json_group = crate::rooting::open_rooted_group(1);
+                let v_root = args
+                    .first()
+                    .map(|data| json_group.lower(ctx, data, args.len() >= 2))
+                    .transpose()?;
                 // #2638: honor the optional `init` arg
                 // (`Response.json(data, { status, statusText, headers })`).
                 // Mirror `new Response(body, init)` field extraction: pull
@@ -49,75 +52,15 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
                 // literal) and feed them to the widened runtime helper. Missing
                 // fields keep their sentinels (status 200, no statusText, no
                 // headers) so the default `Response.json(data)` is unchanged.
-                let mut status_val = "200.0".to_string();
-                let mut status_text_ptr = "0".to_string();
-                let mut headers_handle = "0.0".to_string();
-                if args.len() >= 2 {
-                    if let Some(props) = super::extract_options_fields(ctx, &args[1]) {
-                        for (k, vexpr) in &props {
-                            match k.as_str() {
-                                "status" => {
-                                    status_val = lower_expr(ctx, vexpr)?;
-                                }
-                                "statusText" => {
-                                    status_text_ptr = get_raw_string_ptr(ctx, vexpr)?;
-                                }
-                                "headers" => {
-                                    if let Some(hprops) = super::extract_options_fields(ctx, vexpr)
-                                    {
-                                        headers_handle =
-                                            super::build_headers_from_object(ctx, &hprops)?;
-                                    } else {
-                                        headers_handle = lower_expr(ctx, vexpr)?;
-                                    }
-                                }
-                                _ => {
-                                    let _ = lower_expr(ctx, vexpr)?;
-                                }
-                            }
-                        }
-                    } else {
-                        // The init arg is a RUNTIME object, not a literal — a bound
-                        // variable (`Response.json(data, init)` where `init` is a param
-                        // or local, or another `Response`). `extract_options_fields`
-                        // only sees object literals, so the whole init was dropped and
-                        // the status defaulted to 200: `Response.json(x, {status:401})`
-                        // returned 401 at module scope (literal) but 200 the moment the
-                        // init was passed through a variable — e.g. inside
-                        // `NextResponse.json`, so every authenticated route's 401 became
-                        // a 200. Mirror the `new Response(body, init)` runtime path and
-                        // read the fields at runtime.
-                        // `init` is a runtime value that need not be an object:
-                        // `Response.json(x, 3.14)` is legal TS. Unboxing it to a
-                        // raw pointer and dereferencing would SIGSEGV (a
-                        // non-integer double's bits land in the heap-pointer
-                        // magnitude window). Read each field through the boxed
-                        // helper, which validates the receiver and returns
-                        // `undefined` for a non-object instead of derefing.
-                        let opts_val = lower_expr(ctx, &args[1])?;
-                        let get_field = |ctx_inner: &mut FnCtx<'_>, key: &str| -> Result<String> {
-                            let key_idx = ctx_inner.strings.intern(key);
-                            let key_global =
-                                format!("@{}", ctx_inner.strings.entry(key_idx).handle_global);
-                            let blk = ctx_inner.block();
-                            let key_box = blk.load(DOUBLE, &key_global);
-                            let key_bits = blk.bitcast_double_to_i64(&key_box);
-                            let key_raw = blk.and(I64, &key_bits, crate::nanbox::POINTER_MASK_I64);
-                            let opts_val_local = opts_val.clone();
-                            Ok(blk.call(
-                                DOUBLE,
-                                "js_object_get_field_by_name_boxed",
-                                &[(DOUBLE, &opts_val_local), (I64, &key_raw)],
-                            ))
-                        };
-                        status_val = get_field(ctx, "status")?;
-                        let st_box = get_field(ctx, "statusText")?;
-                        let blk = ctx.block();
-                        status_text_ptr =
-                            blk.call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &st_box)]);
-                        headers_handle = get_field(ctx, "headers")?;
-                    }
-                }
+                let (status_val, status_text_ptr, headers_handle) = if args.len() >= 2 {
+                    lower_response_init(ctx, &args[1])?
+                } else {
+                    ("200.0".to_string(), "0".to_string(), "0.0".to_string())
+                };
+                let v = match v_root {
+                    Some(root) => json_group.reread(ctx, root)?,
+                    None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
+                };
                 let handle = ctx.block().call(
                     DOUBLE,
                     "js_response_static_json",
@@ -128,6 +71,7 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
                         (DOUBLE, &headers_handle),
                     ],
                 );
+                json_group.release(ctx);
                 return Ok(Some(handle));
             }
             "static_redirect" => {
@@ -138,8 +82,10 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
                 } else {
                     "0".to_string()
                 };
+                let (arg_values, arg_group) =
+                    crate::lower_call::lower_call_args_rooted(ctx, &args[..args.len().min(2)])?;
                 let status = if args.len() >= 2 {
-                    lower_expr(ctx, &args[1])?
+                    arg_values[1].clone()
                 } else {
                     "302.0".to_string()
                 };
@@ -148,7 +94,9 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
                     "js_response_static_redirect",
                     &[(I64, &url_ptr), (DOUBLE, &status)],
                 );
-                return Ok(Some(handle));
+                let result = Some(handle);
+                arg_group.release(ctx);
+                return Ok(result);
             }
             "static_error" => {
                 let handle = ctx.block().call(DOUBLE, "js_response_static_error", &[]);
@@ -186,8 +134,10 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
                 if args.len() < 2 {
                     return Ok(Some(double_literal(0.0)));
                 }
-                let key_ptr = get_raw_string_ptr(ctx, &args[0])?;
-                let val_ptr = get_raw_string_ptr(ctx, &args[1])?;
+                let (arg_values, arg_group) =
+                    crate::lower_call::lower_call_args_rooted(ctx, &args[..args.len().min(2)])?;
+                let key_ptr = crate::lower_call::raw_string_ptr_of(ctx, &arg_values[0]);
+                let val_ptr = crate::lower_call::raw_string_ptr_of(ctx, &arg_values[1]);
                 let runtime_fn = if method == "append" {
                     "js_headers_append"
                 } else {
@@ -198,9 +148,9 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
                     runtime_fn,
                     &[(DOUBLE, &h_handle), (I64, &key_ptr), (I64, &val_ptr)],
                 );
-                return Ok(Some(double_literal(f64::from_bits(
-                    crate::nanbox::TAG_UNDEFINED,
-                ))));
+                let result = Some(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+                arg_group.release(ctx);
+                return Ok(result);
             }
             "get" => {
                 if args.is_empty() {
@@ -600,18 +550,20 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
         let handle = lower_expr(ctx, recv)?;
         match method {
             "append" | "set" => {
+                let (arg_values, arg_group) =
+                    crate::lower_call::lower_call_args_rooted(ctx, &args[..args.len().min(3)])?;
                 let name = if !args.is_empty() {
-                    lower_expr(ctx, &args[0])?
+                    arg_values[0].clone()
                 } else {
                     double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
                 };
                 let value = if args.len() >= 2 {
-                    lower_expr(ctx, &args[1])?
+                    arg_values[1].clone()
                 } else {
                     double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
                 };
                 let filename = if args.len() >= 3 {
-                    lower_expr(ctx, &args[2])?
+                    arg_values[2].clone()
                 } else {
                     double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
                 };
@@ -630,9 +582,9 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
                         (DOUBLE, &filename),
                     ],
                 );
-                return Ok(Some(double_literal(f64::from_bits(
-                    crate::nanbox::TAG_UNDEFINED,
-                ))));
+                let result = Some(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+                arg_group.release(ctx);
+                return Ok(result);
             }
             "delete" => {
                 let key_ptr = if args.is_empty() {
@@ -767,18 +719,20 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
                 // pointer (0). Runtime `js_blob_slice` checks `is_nan()`
                 // / `type_ptr.is_null()` to apply WHATWG defaults
                 // (start=0, end=len, type="").
+                let (arg_values, arg_group) =
+                    crate::lower_call::lower_call_args_rooted(ctx, &args[..args.len().min(3)])?;
                 let start = if !args.is_empty() {
-                    lower_expr(ctx, &args[0])?
+                    arg_values[0].clone()
                 } else {
                     double_literal(f64::NAN)
                 };
                 let end = if args.len() >= 2 {
-                    lower_expr(ctx, &args[1])?
+                    arg_values[1].clone()
                 } else {
                     double_literal(f64::NAN)
                 };
                 let type_ptr = if args.len() >= 3 {
-                    get_raw_string_ptr(ctx, &args[2])?
+                    crate::lower_call::raw_string_ptr_of(ctx, &arg_values[2])
                 } else {
                     "0".to_string()
                 };
@@ -792,7 +746,9 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
                         (I64, &type_ptr),
                     ],
                 );
-                return Ok(Some(new_handle));
+                let result = Some(new_handle);
+                arg_group.release(ctx);
+                return Ok(result);
             }
             // Issue #237: blob.stream() — returns ReadableStream over the
             // blob's bytes. Single-chunk; closes after one read.
@@ -876,13 +832,15 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
                 return Ok(Some(h));
             }
             "pipeTo" => {
+                let (arg_values, arg_group) =
+                    crate::lower_call::lower_call_args_rooted(ctx, &args[..args.len().min(2)])?;
                 let dest_raw = if !args.is_empty() {
-                    lower_expr(ctx, &args[0])?
+                    arg_values[0].clone()
                 } else {
                     double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
                 };
                 let options = if args.len() >= 2 {
-                    lower_expr(ctx, &args[1])?
+                    arg_values[1].clone()
                 } else {
                     double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
                 };
@@ -896,7 +854,9 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
                     "js_readable_stream_pipe_to",
                     &[(DOUBLE, &recv_handle), (DOUBLE, &dest), (DOUBLE, &options)],
                 );
-                return Ok(Some(nanbox_pointer_inline(blk, &promise)));
+                let result = Some(nanbox_pointer_inline(blk, &promise));
+                arg_group.release(ctx);
+                return Ok(result);
             }
             "pipeThrough" => {
                 // Preserve the original numeric sequence for a write-stable
@@ -913,7 +873,12 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
                         Some(perry_hir::types::Type::Named(name)) if name == "TransformStream"
                     );
                 if numeric_transform {
-                    let transform_raw = lower_expr(ctx, &args[0])?;
+                    // Only this path takes the argument from a group; the pair
+                    // path below owns its own rooting and must not see the
+                    // arguments lowered twice (`options()` ran twice).
+                    let (arg_values, arg_group) =
+                        crate::lower_call::lower_call_args_rooted(ctx, &args[..1])?;
+                    let transform_raw = arg_values[0].clone();
                     let transform = ctx.block().call(
                         DOUBLE,
                         "js_stream_unwrap_handle",
@@ -951,7 +916,9 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
                     );
                     ctx.block()
                         .call_void("js_promise_mark_internally_handled", &[(I64, &pipe)]);
-                    return Ok(Some(readable));
+                    let result = Some(readable);
+                    arg_group.release(ctx);
+                    return Ok(result);
                 }
                 // Evaluate both arguments before the pair getters. The runtime
                 // owns roots across getters; only options evaluation can move
@@ -1245,4 +1212,126 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
     }
 
     Ok(None)
+}
+
+/// Lower a `Response` init (`{ status?, statusText?, headers? }`, or any
+/// runtime value standing for one) to the three values `js_response_new` /
+/// `js_response_static_json` take: the NaN-boxed status, the RAW `statusText`
+/// string pointer, and the Headers handle.
+///
+/// Shared by `Response.json(data, init)` and `new Response(body, init)`, which
+/// had two copies of this and both lowered each field into a bare register.
+/// #11789 sweep: every field value is lowered and rooted FIRST, in source
+/// order, each across the ones after it (a header literal builds an
+/// allocating Headers handle, and a field expression is arbitrary user code);
+/// the raw `statusText` pointer is taken from the re-read, so nothing
+/// collects between it and the call that consumes it. A Headers handle is a
+/// plain registry id, not a heap reference, so one built from a literal
+/// needs no root.
+pub(in crate::lower_call) fn lower_response_init(
+    ctx: &mut FnCtx<'_>,
+    init: &Expr,
+) -> Result<(String, String, String)> {
+    let mut status_val = "200.0".to_string();
+    let mut status_text_ptr = "0".to_string();
+    let mut headers_handle = "0.0".to_string();
+    if let Some(props) = super::extract_options_fields(ctx, init) {
+        enum Slot {
+            Status(usize),
+            StatusText(usize),
+            Headers(usize),
+            HeadersBuilt(String),
+            Discard,
+        }
+        let mut group = crate::rooting::open_rooted_group(props.len());
+        let mut slots: Vec<Slot> = Vec::with_capacity(props.len());
+        for (i, (k, vexpr)) in props.iter().enumerate() {
+            let collects = props[i + 1..].iter().any(|(later_key, later)| {
+                later_key == "headers" || any_operand_may_collect(ctx, std::iter::once(later))
+            });
+            match k.as_str() {
+                "status" => slots.push(Slot::Status(group.lower(ctx, vexpr, collects)?)),
+                "statusText" => slots.push(Slot::StatusText(group.lower(ctx, vexpr, collects)?)),
+                "headers" => {
+                    // Inline object → build a Headers handle.
+                    // Phase 3 anon-class → same via extract_options.
+                    // Other expressions → use as-is (handle f64).
+                    if let Some(hprops) = super::extract_options_fields(ctx, vexpr) {
+                        slots.push(Slot::HeadersBuilt(super::build_headers_from_object(
+                            ctx, &hprops,
+                        )?));
+                    } else {
+                        slots.push(Slot::Headers(group.lower(ctx, vexpr, collects)?));
+                    }
+                }
+                _ => {
+                    group.lower(ctx, vexpr, collects)?;
+                    slots.push(Slot::Discard);
+                }
+            }
+        }
+        for slot in slots {
+            match slot {
+                Slot::Status(root) => status_val = group.reread(ctx, root)?,
+                Slot::StatusText(root) => {
+                    let text = group.reread(ctx, root)?;
+                    status_text_ptr = super::raw_string_ptr_of(ctx, &text);
+                }
+                Slot::Headers(root) => headers_handle = group.reread(ctx, root)?,
+                Slot::HeadersBuilt(handle) => headers_handle = handle,
+                Slot::Discard => {}
+            }
+        }
+        group.release(ctx);
+    } else {
+        // The init is a RUNTIME object, not a literal -- a bound variable
+        // (`Response.json(data, init)` where `init` is a param or local, or
+        // another `Response`). `extract_options_fields` only sees object
+        // literals, so the whole init was dropped and the status defaulted to
+        // 200: `Response.json(x, {status:401})` returned 401 at module scope
+        // (literal) but 200 the moment the init was passed through a variable
+        // -- e.g. inside `NextResponse.json`, so every authenticated route's
+        // 401 became a 200. Mirror the `new Response(body, init)` runtime path
+        // and read the fields at runtime.
+        //
+        // `init` is a runtime value that need not be an object:
+        // `Response.json(x, 3.14)` is legal TS. Unboxing it to a raw pointer
+        // and dereferencing would SIGSEGV (a non-integer double's bits land in
+        // the heap-pointer magnitude window). Read each field through the
+        // boxed helper, which validates the receiver and returns `undefined`
+        // for a non-object instead of derefing.
+        let mut group = crate::rooting::open_rooted_group(3);
+        let opts_root = group.lower(ctx, init, true)?;
+        let get_field = |ctx_inner: &mut FnCtx<'_>, opts_val: &str, key: &str| -> String {
+            let key_idx = ctx_inner.strings.intern(key);
+            let key_global = format!("@{}", ctx_inner.strings.entry(key_idx).handle_global);
+            let blk = ctx_inner.block();
+            let key_box = blk.load(DOUBLE, &key_global);
+            let key_bits = blk.bitcast_double_to_i64(&key_box);
+            let key_raw = blk.and(I64, &key_bits, crate::nanbox::POINTER_MASK_I64);
+            blk.call(
+                DOUBLE,
+                "js_object_get_field_by_name_boxed",
+                &[(DOUBLE, opts_val), (I64, &key_raw)],
+            )
+        };
+        // Each field read can run a getter, so the values already read and the
+        // options object itself stay rooted across the reads after them.
+        let opts = group.reread(ctx, opts_root)?;
+        let status_box = get_field(ctx, &opts, "status");
+        let status_root = group.adopt_emitted(ctx, crate::rooting::Repr::Boxed, &status_box, true);
+        let opts = group.reread(ctx, opts_root)?;
+        let st_box = get_field(ctx, &opts, "statusText");
+        let st_root = group.adopt_emitted(ctx, crate::rooting::Repr::Boxed, &st_box, true);
+        let opts = group.reread(ctx, opts_root)?;
+        headers_handle = get_field(ctx, &opts, "headers");
+        let headers_root =
+            group.adopt_emitted(ctx, crate::rooting::Repr::Boxed, &headers_handle, true);
+        status_val = group.reread_emitted(ctx, status_root);
+        let st_box = group.reread_emitted(ctx, st_root);
+        headers_handle = group.reread_emitted(ctx, headers_root);
+        status_text_ptr = super::raw_string_ptr_of(ctx, &st_box);
+        group.release(ctx);
+    }
+    Ok((status_val, status_text_ptr, headers_handle))
 }

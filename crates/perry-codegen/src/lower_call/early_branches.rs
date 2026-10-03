@@ -254,16 +254,16 @@ pub fn try_lower_index_get_call(
         if crate::type_analysis::receiver_class_name(ctx, object).as_deref() == Some("Server")
             && is_async_dispose_symbol_index(index)
         {
-            let recv_box = lower_expr(ctx, object)?;
-            for arg in args {
-                let _ = lower_expr(ctx, arg)?;
-            }
+            // #11789 sweep: the server is held across the (ignored) arguments.
+            let (recv_box, _discarded, group) = super::lower_operands_rooted(ctx, object, args)?;
             let blk = ctx.block();
             let handle = unbox_to_i64(blk, &recv_box);
             blk.call_void("js_net_server_close", &[(I64, &handle), (I64, "0")]);
             let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             let promise_handle = blk.call(I64, "js_promise_resolved", &[(DOUBLE, &undef)]);
-            return Ok(Some(nanbox_pointer_inline(blk, &promise_handle)));
+            let boxed = nanbox_pointer_inline(blk, &promise_handle);
+            group.release(ctx);
+            return Ok(Some(boxed));
         }
         let is_static_string = matches!(index.as_ref(), Expr::String(_))
             || crate::type_analysis::is_string_expr(ctx, index)
@@ -346,17 +346,14 @@ pub fn try_lower_current_step_closure_call(
     // local to refer to anymore, so the callee is read out of TLS.
     // Dispatches through the same `js_closure_call<N>` family.
     if matches!(callee, Expr::CurrentStepClosure) {
-        let recv_box = lower_expr(ctx, callee)?;
-        let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
-        for a in args {
-            lowered_args.push(lower_expr(ctx, a)?);
-        }
+        // #11789 sweep: the callee is read from TLS before the arguments and
+        // each argument is held across the ones after it, so they share one
+        // group, as the closure-typed local call below does.
+        let (recv_box, lowered_args, group) = super::lower_operands_rooted(ctx, callee, args)?;
         let closure_handle = unbox_to_i64(ctx.block(), &recv_box);
-        return Ok(Some(super::emit_closure_handle_call(
-            ctx,
-            &closure_handle,
-            &lowered_args,
-        )));
+        let result = super::emit_closure_handle_call(ctx, &closure_handle, &lowered_args);
+        group.release(ctx);
+        return Ok(Some(result));
     }
     Ok(None)
 }

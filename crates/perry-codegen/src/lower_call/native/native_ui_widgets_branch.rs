@@ -11,8 +11,9 @@
         && args.len() == 2
         && extract_options_fields(ctx, &args[1]).is_none()
     {
-        let text_ptr = get_raw_string_ptr(ctx, &args[0])?;
-        let id_ptr = get_raw_string_ptr(ctx, &args[1])?;
+        let (arg_values, arg_group) = super::lower_call_args_rooted(ctx, &args[..args.len().min(2)])?;
+        let text_ptr = super::raw_string_ptr_of(ctx, &arg_values[0]);
+        let id_ptr = super::raw_string_ptr_of(ctx, &arg_values[1]);
         ctx.pending_declares.push((
             "perry_ui_text_create_with_id".to_string(),
             I64,
@@ -25,7 +26,9 @@
             &[(I64, &text_ptr), (I64, &id_ptr)],
         );
         let blk = ctx.block();
-        return Ok(nanbox_pointer_inline(blk, &handle));
+        let result = nanbox_pointer_inline(blk, &handle);
+        arg_group.release(ctx);
+        return Ok(result);
     }
 
     // perry/ui Button — TS shape is `Button(label, handler)` where
@@ -33,16 +36,9 @@
     // uses. The Object-config form (`Button(label, { onPress: cb })`)
     // is a followup.
     if module == "perry/ui" && method == "Button" && object.is_none() {
-        let label_ptr = if let Some(label) = args.first() {
-            get_raw_string_ptr(ctx, label)?
-        } else {
-            "0".to_string()
-        };
-        let handler_d = if let Some(handler) = args.get(1) {
-            lower_expr(ctx, handler)?
-        } else {
-            "0.0".to_string()
-        };
+        let (arg_values, arg_group) = super::lower_call_args_rooted(ctx, &args[..args.len().min(2)])?;
+        let label_ptr = match arg_values.first() { Some(v) => super::raw_string_ptr_of(ctx, v), None => "0".to_string() };
+        let handler_d = arg_values.get(1).cloned().unwrap_or_else(|| "0.0".to_string());
         ctx.pending_declares
             .push(("perry_ui_button_create".to_string(), I64, vec![I64, DOUBLE]));
         // Scope `blk` so the mutable borrow on `ctx` is released before
@@ -70,7 +66,9 @@
         }
 
         let blk = ctx.block();
-        return Ok(nanbox_pointer_inline(blk, &handle));
+        let result = nanbox_pointer_inline(blk, &handle);
+        arg_group.release(ctx);
+        return Ok(result);
     }
 
     // Generic perry/ui receiver-less dispatch via a per-method table.
@@ -150,8 +148,9 @@
         if args.len() < 2 {
             return Ok(double_literal(f64::from_bits(0x7FFC_0000_0000_0001)));
         }
-        let id_d = lower_expr(ctx, &args[0])?;
-        let val_d = lower_expr(ctx, &args[1])?;
+        let (arg_values, arg_group) = super::lower_call_args_rooted(ctx, &args[..args.len().min(2)])?;
+        let id_d = arg_values[0].clone();
+        let val_d = arg_values[1].clone();
         ctx.pending_declares.push((
             "perry_arkts_set_text".to_string(),
             crate::types::VOID,
@@ -159,7 +158,9 @@
         ));
         let blk = ctx.block();
         blk.call_void("perry_arkts_set_text", &[(DOUBLE, &id_d), (DOUBLE, &val_d)]);
-        return Ok(double_literal(f64::from_bits(0x7FFC_0000_0000_0001)));
+        let result = double_literal(f64::from_bits(0x7FFC_0000_0000_0001));
+        arg_group.release(ctx);
+        return Ok(result);
     }
 
     // Issue #535 — perry/ui `state<T>` desugar trio. Synthetic methods
@@ -171,8 +172,9 @@
         if args.len() != 2 {
             return Ok(double_literal(f64::from_bits(0x7FFC_0000_0000_0001)));
         }
-        let id_d = lower_expr(ctx, &args[0])?;
-        let val_d = lower_expr(ctx, &args[1])?;
+        let (arg_values, arg_group) = super::lower_call_args_rooted(ctx, &args[..args.len().min(2)])?;
+        let id_d = arg_values[0].clone();
+        let val_d = arg_values[1].clone();
         let runtime_fn = if method == "__state_init" {
             "js_state_init"
         } else {
@@ -185,7 +187,9 @@
         ));
         let blk = ctx.block();
         blk.call_void(runtime_fn, &[(DOUBLE, &id_d), (DOUBLE, &val_d)]);
-        return Ok(double_literal(f64::from_bits(0x7FFC_0000_0000_0001)));
+        let result = double_literal(f64::from_bits(0x7FFC_0000_0000_0001));
+        arg_group.release(ctx);
+        return Ok(result);
     }
     if module == "perry/ui" && method == "__state_get" && object.is_none() {
         if args.len() != 1 {
@@ -212,10 +216,11 @@
         if args.len() != 3 {
             return Ok(double_literal(f64::from_bits(0x7FFC_0000_0000_0001)));
         }
-        let synth_id_d = lower_expr(ctx, &args[0])?;
-        let host_d = lower_expr(ctx, &args[1])?;
+        let (arg_values, arg_group) = super::lower_call_args_rooted(ctx, &args[..args.len().min(3)])?;
+        let synth_id_d = arg_values[0].clone();
+        let host_d = arg_values[1].clone();
         let host_i64 = unbox_to_i64(ctx.block(), &host_d);
-        let render_d = lower_expr(ctx, &args[2])?;
+        let render_d = arg_values[2].clone();
         ctx.pending_declares.push((
             "js_foreach_register".to_string(),
             crate::types::VOID,
@@ -225,7 +230,9 @@
             "js_foreach_register",
             &[(DOUBLE, &synth_id_d), (I64, &host_i64), (DOUBLE, &render_d)],
         );
-        return Ok(double_literal(f64::from_bits(0x7FFC_0000_0000_0001)));
+        let result = double_literal(f64::from_bits(0x7FFC_0000_0000_0001));
+        arg_group.release(ctx);
+        return Ok(result);
     }
 
     // Issue #535 Layer 2 — `__navstack_register_route(synth_id, name, body)`
@@ -239,9 +246,10 @@
         if args.len() != 3 {
             return Ok(double_literal(f64::from_bits(0x7FFC_0000_0000_0001)));
         }
-        let synth_id_d = lower_expr(ctx, &args[0])?;
-        let name_d = lower_expr(ctx, &args[1])?;
-        let body_d = lower_expr(ctx, &args[2])?;
+        let (arg_values, arg_group) = super::lower_call_args_rooted(ctx, &args[..args.len().min(3)])?;
+        let synth_id_d = arg_values[0].clone();
+        let name_d = arg_values[1].clone();
+        let body_d = arg_values[2].clone();
         let body_i64 = unbox_to_i64(ctx.block(), &body_d);
         ctx.pending_declares.push((
             "js_navstack_register_route".to_string(),
@@ -254,7 +262,9 @@
         );
         // Return the body handle (already NaN-boxed) so the rewrite can
         // chain by binding the result as the route's host child.
-        return Ok(body_d);
+        let result = body_d;
+        arg_group.release(ctx);
+        return Ok(result);
     }
 
     // perry/arkts: HarmonyOS Phase 2 v2 callback bridge. Synthetic module
@@ -270,8 +280,9 @@
                 args.len()
             );
         }
-        let idx_d = lower_expr(ctx, &args[0])?;
-        let closure_d = lower_expr(ctx, &args[1])?;
+        let (arg_values, arg_group) = super::lower_call_args_rooted(ctx, &args[..args.len().min(2)])?;
+        let idx_d = arg_values[0].clone();
+        let closure_d = arg_values[1].clone();
         ctx.pending_declares.push((
             "perry_arkts_register_callback".to_string(),
             crate::types::VOID,
@@ -283,7 +294,9 @@
             "perry_arkts_register_callback",
             &[(I64, &idx_i64), (DOUBLE, &closure_d)],
         );
-        return Ok(double_literal(f64::from_bits(0x7FFC_0000_0000_0001)));
+        let result = double_literal(f64::from_bits(0x7FFC_0000_0000_0001));
+        arg_group.release(ctx);
+        return Ok(result);
     }
 
     // perry/system dispatch: audioStart, audioGetLevel, getDeviceModel, etc.

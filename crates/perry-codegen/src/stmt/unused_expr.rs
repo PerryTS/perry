@@ -34,8 +34,11 @@ pub(super) fn lower_unused_expr(ctx: &mut FnCtx<'_>, expr: &perry_hir::Expr) -> 
                 let _ = lower_expr(ctx, array)?;
                 return Ok(true);
             }
-            let arr_box = lower_expr(ctx, array)?;
-            let cb_box = lower_expr(ctx, callback)?;
+            let rooted_operands: [&perry_hir::Expr; 2] = [array, callback];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let arr_box = rooted_values[0].clone();
+            let cb_box = rooted_values[1].clone();
             let blk = ctx.block();
             let arr_handle = crate::expr::unbox_to_i64(blk, &arr_box);
             // #4091: throw TypeError for a non-callable callback before iterating
@@ -49,7 +52,9 @@ pub(super) fn lower_unused_expr(ctx: &mut FnCtx<'_>, expr: &perry_hir::Expr) -> 
                 "js_array_map_discard",
                 &[(I64, &arr_handle), (I64, &cb_handle)],
             );
-            Ok(true)
+            let rooted_result = true;
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
         _ => Ok(false),
     }

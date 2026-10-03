@@ -62,13 +62,15 @@ pub fn native_module_lookup(
 }
 
 /// Lower a native module call through the dispatch table.
-/// For receiver-less calls, `recv_i64` should be None.
-/// For instance method calls, `recv_i64` should be Some(handle_i64_ssa).
+/// For receiver-less calls, `recv` should be None.
+/// For instance method calls, `recv` is the receiver expression: it is
+/// evaluated first and rooted across every argument with the arguments
+/// themselves (#11789 sweep), and its handle is unboxed from the re-read.
 #[allow(private_interfaces)]
 pub fn lower_native_module_dispatch(
     ctx: &mut FnCtx<'_>,
     sig: &NativeModSig,
-    recv_i64: Option<&str>,
+    recv: Option<&Expr>,
     args: &[Expr],
 ) -> Result<String> {
     // Native-table calls used to lower arguments into bare SSA registers one
@@ -77,17 +79,29 @@ pub fn lower_native_module_dispatch(
     // `https.createServer(options, common.mustCall(handler))`), leaving the
     // runtime with a valid-looking pointer to an evacuated `{}`. Root the
     // complete operand window and coerce only the post-window re-reads.
-    let arg_refs: Vec<&Expr> = args.iter().collect();
-    crate::rooting::with_operands_rooted(ctx, &arg_refs, |ctx, rooted_args| {
+    //
+    // #11789 sweep: the receiver is the first operand of the same window — an
+    // instance method's receiver was unboxed to a raw handle BEFORE the
+    // arguments were lowered, so `conn.query(String(x), work())` kept a bare
+    // handle across `work`. And a `VarArgsAsArray` tail allocates its array
+    // AFTER the re-read, so every operand's window is "collects" there.
+    let operands: Vec<&Expr> = recv.into_iter().chain(args.iter()).collect();
+    let has_receiver = recv.is_some();
+    let packs_varargs = sig.args.contains(&NativeArgKind::VarArgsAsArray);
+    let body = |ctx: &mut FnCtx<'_>, all_values: &[String]| -> Result<String> {
         // Build the LLVM arg list: receiver handle (if any) + coerced args.
         let mut llvm_args: Vec<(crate::types::LlvmType, String)> = Vec::new();
         let mut arg_types: Vec<crate::types::LlvmType> = Vec::new();
 
         // Receiver handle
-        if let Some(handle) = recv_i64 {
-            llvm_args.push((I64, handle.to_string()));
+        let rooted_args = if has_receiver {
+            let handle = unbox_to_i64(ctx.block(), &all_values[0]);
+            llvm_args.push((I64, handle));
             arg_types.push(I64);
-        }
+            &all_values[1..]
+        } else {
+            all_values
+        };
 
         // Coerce each arg per the sig's coercion rules.
         // If more args are passed than the sig declares, pass extras as F64.
@@ -332,7 +346,17 @@ pub fn lower_native_module_dispatch(
                 Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
             }
         }
-    })
+    };
+    if packs_varargs {
+        crate::rooting::with_operands_rooted_across_call(
+            ctx,
+            &operands,
+            |_| Ok(()),
+            |ctx, values, ()| body(ctx, values),
+        )
+    } else {
+        crate::rooting::with_operands_rooted(ctx, &operands, body)
+    }
 }
 
 #[cfg(test)]

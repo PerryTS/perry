@@ -3,7 +3,7 @@
 use anyhow::Result;
 use perry_hir::Expr;
 
-use crate::expr::{lower_expr, FnCtx};
+use crate::expr::FnCtx;
 use crate::types::{DOUBLE, I64, PTR};
 
 fn is_web_storage_global_expr(e: &Expr) -> bool {
@@ -30,11 +30,9 @@ pub(super) fn try_lower_web_storage_method_call(
         return Ok(None);
     }
 
-    let recv_box = lower_expr(ctx, object)?;
-    let mut lowered_args = Vec::with_capacity(args.len());
-    for arg in args {
-        lowered_args.push(lower_expr(ctx, arg)?);
-    }
+    // #11789 sweep: `localStorage.setItem(String(k), f())` holds the key
+    // across the value's evaluation.
+    let (recv_box, lowered_args, group) = super::lower_operands_rooted(ctx, object, args)?;
     let (args_ptr, args_len) = if lowered_args.is_empty() {
         ("null".to_string(), "0".to_string())
     } else {
@@ -58,7 +56,7 @@ pub(super) fn try_lower_web_storage_method_call(
     let entry = ctx.strings.entry(key_idx);
     let bytes_global = format!("@{}", entry.bytes_global);
     let name_len_str = entry.byte_len.to_string();
-    Ok(Some(ctx.block().call(
+    let result = ctx.block().call(
         DOUBLE,
         "js_native_call_method",
         &[
@@ -68,5 +66,7 @@ pub(super) fn try_lower_web_storage_method_call(
             (PTR, &args_ptr),
             (I64, &args_len),
         ],
-    )))
+    );
+    group.release(ctx);
+    Ok(Some(result))
 }

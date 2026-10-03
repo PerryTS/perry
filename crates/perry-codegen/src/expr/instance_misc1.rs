@@ -933,11 +933,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // Materialize cooked array — go through lower_array_literal so
             // SSO + GC + length-init logic stays in one place.
             let cooked_box = lower_array_literal(ctx, cooked)?;
+            // #11789 sweep: the cooked array is held across the raw array's
+            // allocation below.
+            let mut template_group = crate::rooting::open_rooted_group(1);
+            let cooked_root =
+                template_group.adopt_emitted(ctx, crate::rooting::Repr::Boxed, &cooked_box, true);
             // Materialize raw array — same path, but all elements are
             // String literals (built at HIR lowering from each quasi's
             // `.raw` text), so build a Vec<Expr::String> on the fly.
             let raw_exprs: Vec<Expr> = raw.iter().map(|s| Expr::String(s.clone())).collect();
             let raw_box = lower_array_literal(ctx, &raw_exprs)?;
+            let cooked_box = template_group.reread_emitted(ctx, cooked_root);
             let blk = ctx.block();
             let cooked_handle = unbox_to_i64(blk, &cooked_box);
             let raw_handle = unbox_to_i64(blk, &raw_box);
@@ -947,7 +953,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "js_tagged_template_get_or_init",
                 &[(I64, &site_id), (I64, &cooked_handle), (I64, &raw_handle)],
             );
-            Ok(nanbox_pointer_inline(blk, &registered))
+            let boxed = nanbox_pointer_inline(blk, &registered);
+            template_group.release(ctx);
+            Ok(boxed)
         }
 
         // `strings.raw` — look up the registered raw-strings array for a

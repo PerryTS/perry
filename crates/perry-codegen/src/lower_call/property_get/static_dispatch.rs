@@ -6,7 +6,7 @@ use super::*;
 use anyhow::Result;
 use perry_hir::Expr;
 
-use crate::expr::{lower_expr, nanbox_pointer_inline, FnCtx};
+use crate::expr::{lower_expr, FnCtx};
 use crate::nanbox::double_literal;
 use crate::types::{DOUBLE, I32, I64};
 
@@ -191,10 +191,8 @@ pub(crate) fn try_lower_static_dispatch(
                     let generic_label = ctx.block_label(generic_idx);
                     ctx.block().cond_br(&ok, &direct_label, &generic_label);
                     ctx.current_block = generic_idx;
-                    let mut raw: Vec<String> = Vec::with_capacity(args.len());
-                    for a in args {
-                        raw.push(lower_expr(ctx, a)?);
-                    }
+                    // #11789 sweep: argument `i` is held across `i+1..`.
+                    let (raw, raw_group) = crate::lower_call::lower_call_args_rooted(ctx, args)?;
                     let (args_ptr, args_len) = if raw.is_empty() {
                         ("null".to_string(), "0".to_string())
                     } else {
@@ -218,6 +216,7 @@ pub(crate) fn try_lower_static_dispatch(
                             (I64, &args_len),
                         ],
                     );
+                    raw_group.release(ctx);
                     let generic_pred = ctx.block().label.clone();
                     let join_label = ctx.block_label(join_idx);
                     ctx.block().br(&join_label);
@@ -244,71 +243,57 @@ pub(crate) fn try_lower_static_dispatch(
                 // `static foo(a, ...rest)`) follows the same shape:
                 // pass the first `declared-1` positional args as-is,
                 // then bundle the trailing args into an Array.
+                // #11789 sweep: all three arms root their arguments the way a
+                // call to a same-module `function` does (`func_ref.rs`) — the
+                // rest arms through `lower_rest_call_args_rooted` (which also
+                // roots the accumulating array across the elements still being
+                // lowered), the plain arm through `lower_call_args_rooted`. The
+                // bare `Vec<String>` this used to build held every earlier
+                // argument, and the half-built rest array, across the user
+                // code of the arguments after it.
                 let mut lowered: Vec<String> = Vec::with_capacity(args.len());
+                let args_group: crate::rooting::RootedGroup<'_>;
                 if has_rest && is_synth_args {
-                    // Lower each call arg exactly ONCE (a value may have side
-                    // effects), then reuse the SSA registers both for the leading
-                    // real params and for the synthesized `arguments` object.
-                    let mut vals: Vec<String> = Vec::with_capacity(args.len());
-                    for a in args {
-                        vals.push(lower_expr(ctx, a)?);
-                    }
-                    // #5703: the leading real params BEFORE the synth `arguments`
+                    // The leading real params BEFORE the synth `arguments`
                     // slot (`static method(x, _ = 0) { … arguments … }` →
-                    // params `[x, _, <arguments>]`) must receive their positional
-                    // values, padded with `undefined` when under-supplied — exactly
-                    // as the class-DECLARATION (StaticMethodCall) path does.
-                    // Previously this branch pushed ONLY the arguments object, so a
-                    // leading param like `x` received the (empty) arguments array
-                    // instead of its argument / `undefined` (test262
-                    // `params-dflt-meth-static-args-unmapped`).
-                    let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                    // params `[x, _, <arguments>]`) receive their positional
+                    // values, padded with `undefined` when under-supplied
+                    // (#5703), and the synthesized `arguments` object holds ALL
+                    // passed args. Each argument is lowered exactly ONCE.
                     let fixed_count = declared.saturating_sub(1);
-                    for i in 0..fixed_count {
-                        lowered.push(vals.get(i).cloned().unwrap_or_else(|| undef.clone()));
-                    }
-                    // The synthesized `arguments` object holds ALL passed args.
-                    let cap = (vals.len() as u32).to_string();
-                    let mut current = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
-                    for v in &vals {
-                        let blk = ctx.block();
-                        current =
-                            blk.call(I64, "js_array_push_f64", &[(I64, &current), (DOUBLE, v)]);
-                    }
-                    current =
-                        ctx.block()
-                            .call(I64, "js_array_mark_arguments_object", &[(I64, &current)]);
-                    let arguments_box = nanbox_pointer_inline(ctx.block(), &current);
-                    lowered.push(arguments_box);
+                    let (values, guard) = crate::lower_call::lower_rest_call_args_rooted(
+                        ctx,
+                        args,
+                        fixed_count,
+                        &[crate::lower_call::RestBundle {
+                            from: 0,
+                            mark_arguments_object: true,
+                        }],
+                    )?;
+                    args_group = guard;
+                    lowered.extend(values);
                 } else if has_rest {
-                    let fixed_count = declared.saturating_sub(1);
-                    for a in args.iter().take(fixed_count) {
-                        lowered.push(lower_expr(ctx, a)?);
-                    }
                     // #5703 (mirrors #235 in the StaticMethodCall path): when the
-                    // caller under-supplies the fixed leading params, pad the
-                    // missing slots with `undefined` BEFORE the rest array, so the
-                    // callee's default-param prologue / destructuring fires instead
-                    // of reading an uninitialized (0.0) parameter register.
-                    let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-                    while lowered.len() < fixed_count {
-                        lowered.push(undef.clone());
-                    }
-                    let rest_count = args.len().saturating_sub(fixed_count);
-                    let cap = (rest_count as u32).to_string();
-                    let mut current = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
-                    for a in args.iter().skip(fixed_count) {
-                        let v = lower_expr(ctx, a)?;
-                        let blk = ctx.block();
-                        current =
-                            blk.call(I64, "js_array_push_f64", &[(I64, &current), (DOUBLE, &v)]);
-                    }
-                    let rest_box = nanbox_pointer_inline(ctx.block(), &current);
-                    lowered.push(rest_box);
+                    // caller under-supplies the fixed leading params, the missing
+                    // slots are padded with `undefined` BEFORE the rest array, so
+                    // the callee's default-param prologue / destructuring fires
+                    // instead of reading an uninitialized (0.0) parameter register.
+                    let fixed_count = declared.saturating_sub(1);
+                    let (values, guard) = crate::lower_call::lower_rest_call_args_rooted(
+                        ctx,
+                        args,
+                        fixed_count,
+                        &[crate::lower_call::RestBundle {
+                            from: fixed_count,
+                            mark_arguments_object: false,
+                        }],
+                    )?;
+                    args_group = guard;
+                    lowered.extend(values);
                 } else {
-                    for a in args {
-                        lowered.push(lower_expr(ctx, a)?);
-                    }
+                    let (values, guard) = crate::lower_call::lower_call_args_rooted(ctx, args)?;
+                    args_group = guard;
+                    lowered.extend(values);
                     // #5703: a static method of a class EXPRESSION called with fewer
                     // args than declared (`C.m()` for `static m(a = 1)` or
                     // `static m([x, y] = […])`) reaches this fused get-static-method
@@ -352,6 +337,7 @@ pub(crate) fn try_lower_static_dispatch(
                 let arg_slices: Vec<(crate::types::LlvmType, &str)> =
                     lowered.iter().map(|s| (DOUBLE, s.as_str())).collect();
                 let result = ctx.block().call(DOUBLE, &fn_name, &arg_slices);
+                args_group.release(ctx);
                 let Some((via_property, generic_pred, join_idx)) = guarded else {
                     return Ok(Some(result));
                 };
@@ -393,17 +379,15 @@ pub(crate) fn try_lower_static_dispatch(
                 fc = ctx.classes.get(&c).and_then(|cc| cc.extends_name.clone());
             }
             if let Some(owner) = field_owner {
-                let callee_val = lower_expr(
-                    ctx,
-                    &Expr::StaticFieldGet {
-                        class_name: owner,
-                        field_name: property.to_string(),
-                    },
-                )?;
-                let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
-                for a in args {
-                    lowered_args.push(lower_expr(ctx, a)?);
-                }
+                // #11789 sweep: the callee is read before the arguments and is
+                // held across every one of them, each of which is in turn held
+                // across the ones after it.
+                let callee_expr = Expr::StaticFieldGet {
+                    class_name: owner,
+                    field_name: property.to_string(),
+                };
+                let (callee_val, lowered_args, callee_group) =
+                    crate::lower_call::lower_operands_rooted(ctx, &callee_expr, args)?;
                 let (args_ptr_i64, args_len) = if lowered_args.is_empty() {
                     ("0".to_string(), "0".to_string())
                 } else {
@@ -423,7 +407,7 @@ pub(crate) fn try_lower_static_dispatch(
                     let ptr_i64 = ctx.block().ptrtoint(&ptr_reg, I64);
                     (ptr_i64, n.to_string())
                 };
-                return Ok(Some(ctx.block().call(
+                let result = ctx.block().call(
                     DOUBLE,
                     "js_native_call_value",
                     &[
@@ -433,7 +417,9 @@ pub(crate) fn try_lower_static_dispatch(
                         (I64, &args_ptr_i64),
                         (I64, &args_len),
                     ],
-                )));
+                );
+                callee_group.release(ctx);
+                return Ok(Some(result));
             }
         }
         // No static method resolved through the class's statically-visible
@@ -470,11 +456,10 @@ pub(crate) fn try_lower_static_dispatch(
             || matches!(object, Expr::PropertyGet { object: inner, property, .. }
                 if matches!(inner.as_ref(), Expr::ExternFuncRef { .. }) && ctx.class_ids.contains_key(property));
         if receiver_is_dispatchable_class {
-            let recv_box = lower_expr(ctx, object)?;
-            let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
-            for a in args {
-                lowered_args.push(lower_expr(ctx, a)?);
-            }
+            // #11789 sweep: an imported class ref is a heap object, held across
+            // the arguments like any other receiver.
+            let (recv_box, lowered_args, recv_group) =
+                crate::lower_call::lower_operands_rooted(ctx, object, args)?;
             // Materialize the args into an entry-block `[N x double]` slot
             // (see issue #167 — alloca must live in the entry block).
             let (args_ptr, args_len) = if lowered_args.is_empty() {
@@ -501,7 +486,7 @@ pub(crate) fn try_lower_static_dispatch(
             let name_len = entry.byte_len.to_string();
             let blk = ctx.block();
             let name_ptr_i64 = blk.ptrtoint(&bytes_global, I64);
-            return Ok(Some(blk.call(
+            let result = blk.call(
                 DOUBLE,
                 "js_class_static_method_call",
                 &[
@@ -511,7 +496,9 @@ pub(crate) fn try_lower_static_dispatch(
                     (crate::types::PTR, &args_ptr),
                     (I64, &args_len),
                 ],
-            )));
+            );
+            recv_group.release(ctx);
+            return Ok(Some(result));
         }
         // For LocalGet receivers that resolve to a class but the
         // method isn't a static — fall through to the normal

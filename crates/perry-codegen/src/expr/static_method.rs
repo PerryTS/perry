@@ -334,10 +334,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     }
                     None => None,
                 };
-                let mut lowered: Vec<String> = Vec::with_capacity(args.len());
-                for a in args {
-                    lowered.push(lower_expr(ctx, a)?);
-                }
+                let (mut lowered, args_group) =
+                    crate::lower_call::lower_call_args_rooted(ctx, args)?;
                 let raw_args = lowered.clone();
                 // Issue #894: static methods with synthetic `...arguments`
                 // rest params (or any user-declared rest param) need their
@@ -441,7 +439,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let arg_slices: Vec<(crate::types::LlvmType, &str)> =
                     lowered.iter().map(|s| (DOUBLE, s.as_str())).collect();
                 let Some((ok, recv)) = guard else {
-                    return Ok(ctx.block().call(DOUBLE, &fn_name, &arg_slices));
+                    let rooted_result = ctx.block().call(DOUBLE, &fn_name, &arg_slices);
+                    args_group.release(ctx);
+                    return Ok(rooted_result);
                 };
                 let direct_idx = ctx.new_block("static_call.direct");
                 let generic_idx = ctx.new_block("static_call.property");
@@ -485,10 +485,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let generic_pred = ctx.block().label.clone();
                 ctx.block().br(&join_label);
                 ctx.current_block = join_idx;
-                return Ok(ctx.block().phi(
+                let rooted_result = ctx.block().phi(
                     DOUBLE,
                     &[(&direct, &direct_pred), (&via_property, &generic_pred)],
-                ));
+                );
+                args_group.release(ctx);
+                return Ok(rooted_result);
             }
             // #310: when the receiver is a namespace alias from an
             // `import { Foo } from "pkg"` where the source module did
@@ -512,11 +514,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // ramda / date-fns / jose / effect wildcard-namespace
                 // members fell to the `double_literal(0.0)` stub below.
                 if let Some(specifier) = ctx.namespace_v8_specifiers.get(class_name).cloned() {
-                    let mut lowered: Vec<String> = Vec::with_capacity(args.len());
-                    for a in args {
-                        lowered.push(lower_expr(ctx, a)?);
-                    }
-                    return Ok(emit_v8_export_call(ctx, &specifier, method_name, &lowered));
+                    let (lowered, args_group) =
+                        crate::lower_call::lower_call_args_rooted(ctx, args)?;
+                    let rooted_result = emit_v8_export_call(ctx, &specifier, method_name, &lowered);
+                    args_group.release(ctx);
+                    return Ok(rooted_result);
                 }
                 // Issue #5922 (companion to #680): prefer the per-namespace
                 // map so `Context.a` and `Option.a` resolve to their own
@@ -537,11 +539,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     if let Some(specifier) =
                         ctx.import_function_v8_specifiers.get(method_name).cloned()
                     {
-                        let mut lowered: Vec<String> = Vec::with_capacity(args.len());
-                        for a in args {
-                            lowered.push(lower_expr(ctx, a)?);
-                        }
-                        return Ok(emit_v8_export_call(ctx, &specifier, method_name, &lowered));
+                        let (lowered, args_group) =
+                            crate::lower_call::lower_call_args_rooted(ctx, args)?;
+                        let rooted_result =
+                            emit_v8_export_call(ctx, &specifier, method_name, &lowered);
+                        args_group.release(ctx);
+                        return Ok(rooted_result);
                     }
                     // Issue #678/#5924: namespace member resolved through a
                     // re-export rename uses the origin name as the symbol
@@ -685,10 +688,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // `Effect.succeed(42)` returned the literal `0` instead of the
             // tagged Effect instance.
             if let Some(specifier) = ctx.import_function_v8_specifiers.get(class_name).cloned() {
-                let mut lowered: Vec<String> = Vec::with_capacity(args.len());
-                for a in args {
-                    lowered.push(lower_expr(ctx, a)?);
-                }
+                let (lowered, args_group) = crate::lower_call::lower_call_args_rooted(ctx, args)?;
                 // The V8 module's top-level export uses the *imported* name
                 // (the name in the source module). If the local alias differs
                 // from the imported name, fall back to the local name — the
@@ -701,13 +701,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     .get(class_name)
                     .cloned()
                     .unwrap_or_else(|| class_name.clone());
-                return Ok(emit_v8_member_method_call(
-                    ctx,
-                    &specifier,
-                    &member,
-                    method_name,
-                    &lowered,
-                ));
+                let rooted_result =
+                    emit_v8_member_method_call(ctx, &specifier, &member, method_name, &lowered);
+                args_group.release(ctx);
+                return Ok(rooted_result);
             }
             // #4831 (Stripe-style `StripeResource.extend(...)`): the receiver
             // is an imported *function* (or class-ref) that carries the called

@@ -461,8 +461,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             key_expr,
             value_expr,
         } => {
-            let key_v = lower_expr(ctx, key_expr)?;
-            let val_v = lower_expr(ctx, value_expr)?;
+            let rooted_operands: [&perry_hir::Expr; 2] = [key_expr, value_expr];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let key_v = rooted_values[0].clone();
+            let val_v = rooted_values[1].clone();
             if let Some(&class_id) = ctx.class_ids.get(class_name) {
                 if class_id != 0 {
                     let cid_str = class_id.to_string();
@@ -476,7 +479,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     );
                 }
             }
-            Ok(double_literal(f64::from_bits(0x7FFC_0000_0000_0001)))
+            let rooted_result = double_literal(f64::from_bits(0x7FFC_0000_0000_0001));
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
         Expr::RegisterClassComputedMethod {
             class_name,
@@ -1035,8 +1040,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             key,
             value,
         } => {
-            let key_v = lower_expr(ctx, key)?;
-            let val_v = lower_expr(ctx, value)?;
+            let rooted_operands: [&perry_hir::Expr; 2] = [key, value];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let key_v = rooted_values[0].clone();
+            let val_v = rooted_values[1].clone();
             if let Some(&class_id) = ctx.class_ids.get(class_name) {
                 let cid_str = class_id.to_string();
                 ctx.block().call_void(
@@ -1048,7 +1056,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     ],
                 );
             }
-            Ok(val_v)
+            let rooted_result = val_v;
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
         // Issue #894: when `NativeModuleRef` reaches this fallback path
         // (i.e. its parent isn't one of the dedicated fast-paths above —
