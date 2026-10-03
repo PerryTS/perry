@@ -50,25 +50,78 @@ pub(super) unsafe fn own_field_by_key_bytes(obj: *const ObjectHeader, key: &[u8]
 
 thread_local! {
     /// This thread's string for each hidden-key literal, by the literal's address.
+    ///
+    /// The values are raw heap addresses, so this table is a GC root: the
+    /// longlived arena is swept like any other (an unmarked longlived string
+    /// is reclaimed by a full mark-sweep), and only a registered scanner keeps
+    /// these strings marked and the addresses current. `hidden_key_root_scanner`
+    /// is that scanner, registered with the first entry on each thread.
     static HIDDEN_KEYS: std::cell::RefCell<std::collections::HashMap<(usize, usize), usize>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
+    static HIDDEN_KEYS_SCANNER_REGISTERED: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+}
+
+pub(crate) fn hidden_key_root_scanner(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    HIDDEN_KEYS.with(|keys| {
+        for key in keys.borrow_mut().values_mut() {
+            visitor.visit_tagged_usize_slot(key, crate::value::STRING_TAG);
+        }
+    });
+}
+
+fn ensure_hidden_key_scanner() {
+    HIDDEN_KEYS_SCANNER_REGISTERED.with(|registered| {
+        if !registered.get() {
+            crate::gc::gc_register_mutable_root_scanner_named(
+                "node_stream_hidden_keys",
+                hidden_key_root_scanner,
+            );
+            registered.set(true);
+        }
+    });
 }
 
 /// The string for a hidden-field name. Callers read the stream before they take
 /// the key (`set_hidden_value(stream, hidden_key(K), v)`), so taking a key must
 /// never collect (#11828). Each literal gets one longlived string per thread,
-/// which the collector never moves or frees, made with collection held off.
+/// made with collection held off and kept alive (and current) by
+/// `hidden_key_root_scanner`.
 pub(super) fn hidden_key(bytes: &'static [u8]) -> *mut crate::string::StringHeader {
     let id = (bytes.as_ptr() as usize, bytes.len());
     if let Some(key) = HIDDEN_KEYS.with(|keys| keys.borrow().get(&id).copied()) {
         return key as *mut crate::string::StringHeader;
     }
+    ensure_hidden_key_scanner();
     let key = {
         let _no_gc = crate::gc::GcSuppressScope::new();
         crate::string::js_string_from_bytes_longlived(bytes.as_ptr(), bytes.len() as u32)
     };
     HIDDEN_KEYS.with(|keys| keys.borrow_mut().insert(id, key as usize));
     key
+}
+
+/// Test hooks for `gc/tests/runtime_roots/hidden_keys.rs`.
+#[cfg(test)]
+pub(crate) fn hidden_key_for_test(bytes: &'static [u8]) -> *mut crate::string::StringHeader {
+    hidden_key(bytes)
+}
+
+#[cfg(test)]
+pub(crate) fn hidden_key_peek_for_test(bytes: &'static [u8]) -> Option<usize> {
+    let id = (bytes.as_ptr() as usize, bytes.len());
+    HIDDEN_KEYS.with(|keys| keys.borrow().get(&id).copied())
+}
+
+#[cfg(test)]
+pub(crate) fn hidden_key_set_for_test(bytes: &'static [u8], addr: usize) {
+    let id = (bytes.as_ptr() as usize, bytes.len());
+    HIDDEN_KEYS.with(|keys| keys.borrow_mut().insert(id, addr));
+}
+
+#[cfg(test)]
+pub(crate) fn hidden_key_scanner_for_test() -> crate::gc::MutableRootScanner {
+    hidden_key_root_scanner
 }
 
 pub(super) fn string_value_eq(value: f64, expected: &[u8]) -> bool {
@@ -605,14 +658,20 @@ pub(super) fn write_chunk_to_pipe_destinations(stream: f64, chunk: f64) {
     let dests = scope.root_raw_mut_ptr(crate::array::js_array_alloc(0));
     for i in 0..crate::array::js_array_length(live()) {
         let dest = crate::array::js_array_get_f64(live(), i);
-        dests.set_raw_mut_ptr(crate::array::js_array_push_f64(
-            dests.get_raw_mut_ptr(),
-            dest,
-        ));
+        // `js_array_push_f64` roots its receiver before it can grow it.
+        dests.set_raw_mut_ptr(dests.with_mut_ptr(|arr: *mut crate::array::ArrayHeader| {
+            crate::array::js_array_push_f64(arr, dest)
+        }));
     }
-    let len = crate::array::js_array_length(dests.get_raw_const_ptr());
+    let dest_at = |i: u32| {
+        dests.with_const_ptr(|arr: *const crate::array::ArrayHeader| {
+            crate::array::js_array_get_f64(arr, i)
+        })
+    };
+    let len = dests
+        .with_const_ptr(|arr: *const crate::array::ArrayHeader| crate::array::js_array_length(arr));
     for i in 0..len {
-        let dest = crate::array::js_array_get_f64(dests.get_raw_const_ptr(), i);
+        let dest = dest_at(i);
         if is_small_native_handle_destination(dest) {
             let ret = call_small_native_pipe_method(dest, b"write", &[chunk.get_nanbox_f64()]);
             if ret.to_bits() == TAG_FALSE {
@@ -961,9 +1020,18 @@ pub(super) fn drain_readable_from_events(stream: f64) {
             }
             scope.root_raw_mut_ptr(arr)
         };
+        // Re-read the rooted array on every access: emitting runs user code.
+        let value_at = |i: u32| {
+            values.with_const_ptr(|arr: *const crate::array::ArrayHeader| {
+                crate::array::js_array_get_f64(arr, i)
+            })
+        };
+        let len = values.with_const_ptr(|arr: *const crate::array::ArrayHeader| {
+            crate::array::js_array_length(arr)
+        });
         let mut emit_destroyed_tail = false;
-        for i in 0..crate::array::js_array_length(values.get_raw_const_ptr()) {
-            let chunk = crate::array::js_array_get_f64(values.get_raw_const_ptr(), i);
+        for i in 0..len {
+            let chunk = value_at(i);
             if !readable_is_flowing(s()) {
                 return;
             }
@@ -972,16 +1040,16 @@ pub(super) fn drain_readable_from_events(stream: f64) {
                     return;
                 }
                 super::readable_from_promises::consume_readable_buffered_front(s(), chunk);
-                let chunk = crate::array::js_array_get_f64(values.get_raw_const_ptr(), i);
+                let chunk = value_at(i);
                 emit_readable_data_unchecked(s(), chunk);
                 return;
             }
             if super::readable_from_promises::attach_readable_from_promise_chunk(s(), chunk) {
                 return;
             }
-            let chunk = crate::array::js_array_get_f64(values.get_raw_const_ptr(), i);
+            let chunk = value_at(i);
             super::readable_from_promises::consume_readable_buffered_front(s(), chunk);
-            let chunk = crate::array::js_array_get_f64(values.get_raw_const_ptr(), i);
+            let chunk = value_at(i);
             emit_readable_data_unchecked(s(), chunk);
             if stream_destroyed(s()) {
                 emit_destroyed_tail = true;
