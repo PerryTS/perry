@@ -13,7 +13,7 @@ fn pull(iterator: f64) -> f64 {
     )
 }
 
-fn result_field(promise: f64, name: &[u8]) -> f64 {
+fn result_field(promise: f64, name: &'static [u8]) -> f64 {
     assert_ne!(crate::promise::js_value_is_promise(promise), 0);
     let promise = raw_ptr_from_value(promise) as *const Promise;
     let result = unsafe {
