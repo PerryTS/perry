@@ -933,6 +933,10 @@ test_gap_gc_11635_func_proto_register_across_call
 # across the callback; a moving minor there left the pre-move address in the
 # result (an `Object.entries` pair read back as garbage).
 test_gap_gc_11816_array_callback_element
+# #11821: Promise.prototype.finally held the settled value and the chained
+# promise in Rust locals across onFinally() and its continuation allocations;
+# `await p.finally(cb)` resumed with a pre-move address.
+test_gap_gc_11821_promise_finally_value
 # #11789: a direct call to a closure-valued local (`const show = (a, b) => ...`)
 # held each evaluated argument in a register while the later arguments were
 # lowered, so `show(String(x), work())` passed the retired from-space string.

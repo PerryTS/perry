@@ -843,20 +843,34 @@ pub extern "C" fn js_promise_finally(
     let on_finally_handle = scope.root_raw_const_ptr(on_finally);
     // See the sibling in `then`: the allocating call and the re-read are one
     // combinator so the order cannot drift apart (#7341).
-    let (next, promise) =
-        promise_handle.across_mut::<Promise, _>(|| js_promise_new_with_parent(promise));
-    let on_finally = on_finally_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>();
-    let next_i64 = next as i64;
+    let (next, _) = promise_handle.across_mut::<Promise, _>(|| js_promise_new_with_parent(promise));
+    // #11821: each wrapper allocation can collect; `next`, the callback, the
+    // receiver and the first wrapper are re-read from roots after each one.
+    let next_handle = scope.root_raw_mut_ptr(next);
 
     // Build the fulfilled wrapper: captures [on_finally, next].
     let fulfill_wrap = js_closure_alloc(crate::fn_info!(finally_fulfill_wrapper, 1), 2);
+    let on_finally = on_finally_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>();
     js_closure_set_capture_ptr(fulfill_wrap, 0, on_finally as i64);
-    js_closure_set_capture_ptr(fulfill_wrap, 1, next_i64);
+    js_closure_set_capture_ptr(
+        fulfill_wrap,
+        1,
+        next_handle.get_raw_mut_ptr::<Promise>() as i64,
+    );
+    let fulfill_handle = scope.root_raw_mut_ptr(fulfill_wrap);
 
     // Build the rejected wrapper: captures [on_finally, next].
     let reject_wrap = js_closure_alloc(crate::fn_info!(finally_reject_wrapper, 1), 2);
+    let on_finally = on_finally_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>();
     js_closure_set_capture_ptr(reject_wrap, 0, on_finally as i64);
-    js_closure_set_capture_ptr(reject_wrap, 1, next_i64);
+    js_closure_set_capture_ptr(
+        reject_wrap,
+        1,
+        next_handle.get_raw_mut_ptr::<Promise>() as i64,
+    );
+    let fulfill_wrap = fulfill_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>();
+    let promise = promise_handle.get_raw_mut_ptr::<Promise>();
+    let next = next_handle.get_raw_mut_ptr::<Promise>();
 
     // Register wrappers on `promise`.  Crucially, set `promise.next = null`
     // so the microtask runner does NOT attempt to resolve `next` after calling
@@ -1664,6 +1678,14 @@ fn finally_wrapper_common(
 
     let on_finally = js_closure_get_capture_ptr(closure, 0) as *const crate::closure::ClosureHeader;
     let next = js_closure_get_capture_ptr(closure, 1) as *mut Promise;
+    // #11821: `onFinally()` is user code and the continuations below allocate;
+    // any of them can run a moving minor. The original outcome (`orig`) and
+    // `next` were Rust locals across those calls, so `next` settled with a
+    // pre-move address — `await p.finally(cleanup)` resumed with a dangling
+    // value. Every later read comes from these roots.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let orig_handle = scope.root_nanbox_f64(orig);
+    let next_handle = scope.root_raw_mut_ptr(next);
 
     // Non-callable onFinally (e.g. `.finally(1)`): act like `.then(undefined,
     // undefined)` — pass the original outcome through after one extra hop.
@@ -1689,6 +1711,7 @@ fn finally_wrapper_common(
         Ok(ret) => ret,
         Err(exc) => {
             // onFinally threw — reject `next` with the thrown value.
+            let next = next_handle.get_raw_mut_ptr::<Promise>();
             if !next.is_null() {
                 js_promise_reject(next, exc);
             }
@@ -1703,10 +1726,11 @@ fn finally_wrapper_common(
     if js_value_is_promise(cleanup) != 0 {
         let inner = crate::value::js_nanbox_get_pointer(cleanup) as *mut Promise;
         if !inner.is_null() {
+            let cleanup_handle = scope.root_nanbox_f64(cleanup);
             // On cleanup fulfillment: settle `next` with the original outcome.
             let on_ok = js_closure_alloc(crate::fn_info!(finally_cleanup_fulfill, 1), 3);
-            js_closure_set_capture_ptr(on_ok, 0, next as i64);
-            js_closure_set_capture_f64(on_ok, 1, orig);
+            js_closure_set_capture_ptr(on_ok, 0, next_handle.get_raw_mut_ptr::<Promise>() as i64);
+            js_closure_set_capture_f64(on_ok, 1, orig_handle.get_nanbox_f64());
             js_closure_set_capture_f64(
                 on_ok,
                 2,
@@ -1716,9 +1740,12 @@ fn finally_wrapper_common(
                     crate::value::TAG_FALSE
                 }),
             );
+            let on_ok_handle = scope.root_raw_mut_ptr(on_ok);
             // On cleanup rejection: reject `next` with the cleanup reason.
             let on_err = js_closure_alloc(crate::fn_info!(finally_cleanup_reject, 1), 1);
-            js_closure_set_capture_ptr(on_err, 0, next as i64);
+            js_closure_set_capture_ptr(on_err, 0, next_handle.get_raw_mut_ptr::<Promise>() as i64);
+            let on_ok = on_ok_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>();
+            let cleanup = cleanup_handle.get_nanbox_f64();
             // Use Invoke(cleanup, "then", …) to respect any user-installed own
             // `then` property on the cleanup promise (observable-then-calls tests).
             // Wrap in a try-frame: call_receiver_then can throw (e.g. non-callable
@@ -1732,6 +1759,7 @@ fn finally_wrapper_common(
             }) {
                 Ok(()) => {}
                 Err(exc) => {
+                    let next = next_handle.get_raw_mut_ptr::<Promise>();
                     if !next.is_null() {
                         js_promise_reject(next, exc);
                     }
@@ -1743,7 +1771,11 @@ fn finally_wrapper_common(
 
     // Plain (non-thenable) return value: pass the original outcome through
     // after one extra microtask hop.
-    finally_settle_next_with_extra_hop(next, orig, is_fulfilled);
+    finally_settle_next_with_extra_hop(
+        next_handle.get_raw_mut_ptr::<Promise>(),
+        orig_handle.get_nanbox_f64(),
+        is_fulfilled,
+    );
     undef
 }
 
@@ -1761,12 +1793,21 @@ fn finally_settle_next_with_extra_hop(next: *mut Promise, orig: f64, is_fulfille
     } else {
         crate::fn_info!(finally_passthrough_reject, 1)
     };
+    // #11821: both allocations below can collect.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let next_handle = scope.root_raw_mut_ptr(next);
+    let orig_handle = scope.root_nanbox_f64(orig);
     let pass = js_closure_alloc(pass_fn, 2);
-    js_closure_set_capture_ptr(pass, 0, next as i64);
-    js_closure_set_capture_f64(pass, 1, orig);
+    js_closure_set_capture_ptr(pass, 0, next_handle.get_raw_mut_ptr::<Promise>() as i64);
+    js_closure_set_capture_f64(pass, 1, orig_handle.get_nanbox_f64());
+    let pass_handle = scope.root_raw_mut_ptr(pass);
     let undef_promise = js_promise_resolved(f64::from_bits(crate::value::TAG_UNDEFINED));
     // js_promise_then's side-effect is enqueuing `pass` to run next iteration.
-    js_promise_then(undef_promise, pass, ptr::null());
+    js_promise_then(
+        undef_promise,
+        pass_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>(),
+        ptr::null(),
+    );
 }
 
 /// Cleanup-fulfilled handler: settle `next` with the ORIGINAL outcome.
