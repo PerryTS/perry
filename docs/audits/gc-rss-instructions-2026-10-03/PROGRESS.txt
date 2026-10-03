@@ -1,3 +1,20 @@
+NEWLY FETCHED MAIN REBASE — 2026-10-03 20:50Z
+Fetched main2026ecfe6d; proposal rebased without conflicts to6c761801fa.
+All22authored runtime paths remain GC/arena; no object/header/shape/codegen/ABI
+path authored. Mac4877/0/5passes with4999tracked Rust/Cargo inputs independently
+matched. Fresh Linux baseline/proposal build/tests526915 queued in own source/
+target/runtime, equal packages/features/codegen units, under shared heavy lock.
+All existing measurements stay bound to c170 or their older bases.
+
+Private idle-Eden3843fcb54a Linux4856/0/5passes and actual archives/source/logs
+are independently verified. Four-workload48execution comparison421271 is live:
+control TS compiled; private TS compiling. No private memory benefit established.
+A separate test-only8e087ff43e adds a real Linux mincore residency/reuse subject,
+with own source/target. Its wrapper544401 is queued; original application source
+and products remain immutable. Existing dead_cycles=1 for all39first-full empty
+Eden blocks is independently reverified;23raw files copied/rehashed locally.
+No private idle-Eden code has been adopted in the production proposal.
+
 PRIVATE EMPTY-EDEN PROBE LAUNCHED — 2026-10-03 20:29Z
 Private3843fcb54a adds13lines in arena/block.rs and reset.rs; production source
 unchanged. In the existing idle-Eden pass, an offset-zero block outside the
