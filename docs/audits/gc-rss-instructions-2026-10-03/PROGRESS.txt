@@ -601,3 +601,31 @@ Private 32-byte page-class cache prototype: six focused default tests passed,
 including exact bitmap origin, epoch/bounds and >u32 authoritative-map fallback.
 Control-arm/full-suite validation is running separately. That prototype has not
 been accepted or added to production source in this draft.
+
+PRIVATE CACHE PROTOTYPE AND FINAL ACCEPTANCE PREPARATION
+Private cache prototype commit 1f1e2e7102: compact exact page-class entry 40 ->
+32 bytes; the unchanged initial 4,096-entry table requests 32 KiB less per thread.
+The exact original bitmap origin and full-width authoritative ranges are
+preserved. Lengths beyond u32 bypass only this cache, with explicit refusal
+accounting. No managed object/shape/header layout changes. Default/control
+focused suites passed six tests each; full macOS runtime 4,852 passed, 0 failed,
+5 ignored. page-class-compact-v8.patch is reviewable experimental source only;
+it is NOT applied to production PR source. See its macOS validation record.
+Linux and application instruction/RSS acceptance remain unmeasured.
+
+Prepared final shared-visitor v7 acceptance scripts, not uploaded or queued.
+They copy independent source/target roots, apply all 23 pinned v7 overlay paths
+(including baseline trace.rs), refresh build inputs, require new policy tests
+and coherent changed production artifacts, run Linux runtime/FFI/events and
+six genuinely moving/default Node-exact fixtures, then measure full-runtime
+TS/Zod (24 cells) and all 17 normal-auto applications (204 cells) against pristine
+main69. Existing pristine-control build records/executables are reused only after
+source/compiler/product/binary identity verification; measured runs are fresh
+for both arms. All five scripts pass Python/bash syntax checks. They launch only
+after v6 measurements support keeping the proposed window, or are revised if
+policy evidence requires another choice. This is preparation, not acceptance.
+
+Main freshly fetched again: 69de7f3526 unchanged. The Linux main69 baseline build
+completed; consolidated immediate-discard main69 runtime tests passed 4,832,
+0 failed, 5 ignored. Its remaining FFI/events/build/application stages are live.
+Those frozen results will not validate current v7 or the private cache prototype.
