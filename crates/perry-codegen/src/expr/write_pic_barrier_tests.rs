@@ -737,3 +737,47 @@ fn dyn_ic_inline_store_keeps_its_semantic_fallback_for_reference_values() {
         "the receiver guard must still fall through to the outlined helper:\n{ir}"
     );
 }
+
+/// A stored value that can never be a closure (a literal, an operator's
+/// primitive result) has nothing a ConstFn lane could admit, so the site emits
+/// no ConstFn admission: a flagged lane takes the miss, as a failed admission
+/// would. A value that may be a closure keeps it.
+#[test]
+fn store_ic_emits_no_constfn_admission_for_a_value_that_cannot_be_a_closure() {
+    let constfn_blocks = [
+        "put.pic.hit.constfn",
+        "put.add.constfn",
+        "put.pic.constfn.header",
+    ];
+    for (name, value) in [
+        ("store_ic_constfn_number", Expr::Number(1.0)),
+        ("store_ic_constfn_string", Expr::String("s".to_string())),
+        (
+            "store_ic_constfn_sum",
+            Expr::Binary {
+                op: perry_hir::BinaryOp::Add,
+                left: Box::new(Expr::LocalGet(VALUE)),
+                right: Box::new(Expr::Number(1.0)),
+            },
+        ),
+    ] {
+        let ir = write_pic_ir(name, value);
+        for stem in constfn_blocks {
+            assert!(
+                block(&ir, stem).is_none(),
+                "{name}: `{stem}` must not be emitted for a value that is never a closure:\n{ir}"
+            );
+        }
+        assert!(
+            block(&ir, "put.pic.hit.f64").is_some(),
+            "{name}: the F64 lane check stays:\n{ir}"
+        );
+    }
+    let ir = write_pic_ir("store_ic_constfn_any", Expr::LocalGet(VALUE));
+    for stem in constfn_blocks {
+        assert!(
+            block(&ir, stem).is_some(),
+            "a value that may be a closure keeps `{stem}`:\n{ir}"
+        );
+    }
+}
