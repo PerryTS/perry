@@ -654,6 +654,53 @@ unsafe fn walk(recv: *const ObjectHeader, name: &[u8], class_first: bool) -> Opt
     None
 }
 
+/// The shape facts behind a computed-key read's ABSENT verdict (#10753):
+/// `Some(terminal)` when `obj`'s shapes prove that an ordinary Get of `name`
+/// on it reaches no property, where `terminal` is the ShapeId of
+/// `%Object.prototype%` that proof rests on, or 0 when the receiver's shape
+/// links to null and nothing past it is consulted.
+///
+/// The same facts a depth-1 ABSENT holder entry is primed from: an ordinary
+/// receiver ([`ordinary_receiver`]), an admitted name (no index-like or
+/// synthesized key), no accessor for the name on the receiver, the name in
+/// none of the receiver's own keys, and a [`walk`] that ends absent at
+/// `%Object.prototype%` with no hop between. It is a pre-check only: the
+/// caller files the verdict (`object::read_stub::read_stub_prime_absent`)
+/// after the generic Get has answered `undefined`, as `prime_read_holder`
+/// files its entries only after the getter agreed.
+///
+/// Allocation-free and never calls user code.
+///
+/// # Safety
+/// `obj` is a plausible object address; `name` stays valid for the call.
+pub(crate) unsafe fn dynamic_absent_terminal(obj: *const ObjectHeader, name: &[u8]) -> Option<u32> {
+    if !holder_name_admitted(name) {
+        return None;
+    }
+    let recv = ordinary_receiver(obj as usize)?;
+    if key_may_be_accessor(recv, name) {
+        return None;
+    }
+    let shape = object_shape_descriptor(recv)?;
+    if !shape.object_kind.is_ordinary_layout() {
+        return None;
+    }
+    let keys = shape.keys as usize as *const crate::array::ArrayHeader;
+    if !keys.is_null()
+        && crate::object::keys_find_slot_by_bytes_resolved(keys, shape.logical_key_count, name)
+            .is_some()
+    {
+        return None;
+    }
+    if admitted_proto_id(recv)? == PROTO_ID_NULL {
+        return Some(0);
+    }
+    let w = walk(recv, name, false)?;
+    let object_prototype = crate::array::object_prototype_addr_if_resolved();
+    (w.slot.is_none() && w.depth == 1 && object_prototype != 0 && w.holder == object_prototype)
+        .then_some(w.holder_shape)
+}
+
 /// Prime `cache_slot`'s holder entry for `obj.key`, whose key the caller has
 /// proved is not own. Returns the answer (from the generic getter) when the
 /// receiver took the generic read here; `None` when it did not, and the caller
