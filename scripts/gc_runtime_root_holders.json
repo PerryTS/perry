@@ -778,6 +778,12 @@
       "why": "Queue entries contain a native addon function pointer plus the addon's opaque data and hint pointers. Node-API defines those as embedder-owned native pointers; no field is a Perry GC-heap address."
     },
     {
+      "file": "crates/perry-runtime/src/node_stream_readwrite.rs",
+      "name": "HIDDEN_KEYS_SCANNER_REGISTERED",
+      "verdict": "not_a_gc_pointer",
+      "why": "Cell<bool> latch recording whether this thread already registered node_stream_hidden_keys, the mutable root scanner for HIDDEN_KEYS (the per-thread longlived hidden-field key strings, #11828). It stores only true/false; the heap addresses live in HIDDEN_KEYS, which that same-file scanner marks and rewrites."
+    },
+    {
       "file": "crates/perry-runtime/src/node_stream_state_view.rs",
       "name": "STATE_PROTO_SCANNER_REGISTERED",
       "verdict": "not_a_gc_pointer",

@@ -552,7 +552,7 @@
       "file": "crates/perry-runtime/src/node_stream_readwrite.rs",
       "name": "HIDDEN_KEYS",
       "verdict": "bounded_by_program",
-      "why": "Keyed by (address, length) of the &'static [u8] hidden-field name literals passed to hidden_key; at most one entry per literal in the compiled runtime, so growth stops once each has been used once per thread."
+      "why": "Keyed by (address, length) of the &'static [u8] hidden-field name literals passed to hidden_key; at most one entry per literal in the compiled runtime, so growth stops once each has been used once per thread. The cached key strings are rooted (marked and rewritten) by the node_stream_hidden_keys mutable root scanner."
     }
   ]
 }
