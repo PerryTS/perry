@@ -380,14 +380,19 @@ pub(super) fn candidates(
     if cond.is_some_and(|c| !quiet(ctx, c)) || update.is_some_and(|u| !quiet(ctx, u)) {
         return out;
     }
-    // (binding, static max or counter, store)
-    let mut uses: Vec<(u32, Option<u32>, bool)> = Vec::new();
+    // (binding, static max or counter, store, a Number operand)
+    let mut uses: Vec<(u32, Option<u32>, bool, bool)> = Vec::new();
     let mut walk = |e: &Expr| -> bool {
         // `numeric`: `e` is an operand a Number consumer reads (arithmetic,
         // a relational compare, a `Math.*` argument, a stored element). A
         // counter-indexed read anywhere else (`const o = xs[i]`) is not what
         // the dense facts serve: it does not make its array a candidate.
-        fn e_walk(e: &Expr, env: &Env, numeric: bool, out: &mut Vec<(u32, Option<u32>, bool)>) {
+        fn e_walk(
+            e: &Expr,
+            env: &Env,
+            numeric: bool,
+            out: &mut Vec<(u32, Option<u32>, bool, bool)>,
+        ) {
             let access = match e {
                 Expr::IndexGet { object, index } => Some((object.as_ref(), index.as_ref(), false)),
                 _ => element_store(e).map(|(o, i, _)| (o, i, true)),
@@ -395,7 +400,7 @@ pub(super) fn candidates(
             if let Some((object, index, store)) = access {
                 if let (Some(Recv::Local(id)), Some(ix)) = (env.array(object), env.index(index)) {
                     if ix.is_some() || store || numeric {
-                        out.push((id, ix, store));
+                        out.push((id, ix, store, numeric));
                     }
                 }
             }
@@ -432,9 +437,29 @@ pub(super) fn candidates(
             r => r,
         })
         .collect();
-    for (id, ix, store) in uses {
+    // What a region serves an array: a store, a read a Number consumer takes,
+    // or, in a body that runs no JS, any read at a proven index (one load in
+    // place of the guarded tier, on facts that stay valid across iterations).
+    // A body that calls out sets the dirty flag and re-checks the guard every
+    // iteration, which an array only read for its element VALUES
+    // (`const o = xs[i & 63]; o.m()`) does not pay back: such an array is no
+    // candidate there, though its reads ride along once some other access
+    // makes it one.
+    let calls = body
+        .iter()
+        .any(|s| perry_hir::walker::stmt_any_expr(s, &mut may_call));
+    let served: HashSet<u32> = uses
+        .iter()
+        .filter(|&&(_, _, store, numeric)| store || numeric || !calls)
+        .map(|&(id, ..)| id)
+        .collect();
+    for (id, ix, store, _) in uses {
         let r = Recv::Local(id);
-        if written.contains(&id) || keyed.contains(&r) || !receiver_eligible(ctx, r) {
+        if !served.contains(&id)
+            || written.contains(&id)
+            || keyed.contains(&r)
+            || !receiver_eligible(ctx, r)
+        {
             continue;
         }
         let u = out.entry(r).or_default();
@@ -445,6 +470,23 @@ pub(super) fn candidates(
         u.store |= store;
     }
     out
+}
+
+/// Does `e` contain a call (`f()`, `o.m()`, `new C()`, a native method call)?
+fn may_call(e: &Expr) -> bool {
+    if matches!(
+        e,
+        Expr::Call { .. }
+            | Expr::CallSpread { .. }
+            | Expr::New { .. }
+            | Expr::NewDynamic { .. }
+            | Expr::NativeMethodCall { .. }
+    ) {
+        return true;
+    }
+    let mut found = false;
+    perry_hir::walker::walk_expr_children(e, &mut |c| found |= may_call(c));
+    found
 }
 
 /// The preheader / re-check guard of one array receiver; stores the base.
