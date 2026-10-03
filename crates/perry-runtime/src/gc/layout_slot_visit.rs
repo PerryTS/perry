@@ -83,10 +83,10 @@ pub(super) unsafe fn visit_gc_layout_slot_descriptors(
 }
 
 /// The ONE body of [`visit_gc_layout_slot_descriptors`], generic over the
-/// visitor. Cold callers share the `dyn` wrapper above. The copying drain,
-/// full mark and retained-parent rebuild instantiate this body for their
-/// visitors so their per-slot closures inline instead of paying indirect calls.
-/// Same enumeration either way: no second copy of the slot logic can drift.
+/// visitor. The copying drain instantiates it directly; full marking and
+/// retained-parent rebuilding use the shared `dyn` wrapper. Specializing those
+/// two walks increased TS instructions in both isolated application modes
+/// without reducing peak RSS. Enumeration remains one body in either case.
 #[inline(always)]
 pub(super) unsafe fn visit_gc_layout_slot_descriptors_inline<F>(
     header: *mut GcHeader,
@@ -251,16 +251,6 @@ pub(super) unsafe fn visit_gc_rewrite_slot_descriptors(
     visit: impl FnMut(GcMutableSlotDescriptor),
 ) {
     visit_gc_rewrite_slot_descriptors_with::<false>(header, visit);
-}
-
-/// Instantiate the shared descriptor walk for a hot tracing visitor. This
-/// changes callback dispatch only; descriptor enumeration stays in one body.
-#[inline(always)]
-pub(super) unsafe fn visit_gc_rewrite_slot_descriptors_inline(
-    header: *mut GcHeader,
-    visit: impl FnMut(GcMutableSlotDescriptor),
-) {
-    visit_gc_rewrite_slot_descriptors_with::<true>(header, visit);
 }
 
 /// The one body of [`visit_gc_rewrite_slot_descriptors`]. `INLINE_LAYOUT`
@@ -555,8 +545,8 @@ pub(super) unsafe fn visit_gc_rewrite_slots(
 }
 
 /// [`visit_gc_rewrite_slots`] with the whole enumeration instantiated for
-/// `visit`: used by the copying drain and retained-parent rebuild. Indirect
-/// descriptor and slot visitor calls were a measured share of the per-object
+/// `visit`: the copying drain. Indirect descriptor and slot visitor calls
+/// were a measured share of that path's per-object
 /// trace cost. Enumerates exactly the same slots, in the same order.
 #[inline(always)]
 pub(super) unsafe fn visit_gc_rewrite_slots_inline(
