@@ -1,3 +1,40 @@
+VERIFIED STATUS — 2026-10-03 21:38Z
+Draft #11781 is rebased onto fetched main 2026ecfe6d. Runtime source 6c761801fa;
+22 authored GC/arena paths; object/header/shape/codegen/ABI untouched.
+Fresh Linux baseline 4841/0/5 and proposal 4861/0/5 pass; Mac proposal 4877/0/5.
+Independent source/product/command/raw-test verification passes; 17 Linux build
+files copied and rehashed locally. Latest-main application and actual moving-
+collection acceptance remain outstanding. Earlier RSS results remain on c170.
+
+Private moving-idle Eden probe: 48/48 four-case full-runtime runs independently
+verified against source/compiler/runtime/binary, Node output, RSS and counters.
+Signed changes versus unchanged c170 GC proposal:
+TypeScript RSS -0.042%, instructions -0.029%, minor faults +0.454%;
+Zod RSS -1.185%, instructions +0.106%, faults +6.457%;
+requests RSS +0.275%, instructions +0.291%, faults +8.076%;
+strings RSS -0.071%, instructions -0.032%, faults +0.001%.
+No material TS benefit: this variant remains unapplied; no full17 acceptance
+is claimed. Real Linux residency/reuse subject passes (1/0/0), independently
+verified on 4994 tracked inputs with exactly one test-only file delta. All 130
+raw application/residency files copied and independently rehashed locally.
+Original candidate compile SIGKILL during host-global OOM and original native-
+fixture setup failure are preserved separately. Recovery used new namespaces,
+reused controls by exact hashes, and two candidate compiler workers.
+
+Next memory question: advice timing and collection-path coverage. The moving
+idle pass and nonmoving reset path give dead_cycles=1 different meanings;
+nonmoving reset increments after fresh reset. Any next probe must observe an
+empty block through the preceding mutator interval and protect recent/in-use
+blocks. No GC-entry policy or string-storage change is implemented yet.
+Latest-main Node pin/address checks pass (inherited stale-ratchet warning).
+The file-size gate fails on inherited, unchanged parent_static.rs (2023 lines).
+Remaining: collection timing experiment, fresh latest-main linked/moving and
+application matrices, and explicit resolution/bounding of instruction/fault
+costs. Radical TS RSS reduction and an absolute minimum remain unproven.
+
+All entries below are historical snapshots; their queued/live wording does
+not override the latest verified state above.
+
 NEWLY FETCHED MAIN REBASE — 2026-10-03 20:50Z
 Fetched main2026ecfe6d; proposal rebased without conflicts to6c761801fa.
 All22authored runtime paths remain GC/arena; no object/header/shape/codegen/ABI
