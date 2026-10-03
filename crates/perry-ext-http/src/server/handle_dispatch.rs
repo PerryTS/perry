@@ -1336,7 +1336,46 @@ fn response_socket_value(handle: i64) -> f64 {
     if req_handle == 0 {
         f64::from_bits(TAG_NULL)
     } else {
-        handle_to_pointer_f64(req_handle)
+        crate::server::request::incoming_socket_override(req_handle)
+            .unwrap_or_else(|| handle_to_pointer_f64(req_handle))
+    }
+}
+
+#[cfg(test)]
+mod response_socket_tests {
+    use super::*;
+    use crate::server::request::{alloc_incoming_message, incoming_socket_assign};
+    use perry_ffi::{drop_handle, register_handle};
+    use std::collections::HashMap;
+
+    #[test]
+    fn response_socket_follows_request_socket_without_changing_standalone_assignment() {
+        let socket = 1234.5_f64;
+        for _ in 0..2 {
+            let request = alloc_incoming_message(IncomingMessage::new(
+                "GET".into(),
+                "/".into(),
+                HashMap::new(),
+                Vec::new(),
+                Vec::new(),
+                "127.0.0.1".into(),
+                1234,
+            ));
+            assert!(incoming_socket_assign(request, socket));
+            let response = register_handle(ServerResponse::new().with_request_handle(request));
+            assert_eq!(response_socket_value(response).to_bits(), socket.to_bits());
+            drop_handle(response);
+            drop_handle(request);
+        }
+
+        let standalone = register_handle(ServerResponse::new());
+        assert_eq!(response_socket_value(standalone).to_bits(), TAG_NULL);
+        crate::server::response::js_node_http_res_assign_socket(standalone, socket);
+        assert_eq!(
+            response_socket_value(standalone).to_bits(),
+            socket.to_bits()
+        );
+        drop_handle(standalone);
     }
 }
 
