@@ -656,6 +656,21 @@ pub(crate) fn slot_may_be_constfn(keys_global: &str, slot: u32) -> bool {
 /// returning the ordinary birth id. Match all structural facts and preserve
 /// every base representation; a written SPECIAL slot cannot use a raw store.
 pub(crate) fn compatible_final_shape_ids(expected: &str, written_slots: &[u32]) -> Vec<u32> {
+    let mut ids: Vec<u32> = compatible_final_shapes(expected, written_slots)
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    ids.sort_unstable();
+    ids.dedup();
+    ids
+}
+
+/// [`compatible_final_shape_ids`] with each id's content, sorted by id. Every
+/// returned id joins the module's seed set exactly as a guard immediate does.
+pub(crate) fn compatible_final_shapes(
+    expected: &str,
+    written_slots: &[u32],
+) -> Vec<(u32, BirthShape)> {
     let Ok(expected) = expected.parse::<u32>() else {
         return Vec::new();
     };
@@ -699,14 +714,14 @@ pub(crate) fn compatible_final_shape_ids(expected: &str, written_slots: &[u32]) 
             })
             .collect()
     });
-    let mut ids = Vec::new();
+    let mut out = Vec::new();
     for (shape, id) in candidates {
         note_guard_id(id, Some(&shape));
-        ids.push(id);
+        out.push((id, shape));
     }
-    ids.sort_unstable();
-    ids.dedup();
-    ids
+    out.sort_by_key(|(id, _)| *id);
+    out.dedup_by_key(|(id, _)| *id);
+    out
 }
 
 /// The static supplier of a loop region (DESIGN §4.1): the static id of
