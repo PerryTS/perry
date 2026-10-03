@@ -107,7 +107,9 @@ pub unsafe extern "C-unwind" fn js_native_call_method_by_id_learn(
     if method_id == 0 {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    if expected_class_id != 0 {
+    // A null `site` is the compiled miss edge saying no word could be
+    // consulted (its prototype guard bytes are set): dispatch only.
+    if !site.is_null() && expected_class_id != 0 {
         let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
         if let Some(name_ref) =
             crate::string::perry_string_ref_from_dispatch_id(method_id, &mut scratch)
