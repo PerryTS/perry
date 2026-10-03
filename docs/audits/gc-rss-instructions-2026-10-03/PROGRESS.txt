@@ -25,11 +25,15 @@ On main69 TS, GC accounts for 74.64-75.08% of baseline self samples and
 NOT exact GC instruction deltas or new-main measurements. See instruction-profile-
 summary.json, instruction-profile-verification.json and its verifier.
 
-The Linux v6 reuse-window pipeline has acquired the benchmark lock and is
-running application measurements after its Linux runtime (4,834), FFI/events
-and protected-moving linked stages passed. Its two real residency/publication
-tests ran. It retains the rejected visitor specialization to
-isolate pool policy. The paired user/kernel diagnostic is queued behind it.
+The frozen v6 Linux runtime (4,834), FFI/events and protected-moving linked
+stages passed, including both real residency/publication tests. Its application
+stage stopped when the TypeScript compiler exceeded the 600-second build guard;
+no app measurements were produced. Failure preserved; unchanged products and
+checks reverified. The v6r1 repair uses a new namespace and 1,800-second compile
+guard, reusing the successful control executable by source/product identity.
+It is queued behind a live campaign build on the shared lock. The rejected
+visitor specialization stays in that comparison to isolate pool policy.
+The paired user/kernel diagnostic has completed and is independently verified.
 Current source still requires its own Linux/app acceptance after that decision.
 
 Private capture-by-value callback candidate: one trace.rs change, based on
@@ -744,3 +748,38 @@ against the 2,000 cap. That file is byte-identical to pristine e532; no GC-branc
 edit caused it. It is part of the campaign's fresh class-template/codegen work.
 No independent codegen refactor is made here. Current-main validation records
 this actual failure; the draft cannot claim all required checks passed.
+
+PAIRED USER/KERNEL DIAGNOSTIC VERIFIED (12/12, frozen earlier full-runtime arms)
+Immediate discard versus scan: TS user instructions 63,803,547,046 ->
+63,806,187,361 (+0.00414%); kernel instructions 918,458,658 -> 5,073,916,819
+(+452.44%, +4,155,458,161); minor faults 108,996 -> 812,151 (+645.12%).
+The extra retired instructions are overwhelmingly in kernel execution. Kernel
+counts include all kernel work, so this is not direct fault-handler attribution.
+It strongly supports avoiding advice on promptly reused blocks; it does not
+validate the window or current main.
+
+Visitor specialization versus immediate-pool control: user instructions
++991,384,583 (+1.55%); kernel +0.03%, faults +0.015%. That regression is in user
+execution and independently reinforces its rollback. Raw perf logs, complete
+cell coverage, source/build/oracle/executable identities and every published
+distribution were independently rechecked. See paired-instruction-domains-
+comparison.json, its verification record and verifier.
+
+V6 COMPILATION TIMEOUT REPAIR
+Original v6 pipeline terminal exit 1; candidate TS compiler killed by the
+harness after 600.92 seconds during code generation. Control compiled correctly,
+but there are zero application measurement rows. This is a compilation failure,
+not a measured program RSS/CPU regression. The v6r1 input verifier rechecks all
+frozen production products/source, Linux/FFI/events and 12 linked executions
+(including six copied/protected runs) before retry. New r1 app identities and
+receipts preserve the original failed build. The final e532 preparation now
+requires the successful r1 policy receipt and allows 1,800-second no-auto builds.
+The repair process is live and waiting for the shared benchmark lock; no
+foreign campaign process was stopped. Policy acceptance is still open.
+
+CURRENT-MAIN METADATA DECODER PREPARATION
+Compiled the exact e532 ObjectMeta source with its offset assertions: twenty
+u64 fields, 160-byte payload, 168 bytes including the existing 8-byte GC header.
+instance_birth is at payload offset 144, native_state at 152. This is layout
+proof only, not a new owner census or RSS result; the forthcoming Linux observer
+must assert those allocations and remeasure owner/shape/canonical distributions.

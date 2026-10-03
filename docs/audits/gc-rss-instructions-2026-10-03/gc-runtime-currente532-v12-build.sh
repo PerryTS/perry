@@ -3,7 +3,7 @@ set -euo pipefail
 B=/root/rss-header-20261002
 trap 'echo $? > "$B/gc-runtime-currente532-v12-build.exit"' EXIT
 test "$(cat "$B/gc-runtime-main69r1-auto.exit")" = 0
-test "$(cat "$B/gc-runtime-window-v6-auto.exit")" = 0
+test "$(cat "$B/gc-runtime-window-v6r1-auto.exit")" = 0
 export PATH=/root/.cargo/bin:$PATH CARGO_BUILD_JOBS=4 CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 CARGO_INCREMENTAL=0 LLVM_SYS_221_PREFIX=/usr/lib/llvm-22 RUST_TEST_THREADS=1
 python3 - <<'SETUP'
 from pathlib import Path
