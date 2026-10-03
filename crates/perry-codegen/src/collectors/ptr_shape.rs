@@ -235,6 +235,30 @@ pub(crate) use entry::{
     collect_shape_proven_ptr_locals_and_element_fields, expr_is_shape_barrier,
 };
 
+/// What one region's `Ptr<Shape>` proof established.
+#[derive(Default)]
+pub(crate) struct ShapeProof {
+    /// Locals holding exactly one object of a known class object, with a
+    /// statically immutable shape: field accesses lower to bare fixed-offset
+    /// loads and method calls to direct calls.
+    pub exact: HashMap<u32, PtrShapeLocal>,
+    /// Group-wide numeric layouts of proven element arrays.
+    pub element_fields: HashMap<u32, HashSet<String>>,
+    /// #11759 (c′): locals bound to the guarded `new` of a repeatable class
+    /// declaration, proven by every rule above except that the class OBJECT
+    /// is not fixed: the instance belongs to whichever evaluation the binding
+    /// holds. Every evaluation of one template runs the same constructor
+    /// chain, field initializers and methods on the same arguments, and a
+    /// later evaluation's captures are values of the same locals the first
+    /// evaluation's are, so which fields hold a Number on every reachable
+    /// store is a fact of the template (`numeric_fields`). The slot layout
+    /// and the method table are not proven for a later evaluation's
+    /// instance, so these locals never take the bare-load or direct-call
+    /// forms: the facts feed only the Number-by-construction proof of values
+    /// read from them.
+    pub lineage: HashMap<u32, PtrShapeLocal>,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum CollectionPurpose {
     UnguardedRepresentation,
@@ -252,7 +276,7 @@ fn collect_shape_proven_ptr_locals_impl(
     element_facts: &ElementShapeFacts,
     numeric_param_seeds: &HashSet<u32>,
     purpose: CollectionPurpose,
-) -> (HashMap<u32, PtrShapeLocal>, HashMap<u32, HashSet<String>>) {
+) -> ShapeProof {
     // #7152: Perry's own `cjs_wrap` preamble, recognised once for this region.
     // One scan of the top-level statement list on anything else, then a
     // `Default` that suppresses nothing. See `cjs_scaffolding.rs`.
@@ -268,7 +292,7 @@ fn collect_shape_proven_ptr_locals_impl(
     };
     if let Some(denial) = bail {
         report::early_bail(stmts, boxed_vars, module_globals, &preamble, denial);
-        return (HashMap::new(), HashMap::new());
+        return ShapeProof::default();
     }
     // `--opt-report` (#6952): binding names and loop depths for the values
     // this pass is about to accept or deny. Both walks are skipped entirely
@@ -322,7 +346,7 @@ fn collect_shape_proven_ptr_locals_impl(
         callback_seeded.insert(id);
     }
     if candidates.is_empty() && element_facts.is_empty() {
-        return (HashMap::new(), HashMap::new());
+        return ShapeProof::default();
     }
     // Class-level admission BEFORE the use walk so the walk's chain-field
     // membership tests are meaningful.
@@ -336,7 +360,7 @@ fn collect_shape_proven_ptr_locals_impl(
         }
     });
     if candidates.is_empty() && element_facts.is_empty() {
-        return (HashMap::new(), HashMap::new());
+        return ShapeProof::default();
     }
 
     // Alias pre-pass: `const alias = candidate` (the exact-receiver inliner
@@ -377,6 +401,7 @@ fn collect_shape_proven_ptr_locals_impl(
         module_dispatch,
         disqualified: HashSet::new(),
         let_counts: HashMap::new(),
+        lineage_seeded: HashSet::new(),
         field_stores: HashMap::new(),
         method_calls: HashMap::new(),
         new_args: HashMap::new(),
@@ -402,6 +427,7 @@ fn collect_shape_proven_ptr_locals_impl(
         const_local_inits,
         disq_reasons,
         field_reads,
+        lineage_seeded,
         ..
     } = walk;
     // #7770: locals whose every write is number-producing by construction —
@@ -450,6 +476,7 @@ fn collect_shape_proven_ptr_locals_impl(
         &numeric_locals,
     );
     let mut out = HashMap::new();
+    let mut lineage = HashMap::new();
     // `--opt-report`: one closure so every `continue` below has a matching
     // one-line recording. Behaviour is unchanged — `deny` is a no-op when
     // the report is off.
@@ -551,6 +578,21 @@ fn collect_shape_proven_ptr_locals_impl(
                 &numeric_locals,
             )
         };
+        if lineage_seeded.contains(id) {
+            // A field-representation fact of the template, never a layout or
+            // dispatch fact of one class object: see [`ShapeProof::lineage`].
+            let fact = PtrShapeLocal {
+                class_name: class_name.clone(),
+                numeric_fields,
+                report_name: None,
+            };
+            for (member, root) in &roots {
+                if root == id {
+                    lineage.insert(*member, fact.clone());
+                }
+            }
+            continue;
+        }
         let fact = PtrShapeLocal {
             class_name: class_name.clone(),
             numeric_fields,
@@ -662,7 +704,11 @@ fn collect_shape_proven_ptr_locals_impl(
             .is_some_and(|members| members.iter().all(|member| out.contains_key(member)))
     });
     let element_fields = element_facts.proven_array_numeric_fields(&group_numeric);
-    (out, element_fields)
+    ShapeProof {
+        exact: out,
+        element_fields,
+        lineage,
+    }
 }
 
 #[path = "ptr_shape_aliases.rs"]
@@ -819,6 +865,11 @@ struct UseWalk<'a> {
     /// read. Their `Let` init is an `Expr::IndexGet`, which rule 1 would
     /// otherwise reject as `LET_INIT_NOT_NEW`.
     element_seeded: &'a HashSet<u32>,
+    /// #11759 (c′): candidates whose provenance is a class declaration's
+    /// guarded `new` (`ClassIsFirstEvaluation ? new C(..) : new <binding>(..)`).
+    /// The object is an instance of SOME evaluation of `C`'s template, not
+    /// necessarily of the shared class: see [`ShapeProof::lineage`].
+    lineage_seeded: HashSet<u32>,
     /// #7034 §3: the element-shape-proven arrays of this region. Consulted to
     /// decide whether a `push` is a contained element position.
     element_facts: &'a ElementShapeFacts,
@@ -902,6 +953,30 @@ impl<'a> UseWalk<'a> {
                             self.walk_expr(a);
                         }
                         return;
+                    }
+                    // #11759 (c′): `new C(..)` through a repeatable class
+                    // declaration's binding. Both arms construct with the same
+                    // arguments through the same template constructor; the
+                    // later-evaluation arm's arguments are the same
+                    // expressions, so walking that arm alone covers them.
+                    if let Some(Expr::Conditional {
+                        condition,
+                        then_expr,
+                        else_expr,
+                    }) = init.as_ref()
+                    {
+                        if let (
+                            Expr::ClassIsFirstEvaluation { .. },
+                            Expr::New { args, .. },
+                            Expr::NewDynamic { .. },
+                        ) = (condition.as_ref(), then_expr.as_ref(), else_expr.as_ref())
+                        {
+                            self.lineage_seeded.insert(*id);
+                            self.new_args.insert(*id, args.as_slice());
+                            self.walk_expr(condition);
+                            self.walk_expr(else_expr);
+                            return;
+                        }
                     }
                     // #7034 §4: a return-shape-seeded candidate's provenance
                     // is the CALL. It records no `new_args` — the constructor

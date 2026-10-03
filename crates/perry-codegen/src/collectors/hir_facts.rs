@@ -211,6 +211,11 @@ pub(crate) struct ShapeStabilityFacts {
     /// and unguarded direct method dispatch
     /// (`lower_call/property_get/dynamic_dispatch.rs`).
     pub shape_proven_ptr_locals: HashMap<u32, super::PtrShapeLocal>,
+    /// #11759 (c′): locals bound to a repeatable class declaration's guarded
+    /// `new`, proven up to the class TEMPLATE (`ShapeProof::lineage`). Only
+    /// their `numeric_fields` are consumed, as a fact about the VALUES read
+    /// from those fields; never a layout or dispatch license.
+    pub shape_lineage_locals: HashMap<u32, super::PtrShapeLocal>,
     /// Fresh-object containment facts consumed exclusively by guarded
     /// argument-shape clone routes. This map remains available in modules
     /// with shape barriers, so it must never license guard-free field access:
@@ -455,6 +460,12 @@ impl TypeFacts {
     /// when it is a proven `Ptr<Shape>` local (`collectors/ptr_shape.rs`).
     pub(crate) fn shape_proven_ptr_local(&self, local_id: u32) -> Option<&super::PtrShapeLocal> {
         self.shape_stability.shape_proven_ptr_locals.get(&local_id)
+    }
+
+    /// #11759 (c′): the template-lineage fact for a local bound to a
+    /// repeatable class declaration's guarded `new` (`ShapeProof::lineage`).
+    pub(crate) fn shape_lineage_local(&self, local_id: u32) -> Option<&super::PtrShapeLocal> {
+        self.shape_stability.shape_lineage_locals.get(&local_id)
     }
 
     pub(crate) fn guarded_argument_route_local(
@@ -717,17 +728,20 @@ pub(crate) fn collect_type_facts(
     // Representation-selection Phase 3b: shape-proven pointer locals. Gated
     // on `PERRY_PTR_SHAPE_LOCALS` and the module-wide §5.2 barrier scan
     // inside the collector.
-    let (shape_proven_ptr_locals, exact_numeric_element_fields) =
-        super::ptr_shape::collect_shape_proven_ptr_locals_and_element_fields(
-            stmts,
-            boxed_vars,
-            module_globals,
-            classes,
-            module_dispatch,
-            &not_bigint_locals,
-            &element_shape_facts,
-            spec_numeric_params,
-        );
+    let super::ptr_shape::ShapeProof {
+        exact: shape_proven_ptr_locals,
+        element_fields: exact_numeric_element_fields,
+        lineage: shape_lineage_locals,
+    } = super::ptr_shape::collect_shape_proven_ptr_locals_and_element_fields(
+        stmts,
+        boxed_vars,
+        module_globals,
+        classes,
+        module_dispatch,
+        &not_bigint_locals,
+        &element_shape_facts,
+        spec_numeric_params,
+    );
     array_facts.exact_numeric_element_fields = exact_numeric_element_fields;
 
     // #8105 / #10777: locals that hold a JS Number by construction.
@@ -746,8 +760,20 @@ pub(crate) fn collect_type_facts(
     // `PERRY_PTR_SHAPE_LOCALS=0`; that still holds, because an empty
     // `shape_proven_ptr_locals` yields empty inputs below and the fixpoint then
     // computes exactly what it computed before.
-    let (nbc_shape_members, nbc_shape_numeric_fields) =
-        super::number_by_construction::shape_numeric_inputs(&shape_proven_ptr_locals);
+    //
+    // #11759 (c′): a repeatable class declaration's guarded `new` is proven
+    // only up to its template (`ShapeProof::lineage`); which of its fields
+    // hold a Number is a template fact, so it feeds this proof and nothing
+    // that relies on one class object's layout.
+    let (nbc_shape_members, nbc_shape_numeric_fields) = {
+        let mut numeric_inputs = shape_proven_ptr_locals.clone();
+        numeric_inputs.extend(
+            shape_lineage_locals
+                .iter()
+                .map(|(id, fact)| (*id, fact.clone())),
+        );
+        super::number_by_construction::shape_numeric_inputs(&numeric_inputs)
+    };
     let number_by_construction_locals = super::collect_number_by_construction_locals(
         stmts,
         params,
@@ -865,6 +891,7 @@ pub(crate) fn collect_type_facts(
         shape_stability: ShapeStabilityFacts {
             scalar_replaceable_object_locals,
             shape_proven_ptr_locals,
+            shape_lineage_locals,
             guarded_argument_route_locals,
             num_array_locals,
         },

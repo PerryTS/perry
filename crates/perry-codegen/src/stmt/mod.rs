@@ -174,9 +174,37 @@ fn lower_async_rejecting_stmts_inner(
     Ok(())
 }
 
+/// #11759 (c′): one copy of a function body's versioned tail
+/// (`class_first_loop::try_lower_versioned_tail`). It never versions again on
+/// its own first statement.
+fn lower_stmts_versioned_tail(
+    ctx: &mut FnCtx<'_>,
+    stmts: &[Stmt],
+    emit_shadow_clears: bool,
+) -> Result<()> {
+    lower_stmts_from(ctx, stmts, emit_shadow_clears, false)
+}
+
 fn lower_stmts_inner(ctx: &mut FnCtx<'_>, stmts: &[Stmt], emit_shadow_clears: bool) -> Result<()> {
+    lower_stmts_from(ctx, stmts, emit_shadow_clears, emit_shadow_clears)
+}
+
+fn lower_stmts_from(
+    ctx: &mut FnCtx<'_>,
+    stmts: &[Stmt],
+    emit_shadow_clears: bool,
+    version_tails: bool,
+) -> Result<()> {
     let mut i = 0;
     while i < stmts.len() {
+        // #11759 (c′): the rest of a function body after `let c = new C()`
+        // through a repeatable class declaration's binding tests the
+        // declaration's first evaluation once (`class_first_loop`).
+        if version_tails
+            && class_first_loop::try_lower_versioned_tail(ctx, &stmts[i..], i, emit_shadow_clears)?
+        {
+            return Ok(());
+        }
         // A common memo-table method shape is
         // `if (!owner.table[i]) { ...fill... } return owner.table[i]`.
         // Before lowering the untouched statements, add a guarded direct

@@ -705,6 +705,20 @@ pub(crate) fn expr_produces_canonical_raw_f64(ctx: &FnCtx<'_>, e: &Expr) -> bool
             if crate::stmt::region_loop::is_f64_read(ctx, e) {
                 return true;
             }
+            // #11759 (c′): the receiver is the guarded `new` of a repeatable
+            // class declaration, an instance of SOME evaluation of the
+            // template. Which fields hold a Number on every reachable store
+            // is a template fact (`ShapeProof::lineage`), so whatever route
+            // reads the field — the scalar a replaced first-evaluation `new`
+            // keeps, or a later evaluation's guarded read — hands back the
+            // Number that was stored: canonical, since every raw-f64 store
+            // canonicalizes and every boxed read of a Number is its double.
+            if let Expr::LocalGet(id) = object.as_ref() {
+                if let Some(fact) = ctx.native_facts.shape_lineage_local(*id) {
+                    return !ctx.boxed_vars.contains(id)
+                        && fact.numeric_fields.contains(property.as_str());
+                }
+            }
             let Some(fact) = ctx.ptr_shape_receiver_fact(object.as_ref()) else {
                 return false;
             };

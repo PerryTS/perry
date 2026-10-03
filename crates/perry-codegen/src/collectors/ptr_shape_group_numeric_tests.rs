@@ -282,7 +282,7 @@ fn promote_with_element_fields_and_numeric_params(
         classes,
         &facts,
     );
-    collect_shape_proven_ptr_locals_and_element_fields(
+    let proof = collect_shape_proven_ptr_locals_and_element_fields(
         stmts,
         &HashSet::new(),
         &HashMap::new(),
@@ -291,7 +291,8 @@ fn promote_with_element_fields_and_numeric_params(
         &HashSet::new(),
         &els,
         numeric_param_seeds,
-    )
+    );
+    (proof.exact, proof.element_fields)
 }
 
 fn read_direct_field(array_id: u32, index_id: u32, property: &str) -> Stmt {

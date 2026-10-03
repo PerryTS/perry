@@ -11,6 +11,14 @@
 //! forms (so `let c = new C()` is scalar-replaced exactly as a single
 //! evaluation's would be), the later-evaluation copy only the by-value forms.
 //!
+//! The same holds for the rest of a function body after `const c = new C()`
+//! ([`try_lower_versioned_tail`]): one test at the declaration, then the
+//! remaining statements lowered twice. In the first-evaluation copy `c` is an
+//! instance of the shared class, exactly what a single evaluation's
+//! `new C()` gives, so the `Ptr<Shape>` facts its template lineage proved
+//! (`collectors::ptr_shape::ShapeProof::lineage`) apply to it unchanged:
+//! bare field loads and direct method calls.
+//!
 //! A guard left in either copy (one this rewrite does not reach) still tests
 //! at run time, so the rewrite only removes tests; it never decides one.
 
@@ -37,6 +45,7 @@ pub(super) fn try_lower_versioned_loop(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Resu
     let join_l = ctx.block_label(join_idx);
     ctx.block().cond_br(&first, &first_l, &later_l);
 
+    let exact = first_evaluation_instances(ctx, std::slice::from_ref(stmt), binding);
     for (idx, is_first) in [(first_idx, true), (later_idx, false)] {
         ctx.current_block = idx;
         let mut copy = stmt.clone();
@@ -44,7 +53,11 @@ pub(super) fn try_lower_versioned_loop(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Resu
         // Scalar replacement registers a binding's field slots by id; the
         // other copy binds the same ids and must not find this copy's.
         let scalar_replaced = ctx.scalar_replaced.clone();
+        let overlays = is_first.then(|| install_exact(ctx, &exact));
         lower_stmt(ctx, &copy)?;
+        if let Some(saved) = overlays {
+            restore_exact(ctx, saved);
+        }
         ctx.scalar_replaced = scalar_replaced;
         if !ctx.block().is_terminated() {
             ctx.block().br(&join_l);
@@ -52,6 +65,317 @@ pub(super) fn try_lower_versioned_loop(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Resu
     }
     ctx.current_block = join_idx;
     Ok(true)
+}
+
+/// The most HIR nodes a versioned function-body tail may hold: it is lowered
+/// twice, so this bounds the code it adds.
+const TAIL_NODE_LIMIT: usize = 400;
+
+/// Lower `stmts[i..]`, the rest of a function body, versioned on the
+/// first-evaluation guard of `stmts[i]` when that is `let c = new C()`
+/// through a repeatable class declaration's binding. `index_base` is
+/// `stmts[i]`'s index in the body (the shadow-slot clear plan is keyed by
+/// it). `Ok(false)`: not applicable, and the caller lowers the statement as
+/// usual.
+pub(super) fn try_lower_versioned_tail(
+    ctx: &mut FnCtx<'_>,
+    tail: &[Stmt],
+    index_base: usize,
+    emit_shadow_clears: bool,
+) -> Result<bool> {
+    let Some((binding, template)) = tail_guard(ctx, tail) else {
+        return Ok(false);
+    };
+    let value = Expr::LocalGet(binding);
+    let first = crate::expr::class_first_evaluation::is_first_i1(ctx, &value, &template)?;
+    let first_idx = ctx.new_block("classtail.first");
+    let later_idx = ctx.new_block("classtail.later");
+    let join_idx = ctx.new_block("classtail.join");
+    let first_l = ctx.block_label(first_idx);
+    let later_l = ctx.block_label(later_idx);
+    let join_l = ctx.block_label(join_idx);
+    ctx.block().cond_br(&first, &first_l, &later_l);
+
+    // The body's shadow-slot clear plan, keyed from the tail's first
+    // statement for the duration of the two copies.
+    let clears = if emit_shadow_clears {
+        let shifted = ctx
+            .shadow_slot_clears_after_stmt
+            .iter()
+            .filter(|(k, _)| **k >= index_base)
+            .map(|(k, v)| (*k - index_base, v.clone()))
+            .collect();
+        Some(std::mem::replace(
+            &mut ctx.shadow_slot_clears_after_stmt,
+            shifted,
+        ))
+    } else {
+        None
+    };
+    let exact = first_evaluation_instances(ctx, tail, binding);
+    let mut result = Ok(());
+    for (idx, is_first) in [(first_idx, true), (later_idx, false)] {
+        ctx.current_block = idx;
+        let mut copy = tail.to_vec();
+        for s in copy.iter_mut() {
+            resolve_guards_in_stmt(s, binding, is_first);
+        }
+        let scalar_replaced = ctx.scalar_replaced.clone();
+        let overlays = is_first.then(|| install_exact(ctx, &exact));
+        result = super::lower_stmts_versioned_tail(ctx, &copy, emit_shadow_clears);
+        if let Some(saved) = overlays {
+            restore_exact(ctx, saved);
+        }
+        ctx.scalar_replaced = scalar_replaced;
+        if result.is_err() {
+            break;
+        }
+        if !ctx.block().is_terminated() {
+            ctx.block().br(&join_l);
+        }
+    }
+    if let Some(clears) = clears {
+        ctx.shadow_slot_clears_after_stmt = clears;
+    }
+    result?;
+    ctx.current_block = join_idx;
+    Ok(true)
+}
+
+/// The guard `tail[0]` binds through: `let c = <first evaluation of C> ?
+/// new C(..) : new C(..)` on a binding the tail cannot rebind, in a tail
+/// small enough to lower twice that defines no code, and that gains from the
+/// split: it uses `c`, or tests the binding outside a loop (a loop versions
+/// itself).
+fn tail_guard(ctx: &FnCtx<'_>, tail: &[Stmt]) -> Option<(u32, String)> {
+    let Some(Stmt::Let {
+        id: instance,
+        init:
+            Some(Expr::Conditional {
+                condition,
+                then_expr,
+                else_expr,
+            }),
+        ..
+    }) = tail.first()
+    else {
+        return None;
+    };
+    // A class with captures stamps its first evaluation's instance with that
+    // evaluation (`ClassEnvStamp`).
+    let then_new = match then_expr.as_ref() {
+        Expr::ClassEnvStamp { instance, .. } => instance.as_ref(),
+        e => e,
+    };
+    if !matches!(then_new, Expr::New { .. })
+        || !matches!(else_expr.as_ref(), Expr::NewDynamic { .. })
+    {
+        return None;
+    }
+    let Expr::ClassIsFirstEvaluation { value, template } = condition.as_ref() else {
+        return None;
+    };
+    let Expr::LocalGet(id) = value.as_ref() else {
+        return None;
+    };
+    if ctx.boxed_vars.contains(id)
+        || ctx.module_globals.contains_key(id)
+        || ctx.reassigned_locals.contains(id)
+        || crate::collectors::rebound_locals(tail).contains(id)
+    {
+        return None;
+    }
+    let mut nodes = 0usize;
+    let mut defines_code = false;
+    for s in tail {
+        perry_hir::walker::stmt_any_expr(s, &mut |e| {
+            visit_expr(e, &mut |e| {
+                nodes += 1;
+                if matches!(e, Expr::Closure { .. } | Expr::ClassExprFresh { .. }) {
+                    defines_code = true;
+                }
+            });
+            false
+        });
+        nodes += 1;
+    }
+    if defines_code || nodes > TAIL_NODE_LIMIT {
+        return None;
+    }
+    let rest = &tail[1..];
+    if !mentions_local(rest, *instance) && !guards_outside_loops(rest, *id) {
+        return None;
+    }
+    Some((*id, template.clone()))
+}
+
+fn mentions_local(stmts: &[Stmt], id: u32) -> bool {
+    stmts.iter().any(|s| {
+        perry_hir::walker::stmt_any_expr(s, &mut |e| {
+            let mut found = false;
+            visit_expr(e, &mut |e| {
+                found |= matches!(e, Expr::LocalGet(l) if *l == id)
+            });
+            found
+        })
+    })
+}
+
+/// Does `stmts` test `binding`'s first evaluation outside a loop?
+fn guards_outside_loops(stmts: &[Stmt], binding: u32) -> bool {
+    let guards = |e: &Expr| {
+        let mut found = false;
+        visit_expr(e, &mut |e| {
+            found |= matches!(e, Expr::ClassIsFirstEvaluation { value, .. }
+                if matches!(value.as_ref(), Expr::LocalGet(l) if *l == binding));
+        });
+        found
+    };
+    stmts.iter().any(|s| match s {
+        Stmt::For { .. } | Stmt::While { .. } | Stmt::DoWhile { .. } => false,
+        Stmt::Let { init: Some(e), .. }
+        | Stmt::Return(Some(e))
+        | Stmt::Expr(e)
+        | Stmt::Throw(e) => guards(e),
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            guards(condition)
+                || guards_outside_loops(then_branch, binding)
+                || else_branch
+                    .as_ref()
+                    .is_some_and(|b| guards_outside_loops(b, binding))
+        }
+        Stmt::Labeled { body, .. } => guards_outside_loops(std::slice::from_ref(body), binding),
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            guards_outside_loops(body, binding)
+                || catch
+                    .as_ref()
+                    .is_some_and(|c| guards_outside_loops(&c.body, binding))
+                || finally
+                    .as_ref()
+                    .is_some_and(|f| guards_outside_loops(f, binding))
+        }
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
+            guards(discriminant)
+                || cases.iter().any(|c| {
+                    c.test.as_ref().is_some_and(guards) || guards_outside_loops(&c.body, binding)
+                })
+        }
+        // Any other statement: a guard it holds still tests at run time.
+        _ => false,
+    })
+}
+
+/// The locals `stmts` binds to a guarded `new` through `binding` that the
+/// template-lineage proof covers: in the first-evaluation copy each holds an
+/// instance of the shared class, which is the proof's missing exactness.
+fn first_evaluation_instances(
+    ctx: &FnCtx<'_>,
+    stmts: &[Stmt],
+    binding: u32,
+) -> Vec<(u32, crate::collectors::PtrShapeLocal)> {
+    let mut out = Vec::new();
+    for s in stmts {
+        collect_guarded_lets(s, binding, &mut out);
+    }
+    out.into_iter()
+        .filter_map(|id| {
+            ctx.native_facts
+                .shape_lineage_local(id)
+                .map(|fact| (id, fact.clone()))
+        })
+        .collect()
+}
+
+fn collect_guarded_lets(stmt: &Stmt, binding: u32, out: &mut Vec<u32>) {
+    let guarded = |e: &Expr| {
+        matches!(e, Expr::Conditional { condition, then_expr, .. }
+            if matches!(then_expr.as_ref(), Expr::New { .. })
+                && matches!(condition.as_ref(), Expr::ClassIsFirstEvaluation { value, .. }
+                    if matches!(value.as_ref(), Expr::LocalGet(id) if *id == binding)))
+    };
+    let nested = |body: &[Stmt], out: &mut Vec<u32>| {
+        for s in body {
+            collect_guarded_lets(s, binding, out);
+        }
+    };
+    match stmt {
+        Stmt::Let {
+            id, init: Some(e), ..
+        } if guarded(e) => out.push(*id),
+        Stmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            nested(then_branch, out);
+            if let Some(b) = else_branch {
+                nested(b, out);
+            }
+        }
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => nested(body, out),
+        Stmt::For { init, body, .. } => {
+            if let Some(s) = init {
+                collect_guarded_lets(s, binding, out);
+            }
+            nested(body, out);
+        }
+        Stmt::Labeled { body, .. } => collect_guarded_lets(body, binding, out),
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            nested(body, out);
+            if let Some(c) = catch {
+                nested(&c.body, out);
+            }
+            if let Some(f) = finally {
+                nested(f, out);
+            }
+        }
+        Stmt::Switch { cases, .. } => {
+            for case in cases {
+                nested(&case.body, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Make each first-evaluation instance's lineage fact an exact `Ptr<Shape>`
+/// fact for the first-evaluation copy; returns what it displaced.
+fn install_exact(
+    ctx: &mut FnCtx<'_>,
+    exact: &[(u32, crate::collectors::PtrShapeLocal)],
+) -> Vec<(u32, Option<crate::collectors::PtrShapeLocal>)> {
+    exact
+        .iter()
+        .map(|(id, fact)| (*id, ctx.proven_shape_params.insert(*id, fact.clone())))
+        .collect()
+}
+
+fn restore_exact(ctx: &mut FnCtx<'_>, saved: Vec<(u32, Option<crate::collectors::PtrShapeLocal>)>) {
+    for (id, previous) in saved {
+        match previous {
+            Some(fact) => {
+                ctx.proven_shape_params.insert(id, fact);
+            }
+            None => {
+                ctx.proven_shape_params.remove(&id);
+            }
+        }
+    }
 }
 
 /// The first `ClassIsFirstEvaluation` guard on a local in `stmt` whose answer
