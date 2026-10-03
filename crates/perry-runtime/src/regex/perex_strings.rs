@@ -267,6 +267,27 @@ impl<'a, 's> SpanCopies<'a, 's> {
         })
     }
 
+    /// A final JS value may use Perry's inline string representation. Returning
+    /// a heap pointer forced even a one-byte split piece to allocate.
+    pub(super) fn copy_value(
+        &mut self,
+        start: usize,
+        end: usize,
+        budget: &mut Budget,
+    ) -> Result<f64, EngineError> {
+        let span = Span::new(start, end).ok_or(EngineError::InvalidSpan)?;
+        if let Some(subject) = self.ascii {
+            if let Some(value) = short_ascii_span(subject, span, budget)? {
+                // The scalar value owns its bytes before a poll may move the
+                // subject. Keep the same piece stride as heap copies.
+                self.stride.tick(span.len())?;
+                return Ok(value);
+            }
+        }
+        self.copy(start, end, budget)
+            .map(|text| crate::value::js_nanbox_string(text as i64))
+    }
+
     pub(super) fn copy(
         &mut self,
         start: usize,
@@ -313,6 +334,56 @@ impl<'a, 's> SpanCopies<'a, 's> {
             },
         )
     }
+}
+
+/// Copy a short ASCII span into an immediate value, with no allocation and
+/// no borrowed storage escaping the view. Non-ASCII captures keep the exact
+/// UTF-16 copying path, including lone surrogate boundaries.
+fn short_ascii_span(
+    subject: &BoundSubject<HeapSubject<'_>>,
+    span: Span,
+    budget: &mut Budget,
+) -> Result<Option<f64>, EngineError> {
+    if span.len() > crate::value::SHORT_STRING_MAX_LEN {
+        return Ok(None);
+    }
+    let value = subject
+        .with_view(|input| {
+            let Some(bytes) = input.ascii_bytes() else {
+                return Ok::<Option<f64>, EngineError>(None);
+            };
+            let bytes = bytes
+                .get(span.start()..span.end())
+                .ok_or(EngineError::InvalidSpan)?;
+            Ok(crate::value::JSValue::try_short_string(bytes)
+                .map(|value| f64::from_bits(value.bits())))
+        })
+        .map_err(EngineError::Subject)??;
+    if value.is_some() {
+        super::perex_runtime::charge(budget, span.len())?;
+    }
+    Ok(value)
+}
+
+/// Exec captures are final JS values too; small ASCII matches do not need a
+/// heap string. Retain the capture-copy poll and its cancellation semantics.
+pub(super) fn copy_span_value_near(
+    subject: &BoundSubject<HeapSubject<'_>>,
+    span: Span,
+    near: Option<Position>,
+    budget: &mut Budget,
+    max_output_bytes: usize,
+    quantum: usize,
+    poll: &mut impl FnMut() -> Result<(), EngineError>,
+) -> Result<f64, EngineError> {
+    if span.len() <= max_output_bytes && quantum != 0 {
+        if let Some(value) = short_ascii_span(subject, span, budget)? {
+            poll()?;
+            return Ok(value);
+        }
+    }
+    copy_span_near(subject, span, near, budget, max_output_bytes, quantum, poll)
+        .map(|text| crate::value::js_nanbox_string(text as i64))
 }
 
 /// Decode a packed program name directly into its final string. No native

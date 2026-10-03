@@ -154,10 +154,40 @@ probes**, and 21.8 MB on `12_large_live_set`, whose tenured-proportional cap
 term (`gc/tenuring.rs`, `max(influx x scale, tenured/2)`) already raises its
 Eden a little. That last row is worth noticing — it is the shipped path by which
 a large Eden is reached without any knob, and it tops out around 22 MB on the
-biggest workload the suite has. The guard that keeps this honest is `check`'s existing
-liveness rule (`minor_cycles > 0` and `copied_objects + promoted_objects > 0`):
-a future change that stops reaching the copying minor at this cadence cannot be
-pinned, it fails.
+biggest workload the suite had at that measurement. These are historical cadence
+measurements, not invariants of the current adaptive nursery policy.
+
+### Relocation coverage alongside the normal policy measurement
+
+Promotion can now retain whole nursery blocks in place. Consequently,
+`minor_cycles > 0` and `copied_objects + promoted_objects > 0` prove minor
+activity but do not prove a reference crossed physical relocation. Probe 13's
+normal configuration still measures that shipping policy, with all original
+counter bands and baseline rows intact.
+
+`check_large_eden_relocation.py` additionally compiles the unchanged probe and
+runs it twice with its declared 64 MB nursery setting plus
+`PERRY_GC_PROMOTE_IN_PLACE=0` and `PERRY_GC_DIAG=1`. Each run must exit normally,
+match the exact pinned Node oracle, and report positive `minor_cycles`,
+`copied_objects`, and
+`copied_bytes`. The JSON retains both complete traces and verdicts. The workflow
+runs this check even if the ordinary counter comparison fails, and uploads both
+artifacts. Its result never accepts a changed normal-policy counter.
+
+The 64 MB setting is a base for the adaptive ladder, not a promise of a fixed
+collection cadence. At #11645's child, the separate arm measured eight minors,
+335,661 copied objects / 19,017,288 copied bytes and 109,455,704 freed bytes;
+the original parent had three minors. This restores evacuation of the original
+survivor graph, fresh note edges and strings at the large nursery setting; it
+does not reproduce the parent's exact timing. Its timing and memory costs are
+not shipping-policy measurements.
+
+```bash
+PERRY_RUNTIME_DIR=target/release PERRY_NO_AUTO_OPTIMIZE=1 \
+  python3 benchmarks/gc_ratchet/check_large_eden_relocation.py \
+    --perry target/release/perry --node "$(command -v node)" \
+    --output .bench-results/gc-ratchet-relocation.json
+```
 
 ## Why wall time is excluded from the shared-CI gate
 
@@ -447,8 +477,10 @@ minors — was being reported as passing.
 **Why the second probe is a sum (#7558).** It used to be `copied_objects`
 alone. Both counters come from the same `[gc-copy-minor] ran` line: they are the
 evacuating minor's own accounting of *where* it put each survivor — survivor
-space, or straight to old-gen. Either one alone names a destination; only the
-sum answers "did the copying minor move anything". #7558 produced the
+space, or straight to old-gen. At #7558 both destinations required relocation, so the sum then
+answered "did the copying minor move anything". In-place promotion subsequently
+made the sum a minor-activity check only; the separate probe-13 check above
+requires actual copying. #7558 produced the
 distinction for real: with the conservative scan gone, the adaptive-tenuring
 seed (`gc/tenuring.rs`, which deliberately refuses input from a conservatively
 scanned cycle) started receiving data on `gc()`-driven workloads,

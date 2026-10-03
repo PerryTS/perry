@@ -827,6 +827,16 @@ fn lower_assignment_target(
                             let inner_obj = unwrap_ts(inner.obj.as_ref());
                             if let ast::Expr::Ident(cls_ident) = inner_obj {
                                 let cls_name = cls_ident.sym.to_string();
+                                // The class this binding names in THIS scope. A
+                                // block-scoped `class X` that shadows (or follows) a
+                                // same-named class registers under a scope-local
+                                // key (`class_renames`, #9466); keying the write by
+                                // the raw source name registered it on the OTHER
+                                // class, so `X.prototype.m = v` patched a class this
+                                // scope cannot even see. Every class-keyed check
+                                // below uses the resolved key; the local-binding
+                                // checks keep the source name they are about.
+                                let class_key = ctx.resolve_class_name(&cls_name);
                                 // Built-in Date has a real runtime prototype object;
                                 // Date.prototype writes must remain ordinary property sets.
                                 if cls_name == "Date"
@@ -858,8 +868,8 @@ fn lower_assignment_target(
                                     } else {
                                         None
                                     }
-                                } else if ctx.lookup_class(&cls_name).is_some()
-                                    && class_has_accessor(ctx, &cls_name, &method_name)
+                                } else if ctx.lookup_class(&class_key).is_some()
+                                    && class_has_accessor(ctx, &class_key, &method_name)
                                 {
                                     // `C.prototype.<accessor> = v` where `<accessor>`
                                     // is a `set`/`get` declared on the class is an
@@ -869,8 +879,8 @@ fn lower_assignment_target(
                                     // runtime prototype-ref setter dispatch). Test262
                                     // accessor-name-inst setters.
                                     None
-                                } else if ctx.lookup_class(&cls_name).is_some() {
-                                    Some(ProtoOwner::Class(cls_name))
+                                } else if ctx.lookup_class(&class_key).is_some() {
+                                    Some(ProtoOwner::Class(class_key))
                                 } else if let Some(local_id) = ctx.lookup_local(&cls_name) {
                                     if ctx.function_valued_locals.contains(&local_id) {
                                         // dayjs minified shape (inside IIFE):

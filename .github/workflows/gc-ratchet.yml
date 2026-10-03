@@ -168,7 +168,7 @@ jobs:
           # deliberately broad; it exists only to spare docs-only PRs a build.
           # If the listing is empty or the API failed, `set -e` already aborted
           # — the job does not silently fall through to "not relevant".
-          if grep -qE '^(crates/|benchmarks/gc_ratchet/|Cargo\.(toml|lock)$|\.github/workflows/gc-ratchet\.yml$|tests/test_gc_ratchet\.py$)' changed.txt; then
+          if grep -qE '^(crates/|benchmarks/gc_ratchet/|Cargo\.(toml|lock)$|\.github/workflows/gc-ratchet\.yml$|tests/(test_gc_ratchet|test_large_eden_gc_ratchet)\.py$)' changed.txt; then
             echo "run=true" >> "$GITHUB_OUTPUT"
             echo "Change touches collector-relevant paths; measuring."
           else
@@ -227,6 +227,7 @@ jobs:
             || { echo "::error::expected Node $expected, found $actual"; exit 1; }
 
       - name: Measure
+        id: measurement
         if: steps.relevance.outputs.run == 'true'
         env:
           PERRY_RUNTIME_DIR: ${{ github.workspace }}/target/release
@@ -261,6 +262,18 @@ jobs:
             --current .bench-results/gc-ratchet-current.json \
             --profile shared_ci
 
+      # Run even when the ordinary fingerprint is red, retaining both verdicts.
+      - name: Check large-Eden relocation separately
+        if: always() && steps.measurement.outcome == 'success'
+        env:
+          PERRY_RUNTIME_DIR: ${{ github.workspace }}/target/release
+          PERRY_NO_AUTO_OPTIMIZE: "1"
+        run: |
+          python3 benchmarks/gc_ratchet/check_large_eden_relocation.py \
+            --perry target/release/perry \
+            --node "$(command -v node)" \
+            --output .bench-results/gc-ratchet-relocation.json
+
       - name: Upload measurement
         if: always() && steps.relevance.outputs.run == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -268,6 +281,7 @@ jobs:
           name: gc-ratchet-${{ github.sha }}
           path: |
             .bench-results/gc-ratchet-current.json
+            .bench-results/gc-ratchet-relocation.json
             benchmarks/gc_ratchet/baseline/gc-ratchet-v1.json
           retention-days: 90
 

@@ -147,6 +147,7 @@ pub(super) fn compile_module_entry(
         // resolves the symbols at link time.
         for prefix in non_entry_module_prefixes {
             llmod.declare_function(&format!("{}__init", prefix), VOID, &[]);
+            llmod.declare_function(&format!("__perry_prepare_literals_{}", prefix), VOID, &[]);
         }
         // Issue #753: emit a no-op `<entry_prefix>__init` stub so the
         // dispatch site in some other module that does `await
@@ -547,6 +548,19 @@ pub(super) fn compile_module_entry(
             if crate::collectors::is_cjs_wrapped_module(hir) {
                 blk.call_void("js_bootstrap_cjs_main_module_placeholder", &[]);
             }
+            // The topo sort intentionally drops cyclic evaluation back-edges.
+            // A first eager module can therefore call a later module's hoisted
+            // factory without ever reaching that module's __init wrapper. All
+            // eager literal pools must be ready before ANY eager body runs.
+            // Deferred pools remain lazy and prepare in their own wrapper.
+            for prefix in non_entry_module_prefixes {
+                if cross_module.deferred_module_prefixes.contains(prefix) {
+                    continue;
+                }
+                let prepare_addr =
+                    format!("ptrtoint (ptr @__perry_prepare_literals_{} to i64)", prefix);
+                blk.call_void("js_run_module_init_catching", &[(I64, &prepare_addr)]);
+            }
             for (index, prefix) in non_entry_module_prefixes.iter().enumerate() {
                 if cross_module.deferred_module_prefixes.contains(prefix) {
                     continue;
@@ -780,7 +794,6 @@ pub(super) fn compile_module_entry(
             array_length_snapshots: HashMap::new(),
             string_window_array_facts: Vec::new(),
             suppressed_cleared_shadow_slots: std::collections::HashSet::new(),
-            class_field_loop_facts: Vec::new(),
             region_loops: Vec::new(),
             region_loop_facts: Vec::new(),
             element_shape_loop_facts: Vec::new(),
@@ -1354,6 +1367,14 @@ pub(super) fn compile_module_entry(
             {
                 let blk = wrap_fn.block_mut(2).unwrap();
                 blk.store(I8, "1", &format!("@{}", done_global));
+                // Cyclic dependencies may call our hoisted functions before
+                // our body. Prepare literal infrastructure without evaluating
+                // declared classes or any user statement ahead of dependencies.
+                let prepare_addr = format!(
+                    "ptrtoint (ptr @__perry_prepare_literals_{} to i64)",
+                    module_prefix
+                );
+                blk.call_void("js_run_module_init_catching", &[(I64, &prepare_addr)]);
                 // Trigger init of static-dep + re-export source modules
                 // before the body runs. Each `<dep>__init` is itself
                 // wrapped by the same guard pattern, so this short-
@@ -1646,7 +1667,6 @@ pub(super) fn compile_module_entry(
             array_length_snapshots: HashMap::new(),
             string_window_array_facts: Vec::new(),
             suppressed_cleared_shadow_slots: std::collections::HashSet::new(),
-            class_field_loop_facts: Vec::new(),
             region_loops: Vec::new(),
             region_loop_facts: Vec::new(),
             element_shape_loop_facts: Vec::new(),

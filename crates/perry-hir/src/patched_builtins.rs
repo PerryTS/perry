@@ -176,6 +176,26 @@ fn str_arg(e: &ast::Expr) -> Option<String> {
     }
 }
 
+/// `[Symbol.iterator]` etc. as a key that can never equal a method name, so a
+/// patched well-known symbol is not read as "any member" (which would also
+/// mark `push` patched and bypass spread's iterator protocol, #11772).
+fn well_known_symbol_key(prop: &ast::MemberProp) -> Option<String> {
+    let ast::MemberProp::Computed(c) = prop else {
+        return None;
+    };
+    let ast::Expr::Member(m) = peel(&c.expr) else {
+        return None;
+    };
+    match peel(&m.obj) {
+        ast::Expr::Ident(id) if id.sym.as_ref() == "Symbol" => {}
+        _ => return None,
+    }
+    match &m.prop {
+        ast::MemberProp::Ident(p) => Some(format!("@@{}", p.sym)),
+        _ => None,
+    }
+}
+
 struct Scanner<'a> {
     out: &'a mut PatchedBuiltins,
     /// Identifiers bound to a builtin prototype anywhere in the module, by
@@ -240,7 +260,8 @@ impl Scanner<'_> {
     }
 
     fn record_member_target(&mut self, m: &ast::MemberExpr) {
-        self.record_write(&m.obj, static_member_name(&m.prop));
+        let key = static_member_name(&m.prop).or_else(|| well_known_symbol_key(&m.prop));
+        self.record_write(&m.obj, key);
     }
 
     fn record_pat(&mut self, pat: &ast::Pat) {

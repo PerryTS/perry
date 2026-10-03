@@ -66,7 +66,7 @@ pub(crate) unsafe fn gc_field_slot_range(
         feature = "gc-instruments"
     ))]
     if super::field_rep_store::field_rep_verify_enabled() {
-        super::field_rep_store::assert_f64_lanes_hold_numbers(obj, record, field_count);
+        super::field_rep_store::assert_field_rep_lanes(obj, record, field_count);
     }
     let fields = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
     Some(crate::gc::HeapSlotRange::new(fields, field_count))

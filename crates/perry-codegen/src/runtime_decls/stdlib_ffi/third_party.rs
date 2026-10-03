@@ -48,6 +48,17 @@ pub(crate) fn declare_third_party(module: &mut LlModule) {
     module.declare_function("js_thread_parallel_map", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_thread_parallel_filter", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_thread_spawn", DOUBLE, &[DOUBLE]);
+    module.declare_function(
+        "js_thread_parallel_map_with_literals",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, I64],
+    );
+    module.declare_function(
+        "js_thread_parallel_filter_with_literals",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, I64],
+    );
+    module.declare_function("js_thread_spawn_with_literals", DOUBLE, &[DOUBLE, I64]);
     // Immutable module-global leaves (codegen/global_transfer.rs): publication
     // cell, current-agent cache and canonical slot addresses.
     module.declare_function("js_thread_global_publish", VOID, &[I64, I64, I64]);
