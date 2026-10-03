@@ -6,6 +6,26 @@
 use perry_hir::{Expr, Stmt};
 use std::collections::HashSet;
 
+/// The template cell of per-evaluation template `cid`: the template's own
+/// record, an internal `[N x i64]` the module's string-pool initializer
+/// defines and registers (`js_register_class_template_cell`) and the
+/// evaluation site passes to `js_class_evaluation_object` and
+/// `js_class_object_set_ctor_caps`. Codegen writes only its length in words
+/// (word 0); the runtime owns the rest of its layout
+/// (`class_object_template::TemplateCell`).
+pub(crate) fn template_cell_global(cid: u32) -> String {
+    format!("perry_ctpl.{cid}")
+}
+
+/// How many words template cell of `class` gets: the runtime's fixed words
+/// plus two per slot of the class object's and the prototype's final shapes
+/// (`length`, `name`, one per static method and the pinned parent;
+/// `constructor` and one per method). The runtime checks every record against
+/// the length, so a short cell only declines to memoize.
+pub(crate) fn template_cell_words(class: Option<&perry_hir::Class>) -> usize {
+    32 + 2 * (4 + class.map_or(16, |c| c.static_methods.len() + c.methods.len()))
+}
+
 /// Every `ClassExprFresh` template named anywhere in `hir`: module init,
 /// function bodies, class members and nested closures.
 pub(crate) fn fresh_class_templates(hir: &perry_hir::Module) -> HashSet<String> {

@@ -547,18 +547,6 @@
       "name": "UNTRANSFERABLE_OBJECTS",
       "verdict": "open_leak",
       "why": "NaN-box bits of each object passed to markAsUntransferable: one per marked object, never unmarked"
-    },
-    {
-      "file": "crates/perry-runtime/src/object/field_get_set/class_object_template.rs",
-      "name": "TEMPLATES",
-      "verdict": "bounded_by_program",
-      "why": "Per agent, keyed by per-evaluation class template id: the final class-object ShapeId and slot fills, recorded once per template (the records are external carriers)"
-    },
-    {
-      "file": "crates/perry-runtime/src/object/field_get_set/class_object_template.rs",
-      "name": "PROTOTYPES",
-      "verdict": "bounded_by_program",
-      "why": "Per agent, keyed by per-evaluation class template id: the final prototype ShapeId and slot fills, recorded once per template (the record is an external carrier)"
     }
   ]
 }

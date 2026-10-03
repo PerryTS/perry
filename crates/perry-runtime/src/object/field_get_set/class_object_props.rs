@@ -140,8 +140,9 @@ unsafe fn class_evaluation_prototype_value(obj: *const ObjectHeader) -> f64 {
             let proto_value = proto
                 .with_mut_ptr::<ObjectHeader, _>(|p| crate::value::js_nanbox_pointer(p as i64));
             class.with_mut_ptr::<ObjectHeader, _>(|class| {
-                super::class_object_template::class_object_add_internal(
+                super::class_object_template::class_object_add_internal_for(
                     class,
+                    class_id,
                     super::class_object_template::InternalKey::EvaluationPrototype,
                     proto_value,
                 )
@@ -239,8 +240,9 @@ unsafe fn class_evaluation_prototype_value(obj: *const ObjectHeader) -> f64 {
     let proto_value = proto
         .with_mut_ptr::<ObjectHeader, _>(|proto| crate::value::js_nanbox_pointer(proto as i64));
     class.with_mut_ptr::<ObjectHeader, _>(|class| {
-        super::class_object_template::class_object_add_internal(
+        super::class_object_template::class_object_add_internal_for(
             class,
+            class_id,
             super::class_object_template::InternalKey::EvaluationPrototype,
             proto_value,
         )

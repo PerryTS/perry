@@ -435,6 +435,7 @@ pub(crate) fn declare_core(module: &mut LlModule) {
         VOID,
         &[I64, I64, I64, I64],
     );
+    module.declare_function("js_register_class_template_cell", VOID, &[I64, I64]);
     module.declare_function("js_static_method_entry_leave", VOID, &[]);
     module.declare_function(
         "js_class_static_call_guard",

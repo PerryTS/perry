@@ -23,11 +23,13 @@
 //! the evaluation, linked to the evaluation's parent prototype.
 //!
 //! What the template remembers is ShapeIds and what fills each slot; it holds
-//! nothing about any object. Its records are external carriers for the
-//! agent's life, so no id it names can come to name other facts.
+//! nothing about any object. It remembers them in its own image record, the
+//! template cell ([`TemplateCell`]) codegen emits once per template: no table
+//! is keyed by the template. The shape records it names are external carriers
+//! for the agent's life, so no id it names can come to name other facts.
 
 use super::*;
-use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// How one slot of a template's final class-object shape is filled.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -45,21 +47,205 @@ enum Fill {
     Parent,
 }
 
-struct ClassObjectTemplate {
-    /// The width the compiled evaluation allocates its class object with.
-    field_count: u32,
-    static_field_mask: u32,
-    has_parent: bool,
-    final_shape: u32,
-    fills: Rc<[Fill]>,
-    /// Recorded additions of an internal own key (`InternalKey`) to a class
-    /// object of this template: from shape, key, to shape, slot. Every id is
-    /// a retained record.
-    edges: Vec<(u32, InternalKey, u32, u32)>,
-}
-
 /// The most internal-key transitions one template records.
 const MAX_TEMPLATE_EDGES: usize = 8;
+
+/// A per-evaluation class template's own record: an image static codegen
+/// emits once per template (`@perry_ctpl.<cid>`) and hands to the template's
+/// evaluation site, and whose address the template's vtable entry carries
+/// ([`js_register_class_template_cell`]) for the runtime paths that start from
+/// a class object. Codegen gives it its length in words (word 0) and nothing
+/// else; this module owns the rest of the layout.
+///
+/// It memoizes what the template's first evaluation reached: the final
+/// ShapeIds of its class object and prototype, how each of their slots is
+/// filled, and the internal-key transitions between them. ShapeIds name one
+/// agent's own shape records, so the cell answers only the thread that
+/// recorded it (its owner token). Any other thread takes the ordinary path,
+/// which is correct and only slower.
+#[derive(Clone, Copy)]
+pub(crate) struct TemplateCell(*const AtomicU64);
+
+/// The cell's length in words, written by codegen.
+const W_LEN: usize = 0;
+/// The token of the thread that owns the cell's ShapeIds; 0 while unclaimed.
+const W_OWNER: usize = 1;
+/// The class object's final ShapeId; 0 when not recorded.
+const W_CLASS_SHAPE: usize = 2;
+/// `field_count | static_field_mask << 32 | has_parent << 40 | fills << 48`.
+const W_CLASS_FACTS: usize = 3;
+/// Whether the class object's shape was settled (recorded or refused).
+const W_CLASS_SETTLED: usize = 4;
+/// The prototype object's final ShapeId; 0 when not recorded.
+const W_PROTO_SHAPE: usize = 5;
+/// `field_count | fills << 32`.
+const W_PROTO_FACTS: usize = 6;
+/// The [[Prototype]] identity the prototype's final shape names.
+const W_PROTO_ID: usize = 7;
+/// `MAX_TEMPLATE_EDGES` pairs: `from | to << 32`, `slot | key << 32` (key is
+/// `InternalKey as u64 + 1`, 0 for an empty pair).
+const W_EDGES: usize = 8;
+/// The class fills (two words each: tag, value), then the prototype fills.
+const W_FILLS: usize = W_EDGES + 2 * MAX_TEMPLATE_EDGES;
+
+/// Fill tags.
+const TAG_BITS: u64 = 1;
+const TAG_NAME: u64 = 2;
+const TAG_METHOD: u64 = 3;
+const TAG_PARENT: u64 = 4;
+const TAG_CONSTRUCTOR: u64 = 5;
+
+#[thread_local]
+static THREAD_TOKEN: std::cell::Cell<u64> = std::cell::Cell::new(0);
+static NEXT_THREAD_TOKEN: AtomicU64 = AtomicU64::new(1);
+
+/// This thread's token: unique for the process's life, never 0.
+#[inline]
+fn thread_token() -> u64 {
+    let token = THREAD_TOKEN.get();
+    if token != 0 {
+        return token;
+    }
+    let token = NEXT_THREAD_TOKEN.fetch_add(1, Ordering::Relaxed);
+    THREAD_TOKEN.set(token);
+    token
+}
+
+impl TemplateCell {
+    /// The cell at `ptr`, when it is one: non-null, with a length that holds
+    /// its fixed words.
+    pub(crate) unsafe fn from_ptr(ptr: *const u64) -> Option<Self> {
+        if ptr.is_null() || (ptr as usize) % std::mem::align_of::<AtomicU64>() != 0 {
+            return None;
+        }
+        let cell = TemplateCell(ptr as *const AtomicU64);
+        (cell.len() >= W_FILLS).then_some(cell)
+    }
+
+    #[inline]
+    unsafe fn word(self, i: usize) -> &'static AtomicU64 {
+        &*self.0.add(i)
+    }
+
+    #[inline]
+    unsafe fn len(self) -> usize {
+        self.word(W_LEN).load(Ordering::Relaxed) as usize
+    }
+
+    #[inline]
+    unsafe fn get(self, i: usize) -> u64 {
+        self.word(i).load(Ordering::Relaxed)
+    }
+
+    #[inline]
+    unsafe fn set(self, i: usize, v: u64) {
+        self.word(i).store(v, Ordering::Relaxed)
+    }
+
+    /// Does this thread own the cell's ShapeIds? Every word but the owner is
+    /// read and written only by its owner thread.
+    #[inline]
+    unsafe fn owned(self) -> bool {
+        self.word(W_OWNER).load(Ordering::Acquire) == thread_token()
+    }
+
+    /// Claim the cell for this thread, or report whether this thread already
+    /// owns it.
+    unsafe fn claim(self) -> bool {
+        let token = thread_token();
+        match self
+            .word(W_OWNER)
+            .compare_exchange(0, token, Ordering::AcqRel, Ordering::Acquire)
+        {
+            Ok(_) => true,
+            Err(owner) => owner == token,
+        }
+    }
+
+    /// The class fill at `i` (of `n` recorded).
+    #[inline]
+    unsafe fn class_fill(self, i: usize) -> Fill {
+        let (tag, value) = (self.get(W_FILLS + 2 * i), self.get(W_FILLS + 2 * i + 1));
+        match tag {
+            TAG_NAME => Fill::Name,
+            TAG_METHOD => Fill::Method(value as usize),
+            TAG_PARENT => Fill::Parent,
+            _ => Fill::Bits(value),
+        }
+    }
+
+    /// Where the prototype fills start: after the class fills.
+    #[inline]
+    unsafe fn proto_fills_base(self) -> usize {
+        W_FILLS + 2 * ((self.get(W_CLASS_FACTS) >> 48) as usize)
+    }
+
+    #[inline]
+    unsafe fn proto_fill(self, i: usize) -> ProtoFill {
+        let base = self.proto_fills_base();
+        match self.get(base + 2 * i) {
+            TAG_CONSTRUCTOR => ProtoFill::Constructor,
+            _ => ProtoFill::Method(self.get(base + 2 * i + 1) as usize),
+        }
+    }
+
+    /// The recorded class-object template: final shape, fill count and
+    /// whether it has a parent, when this thread owns one recorded for
+    /// `field_count` and `static_field_mask`.
+    #[inline]
+    unsafe fn class_template(
+        self,
+        field_count: u32,
+        static_field_mask: u32,
+    ) -> Option<(u32, usize, bool)> {
+        if !self.owned() {
+            return None;
+        }
+        let shape = self.get(W_CLASS_SHAPE) as u32;
+        let facts = self.get(W_CLASS_FACTS);
+        (shape != 0
+            && facts as u32 == field_count
+            && (facts >> 32) as u8 as u32 == static_field_mask)
+            .then_some((shape, (facts >> 48) as usize, facts & (1 << 40) != 0))
+    }
+
+    /// The recorded prototype template: field count, final shape, fill count
+    /// and [[Prototype]] identity, when this thread owns one.
+    #[inline]
+    unsafe fn proto_template(self) -> Option<(u32, u32, usize, u64)> {
+        if !self.owned() {
+            return None;
+        }
+        let shape = self.get(W_PROTO_SHAPE) as u32;
+        let facts = self.get(W_PROTO_FACTS);
+        (shape != 0).then(|| {
+            (
+                facts as u32,
+                shape,
+                (facts >> 32) as usize,
+                self.get(W_PROTO_ID),
+            )
+        })
+    }
+}
+
+/// Register `cell`, template `class_id`'s template cell, on its vtable entry,
+/// so a path that starts from one of its class objects finds it. Codegen emits
+/// one call per per-evaluation template at module init.
+#[no_mangle]
+pub extern "C" fn js_register_class_template_cell(class_id: i64, cell: i64) {
+    if class_id <= 0 || class_id > u32::MAX as i64 || cell == 0 {
+        return;
+    }
+    super::super::class_registry::class_set_template_cell(class_id as u32, cell as usize);
+}
+
+/// Template `class_id`'s template cell, if codegen registered one.
+#[inline]
+fn template_cell_of(class_id: u32) -> Option<TemplateCell> {
+    let ptr = super::super::class_registry::class_template_cell(class_id)?;
+    unsafe { TemplateCell::from_ptr(ptr as *const u64) }
+}
 
 /// An own key the runtime adds to a per-evaluation class object after its
 /// members: the captured environment (`__perry_ctor_caps`) and the
@@ -102,13 +288,6 @@ fn note_template_hit(prototype: bool) {
     });
 }
 
-thread_local! {
-    /// This agent's template shapes, by template class id. ShapeIds name an
-    /// agent's own records, so the memo is the agent's too.
-    static TEMPLATES: std::cell::RefCell<crate::fast_hash::PtrHashMap<u32, ClassObjectTemplate>> =
-        std::cell::RefCell::new(crate::fast_hash::new_ptr_hash_map());
-}
-
 /// The own-property key of the evaluation's captured environment.
 pub(crate) const CTOR_CAPS_KEY: &[u8] = b"__perry_ctor_caps";
 
@@ -148,38 +327,38 @@ pub(crate) unsafe fn static_method_value_runs(
 /// its own `length`, `name` and static methods and its pinned parent.
 /// `static_field_mask` (bit 0 `length`, bit 1 `name`) names the static fields
 /// that take over an intrinsic key.
+/// `cell` is the template's cell (`@perry_ctpl.<cid>`); null takes the
+/// ordinary path.
 #[no_mangle]
 pub extern "C" fn js_class_evaluation_object(
     template_class_id: u32,
     field_count: u32,
     static_field_mask: u32,
+    cell: *const u64,
 ) -> i64 {
-    let template = TEMPLATES.with(|t| {
-        t.borrow()
-            .get(&template_class_id)
-            .filter(|t| t.field_count == field_count && t.static_field_mask == static_field_mask)
-            .map(|t| (t.final_shape, t.fills.clone(), t.has_parent))
-    });
+    let cell = unsafe { TemplateCell::from_ptr(cell) };
+    let template = cell.and_then(|c| unsafe { c.class_template(field_count, static_field_mask) });
     // The template stash, deliberately: this records the heritage the
     // `RegisterClassParentDynamic` call immediately preceding the evaluation
     // evaluated for THIS evaluation. `js_get_dynamic_parent_value`'s
     // active-replay override would answer with an enclosing constructor
     // replay's parent when a factory is re-entered from inside a constructor
     // body. A template recorded without heritage has none to read.
-    let has_parent = template.as_ref().is_none_or(|t| t.2);
+    let has_parent = template.is_none_or(|t| t.2);
     let parent = if has_parent {
         crate::object::parent_static::template_dynamic_parent_value(template_class_id)
     } else {
         f64::from_bits(crate::value::TAG_UNDEFINED)
     };
-    if let Some((final_shape, fills, has_parent)) = template {
+    if let (Some(cell), Some((final_shape, fills, has_parent))) = (cell, template) {
         if has_parent == (parent.to_bits() != crate::value::TAG_UNDEFINED) {
             return unsafe {
                 class_object_in_template_shape(
                     template_class_id,
                     field_count,
                     final_shape,
-                    &fills,
+                    cell,
+                    fills,
                     parent,
                 )
             } as i64;
@@ -194,13 +373,16 @@ pub extern "C" fn js_class_evaluation_object(
             static_field_mask,
             parent,
             &|obj, parent| {
-                record_class_object_template(
-                    obj,
-                    template_class_id,
-                    field_count,
-                    static_field_mask,
-                    parent,
-                )
+                if let Some(cell) = cell {
+                    record_class_object_template(
+                        cell,
+                        obj,
+                        template_class_id,
+                        field_count,
+                        static_field_mask,
+                        parent,
+                    )
+                }
             },
         ) as i64
     }
@@ -212,7 +394,8 @@ unsafe fn class_object_in_template_shape(
     class_id: u32,
     field_count: u32,
     final_shape: u32,
-    fills: &[Fill],
+    cell: TemplateCell,
+    fills: usize,
     parent: f64,
 ) -> *mut ObjectHeader {
     #[cfg(test)]
@@ -231,8 +414,8 @@ unsafe fn class_object_in_template_shape(
     crate::object::field_get_set::note_private_template_evaluated(class_id);
     crate::object::class_registry::class_object_value_root_store(class_id, obj);
     let class = scope.root_raw_mut_ptr(obj);
-    for (slot, fill) in fills.iter().enumerate() {
-        let bits = match *fill {
+    for slot in 0..fills {
+        let bits = match cell.class_fill(slot) {
             Fill::Bits(bits) => bits,
             Fill::Name => super::super::class_value::intrinsic_own_data_value(class_id, "name")
                 .map_or(crate::value::TAG_UNDEFINED, f64::to_bits),
@@ -262,15 +445,19 @@ unsafe fn class_object_in_template_shape(
 /// as template `class_id`'s, if its keys are exactly the template's, each in
 /// its inline slot, and its lanes are all `Any`.
 unsafe fn record_class_object_template(
+    cell: TemplateCell,
     obj: *mut ObjectHeader,
     class_id: u32,
     field_count: u32,
     static_field_mask: u32,
     parent: f64,
 ) {
-    if TEMPLATES.with(|t| t.borrow().contains_key(&class_id)) {
+    // The first evaluation on the thread that claims the cell settles it:
+    // recorded, or refused for good.
+    if !cell.claim() || cell.get(W_CLASS_SETTLED) != 0 {
         return;
     }
+    cell.set(W_CLASS_SETTLED, 1);
     let Some(d) = crate::object::shapes::object_shape_descriptor(obj) else {
         return;
     };
@@ -281,6 +468,9 @@ unsafe fn record_class_object_template(
         || d.rep != crate::object::field_rep::REP_ANY
         || d.live_inline_slot_count < d.logical_key_count
         || count > (field_count as usize).max(crate::object::INLINE_SLOT_FLOOR)
+        || count >= 1 << 16
+        || W_FILLS + 2 * count > cell.len()
+        || static_field_mask > 0xff
         || crate::object::shapes::shape_object_kind_by_id(final_shape)
             != Some(crate::object::shapes::ShapeObjectKind::Class)
     {
@@ -336,19 +526,24 @@ unsafe fn record_class_object_template(
     // The record stays this agent's for its life, so the template never
     // stamps an id that names other facts.
     crate::object::shapes::note_external_shape_carrier(Some(d));
-    TEMPLATES.with(|t| {
-        t.borrow_mut().insert(
-            class_id,
-            ClassObjectTemplate {
-                field_count,
-                static_field_mask,
-                has_parent,
-                final_shape,
-                fills: fills.into(),
-                edges: Vec::new(),
-            },
-        )
-    });
+    for (i, fill) in fills.iter().enumerate() {
+        let (tag, value) = match *fill {
+            Fill::Bits(bits) => (TAG_BITS, bits),
+            Fill::Name => (TAG_NAME, 0),
+            Fill::Method(code) => (TAG_METHOD, code as u64),
+            Fill::Parent => (TAG_PARENT, 0),
+        };
+        cell.set(W_FILLS + 2 * i, tag);
+        cell.set(W_FILLS + 2 * i + 1, value);
+    }
+    cell.set(
+        W_CLASS_FACTS,
+        field_count as u64
+            | (static_field_mask as u64) << 32
+            | (has_parent as u64) << 40
+            | (count as u64) << 48,
+    );
+    cell.set(W_CLASS_SHAPE, final_shape as u64);
 }
 
 /// Add internal own key `key` with `value` to class object `obj`. From a shape
@@ -360,20 +555,26 @@ pub(crate) unsafe fn class_object_add_internal(
     obj: *mut ObjectHeader,
     key: InternalKey,
     value: f64,
+    cell: Option<TemplateCell>,
 ) {
-    let class_id = (*obj).class_id;
     let from = crate::object::shapes::object_shape_id(obj);
-    let edge = TEMPLATES.with(|t| {
-        t.borrow().get(&class_id).map(|t| {
-            (
-                t.edges
-                    .iter()
-                    .find(|e| e.0 == from && e.1 == key)
-                    .map(|e| (e.2, e.3)),
-                t.edges.len() < MAX_TEMPLATE_EDGES,
-            )
-        })
-    });
+    let key_word = key as u64 + 1;
+    // The recorded transition from `from` by `key`, and the first free pair
+    // when there is none, of a cell this thread owns.
+    let edge = cell
+        .filter(|c| c.owned() && c.get(W_CLASS_SHAPE) != 0)
+        .map(|c| {
+            let mut free = None;
+            for i in 0..MAX_TEMPLATE_EDGES {
+                let (ids, at) = (c.get(W_EDGES + 2 * i), c.get(W_EDGES + 2 * i + 1));
+                if at >> 32 == 0 {
+                    free.get_or_insert(i);
+                } else if ids as u32 == from && at >> 32 == key_word {
+                    return (Some(((ids >> 32) as u32, at as u32)), free);
+                }
+            }
+            (None, free)
+        });
     if let Some((Some((to, slot)), _)) = edge {
         // `obj` carries the recorded predecessor, so it is exactly as wide as
         // the object the transition was recorded on: `slot` is inline.
@@ -389,7 +590,10 @@ pub(crate) unsafe fn class_object_add_internal(
     class.with_mut_ptr::<ObjectHeader, _>(|obj| {
         crate::object::js_object_set_field_by_name(obj, key_str, value.get_nanbox_f64())
     });
-    if edge != Some((None, true)) || from == 0 {
+    let (Some(cell), Some((None, Some(free)))) = (cell, edge) else {
+        return;
+    };
+    if from == 0 {
         return;
     }
     class.with_mut_ptr::<ObjectHeader, _>(|obj| {
@@ -415,22 +619,38 @@ pub(crate) unsafe fn class_object_add_internal(
             crate::object::shapes::shape_descriptor_by_id(from),
         );
         crate::object::shapes::note_external_shape_carrier(Some(d));
-        TEMPLATES.with(|t| {
-            if let Some(t) = t.borrow_mut().get_mut(&class_id) {
-                t.edges.push((from, key, to, slot));
-            }
-        });
+        cell.set(W_EDGES + 2 * free, from as u64 | (to as u64) << 32);
+        cell.set(W_EDGES + 2 * free + 1, slot as u64 | key_word << 32);
     });
 }
 
 /// `__perry_ctor_caps` of a per-evaluation class object (`ClassExprFresh`):
-/// the captured environment its constructor replays with.
+/// the captured environment its constructor replays with. `cell` is the
+/// template's cell.
 #[no_mangle]
-pub extern "C" fn js_class_object_set_ctor_caps(obj: i64, caps: f64) {
+pub extern "C" fn js_class_object_set_ctor_caps(obj: i64, caps: f64, cell: *const u64) {
     if obj == 0 {
         return;
     }
-    unsafe { class_object_add_internal(obj as *mut ObjectHeader, InternalKey::CtorCaps, caps) }
+    unsafe {
+        class_object_add_internal(
+            obj as *mut ObjectHeader,
+            InternalKey::CtorCaps,
+            caps,
+            TemplateCell::from_ptr(cell),
+        )
+    }
+}
+
+/// [`class_object_add_internal`] for a class object of template `class_id`,
+/// with the template's registered cell.
+pub(crate) unsafe fn class_object_add_internal_for(
+    obj: *mut ObjectHeader,
+    class_id: u32,
+    key: InternalKey,
+    value: f64,
+) {
+    class_object_add_internal(obj, key, value, template_cell_of(class_id))
 }
 
 /// How one slot of a template's final prototype shape is filled.
@@ -441,21 +661,6 @@ enum ProtoFill {
     /// A new function object running this method's closure-convention entry
     /// (its `JsFunctionInfo`), at home in the class object.
     Method(usize),
-}
-
-struct PrototypeTemplate {
-    /// The width the prototype object is allocated with.
-    field_count: u32,
-    /// The [[Prototype]] identity the final shape names.
-    proto_id: u64,
-    final_shape: u32,
-    fills: Rc<[ProtoFill]>,
-}
-
-thread_local! {
-    /// This agent's template prototype shapes, by template class id.
-    static PROTOTYPES: std::cell::RefCell<crate::fast_hash::PtrHashMap<u32, PrototypeTemplate>> =
-        std::cell::RefCell::new(crate::fast_hash::new_ptr_hash_map());
 }
 
 /// The function object one evaluation's prototype holds for method `name` of
@@ -483,12 +688,11 @@ pub(crate) unsafe fn prototype_from_template(
     class_id: u32,
     parent_proto: u64,
 ) -> Option<*mut ObjectHeader> {
-    let (field_count, final_shape, fills) = PROTOTYPES.with(|t| {
-        let t = t.borrow();
-        let t = t.get(&class_id)?;
-        (crate::object::shapes::stable_linked_proto_id(class_id, parent_proto) == Some(t.proto_id))
-            .then(|| (t.field_count, t.final_shape, t.fills.clone()))
-    })?;
+    let cell = template_cell_of(class_id)?;
+    let (field_count, final_shape, fills, proto_id) = cell.proto_template()?;
+    if crate::object::shapes::stable_linked_proto_id(class_id, parent_proto) != Some(proto_id) {
+        return None;
+    }
     #[cfg(test)]
     note_template_hit(true);
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -522,8 +726,8 @@ pub(crate) unsafe fn prototype_from_template(
         crate::object::shapes::stamp_object_shape_id_with_carrier_note(proto, final_shape);
         crate::object::descriptor_state::note_attrs_born_with_keys(proto as usize);
     });
-    for (slot, fill) in fills.iter().enumerate() {
-        let bits = match *fill {
+    for slot in 0..fills {
+        let bits = match cell.proto_fill(slot) {
             ProtoFill::Constructor => class
                 .with_const_ptr::<ObjectHeader, _>(|c| crate::value::js_nanbox_pointer(c as i64)),
             ProtoFill::Method(code) => {
@@ -553,7 +757,12 @@ pub(crate) unsafe fn record_prototype_template(
     field_count: u32,
     parent_proto: u64,
 ) {
-    if PROTOTYPES.with(|t| t.borrow().contains_key(&class_id)) {
+    let Some(cell) = template_cell_of(class_id) else {
+        return;
+    };
+    // Only on top of this thread's class-object template: the prototype fills
+    // follow its fills in the cell.
+    if !cell.owned() || cell.get(W_CLASS_SETTLED) == 0 || cell.get(W_PROTO_SHAPE) != 0 {
         return;
     }
     let Some(proto_id) = crate::object::shapes::stable_linked_proto_id(class_id, parent_proto)
@@ -581,6 +790,8 @@ pub(crate) unsafe fn record_prototype_template(
                 | crate::object::OBJECT_META_FLAG_CLASS_EVALUATION_PROTO)
             != 0
         || (*meta).spill != 0
+        || u32::try_from(count).is_err()
+        || cell.proto_fills_base() + 2 * count > cell.len()
     {
         return;
     }
@@ -609,17 +820,18 @@ pub(crate) unsafe fn record_prototype_template(
         fills.push(fill);
     }
     crate::object::shapes::note_external_shape_carrier(Some(d));
-    PROTOTYPES.with(|t| {
-        t.borrow_mut().insert(
-            class_id,
-            PrototypeTemplate {
-                field_count,
-                proto_id,
-                final_shape,
-                fills: fills.into(),
-            },
-        )
-    });
+    let base = cell.proto_fills_base();
+    for (i, fill) in fills.iter().enumerate() {
+        let (tag, value) = match *fill {
+            ProtoFill::Constructor => (TAG_CONSTRUCTOR, 0),
+            ProtoFill::Method(code) => (TAG_METHOD, code as u64),
+        };
+        cell.set(base + 2 * i, tag);
+        cell.set(base + 2 * i + 1, value);
+    }
+    cell.set(W_PROTO_FACTS, field_count as u64 | (count as u64) << 32);
+    cell.set(W_PROTO_ID, proto_id);
+    cell.set(W_PROTO_SHAPE, final_shape as u64);
 }
 
 /// Is `obj` an evaluation prototype of template `class_id` built with the
@@ -660,9 +872,9 @@ pub(crate) unsafe fn evaluation_chain_lost_method(
         return false;
     }
     let class_id = (*obj).class_id;
-    let template = PROTOTYPES
-        .with(|t| t.borrow().get(&class_id).map(|t| t.final_shape))
-        .and_then(crate::object::shapes::shape_descriptor_by_id);
+    let template = template_cell_of(class_id)
+        .and_then(|c| c.proto_template())
+        .and_then(|t| crate::object::shapes::shape_descriptor_by_id(t.1));
     if let Some(template) = template {
         // The template's prototype keys, all still there: marking the
         // prototype (its first instance) restamps its shape but keeps them.

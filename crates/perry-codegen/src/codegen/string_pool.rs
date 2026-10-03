@@ -1146,6 +1146,34 @@ pub(super) fn emit_string_pool(
         .iter()
         .filter_map(|name| class_ids.get(name).copied())
         .collect();
+    // Each per-evaluation template's own record, its template cell
+    // (`fresh_class_templates::template_cell_global`), registered on the
+    // template's vtable entry for the runtime paths that start from one of its
+    // class objects.
+    let mut fresh_cells: Vec<(u32, usize)> = fresh_class_templates
+        .iter()
+        .filter_map(|name| {
+            let cid = *class_ids.get(name)?;
+            let words =
+                super::fresh_class_templates::template_cell_words(classes.get(name).copied());
+            Some((cid, words))
+        })
+        .collect();
+    fresh_cells.sort_unstable();
+    fresh_cells.dedup_by_key(|cell| cell.0);
+    for (cid, words) in fresh_cells {
+        let global = super::fresh_class_templates::template_cell_global(cid);
+        chunker.module().add_raw_global(format!(
+            "@{global} = internal global [{words} x i64] [i64 {words}{}]",
+            ", i64 0".repeat(words - 1)
+        ));
+        let blk = chunker.current_block();
+        let cell_i64 = blk.ptrtoint(&format!("@{global}"), I64);
+        blk.call_void(
+            "js_register_class_template_cell",
+            &[(I64, &cid.to_string()), (I64, &cell_i64)],
+        );
+    }
     method_triples.sort_unstable();
     for (
         cid,

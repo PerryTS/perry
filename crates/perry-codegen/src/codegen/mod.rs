@@ -204,7 +204,7 @@ mod emission_order_tests;
 mod entry;
 pub mod entry_outline;
 mod export_value_wrappers;
-mod fresh_class_templates;
+pub(crate) mod fresh_class_templates;
 pub(crate) mod func_registry;
 mod function;
 mod function_source_header;

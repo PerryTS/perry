@@ -608,6 +608,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         } => {
             let template_cid = ctx.class_ids.get(template).copied().unwrap_or(0);
             let tcid_str = template_cid.to_string();
+            // The template's own record (its template cell), which the
+            // module's string-pool initializer defines for every template it
+            // evaluates.
+            let cell = if template_cid == 0 {
+                "null".to_string()
+            } else {
+                format!(
+                    "@{}",
+                    crate::codegen::fresh_class_templates::template_cell_global(template_cid)
+                )
+            };
             // Room for the evaluation's own `length`, `name` and static
             // methods, its pinned parent, its captured environment and its
             // prototype object besides its static fields, so the template's
@@ -645,6 +656,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     (I32, &tcid_str),
                     (I32, &nfields),
                     (I32, &field_mask.to_string()),
+                    (PTR, &cell),
                 ],
             );
             // #7154: the fresh class object is a raw SSA register while the
@@ -782,7 +794,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // the template's final shape (`class_object_template`).
                     ctx.block().call_void(
                         "js_class_object_set_ctor_caps",
-                        &[(I64, &obj), (DOUBLE, &caps_box)],
+                        &[(I64, &obj), (DOUBLE, &caps_box), (PTR, &cell)],
                     );
                     // A guarded class environment learns this evaluation; the
                     // first one publishes its captures into the slots.
