@@ -1109,3 +1109,16 @@ TS minor faults+1.027%; remaining faults approximately flat. Initial benefit
 is small and cannot replace full17-case normal-auto/moving acceptance.
 Full17-case ELF/control builds and204measurements launched under shared lock,
 using separate source/runtime/target directories. Probe remains unapplied.
+
+NATURAL ARENA TIMELINE QUEUED (2026-10-03 18:56Z)
+Owned wrapper4145511 waits for the shared lock after ELF full-matrix job.
+Uses the existing independently verified c170 full-runtime baseline/proposal
+TS/Zod binaries. Arms the existing census at each natural synchronous full
+mark-complete hook; does not call gc() or edit workloads/pacing. Captures
+RSS before arming and before reporting separately from census RSS. Requested
+space capacity/used/live/dead/late bytes, old holes and block pool bytes are
+reported by the existing authoritative walkers. Census allocations/stops can
+perturb residency; this is diagnosis, not peak-RSS/perf acceptance. Zod may
+have zero natural full cycles; that is recorded without forcing a cycle.
+Rental data/export/hash proofs were safe before18:00Z; all current jobs are
+on the durable original measurement host. No other lane's files were touched.
