@@ -1039,6 +1039,7 @@ pub(super) fn emit_module_artifacts(
         &user_fn_wrapper_strict,
         &user_fn_display_names,
         &user_fn_source,
+        &super::fresh_class_templates::fresh_class_templates(hir),
     );
     progress.checkpoint("string pool and registration initializer");
 

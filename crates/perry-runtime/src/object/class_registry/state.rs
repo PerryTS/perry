@@ -345,6 +345,11 @@ pub struct VTableMethodEntry {
     /// `has_synthetic_arguments`: the rest slot holds only the args from the
     /// rest position onward, so apply/dynamic dispatch bundles them correctly.
     pub has_rest: bool,
+    /// The method's closure-convention entry (`<method>__eclo`'s
+    /// `JsFunctionInfo`) when its class is evaluated per evaluation
+    /// (`ClassExprFresh`): each evaluation's prototype holds one function
+    /// object running it. 0 otherwise.
+    pub entry: usize,
 }
 
 /// The compiled halves of one declared accessor, each 0 when that half is
@@ -467,6 +472,14 @@ pub static CLASS_STRING_MEMBER_ORDERS: ImageTable<RwLock<Option<StringMemberOrde
 /// is exact (Test262 .../class/*/dflt-params-trailing-comma).
 pub static CLASS_METHOD_BIND_LENGTHS: ImageTable<RwLock<Option<HashMap<(u32, String), u32>>>> =
     ImageTable::new(|image| &image.method_bind_lengths);
+
+/// The closure-convention entry registered for method `name` of per-evaluation
+/// class `class_id` (its vtable entry's `entry`), if any.
+pub(crate) fn class_method_entry(class_id: u32, name: &str) -> Option<usize> {
+    let guard = CLASS_VTABLE_REGISTRY.read().ok()?;
+    let entry = guard.as_ref()?.get(&class_id)?.methods.get(name)?.entry;
+    (entry != 0).then_some(entry)
+}
 
 /// Default-aware spec `.length` for STATIC methods, keyed (class_id, name).
 /// Distinct from `CLASS_METHOD_BIND_LENGTHS` (instance methods) so a class with

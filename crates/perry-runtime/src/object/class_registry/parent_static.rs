@@ -355,69 +355,54 @@ pub extern "C" fn js_register_class_parent_dynamic(class_id: u32, mut parent_val
 
 /// Own-property key under which a per-evaluation class object
 /// (`ClassExprFresh`) pins ITS OWN parent class value. See
-/// `js_class_object_pin_parent`.
+/// `js_class_evaluation_object`.
 pub(crate) const CLASS_OBJECT_PARENT_KEY: &str = "__perry_parent_class";
 
-/// #6438: pin THIS evaluation's parent onto a per-evaluation class object.
-///
-/// `CLASS_DYNAMIC_PARENT_VALUE` is keyed by the child's **class id**, i.e. by
-/// the compile-time template — so a class expression evaluated N times with a
-/// DIFFERENT parent each time (effect's
-/// `class DeclareClass extends make(ast) { … }`, where `make(ast)` returns a
-/// fresh class per call) collapses to last-wins: every DeclareClass would walk
-/// to the LAST `make(ast)` and read that evaluation's `static ast`.
-///
-/// Codegen calls this immediately after `RegisterClassParentDynamic` in the
-/// same lowered Sequence, so the table still holds *this* evaluation's parent.
-/// Copy it onto the class object as an own property; later evaluations
-/// overwrite the table but each object already carries its own edge. Same
-/// write-right-before-use shape the capture snapshot already uses.
-///
-/// A no-parent class expression pins nothing (the getter yields undefined or a
-/// static ClassRef fallback, which the field walk treats as "no own edge").
-#[no_mangle]
-pub extern "C" fn js_class_object_pin_parent(
-    obj: i64,
+/// The ordinary path of one evaluation's class object
+/// (`js_class_evaluation_object`): give `obj`, a newborn class object of
+/// template `template_class_id`, its own `length`, `name` and static methods
+/// (with or without heritage), then pin `parent`, this evaluation's heritage,
+/// onto it. Without the pin, a factory invoked more than once (effect's
+/// `class DeclareClass extends make(ast) { … }`) has every instance walk to
+/// the LAST parent (#6438). `record` sees the finished object and its parent.
+/// Returns `obj`'s current address.
+pub(crate) unsafe fn class_object_define_members(
+    obj: *mut crate::object::ObjectHeader,
     template_class_id: u32,
     static_field_mask: u32,
-) {
+    parent: f64,
+    record: &dyn Fn(*mut crate::object::ObjectHeader, f64),
+) -> *mut crate::object::ObjectHeader {
     const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
-    if obj == 0 || template_class_id == 0 {
-        return;
+    if obj.is_null() || template_class_id == 0 {
+        return obj;
     }
-    // The template stash, deliberately: this records the heritage the
-    // `RegisterClassParentDynamic` call immediately preceding us evaluated for
-    // THIS evaluation. `js_get_dynamic_parent_value`'s active-replay override
-    // would answer with an enclosing constructor replay's parent when a factory
-    // is re-entered from inside a constructor body.
-    let parent = template_dynamic_parent_value(template_class_id);
-    // Every class object owns its `length`, `name` and static methods from
-    // creation, with or without heritage.
-    unsafe {
-        crate::object::field_get_set::define_class_object_own_properties(
-            obj as *mut crate::object::ObjectHeader,
-            static_field_mask,
-        );
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let class = scope.root_raw_mut_ptr(obj);
+    let parent = scope.root_nanbox_f64(parent);
+    class.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj| {
+        crate::object::field_get_set::define_class_object_own_properties(obj, static_field_mask);
+    });
+    if parent.get_nanbox_f64().to_bits() != TAG_UNDEFINED {
+        // #10624: arm BEFORE the write it advertises (the ordering rule in
+        // `registry_latch.rs`) — everything the latch gates (this own-property
+        // write, and `pin_instance_constructing_class`'s later instance pin,
+        // which never fires without this one already having happened) follows
+        // in this thread's program order.
+        super::evaluation_heritage::CLASS_OBJECT_HERITAGE_PIN_LATCH.arm();
+        let key_bytes = CLASS_OBJECT_PARENT_KEY.as_bytes();
+        let key = crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
+        class.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj| {
+            crate::object::js_object_set_field_by_name(obj, key, parent.get_nanbox_f64())
+        });
     }
-    if parent.to_bits() == TAG_UNDEFINED {
-        return;
-    }
-    // #10624: arm BEFORE the write it advertises (the ordering rule in
-    // `registry_latch.rs`) — everything the latch gates (this own-property
-    // write, and `pin_instance_constructing_class`'s later instance pin,
-    // which never fires without this one already having happened) follows
-    // in this thread's program order.
-    super::evaluation_heritage::CLASS_OBJECT_HERITAGE_PIN_LATCH.arm();
-    let key_bytes = CLASS_OBJECT_PARENT_KEY.as_bytes();
-    let key = crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
-    crate::object::js_object_set_field_by_name(
-        obj as *mut crate::object::ObjectHeader,
-        key,
-        parent,
-    );
+    class.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj| {
+        record(obj, parent.get_nanbox_f64());
+        obj
+    })
 }
 
-/// Read back the parent pinned by `js_class_object_pin_parent`, or `None` when
+/// Read back the parent pinned by `js_class_evaluation_object`, or `None` when
 /// this class object has no own parent edge.
 ///
 /// Scans the keys array DIRECTLY rather than going through the by-name read
@@ -787,6 +772,7 @@ pub unsafe extern "C" fn js_register_class_computed_method(
                         param_count: param_count as u32,
                         has_synthetic_arguments: false,
                         has_rest: has_rest != 0,
+                        entry: 0,
                     },
                 );
             }
@@ -860,6 +846,7 @@ pub unsafe extern "C" fn js_register_class_computed_method(
                 // so they never receive a synthesized arguments object.
                 has_synthetic_arguments: false,
                 has_rest: has_rest != 0,
+                entry: 0,
             },
         );
         // Backfill when reflection already materialized `C.prototype`.
@@ -977,25 +964,6 @@ pub(crate) fn class_has_own_static_method(class_id: u32, name: &str) -> bool {
                 .and_then(|m| m.get(&class_id).map(|inner| inner.contains_key(name)))
         })
         .unwrap_or(false)
-}
-
-/// The name of ClassBody static method `name` declared by class `class_id`
-/// itself, as the bytes of its declaration's record: `None` when the class
-/// declares no such method.
-///
-/// The bytes are the record's own key, so they live as long as the class's
-/// image — the agent that holds every value of the class. A value that names
-/// the method for its whole life (a class object's bound static method) points
-/// at them instead of keeping a copy. That holds only while no writer of
-/// `CLASS_STATIC_METHODS` removes or re-keys a record: each must insert a new
-/// record or update a value in place.
-pub(crate) fn class_own_static_method_name_bytes(
-    class_id: u32,
-    name: &str,
-) -> Option<(*const u8, usize)> {
-    let guard = CLASS_STATIC_METHODS.read().ok()?;
-    let (key, _) = guard.as_ref()?.get(&class_id)?.get_key_value(name)?;
-    Some((key.as_ptr(), key.len()))
 }
 
 /// ClassBody static method `name` declared by class `class_id` itself:

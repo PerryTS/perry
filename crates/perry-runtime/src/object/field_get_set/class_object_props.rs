@@ -5,7 +5,7 @@
 
 use super::*;
 
-const CLASS_EVALUATION_PROTOTYPE_KEY: &[u8] = b"#<perry:class-evaluation-prototype>";
+pub(crate) const CLASS_EVALUATION_PROTOTYPE_KEY: &[u8] = b"#<perry:class-evaluation-prototype>";
 
 /// Set once the first per-evaluation prototype is materialized, so
 /// [`class_evaluation_prototype_class_id`] costs one relaxed load for the
@@ -70,22 +70,87 @@ pub(crate) fn class_evaluation_prototype_class_id(ptr: usize) -> Option<u32> {
 /// but observable method identity and private-name closures belong to the
 /// evaluation, not to that shared template.
 unsafe fn class_evaluation_prototype_value(obj: *const ObjectHeader) -> f64 {
+    if let Some(existing) = super::super::class_registry::class_object_own_field_bytes(
+        obj,
+        CLASS_EVALUATION_PROTOTYPE_KEY,
+    )
+    .filter(|value| value.to_bits() != crate::value::TAG_UNDEFINED)
+    {
+        return existing;
+    }
     let scope = crate::gc::RuntimeHandleScope::new();
     let class = scope.root_raw_mut_ptr(obj as *mut ObjectHeader);
-    let hidden_key = crate::string::js_string_from_bytes(
-        CLASS_EVALUATION_PROTOTYPE_KEY.as_ptr(),
-        CLASS_EVALUATION_PROTOTYPE_KEY.len() as u32,
-    );
-    let hidden_key = scope.root_string_ptr(hidden_key);
-    let existing = class.with_mut_ptr::<ObjectHeader, _>(|class| {
-        hidden_key
-            .with_const_ptr::<crate::StringHeader, _>(|key| own_data_field_by_name(class, key))
+    let class_id = class.with_mut_ptr::<ObjectHeader, _>(|class| (*class).class_id);
+
+    // Each evaluation owns a distinct prototype object, and that object's
+    // [[Prototype]] follows this evaluation's pinned heritage edge rather than
+    // the template-id (last-wins) parent table.
+    let pinned_parent = class.with_const_ptr::<ObjectHeader, _>(|class| {
+        super::super::class_registry::class_object_pinned_parent(class)
     });
-    if let Some(existing) = existing.filter(|value| !value.is_undefined()) {
-        return f64::from_bits(existing.bits());
+    let parent_proto = match pinned_parent {
+        Some(parent) if parent.to_bits() == crate::value::TAG_NULL => Some(crate::value::TAG_NULL),
+        Some(parent) => {
+            let parent = scope.root_nanbox_f64(parent);
+            let parent_value = parent.get_nanbox_f64();
+            if super::super::class_registry::is_class_object_value(parent_value) {
+                let parent_obj =
+                    JSValue::from_bits(parent_value.to_bits()).as_pointer::<ObjectHeader>();
+                (!parent_obj.is_null())
+                    .then(|| class_evaluation_prototype_value(parent_obj).to_bits())
+            } else if let Some(parent_id) = super::super::class_ref_id(parent_value) {
+                Some(super::super::class_registry::class_decl_prototype_value(parent_id).to_bits())
+            } else {
+                let parent_js = JSValue::from_bits(parent_value.to_bits());
+                if parent_js.is_pointer()
+                    && crate::closure::is_closure_ptr(parent_js.as_pointer::<u8>() as usize)
+                {
+                    let value = crate::closure::closure_get_dynamic_prop(
+                        parent_js.as_pointer::<u8>() as usize,
+                        "prototype",
+                    );
+                    let value_js = JSValue::from_bits(value.to_bits());
+                    if value.to_bits() == crate::value::TAG_NULL {
+                        Some(crate::value::TAG_NULL)
+                    } else {
+                        value_js.is_pointer().then_some(value.to_bits())
+                    }
+                } else {
+                    None
+                }
+            }
+        }
+        None => super::super::class_registry::global_object_prototype_bits(),
+    };
+    let parent_proto = parent_proto.map(|bits| scope.root_heap_word_u64(bits));
+
+    // Every evaluation after the template's first in this agent is born in
+    // the shape that one reached (`class_object_template`).
+    if let Some(parent_proto) = &parent_proto {
+        if let Some(proto) = class.with_mut_ptr::<ObjectHeader, _>(|class| {
+            super::class_object_template::prototype_from_template(
+                class,
+                class_id,
+                parent_proto.get_heap_word_u64(),
+            )
+        }) {
+            CLASS_EVALUATION_PROTOTYPES_MATERIALIZED
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+            let proto = scope.root_raw_mut_ptr(proto);
+            let proto_value = proto
+                .with_mut_ptr::<ObjectHeader, _>(|p| crate::value::js_nanbox_pointer(p as i64));
+            class.with_mut_ptr::<ObjectHeader, _>(|class| {
+                super::class_object_template::class_object_add_internal(
+                    class,
+                    super::class_object_template::InternalKey::EvaluationPrototype,
+                    proto_value,
+                )
+            });
+            return proto
+                .with_mut_ptr::<ObjectHeader, _>(|p| crate::value::js_nanbox_pointer(p as i64));
+        }
     }
 
-    let class_id = class.with_mut_ptr::<ObjectHeader, _>(|class| (*class).class_id);
     // Inline room for `constructor` and every declared member (see
     // `class_decl_prototype_value`).
     let members = super::super::class_registry::class_prototype_member_names(class_id).len() as u32;
@@ -131,11 +196,18 @@ unsafe fn class_evaluation_prototype_value(obj: *const ObjectHeader) -> f64 {
         let key = scope.root_string_ptr(key);
         let class_value = class
             .with_mut_ptr::<ObjectHeader, _>(|class| crate::value::js_nanbox_pointer(class as i64));
-        let method = super::super::native_module::class_evaluation_method_value_for_name(
-            class_id,
-            &name,
-            class_value,
-        );
+        // The evaluation's own function object for the method: its entry runs
+        // the method at home in this evaluation (`<method>__eclo`). A template
+        // compiled without entries keeps the by-name method value.
+        let method =
+            super::class_object_template::evaluation_method_value(class_id, &name, class_value)
+                .unwrap_or_else(|| {
+                    super::super::native_module::class_evaluation_method_value_for_name(
+                        class_id,
+                        &name,
+                        class_value,
+                    )
+                });
         proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
             key.with_const_ptr::<crate::StringHeader, _>(|key| {
                 js_object_set_field_by_name(proto, key, method)
@@ -144,62 +216,34 @@ unsafe fn class_evaluation_prototype_value(obj: *const ObjectHeader) -> f64 {
         });
     }
 
-    // Each evaluation owns a distinct prototype object, and that object's
-    // [[Prototype]] follows this evaluation's pinned heritage edge rather than
-    // the template-id (last-wins) parent table.
-    let pinned_parent = class.with_const_ptr::<ObjectHeader, _>(|class| {
-        super::super::class_registry::class_object_pinned_parent(class)
-    });
-    let parent_proto = match pinned_parent {
-        Some(parent) if parent.to_bits() == crate::value::TAG_NULL => Some(crate::value::TAG_NULL),
-        Some(parent) => {
-            let parent = scope.root_nanbox_f64(parent);
-            let parent_value = parent.get_nanbox_f64();
-            if super::super::class_registry::is_class_object_value(parent_value) {
-                let parent_obj =
-                    JSValue::from_bits(parent_value.to_bits()).as_pointer::<ObjectHeader>();
-                (!parent_obj.is_null())
-                    .then(|| class_evaluation_prototype_value(parent_obj).to_bits())
-            } else if let Some(parent_id) = super::super::class_ref_id(parent_value) {
-                Some(super::super::class_registry::class_decl_prototype_value(parent_id).to_bits())
-            } else {
-                let parent_js = JSValue::from_bits(parent_value.to_bits());
-                if parent_js.is_pointer()
-                    && crate::closure::is_closure_ptr(parent_js.as_pointer::<u8>() as usize)
-                {
-                    let value = crate::closure::closure_get_dynamic_prop(
-                        parent_js.as_pointer::<u8>() as usize,
-                        "prototype",
-                    );
-                    let value_js = JSValue::from_bits(value.to_bits());
-                    if value.to_bits() == crate::value::TAG_NULL {
-                        Some(crate::value::TAG_NULL)
-                    } else {
-                        value_js.is_pointer().then_some(value.to_bits())
-                    }
-                } else {
-                    None
-                }
-            }
-        }
-        None => super::super::class_registry::global_object_prototype_bits(),
-    };
-    if let Some(parent_proto) = parent_proto {
-        let parent_proto = scope.root_heap_word_u64(parent_proto);
+    if let Some(parent_proto) = &parent_proto {
         proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
             super::super::prototype_chain::object_link_class_evaluation_prototype(
                 proto as usize,
                 parent_proto.get_heap_word_u64(),
             )
         });
+        proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
+            class.with_const_ptr::<ObjectHeader, _>(|class| {
+                super::class_object_template::record_prototype_template(
+                    proto,
+                    class,
+                    class_id,
+                    members + 1,
+                    parent_proto.get_heap_word_u64(),
+                )
+            })
+        });
     }
 
     let proto_value = proto
         .with_mut_ptr::<ObjectHeader, _>(|proto| crate::value::js_nanbox_pointer(proto as i64));
     class.with_mut_ptr::<ObjectHeader, _>(|class| {
-        hidden_key.with_const_ptr::<crate::StringHeader, _>(|key| {
-            js_object_set_field_by_name(class, key, proto_value)
-        })
+        super::class_object_template::class_object_add_internal(
+            class,
+            super::class_object_template::InternalKey::EvaluationPrototype,
+            proto_value,
+        )
     });
     proto.with_mut_ptr::<ObjectHeader, _>(|proto| crate::value::js_nanbox_pointer(proto as i64))
 }
@@ -272,52 +316,65 @@ pub(crate) unsafe fn define_class_object_own_properties(
         }
     }
     for name in super::super::class_registry::class_own_string_member_names(class_id, true) {
-        // The method value is bound to THIS class object, as a read of the
-        // static through the evaluation has always produced it: its call runs
-        // in this evaluation (its environment and self-binding), whatever
-        // `this` is. The bound closure keeps the name's address for its whole
-        // life, so the name is the declaration's own: the bytes of the
-        // template's record for this method (none for an accessor).
-        let Some((name_ptr, name_len)) =
-            super::super::class_registry::class_own_static_method_name_bytes(class_id, &name)
+        // The method's own function object runs the declaration's
+        // closure-convention entry, as the shared class's function object's
+        // does (`install_declared_static_method`): a call's `this` is the
+        // body's `this`, and its `name` and `length` are facts of the entry.
+        // One per evaluation, so evaluations never share a method value; its
+        // home is this class object, the evaluation its body runs in however
+        // it is called (`js_static_method_entry_enter_home`). An accessor has
+        // no entry.
+        let Some(code) =
+            super::super::class_registry::class_own_static_method_code(class_id, &name)
         else {
             continue;
         };
-        let class_value = class
-            .with_mut_ptr::<ObjectHeader, _>(|class| crate::value::js_nanbox_pointer(class as i64));
-        let f = super::super::native_module::build_bound_method_closure(
-            class_value,
-            name_ptr,
-            name_len,
+        let f = super::class_object_template::static_method_value(code);
+        if f.is_null() {
+            continue;
+        }
+        class.with_mut_ptr::<ObjectHeader, _>(|class| {
+            super::class_object_template::set_static_method_home(
+                f,
+                crate::value::js_nanbox_pointer(class as i64),
+            )
+        });
+        define(
+            &name,
+            crate::value::js_nanbox_pointer(f as i64),
+            (true, false, true),
         );
-        define(&name, f, (true, false, true));
     }
 }
 
 /// Is `value` the method value `define_class_object_own_properties` stored for
-/// static `name` on class object `holder`: a bound method closure naming this
-/// method, bound to this object? Anything else in that slot is the program's.
+/// static `name` of template `owner` on class object `holder`: a function
+/// object running that declaration's entry, at home in `holder`? Anything else
+/// in that slot is the program's.
 unsafe fn is_declared_static_method_value(
     value: f64,
-    holder: *const ObjectHeader,
+    owner: u32,
     name: &str,
+    holder: *const ObjectHeader,
 ) -> bool {
-    let value = JSValue::from_bits(value.to_bits());
-    if !value.is_pointer() {
-        return false;
-    }
-    let closure = value.as_pointer::<crate::closure::ClosureHeader>();
-    if !crate::closure::is_closure_ptr(closure as usize)
-        || !std::ptr::eq((*closure).info, &crate::closure::BOUND_METHOD_INFO)
-    {
-        return false;
-    }
-    let receiver = crate::closure::js_closure_get_capture_f64(closure, 0);
-    let name_ptr = crate::closure::js_closure_get_capture_ptr(closure, 1) as *const u8;
-    let name_len = crate::closure::js_closure_get_capture_ptr(closure, 2) as usize;
-    receiver.to_bits() == crate::value::js_nanbox_pointer(holder as i64).to_bits()
-        && !name_ptr.is_null()
-        && std::slice::from_raw_parts(name_ptr, name_len) == name.as_bytes()
+    // The function object's home first: one capture read, before the
+    // registry lookup of the declaration's entry.
+    let v = JSValue::from_bits(value.to_bits());
+    v.is_pointer()
+        && crate::closure::is_closure_ptr(v.as_pointer::<u8>() as usize)
+        && crate::closure::js_closure_get_capture_bits(
+            v.as_pointer::<crate::closure::ClosureHeader>(),
+            0,
+        ) == crate::value::js_nanbox_pointer(holder as i64).to_bits()
+        && super::super::class_registry::class_own_static_method_code(owner, name).is_some_and(
+            |code| {
+                super::class_object_template::static_method_value_runs(
+                    value.to_bits(),
+                    code,
+                    holder,
+                )
+            },
+        )
 }
 
 /// May a call `C.name(..)` on class object `object` run the registered static
@@ -345,7 +402,7 @@ pub(crate) unsafe fn class_object_registry_serves_static(
                 holder,
                 name.as_bytes(),
             )
-            .is_some_and(|v| is_declared_static_method_value(v, holder, name));
+            .is_some_and(|v| is_declared_static_method_value(v, owner, name, holder));
         }
         let Some(parent) = super::super::class_registry::class_object_pinned_parent(holder) else {
             break;
@@ -360,30 +417,6 @@ pub(crate) unsafe fn class_object_registry_serves_static(
     }
     // No evaluation of the declaring template is in this object's chain.
     true
-}
-
-/// Run static method `name` for a bound method value whose receiver is class
-/// object `receiver` (see [`define_class_object_own_properties`]). `None` when
-/// `receiver` is not a class object or the registry has no such declaration.
-pub(crate) unsafe fn class_object_static_method_call(
-    receiver: f64,
-    name_ptr: *const u8,
-    name_len: usize,
-    args: &[f64],
-) -> Option<f64> {
-    if !super::super::class_registry::is_class_object_value(receiver) {
-        return None;
-    }
-    let obj = JSValue::from_bits(receiver.to_bits()).as_pointer::<ObjectHeader>();
-    let name = std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len)).ok()?;
-    super::super::class_registry::lookup_static_method_in_chain((*obj).class_id, name)?;
-    Some(super::super::class_registry::js_class_static_method_call(
-        receiver,
-        name_ptr,
-        name_len,
-        args.as_ptr(),
-        args.len(),
-    ))
 }
 
 /// Does `obj` (a class object) own `key` without storing it? Only `prototype`:

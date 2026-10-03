@@ -261,7 +261,6 @@ const NON_COLLECTING: &[&str] = &[
     "js_object_get_class_id",
     "js_object_get_own_field_or_undef",
     "js_object_mark_class",
-    "js_class_object_pin_parent",
     "js_new_target_get",
     "js_new_target_set",
     "js_ctor_return_override",
