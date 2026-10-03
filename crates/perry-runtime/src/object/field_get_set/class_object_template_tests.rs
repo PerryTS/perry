@@ -18,6 +18,13 @@ extern "C" fn method(_this: f64) -> f64 {
     0.0
 }
 
+/// A template cell as codegen emits it: `words` long, zero but its length.
+fn cell(words: usize) -> *mut u64 {
+    let mut cell = vec![0u64; words].into_boxed_slice();
+    cell[0] = words as u64;
+    Box::leak(cell).as_mut_ptr()
+}
+
 unsafe fn slot(obj: *const ObjectHeader, name: &[u8]) -> u64 {
     super::super::class_registry::class_object_own_field_bytes(obj, name)
         .expect("own data property")
@@ -67,10 +74,14 @@ fn later_evaluations_are_born_in_the_template_shapes() {
             info as i64,
         );
     }
+    let cell = cell(64);
+    js_register_class_template_cell(cid as i64, cell as i64);
     let scope = crate::gc::RuntimeHandleScope::new();
     let before = template_hits();
     let classes: Vec<_> = (0..3)
-        .map(|_| scope.root_raw_mut_ptr(js_class_evaluation_object(cid, 6, 0) as *mut ObjectHeader))
+        .map(|_| {
+            scope.root_raw_mut_ptr(js_class_evaluation_object(cid, 6, 0, cell) as *mut ObjectHeader)
+        })
         .collect();
     let protos: Vec<_> = classes
         .iter()
@@ -148,6 +159,45 @@ fn later_evaluations_are_born_in_the_template_shapes() {
             slot(p[1], b"m"),
             slot(p[2], b"m"),
             "methods are per evaluation"
+        );
+    }
+}
+
+/// The template's memo lives in its own cell, and only the thread that
+/// recorded it reads it: ShapeIds name one agent's shape records, so another
+/// thread must take the ordinary path. A cell too short for a record refuses
+/// to record rather than write past its end.
+#[test]
+fn a_template_cell_answers_only_its_recording_thread() {
+    unsafe {
+        let words = cell(W_FILLS + 2);
+        let c = TemplateCell::from_ptr(words).expect("a cell");
+        assert!(
+            TemplateCell::from_ptr(cell(W_FILLS - 1)).is_none(),
+            "too short for its fixed words"
+        );
+        assert!(TemplateCell::from_ptr(std::ptr::null()).is_none());
+        assert!(c.claim(), "the first thread claims the cell");
+        assert!(c.owned() && c.claim(), "and keeps it");
+        c.set(W_CLASS_SHAPE, 7);
+        c.set(W_CLASS_FACTS, 6 | 1 << 48);
+        assert_eq!(c.class_template(6, 0), Some((7, 1, false)));
+        assert_eq!(
+            c.class_template(5, 0),
+            None,
+            "another width is another site"
+        );
+        let addr = words as usize;
+        let other = std::thread::spawn(move || {
+            let c = TemplateCell::from_ptr(addr as *const u64).unwrap();
+            (c.owned(), c.claim(), c.class_template(6, 0).is_some())
+        })
+        .join()
+        .unwrap();
+        assert_eq!(
+            other,
+            (false, false, false),
+            "another thread never reads the memo"
         );
     }
 }

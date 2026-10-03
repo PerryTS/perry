@@ -383,6 +383,10 @@ pub struct ClassVTable {
     pub methods: HashMap<String, VTableMethodEntry>,
     pub accessors: HashMap<String, AccessorDecl>,
     pub private_accessors: HashMap<String, AccessorDecl>,
+    /// The address of the class's template cell (`@perry_ctpl.<cid>`) when
+    /// the class is a per-evaluation template (`class_object_template`); 0
+    /// otherwise.
+    pub template_cell: usize,
 }
 
 impl ClassVTable {
@@ -472,6 +476,25 @@ pub static CLASS_STRING_MEMBER_ORDERS: ImageTable<RwLock<Option<StringMemberOrde
 /// is exact (Test262 .../class/*/dflt-params-trailing-comma).
 pub static CLASS_METHOD_BIND_LENGTHS: ImageTable<RwLock<Option<HashMap<(u32, String), u32>>>> =
     ImageTable::new(|image| &image.method_bind_lengths);
+
+/// Record `cell` as per-evaluation template `class_id`'s template cell.
+pub(crate) fn class_set_template_cell(class_id: u32, cell: usize) {
+    let Ok(mut guard) = CLASS_VTABLE_REGISTRY.write() else {
+        return;
+    };
+    guard
+        .get_or_insert_with(crate::fast_hash::new_ptr_hash_map)
+        .entry(class_id)
+        .or_default()
+        .template_cell = cell;
+}
+
+/// Per-evaluation template `class_id`'s template cell, if one was registered.
+pub(crate) fn class_template_cell(class_id: u32) -> Option<usize> {
+    let guard = CLASS_VTABLE_REGISTRY.read().ok()?;
+    let cell = guard.as_ref()?.get(&class_id)?.template_cell;
+    (cell != 0).then_some(cell)
+}
 
 /// The closure-convention entry registered for method `name` of per-evaluation
 /// class `class_id` (its vtable entry's `entry`), if any.
