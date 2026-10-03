@@ -44,6 +44,15 @@ pub struct TypedMasks {
     pub pointer_words: Vec<u64>,
 }
 
+/// One compile-time ConstFn body fact. `symbol` is the defining body's
+/// stable LLVM info symbol (without `@`), never an ASLR address. The linker
+/// resolves it to the one `JsFunctionInfo` for that body in every agent.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ConstFnBirth {
+    pub slot: u8,
+    pub symbol: String,
+}
+
 /// The content of one compiler-visible birth shape.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct BirthShape {
@@ -60,6 +69,9 @@ pub struct BirthShape {
     /// an importer's all-`Any` stub of the same keys are two contents, and
     /// the stub never adopts the definer's id.
     pub rep: u64,
+    /// Sorted, unique body symbols for SPECIAL lanes. The current class-birth
+    /// collector leaves this empty; post-construction producers populate it.
+    pub constfn: Vec<ConstFnBirth>,
 }
 
 impl BirthShape {
@@ -75,8 +87,15 @@ impl BirthShape {
     /// The facts the runtime mints for this content, without the masks: a
     /// typed layout and a structural mint of the same class share them. The
     /// rep is a runtime fact, so it is part of them.
-    pub(crate) fn structure(&self) -> (&[u8], u32, u32, &BirthProto, u64) {
-        (&self.keys, self.key_count, self.live, &self.proto, self.rep)
+    pub(crate) fn structure(&self) -> (&[u8], u32, u32, &BirthProto, u64, &[ConstFnBirth]) {
+        (
+            &self.keys,
+            self.key_count,
+            self.live,
+            &self.proto,
+            self.rep,
+            &self.constfn,
+        )
     }
 
     /// A stable 64-bit FNV-1a over the content (never `RandomState`: the id
@@ -114,6 +133,17 @@ impl BirthShape {
         if self.rep != 0 {
             eat(&[3]);
             eat(&self.rep.to_le_bytes());
+        }
+        // Preserve every old content hash when there is no ConstFn fact.
+        // Body names, never load addresses, determine static ids.
+        if !self.constfn.is_empty() {
+            eat(&[4]);
+            eat(&(self.constfn.len() as u32).to_le_bytes());
+            for entry in &self.constfn {
+                eat(&[entry.slot]);
+                eat(&(entry.symbol.len() as u32).to_le_bytes());
+                eat(entry.symbol.as_bytes());
+            }
         }
         h
     }
@@ -351,6 +381,7 @@ pub(crate) fn class_birth(
         },
         typed: None,
         rep: class_birth_reps.get(global_name).copied().unwrap_or(0),
+        constfn: Vec::new(),
     });
     ClassBirth {
         class_id,
@@ -367,6 +398,10 @@ thread_local! {
     /// content (the facts the id names: a resolved definer id names the same
     /// structure). Set by `compile_module` for every module (empty when the
     /// driver assigned none).
+    static MODULE_FINAL_IDS: RefCell<HashMap<BirthShape, u32>> = RefCell::new(HashMap::new());
+    /// Final records named by this module's finalizers or class-registration
+    /// mints, including class prototypes that cannot use startup literal seeds.
+    static MODULE_FINAL_USES: RefCell<BTreeMap<u32, BirthShape>> = RefCell::new(BTreeMap::new());
     static MODULE_STATIC_IDS: RefCell<HashMap<String, (u32, BirthShape)>> =
         RefCell::new(HashMap::new());
     /// The seedable static ids this module's GUARDS embedded, with their
@@ -410,9 +445,17 @@ pub(crate) fn set_module_static_ids(
             })
             .collect()
     };
+    MODULE_FINAL_IDS.with(|m| {
+        *m.borrow_mut() = assigned
+            .iter()
+            .filter(|(shape, _)| !shape.constfn.is_empty())
+            .cloned()
+            .collect()
+    });
     MODULE_STATIC_IDS.with(|m| *m.borrow_mut() = map);
     MODULE_PROGRAM_IDS.with(|m| *m.borrow_mut() = program.clone());
     MODULE_SEEDS.with(|s| s.borrow_mut().clear());
+    MODULE_FINAL_USES.with(|s| s.borrow_mut().clear());
 }
 
 /// Note that a guard embeds `id` as an immediate: a seedable content joins
@@ -423,6 +466,35 @@ fn note_guard_id(id: u32, seed: Option<&BirthShape>) {
             s.borrow_mut().entry(id).or_insert_with(|| shape.clone());
         });
     }
+}
+
+pub(crate) fn has_static_final_shapes() -> bool {
+    MODULE_FINAL_IDS.with(|m| !m.borrow().is_empty())
+}
+
+pub(crate) fn disable_static_final_shapes() {
+    MODULE_FINAL_IDS.with(|m| m.borrow_mut().clear());
+}
+
+/// Final ids are requested only after construction, never by allocation guards.
+pub(crate) fn static_final_shape_id(shape: &BirthShape) -> Option<u32> {
+    let id = MODULE_FINAL_IDS.with(|m| m.borrow().get(shape).copied())?;
+    note_guard_id(id, Some(shape));
+    MODULE_FINAL_USES.with(|s| {
+        s.borrow_mut().insert(id, shape.clone());
+    });
+    Some(id)
+}
+
+/// Only final shapes named by emitted finalizers or class mints need body references.
+pub(crate) fn module_final_seeds() -> Vec<(BirthShape, u32)> {
+    MODULE_FINAL_USES.with(|s| {
+        s.borrow()
+            .iter()
+            .filter(|(_, shape)| !shape.constfn.is_empty())
+            .map(|(id, shape)| (shape.clone(), *id))
+            .collect()
+    })
 }
 
 /// Drain the seed set of the module just compiled on this thread: every
@@ -437,22 +509,41 @@ pub fn take_module_static_seeds() -> Vec<(u32, BirthShape)> {
 /// part of the object-cache key: an entry written in another format is a
 /// miss, never a line this decoder reads as other facts (a pinned
 /// `PERRY_OBJECT_CACHE_BUILD_ID` keeps the build id across compilers).
-pub const STATIC_SEED_FORMAT: &str = "2";
+pub const STATIC_SEED_FORMAT: &str = "3";
 
-/// One seed as a line of the object cache's seed sidecar:
-/// `<id> <key_count> <live> <hex of the NUL-terminated key names> <rep>`,
-/// the rep as `0x`-prefixed hex. Every field the seed mints from is in the
-/// line: a warm link seeds exactly the facts the cold one did.
+/// One seed as a line of the object cache's sidecar:
+/// `<id> <key_count> <live> <keys_hex> <rep_hex> <body_entries>`.
+/// `body_entries` is `-` or comma-separated `<slot>@<symbol_hex>` pairs.
+/// ConstFn entries describe opt-in post-construction final shapes. Warm cache
+/// replay preserves the same body references as a cold executable link.
 pub fn encode_static_seed(id: u32, shape: &BirthShape) -> String {
     let hex: String = shape.keys.iter().map(|b| format!("{b:02x}")).collect();
+    let bodies = if shape.constfn.is_empty() {
+        "-".to_string()
+    } else {
+        shape
+            .constfn
+            .iter()
+            .map(|entry| {
+                let symbol: String = entry
+                    .symbol
+                    .as_bytes()
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect();
+                format!("{}@{symbol}", entry.slot)
+            })
+            .collect::<Vec<_>>()
+            .join(",")
+    };
     format!(
-        "{id} {} {} {hex} {:#x}",
+        "{id} {} {} {hex} {:#x} {bodies}",
         shape.key_count, shape.live, shape.rep
     )
 }
 
-/// The inverse of [`encode_static_seed`]; `None` for a malformed line
-/// (including a line of another format, which lacks the rep field).
+/// Decode the exact current sidecar format. A missing body field, malformed
+/// symbol, unsorted/duplicate slot, or SPECIAL/metadata mismatch is a miss.
 pub fn decode_static_seed(line: &str) -> Option<(u32, BirthShape)> {
     let mut it = line.split_ascii_whitespace();
     let id = it.next()?.parse().ok()?;
@@ -460,6 +551,7 @@ pub fn decode_static_seed(line: &str) -> Option<(u32, BirthShape)> {
     let live = it.next()?.parse().ok()?;
     let hex = it.next()?;
     let rep = u64::from_str_radix(it.next()?.strip_prefix("0x")?, 16).ok()?;
+    let bodies = it.next()?;
     if it.next().is_some() || hex.is_empty() || hex.len() % 2 != 0 {
         return None;
     }
@@ -467,6 +559,52 @@ pub fn decode_static_seed(line: &str) -> Option<(u32, BirthShape)> {
         .step_by(2)
         .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).ok())
         .collect::<Option<Vec<u8>>>()?;
+    let constfn = if bodies == "-" {
+        Vec::new()
+    } else {
+        let mut entries = Vec::new();
+        for text in bodies.split(',') {
+            let (slot, encoded) = text.split_once('@')?;
+            let slot: u8 = slot.parse().ok()?;
+            if slot >= 32 || encoded.is_empty() || encoded.len() % 2 != 0 {
+                return None;
+            }
+            if entries
+                .last()
+                .is_some_and(|entry: &ConstFnBirth| entry.slot >= slot)
+            {
+                return None;
+            }
+            let bytes = (0..encoded.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&encoded[i..i + 2], 16).ok())
+                .collect::<Option<Vec<u8>>>()?;
+            let symbol = String::from_utf8(bytes).ok()?;
+            if !symbol
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"_.$".contains(&b))
+            {
+                return None;
+            }
+            if (rep >> (u32::from(slot) * 2)) & 3 != 3 {
+                return None;
+            }
+            entries.push(ConstFnBirth { slot, symbol });
+        }
+        entries
+    };
+    let mut special = 0u32;
+    for slot in 0..32 {
+        if (rep >> (slot * 2)) & 3 == 3 {
+            special |= 1 << slot;
+        }
+    }
+    let covered = constfn
+        .iter()
+        .fold(0u32, |mask, entry| mask | (1 << entry.slot));
+    if special != covered {
+        return None;
+    }
     Some((
         id,
         BirthShape {
@@ -476,6 +614,7 @@ pub fn decode_static_seed(line: &str) -> Option<(u32, BirthShape)> {
             proto: BirthProto::Literal,
             typed: None,
             rep,
+            constfn,
         },
     ))
 }
@@ -487,9 +626,87 @@ pub(crate) fn static_shape_id_for_keys_global(keys_global: &str) -> Option<u32> 
     MODULE_STATIC_IDS.with(|m| {
         let m = m.borrow();
         let (id, shape) = m.get(keys_global)?;
+        if !shape.constfn.is_empty() {
+            return None;
+        }
         note_guard_id(*id, Some(shape));
         Some(*id)
     })
+}
+
+/// A contained receiver proof proves offsets, not a function body's invariant.
+/// An inherited method can receive a subclass layout: match the key at this
+/// slot across completed contents instead of treating allocation class as the
+/// only possible receiver. Such boxed stores must use the checked slot funnel.
+pub(crate) fn slot_may_be_constfn(keys_global: &str, slot: u32) -> bool {
+    let birth = MODULE_STATIC_IDS.with(|m| m.borrow().get(keys_global).map(|(_, s)| s.clone()));
+    let Some(birth) = birth else {
+        return false;
+    };
+    let name = birth.keys.split(|&b| b == 0).nth(slot as usize);
+    MODULE_FINAL_IDS.with(|m| {
+        m.borrow().keys().any(|s| {
+            s.constfn.iter().any(|i| i.slot as u32 == slot)
+                && s.keys.split(|&b| b == 0).nth(slot as usize) == name
+        })
+    })
+}
+
+/// Guard-only compatible completed identities. Allocation suppliers continue
+/// returning the ordinary birth id. Match all structural facts and preserve
+/// every base representation; a written SPECIAL slot cannot use a raw store.
+pub(crate) fn compatible_final_shape_ids(expected: &str, written_slots: &[u32]) -> Vec<u32> {
+    let Ok(expected) = expected.parse::<u32>() else {
+        return Vec::new();
+    };
+    let birth = MODULE_STATIC_IDS
+        .with(|m| {
+            m.borrow()
+                .values()
+                .find(|(id, _)| *id == expected)
+                .map(|(_, s)| s.clone())
+        })
+        .or_else(|| {
+            MODULE_PROGRAM_IDS.with(|m| {
+                m.borrow()
+                    .0
+                    .values()
+                    .find(|d| d.id == expected)
+                    .map(|d| d.shape.clone())
+            })
+        });
+    let Some(birth) = birth else {
+        return Vec::new();
+    };
+    let candidates: Vec<(BirthShape, u32)> = MODULE_FINAL_IDS.with(|m| {
+        m.borrow()
+            .iter()
+            .filter_map(|(shape, &id)| {
+                let ordinary_rep = shape
+                    .constfn
+                    .iter()
+                    .fold(shape.rep, |rep, entry| rep & !(3u64 << (2 * entry.slot)));
+                (shape.keys == birth.keys
+                    && shape.key_count == birth.key_count
+                    && shape.live == birth.live
+                    && shape.proto == birth.proto
+                    && ordinary_rep == birth.rep
+                    && !shape
+                        .constfn
+                        .iter()
+                        .any(|i| written_slots.contains(&(i.slot as u32))))
+                .then(|| (shape.clone(), id))
+            })
+            .collect()
+    });
+    let mut ids = Vec::new();
+    for (shape, id) in candidates {
+        note_guard_id(id, Some(&shape));
+        ids.push(id);
+    }
+    ids.sort_unstable();
+    ids.dedup();
+    ids
 }
 
 /// The static supplier of a loop region (DESIGN §4.1): the static id of
@@ -504,16 +721,20 @@ pub(crate) fn static_shape_id_for_keys_global(keys_global: &str) -> Option<u32> 
 /// inline key of the birth shape, or when a key in `boxed_mask` (a bare
 /// store of a value not proven a canonical double) sits on a non-`Any` lane
 /// of the birth rep: the runtime's pack refuses that word too (charter step
-/// 5). A returned id is a guard immediate: it joins the module's seed set
-/// like any other.
+/// 5). The third result is R in region-key order: only identity F64 lanes
+/// of this exact birth ShapeId set a bit. A returned id is a guard immediate:
+/// it joins the module's seed set like any other.
 pub(crate) fn static_region_slots(
     keys_global: &str,
     keys: &[String],
     boxed_mask: u32,
-) -> Option<(u32, Vec<u32>)> {
+) -> Option<(u32, Vec<u32>, u32)> {
     MODULE_STATIC_IDS.with(|m| {
         let m = m.borrow();
         let (id, shape) = m.get(keys_global)?;
+        if !shape.constfn.is_empty() {
+            return None;
+        }
         let names: Vec<&[u8]> = shape
             .keys
             .strip_suffix(&[0])
@@ -538,15 +759,32 @@ pub(crate) fn static_region_slots(
         {
             return None;
         }
+        let r_mask = slots.iter().enumerate().fold(0u32, |mask, (i, &slot)| {
+            if (shape.rep >> (2 * slot)) & 0b11 == 0b01 {
+                mask | (1 << i)
+            } else {
+                mask
+            }
+        });
         note_guard_id(*id, Some(shape));
-        Some((*id, slots))
+        Some((*id, slots, r_mask))
     })
 }
 
-/// The static id this module's mint of `keys_global` requests (the same id
-/// its guards embed; a mint alone does not need a seed).
+/// The static id this module's mint of `keys_global` requests. A literal's
+/// key-cache builder already mints its plain layout before the class mint, so
+/// it needs a startup seed even when no guard embeds this id. Declared-class
+/// prototypes differ from the plain key-cache layout and do not need a seed.
 pub(crate) fn requested_shape_id_for_keys_global(keys_global: &str) -> Option<u32> {
-    MODULE_STATIC_IDS.with(|m| m.borrow().get(keys_global).map(|(id, _)| *id))
+    MODULE_STATIC_IDS.with(|m| {
+        m.borrow()
+            .get(keys_global)
+            .filter(|(_, shape)| shape.constfn.is_empty())
+            .map(|(id, shape)| {
+                note_guard_id(*id, Some(shape));
+                *id
+            })
+    })
 }
 
 /// The static id behind ANOTHER module's shape-id global `shape_id_global`
@@ -562,6 +800,9 @@ pub(crate) fn static_shape_id_for_foreign_global(
         if crate::typed_shape::shape_id_global_name_from_keys_global(&d.keys_global)
             != shape_id_global
         {
+            return None;
+        }
+        if !d.shape.constfn.is_empty() {
             return None;
         }
         note_guard_id(d.id, Some(&d.shape));

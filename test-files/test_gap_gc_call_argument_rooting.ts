@@ -47,6 +47,7 @@
 // it. That is the same shape of blind spot `js_implicit_this_set` (#7226) and
 // `js_regexp_new` (#7227) each cost a round for.
 //
+// parity-env: PERRY_GC_MOVING_LOOP_POLLS=1 PERRY_GC_SCHEDULE_SEED=1 PERRY_GC_SCHEDULE_RATE=1 PERRY_GC_SCHEDULE_ALLOC_KB=4 PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_VERIFY_EVACUATION=1
 // LIVE BY CONSTRUCTION. `churn` keeps allocating AFTER the back-edge poll that
 // collects, so the abandoned from-space bytes are recycled before the callee
 // reads them — a stale read returns wrong text instead of the right answer out

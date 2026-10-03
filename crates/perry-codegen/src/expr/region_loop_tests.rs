@@ -64,7 +64,11 @@ fn put(key: &str, value: Expr) -> Stmt {
 }
 
 /// `function probe(o, v, n) { let h = 0; for (let i = 0; i < n; i++) { body } return h; }`
-fn loop_ir(name: &str, body: Vec<Stmt>) -> String {
+fn loop_ir_with_return(name: &str, body: Vec<Stmt>, result: Expr) -> String {
+    loop_ir_with_bound(name, body, result, Expr::LocalGet(N))
+}
+
+fn loop_ir_with_bound(name: &str, body: Vec<Stmt>, result: Expr, bound: Expr) -> String {
     let mut m = Module::new(name);
     m.functions = vec![Function {
         id: 1,
@@ -91,7 +95,7 @@ fn loop_ir(name: &str, body: Vec<Stmt>) -> String {
                 condition: Some(Expr::Compare {
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(I)),
-                    right: Box::new(Expr::LocalGet(N)),
+                    right: Box::new(bound),
                 }),
                 update: Some(Expr::Update {
                     id: I,
@@ -100,7 +104,7 @@ fn loop_ir(name: &str, body: Vec<Stmt>) -> String {
                 }),
                 body,
             },
-            Stmt::Return(Some(Expr::LocalGet(H))),
+            Stmt::Return(Some(result)),
         ],
         is_async: false,
         is_generator: false,
@@ -113,6 +117,10 @@ fn loop_ir(name: &str, body: Vec<Stmt>) -> String {
     }];
     m.init_kind = ModuleInitKind::Eager;
     String::from_utf8(compile_module(&m, opts()).expect("module compiles")).expect("UTF-8 IR")
+}
+
+fn loop_ir(name: &str, body: Vec<Stmt>) -> String {
+    loop_ir_with_return(name, body, Expr::LocalGet(H))
 }
 
 /// The blocks of the probe function, label -> (instructions, successors).
@@ -342,15 +350,15 @@ fn a_region_that_stores_every_key_it_names_has_no_spill_copy() {
     );
 }
 
-/// The prime call's last argument: the boxed-store mask (charter step 5).
+/// The prime call's penultimate argument: the boxed-store mask (charter step 5).
 fn prime_boxed_masks(ir: &str) -> Vec<u32> {
     ir.lines()
         .filter(|l| l.contains("@js_region_loop_prime("))
         .filter_map(|l| {
-            // The call can carry trailing attributes after its closing parenthesis.
-            let call = l.split_once(')')?.0;
-            let last_arg = call.rsplit_once("i32 ")?.1;
-            last_arg.trim().parse().ok()
+            // The R mask follows the boxed-store mask; the call may carry
+            // trailing LLVM attributes after its closing parenthesis.
+            let (before_r, _) = l.rsplit_once(", i32 ")?;
+            before_r.rsplit_once("i32 ")?.1.trim().parse().ok()
         })
         .collect()
 }
@@ -387,5 +395,422 @@ fn a_bare_store_of_a_value_not_proven_a_double_names_its_key_to_the_prime() {
     assert!(
         masks.iter().all(|&m| m == 0),
         "a literal double is a valid value of every lane: {masks:?}"
+    );
+}
+
+/// Last prime argument, before LLVM call attributes, is the requested region R mask.
+fn prime_rep_masks(ir: &str) -> Vec<u32> {
+    ir.lines()
+        .filter(|line| line.contains("@js_region_loop_prime("))
+        .filter_map(|line| {
+            line.rsplit_once("i32 ")?
+                .1
+                .split_once(')')?
+                .0
+                .trim()
+                .parse()
+                .ok()
+        })
+        .collect()
+}
+
+/// P8: the generic region must carry the class-field increment shape after
+/// its older numeric loop tier is retired. The store is bare only when its
+/// own exact read is protected by R; a string store cannot clear the boxed
+/// mask even when a later read requests R.
+#[test]
+fn a_region_r_proven_increment_store_clears_only_its_number_boxed_bit() {
+    let increment = Expr::Binary {
+        op: BinaryOp::Add,
+        left: Box::new(get("x")),
+        right: Box::new(Expr::Integer(1)),
+    };
+    let numeric = loop_ir("region_store_r_number", vec![put("x", increment)]);
+    let numeric_masks = prime_boxed_masks(&numeric);
+    assert!(
+        numeric.contains("rloop.fast"),
+        "numeric region did not form:\n{numeric}"
+    );
+    assert!(
+        !numeric_masks.is_empty() && numeric_masks.iter().all(|&m| m == 0),
+        "R-proven Number store must clear the boxed bit: {numeric_masks:?}\n{numeric}"
+    );
+    let numeric_r = prime_rep_masks(&numeric);
+    assert!(
+        !numeric_r.is_empty() && numeric_r.iter().all(|&m| m == 1),
+        "increment must actually request F64 for its exact read: {numeric_r:?}\n{numeric}"
+    );
+
+    let non_number = loop_ir(
+        "region_store_r_string",
+        vec![
+            put("x", Expr::String("bad".into())),
+            Stmt::Expr(Expr::LocalSet(
+                H,
+                Box::new(Expr::Binary {
+                    op: BinaryOp::Add,
+                    left: Box::new(get("x")),
+                    right: Box::new(Expr::Integer(1)),
+                }),
+            )),
+        ],
+    );
+    let non_number_masks = prime_boxed_masks(&non_number);
+    assert!(
+        !non_number_masks.is_empty() && non_number_masks.iter().all(|&m| m == 1),
+        "string store must retain the boxed bit: {non_number_masks:?}\n{non_number}"
+    );
+}
+
+/// A fresh bare read used by a Number-consuming add requests an F64 lane.
+/// The prime must refuse an Any receiver, so this is an actual R-bearing
+/// region rather than a vacuous mask argument.
+#[test]
+fn a_number_consuming_bare_read_sets_the_prime_rep_mask() {
+    let ir = loop_ir(
+        "region_loop_rep",
+        vec![Stmt::Expr(Expr::LocalSet(
+            H,
+            Box::new(Expr::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(Expr::LocalGet(H)),
+                right: Box::new(get("x")),
+            }),
+        ))],
+    );
+    assert!(ir.contains("rloop.fast"), "region did not form:\n{ir}");
+    let masks = prime_rep_masks(&ir);
+    assert!(!masks.is_empty(), "no learned prime in\n{ir}");
+    assert!(
+        masks.iter().all(|&m| m == 1),
+        "fresh x read must request key 0: {masks:?}"
+    );
+}
+
+/// The F-local fixed point follows the fresh F64 read through a temporary and
+/// a loop-carried accumulator. Entry is strict; G and post-loop code retain
+/// the ordinary dynamic add. Removing the scoped materialization or the
+/// entry check makes this test fail.
+#[test]
+fn a_region_number_local_is_admitted_only_in_f() {
+    const TEMP: u32 = 6;
+    let body = vec![
+        Stmt::Let {
+            id: TEMP,
+            name: "temp".to_string(),
+            ty: Type::Any,
+            mutable: false,
+            init: Some(get("x")),
+        },
+        Stmt::Expr(Expr::LocalSet(
+            H,
+            Box::new(Expr::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(Expr::LocalGet(H)),
+                right: Box::new(Expr::LocalGet(TEMP)),
+            }),
+        )),
+    ];
+    let ir = loop_ir_with_return(
+        "region_number_scope",
+        body,
+        Expr::Binary {
+            op: BinaryOp::Add,
+            left: Box::new(Expr::LocalGet(H)),
+            right: Box::new(Expr::Integer(1)),
+        },
+    );
+    assert!(ir.contains("rloop.fast"), "region did not form:\n{ir}");
+    let masks = prime_rep_masks(&ir);
+    assert!(
+        !masks.is_empty() && masks.iter().all(|&m| m == 1),
+        "the temp's source must request R=1: {masks:?}\n{ir}"
+    );
+    assert!(
+        ir.contains("rloop.fast") && ir.contains("fadd double"),
+        "F must use numeric add:\n{ir}"
+    );
+    assert!(
+        ir.contains("rloop.guard") && ir.contains("icmp ult i64"),
+        "A_F must strictly test the loop-carried accumulator:\n{ir}"
+    );
+    assert!(
+        ir.lines()
+            .filter(|line| {
+                line.contains("call ") && line.contains("@js_dynamic_string_or_number_add(")
+            })
+            .count()
+            >= 2,
+        "G and post-loop adds must remain dynamic (no scope leak):\n{ir}"
+    );
+}
+
+/// Literal-bound flow through temp must receive the same R/5L proof as direct reads.
+#[test]
+fn flow_derived_number_local_constant_bound_avoids_recheck() {
+    const TEMP: u32 = 6;
+    let body = vec![
+        Stmt::Let {
+            id: TEMP,
+            name: "temp".to_string(),
+            ty: Type::Any,
+            mutable: false,
+            init: Some(get("x")),
+        },
+        Stmt::Expr(Expr::LocalSet(
+            H,
+            Box::new(Expr::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(Expr::LocalGet(H)),
+                right: Box::new(Expr::LocalGet(TEMP)),
+            }),
+        )),
+    ];
+    let ir = loop_ir_with_bound(
+        "region_number_scope_constant_bound",
+        body,
+        Expr::Binary {
+            op: BinaryOp::Add,
+            left: Box::new(Expr::LocalGet(H)),
+            right: Box::new(Expr::Integer(1)),
+        },
+        Expr::Integer(200),
+    );
+    assert!(ir.contains("rloop.fast"), "region did not form:\n{ir}");
+    assert!(
+        !ir.contains("br i1 true, label %rloop.recheck"),
+        "constant-bound flow-derived R/5L must avoid an unconditional recheck:\n{ir}"
+    );
+    let bl = blocks(&ir);
+    let f = f_body_blocks(&bl);
+    assert!(!f.is_empty(), "F body must be present:\n{ir}");
+    for label in f {
+        let instructions = bl[&label].0.join("\n");
+        assert!(
+            !instructions.contains("@js_object_get_field"),
+            "{label} must retain the bare R-proven load:\n{instructions}\n{ir}"
+        );
+    }
+    let masks = prime_rep_masks(&ir);
+    assert!(
+        !masks.is_empty() && masks.iter().all(|&m| m == 1),
+        "the temp's source must request R=1: {masks:?}\n{ir}"
+    );
+    assert!(
+        ir.contains("rloop.fast") && ir.contains("fadd double"),
+        "F must use numeric add:\n{ir}"
+    );
+    assert!(
+        ir.contains("rloop.guard") && ir.contains("icmp ult i64"),
+        "A_F must strictly test the loop-carried accumulator:\n{ir}"
+    );
+    assert!(
+        ir.lines()
+            .filter(|line| {
+                line.contains("call ") && line.contains("@js_dynamic_string_or_number_add(")
+            })
+            .count()
+            >= 2,
+        "G and post-loop adds must remain dynamic (no scope leak):\n{ir}"
+    );
+}
+
+/// An unrestricted bound comparison may invoke user code and revoke freshness.
+#[test]
+fn any_bound_numeric_region_retains_collecting_comparison_recheck() {
+    const TEMP: u32 = 6;
+    let body = vec![
+        Stmt::Let {
+            id: TEMP,
+            name: "temp".to_string(),
+            ty: Type::Any,
+            mutable: false,
+            init: Some(get("x")),
+        },
+        Stmt::Expr(Expr::LocalSet(
+            H,
+            Box::new(Expr::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(Expr::LocalGet(H)),
+                right: Box::new(Expr::LocalGet(TEMP)),
+            }),
+        )),
+    ];
+    let ir = loop_ir_with_return(
+        "region_number_scope_any_bound",
+        body,
+        Expr::Binary {
+            op: BinaryOp::Add,
+            left: Box::new(Expr::LocalGet(H)),
+            right: Box::new(Expr::Integer(1)),
+        },
+    );
+    assert!(ir.contains("rloop.fast"), "region did not form:\n{ir}");
+    assert!(
+        ir.contains("@js_rel_lt("),
+        "Any bound must retain its collecting comparison:\n{ir}"
+    );
+    assert!(
+        ir.contains("br i1 true, label %rloop.recheck"),
+        "Any-bound user-code comparison must retain the conservative recheck:\n{ir}"
+    );
+    let masks = prime_rep_masks(&ir);
+    assert!(
+        !masks.is_empty() && masks.iter().all(|&m| m == 1),
+        "the temp's source must request R=1: {masks:?}\n{ir}"
+    );
+    assert!(
+        ir.contains("rloop.fast") && ir.contains("fadd double"),
+        "F must use numeric add:\n{ir}"
+    );
+    assert!(
+        ir.contains("rloop.guard") && ir.contains("icmp ult i64"),
+        "A_F must strictly test the loop-carried accumulator:\n{ir}"
+    );
+    assert!(
+        ir.lines()
+            .filter(|line| {
+                line.contains("call ") && line.contains("@js_dynamic_string_or_number_add(")
+            })
+            .count()
+            >= 2,
+        "G and post-loop adds must remain dynamic (no scope leak):\n{ir}"
+    );
+}
+
+fn times(e: Expr, factor: i64) -> Expr {
+    Expr::Binary {
+        op: BinaryOp::Mul,
+        left: Box::new(e),
+        right: Box::new(Expr::Integer(factor)),
+    }
+}
+
+fn accumulated(reads: &[&str], factor: i64) -> Stmt {
+    let mut sum = Expr::LocalGet(H);
+    for key in reads {
+        sum = Expr::Binary {
+            op: BinaryOp::Add,
+            left: Box::new(sum),
+            right: Box::new(times(get(key), factor)),
+        };
+    }
+    Stmt::Expr(Expr::LocalSet(H, Box::new(sum)))
+}
+
+/// An arithmetic wrapper must consume the exact R and 5L facts, regardless
+/// of its spelling. Sabotaging either proof restores the unconditional
+/// recheck and (for four reads) generic reads after the first one.
+#[test]
+fn numeric_arithmetic_twins_keep_all_reads_bare_without_a_recheck() {
+    for keys in [&["a"][..], &["a", "b", "c", "e"][..]] {
+        for factor in [1, 2] {
+            let ir = loop_ir_with_bound(
+                "region_arith_twin",
+                vec![accumulated(keys, factor)],
+                Expr::LocalGet(H),
+                Expr::Integer(200),
+            );
+            let masks = prime_rep_masks(&ir);
+            let expected = (1u32 << keys.len()) - 1;
+            assert!(
+                !masks.is_empty() && masks.iter().all(|m| *m == expected),
+                "every exact arithmetic read must be R-proven: {masks:?}\n{ir}"
+            );
+            assert!(ir.contains("rloop.fast"), "F did not form:\n{ir}");
+            assert!(
+                !ir.contains("rloop.recheck"),
+                "numeric arithmetic must not recheck every iteration:\n{ir}"
+            );
+            let bl = blocks(&ir);
+            let f = f_body_blocks(&bl);
+            for label in f {
+                let instructions = bl[&label].0.join("\n");
+                assert!(
+                    !instructions.contains("@js_object_get_field"),
+                    "{label} must not use a generic read:\n{instructions}\n{ir}"
+                );
+            }
+        }
+    }
+}
+
+/// A property read from another object may run a getter. It must kill the
+/// receiver fact even when it is nested under native arithmetic, and a
+/// later read of the region receiver must not inherit the earlier proof.
+#[test]
+fn arithmetic_getter_operand_requires_generic_recheck() {
+    let getter = Expr::PropertyGet {
+        object: Box::new(Expr::Call {
+            callee: Box::new(Expr::LocalGet(V)),
+            args: Vec::new(),
+            type_args: Vec::new(),
+            byte_offset: 0,
+        }),
+        property: "x".to_string(),
+        byte_offset: 0,
+    };
+    let body = vec![
+        Stmt::Expr(Expr::LocalSet(
+            H,
+            Box::new(Expr::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(Expr::LocalGet(H)),
+                right: Box::new(Expr::Binary {
+                    op: BinaryOp::Mul,
+                    left: Box::new(get("a")),
+                    right: Box::new(getter),
+                }),
+            }),
+        )),
+        Stmt::Expr(get("b")),
+    ];
+    let ir = loop_ir_with_bound(
+        "region_getter_kill",
+        body,
+        Expr::LocalGet(H),
+        Expr::Integer(200),
+    );
+    assert!(
+        ir.contains("rloop.fast"),
+        "fixture must admit the first read:\n{ir}"
+    );
+    assert!(
+        ir.contains("rloop.recheck") && ir.contains("br i1 true, label %rloop.recheck"),
+        "getter operand must force the back-edge recheck:\n{ir}"
+    );
+    assert!(
+        prime_rep_masks(&ir).iter().all(|m| m & 0b10 == 0),
+        "the later b read must not borrow the stale fact:\n{ir}"
+    );
+}
+
+/// A call after the final bare read may mutate the receiver or its
+/// prototype. The whole F path, not just prefixes of bare reads, is part of
+/// the next iteration's freshness proof.
+#[test]
+fn post_read_mutation_call_forces_next_iteration_recheck() {
+    let body = vec![
+        accumulated(&["a"], 1),
+        Stmt::Expr(Expr::Call {
+            callee: Box::new(Expr::LocalGet(V)),
+            args: Vec::new(),
+            type_args: Vec::new(),
+            byte_offset: 0,
+        }),
+    ];
+    let ir = loop_ir_with_bound(
+        "region_post_read_mutation",
+        body,
+        Expr::LocalGet(H),
+        Expr::Integer(200),
+    );
+    assert!(
+        ir.contains("rloop.fast"),
+        "fixture must admit the read:\n{ir}"
+    );
+    assert!(
+        ir.contains("rloop.recheck") && ir.contains("br i1 true, label %rloop.recheck"),
+        "a post-read JS call must recheck before the next iteration:\n{ir}"
     );
 }

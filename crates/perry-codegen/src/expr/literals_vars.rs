@@ -436,8 +436,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 demote_extracted_string_binding(ctx, *id, &value);
                 Ok(value)
             } else if let Some(global_name) = ctx.module_globals.get(id).cloned() {
-                let g_ref = format!("@{}", global_name);
-                let value = ctx.block().load(DOUBLE, &g_ref);
+                let value =
+                    crate::codegen::global_transfer::load_module_global(ctx, *id, &global_name);
                 demote_extracted_string_binding(ctx, *id, &value);
                 Ok(value)
             } else {
