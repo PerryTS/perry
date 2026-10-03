@@ -59,7 +59,7 @@
 //! ([`HOLDER_STATE`]): it never walks or primes again, and its misses take the
 //! path they took before the entry existed.
 
-use super::{key_may_be_accessor, next_prototype, ordinary_receiver, WORKER_AGENTS_EXIST};
+use super::{next_prototype, ordinary_receiver, WORKER_AGENTS_EXIST};
 use crate::object::shapes::{
     object_proto_id, object_shape_descriptor, object_shape_stamp, shape_proto_id, PIC_ID_TOKEN_BIT,
     PROTO_ID_CLASS, PROTO_ID_DEFAULT, PROTO_ID_MIXED, PROTO_ID_NULL, PROTO_ID_UNIQUE,
@@ -80,7 +80,7 @@ pub const HOLDER_SHAPE: usize = crate::codegen_abi::PIC_HOLDER_SHAPE_WORD;
 ///
 /// | value | meaning |
 /// |---|---|
-/// | `0 ..= u32::MAX` | depth 1, the value is the holder's inline slot |
+/// | `0 ..= u32::MAX` | depth 1, the value is the holder's slot word ([`HOLDER_SLOT_SPILL`]) |
 /// | [`HOLDER_ABSENT_DEPTH1`] | depth 1, absent: the answer is `undefined` |
 /// | [`HOLDER_ACCESSOR`] + slot | direct class-prototype accessor; collecting hit only |
 /// | [`HOLDER_MULTI_ABSENT`] | depth-1 absent for up to ten receiver shapes |
@@ -124,6 +124,15 @@ const HOLDER_MULTI_ABSENT: u64 = 1 << 60;
 const MULTI_ABSENT_EXTRA_IDS: usize = 9;
 const MULTI_ABSENT_NEXT_MASK: u64 = 0xf;
 const HOLDER_DEPTH_SHIFT: u32 = 32;
+/// A holder slot word with this bit set names the holder's SPILL position
+/// (the low bits), not an inline slot: a key past the holder's inline region,
+/// as `%Object.prototype%`'s `constructor` and keys added to a declared
+/// class's prototype after it was built are. The holder's ShapeId pins the
+/// key list, so the position names the key for as long as it matches, exactly
+/// as it does for an inline slot. Spill positions stay far below this bit
+/// (`spill::SPILL_MAX_FIELD_INDEX`). Inline words keep the bit clear, so the
+/// common depth-1 inline hit stays one compare.
+pub(super) const HOLDER_SLOT_SPILL: u32 = 1 << 31;
 const HOLDER_MAX_DEPTH: usize = 4;
 
 /// Every cache that holds (or held) a holder entry, for the primary agent's
@@ -219,7 +228,7 @@ pub(crate) unsafe fn entry_answer(c: &PicCache, token: i64) -> Option<u64> {
     // A depth-1 data holder is the common inherited-read hit. Its kind is
     // exactly an inline slot number; answer it before the absent, accessor,
     // multi-shape and deeper-hop decoding below.
-    if (kind as u64) <= u32::MAX as u64 {
+    if (kind as u64) < u64::from(HOLDER_SLOT_SPILL) {
         let holder = c[HOLDER_OBJ] as usize;
         if shape_word(holder) != c[HOLDER_SHAPE] as u32 {
             return None;
@@ -269,7 +278,7 @@ unsafe fn entry_answer_other(c: &PicCache, kind: i64) -> Option<u64> {
     if absent {
         return Some(crate::value::TAG_UNDEFINED);
     }
-    Some(slot_bits(holder, slot))
+    holder_slot_value(holder, slot)
 }
 
 /// A second through tenth ABSENT receiver shape is a rare path relative to
@@ -319,6 +328,26 @@ fn set_multi_absent_id(c: &mut PicCache, i: usize, id: u32) {
     }
 }
 
+/// The site's DECLARED-CLASS entry (`class_read`) for `recv`, from the GC-leaf
+/// read front, asked after [`entry_answer`] declined: a class instance's
+/// inherited data or absent key, proved by the receiver's ShapeId and class
+/// id, the class lookup-surface generation (its direct link) and the hop and
+/// holder ShapeIds. Loads and compares only.
+///
+/// # Safety
+/// `c` is a live site cache; `recv` an object whose ShapeId `token` carries.
+#[inline]
+pub(crate) unsafe fn class_entry_answer(
+    c: &PicCache,
+    recv: *const ObjectHeader,
+    token: i64,
+) -> Option<u64> {
+    if WORKER_AGENTS_EXIST.load(Ordering::SeqCst) != 0 || token == 0 {
+        return None;
+    }
+    class_read::leaf_answer(c, recv, token)
+}
+
 /// The site's holder entry asked for `handle`, without priming: what the
 /// emitted tower's holder check answers, for a runtime caller that asks the
 /// site's words itself (`typed_feedback::guards`' class-field miss arm).
@@ -347,6 +376,45 @@ unsafe fn shape_word(addr: usize) -> u32 {
     object_shape_stamp(addr as *const ObjectHeader)
 }
 
+/// The value a holder slot word names on `addr` (see [`HOLDER_SLOT_SPILL`]),
+/// or `None` when it must not be answered from the entry. An inline slot is
+/// its word. A spill position answers only a value the generic getter would
+/// take as found: `object::overflow_get` reads a spilled `undefined` (and a
+/// never-written hole) as ABSENT and continues up the chain, so such a value
+/// declines and the collecting path decides. Loads only: a GC leaf.
+#[inline]
+pub(super) unsafe fn holder_slot_value(addr: usize, slot: u32) -> Option<u64> {
+    if slot & HOLDER_SLOT_SPILL == 0 {
+        return Some(slot_bits(addr, slot));
+    }
+    holder_spill_value(addr, slot & !HOLDER_SLOT_SPILL)
+}
+
+#[cold]
+#[inline(never)]
+unsafe fn holder_spill_value(addr: usize, index: u32) -> Option<u64> {
+    crate::object::spill::spill_get(addr, index as usize)
+}
+
+/// The slot word for key position `s` of the hop `addr` whose shape has
+/// `inline` live inline slots: the inline slot, or the spill position when
+/// the key's value lives in the object's spill storage now and the generic
+/// getter takes it as found ([`holder_slot_value`]). `None` refuses the walk
+/// (a legacy side-table overflow slot, spill disabled, or a value the getter
+/// would read past).
+unsafe fn holder_slot_word(addr: usize, s: u32, inline: u32) -> Option<u32> {
+    if s < inline {
+        return Some(s);
+    }
+    if s as usize >= crate::object::spill::SPILL_MAX_FIELD_INDEX
+        || !crate::object::spill::object_spill_enabled()
+        || crate::object::spill::spill_get(addr, s as usize).is_none()
+    {
+        return None;
+    }
+    Some(s | HOLDER_SLOT_SPILL)
+}
+
 #[inline]
 unsafe fn slot_bits(addr: usize, slot: u32) -> u64 {
     std::ptr::read(
@@ -360,6 +428,60 @@ unsafe fn slot_bits(addr: usize, slot: u32) -> u64 {
 /// getter.
 fn holder_name_admitted(name: &[u8]) -> bool {
     !super::name_refused(name) && name != b"__proto__" && !name.iter().all(u8::is_ascii_digit)
+}
+
+/// A declared-class instance whose class's prototype object does not exist
+/// yet: materialize it, as any `C.prototype` read does, so the walk below has
+/// the object the class's prototype members (and `C.prototype.k = v` values,
+/// which `js_register_prototype_method` records before the object exists) are
+/// read from. Without it the site walks the class registry by name on every
+/// read.
+///
+/// The materialization allocates with collection SUPPRESSED: the miss
+/// handler holds the receiver and key raw and takes the generic getter with
+/// them when the prime declines, so nothing may move here. It installs only
+/// the class's own declared members; no user code runs.
+///
+/// # Safety
+/// `obj` is the miss handler's object receiver.
+unsafe fn materialize_class_prototype(obj: *const ObjectHeader) {
+    if ordinary_receiver(obj as usize).is_none() {
+        return;
+    }
+    let class_id = (*obj).class_id;
+    let is_bare_class = shape_proto_id(object_shape_stamp(obj))
+        .is_some_and(|pid| (PROTO_ID_CLASS..PROTO_ID_MIXED).contains(&pid));
+    if !is_bare_class || !crate::object::class_decl_prototype_object(class_id).is_null() {
+        return;
+    }
+    let _no_move = crate::gc::GcSuppressScope::new();
+    crate::object::class_registry::class_decl_prototype_value(class_id);
+}
+
+/// Could a [[Get]] of `name` on `obj` run an accessor? The read-side form of
+/// `method_site::key_may_be_accessor`: a data property's attributes
+/// (non-enumerable, read-only, non-configurable: the meta record's
+/// `attr_key_bits`) do not change what a Get answers, so only the accessor
+/// Bloom bit short-cuts, and the authoritative descriptor state decides the
+/// rest. `%Object.prototype%.constructor` and every class prototype's methods
+/// are non-enumerable data properties.
+unsafe fn key_may_be_accessor(obj: *const ObjectHeader, name: &[u8]) -> bool {
+    let meta = (*obj).meta;
+    if !meta.is_null() {
+        let bit = 1u64 << (crate::object::key_bytes_hash(name.as_ptr(), name.len()) & 63);
+        if (*meta).accessor_key_bits & bit != 0 {
+            return true;
+        }
+    }
+    if crate::object::descriptor_state::object_has_descriptors(obj as usize) {
+        let Ok(name) = std::str::from_utf8(name) else {
+            return true;
+        };
+        if crate::object::descriptor_state::get_accessor_descriptor(obj as usize, name).is_some() {
+            return true;
+        }
+    }
+    false
 }
 
 /// The answer the shapes give, found by a walk that allocates nothing.
@@ -619,9 +741,7 @@ unsafe fn walk(recv: *const ObjectHeader, name: &[u8], class_first: bool) -> Opt
             if let Some(s) =
                 crate::object::keys_find_slot_by_bytes_resolved(keys, shape.logical_key_count, name)
             {
-                if s >= shape.live_inline_slot_count {
-                    return None;
-                }
+                let s = holder_slot_word(next as usize, s, shape.live_inline_slot_count)?;
                 w.holder = next as usize;
                 w.holder_shape = object_shape_stamp(next);
                 w.slot = Some(s);
@@ -727,6 +847,7 @@ pub(crate) unsafe fn prime_read_holder(
             return None;
         }
     }
+    materialize_class_prototype(obj);
     let name = crate::string::header_str_checked(key)?.as_bytes();
     let recv = ordinary_receiver(obj as usize)?;
     if let Some(acc) = class_accessor_walk(recv, name) {
@@ -818,7 +939,9 @@ pub(crate) unsafe fn prime_read_holder(
         let bits = value.bits();
         let confirmed = match w.slot {
             None => bits == crate::value::TAG_UNDEFINED,
-            Some(s) => bits == slot_bits(w.holder, s) && bits != crate::value::TAG_HOLE,
+            Some(s) => {
+                holder_slot_value(w.holder, s) == Some(bits) && bits != crate::value::TAG_HOLE
+            }
         };
         if !confirmed {
             refuse_and_latch(cache);
