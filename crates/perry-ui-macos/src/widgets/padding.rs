@@ -13,6 +13,8 @@ pub struct PerryInsetCellIvars {
     left: Cell<f64>,
     bottom: Cell<f64>,
     right: Cell<f64>,
+    /// The side padding the cell's text layout adds, which a label draws over.
+    line_padding: Cell<f64>,
 }
 
 impl PerryInsetCellIvars {
@@ -22,15 +24,16 @@ impl PerryInsetCellIvars {
             left: Cell::new(0.0),
             bottom: Cell::new(0.0),
             right: Cell::new(0.0),
+            line_padding: Cell::new(0.0),
         }
     }
 
     fn get(&self) -> NSEdgeInsets {
         NSEdgeInsets {
             top: self.top.get(),
-            left: self.left.get(),
+            left: self.left.get() - self.line_padding.get(),
             bottom: self.bottom.get(),
-            right: self.right.get(),
+            right: self.right.get() - self.line_padding.get(),
         }
     }
 
@@ -107,6 +110,16 @@ define_class!(
         }
     }
 );
+
+impl PerryInsetTextFieldCell {
+    /// Draws the text at the frame's left edge, as a web text element does.
+    /// AppKit's text layout pads each side by 2pt, and a stock label hides
+    /// that with 2pt alignment rect insets, which push its frame past the
+    /// width it is pinned to.
+    pub(crate) fn cancel_line_padding(&self) {
+        self.ivars().line_padding.set(2.0);
+    }
+}
 
 define_class!(
     #[unsafe(super(NSSecureTextFieldCell))]
