@@ -691,11 +691,11 @@
     },
     {
       "path": "crates/perry-codegen/src/stmt/region_loop/guard.rs",
-      "function": "static_region_word",
+      "function": "static_class_name",
       "access": "local_type_hint",
       "count": 1,
       "classification": "runtime-validated",
-      "reason": "The declared class only picks a loop region's static supplier (its static ShapeId and slots); the region guard compares the receiver's own ShapeId against that id as an immediate, so a receiver of any other shape misses into the learned supplier and a wrong hint can only cost the static hit, never a wrong slot."
+      "reason": "The declared class only picks a region receiver's static supplier (its static ShapeId and slots): at planning, whether a receiver naming more keys than a learned word addresses may be planned at all, and at the guard, the id and constant slots. The guard compares the receiver's own ShapeId against that id as an immediate, so a receiver of any other shape takes the plain copy (a receiver wider than a learned word is guarded only when the same supplier still serves it at guard time, else the loop is lowered plainly); a wrong hint can only cost the region, never a wrong slot."
     }
   ]
 }

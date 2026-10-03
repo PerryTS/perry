@@ -77,7 +77,8 @@ use self::bare::note;
 pub(crate) use self::bare::{try_lower_bare_get, try_lower_bare_put, try_lower_fact_add_tree};
 use self::guard::{
     decode_slots, emit_body_guard_direct, emit_guard, emit_guard_word, emit_recheck_eq,
-    emit_value_tests, field_i32, handle_of, has_static_supplier, lower_recv, store_admission,
+    emit_value_tests, field_i32, handle_of, has_static_supplier, lower_recv, static_class_name,
+    static_keys_served, store_admission,
 };
 pub(crate) use self::numeric_expression::try_lower_numeric_compare;
 use self::plan::{
@@ -208,6 +209,8 @@ pub(crate) struct Receiver {
     expected_shape: Option<String>,
     /// Each key's slot (`i64`), decoded once from `word`.
     slots: Vec<String>,
+    /// A static supplier's slots, compile-time constants (any number of keys).
+    static_slots: Option<Vec<u32>>,
 }
 
 /// Whether this exact fresh bare read is protected by an R bit in an
@@ -432,6 +435,12 @@ fn begin_with(
     } else {
         HashSet::new()
     };
+    // Receivers whose class the compiler names: their static supplier may
+    // serve more keys than one learned word addresses.
+    let wide: HashMap<Recv, String> = cands
+        .iter()
+        .filter_map(|r| static_class_name(ctx, *r, None).map(|c| (*r, c)))
+        .collect();
     let env = arrays::loop_env(ctx, cond, body, update);
     // The counter bound `B` of `i < B`: an array guard with the counter
     // checks `B <= capacity` (or `<= length`) as an `f64` compare, which a
@@ -465,15 +474,31 @@ fn begin_with(
     // choice below.
     let mut nested: Option<(Plan, Option<(usize, Plan)>)> = None;
     if !arrs.is_empty() {
-        let inner = body_region_plan(ctx, body, &cands_for_body);
+        let inner = body_region_plan(ctx, body, &cands_for_body, &wide);
+        if std::env::var("PERRY_REGION_DIAG").as_deref() == Ok("7") {
+            if let Some((k, ip)) = &inner {
+                eprintln!(
+                    "[perry region] inner plan in {}: split={} bare={} trees={} reads={:?} recv={:?}",
+                    ctx.func.name,
+                    k,
+                    ip.bare.len(),
+                    ip.trees.len(),
+                    ip.bare_reads.iter().map(|(_, r, k)| (*r, k.clone())).collect::<Vec<_>>(),
+                    ip.receivers.iter().map(|(r, k, ..)| (*r, k.clone())).collect::<Vec<_>>()
+                );
+            }
+        }
         let p = plan(
             ctx,
             body,
             cands.clone(),
+            &wide,
             arrs,
             &env,
             Some((cond, update)),
-            inner.as_ref().map(|(k, ip)| (*k, &ip.bare, &ip.trees)),
+            inner
+                .as_ref()
+                .map(|(k, ip)| (*k, &ip.bare, &ip.trees, &ip.stale_at)),
         );
         if std::env::var("PERRY_REGION_DIAG").as_deref() == Ok("4") {
             eprintln!(
@@ -514,6 +539,7 @@ fn begin_with(
                 ctx,
                 body,
                 cands,
+                &wide,
                 HashMap::new(),
                 &Env::default(),
                 Some((cond, update)),
@@ -523,6 +549,21 @@ fn begin_with(
             None,
         ),
     };
+    // The guard is emitted now, in the context the plan was made in: a
+    // receiver wider than a learned word must still name its class.
+    let first = first.filter(|p| {
+        p.receivers.iter().all(|(r, k, _, _, bm, _)| {
+            k.len() <= MAX_KEYS
+                || static_class_name(ctx, *r, None)
+                    .is_some_and(|c| static_keys_served(ctx, &c, k, *bm))
+        })
+    });
+    if first.is_none() {
+        if let Some(sc) = bound_scope {
+            ctx.receiver_descriptors.dematerialize_scope(sc);
+        }
+    }
+    let bound_scope = bound_scope.filter(|_| first.is_some());
     if let Some(p) = first {
         let token = NEXT_TOKEN.with(|t| {
             let v = t.get();
@@ -551,6 +592,7 @@ fn begin_with(
                 word: String::new(),
                 expected_shape: None,
                 slots: Vec::new(),
+                static_slots: None,
             })
             .collect();
         let mut all = "true".to_string();
@@ -603,6 +645,8 @@ fn begin_with(
         let inner = inner.map(|(k, ip)| {
             let mut ib = body_pending(ip, body, k);
             ib.dirty_slot = Some(dirty_slot.clone());
+            // The loop's dirty points in the tail are set from F-tail.
+            ib.dirty_after = p.dirty_after.clone();
             ib.parent_valid = Some(valid_slot.clone());
             Box::new(ib)
         });
@@ -636,7 +680,7 @@ fn begin_with(
     }
     // Body region: the first `const o = <expr>` whose binding the rest of the
     // body reads or writes by static key.
-    if let Some((k, p)) = body_region_plan(ctx, body, &cands_for_body) {
+    if let Some((k, p)) = body_region_plan(ctx, body, &cands_for_body, &wide) {
         let pending = body_pending(p, body, k);
         let token = pending.token;
         ctx.region_loops.push(pending);
@@ -665,10 +709,13 @@ fn body_region_plan(
     ctx: &FnCtx<'_>,
     body: &[Stmt],
     extra: &HashSet<Recv>,
+    wide: &HashMap<Recv, String>,
 ) -> Option<(usize, Plan)> {
     for (i, s) in body.iter().enumerate() {
         let Stmt::Let {
-            id, init: Some(_), ..
+            id,
+            init: Some(init),
+            ..
         } = s
         else {
             continue;
@@ -679,6 +726,19 @@ fn body_region_plan(
             .iter()
             .filter(|s| matches!(s, Stmt::Let { id: x, .. } if x == id))
             .count();
+        if std::env::var("PERRY_REGION_DIAG").as_deref() == Ok("7") {
+            eprintln!(
+                "[perry region] body let {id} at {i} in {}: decls={decls} assigned={} refused={} boxed={} prealloc={} tdz={} rep={} int={}",
+                ctx.func.name,
+                assigned(tail, &[]).contains(id),
+                body_refused(tail),
+                ctx.boxed_vars.contains(id),
+                ctx.prealloc_boxes.contains(id),
+                ctx.tdz_boxes.contains(id),
+                ctx.local_slot_reps.contains_key(id),
+                ctx.integer_locals.contains(id)
+            );
+        }
         if decls != 1 || assigned(tail, &[]).contains(id) || body_refused(tail) {
             continue;
         }
@@ -695,10 +755,15 @@ fn body_region_plan(
         let mut cands = HashSet::new();
         cands.insert(Recv::Local(*id));
         cands.extend(extra.iter().copied());
+        let mut wide = wide.clone();
+        if let Some(c) = static_class_name(ctx, Recv::Local(*id), Some(init)) {
+            wide.insert(Recv::Local(*id), c);
+        }
         if let Some(p) = plan(
             ctx,
             tail,
             cands,
+            &wide,
             HashMap::new(),
             &Env::default(),
             None,
@@ -844,6 +909,7 @@ fn body_pending(p: Plan, body: &[Stmt], split_at: usize) -> Pending {
             word: String::new(),
             expected_shape: None,
             slots: Vec::new(),
+            static_slots: None,
         })
         .collect();
     Pending {
@@ -1051,7 +1117,12 @@ pub(crate) fn lower_split(
     let parent_valid = ctx.region_loops[idx].parent_valid.clone();
     // A body region's binding was declared by the prefix just lowered: if its
     // lowering gave it a special representation, the tail lowers plainly.
-    if split_at > 0 && !receivers.iter().all(|rv| receiver_eligible(ctx, rv.recv)) {
+    if split_at > 0
+        && !receivers.iter().all(|rv| {
+            receiver_eligible(ctx, rv.recv)
+                && (rv.keys.len() <= MAX_KEYS || has_static_supplier(ctx, rv))
+        })
+    {
         if let Some(v) = &parent_valid {
             ctx.block().store(I1, "false", v);
         }

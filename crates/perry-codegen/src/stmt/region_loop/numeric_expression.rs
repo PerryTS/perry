@@ -147,6 +147,7 @@ fn emit(
         word: String::new(),
         expected_shape: None,
         slots: Vec::new(),
+        static_slots: None,
     };
     let (sites, word) = emit_guard_word(ctx, &mut rv);
     decode_slots(ctx, &mut rv, &word);

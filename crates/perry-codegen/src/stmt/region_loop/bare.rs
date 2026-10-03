@@ -13,12 +13,10 @@ pub(super) fn active_slot(ctx: &mut FnCtx<'_>, e: &Expr, r: Recv, key: &str) -> 
     if !a.bare.contains(&(e as *const Expr as usize)) {
         return None;
     }
-    let rv = a.receivers.iter().find(|x| x.recv == r)?;
+    let rv = a.receivers.iter().find(|x| x.recv == r)?.clone();
     let i = rv.keys.iter().position(|k| k == key)?;
     let word = rv.word.clone();
-    let shift = (32 + SLOT_BITS * i as u32).to_string();
-    let s = ctx.block().lshr(I64, &word, &shift);
-    Some(ctx.block().and(I64, &s, "63"))
+    Some(super::guard::slot_of(ctx, &rv, &word, i))
 }
 
 /// The receiver's handle for a bare access. Every derivation reads the
