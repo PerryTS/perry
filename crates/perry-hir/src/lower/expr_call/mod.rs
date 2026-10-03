@@ -83,6 +83,61 @@ mod native_module_spread_tests;
 pub(super) fn call_has_spread_arg(call: &ast::CallExpr) -> bool {
     call.args.iter().any(|arg| arg.spread.is_some())
 }
+
+/// The callee of a spread call to a built-in static (`JSON.stringify(...xs)`,
+/// `Array.of(...xs)`, `Reflect.has(...xs)`).
+///
+/// In member-object position a built-in namespace collapses to the intrinsic
+/// static surface `PropertyGet { GlobalGet(0), method }` — the receiver is
+/// dropped (`expr_member::member_tail`, #973/#4139) because the positional
+/// intrinsic arms recognise that shape. A spread call takes none of those arms
+/// (`call_has_spread_arg`), and the spread dispatch then has no receiver to
+/// find `method` on: it threw "value is not a function". Give it the real
+/// namespace object back, so the call dispatches `method` by name on it, as
+/// `globalThis.JSON.stringify(...xs)` does. `console` keeps the collapsed
+/// shape: codegen's `console.log(...xs)` arm matches it.
+fn restore_builtin_spread_receiver(
+    ctx: &LoweringContext,
+    ast_callee: &ast::Expr,
+    callee: Expr,
+) -> Expr {
+    let Expr::PropertyGet {
+        object,
+        property,
+        byte_offset,
+    } = callee
+    else {
+        return callee;
+    };
+    let namespace = match unwrap_call_callee_ts_wrappers(ast_callee) {
+        ast::Expr::Member(member) if matches!(object.as_ref(), Expr::GlobalGet(0)) => {
+            match member.obj.as_ref() {
+                ast::Expr::Ident(ident) => Some(ident.sym.as_ref()),
+                _ => None,
+            }
+        }
+        _ => None,
+    };
+    let object = match namespace {
+        Some(name)
+            if !matches!(name, "console" | "globalThis" | "global")
+                && crate::analysis::is_builtin_global_value_name(name)
+                && ctx.lookup_local(name).is_none() =>
+        {
+            Box::new(Expr::PropertyGet {
+                object,
+                property: name.to_string(),
+                byte_offset: 0,
+            })
+        }
+        _ => object,
+    };
+    Expr::PropertyGet {
+        object,
+        property,
+        byte_offset,
+    }
+}
 mod nested_namespace;
 mod object_static;
 mod os;
@@ -783,6 +838,7 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
 
             // Use CallSpread if any argument has spread
             if let Some(spread_args) = spread_args {
+                let callee = Box::new(restore_builtin_spread_receiver(ctx, expr, *callee));
                 Ok(Expr::CallSpread {
                     callee,
                     args: spread_args,
