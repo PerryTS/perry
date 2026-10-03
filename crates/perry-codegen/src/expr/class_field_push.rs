@@ -88,8 +88,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, receiver: &Expr, value: &Expr) -> Resul
         .phi(DOUBLE, &[("0.0", &builtin_label), (&method, &lookup_end)]);
     rooting::with_rooted_group(ctx, 1, |ctx, group| {
         let method = group.adopt_emitted(ctx, Repr::Boxed, &method, true);
-        let value = lower_expr(ctx, value)?;
-        let recv = lower_expr(ctx, receiver)?;
+        let rooted_operands: [&perry_hir::Expr; 2] = [value, receiver];
+        let (rooted_values, rooted_group) =
+            crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+        let value = rooted_values[0].clone();
+        let recv = rooted_values[1].clone();
         let method = group.reread_emitted(ctx, method);
         ctx.block().cond_br(&is_builtin, &append_label, &call_label);
         ctx.current_block = append;
@@ -109,7 +112,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, receiver: &Expr, value: &Expr) -> Resul
         ctx.block().br(&merge_label);
         ctx.current_block = merge;
         // This lowering is only used for discarded-result statements.
-        Ok("0.0".into())
+        let rooted_result = "0.0".into();
+        rooted_group.release(ctx);
+        Ok(rooted_result)
     })
 }
 
@@ -128,10 +133,15 @@ fn lower_lookup_first(ctx: &mut FnCtx<'_>, receiver: &Expr, value: &Expr) -> Res
     let method = lookup_method(ctx, receiver)?;
     rooting::with_rooted_group(ctx, 1, |ctx, group| {
         let method = group.adopt_emitted(ctx, Repr::Boxed, &method, true);
-        let value = lower_expr(ctx, value)?;
-        let recv = lower_expr(ctx, receiver)?;
+        let rooted_operands: [&perry_hir::Expr; 2] = [value, receiver];
+        let (rooted_values, rooted_group) =
+            crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+        let value = rooted_values[0].clone();
+        let recv = rooted_values[1].clone();
         let method = group.reread_emitted(ctx, method);
-        Ok(call_captured(ctx, &method, &recv, &value))
+        let rooted_result = call_captured(ctx, &method, &recv, &value);
+        rooted_group.release(ctx);
+        Ok(rooted_result)
     })
 }
 

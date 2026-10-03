@@ -179,31 +179,47 @@ pub(crate) fn arm_crypto_hash_chain(
             }
             // Lower all the sub-expressions before any FFI call so
             // their side-effects run in the source order Node sees.
-            let alg_box = lower_expr(ctx, &create_args[0])?;
-            let key_box_opt = if (create_method == "createHmac" || create_method == "Hmac")
+            //
+            // #11789 sweep: every one of these is held across the ones after
+            // it, and then across the handle allocation and the `.update`
+            // call below, so each is rooted in one group (window: "collects",
+            // because the allocating steps follow the last of them) and read
+            // back at its use.
+            let mut chain_group = crate::rooting::open_rooted_group(6);
+            let alg_root = chain_group.lower(ctx, &create_args[0], true)?;
+            let key_root = if (create_method == "createHmac" || create_method == "Hmac")
                 && create_args.len() >= 2
             {
-                Some(lower_expr(ctx, &create_args[1])?)
+                Some(chain_group.lower(ctx, &create_args[1], true)?)
             } else {
                 None
             };
-            let hash_options_box_opt = if (create_method == "createHash" || create_method == "Hash")
+            let hash_options_root = if (create_method == "createHash" || create_method == "Hash")
                 && create_args.len() >= 2
             {
-                Some(lower_expr(ctx, &create_args[1])?)
+                Some(chain_group.lower(ctx, &create_args[1], true)?)
             } else {
                 None
             };
-            let data_box = lower_expr(ctx, &update_args[0])?;
-            let update_encoding_box_opt = if update_args.len() >= 2 {
-                Some(lower_expr(ctx, &update_args[1])?)
+            let data_root = chain_group.lower(ctx, &update_args[0], true)?;
+            let update_encoding_root = if update_args.len() >= 2 {
+                Some(chain_group.lower(ctx, &update_args[1], true)?)
             } else {
                 None
             };
-            let enc_box_opt = if digest_args.is_empty() {
+            let enc_root = if digest_args.is_empty() {
                 None
             } else {
-                Some(lower_expr(ctx, &digest_args[0])?)
+                Some(chain_group.lower(ctx, &digest_args[0], true)?)
+            };
+            let alg_box = chain_group.reread(ctx, alg_root)?;
+            let key_box_opt = match key_root {
+                Some(root) => Some(chain_group.reread(ctx, root)?),
+                None => None,
+            };
+            let hash_options_box_opt = match hash_options_root {
+                Some(root) => Some(chain_group.reread(ctx, root)?),
+                None => None,
             };
 
             // #2013/#3146: validate the algorithm (and HMAC key) BEFORE
@@ -245,13 +261,15 @@ pub(crate) fn arm_crypto_hash_chain(
             // Invoke `.update(data[, inputEncoding])` via the runtime's generic
             // handle-method dispatcher.
             let update_name = emit_string_literal_global(ctx, "update");
-            let update_argc_usize = if update_encoding_box_opt.is_some() {
-                2
-            } else {
-                1
-            };
+            let update_argc_usize = if update_encoding_root.is_some() { 2 } else { 1 };
             let update_argc = update_argc_usize.to_string();
             let update_args_buf = ctx.func.alloca_entry_array(DOUBLE, update_argc_usize);
+            // Below the handle allocation: read the data and its encoding back.
+            let data_box = chain_group.reread(ctx, data_root)?;
+            let update_encoding_box_opt = match update_encoding_root {
+                Some(root) => Some(chain_group.reread(ctx, root)?),
+                None => None,
+            };
             {
                 let blk = ctx.block();
                 let slot = blk.gep(DOUBLE, &update_args_buf, &[(I64, "0")]);
@@ -285,6 +303,10 @@ pub(crate) fn arm_crypto_hash_chain(
 
             // Invoke `.digest(enc?)` — 0 or 1 args.
             let digest_name = emit_string_literal_global(ctx, "digest");
+            let enc_box_opt = match enc_root {
+                Some(root) => Some(chain_group.reread(ctx, root)?),
+                None => None,
+            };
             let (digest_args_ptr, digest_argc) = if let Some(enc_box) = enc_box_opt {
                 let buf = ctx.func.alloca_entry_array(DOUBLE, 1);
                 {
@@ -314,6 +336,7 @@ pub(crate) fn arm_crypto_hash_chain(
                     (I64, &digest_argc),
                 ],
             );
+            chain_group.release(ctx);
             Ok(result)
         }
     }
@@ -328,9 +351,11 @@ pub(crate) fn arm_crypto_create_hash(
     if args.is_empty() {
         return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
     }
-    let alg_box = lower_expr(ctx, &args[0])?;
+    let (arg_values, arg_group) =
+        crate::lower_call::lower_call_args_rooted(ctx, &args[..args.len().min(2)])?;
+    let alg_box = arg_values[0].clone();
     let options_box = if args.len() >= 2 {
-        Some(lower_expr(ctx, &args[1])?)
+        Some(arg_values[1].clone())
     } else {
         None
     };
@@ -339,7 +364,7 @@ pub(crate) fn arm_crypto_create_hash(
     let blk = ctx.block();
     let alg_handle = unbox_ffi_str_arg(blk, &alg_box);
     // Returns an already-NaN-boxed f64 (POINTER_TAG + handle id).
-    if let Some(options_box) = options_box {
+    let result = if let Some(options_box) = options_box {
         Ok(blk.call(
             DOUBLE,
             "js_crypto_create_hash_options",
@@ -347,7 +372,9 @@ pub(crate) fn arm_crypto_create_hash(
         ))
     } else {
         Ok(blk.call(DOUBLE, "js_crypto_create_hash", &[(I64, &alg_handle)]))
-    }
+    };
+    arg_group.release(ctx);
+    result
 }
 
 /// Bytes codegen reserves per handle-free chain site. Mirrors
@@ -375,13 +402,10 @@ pub(crate) fn arm_crypto_chain_call(
     let Expr::PropertyGet { property, .. } = callee else {
         unreachable!("guarded by the dispatcher")
     };
-    let mut vals = Vec::with_capacity(args.len());
-    for a in args {
-        vals.push(lower_expr(ctx, a)?);
-    }
+    let (vals, args_group) = crate::lower_call::lower_call_args_rooted(ctx, args)?;
     let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
     let arg = |i: usize| vals.get(i).cloned().unwrap_or_else(|| undef.clone());
-    match property.as_str() {
+    let rooted_result = match property.as_str() {
         CHAIN_INIT_HASH => {
             let alg_box = arg(0);
             emit_validate_string_arg(ctx, &alg_box, "algorithm");
@@ -431,5 +455,7 @@ pub(crate) fn arm_crypto_chain_call(
             ))
         }
         other => unreachable!("not a crypto chain method: {other}"),
-    }
+    };
+    args_group.release(ctx);
+    rooted_result
 }

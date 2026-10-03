@@ -941,6 +941,14 @@ test_gap_gc_11821_promise_finally_value
 # held each evaluated argument in a register while the later arguments were
 # lowered, so `show(String(x), work())` passed the retired from-space string.
 test_gap_gc_11789_closure_call_args
+# #11789 sweep: every other call lowering that held an earlier argument in a
+# register across a later one that collects. Native-call family (fs.*, util.format,
+# JSON.stringify indent, bigint.toString(radix), process.emitWarning).
+test_gap_gc_11789_native_call_args
+# Constructor / option-literal family (new Headers/Response/Blob/ReadableStream, super(a, b)).
+test_gap_gc_11789_ctor_call_args
+# Dispatch family (class static C.m(a, b), super.m(a, b), fused Promise.resolve(v).then(f, g)).
+test_gap_gc_11789_dispatch_call_args
 
 # #11743: a field receiver and captured method cross allocating arguments.
 # Recursive child pushes observe parent identity after relocation and growth.

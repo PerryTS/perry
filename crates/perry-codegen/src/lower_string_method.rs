@@ -252,11 +252,12 @@ fn lower_string_method_dispatch(
         "indexOf" => {
             // No `searchString` → `undefined`, which `js_string_coerce`
             // stringifies to "undefined" (`"".indexOf()` === -1).
+            let (arg_values, arg_group) = crate::lower_call::lower_call_args_rooted(ctx, args)?;
             let needle_box = if args.is_empty() {
                 ctx.block()
                     .bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64)
             } else {
-                lower_expr(ctx, &args[0])?
+                arg_values[0].clone()
             };
             // An object `searchString` must be `ToString`-coerced (running its
             // user `toString`/`valueOf`) BEFORE `ToNumber(position)`, per
@@ -264,13 +265,10 @@ fn lower_string_method_dispatch(
             let needle_is_str = !args.is_empty() && is_string_expr(ctx, &args[0]);
             // Optional fromIndex.
             let from_idx_double = if args.len() >= 2 {
-                Some(lower_expr(ctx, &args[1])?)
+                Some(arg_values[1].clone())
             } else {
                 None
             };
-            for extra in args.iter().skip(2) {
-                let _ = lower_expr(ctx, extra)?;
-            }
             let recv_box = reread_recv(ctx, group, recv);
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
@@ -296,26 +294,26 @@ fn lower_string_method_dispatch(
                 )
             };
             // i32 → double via sitofp (preserves the -1 sentinel for "not found").
-            Ok(blk.sitofp(I32, &result_i32, DOUBLE))
+            let result = blk.sitofp(I32, &result_i32, DOUBLE);
+            arg_group.release(ctx);
+            Ok(result)
         }
         "slice" | "substring" => {
             // Issue #316: 0-arg form is the spec'd "clone" idiom —
             // `s.slice()` ≡ `s.slice(0, length)`. Was rejected at
             // codegen with "expects 1 or 2 args, got 0" before this fix.
+            let (arg_values, arg_group) = crate::lower_call::lower_call_args_rooted(ctx, args)?;
             let start_d = if args.is_empty() {
                 "0.0".to_string()
             } else {
-                lower_expr(ctx, &args[0])?
+                arg_values[0].clone()
             };
             // 2-arg form: explicit end (may be `undefined` → treated as `len`).
             let end_d = if args.len() >= 2 {
-                Some(lower_expr(ctx, &args[1])?)
+                Some(arg_values[1].clone())
             } else {
                 None
             };
-            for extra in args.iter().skip(2) {
-                let _ = lower_expr(ctx, extra)?;
-            }
             let recv_box = reread_recv(ctx, group, recv);
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
@@ -351,7 +349,9 @@ fn lower_string_method_dispatch(
                 runtime_fn,
                 &[(I64, &recv_handle), (I32, &start_i32), (I32, &end_i32)],
             );
-            Ok(nanbox_string_inline(blk, &result_handle))
+            let result = nanbox_string_inline(blk, &result_handle);
+            arg_group.release(ctx);
+            Ok(result)
         }
         "split" => {
             let mut arguments = open_rooted_group(2);
@@ -394,14 +394,12 @@ fn lower_string_method_dispatch(
         "toLocaleLowerCase" | "toLocaleUpperCase" => {
             // The `locales` arg is passed as a NaN-boxed JSValue (double) to the
             // runtime, which extracts/validates it. Missing → undefined.
+            let (arg_values, arg_group) = crate::lower_call::lower_call_args_rooted(ctx, args)?;
             let locales_box = if args.is_empty() {
                 None
             } else {
-                Some(lower_expr(ctx, &args[0])?)
+                Some(arg_values[0].clone())
             };
-            for extra in args.iter().skip(1) {
-                let _ = lower_expr(ctx, extra)?;
-            }
             let recv_box = reread_recv(ctx, group, recv);
             let blk = ctx.block();
             let locales_box = match locales_box {
@@ -419,7 +417,9 @@ fn lower_string_method_dispatch(
                 runtime_fn,
                 &[(I64, &recv_handle), (DOUBLE, &locales_box)],
             );
-            Ok(nanbox_string_inline(blk, &result))
+            let result = nanbox_string_inline(blk, &result);
+            arg_group.release(ctx);
+            Ok(result)
         }
         // Unary string-returning methods (no args).
         "toLowerCase" | "toUpperCase" | "trim" | "trimStart" | "trimEnd" => {
@@ -470,14 +470,12 @@ fn lower_string_method_dispatch(
         // Annex B §B.2.2 HTML wrappers that take an attribute value. A missing
         // arg coerces `undefined` -> "undefined" via `js_string_coerce`.
         "anchor" | "link" | "fontcolor" | "fontsize" => {
+            let (arg_values, arg_group) = crate::lower_call::lower_call_args_rooted(ctx, args)?;
             let value_d = if args.is_empty() {
                 crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
             } else {
-                lower_expr(ctx, &args[0])?
+                arg_values[0].clone()
             };
-            for extra in args.iter().skip(1) {
-                let _ = lower_expr(ctx, extra)?;
-            }
             let recv_box = reread_recv(ctx, group, recv);
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
@@ -494,7 +492,9 @@ fn lower_string_method_dispatch(
                 runtime_fn,
                 &[(I64, &recv_handle), (I64, &value_handle)],
             );
-            Ok(nanbox_string_inline(blk, &result))
+            let result = nanbox_string_inline(blk, &result);
+            arg_group.release(ctx);
+            Ok(result)
         }
         "charAt" => {
             // #2787: a missing index defaults to 0; the provided index is
@@ -503,14 +503,12 @@ fn lower_string_method_dispatch(
             // #3987: JS ignores extra args to `charAt` but still evaluates them
             // (left-to-right, for side effects). Use args[0] as the index and
             // lower the rest, discarding their values, instead of bailing.
+            let (arg_values, arg_group) = crate::lower_call::lower_call_args_rooted(ctx, args)?;
             let idx_d = if args.is_empty() {
                 crate::nanbox::double_literal(0.0)
             } else {
-                lower_expr(ctx, &args[0])?
+                arg_values[0].clone()
             };
-            for extra in args.iter().skip(1) {
-                let _ = lower_expr(ctx, extra)?;
-            }
             let recv_box = reread_recv(ctx, group, recv);
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
@@ -520,7 +518,9 @@ fn lower_string_method_dispatch(
                 "js_string_char_at",
                 &[(I64, &recv_handle), (I32, &idx_i32)],
             );
-            Ok(nanbox_string_inline(blk, &result))
+            let result = nanbox_string_inline(blk, &result);
+            arg_group.release(ctx);
+            Ok(result)
         }
         "repeat" => {
             if args.is_empty() {
@@ -529,10 +529,8 @@ fn lower_string_method_dispatch(
                     args.len()
                 );
             }
-            let count_d = lower_expr(ctx, &args[0])?;
-            for extra in args.iter().skip(1) {
-                let _ = lower_expr(ctx, extra)?;
-            }
+            let (arg_values, arg_group) = crate::lower_call::lower_call_args_rooted(ctx, args)?;
+            let count_d = arg_values[0].clone();
             let recv_box = reread_recv(ctx, group, recv);
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
@@ -541,7 +539,9 @@ fn lower_string_method_dispatch(
                 "js_string_repeat",
                 &[(I64, &recv_handle), (DOUBLE, &count_d)],
             );
-            Ok(nanbox_string_inline(blk, &result))
+            let result = nanbox_string_inline(blk, &result);
+            arg_group.release(ctx);
+            Ok(result)
         }
         "replace" | "replaceAll" => {
             let mut arguments = open_rooted_group(2);
@@ -589,80 +589,83 @@ fn lower_string_method_dispatch(
             // #2787: missing index -> 0; JS index coercion (undefined/NaN -> 0).
             // `js_string_at` already resolves negative indices relative to len.
             // #3987: ignore extra args (still evaluate for side effects).
+            let (arg_values, arg_group) = crate::lower_call::lower_call_args_rooted(ctx, args)?;
             let idx_d = if args.is_empty() {
                 crate::nanbox::double_literal(0.0)
             } else {
-                lower_expr(ctx, &args[0])?
+                arg_values[0].clone()
             };
-            for extra in args.iter().skip(1) {
-                let _ = lower_expr(ctx, extra)?;
-            }
             let recv_box = reread_recv(ctx, group, recv);
             let recv_handle = str_operand_handle_tag_dispatched(ctx, object, &recv_box);
             let blk = ctx.block();
             let idx_i32 = blk.call(I32, "js_string_index_to_i32", &[(DOUBLE, &idx_d)]);
             // js_string_at returns a NaN-boxed string or undefined directly.
-            Ok(blk.call(
+            let result = blk.call(
                 DOUBLE,
                 "js_string_at",
                 &[(I64, &recv_handle), (I32, &idx_i32)],
-            ))
+            );
+            arg_group.release(ctx);
+            Ok(result)
         }
         "codePointAt" => {
             // #2787: missing index -> 0; JS index coercion (undefined/NaN -> 0).
             // #3987: ignore extra args (still evaluate for side effects).
+            let (arg_values, arg_group) = crate::lower_call::lower_call_args_rooted(ctx, args)?;
             let idx_d = if args.is_empty() {
                 crate::nanbox::double_literal(0.0)
             } else {
-                lower_expr(ctx, &args[0])?
+                arg_values[0].clone()
             };
-            for extra in args.iter().skip(1) {
-                let _ = lower_expr(ctx, extra)?;
-            }
             let recv_box = reread_recv(ctx, group, recv);
             let recv_handle = str_operand_handle_tag_dispatched(ctx, object, &recv_box);
             let blk = ctx.block();
             let idx_i32 = blk.call(I32, "js_string_index_to_i32", &[(DOUBLE, &idx_d)]);
             // Returns NaN-boxed number or undefined directly.
-            Ok(blk.call(
+            let result = blk.call(
                 DOUBLE,
                 "js_string_code_point_at",
                 &[(I64, &recv_handle), (I32, &idx_i32)],
-            ))
+            );
+            arg_group.release(ctx);
+            Ok(result)
         }
         "charCodeAt" => {
             // #2787: missing index -> 0; JS index coercion (undefined/NaN -> 0).
             // #3987: ignore extra args (still evaluate for side effects).
+            let (arg_values, arg_group) = crate::lower_call::lower_call_args_rooted(ctx, args)?;
             let idx_d = if args.is_empty() {
                 crate::nanbox::double_literal(0.0)
             } else {
-                lower_expr(ctx, &args[0])?
+                arg_values[0].clone()
             };
-            for extra in args.iter().skip(1) {
-                let _ = lower_expr(ctx, extra)?;
-            }
             let recv_box = reread_recv(ctx, group, recv);
             if let Some(value) = lower_char_code_at_inline(ctx, object, &recv_box, &idx_d) {
-                return Ok(value);
+                let result = value;
+                arg_group.release(ctx);
+                return Ok(result);
             }
             let recv_handle = str_operand_handle_tag_dispatched(ctx, object, &recv_box);
             let blk = ctx.block();
             let idx_i32 = blk.call(I32, "js_string_index_to_i32", &[(DOUBLE, &idx_d)]);
             // js_string_char_code_at returns a plain f64 (NaN for OOB).
-            Ok(blk.call(
+            let result = blk.call(
                 DOUBLE,
                 "js_string_char_code_at",
                 &[(I64, &recv_handle), (I32, &idx_i32)],
-            ))
+            );
+            arg_group.release(ctx);
+            Ok(result)
         }
         "lastIndexOf" => {
             // No `searchString` → `undefined` → "undefined"
             // (`"".lastIndexOf()` === -1).
+            let (arg_values, arg_group) = crate::lower_call::lower_call_args_rooted(ctx, args)?;
             let needle_box = if args.is_empty() {
                 ctx.block()
                     .bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64)
             } else {
-                lower_expr(ctx, &args[0])?
+                arg_values[0].clone()
             };
             // `ToString(searchString)` runs the arg's user `toString`/`valueOf`
             // (ECMA-262 §22.1.3.9) before `ToNumber(position)`; static strings
@@ -672,13 +675,10 @@ fn lower_string_method_dispatch(
             // last-index-of (search to the end); with it, the position-aware
             // variant. Mirrors the `indexOf` arm.
             let pos_double = if args.len() >= 2 {
-                Some(lower_expr(ctx, &args[1])?)
+                Some(arg_values[1].clone())
             } else {
                 None
             };
-            for extra in args.iter().skip(2) {
-                let _ = lower_expr(ctx, extra)?;
-            }
             let recv_box = reread_recv(ctx, group, recv);
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
@@ -708,7 +708,9 @@ fn lower_string_method_dispatch(
                     &[(I64, &recv_handle), (I64, &needle_handle)],
                 )
             };
-            Ok(blk.sitofp(I32, &i32_v, DOUBLE))
+            let result = blk.sitofp(I32, &i32_v, DOUBLE);
+            arg_group.release(ctx);
+            Ok(result)
         }
         "padStart" | "padEnd" => {
             if args.is_empty() {
@@ -718,7 +720,17 @@ fn lower_string_method_dispatch(
                     args.len()
                 );
             }
-            let len_d = lower_expr(ctx, &args[0])?;
+            // Not `lower_call_args_rooted`: the `maxLength` coercion below
+            // runs BEFORE the fill is consumed, so the fill is rooted across
+            // that user `valueOf` as well as across the arguments after it.
+            let mut arg_group = open_rooted_group(args.len());
+            for (i, arg) in args.iter().enumerate() {
+                let collects =
+                    i == 1 || crate::rooting::any_operand_may_collect(ctx, args[i + 1..].iter());
+                arg_group.lower(ctx, arg, collects)?;
+            }
+            let arg_values = arg_group.reread_all(ctx)?;
+            let len_d = arg_values[0].clone();
             // `ToLength(maxLength)` (ECMA-262 §22.1.3.16 `StringPad` step 1)
             // must run — including any `valueOf`/`toString` on an object
             // `maxLength` — BEFORE `ToString(fillString)` below. Coercing
@@ -738,7 +750,10 @@ fn lower_string_method_dispatch(
             // booleans, `null`, `{ toString }`) render correctly instead of
             // being bit-cast and dropped.
             let pad_handle = if args.len() >= 2 {
-                let pad_box = lower_expr(ctx, &args[1])?;
+                // Re-read below the maxLength coercion above: its user
+                // valueOf can collect, and the register read before it
+                // would name from-space.
+                let pad_box = arg_group.reread(ctx, 1)?;
                 let blk = ctx.block();
                 blk.call(I64, "js_string_pad_fill", &[(DOUBLE, &pad_box)])
             } else {
@@ -748,9 +763,6 @@ fn lower_string_method_dispatch(
                 let sp_box = blk.load(DOUBLE, &sp_global);
                 unbox_str_handle(blk, &sp_box)
             };
-            for extra in args.iter().skip(2) {
-                let _ = lower_expr(ctx, extra)?;
-            }
             let recv_box = reread_recv(ctx, group, recv);
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
@@ -771,7 +783,9 @@ fn lower_string_method_dispatch(
                 runtime_fn,
                 &[(I64, &recv_handle), (DOUBLE, &len_d), (I64, &pad_handle)],
             );
-            Ok(nanbox_string_inline(blk, &result))
+            let result = nanbox_string_inline(blk, &result);
+            arg_group.release(ctx);
+            Ok(result)
         }
         "normalize" => {
             // Takes the form from args[0]; per spec, surplus args are
@@ -804,29 +818,27 @@ fn lower_string_method_dispatch(
             // `s.localeCompare()` === `s.localeCompare(undefined)` ===
             // `s.localeCompare("undefined")`.
             let other_is_str = !args.is_empty() && is_string_expr(ctx, &args[0]);
+            let (arg_values, arg_group) = crate::lower_call::lower_call_args_rooted(ctx, args)?;
             let other_box = if args.is_empty() {
                 ctx.block()
                     .bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64)
             } else {
-                lower_expr(ctx, &args[0])?
+                arg_values[0].clone()
             };
             // `options` is the 3rd arg; `locales` (2nd) is validated for its
             // RangeError side effect (#2781) but collation ordering stays
             // locale-neutral (full ICU deferred). With an options object
             // present, route to the variant that honors `{ numeric: true }`.
             let locales_box = if args.len() >= 2 {
-                Some(lower_expr(ctx, &args[1])?)
+                Some(arg_values[1].clone())
             } else {
                 None
             };
             let options_box = if args.len() >= 3 {
-                Some(lower_expr(ctx, &args[2])?)
+                Some(arg_values[2].clone())
             } else {
                 None
             };
-            for extra in args.iter().skip(3) {
-                let _ = lower_expr(ctx, extra)?;
-            }
             let blk = ctx.block();
             if let Some(loc) = &locales_box {
                 // Validate `(locales, options)` exactly as `Construct(%Collator%,
@@ -857,7 +869,7 @@ fn lower_string_method_dispatch(
                 blk.call(I64, "js_string_coerce", &[(DOUBLE, &other_box)])
             };
             // Returns a plain f64 (-1/0/1) — NOT NaN-tagged.
-            if let Some(opts) = options_box {
+            let result = if let Some(opts) = options_box {
                 Ok(blk.call(
                     DOUBLE,
                     "js_string_locale_compare_opts",
@@ -869,7 +881,9 @@ fn lower_string_method_dispatch(
                     "js_string_locale_compare",
                     &[(I64, &recv_handle), (I64, &other_handle)],
                 ))
-            }
+            };
+            arg_group.release(ctx);
+            result
         }
         "search" | "match" | "matchAll" => {
             let mut argument_group = open_rooted_group(1);
@@ -1022,15 +1036,13 @@ fn lower_string_method_dispatch(
                     args.len()
                 );
             }
-            let start_d = lower_expr(ctx, &args[0])?;
+            let (arg_values, arg_group) = crate::lower_call::lower_call_args_rooted(ctx, args)?;
+            let start_d = arg_values[0].clone();
             let len_d = if args.len() >= 2 {
-                Some(lower_expr(ctx, &args[1])?)
+                Some(arg_values[1].clone())
             } else {
                 None
             };
-            for extra in args.iter().skip(2) {
-                let _ = lower_expr(ctx, extra)?;
-            }
             let recv_box = reread_recv(ctx, group, recv);
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
@@ -1049,7 +1061,9 @@ fn lower_string_method_dispatch(
                 "js_string_substr",
                 &[(I64, &recv_handle), (DOUBLE, &start_d), (DOUBLE, &length_d)],
             );
-            Ok(nanbox_string_inline(blk, &result))
+            let result = nanbox_string_inline(blk, &result);
+            arg_group.release(ctx);
+            Ok(result)
         }
         "startsWith" | "endsWith" => {
             // Spec allows the 2-arg form: startsWith(searchString, position)
@@ -1058,20 +1072,18 @@ fn lower_string_method_dispatch(
             // turns into "undefined" (`"xundefined".endsWith()` is true). A
             // compile-time arity error here also rejected the string arm of
             // the tag guard for a user `endsWith()` on an `any` receiver.
+            let (arg_values, arg_group) = crate::lower_call::lower_call_args_rooted(ctx, args)?;
             let other_box = if args.is_empty() {
                 ctx.block()
                     .bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64)
             } else {
-                lower_expr(ctx, &args[0])?
+                arg_values[0].clone()
             };
             let pos_d = if args.len() >= 2 {
-                Some(lower_expr(ctx, &args[1])?)
+                Some(arg_values[1].clone())
             } else {
                 None
             };
-            for extra in args.iter().skip(2) {
-                let _ = lower_expr(ctx, extra)?;
-            }
             let recv_box = reread_recv(ctx, group, recv);
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
@@ -1110,7 +1122,9 @@ fn lower_string_method_dispatch(
                     &[(I64, &recv_handle), (I64, &other_handle)],
                 )
             };
-            Ok(i32_bool_to_nanbox(blk, &result_i32))
+            let result = i32_bool_to_nanbox(blk, &result_i32);
+            arg_group.release(ctx);
+            Ok(result)
         }
         "includes" => {
             // str.includes(sub, position?) -> boolean. Implemented as
@@ -1120,22 +1134,20 @@ fn lower_string_method_dispatch(
             // path. Negative/NaN clamp to 0 and Infinity saturates past the
             // end inside js_string_index_of_from.
             // #10476: an omitted searchString is `undefined` (see above).
+            let (arg_values, arg_group) = crate::lower_call::lower_call_args_rooted(ctx, args)?;
             let needle_box = if args.is_empty() {
                 ctx.block()
                     .bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64)
             } else {
-                lower_expr(ctx, &args[0])?
+                arg_values[0].clone()
             };
             // Preserve evaluation of the second argument for side effects and
             // use it as the start index when present.
             let pos_d = if args.len() >= 2 {
-                Some(lower_expr(ctx, &args[1])?)
+                Some(arg_values[1].clone())
             } else {
                 None
             };
-            for extra in args.iter().skip(2) {
-                let _ = lower_expr(ctx, extra)?;
-            }
             let recv_box = reread_recv(ctx, group, recv);
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
@@ -1166,7 +1178,9 @@ fn lower_string_method_dispatch(
                 crate::nanbox::TAG_TRUE_I64,
                 crate::nanbox::TAG_FALSE_I64,
             );
-            Ok(blk.bitcast_i64_to_double(&tagged))
+            let result = blk.bitcast_i64_to_double(&tagged);
+            arg_group.release(ctx);
+            Ok(result)
         }
         // `.toString()` on a union-typed receiver (string | number) may
         // arrive here when `is_string_expr` returned true because the

@@ -259,8 +259,11 @@ pub(super) fn init_static_fields_late(
                 let Some(&class_id) = ctx.class_ids.get(&c.name) else {
                     continue;
                 };
-                let key_v = crate::expr::lower_expr(ctx, key_expr)?;
-                let val_v = crate::expr::lower_expr(ctx, init_expr)?;
+                let rooted_operands: [&perry_hir::Expr; 2] = [key_expr, init_expr];
+                let (rooted_values, rooted_group) =
+                    crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+                let key_v = rooted_values[0].clone();
+                let val_v = rooted_values[1].clone();
                 let cid_str = class_id.to_string();
                 ctx.block().call_void(
                     "js_class_register_static_symbol",
@@ -270,6 +273,7 @@ pub(super) fn init_static_fields_late(
                         (DOUBLE, &val_v),
                     ],
                 );
+                rooted_group.release(ctx);
                 continue;
             }
             let key = (c.name.clone(), sf.name.clone());

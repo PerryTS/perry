@@ -2,10 +2,9 @@
     if module == "__perry_runtime" && class_name.is_none() && object.is_none() {
         match method {
             "importMetaResolve" | "importMetaResolveValue" => {
-                let values = args
-                    .iter()
-                    .map(|arg| lower_expr(ctx, arg))
-                    .collect::<Result<Vec<_>>>()?;
+                // #11789 sweep: `import.meta.resolve(specifier, parent)` holds
+                // the specifier across the parent's evaluation.
+                let (values, arg_group) = super::lower_call_args_rooted(ctx, args)?;
                 let values = values
                     .iter()
                     .map(|value| (DOUBLE, value.as_str()))
@@ -15,7 +14,9 @@
                 } else {
                     "js_import_meta_resolve_value"
                 };
-                return Ok(ctx.block().call(DOUBLE, name, &values));
+                let result = ctx.block().call(DOUBLE, name, &values);
+                arg_group.release(ctx);
+                return Ok(result);
             }
             "iteratorNextResult" => {
                 let iter = args.first().map_or_else(
@@ -43,19 +44,16 @@
                 return Ok(crate::expr::i32_bool_to_nanbox(blk, &needs));
             }
             "iteratorCloseIfNotDone" => {
-                let iter = args.first().map_or_else(
-                    || Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))),
-                    |arg| lower_expr(ctx, arg),
-                )?;
-                let done = args.get(1).map_or_else(
-                    || Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))),
-                    |arg| lower_expr(ctx, arg),
-                )?;
-                return Ok(ctx.block().call(
+                let (arg_values, arg_group) = super::lower_call_args_rooted(ctx, &args[..args.len().min(2)])?;
+                let iter = arg_values.first().cloned().unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+                let done = arg_values.get(1).cloned().unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+                let result = ctx.block().call(
                     DOUBLE,
                     "js_iterator_close_if_not_done",
                     &[(DOUBLE, &iter), (DOUBLE, &done)],
-                ));
+                );
+                arg_group.release(ctx);
+                return Ok(result);
             }
             "requireObjectCoercible" => {
                 let val = args.first().map_or_else(
@@ -83,19 +81,16 @@
                 ));
             }
             "iteratorRestToArray" => {
-                let iter = args.first().map_or_else(
-                    || Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))),
-                    |arg| lower_expr(ctx, arg),
-                )?;
-                let done = args.get(1).map_or_else(
-                    || Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))),
-                    |arg| lower_expr(ctx, arg),
-                )?;
-                return Ok(ctx.block().call(
+                let (arg_values, arg_group) = super::lower_call_args_rooted(ctx, &args[..args.len().min(2)])?;
+                let iter = arg_values.first().cloned().unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+                let done = arg_values.get(1).cloned().unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+                let result = ctx.block().call(
                     DOUBLE,
                     "js_iterator_rest_to_array",
                     &[(DOUBLE, &iter), (DOUBLE, &done)],
-                ));
+                );
+                arg_group.release(ctx);
+                return Ok(result);
             }
             // Next.js wall 53: runtime `require(absolutePath.json)` fallback.
             "requireJsonDisk" => {
@@ -111,36 +106,30 @@
             }
             // require.resolve node_modules subpath fallback.
             "requireResolveNodeModules" => {
-                let from = args.first().map_or_else(
-                    || Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))),
-                    |arg| lower_expr(ctx, arg),
-                )?;
-                let specifier = args.get(1).map_or_else(
-                    || Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))),
-                    |arg| lower_expr(ctx, arg),
-                )?;
-                return Ok(ctx.block().call(
+                let (arg_values, arg_group) = super::lower_call_args_rooted(ctx, &args[..args.len().min(2)])?;
+                let from = arg_values.first().cloned().unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+                let specifier = arg_values.get(1).cloned().unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+                let result = ctx.block().call(
                     DOUBLE,
                     "js_require_resolve_node_modules",
                     &[(DOUBLE, &from), (DOUBLE, &specifier)],
-                ));
+                );
+                arg_group.release(ctx);
+                return Ok(result);
             }
             // Publish the CJS record before its body so same-thread recursive
             // requires see its current exports, including replacements.
             "registerPathModulePartial" => {
-                let path = args.first().map_or_else(
-                    || Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))),
-                    |arg| lower_expr(ctx, arg),
-                )?;
-                let exports = args.get(1).map_or_else(
-                    || Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))),
-                    |arg| lower_expr(ctx, arg),
-                )?;
+                let (arg_values, arg_group) = super::lower_call_args_rooted(ctx, &args[..args.len().min(2)])?;
+                let path = arg_values.first().cloned().unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+                let exports = arg_values.get(1).cloned().unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
                 ctx.block().call_void(
                     "js_register_path_module_partial",
                     &[(DOUBLE, &path), (DOUBLE, &exports)],
                 );
-                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+                let result = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                arg_group.release(ctx);
+                return Ok(result);
             }
             // #6769: link `module.parent` before the wrapper body runs.
             "linkPathModuleParent" => {
@@ -154,19 +143,16 @@
             }
             // Next.js wall 54: publish the final exports by absolute path.
             "registerPathModule" => {
-                let path = args.first().map_or_else(
-                    || Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))),
-                    |arg| lower_expr(ctx, arg),
-                )?;
-                let exports = args.get(1).map_or_else(
-                    || Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))),
-                    |arg| lower_expr(ctx, arg),
-                )?;
+                let (arg_values, arg_group) = super::lower_call_args_rooted(ctx, &args[..args.len().min(2)])?;
+                let path = arg_values.first().cloned().unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+                let exports = arg_values.get(1).cloned().unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
                 ctx.block().call_void(
                     "js_register_path_module",
                     &[(DOUBLE, &path), (DOUBLE, &exports)],
                 );
-                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+                let result = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                arg_group.release(ctx);
+                return Ok(result);
             }
             // Next.js wall 54: resolve runtime `require(absolutePath.js)`.
             "requirePathModule" => {
@@ -329,19 +315,21 @@
             _ => None,
         };
         if let Some(runtime) = runtime {
-            let bits = if let Some(a) = args.first() {
-                lower_expr(ctx, a)?
-            } else {
-                crate::nanbox::double_literal(0.0)
-            };
-            let value = if let Some(a) = args.get(1) {
-                lower_expr(ctx, a)?
-            } else {
-                crate::nanbox::double_literal(0.0)
-            };
-            return Ok(ctx
+            // #11789 sweep: `bits` is held across the value's evaluation.
+            let (arg_values, arg_group) = super::lower_call_args_rooted(ctx, args)?;
+            let bits = arg_values
+                .first()
+                .cloned()
+                .unwrap_or_else(|| crate::nanbox::double_literal(0.0));
+            let value = arg_values
+                .get(1)
+                .cloned()
+                .unwrap_or_else(|| crate::nanbox::double_literal(0.0));
+            let result = ctx
                 .block()
-                .call(DOUBLE, runtime, &[(DOUBLE, &bits), (DOUBLE, &value)]));
+                .call(DOUBLE, runtime, &[(DOUBLE, &bits), (DOUBLE, &value)]);
+            arg_group.release(ctx);
+            return Ok(result);
         }
     }
 
@@ -374,22 +362,22 @@
             _ => None,
         };
         if let Some((fname, arity)) = runtime {
-            let mut lowered = Vec::with_capacity(arity);
-            for i in 0..arity {
-                let arg = if let Some(expr) = args.get(i) {
-                    lower_expr(ctx, expr)?
-                } else {
-                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-                };
-                lowered.push(arg);
-            }
-            // Lower remaining args for side effects (Node ignores them).
-            for extra in args.iter().skip(arity) {
-                let _ = lower_expr(ctx, extra)?;
-            }
+            // #11789 sweep: every argument (the surplus ones, which Node
+            // ignores, included) is evaluated in order and each is held across
+            // the ones after it.
+            let (arg_values, arg_group) = super::lower_call_args_rooted(ctx, args)?;
+            let lowered: Vec<String> = (0..arity)
+                .map(|i| {
+                    arg_values.get(i).cloned().unwrap_or_else(|| {
+                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                    })
+                })
+                .collect();
             let call_args: Vec<(crate::types::LlvmType, &str)> =
                 lowered.iter().map(|arg| (DOUBLE, arg.as_str())).collect();
-            return Ok(ctx.block().call(DOUBLE, fname, &call_args));
+            let result = ctx.block().call(DOUBLE, fname, &call_args);
+            arg_group.release(ctx);
+            return Ok(result);
         }
     }
 
@@ -425,15 +413,14 @@
             _ => None,
         };
         if let Some(fname) = v8_hook {
-            let arg = if let Some(first) = args.first() {
-                lower_expr(ctx, first)?
-            } else {
+            // #11789 sweep: the callback is held across the surplus arguments.
+            let (arg_values, arg_group) = super::lower_call_args_rooted(ctx, args)?;
+            let arg = arg_values.first().cloned().unwrap_or_else(|| {
                 double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-            };
-            for extra in args.iter().skip(1) {
-                let _ = lower_expr(ctx, extra)?;
-            }
-            return Ok(ctx.block().call(DOUBLE, fname, &[(DOUBLE, &arg)]));
+            });
+            let result = ctx.block().call(DOUBLE, fname, &[(DOUBLE, &arg)]);
+            arg_group.release(ctx);
+            return Ok(result);
         }
 
         // #3142: named-import GCProfiler instances lower their method calls to
@@ -441,16 +428,17 @@
         // the same small runtime state machine as namespace-member calls.
         if class_name == Some("GCProfiler") && matches!(method, "start" | "stop") {
             if let Some(object) = object {
-                let recv = lower_expr(ctx, object)?;
-                for extra in args {
-                    let _ = lower_expr(ctx, extra)?;
-                }
+                // #11789 sweep: the profiler is held across the (ignored)
+                // arguments' evaluation.
+                let (recv, _extras, arg_group) = super::lower_operands_rooted(ctx, object, args)?;
                 let fname = if method == "start" {
                     "js_v8_gc_profiler_start"
                 } else {
                     "js_v8_gc_profiler_stop"
                 };
-                return Ok(ctx.block().call(DOUBLE, fname, &[(DOUBLE, &recv)]));
+                let result = ctx.block().call(DOUBLE, fname, &[(DOUBLE, &recv)]);
+                arg_group.release(ctx);
+                return Ok(result);
             }
         }
     }
@@ -460,16 +448,18 @@
         && method == "convertKey"
         && object.is_none()
     {
-        let mut lowered = Vec::with_capacity(5);
-        for i in 0..5 {
-            lowered.push(if let Some(arg) = args.get(i) {
-                lower_expr(ctx, arg)?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-            });
-        }
+        // #11789 sweep: key, encodings and format are each held across the
+        // ones after them.
+        let (arg_values, arg_group) = super::lower_call_args_rooted(ctx, args)?;
+        let lowered: Vec<String> = (0..5)
+            .map(|i| {
+                arg_values.get(i).cloned().unwrap_or_else(|| {
+                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                })
+            })
+            .collect();
         let blk = ctx.block();
-        return Ok(blk.call(
+        let result = blk.call(
             DOUBLE,
             "js_crypto_ecdh_convert_key",
             &[
@@ -479,7 +469,9 @@
                 (DOUBLE, &lowered[3]),
                 (DOUBLE, &lowered[4]),
             ],
-        ));
+        );
+        arg_group.release(ctx);
+        return Ok(result);
     }
 
     if module == "crypto"

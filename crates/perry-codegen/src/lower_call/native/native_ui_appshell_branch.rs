@@ -59,6 +59,7 @@
             );
         };
 
+        let mut web_roots = crate::rooting::open_rooted_group(props.len());
         let mut url_ptr: String = "0".to_string();
         let mut width_d: String = "0.0".to_string();
         let mut height_d: String = "0.0".to_string();
@@ -69,21 +70,33 @@
         let mut on_loaded_d: Option<String> = None;
         let mut on_error_d: Option<String> = None;
 
-        for (key, val) in &props {
+        // #11789 sweep: the option values are lowered and rooted FIRST, in
+        // property order, each across the ones after it; the raw string
+        // pointers, array handles and callbacks below are taken from the
+        // re-read, so none is a pre-move address by the time it is used.
+        let mut prop_roots: Vec<usize> = Vec::with_capacity(props.len());
+        for (i, (_, val)) in props.iter().enumerate() {
+            let collects = crate::rooting::any_operand_may_collect(
+                ctx,
+                props[i + 1..].iter().map(|(_, later)| later),
+            );
+            prop_roots.push(web_roots.lower(ctx, val, collects)?);
+        }
+        for (i, (key, _)) in props.iter().enumerate() {
             match key.as_str() {
                 "url" => {
-                    let v = lower_expr(ctx, val)?;
+                    let v = web_roots.reread(ctx, prop_roots[i])?;
                     let blk = ctx.block();
                     url_ptr = unbox_to_i64(blk, &v);
                 }
                 "width" => {
-                    width_d = lower_expr(ctx, val)?;
+                    width_d = web_roots.reread(ctx, prop_roots[i])?;
                 }
                 "height" => {
-                    height_d = lower_expr(ctx, val)?;
+                    height_d = web_roots.reread(ctx, prop_roots[i])?;
                 }
                 "userAgent" => {
-                    let v = lower_expr(ctx, val)?;
+                    let v = web_roots.reread(ctx, prop_roots[i])?;
                     let blk = ctx.block();
                     user_agent_ptr = Some(unbox_to_i64(blk, &v));
                 }
@@ -91,31 +104,31 @@
                     // The user passes a JS array of strings; we treat it as a
                     // generic widget-like handle (i64 unbox of POINTER) and
                     // the runtime walks it via js_array_get_length / element.
-                    let v = lower_expr(ctx, val)?;
+                    let v = web_roots.reread(ctx, prop_roots[i])?;
                     let blk = ctx.block();
                     allowed_domains_handle = Some(unbox_to_i64(blk, &v));
                 }
                 "ephemeral" => {
                     // Boolean → JS truthy → i32 (1 = ephemeral).
-                    let v = lower_expr(ctx, val)?;
+                    let v = web_roots.reread(ctx, prop_roots[i])?;
                     let blk = ctx.block();
                     let truthy = blk.call(I32, "js_is_truthy", &[(DOUBLE, &v)]);
                     ephemeral_d = Some(truthy);
                 }
                 "onShouldNavigate" => {
-                    on_should_navigate_d = Some(lower_expr(ctx, val)?);
+                    on_should_navigate_d = Some(web_roots.reread(ctx, prop_roots[i])?);
                 }
                 "onLoaded" => {
-                    on_loaded_d = Some(lower_expr(ctx, val)?);
+                    on_loaded_d = Some(web_roots.reread(ctx, prop_roots[i])?);
                 }
                 "onError" => {
-                    on_error_d = Some(lower_expr(ctx, val)?);
+                    on_error_d = Some(web_roots.reread(ctx, prop_roots[i])?);
                 }
                 _ => {
                     // Unknown key — lower for side effects so any nested
                     // closures still get collected by the closure-conversion
                     // pass.
-                    let _ = lower_expr(ctx, val)?;
+                    let _ = prop_roots[i];
                 }
             }
         }
@@ -214,7 +227,9 @@
         }
 
         // Return as a NaN-boxed widget handle (POINTER tag).
-        return Ok(nanbox_pointer_inline(blk, &handle));
+        let result = nanbox_pointer_inline(blk, &handle);
+        web_roots.release(ctx);
+        return Ok(result);
     }
 
     if module == "perry/ui" && method == "App" && object.is_none() {
@@ -247,26 +262,39 @@
             let mut vibrancy_ptr: Option<String> = None;
             let mut activation_policy_ptr: Option<String> = None;
             let mut quit_on_last_window_close_val: Option<String> = None;
-            for (key, val) in &props {
+            // #11789 sweep: every option value, not just `frameAutosaveName`,
+            // is held across the ones after it (a `body` builder collects),
+            // and `title` / `icon` / `windowState` are unboxed to raw string
+            // pointers. So all of them are lowered and rooted FIRST, in
+            // property order, and the conversions below read the re-read.
+            let mut prop_roots: Vec<usize> = Vec::with_capacity(props.len());
+            for (i, (_, val)) in props.iter().enumerate() {
+                let collects = crate::rooting::any_operand_may_collect(
+                    ctx,
+                    props[i + 1..].iter().map(|(_, later)| later),
+                );
+                prop_roots.push(frame_roots.lower(ctx, val, collects)?);
+            }
+            for (i, (key, _)) in props.iter().enumerate() {
                 match key.as_str() {
                     "title" => {
-                        let v = lower_expr(ctx, val)?;
+                        let v = frame_roots.reread(ctx, prop_roots[i])?;
                         let blk = ctx.block();
                         title_ptr = unbox_to_i64(blk, &v);
                     }
                     "width" => {
-                        width_d = lower_expr(ctx, val)?;
+                        width_d = frame_roots.reread(ctx, prop_roots[i])?;
                     }
                     "height" => {
-                        height_d = lower_expr(ctx, val)?;
+                        height_d = frame_roots.reread(ctx, prop_roots[i])?;
                     }
                     "body" => {
-                        let v = lower_expr(ctx, val)?;
+                        let v = frame_roots.reread(ctx, prop_roots[i])?;
                         let blk = ctx.block();
                         body_handle = unbox_to_i64(blk, &v);
                     }
                     "icon" => {
-                        let v = lower_expr(ctx, val)?;
+                        let v = frame_roots.reread(ctx, prop_roots[i])?;
                         let blk = ctx.block();
                         icon_ptr = Some(unbox_to_i64(blk, &v));
                     }
@@ -274,14 +302,15 @@
                     // Forwarded to perry_ui_app_set_window_state; each platform
                     // backend applies the state at app_run time.
                     "windowState" => {
-                        let v = lower_expr(ctx, val)?;
+                        let v = frame_roots.reread(ctx, prop_roots[i])?;
                         let blk = ctx.block();
                         window_state_ptr = Some(unbox_to_i64(blk, &v));
                     }
                     "frameAutosaveName" => {
                         // Later options (especially body builders) can collect.
-                        // Keep the JS string rooted until the backend copies it.
-                        frame_autosave_name_root = Some(frame_roots.lower(ctx, val, true)?);
+                        // Keep the JS string rooted until the backend copies it:
+                        // its root outlives the re-reads below.
+                        frame_autosave_name_root = Some(prop_roots[i]);
                     }
                     // v0.4.11 launcher-style window options, lost in the Phase K
                     // Cranelift→LLVM cutover (2026-07-16 docs audit). `frameless`
@@ -289,10 +318,10 @@
                     // every platform backend only acts when the bits equal
                     // TAG_TRUE, exactly like the original Cranelift wiring.
                     "frameless" => {
-                        frameless_val = Some(lower_expr(ctx, val)?);
+                        frameless_val = Some(frame_roots.reread(ctx, prop_roots[i])?);
                     }
                     "transparent" => {
-                        transparent_val = Some(lower_expr(ctx, val)?);
+                        transparent_val = Some(frame_roots.reread(ctx, prop_roots[i])?);
                     }
                     // `level` / `vibrancy` / `activationPolicy` are strings. Route
                     // through the SSO-safe unbox (js_get_string_pointer_unified)
@@ -300,25 +329,25 @@
                     // "modal" or "menu" can arrive as inline SSO values whose low
                     // 48 bits are not a StringHeader pointer.
                     "level" => {
-                        let v = lower_expr(ctx, val)?;
+                        let v = frame_roots.reread(ctx, prop_roots[i])?;
                         let blk = ctx.block();
                         level_ptr = Some(crate::expr::unbox_str_handle(blk, &v));
                     }
                     "vibrancy" => {
-                        let v = lower_expr(ctx, val)?;
+                        let v = frame_roots.reread(ctx, prop_roots[i])?;
                         let blk = ctx.block();
                         vibrancy_ptr = Some(crate::expr::unbox_str_handle(blk, &v));
                     }
                     "activationPolicy" => {
-                        let v = lower_expr(ctx, val)?;
+                        let v = frame_roots.reread(ctx, prop_roots[i])?;
                         let blk = ctx.block();
                         activation_policy_ptr = Some(crate::expr::unbox_str_handle(blk, &v));
                     }
                     "quitOnLastWindowClose" => {
-                        quit_on_last_window_close_val = Some(lower_expr(ctx, val)?);
+                        quit_on_last_window_close_val = Some(frame_roots.reread(ctx, prop_roots[i])?);
                     }
                     _ => {
-                        let _ = lower_expr(ctx, val)?;
+                        let _ = prop_roots[i];
                     }
                 }
             }

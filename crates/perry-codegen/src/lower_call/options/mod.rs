@@ -25,7 +25,7 @@ use crate::types::{DOUBLE, I64};
 
 mod fetch;
 mod notification;
-pub(in crate::lower_call) use fetch::lower_fetch_native_method;
+pub(in crate::lower_call) use fetch::{lower_fetch_native_method, lower_response_init};
 pub(in crate::lower_call) use notification::lower_notification_schedule;
 
 /// Extract a raw string pointer (i64) from a NaN-boxed JSValue via the
@@ -33,8 +33,16 @@ pub(in crate::lower_call) use notification::lower_notification_schedule;
 /// other expression that produces a NaN-boxed double.
 pub(in crate::lower_call) fn get_raw_string_ptr(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<String> {
     let v = lower_expr(ctx, e)?;
-    let blk = ctx.block();
-    Ok(blk.call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &v)]))
+    Ok(raw_string_ptr_of(ctx, &v))
+}
+
+/// The raw-pointer half of [`get_raw_string_ptr`], for a caller that lowered
+/// the string itself. A call with several operands lowers and roots them all
+/// FIRST and converts the re-read values here, because the raw address is
+/// only valid until the next collection (#11789 sweep).
+pub(in crate::lower_call) fn raw_string_ptr_of(ctx: &mut FnCtx<'_>, v: &str) -> String {
+    ctx.block()
+        .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, v)])
 }
 
 /// Build a Headers handle from an inline object literal `{ "k": "v", ... }`.
@@ -48,11 +56,13 @@ pub(in crate::lower_call) fn build_headers_from_object(
         let h_root = group.adopt_emitted(ctx, Repr::Boxed, &h, !props.is_empty());
         for (k, vexpr) in props {
             let key_expr = Expr::String(k.clone());
-            let key_ptr = get_raw_string_ptr(ctx, &key_expr)?;
+            // #11789 sweep: the value is evaluated (and coerced -- a
+            // `toString()` is user code) BEFORE the key's raw pointer is taken.
             let value = lower_expr(ctx, vexpr)?;
             let val_ptr = ctx
                 .block()
                 .call(I64, "js_jsvalue_to_string", &[(DOUBLE, &value)]);
+            let key_ptr = get_raw_string_ptr(ctx, &key_expr)?;
             let h = group.reread_emitted(ctx, h_root);
             ctx.block().call(
                 DOUBLE,

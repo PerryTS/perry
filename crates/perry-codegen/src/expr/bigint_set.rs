@@ -472,13 +472,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 .map(|k| Expr::String(k.clone()))
                 .collect();
             let keys_arr_boxed = lower_array_literal(ctx, &key_exprs)?;
+            // #11789 sweep: the excluded-keys array is held across the
+            // object's evaluation (an arbitrary call), so it is rooted there
+            // and its pointer re-derived below it.
+            let mut rest_group = crate::rooting::open_rooted_group(1);
+            let keys_root = rest_group.adopt_emitted(
+                ctx,
+                crate::rooting::Repr::Boxed,
+                &keys_arr_boxed,
+                crate::rooting::operand_may_collect(ctx, object),
+            );
+            let obj_box = lower_expr(ctx, object)?;
+            let keys_arr_boxed = rest_group.reread_emitted(ctx, keys_root);
+            let blk = ctx.block();
             let keys_arr = {
-                let blk = ctx.block();
                 let bits = blk.bitcast_double_to_i64(&keys_arr_boxed);
                 blk.and(I64, &bits, POINTER_MASK_I64)
             };
-            let obj_box = lower_expr(ctx, object)?;
-            let blk = ctx.block();
             let obj_handle = {
                 let bits = blk.bitcast_double_to_i64(&obj_box);
                 blk.and(I64, &bits, POINTER_MASK_I64)
@@ -488,7 +498,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "js_object_rest",
                 &[(I64, &obj_handle), (I64, &keys_arr)],
             );
-            Ok(nanbox_pointer_inline(blk, &rest_ptr))
+            let boxed = nanbox_pointer_inline(blk, &rest_ptr);
+            rest_group.release(ctx);
+            Ok(boxed)
         }
 
         // -------- BigInt(literal) --------
@@ -535,8 +547,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // is a synthetic "default" marker we'd want js_array_sort_default;
         // for now we always use the user-comparator path.
         Expr::ArraySort { array, comparator } => {
-            let arr_box = lower_expr(ctx, array)?;
-            let cmp_box = lower_expr(ctx, comparator)?;
+            let rooted_operands: [&perry_hir::Expr; 2] = [array, comparator];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let arr_box = rooted_values[0].clone();
+            let cmp_box = rooted_values[1].clone();
             let blk = ctx.block();
             let arr_handle = unbox_to_i64(blk, &arr_box);
             // #2796: validate the comparator (function | undefined) before
@@ -548,7 +563,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "js_array_sort_with_comparator",
                 &[(I64, &arr_handle), (I64, &cmp_handle)],
             );
-            Ok(nanbox_pointer_inline(blk, &result))
+            let rooted_result = nanbox_pointer_inline(blk, &result);
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
 
         // -------- arr.reduce(callback, initial?) -> value --------
@@ -562,8 +579,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             callback,
             initial,
         } => {
-            let arr_box = lower_expr(ctx, array)?;
-            let cb_box = lower_expr(ctx, callback)?;
+            let rooted_operands: [&perry_hir::Expr; 2] = [array, callback];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let arr_box = rooted_values[0].clone();
+            let cb_box = rooted_values[1].clone();
             let (has_init, init_d) = if let Some(init_expr) = initial {
                 let v = lower_expr(ctx, init_expr)?;
                 ("1".to_string(), v)
@@ -590,7 +610,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             } else {
                 "js_array_reduce"
             };
-            Ok(blk.call(
+            let rooted_result = blk.call(
                 DOUBLE,
                 runtime_fn,
                 &[
@@ -599,7 +619,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     (I32, &has_init),
                     (DOUBLE, &init_use),
                 ],
-            ))
+            );
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
 
         // -------- enum members lower to constants --------
@@ -768,10 +790,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 );
                 new_handle
             } else if use_number_set {
-                let v = lower_expr(ctx, value)?;
-                let set_box = lower_expr(ctx, &set_expr)?;
+                let rooted_operands: [&perry_hir::Expr; 2] = [value, &set_expr];
+                let (rooted_values, rooted_group) =
+                    crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+                let v = rooted_values[0].clone();
+                let set_box = rooted_values[1].clone();
                 let set_handle = unbox_collection_receiver(ctx, &set_box, "add");
-                guarded_set_number_add(ctx, &set_handle, &v)
+                let rooted_result = guarded_set_number_add(ctx, &set_handle, &v);
+                rooted_group.release(ctx);
+                rooted_result
             } else {
                 let set_box = lower_expr(ctx, &set_expr)?;
                 let set_handle = unbox_collection_receiver(ctx, &set_box, "add");
@@ -1432,14 +1459,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
 
         Expr::FsWriteFileSync(path, content) => {
-            let p = lower_expr(ctx, path)?;
-            let c = lower_expr(ctx, content)?;
+            let rooted_operands: [&perry_hir::Expr; 2] = [path, content];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let p = rooted_values[0].clone();
+            let c = rooted_values[1].clone();
             // js_fs_write_file_sync returns i32 (1=success). Discard the
             // result; fs.writeFileSync is void in JS.
             let _ = ctx
                 .block()
                 .call(I32, "js_fs_write_file_sync", &[(DOUBLE, &p), (DOUBLE, &c)]);
-            Ok(double_literal(0.0))
+            let rooted_result = double_literal(0.0);
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
 
         Expr::FsAppendFileSync(path, content) => {
@@ -1453,12 +1485,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // `import * as fs from "fs"`) — without that the variant
             // never gets emitted for the common usage shape. Returns i32
             // (1=success) which we discard; appendFileSync is void in JS.
-            let p = lower_expr(ctx, path)?;
-            let c = lower_expr(ctx, content)?;
+            let rooted_operands: [&perry_hir::Expr; 2] = [path, content];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let p = rooted_values[0].clone();
+            let c = rooted_values[1].clone();
             let _ = ctx
                 .block()
                 .call(I32, "js_fs_append_file_sync", &[(DOUBLE, &p), (DOUBLE, &c)]);
-            Ok(double_literal(0.0))
+            let rooted_result = double_literal(0.0);
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
 
         // -------- NativeMethodCall (Phase H.1) --------

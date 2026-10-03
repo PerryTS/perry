@@ -151,9 +151,14 @@ fn with_class_store_operands<'f, R>(
     body: impl FnOnce(&mut FnCtx<'f>, String, String) -> Result<R>,
 ) -> Result<R> {
     if matches!(object, Expr::LocalGet(_) | Expr::This) {
-        let recv_box = lower_expr(ctx, object)?;
-        let val_double = lower_expr(ctx, value)?;
-        return body(ctx, recv_box, val_double);
+        let rooted_operands: [&perry_hir::Expr; 2] = [object, value];
+        let (rooted_values, rooted_group) =
+            crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+        let recv_box = rooted_values[0].clone();
+        let val_double = rooted_values[1].clone();
+        let rooted_result = body(ctx, recv_box, val_double);
+        rooted_group.release(ctx);
+        return rooted_result;
     }
     rooting::with_operands_rooted(ctx, &[object, value], |ctx, vals| {
         body(ctx, vals[0].clone(), vals[1].clone())

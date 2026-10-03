@@ -460,11 +460,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let r = ctx.block().mul(I32, &a_i32, &b_i32);
                 return Ok(ctx.block().sitofp(I32, &r, DOUBLE));
             }
-            let av = lower_expr(ctx, a)?;
-            let bv = lower_expr(ctx, b)?;
-            Ok(ctx
-                .block()
-                .call(DOUBLE, "js_math_imul", &[(DOUBLE, &av), (DOUBLE, &bv)]))
+            let rooted_operands: [&perry_hir::Expr; 2] = [a, b];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let av = rooted_values[0].clone();
+            let bv = rooted_values[1].clone();
+            let rooted_result =
+                ctx.block()
+                    .call(DOUBLE, "js_math_imul", &[(DOUBLE, &av), (DOUBLE, &bv)]);
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
 
         // -------- new Error() / new Error(message) --------
@@ -1121,13 +1126,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 .call(DOUBLE, "js_webassembly_module_imports", &[(DOUBLE, &v)]))
         }
         Expr::WebAssemblyModuleCustomSections { module, name } => {
-            let module_v = lower_expr(ctx, module)?;
-            let name_v = lower_expr(ctx, name)?;
-            Ok(ctx.block().call(
+            let rooted_operands: [&perry_hir::Expr; 2] = [module, name];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let module_v = rooted_values[0].clone();
+            let name_v = rooted_values[1].clone();
+            let rooted_result = ctx.block().call(
                 DOUBLE,
                 "js_webassembly_module_custom_sections",
                 &[(DOUBLE, &module_v), (DOUBLE, &name_v)],
-            ))
+            );
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
         Expr::WebAssemblyInstantiate { bytes, imports } => {
             let bytes = lower_expr(ctx, bytes)?;
@@ -1146,14 +1156,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             name,
             args,
         } => {
-            let inst = lower_expr(ctx, instance)?;
-            let name_v = lower_expr(ctx, name)?;
-            let lowered_args: Vec<String> = args
-                .iter()
-                .map(|a| lower_expr(ctx, a))
-                .collect::<Result<Vec<_>>>()?;
+            // The instance and the name are held across every argument, so
+            // they and the arguments are one group.
+            let rooted_operands: Vec<&perry_hir::Expr> = [&**instance, &**name]
+                .into_iter()
+                .chain(args.iter())
+                .collect();
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let inst = rooted_values[0].clone();
+            let name_v = rooted_values[1].clone();
+            let lowered_args: Vec<String> = rooted_values[2..].to_vec();
             let blk = ctx.block();
-            match lowered_args.len() {
+            let rooted_result = match lowered_args.len() {
                 0 => Ok(blk.call(
                     DOUBLE,
                     "js_webassembly_call_export_0",
@@ -1201,7 +1216,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         (DOUBLE, &lowered_args[3]),
                     ],
                 )),
-            }
+            };
+            rooted_group.release(ctx);
+            rooted_result
         }
 
         // `JSON.stringify(value, replacer, indent)` — full form via
@@ -1209,16 +1226,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // replacers, indent spaces, circular detection (throws
         // TypeError), and `toJSON`.
         Expr::JsonStringifyFull(value, replacer, indent) => {
-            let v = lower_expr(ctx, value)?;
-            let r = lower_expr(ctx, replacer)?;
-            let i = lower_expr(ctx, indent)?;
+            let rooted_operands: [&perry_hir::Expr; 3] = [value, replacer, indent];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let v = rooted_values[0].clone();
+            let r = rooted_values[1].clone();
+            let i = rooted_values[2].clone();
             let blk = ctx.block();
             let result_i64 = blk.call(
                 I64,
                 "js_json_stringify_full",
                 &[(DOUBLE, &v), (DOUBLE, &r), (DOUBLE, &i)],
             );
-            Ok(blk.bitcast_i64_to_double(&result_i64))
+            let rooted_result = blk.bitcast_i64_to_double(&result_i64);
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
 
         // `new Map()` — alloc with default capacity 8 (the runtime grows

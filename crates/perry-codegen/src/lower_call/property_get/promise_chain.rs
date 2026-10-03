@@ -4,7 +4,7 @@
 use anyhow::Result;
 use perry_hir::Expr;
 
-use crate::expr::{lower_expr, nanbox_pointer_inline, FnCtx};
+use crate::expr::{nanbox_pointer_inline, FnCtx};
 use crate::nanbox::double_literal;
 use crate::type_analysis::{is_global_constructor_expr, is_promise_expr};
 use crate::types::{DOUBLE, I64};
@@ -71,17 +71,34 @@ pub(crate) fn try_lower_promise_chain_method(
                             if inner_property == "resolve"
                                 && is_global_constructor_expr(inner_object.as_ref(), "Promise")
                             {
-                                let inner_value = if inner_args.is_empty() {
-                                    double_literal(0.0)
-                                } else {
-                                    lower_expr(ctx, &inner_args[0])?
-                                };
-                                let on_fulfilled_box = lower_expr(ctx, &args[0])?;
-                                let on_rejected_box = if args.len() >= 2 {
-                                    lower_expr(ctx, &args[1])?
-                                } else {
-                                    undefined_arg()
-                                };
+                                // #11789 sweep: the resolved value is held while the
+                                // handler closures are built (each allocates), and
+                                // each handler across the next.
+                                let mut operands: Vec<&Expr> = Vec::with_capacity(3);
+                                if !inner_args.is_empty() {
+                                    operands.push(&inner_args[0]);
+                                }
+                                operands.push(&args[0]);
+                                if args.len() >= 2 {
+                                    operands.push(&args[1]);
+                                }
+                                return crate::rooting::with_operands_rooted(
+                                    ctx,
+                                    &operands,
+                                    |ctx, vals| {
+                                        let mut it = vals.iter().cloned();
+                                        let inner_value = if inner_args.is_empty() {
+                                            double_literal(0.0)
+                                        } else {
+                                            it.next().expect("inner value operand")
+                                        };
+                                        let on_fulfilled_box =
+                                            it.next().expect("fulfilled handler operand");
+                                        let on_rejected_box = if args.len() >= 2 {
+                                            it.next().expect("rejected handler operand")
+                                        } else {
+                                            undefined_arg()
+                                        };
                                 let blk = ctx.block();
                                 // `js_promise_resolved_then` takes already-unboxed
                                 // `ClosurePtr` args (unlike the `_checked` entries
@@ -109,18 +126,20 @@ pub(crate) fn try_lower_promise_chain_method(
                                         (I64, &on_rejected_handle),
                                     ],
                                 );
-                                return Ok(Some(nanbox_pointer_inline(blk, &new_promise)));
+                                        Ok(Some(nanbox_pointer_inline(blk, &new_promise)))
+                                    },
+                                );
                             }
                         }
                     }
 
-                    let promise_box = lower_expr(ctx, object)?;
-                    let on_fulfilled_box = lower_expr(ctx, &args[0])?;
-                    let on_rejected_box = if args.len() >= 2 {
-                        lower_expr(ctx, &args[1])?
-                    } else {
-                        undefined_arg()
-                    };
+                    // #11789 sweep: the promise is held across the handler
+                    // closures, each of which allocates.
+                    let handlers = &args[..args.len().min(2)];
+                    let (promise_box, handler_vals, group) =
+                        crate::lower_call::lower_operands_rooted(ctx, object, handlers)?;
+                    let on_fulfilled_box = handler_vals[0].clone();
+                    let on_rejected_box = handler_vals.get(1).cloned().unwrap_or_else(undefined_arg);
                     let blk = ctx.block();
                     let new_promise = blk.call(
                         DOUBLE,
@@ -131,18 +150,22 @@ pub(crate) fn try_lower_promise_chain_method(
                             (DOUBLE, &on_rejected_box),
                         ],
                     );
+                    group.release(ctx);
                     return Ok(Some(new_promise));
                 }
             "catch"
                 if !args.is_empty() => {
-                    let promise_box = lower_expr(ctx, object)?;
-                    let on_rejected_box = lower_expr(ctx, &args[0])?;
+                    // #11789 sweep: the promise is held across the handler.
+                    let (promise_box, handler_vals, group) =
+                        crate::lower_call::lower_operands_rooted(ctx, object, &args[..1])?;
+                    let on_rejected_box = handler_vals[0].clone();
                     let blk = ctx.block();
                     let new_promise = blk.call(
                         DOUBLE,
                         "js_promise_catch_checked",
                         &[(DOUBLE, &promise_box), (DOUBLE, &on_rejected_box)],
                     );
+                    group.release(ctx);
                     return Ok(Some(new_promise));
                 }
             "finally"
@@ -154,14 +177,17 @@ pub(crate) fn try_lower_promise_chain_method(
                 // — unless the receiver has an own "then"/"constructor"
                 // override, in which case it defers to the spec-path thunk.
                 if !args.is_empty() => {
-                    let promise_box = lower_expr(ctx, object)?;
-                    let on_finally_box = lower_expr(ctx, &args[0])?;
+                    // #11789 sweep: the promise is held across the handler.
+                    let (promise_box, handler_vals, group) =
+                        crate::lower_call::lower_operands_rooted(ctx, object, &args[..1])?;
+                    let on_finally_box = handler_vals[0].clone();
                     let blk = ctx.block();
                     let new_promise = blk.call(
                         DOUBLE,
                         "js_promise_finally_checked",
                         &[(DOUBLE, &promise_box), (DOUBLE, &on_finally_box)],
                     );
+                    group.release(ctx);
                     return Ok(Some(new_promise));
                 }
             _ => {}

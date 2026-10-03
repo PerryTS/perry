@@ -185,15 +185,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // 0..99→1900+year), so we pass a NaN-boxed args buffer + count rather
         // than padding missing slots with 0.
         Expr::DateUtc(args) => {
-            let mut vals: Vec<String> = Vec::with_capacity(args.len());
-            for a in args.iter() {
-                vals.push(lower_expr(ctx, a)?);
-            }
+            let (vals, args_group) = crate::lower_call::lower_call_args_rooted(ctx, args)?;
             // #10463: an entry-block buffer, not one per loop iteration.
             let (args_ptr, argc) = lower_js_args_array(ctx, &vals);
-            Ok(ctx
-                .block()
-                .call(DOUBLE, "js_date_utc", &[(PTR, &args_ptr), (I32, &argc)]))
+            let rooted_result =
+                ctx.block()
+                    .call(DOUBLE, "js_date_utc", &[(PTR, &args_ptr), (I32, &argc)]);
+            args_group.release(ctx);
+            Ok(rooted_result)
         }
 
         // -------- Object.defineProperty --------
@@ -312,15 +311,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // runtime resolves synchronously inside the Promise body since
         // SHA / HMAC are CPU-bound — the await is decorative.
         Expr::WebCryptoDigest { algo, data } => {
-            let algo_box = lower_expr(ctx, algo)?;
-            let data_box = lower_expr(ctx, data)?;
+            let rooted_operands: [&perry_hir::Expr; 2] = [algo, data];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let algo_box = rooted_values[0].clone();
+            let data_box = rooted_values[1].clone();
             let blk = ctx.block();
             let promise = blk.call(
                 I64,
                 "js_webcrypto_digest",
                 &[(DOUBLE, &algo_box), (DOUBLE, &data_box)],
             );
-            Ok(nanbox_pointer_inline(blk, &promise))
+            let rooted_result = nanbox_pointer_inline(blk, &promise);
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
         Expr::WebCryptoImportKey {
             format,
@@ -329,11 +333,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             extractable,
             usages,
         } => {
-            let format_box = lower_expr(ctx, format)?;
-            let key_box = lower_expr(ctx, key)?;
-            let algo_box = lower_expr(ctx, algorithm)?;
-            let extractable_box = lower_expr(ctx, extractable)?;
-            let usages_box = lower_expr(ctx, usages)?;
+            let rooted_operands: [&perry_hir::Expr; 5] =
+                [format, key, algorithm, extractable, usages];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let format_box = rooted_values[0].clone();
+            let key_box = rooted_values[1].clone();
+            let algo_box = rooted_values[2].clone();
+            let extractable_box = rooted_values[3].clone();
+            let usages_box = rooted_values[4].clone();
             let blk = ctx.block();
             let promise = blk.call(
                 I64,
@@ -346,34 +354,46 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     (DOUBLE, &usages_box),
                 ],
             );
-            Ok(nanbox_pointer_inline(blk, &promise))
+            let rooted_result = nanbox_pointer_inline(blk, &promise);
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
         Expr::WebCryptoExportKey { format, key } => {
-            let format_box = lower_expr(ctx, format)?;
-            let key_box = lower_expr(ctx, key)?;
+            let rooted_operands: [&perry_hir::Expr; 2] = [format, key];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let format_box = rooted_values[0].clone();
+            let key_box = rooted_values[1].clone();
             let blk = ctx.block();
             let promise = blk.call(
                 I64,
                 "js_webcrypto_export_key",
                 &[(DOUBLE, &format_box), (DOUBLE, &key_box)],
             );
-            Ok(nanbox_pointer_inline(blk, &promise))
+            let rooted_result = nanbox_pointer_inline(blk, &promise);
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
         Expr::WebCryptoSign {
             algorithm,
             key,
             data,
         } => {
-            let algo_box = lower_expr(ctx, algorithm)?;
-            let key_box = lower_expr(ctx, key)?;
-            let data_box = lower_expr(ctx, data)?;
+            let rooted_operands: [&perry_hir::Expr; 3] = [algorithm, key, data];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let algo_box = rooted_values[0].clone();
+            let key_box = rooted_values[1].clone();
+            let data_box = rooted_values[2].clone();
             let blk = ctx.block();
             let promise = blk.call(
                 I64,
                 "js_webcrypto_sign",
                 &[(DOUBLE, &algo_box), (DOUBLE, &key_box), (DOUBLE, &data_box)],
             );
-            Ok(nanbox_pointer_inline(blk, &promise))
+            let rooted_result = nanbox_pointer_inline(blk, &promise);
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
         Expr::WebCryptoVerify {
             algorithm,
@@ -381,10 +401,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             signature,
             data,
         } => {
-            let algo_box = lower_expr(ctx, algorithm)?;
-            let key_box = lower_expr(ctx, key)?;
-            let sig_box = lower_expr(ctx, signature)?;
-            let data_box = lower_expr(ctx, data)?;
+            let rooted_operands: [&perry_hir::Expr; 4] = [algorithm, key, signature, data];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let algo_box = rooted_values[0].clone();
+            let key_box = rooted_values[1].clone();
+            let sig_box = rooted_values[2].clone();
+            let data_box = rooted_values[3].clone();
             let blk = ctx.block();
             let promise = blk.call(
                 I64,
@@ -396,16 +419,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     (DOUBLE, &data_box),
                 ],
             );
-            Ok(nanbox_pointer_inline(blk, &promise))
+            let rooted_result = nanbox_pointer_inline(blk, &promise);
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
         Expr::WebCryptoDeriveBits {
             algorithm,
             base_key,
             length,
         } => {
-            let algo_box = lower_expr(ctx, algorithm)?;
-            let key_box = lower_expr(ctx, base_key)?;
-            let length_box = lower_expr(ctx, length)?;
+            let rooted_operands: [&perry_hir::Expr; 3] = [algorithm, base_key, length];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let algo_box = rooted_values[0].clone();
+            let key_box = rooted_values[1].clone();
+            let length_box = rooted_values[2].clone();
             let blk = ctx.block();
             let promise = blk.call(
                 I64,
@@ -416,7 +444,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     (DOUBLE, &length_box),
                 ],
             );
-            Ok(nanbox_pointer_inline(blk, &promise))
+            let rooted_result = nanbox_pointer_inline(blk, &promise);
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
         Expr::WebCryptoDeriveKey {
             algorithm,
@@ -425,11 +455,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             extractable,
             usages,
         } => {
-            let algo_box = lower_expr(ctx, algorithm)?;
-            let key_box = lower_expr(ctx, base_key)?;
-            let derived_algo_box = lower_expr(ctx, derived_key_algorithm)?;
-            let extractable_box = lower_expr(ctx, extractable)?;
-            let usages_box = lower_expr(ctx, usages)?;
+            let rooted_operands: [&perry_hir::Expr; 5] = [
+                algorithm,
+                base_key,
+                derived_key_algorithm,
+                extractable,
+                usages,
+            ];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let algo_box = rooted_values[0].clone();
+            let key_box = rooted_values[1].clone();
+            let derived_algo_box = rooted_values[2].clone();
+            let extractable_box = rooted_values[3].clone();
+            let usages_box = rooted_values[4].clone();
             let blk = ctx.block();
             let promise = blk.call(
                 I64,
@@ -442,48 +481,63 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     (DOUBLE, &usages_box),
                 ],
             );
-            Ok(nanbox_pointer_inline(blk, &promise))
+            let rooted_result = nanbox_pointer_inline(blk, &promise);
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
         Expr::WebCryptoEncrypt {
             algorithm,
             key,
             data,
         } => {
-            let algo_box = lower_expr(ctx, algorithm)?;
-            let key_box = lower_expr(ctx, key)?;
-            let data_box = lower_expr(ctx, data)?;
+            let rooted_operands: [&perry_hir::Expr; 3] = [algorithm, key, data];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let algo_box = rooted_values[0].clone();
+            let key_box = rooted_values[1].clone();
+            let data_box = rooted_values[2].clone();
             let blk = ctx.block();
             let promise = blk.call(
                 I64,
                 "js_webcrypto_encrypt",
                 &[(DOUBLE, &algo_box), (DOUBLE, &key_box), (DOUBLE, &data_box)],
             );
-            Ok(nanbox_pointer_inline(blk, &promise))
+            let rooted_result = nanbox_pointer_inline(blk, &promise);
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
         Expr::WebCryptoDecrypt {
             algorithm,
             key,
             data,
         } => {
-            let algo_box = lower_expr(ctx, algorithm)?;
-            let key_box = lower_expr(ctx, key)?;
-            let data_box = lower_expr(ctx, data)?;
+            let rooted_operands: [&perry_hir::Expr; 3] = [algorithm, key, data];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let algo_box = rooted_values[0].clone();
+            let key_box = rooted_values[1].clone();
+            let data_box = rooted_values[2].clone();
             let blk = ctx.block();
             let promise = blk.call(
                 I64,
                 "js_webcrypto_decrypt",
                 &[(DOUBLE, &algo_box), (DOUBLE, &key_box), (DOUBLE, &data_box)],
             );
-            Ok(nanbox_pointer_inline(blk, &promise))
+            let rooted_result = nanbox_pointer_inline(blk, &promise);
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
         Expr::WebCryptoGenerateKey {
             algorithm,
             extractable,
             usages,
         } => {
-            let algo_box = lower_expr(ctx, algorithm)?;
-            let extractable_box = lower_expr(ctx, extractable)?;
-            let usages_box = lower_expr(ctx, usages)?;
+            let rooted_operands: [&perry_hir::Expr; 3] = [algorithm, extractable, usages];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let algo_box = rooted_values[0].clone();
+            let extractable_box = rooted_values[1].clone();
+            let usages_box = rooted_values[2].clone();
             let blk = ctx.block();
             let promise = blk.call(
                 I64,
@@ -494,7 +548,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     (DOUBLE, &usages_box),
                 ],
             );
-            Ok(nanbox_pointer_inline(blk, &promise))
+            let rooted_result = nanbox_pointer_inline(blk, &promise);
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
         Expr::WebCryptoWrapKey {
             format,
@@ -502,10 +558,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             wrapping_key,
             wrap_algorithm,
         } => {
-            let format_box = lower_expr(ctx, format)?;
-            let key_box = lower_expr(ctx, key)?;
-            let wrapping_key_box = lower_expr(ctx, wrapping_key)?;
-            let wrap_algo_box = lower_expr(ctx, wrap_algorithm)?;
+            let rooted_operands: [&perry_hir::Expr; 4] =
+                [format, key, wrapping_key, wrap_algorithm];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let format_box = rooted_values[0].clone();
+            let key_box = rooted_values[1].clone();
+            let wrapping_key_box = rooted_values[2].clone();
+            let wrap_algo_box = rooted_values[3].clone();
             let blk = ctx.block();
             let promise = blk.call(
                 I64,
@@ -517,7 +577,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     (DOUBLE, &wrap_algo_box),
                 ],
             );
-            Ok(nanbox_pointer_inline(blk, &promise))
+            let rooted_result = nanbox_pointer_inline(blk, &promise);
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
         Expr::WebCryptoUnwrapKey {
             format,
@@ -528,13 +590,24 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             extractable,
             usages,
         } => {
-            let format_box = lower_expr(ctx, format)?;
-            let wrapped_key_box = lower_expr(ctx, wrapped_key)?;
-            let unwrapping_key_box = lower_expr(ctx, unwrapping_key)?;
-            let unwrap_algo_box = lower_expr(ctx, unwrap_algorithm)?;
-            let unwrapped_algo_box = lower_expr(ctx, unwrapped_key_algorithm)?;
-            let extractable_box = lower_expr(ctx, extractable)?;
-            let usages_box = lower_expr(ctx, usages)?;
+            let rooted_operands: [&perry_hir::Expr; 7] = [
+                format,
+                wrapped_key,
+                unwrapping_key,
+                unwrap_algorithm,
+                unwrapped_key_algorithm,
+                extractable,
+                usages,
+            ];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let format_box = rooted_values[0].clone();
+            let wrapped_key_box = rooted_values[1].clone();
+            let unwrapping_key_box = rooted_values[2].clone();
+            let unwrap_algo_box = rooted_values[3].clone();
+            let unwrapped_algo_box = rooted_values[4].clone();
+            let extractable_box = rooted_values[5].clone();
+            let usages_box = rooted_values[6].clone();
             let blk = ctx.block();
             let promise = blk.call(
                 I64,
@@ -549,7 +622,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     (DOUBLE, &usages_box),
                 ],
             );
-            Ok(nanbox_pointer_inline(blk, &promise))
+            let rooted_result = nanbox_pointer_inline(blk, &promise);
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
         Expr::CryptoRandomFillSync {
             buffer,
@@ -560,16 +635,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // in-place; return the same NaN-boxed buffer value. `offset`
             // and `size` are NaN-boxed JS values (Undefined → use
             // defaults). The runtime accepts both layouts.
-            let buf_box = lower_expr(ctx, buffer)?;
-            let off_box = lower_expr(ctx, offset)?;
-            let sz_box = lower_expr(ctx, size)?;
+            let rooted_operands: [&perry_hir::Expr; 3] = [buffer, offset, size];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let buf_box = rooted_values[0].clone();
+            let off_box = rooted_values[1].clone();
+            let sz_box = rooted_values[2].clone();
             let blk = ctx.block();
             let result = blk.call(
                 DOUBLE,
                 "js_crypto_random_fill_sync",
                 &[(DOUBLE, &buf_box), (DOUBLE, &off_box), (DOUBLE, &sz_box)],
             );
-            Ok(result)
+            let rooted_result = result;
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
 
         // -------- arr.indexOf(value) -> number --------
@@ -582,8 +662,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             value,
             from_index,
         } => {
-            let arr_box = lower_expr(ctx, array)?;
-            let v = lower_expr(ctx, value)?;
+            let rooted_operands: [&perry_hir::Expr; 2] = [array, value];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let arr_box = rooted_values[0].clone();
+            let v = rooted_values[1].clone();
             // #2804: optional fromIndex. has_from=1 + lowered index when
             // present; otherwise has_from=0 with a placeholder DOUBLE (`v`).
             let (from_box, has_from) = match from_index {
@@ -602,7 +685,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     (I32, has_from),
                 ],
             );
-            Ok(blk.sitofp(I64, &i64_v, DOUBLE))
+            let rooted_result = blk.sitofp(I64, &i64_v, DOUBLE);
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
 
         // arr.lastIndexOf(value, fromIndex?) — mirrors ArrayIndexOf + the
@@ -613,8 +698,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             value,
             from_index,
         } => {
-            let arr_box = lower_expr(ctx, array)?;
-            let v = lower_expr(ctx, value)?;
+            let rooted_operands: [&perry_hir::Expr; 2] = [array, value];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let arr_box = rooted_values[0].clone();
+            let v = rooted_values[1].clone();
             // With a fromIndex, pass has_from=1 + the lowered index; without,
             // pass has_from=0 and reuse `v` as an ignored placeholder DOUBLE
             // operand (runtime defaults to length-1).
@@ -634,31 +722,43 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     (I32, has_from),
                 ],
             );
-            Ok(blk.sitofp(I64, &i64_v, DOUBLE))
+            let rooted_result = blk.sitofp(I64, &i64_v, DOUBLE);
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
 
         // -------- arr.forEach(callback) — invoke callback for side effects --------
         Expr::ArrayForEach { array, callback } => {
-            let arr_box = lower_expr(ctx, array)?;
-            let cb_box = lower_expr(ctx, callback)?;
+            let rooted_operands: [&perry_hir::Expr; 2] = [array, callback];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let arr_box = rooted_values[0].clone();
+            let cb_box = rooted_values[1].clone();
             let blk = ctx.block();
             let arr_handle = unbox_to_i64(blk, &arr_box);
             // #4091: throw TypeError for a non-callable callback before iterating
             // (validated up front so even an empty array throws, per spec).
             let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
             blk.call_void("js_array_forEach", &[(I64, &arr_handle), (I64, &cb_handle)]);
-            Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
+            let rooted_result = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
 
         // -------- Object.getOwnPropertyDescriptor(obj, key) --------
         Expr::ObjectGetOwnPropertyDescriptor(obj, key) => {
-            let o = lower_expr(ctx, obj)?;
-            let k = lower_expr(ctx, key)?;
-            Ok(ctx.block().call(
+            let rooted_operands: [&perry_hir::Expr; 2] = [obj, key];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let o = rooted_values[0].clone();
+            let k = rooted_values[1].clone();
+            let rooted_result = ctx.block().call(
                 DOUBLE,
                 "js_object_get_own_property_descriptor",
                 &[(DOUBLE, &o), (DOUBLE, &k)],
-            ))
+            );
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
 
         // -------- Object.getOwnPropertyDescriptors(obj) --------
@@ -767,8 +867,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // SSO operands resolve to a real heap StringHeader; handler is
         // unboxed to its closure pointer via the standard mask.
         Expr::ProcessStdinOn { event, handler } => {
-            let event_box = lower_expr(ctx, event)?;
-            let handler_box = lower_expr(ctx, handler)?;
+            let rooted_operands: [&perry_hir::Expr; 2] = [event, handler];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let event_box = rooted_values[0].clone();
+            let handler_box = rooted_values[1].clone();
             let blk = ctx.block();
             let event_handle = unbox_str_handle(blk, &event_box);
             let handler_handle = unbox_to_i64(blk, &handler_box);
@@ -776,20 +879,27 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "js_readline_stdin_on",
                 &[(I64, &event_handle), (I64, &handler_handle)],
             );
-            Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
+            let rooted_result = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
 
         Expr::ProcessStdinRemoveListener { event, handler } => {
-            let event_box = lower_expr(ctx, event)?;
-            let handler_box = lower_expr(ctx, handler)?;
+            let rooted_operands: [&perry_hir::Expr; 2] = [event, handler];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let event_box = rooted_values[0].clone();
+            let handler_box = rooted_values[1].clone();
             let blk = ctx.block();
             let event_handle = unbox_str_handle(blk, &event_box);
             let handler_handle = unbox_to_i64(blk, &handler_box);
-            Ok(blk.call(
+            let rooted_result = blk.call(
                 DOUBLE,
                 "js_readline_stdin_remove_listener",
                 &[(I64, &event_handle), (I64, &handler_handle)],
-            ))
+            );
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
 
         Expr::ProcessStdinLifecycle(method) => {
@@ -807,16 +917,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // for the 'resize' event (#347 Phase 3). Other events fall
         // through to the runtime's no-op (silently ignored).
         Expr::ProcessStdoutOn { event, handler } => {
-            let event_box = lower_expr(ctx, event)?;
-            let handler_box = lower_expr(ctx, handler)?;
+            let rooted_operands: [&perry_hir::Expr; 2] = [event, handler];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let event_box = rooted_values[0].clone();
+            let handler_box = rooted_values[1].clone();
             let blk = ctx.block();
             let event_handle = unbox_str_handle(blk, &event_box);
             let handler_handle = unbox_to_i64(blk, &handler_box);
-            Ok(blk.call(
+            let rooted_result = blk.call(
                 DOUBLE,
                 "js_process_stdout_on",
                 &[(I64, &event_handle), (I64, &handler_handle)],
-            ))
+            );
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
 
         // -------- tty.isatty(fd) (#347 Phase 3) --------
@@ -933,8 +1048,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             value,
             step_closure,
         } => {
-            let value_box = lower_expr(ctx, value)?;
-            let step_box = lower_expr(ctx, step_closure)?;
+            let rooted_operands: [&perry_hir::Expr; 2] = [value, step_closure];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let value_box = rooted_values[0].clone();
+            let step_box = rooted_values[1].clone();
             let blk = ctx.block();
             let step_handle = unbox_to_i64(blk, &step_box);
             let promise_handle = blk.call(
@@ -942,7 +1060,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "js_async_step_chain",
                 &[(DOUBLE, &value_box), (I64, &step_handle)],
             );
-            Ok(nanbox_pointer_inline(blk, &promise_handle))
+            let rooted_result = nanbox_pointer_inline(blk, &promise_handle);
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
 
         // -------- Optimized async-step done (perf hot path) --------
@@ -957,8 +1077,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             value,
             step_closure,
         } => {
-            let value_box = lower_expr(ctx, value)?;
-            let step_box = lower_expr(ctx, step_closure)?;
+            let rooted_operands: [&perry_hir::Expr; 2] = [value, step_closure];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let value_box = rooted_values[0].clone();
+            let step_box = rooted_values[1].clone();
             let blk = ctx.block();
             let step_handle = unbox_to_i64(blk, &step_box);
             let promise_handle = blk.call(
@@ -966,7 +1089,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "js_async_step_done",
                 &[(DOUBLE, &value_box), (I64, &step_handle)],
             );
-            Ok(nanbox_pointer_inline(blk, &promise_handle))
+            let rooted_result = nanbox_pointer_inline(blk, &promise_handle);
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
 
         // -------- #691 Phase 2: current step closure (self-ref) ----
@@ -997,15 +1122,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             value,
             is_error,
         } => {
-            let step_box = lower_expr(ctx, step_closure)?;
-            let value_box = lower_expr(ctx, value)?;
+            let rooted_operands: [&perry_hir::Expr; 2] = [step_closure, value];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let step_box = rooted_values[0].clone();
+            let value_box = rooted_values[1].clone();
             let is_error_lit = if *is_error {
                 double_literal(f64::from_bits(crate::nanbox::TAG_TRUE))
             } else {
                 double_literal(f64::from_bits(crate::nanbox::TAG_FALSE))
             };
             let blk = ctx.block();
-            Ok(blk.call(
+            let rooted_result = blk.call(
                 DOUBLE,
                 "js_async_generator_resume",
                 &[
@@ -1013,7 +1141,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     (DOUBLE, &value_box),
                     (DOUBLE, is_error_lit.as_str()),
                 ],
-            ))
+            );
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
 
         // -------- Object.getOwnPropertyNames(obj) --------

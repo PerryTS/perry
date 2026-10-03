@@ -79,14 +79,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let entry = ctx.strings.entry(idx);
                 (format!("@{}", entry.bytes_global), entry.byte_len)
             };
-            let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
-            for arg in args {
-                lowered_args.push(lower_expr(ctx, arg)?);
-            }
+            let (lowered_args, args_group) = crate::lower_call::lower_call_args_rooted(ctx, args)?;
             let handle_i64 = ctx.block().bitcast_double_to_i64(&handle_dbl);
             let (args_ptr, args_len_str) = lower_js_args_array(ctx, &lowered_args);
             let len_str = byte_len.to_string();
-            Ok(ctx.block().call(
+            let rooted_result = ctx.block().call(
                 DOUBLE,
                 "js_call_function",
                 &[
@@ -96,7 +93,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     (PTR, &args_ptr),
                     (I64, &args_len_str),
                 ],
-            ))
+            );
+            args_group.release(ctx);
+            Ok(rooted_result)
         }
 
         Expr::JsCallMethod {
@@ -112,13 +111,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let entry = ctx.strings.entry(idx);
                 (format!("@{}", entry.bytes_global), entry.byte_len)
             };
-            let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
-            for arg in args {
-                lowered_args.push(lower_expr(ctx, arg)?);
-            }
+            let (lowered_args, args_group) = crate::lower_call::lower_call_args_rooted(ctx, args)?;
             let (args_ptr, args_len_str) = lower_js_args_array(ctx, &lowered_args);
             let len_str = byte_len.to_string();
-            Ok(ctx.block().call(
+            let rooted_result = ctx.block().call(
                 DOUBLE,
                 "js_call_method",
                 &[
@@ -128,23 +124,24 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     (PTR, &args_ptr),
                     (I64, &args_len_str),
                 ],
-            ))
+            );
+            args_group.release(ctx);
+            Ok(rooted_result)
         }
 
         Expr::JsCallValue { callee, args } => {
             downgrade_unknown_call_expr(ctx, callee);
             downgrade_unknown_call_args(ctx, args);
             let func_dbl = lower_expr(ctx, callee)?;
-            let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
-            for arg in args {
-                lowered_args.push(lower_expr(ctx, arg)?);
-            }
+            let (lowered_args, args_group) = crate::lower_call::lower_call_args_rooted(ctx, args)?;
             let (args_ptr, args_len_str) = lower_js_args_array(ctx, &lowered_args);
-            Ok(ctx.block().call(
+            let rooted_result = ctx.block().call(
                 DOUBLE,
                 "js_call_value",
                 &[(DOUBLE, &func_dbl), (PTR, &args_ptr), (I64, &args_len_str)],
-            ))
+            );
+            args_group.release(ctx);
+            Ok(rooted_result)
         }
 
         Expr::JsGetProperty {
@@ -173,8 +170,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         } => {
             downgrade_unknown_call_expr(ctx, object);
             downgrade_unknown_call_expr(ctx, value);
-            let obj_dbl = lower_expr(ctx, object)?;
-            let val_dbl = lower_expr(ctx, value)?;
+            let rooted_operands: [&perry_hir::Expr; 2] = [object, value];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let obj_dbl = rooted_values[0].clone();
+            let val_dbl = rooted_values[1].clone();
             let (bytes_global, byte_len) = {
                 let idx = ctx.strings.intern(property_name);
                 let entry = ctx.strings.entry(idx);
@@ -190,7 +190,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     (DOUBLE, &val_dbl),
                 ],
             );
-            Ok(val_dbl)
+            let rooted_result = val_dbl;
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
 
         Expr::JsNew {
@@ -206,14 +208,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let entry = ctx.strings.entry(idx);
                 (format!("@{}", entry.bytes_global), entry.byte_len)
             };
-            let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
-            for arg in args {
-                lowered_args.push(lower_expr(ctx, arg)?);
-            }
+            let (lowered_args, args_group) = crate::lower_call::lower_call_args_rooted(ctx, args)?;
             let handle_i64 = ctx.block().bitcast_double_to_i64(&handle_dbl);
             let (args_ptr, args_len_str) = lower_js_args_array(ctx, &lowered_args);
             let len_str = byte_len.to_string();
-            Ok(ctx.block().call(
+            let rooted_result = ctx.block().call(
                 DOUBLE,
                 "js_new_instance",
                 &[
@@ -223,23 +222,24 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     (PTR, &args_ptr),
                     (I64, &args_len_str),
                 ],
-            ))
+            );
+            args_group.release(ctx);
+            Ok(rooted_result)
         }
 
         Expr::JsNewFromHandle { constructor, args } => {
             downgrade_unknown_call_expr(ctx, constructor);
             downgrade_unknown_call_args(ctx, args);
             let ctor_dbl = lower_expr(ctx, constructor)?;
-            let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
-            for arg in args {
-                lowered_args.push(lower_expr(ctx, arg)?);
-            }
+            let (lowered_args, args_group) = crate::lower_call::lower_call_args_rooted(ctx, args)?;
             let (args_ptr, args_len_str) = lower_js_args_array(ctx, &lowered_args);
-            Ok(ctx.block().call(
+            let rooted_result = ctx.block().call(
                 DOUBLE,
                 "js_new_from_handle",
                 &[(DOUBLE, &ctor_dbl), (PTR, &args_ptr), (I64, &args_len_str)],
-            ))
+            );
+            args_group.release(ctx);
+            Ok(rooted_result)
         }
 
         // `JsCreateCallback` (issue #248 Phase 2B): wrap a Perry closure
