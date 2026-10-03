@@ -14,5 +14,6 @@
     "crates/perry-runtime/src/turnloop_pool/tests.rs": "5e78833ca5151d13a25b39303fd9d4af3adac66c7dd523ec62e6dc31f6a6ccfc",
     "crates/perry-runtime/src/gc/trace.rs": "238b62d934ec5b533f6d82bc4853a3072c513db5896f143613c2030036bc30f3"
   },
-  "validation": "pending; macOS full runtime suite running"
+  "validation": "macOS full runtime: 4835 passed, 0 failed, 5 ignored; Linux/app A/B queued",
+  "macos_log_sha256": "35c47b3f83cc91a566c7921dfd47559fbb8c059825ed0d9ae1a6c5333d425f73"
 }

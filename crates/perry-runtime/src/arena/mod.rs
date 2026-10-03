@@ -38,6 +38,8 @@ mod tests;
 mod tests_batch_unregister;
 #[cfg(test)]
 mod tests_promoted_runs;
+#[cfg(test)]
+mod tests_page_meta_audit;
 
 // Cross-sibling shared types/thread-locals (used by sibling modules via
 // `use super::*;`). These are not part of the crate-public surface
@@ -68,7 +70,7 @@ pub(crate) use block::{
 };
 pub(crate) use page_meta::{
     address_span_overlaps_pages, defer_old_object_page_registration, page_class_table_report,
-    register_block_space_with_object_starts, register_old_object_pages,
+    register_block_space_with_object_starts, register_old_object_pages, shrink_page_tables,
     unregister_block_generation, unregister_old_block_pages, OLD_GEN_RECLAIM_POOLED_BYTES,
     OLD_GEN_RECLAIM_RETURNED_BYTES, OLD_GEN_RECLAIM_REUSABLE_BYTES,
 };

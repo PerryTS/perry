@@ -1728,6 +1728,7 @@ impl GcCycleState {
                     if self.minor.is_none() {
                         crate::object::shapes::shrink_shape_tables();
                         super::shrink_malloc_registry();
+                        crate::arena::shrink_page_tables();
                     }
                     let trim = run_malloc_trim(self.progress_kind);
                     // #9612: and purge the allocator the process actually uses.

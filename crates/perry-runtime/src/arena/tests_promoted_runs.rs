@@ -220,6 +220,11 @@ fn every_page_object_reader_expands_promoted_runs() {
     const EXEMPT: &[(&str, &str)] = &[
         ("expand_promoted_run", "the expansion itself"),
         (
+            "shrink_page_tables",
+            "resizes hash directories without reading or removing object lists; \
+             described runs remain represented in their own directory",
+        ),
+        (
             "page_meta_census",
             "PERRY_GC_CENSUS read-only size estimate (gc/census.rs): reports the \
              promoted-run map as its own row and must not expand (mutate) what \
@@ -262,26 +267,17 @@ fn every_page_object_reader_expands_promoted_runs() {
         ),
     ];
 
-    // `page_meta` is a directory since the #9853 page-class table pushed it past
-    // the file cap. Read EVERY part: scanning only `mod.rs` would silently drop
-    // the functions that moved into `page_class.rs` from this audit, leaving a
-    // green test that covers less than it did before the split.
-    let page_meta_dir =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/arena/page_meta");
-    let mut src = String::new();
-    for part in ["mod.rs", "page_class.rs", "tests.rs"] {
-        src.push_str(
-            &std::fs::read_to_string(page_meta_dir.join(part))
-                .unwrap_or_else(|e| panic!("page_meta/{part} must be readable: {e:?}")),
-        );
-        src.push('\n');
-    }
+    let src = super::tests_page_meta_audit::source();
 
     let mut bodies: Vec<(String, String)> = Vec::new();
     for line in src.lines() {
         let trimmed = line.trim_start();
         if let Some(rest) = trimmed
             .strip_prefix("pub(crate) fn ")
+            .or_else(|| trimmed.strip_prefix("pub(super) fn "))
+            .or_else(|| trimmed.strip_prefix("pub(crate) unsafe fn "))
+            .or_else(|| trimmed.strip_prefix("pub(super) unsafe fn "))
+            .or_else(|| trimmed.strip_prefix("unsafe fn "))
             .or_else(|| trimmed.strip_prefix("pub fn "))
             .or_else(|| trimmed.strip_prefix("fn "))
         {
