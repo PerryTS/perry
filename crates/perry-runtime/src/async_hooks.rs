@@ -1145,6 +1145,14 @@ pub(crate) fn gc_destroy_work_pending() -> bool {
 }
 
 pub fn drain_gc_destroy_queue() -> i32 {
+    // A timer's callback checkpoint runs before its `after` hook. Destruction
+    // queued by clearInterval (or GC) must wait until the enclosing async scope
+    // and all nested scopes have finished their `after` hooks. Leave the queue
+    // intact for the next outer checkpoint rather than destroying resources
+    // while their execution identities are still active.
+    if EXECUTION_STACK.with(|stack| !stack.borrow().is_empty()) {
+        return 0;
+    }
     let ids: Vec<u64> = {
         let mut q = GC_DESTROY_QUEUE.lock().unwrap();
         q.drain(..).collect()
