@@ -259,6 +259,7 @@ pub(crate) fn emit_array_region_guard(
     recv_box: &str,
     max_index: u32,
     dense: Option<ArrayRegionDense<'_>>,
+    cap_bound: Option<&str>,
     base_slot: &str,
 ) -> String {
     let deref_idx = ctx.new_block("rloop.arr.deref");
@@ -311,7 +312,21 @@ pub(crate) fn emit_array_region_guard(
         let capacity_ptr = blk.inttoptr(I64, &capacity_addr);
         let capacity = blk.load(I32, &capacity_ptr);
         let fits = match dense {
-            None => blk.icmp_ult(I32, &max_index.to_string(), &capacity),
+            // Element receivers (no dense facts): every counter value is
+            // below `cap_bound`, an `f64`, so `cap_bound <= capacity` keeps
+            // each load inside the backing store; a slot in
+            // `[length, capacity)` holds a hole (the S0 invariant).
+            None => {
+                let fits = blk.icmp_ult(I32, &max_index.to_string(), &capacity);
+                match cap_bound {
+                    Some(bound) => {
+                        let cap_f = blk.uitofp(I32, &capacity, DOUBLE);
+                        let within = blk.fcmp("ole", bound, &cap_f);
+                        blk.and(I1, &fits, &within)
+                    }
+                    None => fits,
+                }
+            }
             Some(d) => {
                 // #9784: the logical length does not prove the backing
                 // store (a presized array's capacity can be smaller): every
