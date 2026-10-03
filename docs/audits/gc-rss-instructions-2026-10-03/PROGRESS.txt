@@ -9,7 +9,8 @@ The prior visitor revision passed 4,835 macOS tests; the page-table revision
 initially passed 4,846 with one capacity-test assertion failure. The test now
 samples capacity after removals, isolating our helper from HashMap tombstones.
 Latest-main macOS runtime: 4,849 passed, 0 failed, 5 ignored.
-Linux and all application acceptance remain open.
+Consolidated Linux/application acceptance remains open. V2 isolated results
+and the pool build-freshness correction are documented below.
 Running isolated comparisons retain the original f6c873/ebc858 production base.
 Those results cannot serve as final latest-main acceptance; a fresh baseline
 and consolidated candidate comparison is required after them. Source hashes:
@@ -343,3 +344,44 @@ regression, and whether the consolidated memory changes improve Zod. If
 not, isolate those costs before accepting the combined candidate. Quantify
 the pool release's fault/CPU cost across all workloads and the page-table
 census savings. No performance-acceptance verdict has been made.
+
+BUILD-FRESHNESS CORRECTION (2026-10-03)
+The original pool v3 build was stale: tar restored runtime inputs with mtimes
+older than Cargo's dependency outputs. Cargo reported 4,816 passing tests in
+0.36 seconds but omitted both new page-release tests. All three copied products
+were byte-identical to v2. Its 50 partial application rows, linked checks and
+successful build receipt are REJECTED as pool-revision evidence. Original logs,
+binaries and terminal receipts remain preserved; no measurements were erased.
+See gc-runtime-pool-v3-stale-build-rejection.json.
+
+V2 remains independently supported: its runtime and static builds recompiled,
+its added scan tests passed, and linked TS/Zod/string binaries contain the new
+generation-filter calls absent from their baselines. See
+ gc-auto-v2-build-freshness-proof.json. Existing v2 regressions remain open.
+
+prepare-gc-overlay.py now refreshes every runtime Rust input timestamp after
+verifying source contents, and invalidates outer auto-runtime cache stamps
+while retaining backups. A tiny real Cargo reproduction demonstrates both
+stale reuse and successful recompilation after the repair; see
+check-gc-overlay-cargo-refresh.py and gc-overlay-cargo-refresh-selftest.json.
+verify-gc-runtime-build.py rejects the stale production test log and requires
+new tests, an actually rebuilt runtime, a changed static archive and a compiled
+page-release symbol. Later page-table builds additionally require their new
+tests. Normal-auto TS/string outputs also require the page-release symbol.
+These guards supplement source hashes; source hashes alone were insufficient.
+
+The repaired pool v3r1 runtime suite has now actually compiled and passed:
+4,818 passed, 0 failed, 5 ignored, including both kernel/page-boundary tests;
+75 runtime-linked FFI and 15 event tests passed (pool-retry-linux-validation.json).
+Coherent archives and application acceptance
+are still pending. Refreshed 1,494 source inputs and invalidated four outer
+cache stamps; compact receipt: pool-retry-source-refresh.json.
+
+Execution order is now a single serialized pipeline:
+gc-runtime-mtime-repair-run.sh -> pool-v3r1 -> inline-v4r1 -> pages-v5r2 ->
+main69r1. Repaired v3 uses gc-runtime-pool-r1-main / gc-auto-v3r1; invalid v3
+products are never reused. Later source revisions are unchanged; the new
+suffixes identify repaired execution. Full pipeline success requires all
+runtime/FFI/events, linked moving checks and workload matrices to complete.
+The final summary receipt is gc-runtime-main69r1-auto.exit (not the superseded
+main69-auto receipt shown in the historical command above).

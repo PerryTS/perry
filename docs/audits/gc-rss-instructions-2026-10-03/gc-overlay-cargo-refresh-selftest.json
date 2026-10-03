@@ -1,0 +1,10 @@
+{
+  "kind": "Reproduce stale Cargo reuse with a tiny crate, then require fresh tests.",
+  "helper_sha256": "e30b2c446eab4631d3f7cf1b387d12b2050fadbf5f8b18796b396d84ce3c67bf",
+  "baseline_log": "   Compiling perry-runtime v0.0.0 (/private/var/folders/8v/09vl257j2_v70v2k77gh01n00000gn/T/perry-cargo-mtime-proof-3dc4mos0/crates/perry-runtime)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.08s\n     Running unittests src/lib.rs (/var/folders/8v/09vl257j2_v70v2k77gh01n00000gn/T/perry-cargo-mtime-proof-3dc4mos0/target/debug/deps/perry_runtime-6297f9b742fd0092)\n\nrunning 1 test\ntest old_code_witness ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n",
+  "stale_log": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.00s\n     Running unittests src/lib.rs (/var/folders/8v/09vl257j2_v70v2k77gh01n00000gn/T/perry-cargo-mtime-proof-3dc4mos0/target/debug/deps/perry_runtime-6297f9b742fd0092)\n\nrunning 1 test\ntest old_code_witness ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n",
+  "refreshed_log": "   Compiling perry-runtime v0.0.0 (/private/var/folders/8v/09vl257j2_v70v2k77gh01n00000gn/T/perry-cargo-mtime-proof-3dc4mos0/crates/perry-runtime)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s\n     Running unittests src/lib.rs (/var/folders/8v/09vl257j2_v70v2k77gh01n00000gn/T/perry-cargo-mtime-proof-3dc4mos0/target/debug/deps/perry_runtime-6297f9b742fd0092)\n\nrunning 1 test\ntest new_code_witness ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n",
+  "source_hashes_verified": true,
+  "refreshed_inputs": 2,
+  "stale_outer_stamp_retained_and_invalidated": true
+}

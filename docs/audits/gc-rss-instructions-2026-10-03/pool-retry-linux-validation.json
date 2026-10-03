@@ -1,0 +1,38 @@
+{
+  "scope": "Repaired pool v3r1 on frozen earlier production base, not consolidated latest-main acceptance",
+  "logs": {
+    "tests": {
+      "log": "gc-runtime-pool-v3r1-linux-tests.log",
+      "sha256": "34fd393b228e0a381dc2afddfaca6d0ea960f37a334001db8ca0ca7694432e29",
+      "counts": [
+        4818,
+        0,
+        5
+      ],
+      "passed_new_tests": [
+        "only_complete_owned_pages_are_eligible",
+        "kernel_releases_interior_pages_without_touching_either_neighbor"
+      ]
+    },
+    "ffi": {
+      "log": "gc-runtime-pool-v3r1-linux-ffi.log",
+      "sha256": "5fd2d8a4c2b48c0d796e7cd649e4ecc474ed2ec2d444f63474eb2650cd0a39cc",
+      "counts": [
+        75,
+        0,
+        0
+      ]
+    },
+    "events": {
+      "log": "gc-runtime-pool-v3r1-linux-events.log",
+      "sha256": "99807203ee6de424d99b8749dc36fcdce614bc3fd121afc6fdeda0b35b93ac1f",
+      "counts": [
+        15,
+        0,
+        0
+      ]
+    }
+  },
+  "source_refresh_sha256": "2014015ae446232a6c0f51eb64f071caac21db9a76f48bdeab037fafde0b8fa9",
+  "production_archive_and_app_acceptance": "pending"
+}
