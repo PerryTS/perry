@@ -275,3 +275,21 @@ queued after the isolated older-base arms, whose results remain separately
 identified. Final comparator join must use these fresh-main normal-auto results.
 Source roots: perry-main69-base / perry-main69-gc (created only on admission).
 Driver: gc-runtime-main69-run.sh; receipt: gc-runtime-main69-run.exit.
+
+Executable attribution, existing frozen-main diagnostics (not main69 acceptance)
+Added executable-footprint.json: hashes bind all four observations to the
+previously validated full-runtime campaign binaries and their pre-observer
+smaps files. Two TypeScript observations show 85.793 MiB of executable-backed
+RSS, of which 70.770 MiB is in executable-permission mappings. Two Zod
+observations show 14.109 MiB and 10.492 MiB respectively. TypeScript is at its
+third natural full; Zod uses the separately labelled explicit-census workload.
+These are collection-boundary snapshots, not peak/default-auto-build RSS.
+
+TypeScript's .text is 109,252,738 bytes of ELF layout. One generated closure
+is 8.266 MiB of machine code, two more are about 2.5 MiB each. Symbol sizes
+do not establish which of their pages are resident. Constants, stack maps,
+unwind information and relocated data occupy other mappings; the report
+keeps those separate from executable-permission RSS. This is evidence for
+a generated-code footprint audit after the current runtime comparisons, not
+a lower bound or an estimate that heap compaction could save those bytes.
+No codegen/header/shape changes are included in this attribution step.
