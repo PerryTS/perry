@@ -1,0 +1,1 @@
+Run the `test_issue_611_globalthis` parity fixture in script mode (`// parity-env: PERRY_GLOBAL_SCRIPT_THIS=1`). Since #11591 a plain `.ts` entry is a module, so its top-level `var`s are only mirrored onto `globalThis` in script mode; the fixture's script-var half (from #8677) needs that, so the coverage is kept rather than rewritten to module output.

@@ -18,8 +18,7 @@
 //! arm puts an unknown external call inside the loop body, which
 //! clobber-blocks LICM for every load in the check. Per-access cost is
 //! therefore paid on every iteration. The hoisted form exists as the #5093
-//! versioned-loop preheader check (`emit_class_field_loop_preheader_check`,
-//! sound only for call-free clone bodies), and statically-proven receivers
+//! region preheader checks (`stmt::region_loop`), and statically-proven receivers
 //! skip the diamond entirely (`collectors/ptr_shape.rs`). Do not "fix" this
 //! by de-volatilizing the gate: it buys nothing (the calls still block LICM)
 //! and weakens the mid-loop sticky-flip visibility guarantee for loops whose
@@ -39,10 +38,7 @@ use super::FnCtx;
 
 // Mirror of the runtime constants the inline check reproduces. Kept as literal
 // decimals because the emitted IR is textual.
-const GC_TYPE_OBJECT: &str = "2";
 const GC_FLAG_FORWARDED_I8: &str = "-128"; // 0x80 as i8
-/// `OBJ_FLAG_HAS_DESCRIPTORS | OBJ_FLAG_STABLE_TOMBSTONES`.
-const OBJ_FLAG_READ_FAST_PATH_BLOCKED: &str = "3072";
 /// `OBJ_FLAG_FROZEN | OBJ_FLAG_STABLE_TOMBSTONES |
 /// OBJ_FLAG_HAS_DESCRIPTORS`. Numeric proof is a different ShapeId, so the
 /// exact shape comparison below excludes it.
@@ -274,125 +270,6 @@ pub(crate) fn emit_plain_finite_number_check(
     blk.icmp_ne(I64, &exp, F64_EXP_MASK)
 }
 
-/// #5093 loop versioning: emit the whole-loop shape check in a versioned
-/// loop's preheader.
-///
-/// This is the hoisted form of [`emit_class_field_inline_precheck`]: the same
-/// strict subset of the runtime `class_field_fast_contract`, evaluated ONCE
-/// before loop entry, branching to `fast_label` (the fast clone's preheader)
-/// when the monomorphic shape holds and to `slow_label` (the slow clone's
-/// preheader, i.e. today's guarded loop) otherwise. Evaluating it once is
-/// sound only because the fast clone's body is call-free (matcher-enforced in
-/// `stmt/loops.rs`): with no calls there is no allocation, so no GC can move
-/// the object or run any of the runtime paths that mutate class_id /
-/// keys_array / field_count / the typed-layout intact bit / the frozen bit /
-/// the process-global enable flag mid-loop.
-///
-/// No typed-layout bit is tested (charter step 5, P4: raw-f64 fields are `F64`
-/// birth lanes of the compared id); `require_not_frozen` adds the frozen-bit check (any write in the
-/// loop). Per-store value checks are NOT emitted here — the fast clone's
-/// stores keep their inline plain-finite check and side-exit to `slow_label`.
-///
-/// Returns `(obj_ptr, shape_ok)`: the SSA name of the receiver object pointer
-/// (`inttoptr` of `obj_handle`) and the accumulated `i1` shape predicate,
-/// both emitted in the deref block. The deref block is deliberately left
-/// UNTERMINATED with `ctx.current_block` pointing at it: the caller lowers
-/// the fast clone first, verifies it really came out call-free
-/// (`LlBlock::contains_gc_unsafe_call`), and only then terminates the deref
-/// block — `cond_br(shape_ok, fast, slow)` on success, or an unconditional
-/// branch to the slow clone if some unpredicted lowering path emitted a call
-/// (never enter a fast clone whose call-freeness is unproven). The deref
-/// block dominates the fast preheader, so the fast clone may use `obj_ptr`
-/// directly for raw slot access.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn emit_class_field_loop_preheader_check(
-    ctx: &mut FnCtx,
-    obj_bits: &str,
-    obj_handle: &str,
-    expected_class_id: &str,
-    expected_shape_id: &str,
-    require_not_frozen: bool,
-    slow_label: &str,
-) -> (String, String) {
-    let deref_idx = ctx.new_block("class_field_loop.preheader.deref");
-    let deref_label = ctx.block_label(deref_idx);
-
-    // Gate: enable flag first (volatile — the runtime flips it sticky 0 -> 1
-    // when descriptors / typed feedback / verify mode come into use), then
-    // prove the receiver is a real heap object before dereferencing.
-    {
-        let blk = ctx.block();
-        let flag = blk.load_volatile(I8, "@PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED");
-        let flag_ok = blk.icmp_eq(I8, &flag, "0");
-        // POINTER tag and above the handle band: the fused receiver test.
-        let ptr_safe =
-            crate::expr::receiver_range::emit_fused_receiver_test(blk, obj_bits).is_object_pointer;
-        let can_inline = blk.and(I1, &ptr_safe, &flag_ok);
-        blk.cond_br(&can_inline, &deref_label, slow_label);
-    }
-
-    ctx.current_block = deref_idx;
-    {
-        let blk = ctx.block();
-        let obj_ptr = blk.inttoptr(I64, obj_handle);
-
-        // GcHeader (precedes the object by 8 bytes): obj_type @-8 (i8),
-        // gc_flags @-7 (i8), _reserved @-6 (i16).
-        let gtype_ptr = blk.gep(I8, &obj_ptr, &[(I64, "-8")]);
-        let gtype = blk.load(I8, &gtype_ptr);
-        let gtype_ok = blk.icmp_eq(I8, &gtype, GC_TYPE_OBJECT);
-
-        let gflags_ptr = blk.gep(I8, &obj_ptr, &[(I64, "-7")]);
-        let gflags = blk.load(I8, &gflags_ptr);
-        let fwd = blk.and(I8, &gflags, GC_FLAG_FORWARDED_I8);
-        let not_fwd = blk.icmp_eq(I8, &fwd, "0");
-
-        let res_ptr = blk.gep(I8, &obj_ptr, &[(I64, "-6")]);
-        let reserved = blk.load(I16, &res_ptr);
-
-        // ObjectHeader: class_id @0 and authoritative ShapeId @4 (#8113 — the
-        // two leading offsets moved down 4 when `object_type` was deleted).
-        // Matching the immutable descriptor proves the live-slot bound and key
-        // order.
-        let cid_ptr = blk.gep(I8, &obj_ptr, &[(I64, "0")]);
-        let class_id = blk.load(I32, &cid_ptr);
-        let cid_ok = blk.icmp_eq(I32, &class_id, expected_class_id);
-
-        let sid_ptr = blk.gep(I8, &obj_ptr, &[(I64, "4")]);
-        let shape_id = blk.load(I32, &sid_ptr);
-        let shape_ok = blk.icmp_eq(I32, &shape_id, expected_shape_id);
-
-        let mut acc = blk.and(I1, &gtype_ok, &not_fwd);
-        acc = blk.and(I1, &acc, &cid_ok);
-        acc = blk.and(I1, &acc, &shape_ok);
-
-        // #5654: a receiver that has ever had a property / accessor descriptor
-        // installed on it needs the guard's descriptor-aware dispatch (an
-        // accessor must fire on reads, a non-writable slot must reject
-        // stores). Instance-level installs no longer flip the process-global
-        // gate, so the hoisted check must vet the per-object flag — once, for
-        // the whole loop: installing a descriptor mid-loop would require a
-        // runtime call, which the call-free fast clone cannot make.
-        let blocked = blk.and(I16, &reserved, OBJ_FLAG_READ_FAST_PATH_BLOCKED);
-        let unblocked = blk.icmp_eq(I16, &blocked, "0");
-        acc = blk.and(I1, &acc, &unblocked);
-
-        // Charter step 5, P4: a raw-f64 field needs no per-object bit. The
-        // site is raw only for an `F64` lane of every compared id's birth rep
-        // (`class_field_site_raw_f64`), and an object carrying such an id holds
-        // a Number in that lane by the shape's invariant.
-
-        if require_not_frozen {
-            let blocked = blk.and(I16, &reserved, OBJ_FLAG_WRITE_FAST_PATH_BLOCKED);
-            let write_fast_path_ok = blk.icmp_eq(I16, &blocked, "0");
-            acc = blk.and(I1, &acc, &write_fast_path_ok);
-        }
-
-        // No terminator: the caller branches after verifying the fast clone.
-        (obj_ptr, acc)
-    }
-}
-
 /// #7142: the inline shape re-check that licenses routing a class-id dispatch
 /// tower case to a proven-receiver method clone.
 ///
@@ -476,7 +353,8 @@ pub(crate) fn emit_proven_shape_recheck(
     // exact immutable layout and receiver-kind descriptor (#8113 offsets).
     let sid_ptr = blk.gep(I8, &obj_ptr, &[(I64, "4")]);
     let shape_id = blk.load(I32, &sid_ptr);
-    let shape_ok = blk.icmp_eq(I32, &shape_id, expected_shape_id);
+    let shape_ok =
+        crate::typed_shape::emit_compatible_shape_eq(blk, &shape_id, expected_shape_id, &[]);
 
     let mut acc = blk.and(I1, &flag_ok, &not_fwd);
     acc = blk.and(I1, &acc, &unlatched);
@@ -581,7 +459,14 @@ pub(crate) fn emit_class_field_inline_precheck(
             // one 64-bit compare against `(shape << 32) | class_id`.
             let identity = blk.load(I64, &obj_ptr);
             let declared = expected_class_identity(blk, expected_class_id, &live_shape);
-            let mut ok = blk.icmp_eq(I64, &identity, &declared);
+            let mut ok = crate::typed_shape::emit_compatible_class_shape_eq(
+                blk,
+                &identity,
+                expected_class_id,
+                &live_shape,
+                &declared,
+                &[field_index],
+            );
             for arm in subclass_arms {
                 let arm_shape = crate::typed_shape::class_shape_id_operand_on_block(
                     blk,
@@ -590,21 +475,38 @@ pub(crate) fn emit_class_field_inline_precheck(
                 );
                 let arm_expected =
                     expected_class_identity(blk, &arm.class_id.to_string(), &arm_shape);
-                let arm_ok = blk.icmp_eq(I64, &identity, &arm_expected);
+                let arm_ok = crate::typed_shape::emit_compatible_class_shape_eq(
+                    blk,
+                    &identity,
+                    &arm.class_id.to_string(),
+                    &arm_shape,
+                    &arm_expected,
+                    &[field_index],
+                );
                 ok = blk.or(I1, &ok, &arm_ok);
             }
             ok
         } else {
             let sid_ptr = blk.gep(I8, &obj_ptr, &[(I64, "4")]);
             let shape_id = blk.load(I32, &sid_ptr);
-            let mut ok = blk.icmp_eq(I32, &shape_id, &live_shape);
+            let mut ok = crate::typed_shape::emit_compatible_shape_eq(
+                blk,
+                &shape_id,
+                &live_shape,
+                &[field_index],
+            );
             for arm in subclass_arms {
                 let arm_shape = crate::typed_shape::class_shape_id_operand_on_block(
                     blk,
                     &arm.keys_global,
                     true,
                 );
-                let arm_ok = blk.icmp_eq(I32, &shape_id, &arm_shape);
+                let arm_ok = crate::typed_shape::emit_compatible_shape_eq(
+                    blk,
+                    &shape_id,
+                    &arm_shape,
+                    &[field_index],
+                );
                 ok = blk.or(I1, &ok, &arm_ok);
             }
             ok
@@ -757,18 +659,27 @@ pub(crate) fn emit_class_field_read_precheck(
             // one 64-bit compare against `(shape << 32) | class_id`.
             let identity = blk.load(I64, &obj_ptr);
             let declared = expected_class_identity(blk, expected_class_id, &live_shape);
-            blk.icmp_eq(I64, &identity, &declared)
+            crate::typed_shape::emit_compatible_class_shape_eq(
+                blk,
+                &identity,
+                expected_class_id,
+                &live_shape,
+                &declared,
+                &[],
+            )
         } else {
             let sid_ptr = blk.gep(I8, &obj_ptr, &[(I64, "4")]);
             let shape_id = blk.load(I32, &sid_ptr);
-            let mut ok = blk.icmp_eq(I32, &shape_id, &live_shape);
+            let mut ok =
+                crate::typed_shape::emit_compatible_shape_eq(blk, &shape_id, &live_shape, &[]);
             for arm in subclass_arms {
                 let arm_shape = crate::typed_shape::class_shape_id_operand_on_block(
                     blk,
                     &arm.keys_global,
                     true,
                 );
-                let arm_ok = blk.icmp_eq(I32, &shape_id, &arm_shape);
+                let arm_ok =
+                    crate::typed_shape::emit_compatible_shape_eq(blk, &shape_id, &arm_shape, &[]);
                 ok = blk.or(I1, &ok, &arm_ok);
             }
             ok
@@ -785,7 +696,14 @@ pub(crate) fn emit_class_field_read_precheck(
                 );
                 let arm_expected =
                     expected_class_identity(blk, &arm.class_id.to_string(), &arm_shape);
-                let arm_ok = blk.icmp_eq(I64, &identity, &arm_expected);
+                let arm_ok = crate::typed_shape::emit_compatible_class_shape_eq(
+                    blk,
+                    &identity,
+                    &arm.class_id.to_string(),
+                    &arm_shape,
+                    &arm_expected,
+                    &[],
+                );
                 ok = blk.or(I1, &ok, &arm_ok);
             }
         }

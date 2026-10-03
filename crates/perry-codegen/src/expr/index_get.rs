@@ -1064,6 +1064,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     versioned_handle,
                     ctx.i32_counter_slots.get(index_id).cloned(),
                 ) {
+                    crate::expr::store_census::bump(
+                        ctx,
+                        crate::expr::store_census::ELEM_READ_VERSIONED_INDEXED,
+                    );
                     let idx_i32 = ctx.block().load(I32, &index_slot);
                     return Ok(guarded_array::lower_trusted_plain_array_index_get(
                         ctx,

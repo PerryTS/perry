@@ -123,7 +123,7 @@ fn emit_public_typed_closure_trampoline(
             ))
         }
     };
-    let public_name = format!("perry_closure_{}__{}", module_prefix, func_id);
+    let public_name = crate::fn_info::closure_body_symbol(module_prefix, func_id);
     let typed_name = match kind {
         TypedFunctionTrampolineKind::F64 => typed_f64_closure_name(&public_name),
         TypedFunctionTrampolineKind::I32 => typed_i32_closure_name(&public_name),
@@ -235,7 +235,7 @@ pub(super) fn compile_typed_string_closure(
         }
     };
 
-    let generic_name = format!("perry_closure_{}__{}", module_prefix, func_id);
+    let generic_name = crate::fn_info::closure_body_symbol(module_prefix, func_id);
     let llvm_name = typed_string_closure_name(&generic_name);
     let mut llvm_params: Vec<(LlvmType, String)> = Vec::with_capacity(params.len() + 1);
     llvm_params.push((I64, "%this_closure".to_string()));
@@ -283,7 +283,7 @@ pub(super) fn compile_typed_f64_closure(
         _ => return Err(anyhow!("compile_typed_f64_closure: expected Expr::Closure")),
     };
 
-    let generic_name = format!("perry_closure_{}__{}", module_prefix, func_id);
+    let generic_name = crate::fn_info::closure_body_symbol(module_prefix, func_id);
     let llvm_name = typed_f64_closure_name(&generic_name);
     let mut llvm_params: Vec<(LlvmType, String)> = Vec::with_capacity(params.len() + 1);
     llvm_params.push((I64, "%this_closure".to_string()));
@@ -328,7 +328,7 @@ pub(super) fn compile_typed_i1_closure(
         _ => return Err(anyhow!("compile_typed_i1_closure: expected Expr::Closure")),
     };
 
-    let generic_name = format!("perry_closure_{}__{}", module_prefix, func_id);
+    let generic_name = crate::fn_info::closure_body_symbol(module_prefix, func_id);
     let llvm_name = typed_i1_closure_name(&generic_name);
     let param_reps = typed_param_reps_for_params(params)
         .ok_or_else(|| anyhow!("typed-i1 closure '{}' has unsupported parameter", func_id))?;
@@ -373,7 +373,7 @@ pub(super) fn compile_typed_i32_closure(
         _ => return Err(anyhow!("compile_typed_i32_closure: expected Expr::Closure")),
     };
 
-    let generic_name = format!("perry_closure_{}__{}", module_prefix, func_id);
+    let generic_name = crate::fn_info::closure_body_symbol(module_prefix, func_id);
     let llvm_name = typed_i32_closure_name(&generic_name);
     let mut llvm_params: Vec<(LlvmType, String)> = Vec::with_capacity(params.len() + 1);
     llvm_params.push((I64, "%this_closure".to_string()));
@@ -510,7 +510,7 @@ pub(super) fn compile_closure(
     closure_relevant_ids.extend(params.iter().map(|p| p.id));
     closure_relevant_ids.extend(captures.iter().copied());
 
-    let public_llvm_name = format!("perry_closure_{}__{}", module_prefix, func_id);
+    let public_llvm_name = crate::fn_info::closure_body_symbol(module_prefix, func_id);
     let regex_factory_identity = (!is_async
         && !is_generator
         && params.is_empty()
@@ -1182,7 +1182,6 @@ pub(super) fn compile_closure(
         array_length_snapshots: HashMap::new(),
         string_window_array_facts: Vec::new(),
         suppressed_cleared_shadow_slots: std::collections::HashSet::new(),
-        class_field_loop_facts: Vec::new(),
         region_loops: Vec::new(),
         region_loop_facts: Vec::new(),
         element_shape_loop_facts: Vec::new(),

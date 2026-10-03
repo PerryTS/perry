@@ -1011,6 +1011,12 @@ pub(crate) fn class_static_own_accessor(
     class_id: u32,
     name: &str,
 ) -> Option<(crate::object::accessor_pair::Accessor, bool, bool)> {
+    // Static parent walks can reach registered builtin/synthetic ids. Those
+    // have their own dispatch and no compiled-class function object to query.
+    // Keep class_value_mint's contract intact instead of minting one on a miss.
+    if class_id == 0 || class_id >= 0x7FFF_FF00 {
+        return None;
+    }
     use crate::object::key_attrs as ka;
     let ptr = class_value_ptr(class_id) as usize;
     // SAFETY: this agent's live class closure; its bag (if any) is a live
@@ -1163,6 +1169,11 @@ fn is_internal_static_key(name: &str) -> bool {
 /// field or a runtime `C.x = v`): a slot of its function object's own-property
 /// bag.
 pub(crate) fn class_static_get(class_id: u32, name: &str) -> Option<f64> {
+    // A registered builtin parent has no compiled-class function object.
+    // Let the caller continue to its builtin static dispatch on a miss.
+    if class_id == 0 || class_id >= 0x7FFF_FF00 {
+        return None;
+    }
     let ptr = class_value_ptr(class_id) as usize;
     // SAFETY: `class_value_ptr` returns this agent's live class closure.
     unsafe {
@@ -1257,6 +1268,17 @@ pub(crate) fn class_static_entries(class_id: u32) -> Vec<(String, f64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn static_property_lookups_do_not_mint_builtin_class_values() {
+        for cid in [0, 0x7FFF_FF00, 0xFFFF_0024, u32::MAX] {
+            assert!(class_static_get(cid, "from").is_none());
+            assert!(class_static_own_accessor(cid, "from").is_none());
+            assert!(crate::object::class_registry::class_static_prototype(cid).is_null());
+            assert!(!crate::object::class_registry::class_static_prototype_is_nulled(cid));
+            assert!(class_value_cached(cid).is_none());
+        }
+    }
 
     fn register(cid: u32) {
         let mut guard = crate::object::REGISTERED_CLASS_IDS.write().unwrap();

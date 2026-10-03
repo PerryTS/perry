@@ -676,12 +676,8 @@ fn object_set_field_by_name_transition_fast_impl_value(
         let value = value_handle.get_nanbox_f64();
 
         let prev_shape_id = super::shapes::object_shape_stamp(obj);
-        let Some((next_keys, slot_idx, target_shape_id)) =
-            transition_cache_lookup_for_value(prev_shape_id, interned_key, Some(value.to_bits()))
-        else {
-            return None;
-        };
-        if next_keys.is_null() {
+        let hit = transition_cache_lookup(prev_shape_id, interned_key)?;
+        if hit.0.is_null() {
             return None;
         }
 
@@ -696,6 +692,12 @@ fn object_set_field_by_name_transition_fast_impl_value(
         if key_starts_with_digit && crate::array::object_prototype_addr_matches(obj as usize) {
             return None;
         }
+
+        let edge =
+            super::constfn_key_add::admit_or_store(obj, prev_shape_id, hit, value.to_bits())?;
+        let Some((next_keys, slot_idx, target_shape_id)) = edge.transition() else {
+            return Some(value_handle.get_nanbox_f64());
+        };
 
         if !super::shapes::install_cached_object_shape_transition(
             obj,

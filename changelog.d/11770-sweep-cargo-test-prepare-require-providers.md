@@ -1,0 +1,1 @@
+ci: the sweep-tier `cargo-test` job now prepares the coherent require providers (one release graph incl. the ext crates, `PERRY_TEST_RUNTIME_PREBUILT=1`) before `cargo test -p perry`, so `async_resource_own_bind` no longer rebuilds the perry-dev graph inside its 600 s `spawnSync` bound and ETIMEDOUTs on main.

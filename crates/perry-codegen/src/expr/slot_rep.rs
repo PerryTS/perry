@@ -526,10 +526,21 @@ pub(crate) const PTR_SHAPE_SCALAR_REPLACED: &str = "scalar_replaced";
 /// codegen had silently refused to apply.
 pub(crate) const PTR_SHAPE_NO_ACCESS_SITE: &str = "no_access_site";
 
+/// A region owns slot/representation authority; an older unguarded receiver
+/// route must not bypass its live ShapeId and store admission.
+pub(crate) const PTR_SHAPE_REGION_AUTHORITY: &str = "region_shape_authority";
+
 /// `(reason, issue)` for a rule that stopped a *selected* `Ptr<Shape>` proof
 /// from being consumed by codegen.
 pub(crate) fn ptr_shape_context_rule_text(rule: &str) -> (&'static str, &'static str) {
     match rule {
+        PTR_SHAPE_REGION_AUTHORITY => (
+            "the admitted loop/body region owns slot and representation authority: \
+             its live ShapeId guard and store admission replace the unguarded \
+             receiver route at this access. Class provenance consumed by an \
+             emitted static-region access is reported separately",
+            "#10884 (P8 region handoff)",
+        ),
         MODULE_INIT_CONTEXT => (
             "module-init / program-entry bodies set \
              `repsel_context_allows_canonical_i32: false` (codegen/entry.rs), and \

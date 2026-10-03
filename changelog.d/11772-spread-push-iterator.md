@@ -1,0 +1,1 @@
+Fix `arr.push(...x)` ignoring the source iterator after `Array.prototype[Symbol.iterator] = …` (#11772). The patched-builtins pre-scan (#11394) read a computed `Symbol.iterator` key as "any member" and so treated `push` as patched; well-known-symbol keys now record as `@@name`, which never matches a method name.

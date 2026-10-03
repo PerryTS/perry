@@ -1136,7 +1136,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function(
         "js_region_loop_prime",
         I64,
-        &[PTR, I32, I32, I64, I64, I64, I64, I64, I32, I32, I32],
+        &[PTR, I32, I32, I64, I64, I64, I64, I64, I32, I32, I32, I32],
     );
     // Design step 4: the per-class mint with the driver's static id, and the
     // literal-shape seed.
@@ -1144,6 +1144,16 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         "js_object_shape_id_for_class_keys_static",
         I32,
         &[I64, I32, I32, I32, I32, I64],
+    );
+    module.declare_function(
+        "js_object_final_shape_id_for_class_keys_static_constfn",
+        I32,
+        &[I64, I32, I32, I32, I32, I64, PTR, I32],
+    );
+    module.declare_function(
+        "js_object_finalize_constfn_static",
+        I64,
+        &[I64, I32, PTR, I32, I32, I32, I32, I64, PTR, I32],
     );
     module.declare_function("js_shape_seed_plain", I32, &[I32, PTR, I32, I32, I32, I64]);
     module.declare_function("js_shape_register_static_seed", VOID, &[PTR]);
