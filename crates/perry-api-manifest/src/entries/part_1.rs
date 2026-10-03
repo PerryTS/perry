@@ -541,6 +541,7 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
     method("net", "unref", true, Some("Socket")),
     method("net", "cork", true, Some("Socket")),
     method("net", "uncork", true, Some("Socket")),
+    method("net", "writableCorked", true, Some("Socket")),
     // Issue #2131 — lifecycle + EventEmitter surface beyond `.on`.
     // `address()` resolves to a real `{ port, family, address }` object;
     // the rest match the Node EventEmitter shape so any-typed
