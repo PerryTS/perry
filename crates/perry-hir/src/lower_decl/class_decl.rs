@@ -51,8 +51,8 @@ mod class_heritage;
 mod decl_self_binding;
 pub(crate) use decl_self_binding::{
     declared_static_field_names, fresh_class_decl_self_binding,
-    guard_shared_first_capture_snapshot, guard_shared_first_new, guard_shared_first_static_get,
-    may_evaluate_repeatedly,
+    guard_shared_first_capture_snapshot, guard_shared_first_new, guard_shared_first_static_call,
+    guard_shared_first_static_get, may_evaluate_repeatedly,
 };
 mod from_ast;
 mod member_helpers;

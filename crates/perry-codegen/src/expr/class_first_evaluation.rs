@@ -186,16 +186,22 @@ fn publish_first_evaluation_captures(
     Ok(())
 }
 
-/// `ClassIsFirstEvaluation`: does `value` hold the first evaluation of
-/// `template`? One load and one compare; a NaN-boxed boolean.
-pub(crate) fn lower_is_first(ctx: &mut FnCtx<'_>, value: &Expr, template: &str) -> Result<String> {
+/// Does `value` hold the first evaluation of `template`? One load of the
+/// template's first-evaluation word and one compare; an `i1`.
+pub(crate) fn is_first_i1(ctx: &mut FnCtx<'_>, value: &Expr, template: &str) -> Result<String> {
     let v = lower_expr(ctx, value)?;
     let flag = flag_global_name(template);
     let blk = ctx.block();
     let first = blk.load(I64, &flag);
     let bits = blk.bitcast_double_to_i64(&v);
-    let same = blk.icmp_eq(I64, &bits, &first);
-    Ok(blk.select(
+    Ok(blk.icmp_eq(I64, &bits, &first))
+}
+
+/// `ClassIsFirstEvaluation`: does `value` hold the first evaluation of
+/// `template`? A NaN-boxed boolean ([`is_first_i1`]).
+pub(crate) fn lower_is_first(ctx: &mut FnCtx<'_>, value: &Expr, template: &str) -> Result<String> {
+    let same = is_first_i1(ctx, value, template)?;
+    Ok(ctx.block().select(
         crate::types::I1,
         &same,
         DOUBLE,

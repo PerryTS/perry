@@ -22,6 +22,7 @@ mod boxed_slot_no_root_tests;
 mod cached_field_index_return;
 #[cfg(test)]
 mod class_field_loop_tests;
+mod class_first_loop;
 #[cfg(test)]
 mod compound_alias_fold_tests;
 mod counter_range;
@@ -328,6 +329,15 @@ fn lower_return_expr(ctx: &mut FnCtx<'_>, expr: &perry_hir::Expr) -> Result<Stri
 }
 
 pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
+    // #11759 (c′): a loop holding first-evaluation guards on a binding it
+    // cannot rebind tests once, before the loop.
+    if matches!(
+        stmt,
+        Stmt::For { .. } | Stmt::While { .. } | Stmt::DoWhile { .. }
+    ) && class_first_loop::try_lower_versioned_loop(ctx, stmt)?
+    {
+        return Ok(());
+    }
     match stmt {
         Stmt::Expr(e) => {
             // #10185: the element-shape fast clone's carried-index statements
