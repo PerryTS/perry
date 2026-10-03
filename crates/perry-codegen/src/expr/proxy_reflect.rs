@@ -1422,6 +1422,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 {
                     return Ok(v);
                 }
+                // #10741: a planned-bare element store (`a[i] = v`).
+                if let Some(v) = crate::stmt::region_loop::try_lower_bare_index_set(ctx, expr)? {
+                    return Ok(v);
+                }
             }
             if let Expr::String(property) = key.as_ref() {
                 if matches!(property.as_str(), "caller" | "arguments")

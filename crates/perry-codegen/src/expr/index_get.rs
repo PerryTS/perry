@@ -47,7 +47,9 @@ pub(crate) use foreign_counter::{
     packed_f64_loop_index_parts, packed_f64_loop_offset_read,
 };
 use foreign_counter::{affine_packed_loop_read, emit_affine_index_i64, foreign_packed_loop_read};
-pub(crate) use guarded_array::emit_array_region_guard;
+pub(crate) use guarded_array::{
+    emit_array_region_guard, emit_typed_f64_region_guard, ArrayRegionDense,
+};
 mod inline_dyn_typed_array;
 
 use guarded_array::{

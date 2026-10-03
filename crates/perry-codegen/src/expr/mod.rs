@@ -233,6 +233,8 @@ mod index_set_barrier_tests;
 mod instanceof_imported_rhs_tests;
 mod record_value;
 #[cfg(test)]
+mod region_array_loop_tests;
+#[cfg(test)]
 mod region_loop_tests;
 mod repsel_gates;
 mod scalar_slot_root;
@@ -3082,8 +3084,8 @@ mod unary_bigint_tests;
 mod unary_bitnot_tests;
 pub(crate) use index_get::{
     affine_counter_occurrences, affine_index_fits_i64, emit_affine_index_i64_with,
-    emit_array_region_guard, numeric_index_has_integer_array_index_proof,
-    packed_f64_loop_index_parts,
+    emit_array_region_guard, emit_typed_f64_region_guard,
+    numeric_index_has_integer_array_index_proof, packed_f64_loop_index_parts, ArrayRegionDense,
 };
 pub(crate) use masked_window::masked_window_fact_for_index;
 /// Rooting coverage for the computed-store arms the TS corpora cannot reach
