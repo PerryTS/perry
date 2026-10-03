@@ -13,9 +13,6 @@ enum ClassSideTableRootSlot {
     PrototypeObject {
         class_id: u32,
     },
-    DeclPrototypeObject {
-        class_id: u32,
-    },
     ParentClosure {
         class_id: u32,
     },
@@ -101,16 +98,6 @@ pub fn scan_class_side_table_roots_mut(visitor: &mut crate::gc::RuntimeRootVisit
                     visitor.visit_usize_slot(proto_addr);
                     super::class_prototype_object_addr_index_rekey(old_addr, *proto_addr);
                 }
-            }
-        }
-    });
-
-    CLASS_DECL_PROTOTYPE_OBJECTS.with(|table| {
-        if let Ok(mut guard) = table.write() {
-            if let Some(map) = guard.as_mut() {
-                map.visit_root_slots(|proto_addr| {
-                    visitor.visit_usize_slot(proto_addr);
-                });
             }
         }
     });
@@ -244,16 +231,6 @@ fn class_side_table_root_snapshot() -> Vec<ClassSideTableRootSlot> {
         }
     });
 
-    CLASS_DECL_PROTOTYPE_OBJECTS.with(|table| {
-        if let Ok(guard) = table.read() {
-            if let Some(map) = guard.as_ref() {
-                for class_id in map.class_ids() {
-                    slots.push(ClassSideTableRootSlot::DeclPrototypeObject { class_id });
-                }
-            }
-        }
-    });
-
     CLASS_PARENT_CLOSURES.with(|table| {
         if let Ok(guard) = table.read() {
             if let Some(map) = guard.as_ref() {
@@ -364,17 +341,6 @@ fn scan_class_side_table_root_slot(
                         let old_addr = *proto_addr;
                         visitor.visit_usize_slot(proto_addr);
                         super::class_prototype_object_addr_index_rekey(old_addr, *proto_addr);
-                    }
-                }
-            });
-        }
-        ClassSideTableRootSlot::DeclPrototypeObject { class_id } => {
-            CLASS_DECL_PROTOTYPE_OBJECTS.with(|table| {
-                if let Ok(mut guard) = table.write() {
-                    if let Some(map) = guard.as_mut() {
-                        map.visit_root_slot_for(*class_id, |proto_addr| {
-                            visitor.visit_usize_slot(proto_addr);
-                        });
                     }
                 }
             });
@@ -609,11 +575,7 @@ pub(crate) fn test_clear_class_side_table_roots() {
         }
     });
     super::state::CLASS_PROTOTYPE_ADDR_COUNTS.with(|index| index.borrow_mut().clear());
-    CLASS_DECL_PROTOTYPE_OBJECTS.with(|table| {
-        if let Ok(mut guard) = table.write() {
-            *guard = None;
-        }
-    });
+    crate::object::class_value::test_clear_class_decl_prototype_links();
     // Test-only map reset has the same invalidation contract as production
     // registry stores: a still-live accessor site must decline its old link.
     super::class_lookup_surface_gen_bump();
@@ -725,13 +687,7 @@ pub(crate) fn test_seed_class_decl_prototype_object_root(class_id: u32, addr: us
 
 #[cfg(test)]
 pub(crate) fn test_class_decl_prototype_object_root_addr(class_id: u32) -> usize {
-    CLASS_DECL_PROTOTYPE_OBJECTS.with(|table| {
-        table
-            .read()
-            .ok()
-            .and_then(|guard| guard.as_ref().and_then(|map| map.get(class_id)))
-            .unwrap_or(0)
-    })
+    crate::object::class_value::class_decl_prototype_link(class_id) as usize
 }
 
 #[cfg(test)]

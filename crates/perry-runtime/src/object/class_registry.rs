@@ -55,7 +55,7 @@ pub(crate) use decl_accessors::{
     class_chain_getter_value, class_chain_setter_apply, decl_prototype_own_accessor,
     install_decl_prototype_accessor,
 };
-pub mod decl_prototype_table;
+mod decl_prototype_birth;
 mod dispatch;
 pub(crate) mod evaluation_heritage;
 pub(crate) use evaluation_heritage::{
@@ -65,6 +65,9 @@ pub(crate) use evaluation_heritage::{
 #[cfg(test)]
 #[path = "class_registry/decl_method_slots_tests.rs"]
 mod decl_method_slots_tests;
+#[cfg(test)]
+#[path = "class_registry/decl_prototype_birth_tests.rs"]
+mod decl_prototype_birth_tests;
 mod function_prototype;
 mod gc_roots;
 pub(crate) mod parent_static;
@@ -108,12 +111,12 @@ pub(crate) use state::{
     CLASS_OBJECT_EVER,
 };
 pub use state::{
-    AccessorDecl, ClassVTable, VTableMethodEntry, CLASS_DECL_PROTOTYPE_OBJECTS,
-    CLASS_DYNAMIC_PARENT_VALUE, CLASS_METHOD_BIND_LENGTHS, CLASS_OBJECT_VALUES,
-    CLASS_PARENT_CLOSURES, CLASS_PROTOTYPE_METHOD_NONENUM, CLASS_PROTOTYPE_OBJECTS,
-    CLASS_STATIC_ACCESSORS, CLASS_STATIC_METHODS, CLASS_STATIC_METHOD_BIND_LENGTHS,
-    CLASS_STRING_MEMBER_ORDERS, CLASS_SYMBOL_ACCESSORS, CLASS_SYMBOL_MEMBER_ORDERS,
-    CLASS_SYMBOL_METHODS, CLASS_VTABLE_REGISTRY, FUNCTION_CLASS_IDS, REGISTERED_CLASS_IDS,
+    AccessorDecl, ClassVTable, VTableMethodEntry, CLASS_DYNAMIC_PARENT_VALUE,
+    CLASS_METHOD_BIND_LENGTHS, CLASS_OBJECT_VALUES, CLASS_PARENT_CLOSURES,
+    CLASS_PROTOTYPE_METHOD_NONENUM, CLASS_PROTOTYPE_OBJECTS, CLASS_STATIC_ACCESSORS,
+    CLASS_STATIC_METHODS, CLASS_STATIC_METHOD_BIND_LENGTHS, CLASS_STRING_MEMBER_ORDERS,
+    CLASS_SYMBOL_ACCESSORS, CLASS_SYMBOL_MEMBER_ORDERS, CLASS_SYMBOL_METHODS,
+    CLASS_VTABLE_REGISTRY, FUNCTION_CLASS_IDS, REGISTERED_CLASS_IDS,
 };
 
 // ── prototype_objects.rs ────────────────────────────────────────────────────

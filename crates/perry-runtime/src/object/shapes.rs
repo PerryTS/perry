@@ -36,8 +36,11 @@ use std::cell::RefCell;
 
 #[path = "shapes_birth_width.rs"]
 mod shapes_birth_width;
+#[path = "shapes_linked_birth.rs"]
+mod shapes_linked_birth;
 #[path = "shapes_prototype.rs"]
 mod shapes_prototype;
+pub(crate) use shapes_linked_birth::stamp_linked_final_shape;
 #[path = "shapes_slot_list.rs"]
 mod shapes_slot_list;
 #[path = "shapes_store.rs"]
