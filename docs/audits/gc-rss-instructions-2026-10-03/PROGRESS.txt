@@ -488,3 +488,41 @@ New roots/products: perry-main69-window / main69-window-target / main69-window.
 Driver: gc-runtime-window-v6-run.sh; terminal receipt of the same stem.
 Current PR implementation is v6; earlier v2/v3/v4/v5/immediate-main69 results
 validate their pinned revisions, not the newly changed policy on current HEAD.
+
+PAIRED FULL-RUNTIME RESULTS (measured earlier production base)
+Both dedicated TS/Zod comparisons completed 24/24 correct executions and passed
+the comparison verifier, including current executable identities and all four
+counters. These are --no-auto-optimize measurements; they do not replace the
+17-workload normal-auto matrices or validate current v6 HEAD.
+
+Pool vs scan: TS RSS 246.801 -> 246.336 MiB (-0.19%), instructions +6.42%,
+minor faults 108,795 -> 812,164 (+646.51%). All three instruction counts in the
+pool arm exceed all three scan-arm counts. Plain CPU median +17.69%; shared-host
+cycles/timing remain variable. Zod RSS +0.33%, instructions +0.004%.
+This directly isolates the page-release revision against v2, strengthening the
+reason to reject immediate-discard as the final policy. It does not yet measure
+what fraction of those extra instructions belongs to fault handling.
+
+Visitor vs pool: TS RSS 247.105 -> 247.070 MiB (-0.01%), instructions +1.41%,
+minor faults +0.023%. Every candidate instruction count exceeds every paired
+baseline count. Zod RSS +0.80%, instructions +0.016%. Per-slot inlining is NOT an
+accepted instruction optimization on this evidence. Normal-auto results and
+compiled instruction attribution will determine whether to revert it or keep
+only a smaller beneficial part. No instruction win is inferred from fewer
+indirect calls in source. Detailed repetitions: pool-vs-scan-full-runtime.json
+and visitor-vs-pool-full-runtime.json.
+
+The pinned visitor v4 Linux build now passed 4,818 runtime, 75 runtime-linked
+FFI and 15 event tests. Its six linked default/moving executions match Node;
+all three moving fixtures copied objects (12,442 / 5,689 / 63,625) and protected
+from-space. Archived products and logs are bound in visitor-linux-validation.json.
+This validates that isolated source revision, not later page compaction or v6.
+
+Additional diagnostic queued: 12 executions of those exact TS executables under
+the shared benchmark lock, with instructions:u and instructions:k separately.
+It rejects missing/duplicate/unavailable/multiplexed counters and requires both
+domains to be observed. Counts represent all user/kernel work, not direct
+fault-handler attribution. Five corrupt synthetic counter records were rejected;
+that verifies the parser only. No application result or acceptance yet.
+Latest fetched main remains 69de7f3526. PR still a draft; current v6 Linux/app
+validation and broader memory/instruction optimization remain open.
