@@ -1,0 +1,1448 @@
+{
+  "scope": "Fresh latest-main baseline/proposal and private GC-entry probe; four-workload full-runtime matrix. No 17-case normal-auto acceptance claimed. Two compiler workers, unchanged runtime defaults.",
+  "complete_cells": 72,
+  "comparisons": {
+    "production": [
+      {
+        "case": "tscwork",
+        "measurements": {
+          "base": {
+            "rss_bytes": {
+              "min": 266797056,
+              "median": 274726912,
+              "max": 274853888,
+              "values": [
+                266797056,
+                274853888,
+                274726912
+              ]
+            },
+            "cpu_seconds": {
+              "min": 4.67,
+              "median": 4.67,
+              "max": 5.37,
+              "values": [
+                4.67,
+                4.67,
+                5.37
+              ]
+            },
+            "wall_seconds": {
+              "min": 4.67,
+              "median": 4.78,
+              "max": 5.37,
+              "values": [
+                4.78,
+                4.67,
+                5.37
+              ]
+            },
+            "instructions": {
+              "min": 64139132138,
+              "median": 64141727572,
+              "max": 64145083168,
+              "values": [
+                64139132138,
+                64145083168,
+                64141727572
+              ]
+            },
+            "cycles": {
+              "min": 24545454214,
+              "median": 24670749510,
+              "max": 25184136215,
+              "values": [
+                25184136215,
+                24670749510,
+                24545454214
+              ]
+            },
+            "minor-faults": {
+              "min": 107216,
+              "median": 108279,
+              "max": 108290,
+              "values": [
+                107216,
+                108279,
+                108290
+              ]
+            },
+            "major-faults": {
+              "min": 0,
+              "median": 0,
+              "max": 0,
+              "values": [
+                0,
+                0,
+                0
+              ]
+            }
+          },
+          "gc": {
+            "rss_bytes": {
+              "min": 259985408,
+              "median": 270614528,
+              "max": 270852096,
+              "values": [
+                259985408,
+                270614528,
+                270852096
+              ]
+            },
+            "cpu_seconds": {
+              "min": 4.3100000000000005,
+              "median": 4.43,
+              "max": 5.13,
+              "values": [
+                4.43,
+                4.3100000000000005,
+                5.13
+              ]
+            },
+            "wall_seconds": {
+              "min": 4.32,
+              "median": 4.49,
+              "max": 5.13,
+              "values": [
+                4.49,
+                4.32,
+                5.13
+              ]
+            },
+            "instructions": {
+              "min": 62544037854,
+              "median": 62551468744,
+              "max": 62677908732,
+              "values": [
+                62551468744,
+                62544037854,
+                62677908732
+              ]
+            },
+            "cycles": {
+              "min": 22776906338,
+              "median": 22915964196,
+              "max": 23156734676,
+              "values": [
+                22776906338,
+                22915964196,
+                23156734676
+              ]
+            },
+            "minor-faults": {
+              "min": 138118,
+              "median": 139261,
+              "max": 147266,
+              "values": [
+                139261,
+                138118,
+                147266
+              ]
+            },
+            "major-faults": {
+              "min": 0,
+              "median": 0,
+              "max": 0,
+              "values": [
+                0,
+                0,
+                0
+              ]
+            }
+          }
+        },
+        "change": {
+          "rss_bytes": {
+            "absolute": -4112384,
+            "percent": -1.4968988549618367
+          },
+          "cpu_seconds": {
+            "absolute": -0.2400000000000002,
+            "percent": -5.139186295503217
+          },
+          "wall_seconds": {
+            "absolute": -0.29000000000000004,
+            "percent": -6.066945606694563
+          },
+          "instructions": {
+            "absolute": -1590258828,
+            "percent": -2.479289049729616
+          },
+          "cycles": {
+            "absolute": -1754785314,
+            "percent": -7.1128171979076615
+          },
+          "minor-faults": {
+            "absolute": 30982,
+            "percent": 28.61311981085899
+          },
+          "major-faults": {
+            "absolute": 0,
+            "percent": null
+          }
+        }
+      },
+      {
+        "case": "zodwork",
+        "measurements": {
+          "base": {
+            "rss_bytes": {
+              "min": 29102080,
+              "median": 29220864,
+              "max": 29687808,
+              "values": [
+                29102080,
+                29687808,
+                29220864
+              ]
+            },
+            "cpu_seconds": {
+              "min": 0.06,
+              "median": 0.06,
+              "max": 0.06,
+              "values": [
+                0.06,
+                0.06,
+                0.06
+              ]
+            },
+            "wall_seconds": {
+              "min": 0.06,
+              "median": 0.06,
+              "max": 0.07,
+              "values": [
+                0.06,
+                0.06,
+                0.07
+              ]
+            },
+            "instructions": {
+              "min": 972297198,
+              "median": 972405300,
+              "max": 972724436,
+              "values": [
+                972405300,
+                972724436,
+                972297198
+              ]
+            },
+            "cycles": {
+              "min": 353609035,
+              "median": 359816580,
+              "max": 360753004,
+              "values": [
+                360753004,
+                359816580,
+                353609035
+              ]
+            },
+            "minor-faults": {
+              "min": 3973,
+              "median": 3977,
+              "max": 3981,
+              "values": [
+                3977,
+                3981,
+                3973
+              ]
+            },
+            "major-faults": {
+              "min": 0,
+              "median": 0,
+              "max": 0,
+              "values": [
+                0,
+                0,
+                0
+              ]
+            }
+          },
+          "gc": {
+            "rss_bytes": {
+              "min": 29134848,
+              "median": 29429760,
+              "max": 29581312,
+              "values": [
+                29134848,
+                29581312,
+                29429760
+              ]
+            },
+            "cpu_seconds": {
+              "min": 0.06,
+              "median": 0.06,
+              "max": 0.06,
+              "values": [
+                0.06,
+                0.06,
+                0.06
+              ]
+            },
+            "wall_seconds": {
+              "min": 0.06,
+              "median": 0.07,
+              "max": 0.07,
+              "values": [
+                0.07,
+                0.06,
+                0.07
+              ]
+            },
+            "instructions": {
+              "min": 970063270,
+              "median": 970067281,
+              "max": 970277511,
+              "values": [
+                970063270,
+                970067281,
+                970277511
+              ]
+            },
+            "cycles": {
+              "min": 352829975,
+              "median": 353783070,
+              "max": 354870807,
+              "values": [
+                352829975,
+                354870807,
+                353783070
+              ]
+            },
+            "minor-faults": {
+              "min": 3955,
+              "median": 3964,
+              "max": 3971,
+              "values": [
+                3971,
+                3955,
+                3964
+              ]
+            },
+            "major-faults": {
+              "min": 0,
+              "median": 0,
+              "max": 0,
+              "values": [
+                0,
+                0,
+                0
+              ]
+            }
+          }
+        },
+        "change": {
+          "rss_bytes": {
+            "absolute": 208896,
+            "percent": 0.7148864592094295
+          },
+          "cpu_seconds": {
+            "absolute": 0.0,
+            "percent": 0.0
+          },
+          "wall_seconds": {
+            "absolute": 0.010000000000000009,
+            "percent": 16.666666666666675
+          },
+          "instructions": {
+            "absolute": -2338019,
+            "percent": -0.24043667799835688
+          },
+          "cycles": {
+            "absolute": -6033510,
+            "percent": -1.6768293445510452
+          },
+          "minor-faults": {
+            "absolute": -13,
+            "percent": -0.3268795574553729
+          },
+          "major-faults": {
+            "absolute": 0,
+            "percent": null
+          }
+        }
+      },
+      {
+        "case": "72-request-processing",
+        "measurements": {
+          "base": {
+            "rss_bytes": {
+              "min": 70062080,
+              "median": 70074368,
+              "max": 70443008,
+              "values": [
+                70443008,
+                70062080,
+                70074368
+              ]
+            },
+            "cpu_seconds": {
+              "min": 6.95,
+              "median": 6.96,
+              "max": 7.22,
+              "values": [
+                7.22,
+                6.95,
+                6.96
+              ]
+            },
+            "wall_seconds": {
+              "min": 6.96,
+              "median": 6.97,
+              "max": 7.22,
+              "values": [
+                7.22,
+                6.96,
+                6.97
+              ]
+            },
+            "instructions": {
+              "min": 84437493309,
+              "median": 85021213547,
+              "max": 85103053907,
+              "values": [
+                84437493309,
+                85103053907,
+                85021213547
+              ]
+            },
+            "cycles": {
+              "min": 35898573835,
+              "median": 36427576312,
+              "max": 40953094615,
+              "values": [
+                35898573835,
+                36427576312,
+                40953094615
+              ]
+            },
+            "minor-faults": {
+              "min": 10106,
+              "median": 10127,
+              "max": 10698,
+              "values": [
+                10127,
+                10698,
+                10106
+              ]
+            },
+            "major-faults": {
+              "min": 0,
+              "median": 0,
+              "max": 0,
+              "values": [
+                0,
+                0,
+                0
+              ]
+            }
+          },
+          "gc": {
+            "rss_bytes": {
+              "min": 67678208,
+              "median": 67723264,
+              "max": 68055040,
+              "values": [
+                68055040,
+                67678208,
+                67723264
+              ]
+            },
+            "cpu_seconds": {
+              "min": 6.7299999999999995,
+              "median": 6.8,
+              "max": 6.9799999999999995,
+              "values": [
+                6.8,
+                6.7299999999999995,
+                6.9799999999999995
+              ]
+            },
+            "wall_seconds": {
+              "min": 6.74,
+              "median": 6.8,
+              "max": 6.99,
+              "values": [
+                6.8,
+                6.74,
+                6.99
+              ]
+            },
+            "instructions": {
+              "min": 84383719453,
+              "median": 84414180381,
+              "max": 84572944341,
+              "values": [
+                84572944341,
+                84383719453,
+                84414180381
+              ]
+            },
+            "cycles": {
+              "min": 35498136774,
+              "median": 36102143956,
+              "max": 36141160634,
+              "values": [
+                36102143956,
+                35498136774,
+                36141160634
+              ]
+            },
+            "minor-faults": {
+              "min": 9503,
+              "median": 9518,
+              "max": 10036,
+              "values": [
+                9518,
+                10036,
+                9503
+              ]
+            },
+            "major-faults": {
+              "min": 0,
+              "median": 0,
+              "max": 0,
+              "values": [
+                0,
+                0,
+                0
+              ]
+            }
+          }
+        },
+        "change": {
+          "rss_bytes": {
+            "absolute": -2351104,
+            "percent": -3.355155482815053
+          },
+          "cpu_seconds": {
+            "absolute": -0.16000000000000014,
+            "percent": -2.298850574712641
+          },
+          "wall_seconds": {
+            "absolute": -0.16999999999999993,
+            "percent": -2.4390243902439046
+          },
+          "instructions": {
+            "absolute": -607033166,
+            "percent": -0.7139784774589542
+          },
+          "cycles": {
+            "absolute": -325432356,
+            "percent": -0.8933681264234883
+          },
+          "minor-faults": {
+            "absolute": -609,
+            "percent": -6.013626937888816
+          },
+          "major-faults": {
+            "absolute": 0,
+            "percent": null
+          }
+        }
+      },
+      {
+        "case": "30-string-build",
+        "measurements": {
+          "base": {
+            "rss_bytes": {
+              "min": 234897408,
+              "median": 235601920,
+              "max": 235827200,
+              "values": [
+                234897408,
+                235827200,
+                235601920
+              ]
+            },
+            "cpu_seconds": {
+              "min": 0.88,
+              "median": 0.9,
+              "max": 0.92,
+              "values": [
+                0.88,
+                0.9,
+                0.92
+              ]
+            },
+            "wall_seconds": {
+              "min": 0.88,
+              "median": 0.9,
+              "max": 0.93,
+              "values": [
+                0.88,
+                0.9,
+                0.93
+              ]
+            },
+            "instructions": {
+              "min": 17675791988,
+              "median": 17676941343,
+              "max": 17679940641,
+              "values": [
+                17679940641,
+                17675791988,
+                17676941343
+              ]
+            },
+            "cycles": {
+              "min": 4645172925,
+              "median": 4665129586,
+              "max": 4668926231,
+              "values": [
+                4668926231,
+                4645172925,
+                4665129586
+              ]
+            },
+            "minor-faults": {
+              "min": 104813,
+              "median": 104815,
+              "max": 104828,
+              "values": [
+                104815,
+                104813,
+                104828
+              ]
+            },
+            "major-faults": {
+              "min": 0,
+              "median": 0,
+              "max": 0,
+              "values": [
+                0,
+                0,
+                0
+              ]
+            }
+          },
+          "gc": {
+            "rss_bytes": {
+              "min": 222982144,
+              "median": 223170560,
+              "max": 223223808,
+              "values": [
+                223170560,
+                222982144,
+                223223808
+              ]
+            },
+            "cpu_seconds": {
+              "min": 0.84,
+              "median": 0.85,
+              "max": 0.85,
+              "values": [
+                0.84,
+                0.85,
+                0.85
+              ]
+            },
+            "wall_seconds": {
+              "min": 0.85,
+              "median": 0.85,
+              "max": 0.86,
+              "values": [
+                0.85,
+                0.86,
+                0.85
+              ]
+            },
+            "instructions": {
+              "min": 17645252043,
+              "median": 17648341235,
+              "max": 17654073604,
+              "values": [
+                17645252043,
+                17654073604,
+                17648341235
+              ]
+            },
+            "cycles": {
+              "min": 4483092832,
+              "median": 4568681680,
+              "max": 4832185790,
+              "values": [
+                4483092832,
+                4568681680,
+                4832185790
+              ]
+            },
+            "minor-faults": {
+              "min": 110212,
+              "median": 110216,
+              "max": 110277,
+              "values": [
+                110216,
+                110277,
+                110212
+              ]
+            },
+            "major-faults": {
+              "min": 0,
+              "median": 0,
+              "max": 0,
+              "values": [
+                0,
+                0,
+                0
+              ]
+            }
+          }
+        },
+        "change": {
+          "rss_bytes": {
+            "absolute": -12431360,
+            "percent": -5.276425591098743
+          },
+          "cpu_seconds": {
+            "absolute": -0.050000000000000044,
+            "percent": -5.555555555555558
+          },
+          "wall_seconds": {
+            "absolute": -0.050000000000000044,
+            "percent": -5.555555555555558
+          },
+          "instructions": {
+            "absolute": -28600108,
+            "percent": -0.16179330713979034
+          },
+          "cycles": {
+            "absolute": -96447906,
+            "percent": -2.0674217987307175
+          },
+          "minor-faults": {
+            "absolute": 5401,
+            "percent": 5.1528884224586236
+          },
+          "major-faults": {
+            "absolute": 0,
+            "percent": null
+          }
+        }
+      }
+    ],
+    "private_entry": [
+      {
+        "case": "tscwork",
+        "measurements": {
+          "gc": {
+            "rss_bytes": {
+              "min": 259985408,
+              "median": 270614528,
+              "max": 270852096,
+              "values": [
+                259985408,
+                270614528,
+                270852096
+              ]
+            },
+            "cpu_seconds": {
+              "min": 4.3100000000000005,
+              "median": 4.43,
+              "max": 5.13,
+              "values": [
+                4.43,
+                4.3100000000000005,
+                5.13
+              ]
+            },
+            "wall_seconds": {
+              "min": 4.32,
+              "median": 4.49,
+              "max": 5.13,
+              "values": [
+                4.49,
+                4.32,
+                5.13
+              ]
+            },
+            "instructions": {
+              "min": 62544037854,
+              "median": 62551468744,
+              "max": 62677908732,
+              "values": [
+                62551468744,
+                62544037854,
+                62677908732
+              ]
+            },
+            "cycles": {
+              "min": 22776906338,
+              "median": 22915964196,
+              "max": 23156734676,
+              "values": [
+                22776906338,
+                22915964196,
+                23156734676
+              ]
+            },
+            "minor-faults": {
+              "min": 138118,
+              "median": 139261,
+              "max": 147266,
+              "values": [
+                139261,
+                138118,
+                147266
+              ]
+            },
+            "major-faults": {
+              "min": 0,
+              "median": 0,
+              "max": 0,
+              "values": [
+                0,
+                0,
+                0
+              ]
+            }
+          },
+          "entry": {
+            "rss_bytes": {
+              "min": 251670528,
+              "median": 252481536,
+              "max": 252694528,
+              "values": [
+                252481536,
+                251670528,
+                252694528
+              ]
+            },
+            "cpu_seconds": {
+              "min": 4.3100000000000005,
+              "median": 4.3500000000000005,
+              "max": 5.0,
+              "values": [
+                4.3500000000000005,
+                4.3100000000000005,
+                5.0
+              ]
+            },
+            "wall_seconds": {
+              "min": 4.31,
+              "median": 4.35,
+              "max": 5.01,
+              "values": [
+                4.35,
+                4.31,
+                5.01
+              ]
+            },
+            "instructions": {
+              "min": 62424788296,
+              "median": 62435119738,
+              "max": 62441110868,
+              "values": [
+                62424788296,
+                62441110868,
+                62435119738
+              ]
+            },
+            "cycles": {
+              "min": 22758979237,
+              "median": 23353599462,
+              "max": 23380042737,
+              "values": [
+                22758979237,
+                23380042737,
+                23353599462
+              ]
+            },
+            "minor-faults": {
+              "min": 157485,
+              "median": 157624,
+              "max": 158487,
+              "values": [
+                157485,
+                157624,
+                158487
+              ]
+            },
+            "major-faults": {
+              "min": 0,
+              "median": 0,
+              "max": 0,
+              "values": [
+                0,
+                0,
+                0
+              ]
+            }
+          }
+        },
+        "change": {
+          "rss_bytes": {
+            "absolute": -18132992,
+            "percent": -6.700672034873156
+          },
+          "cpu_seconds": {
+            "absolute": -0.07999999999999918,
+            "percent": -1.8058690744920836
+          },
+          "wall_seconds": {
+            "absolute": -0.14000000000000057,
+            "percent": -3.118040089086871
+          },
+          "instructions": {
+            "absolute": -116349006,
+            "percent": -0.186005234307407
+          },
+          "cycles": {
+            "absolute": 437635266,
+            "percent": 1.909739700485269
+          },
+          "minor-faults": {
+            "absolute": 18363,
+            "percent": 13.186031983110858
+          },
+          "major-faults": {
+            "absolute": 0,
+            "percent": null
+          }
+        }
+      },
+      {
+        "case": "zodwork",
+        "measurements": {
+          "gc": {
+            "rss_bytes": {
+              "min": 29134848,
+              "median": 29429760,
+              "max": 29581312,
+              "values": [
+                29134848,
+                29581312,
+                29429760
+              ]
+            },
+            "cpu_seconds": {
+              "min": 0.06,
+              "median": 0.06,
+              "max": 0.06,
+              "values": [
+                0.06,
+                0.06,
+                0.06
+              ]
+            },
+            "wall_seconds": {
+              "min": 0.06,
+              "median": 0.07,
+              "max": 0.07,
+              "values": [
+                0.07,
+                0.06,
+                0.07
+              ]
+            },
+            "instructions": {
+              "min": 970063270,
+              "median": 970067281,
+              "max": 970277511,
+              "values": [
+                970063270,
+                970067281,
+                970277511
+              ]
+            },
+            "cycles": {
+              "min": 352829975,
+              "median": 353783070,
+              "max": 354870807,
+              "values": [
+                352829975,
+                354870807,
+                353783070
+              ]
+            },
+            "minor-faults": {
+              "min": 3955,
+              "median": 3964,
+              "max": 3971,
+              "values": [
+                3971,
+                3955,
+                3964
+              ]
+            },
+            "major-faults": {
+              "min": 0,
+              "median": 0,
+              "max": 0,
+              "values": [
+                0,
+                0,
+                0
+              ]
+            }
+          },
+          "entry": {
+            "rss_bytes": {
+              "min": 29208576,
+              "median": 29478912,
+              "max": 29581312,
+              "values": [
+                29478912,
+                29581312,
+                29208576
+              ]
+            },
+            "cpu_seconds": {
+              "min": 0.06,
+              "median": 0.06,
+              "max": 0.06,
+              "values": [
+                0.06,
+                0.06,
+                0.06
+              ]
+            },
+            "wall_seconds": {
+              "min": 0.06,
+              "median": 0.06,
+              "max": 0.07,
+              "values": [
+                0.06,
+                0.06,
+                0.07
+              ]
+            },
+            "instructions": {
+              "min": 970454546,
+              "median": 970544819,
+              "max": 970846417,
+              "values": [
+                970454546,
+                970846417,
+                970544819
+              ]
+            },
+            "cycles": {
+              "min": 350271625,
+              "median": 350473120,
+              "max": 361543188,
+              "values": [
+                350271625,
+                361543188,
+                350473120
+              ]
+            },
+            "minor-faults": {
+              "min": 3969,
+              "median": 3970,
+              "max": 3974,
+              "values": [
+                3970,
+                3969,
+                3974
+              ]
+            },
+            "major-faults": {
+              "min": 0,
+              "median": 0,
+              "max": 0,
+              "values": [
+                0,
+                0,
+                0
+              ]
+            }
+          }
+        },
+        "change": {
+          "rss_bytes": {
+            "absolute": 49152,
+            "percent": 0.1670146137787043
+          },
+          "cpu_seconds": {
+            "absolute": 0.0,
+            "percent": 0.0
+          },
+          "wall_seconds": {
+            "absolute": -0.010000000000000009,
+            "percent": -14.285714285714302
+          },
+          "instructions": {
+            "absolute": 477538,
+            "percent": 0.04922730715211099
+          },
+          "cycles": {
+            "absolute": -3309950,
+            "percent": -0.9355874491111194
+          },
+          "minor-faults": {
+            "absolute": 6,
+            "percent": 0.15136226034309086
+          },
+          "major-faults": {
+            "absolute": 0,
+            "percent": null
+          }
+        }
+      },
+      {
+        "case": "72-request-processing",
+        "measurements": {
+          "gc": {
+            "rss_bytes": {
+              "min": 67678208,
+              "median": 67723264,
+              "max": 68055040,
+              "values": [
+                68055040,
+                67678208,
+                67723264
+              ]
+            },
+            "cpu_seconds": {
+              "min": 6.7299999999999995,
+              "median": 6.8,
+              "max": 6.9799999999999995,
+              "values": [
+                6.8,
+                6.7299999999999995,
+                6.9799999999999995
+              ]
+            },
+            "wall_seconds": {
+              "min": 6.74,
+              "median": 6.8,
+              "max": 6.99,
+              "values": [
+                6.8,
+                6.74,
+                6.99
+              ]
+            },
+            "instructions": {
+              "min": 84383719453,
+              "median": 84414180381,
+              "max": 84572944341,
+              "values": [
+                84572944341,
+                84383719453,
+                84414180381
+              ]
+            },
+            "cycles": {
+              "min": 35498136774,
+              "median": 36102143956,
+              "max": 36141160634,
+              "values": [
+                36102143956,
+                35498136774,
+                36141160634
+              ]
+            },
+            "minor-faults": {
+              "min": 9503,
+              "median": 9518,
+              "max": 10036,
+              "values": [
+                9518,
+                10036,
+                9503
+              ]
+            },
+            "major-faults": {
+              "min": 0,
+              "median": 0,
+              "max": 0,
+              "values": [
+                0,
+                0,
+                0
+              ]
+            }
+          },
+          "entry": {
+            "rss_bytes": {
+              "min": 67776512,
+              "median": 68063232,
+              "max": 68063232,
+              "values": [
+                68063232,
+                68063232,
+                67776512
+              ]
+            },
+            "cpu_seconds": {
+              "min": 6.75,
+              "median": 6.85,
+              "max": 7.17,
+              "values": [
+                6.75,
+                6.85,
+                7.17
+              ]
+            },
+            "wall_seconds": {
+              "min": 6.75,
+              "median": 6.86,
+              "max": 7.17,
+              "values": [
+                6.75,
+                6.86,
+                7.17
+              ]
+            },
+            "instructions": {
+              "min": 84471440056,
+              "median": 84479801468,
+              "max": 84786557952,
+              "values": [
+                84471440056,
+                84479801468,
+                84786557952
+              ]
+            },
+            "cycles": {
+              "min": 35898734866,
+              "median": 36378126116,
+              "max": 36600158908,
+              "values": [
+                36378126116,
+                35898734866,
+                36600158908
+              ]
+            },
+            "minor-faults": {
+              "min": 9500,
+              "median": 9513,
+              "max": 9517,
+              "values": [
+                9500,
+                9513,
+                9517
+              ]
+            },
+            "major-faults": {
+              "min": 0,
+              "median": 0,
+              "max": 0,
+              "values": [
+                0,
+                0,
+                0
+              ]
+            }
+          }
+        },
+        "change": {
+          "rss_bytes": {
+            "absolute": 339968,
+            "percent": 0.5019958872626074
+          },
+          "cpu_seconds": {
+            "absolute": 0.04999999999999982,
+            "percent": 0.7352941176470562
+          },
+          "wall_seconds": {
+            "absolute": 0.0600000000000005,
+            "percent": 0.8823529411764675
+          },
+          "instructions": {
+            "absolute": 65621087,
+            "percent": 0.07773704216971211
+          },
+          "cycles": {
+            "absolute": 275982160,
+            "percent": 0.76444811791887
+          },
+          "minor-faults": {
+            "absolute": -5,
+            "percent": -0.052532044547171086
+          },
+          "major-faults": {
+            "absolute": 0,
+            "percent": null
+          }
+        }
+      },
+      {
+        "case": "30-string-build",
+        "measurements": {
+          "gc": {
+            "rss_bytes": {
+              "min": 222982144,
+              "median": 223170560,
+              "max": 223223808,
+              "values": [
+                223170560,
+                222982144,
+                223223808
+              ]
+            },
+            "cpu_seconds": {
+              "min": 0.84,
+              "median": 0.85,
+              "max": 0.85,
+              "values": [
+                0.84,
+                0.85,
+                0.85
+              ]
+            },
+            "wall_seconds": {
+              "min": 0.85,
+              "median": 0.85,
+              "max": 0.86,
+              "values": [
+                0.85,
+                0.86,
+                0.85
+              ]
+            },
+            "instructions": {
+              "min": 17645252043,
+              "median": 17648341235,
+              "max": 17654073604,
+              "values": [
+                17645252043,
+                17654073604,
+                17648341235
+              ]
+            },
+            "cycles": {
+              "min": 4483092832,
+              "median": 4568681680,
+              "max": 4832185790,
+              "values": [
+                4483092832,
+                4568681680,
+                4832185790
+              ]
+            },
+            "minor-faults": {
+              "min": 110212,
+              "median": 110216,
+              "max": 110277,
+              "values": [
+                110216,
+                110277,
+                110212
+              ]
+            },
+            "major-faults": {
+              "min": 0,
+              "median": 0,
+              "max": 0,
+              "values": [
+                0,
+                0,
+                0
+              ]
+            }
+          },
+          "entry": {
+            "rss_bytes": {
+              "min": 222621696,
+              "median": 222720000,
+              "max": 223072256,
+              "values": [
+                223072256,
+                222621696,
+                222720000
+              ]
+            },
+            "cpu_seconds": {
+              "min": 0.85,
+              "median": 0.85,
+              "max": 0.86,
+              "values": [
+                0.86,
+                0.85,
+                0.85
+              ]
+            },
+            "wall_seconds": {
+              "min": 0.85,
+              "median": 0.86,
+              "max": 0.86,
+              "values": [
+                0.86,
+                0.86,
+                0.85
+              ]
+            },
+            "instructions": {
+              "min": 17660230688,
+              "median": 17660293163,
+              "max": 17668026659,
+              "values": [
+                17660293163,
+                17660230688,
+                17668026659
+              ]
+            },
+            "cycles": {
+              "min": 4445330265,
+              "median": 4491043555,
+              "max": 4529665648,
+              "values": [
+                4491043555,
+                4529665648,
+                4445330265
+              ]
+            },
+            "minor-faults": {
+              "min": 110215,
+              "median": 110278,
+              "max": 110282,
+              "values": [
+                110282,
+                110215,
+                110278
+              ]
+            },
+            "major-faults": {
+              "min": 0,
+              "median": 0,
+              "max": 0,
+              "values": [
+                0,
+                0,
+                0
+              ]
+            }
+          }
+        },
+        "change": {
+          "rss_bytes": {
+            "absolute": -450560,
+            "percent": -0.20189042855831563
+          },
+          "cpu_seconds": {
+            "absolute": 0.0,
+            "percent": 0.0
+          },
+          "wall_seconds": {
+            "absolute": 0.010000000000000009,
+            "percent": 1.17647058823529
+          },
+          "instructions": {
+            "absolute": 11951928,
+            "percent": 0.06772267059464987
+          },
+          "cycles": {
+            "absolute": -77638125,
+            "percent": -1.6993550971141413
+          },
+          "minor-faults": {
+            "absolute": 62,
+            "percent": 0.05625317558248799
+          },
+          "major-faults": {
+            "absolute": 0,
+            "percent": null
+          }
+        }
+      }
+    ]
+  },
+  "inputs": {
+    "runs": "81e0d0f7f6f26890b6511b29a3e90ea5674b518f7be5d49e857af367314ded00",
+    "builds": "fc3fe484c8067cc76786354c7620a1c1615f29af8d2ccd8579b515bfea7d0f0a",
+    "oracle": "46af5eed7e50e1c6950dcf152b9b2cad941e50f29f49e6f5c42e4f2c22380752",
+    "products": "af6194faf42848e7d8f434c38e6a8fba15c2cb4fd8bef29e51e89369f28a8026"
+  }
+}
