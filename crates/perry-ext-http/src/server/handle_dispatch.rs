@@ -1341,8 +1341,7 @@ fn response_socket_value(handle: i64) -> f64 {
     if req_handle == 0 {
         f64::from_bits(TAG_NULL)
     } else {
-        crate::server::request::incoming_socket_override(req_handle)
-            .unwrap_or_else(|| handle_to_pointer_f64(req_handle))
+        handle_to_pointer_f64(req_handle)
     }
 }
 
@@ -1392,6 +1391,32 @@ mod response_socket_tests {
         );
         drop_handle(standalone);
         drop_handle(socket_handle);
+    }
+
+    #[test]
+    fn zero_socket_response_ignores_request_socket_reassignment() {
+        let request = alloc_incoming_message(IncomingMessage::new(
+            "GET".into(),
+            "/".into(),
+            HashMap::new(),
+            Vec::new(),
+            Vec::new(),
+            "127.0.0.1".into(),
+            1234,
+        ));
+        let response = crate::server::response::alloc_server_response_for_turnloop(0, 0, request);
+        let request_value = handle_to_pointer_f64(request);
+        assert_eq!(
+            response_socket_value(response).to_bits(),
+            request_value.to_bits()
+        );
+        assert!(incoming_socket_assign(request, 42.0));
+        assert_eq!(
+            response_socket_value(response).to_bits(),
+            request_value.to_bits()
+        );
+        drop_handle(response);
+        drop_handle(request);
     }
 }
 
