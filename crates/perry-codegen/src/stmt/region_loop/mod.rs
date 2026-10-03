@@ -398,7 +398,52 @@ pub(crate) fn begin(
     body: &[Stmt],
     update: Option<&Expr>,
 ) -> Result<Option<u64>> {
-    begin_with(ctx, cond, body, update, false)
+    begin_with(ctx, cond, body, update, Admit::Any)
+}
+
+/// Which regions a `begin` may form.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Admit {
+    Any,
+    /// A loop region with a bare element read (S3).
+    Arrays,
+    /// A loop region whose array use loads the per-iteration receiver
+    /// (`const o = xs[i]`) and whose nested body region proves it.
+    Elements,
+}
+
+/// [`begin`] for a loop whose body binds an element receiver of the
+/// counter: only an element region is formed (see [`Admit::Elements`]). The
+/// region tier then owns the loop ahead of the array tiers that would load
+/// the element in a call-free clone, where no region can split the body. A
+/// body with a nested loop is not taken. That is a cost choice, not a
+/// soundness rule (the planner walks a nested loop to its fixpoint): while a
+/// region's facts are active no loop forms a region of its own
+/// ([`begin_with`]), so in the element region's F copy the inner loop, which
+/// usually runs the most, would lose its region.
+pub(crate) fn begin_for_elements(
+    ctx: &mut FnCtx<'_>,
+    cond: Option<&Expr>,
+    body: &[Stmt],
+    update: Option<&Expr>,
+) -> Result<Option<u64>> {
+    if !arrays::element_loads_enabled() || contains_loop(body) {
+        return Ok(None);
+    }
+    begin_with(ctx, cond, body, update, Admit::Elements)
+}
+
+fn contains_loop(ss: &[Stmt]) -> bool {
+    ss.iter().any(|s| match s {
+        Stmt::While { .. } | Stmt::DoWhile { .. } | Stmt::For { .. } => true,
+        Stmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => contains_loop(then_branch) || else_branch.as_deref().is_some_and(contains_loop),
+        Stmt::Switch { cases, .. } => cases.iter().any(|c| contains_loop(&c.body)),
+        _ => false,
+    })
 }
 
 /// [`begin`] for a loop a specialised tier versioned and whose slow copy
@@ -409,7 +454,7 @@ pub(crate) fn begin_for_arrays(
     body: &[Stmt],
     update: Option<&Expr>,
 ) -> Result<Option<u64>> {
-    begin_with(ctx, cond, body, update, true)
+    begin_with(ctx, cond, body, update, Admit::Arrays)
 }
 
 fn begin_with(
@@ -417,7 +462,7 @@ fn begin_with(
     cond: Option<&Expr>,
     body: &[Stmt],
     update: Option<&Expr>,
-    arrays_only: bool,
+    admit: Admit,
 ) -> Result<Option<u64>> {
     if disabled()
         || crate::codegen::full_outline_ic_enabled()
@@ -469,31 +514,12 @@ fn begin_with(
         _ => None,
     };
     let arrs = arrays::candidates(ctx, cond, body, update, &env);
-    if std::env::var("PERRY_REGION_DIAG").as_deref() == Ok("6") {
-        eprintln!(
-            "[perry region] begin in {}: counter={:?} aliases={:?} arrs={:?} cands={}",
-            ctx.func.name, env.counter, env.aliases, arrs, cands.len()
-        );
-    }
     // Array receivers (S3): the loop region, with the body region nested in
     // its F-body when there is one. Without a bare element read, today's
     // choice below.
     let mut nested: Option<(Plan, Option<(usize, Plan)>)> = None;
     if !arrs.is_empty() {
         let inner = body_region_plan(ctx, body, &cands_for_body, &wide);
-        if std::env::var("PERRY_REGION_DIAG").as_deref() == Ok("7") {
-            if let Some((k, ip)) = &inner {
-                eprintln!(
-                    "[perry region] inner plan in {}: split={} bare={} trees={} reads={:?} recv={:?}",
-                    ctx.func.name,
-                    k,
-                    ip.bare.len(),
-                    ip.trees.len(),
-                    ip.bare_reads.iter().map(|(_, r, k)| (*r, k.clone())).collect::<Vec<_>>(),
-                    ip.receivers.iter().map(|(r, k, ..)| (*r, k.clone())).collect::<Vec<_>>()
-                );
-            }
-        }
         let p = plan(
             ctx,
             body,
@@ -524,6 +550,13 @@ fn begin_with(
             }
         }
     }
+    if admit == Admit::Elements
+        && !nested
+            .as_ref()
+            .is_some_and(|(p, inner)| inner.is_some() && p.arrays.iter().any(|(_, u)| u.element))
+    {
+        nested = None;
+    }
     // The bound scope stands only for a region whose guard checks the bound.
     if let Some(sc) = bound_scope {
         let guarded = nested
@@ -535,7 +568,7 @@ fn begin_with(
         }
     }
     let bound_scope = bound_scope.filter(|_| nested.is_some());
-    if nested.is_none() && arrays_only {
+    if nested.is_none() && admit != Admit::Any {
         return Ok(None);
     }
     let (first, inner) = match nested {
@@ -767,19 +800,6 @@ fn body_region_plan(
             .iter()
             .filter(|s| matches!(s, Stmt::Let { id: x, .. } if x == id))
             .count();
-        if std::env::var("PERRY_REGION_DIAG").as_deref() == Ok("7") {
-            eprintln!(
-                "[perry region] body let {id} at {i} in {}: decls={decls} assigned={} refused={} boxed={} prealloc={} tdz={} rep={} int={}",
-                ctx.func.name,
-                assigned(tail, &[]).contains(id),
-                body_refused(tail),
-                ctx.boxed_vars.contains(id),
-                ctx.prealloc_boxes.contains(id),
-                ctx.tdz_boxes.contains(id),
-                ctx.local_slot_reps.contains_key(id),
-                ctx.integer_locals.contains(id)
-            );
-        }
         if decls != 1 || assigned(tail, &[]).contains(id) || body_refused(tail) {
             continue;
         }
@@ -1110,6 +1130,12 @@ fn close_bound_scope(ctx: &mut FnCtx<'_>, token: u64) {
     if let Some(sc) = BOUND_SCOPES.with(|m| m.borrow_mut().remove(&token)) {
         ctx.receiver_descriptors.dematerialize_scope(sc);
     }
+}
+
+/// Is the region `token` registered (its split copy is being lowered)?
+/// [`lower_loop`] unregisters it while it lowers the plain copy.
+pub(crate) fn is_registered(ctx: &FnCtx<'_>, token: u64) -> bool {
+    ctx.region_loops.iter().any(|p| p.token == token)
 }
 
 pub(crate) fn end(ctx: &mut FnCtx<'_>, token: Option<u64>) {

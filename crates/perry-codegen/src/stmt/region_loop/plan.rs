@@ -244,17 +244,9 @@ impl Planner<'_, '_> {
         {
             let d = format!("{e:?}");
             eprintln!(
-                "[perry region] stale at {} in {} [cands={} arrays={} inner={} in_inner={} record={} proofs={}/{} st={:?}]",
+                "[perry region] stale at {} in {}",
                 &d[..d.len().min(160)],
-                self.ctx.func.name,
-                self.cands.len(),
-                self.arrays.len(),
-                self.inner.is_some(),
-                self.in_inner,
-                self.record,
-                self.proof_reads.len(),
-                self.proof_locals.len(),
-                st
+                self.ctx.func.name
             );
         }
         kill(st);
@@ -1045,7 +1037,13 @@ pub(super) fn accesses(ss: &[Stmt]) -> Vec<(Recv, String, bool, usize, Option<&E
                 value,
             } => {
                 if let Some(r) = Recv::of(object) {
-                    out.push((r, property.clone(), true, e as *const Expr as usize, Some(value)));
+                    out.push((
+                        r,
+                        property.clone(),
+                        true,
+                        e as *const Expr as usize,
+                        Some(value),
+                    ));
                 }
             }
             _ => {}
@@ -1222,9 +1220,6 @@ pub(super) fn plan(
         &empty_reads,
         &empty_locals,
     );
-    if seed.is_none() && std::env::var("PERRY_REGION_DIAG").as_deref() == Ok("7") {
-        eprintln!("[perry region] plan seed none in {} cands={:?}", ctx.func.name, cands);
-    }
     let seed = seed?;
     let mut proof_reads: HashSet<usize> = seed
         .numeric_candidates
@@ -1290,17 +1285,6 @@ pub(super) fn plan(
         );
         let locals: HashSet<u32> = locals.into_iter().collect();
         if !reads.is_subset(&proof_reads) || !locals.is_subset(&proof_locals) {
-            if std::env::var("PERRY_REGION_DIAG").as_deref() == Ok("7") {
-                eprintln!(
-                    "[perry region] plan fixpoint not descending in {}: reads {}/{} sub={} locals {:?} vs {:?}",
-                    ctx.func.name,
-                    reads.len(),
-                    proof_reads.len(),
-                    reads.is_subset(&proof_reads),
-                    locals,
-                    proof_locals
-                );
-            }
             return None;
         }
         if reads == proof_reads && locals == proof_locals {
@@ -1320,7 +1304,12 @@ fn plan_once<'p, 'a>(
     arrays: &'p HashMap<Recv, ArrayUse>,
     env: &'p Env,
     loop_ctl: Option<(Option<&Expr>, Option<&Expr>)>,
-    inner: Option<(usize, &'p HashSet<usize>, &'p HashSet<usize>, &'p HashSet<usize>)>,
+    inner: Option<(
+        usize,
+        &'p HashSet<usize>,
+        &'p HashSet<usize>,
+        &'p HashSet<usize>,
+    )>,
     proof_reads: &'p HashSet<usize>,
     proof_locals: &'p HashSet<u32>,
 ) -> Option<Plan> {

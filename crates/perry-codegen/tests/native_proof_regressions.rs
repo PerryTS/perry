@@ -15714,6 +15714,44 @@ fn static_put_value_keeps_the_inline_store_when_rhs_can_allocate() {
 // write-barrier IR assertion is the ONLY detector for a deleted barrier — so
 // it has to live where the next PR to move that store will run it.
 
+/// The `js_put_value_set_packed_miss` entries of `module`'s IR, counted per
+/// literal key `0..keys` (the key operand traced back to the load of
+/// `@<module>_.str.K.handle`). A miss entry whose key is not such a literal
+/// fails the test.
+fn put_miss_entries_per_key(ir: &str, module: &str, keys: usize) -> Vec<usize> {
+    let handle = format!("{module}_.str.");
+    let mut key_of: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut counts = vec![0; keys];
+    for line in ir.lines() {
+        let line = line.trim();
+        let Some((lhs, rhs)) = line.split_once(" = ") else {
+            continue;
+        };
+        let traced = |v: Option<&str>| v.and_then(|v| key_of.get(v.trim())).copied();
+        let key = if let Some(rest) = rhs.strip_prefix("load double, ptr @") {
+            rest.strip_prefix(handle.as_str())
+                .and_then(|r| r.strip_suffix(".handle"))
+                .and_then(|k| k.parse::<usize>().ok())
+        } else if let Some(rest) = rhs.strip_prefix("bitcast double ") {
+            traced(rest.split(' ').next())
+        } else if let Some(rest) = rhs.strip_prefix("and i64 ") {
+            traced(rest.split(',').next())
+        } else if let Some(args) = rhs.strip_prefix("call double @js_put_value_set_packed_miss(") {
+            match traced(args.split(", ").nth(1).and_then(|a| a.strip_prefix("i64 "))) {
+                Some(k) if k < keys => counts[k] += 1,
+                _ => panic!("a miss entry whose key is not a literal key handle: {line}\n{ir}"),
+            }
+            None
+        } else {
+            None
+        };
+        if let Some(k) = key {
+            key_of.insert(lhs.to_string(), k);
+        }
+    }
+    counts
+}
+
 #[test]
 fn nested_same_shape_object_writes_version_one_through_four_fields() {
     let objects = 1u32;
@@ -15984,12 +16022,14 @@ fn nested_same_shape_object_writes_version_one_through_four_fields() {
             && !rejected.contains("object_array_write.loop.fast"),
         "five fields must remain outside the bounded clone:\n{rejected}"
     );
-    assert_eq!(
-        rejected
-            .matches("call double @js_put_value_set_packed_miss(")
-            .count(),
-        5,
-        "the bounded rejection must preserve the one miss entry of each of the five semantic write sites:\n{rejected}"
+    // `const object = objects[inner]` is an element receiver, so a loop
+    // region versions the rejected loop and the five sites are lowered once
+    // per generic copy of the body. Every copy must keep each site's miss
+    // entry: the entries come in whole sets, the same count for every key.
+    let per_key = put_miss_entries_per_key(&rejected, "nested_object_write5_loop", 5);
+    assert!(
+        per_key[0] >= 1 && per_key.iter().all(|c| *c == per_key[0]),
+        "the bounded rejection must preserve the miss entry of each of the five semantic write sites in every copy (entries per key: {per_key:?}):\n{rejected}"
     );
 
     let mut nonfinite_body = loop_body(1);
