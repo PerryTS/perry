@@ -1,0 +1,2160 @@
+[
+  {
+    "arm": "currentc170-base",
+    "case": "tscwork",
+    "natural_fulls": 73,
+    "live_bytes_range": [
+      27756888,
+      28584952
+    ],
+    "highest_pre_arm_rss": [
+      {
+        "seq": 1,
+        "pre_arm_rss_bytes": 261312512,
+        "totals": {
+          "dead_bytes": 36225728,
+          "dead_objects": 34318,
+          "late_marked_bytes": 0,
+          "late_marked_objects": 0,
+          "live_bytes": 27794936,
+          "live_objects": 225705,
+          "non_regex_side_table_bytes": 21583819,
+          "reachability_pass": true,
+          "regex_side_table_bytes": 0,
+          "side_table_bytes": 21583819
+        },
+        "arena": {
+          "block_pool_bytes": 40894464,
+          "capacity_bytes": 73400320,
+          "free_list_bytes": 0,
+          "live_allocated_bytes_estimate": 61856088,
+          "old_free_bytes": 1052488,
+          "spaces": [
+            {
+              "blocks": 6,
+              "capacity_bytes": 6291456,
+              "dead": {
+                "bytes": 228136,
+                "count": 2852
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 856,
+                "count": 17
+              },
+              "object_starts_bytes": 98304,
+              "space": "nursery_eden",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "tombstones": 53,
+              "used_bytes": 228992,
+              "walked_bytes": 228992
+            },
+            {
+              "blocks": 1,
+              "capacity_bytes": 1048576,
+              "dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "object_starts_bytes": 16384,
+              "space": "survivor0",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "tombstones": 0,
+              "used_bytes": 0,
+              "walked_bytes": 0
+            },
+            {
+              "blocks": 1,
+              "capacity_bytes": 1048576,
+              "dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "object_starts_bytes": 16384,
+              "space": "survivor1",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "tombstones": 2,
+              "used_bytes": 0,
+              "walked_bytes": 0
+            },
+            {
+              "blocks": 2,
+              "capacity_bytes": 2097152,
+              "dead": {
+                "bytes": 1577296,
+                "count": 28389
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 126208,
+                "count": 1565
+              },
+              "object_starts_bytes": 32768,
+              "space": "longlived",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "tombstones": 0,
+              "used_bytes": 1703504,
+              "walked_bytes": 1703504
+            },
+            {
+              "blocks": 60,
+              "capacity_bytes": 62914560,
+              "dead": {
+                "bytes": 34420296,
+                "count": 3077
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 27058016,
+                "count": 224121
+              },
+              "object_starts_bytes": 983040,
+              "space": "old",
+              "stub_dead": {
+                "bytes": 4112,
+                "count": 1
+              },
+              "stub_live": {
+                "bytes": 18464,
+                "count": 2
+              },
+              "tombstones": 0,
+              "used_bytes": 62553376,
+              "walked_bytes": 61500888
+            },
+            {
+              "dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 609856,
+                "count": 2
+              },
+              "space": "malloc",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "walked_bytes": 609856
+            }
+          ],
+          "used_bytes": 64485872
+        },
+        "strings": {
+          "dead": {
+            "bytes": 35463296,
+            "count": 27574
+          },
+          "id": 3,
+          "late_marked": {
+            "bytes": 0,
+            "count": 0
+          },
+          "live": {
+            "bytes": 1964280,
+            "count": 27586
+          },
+          "type": "string"
+        }
+      },
+      {
+        "seq": 2,
+        "pre_arm_rss_bytes": 255438848,
+        "totals": {
+          "dead_bytes": 36548936,
+          "dead_objects": 38293,
+          "late_marked_bytes": 0,
+          "late_marked_objects": 0,
+          "live_bytes": 27756888,
+          "live_objects": 225555,
+          "non_regex_side_table_bytes": 21517702,
+          "reachability_pass": true,
+          "regex_side_table_bytes": 0,
+          "side_table_bytes": 21517702
+        },
+        "arena": {
+          "block_pool_bytes": 32505856,
+          "capacity_bytes": 78643200,
+          "free_list_bytes": 0,
+          "live_allocated_bytes_estimate": 61909000,
+          "old_free_bytes": 6383024,
+          "spaces": [
+            {
+              "blocks": 6,
+              "capacity_bytes": 6291456,
+              "dead": {
+                "bytes": 656984,
+                "count": 8197
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 496,
+                "count": 8
+              },
+              "object_starts_bytes": 98304,
+              "space": "nursery_eden",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "tombstones": 53,
+              "used_bytes": 657480,
+              "walked_bytes": 657480
+            },
+            {
+              "blocks": 1,
+              "capacity_bytes": 1048576,
+              "dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "object_starts_bytes": 16384,
+              "space": "survivor0",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "tombstones": 0,
+              "used_bytes": 0,
+              "walked_bytes": 0
+            },
+            {
+              "blocks": 1,
+              "capacity_bytes": 1048576,
+              "dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "object_starts_bytes": 16384,
+              "space": "survivor1",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "tombstones": 2,
+              "used_bytes": 0,
+              "walked_bytes": 0
+            },
+            {
+              "blocks": 2,
+              "capacity_bytes": 2097152,
+              "dead": {
+                "bytes": 1577296,
+                "count": 28389
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 126208,
+                "count": 1565
+              },
+              "object_starts_bytes": 32768,
+              "space": "longlived",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "tombstones": 0,
+              "used_bytes": 1703504,
+              "walked_bytes": 1703504
+            },
+            {
+              "blocks": 65,
+              "capacity_bytes": 68157440,
+              "dead": {
+                "bytes": 34314656,
+                "count": 1707
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 27020328,
+                "count": 223980
+              },
+              "object_starts_bytes": 1064960,
+              "space": "old",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 18464,
+                "count": 2
+              },
+              "tombstones": 0,
+              "used_bytes": 67736472,
+              "walked_bytes": 61353448
+            },
+            {
+              "dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 609856,
+                "count": 2
+              },
+              "space": "malloc",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "walked_bytes": 609856
+            }
+          ],
+          "used_bytes": 70097456
+        },
+        "strings": {
+          "dead": {
+            "bytes": 35668536,
+            "count": 28300
+          },
+          "id": 3,
+          "late_marked": {
+            "bytes": 0,
+            "count": 0
+          },
+          "live": {
+            "bytes": 1948808,
+            "count": 27584
+          },
+          "type": "string"
+        }
+      },
+      {
+        "seq": 0,
+        "pre_arm_rss_bytes": 254799872,
+        "totals": {
+          "dead_bytes": 40659504,
+          "dead_objects": 39258,
+          "late_marked_bytes": 0,
+          "late_marked_objects": 0,
+          "live_bytes": 27985368,
+          "live_objects": 226993,
+          "non_regex_side_table_bytes": 19506344,
+          "reachability_pass": true,
+          "regex_side_table_bytes": 0,
+          "side_table_bytes": 19506344
+        },
+        "arena": {
+          "block_pool_bytes": 0,
+          "capacity_bytes": 114294784,
+          "free_list_bytes": 0,
+          "live_allocated_bytes_estimate": 60216848,
+          "old_free_bytes": 0,
+          "spaces": [
+            {
+              "blocks": 59,
+              "capacity_bytes": 61865984,
+              "dead": {
+                "bytes": 20517848,
+                "count": 9682
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 144,
+                "count": 1
+              },
+              "object_starts_bytes": 966656,
+              "space": "nursery_eden",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "tombstones": 0,
+              "used_bytes": 20517992,
+              "walked_bytes": 20517992
+            },
+            {
+              "blocks": 1,
+              "capacity_bytes": 1048576,
+              "dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "object_starts_bytes": 16384,
+              "space": "survivor0",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "tombstones": 0,
+              "used_bytes": 0,
+              "walked_bytes": 0
+            },
+            {
+              "blocks": 3,
+              "capacity_bytes": 3145728,
+              "dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "object_starts_bytes": 49152,
+              "space": "survivor1",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "tombstones": 0,
+              "used_bytes": 0,
+              "walked_bytes": 0
+            },
+            {
+              "blocks": 2,
+              "capacity_bytes": 2097152,
+              "dead": {
+                "bytes": 1577296,
+                "count": 28389
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 126208,
+                "count": 1565
+              },
+              "object_starts_bytes": 32768,
+              "space": "longlived",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "tombstones": 0,
+              "used_bytes": 1703504,
+              "walked_bytes": 1703504
+            },
+            {
+              "blocks": 44,
+              "capacity_bytes": 46137344,
+              "dead": {
+                "bytes": 17588128,
+                "count": 1185
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 27249160,
+                "count": 225425
+              },
+              "object_starts_bytes": 720896,
+              "space": "old",
+              "stub_dead": {
+                "bytes": 114768,
+                "count": 4
+              },
+              "stub_live": {
+                "bytes": 18464,
+                "count": 2
+              },
+              "tombstones": 0,
+              "used_bytes": 44970520,
+              "walked_bytes": 44970520
+            },
+            {
+              "dead": {
+                "bytes": 976232,
+                "count": 2
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 609856,
+                "count": 2
+              },
+              "space": "malloc",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "walked_bytes": 1586088
+            }
+          ],
+          "used_bytes": 67192016
+        },
+        "strings": {
+          "dead": {
+            "bytes": 38773992,
+            "count": 29188
+          },
+          "id": 3,
+          "late_marked": {
+            "bytes": 0,
+            "count": 0
+          },
+          "live": {
+            "bytes": 1861848,
+            "count": 27580
+          },
+          "type": "string"
+        }
+      }
+    ],
+    "first": [
+      {
+        "seq": 0,
+        "pre_arm_rss_bytes": 254799872,
+        "totals": {
+          "dead_bytes": 40659504,
+          "dead_objects": 39258,
+          "late_marked_bytes": 0,
+          "late_marked_objects": 0,
+          "live_bytes": 27985368,
+          "live_objects": 226993,
+          "non_regex_side_table_bytes": 19506344,
+          "reachability_pass": true,
+          "regex_side_table_bytes": 0,
+          "side_table_bytes": 19506344
+        },
+        "arena": {
+          "block_pool_bytes": 0,
+          "capacity_bytes": 114294784,
+          "free_list_bytes": 0,
+          "live_allocated_bytes_estimate": 60216848,
+          "old_free_bytes": 0,
+          "spaces": [
+            {
+              "blocks": 59,
+              "capacity_bytes": 61865984,
+              "dead": {
+                "bytes": 20517848,
+                "count": 9682
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 144,
+                "count": 1
+              },
+              "object_starts_bytes": 966656,
+              "space": "nursery_eden",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "tombstones": 0,
+              "used_bytes": 20517992,
+              "walked_bytes": 20517992
+            },
+            {
+              "blocks": 1,
+              "capacity_bytes": 1048576,
+              "dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "object_starts_bytes": 16384,
+              "space": "survivor0",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "tombstones": 0,
+              "used_bytes": 0,
+              "walked_bytes": 0
+            },
+            {
+              "blocks": 3,
+              "capacity_bytes": 3145728,
+              "dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "object_starts_bytes": 49152,
+              "space": "survivor1",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "tombstones": 0,
+              "used_bytes": 0,
+              "walked_bytes": 0
+            },
+            {
+              "blocks": 2,
+              "capacity_bytes": 2097152,
+              "dead": {
+                "bytes": 1577296,
+                "count": 28389
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 126208,
+                "count": 1565
+              },
+              "object_starts_bytes": 32768,
+              "space": "longlived",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "tombstones": 0,
+              "used_bytes": 1703504,
+              "walked_bytes": 1703504
+            },
+            {
+              "blocks": 44,
+              "capacity_bytes": 46137344,
+              "dead": {
+                "bytes": 17588128,
+                "count": 1185
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 27249160,
+                "count": 225425
+              },
+              "object_starts_bytes": 720896,
+              "space": "old",
+              "stub_dead": {
+                "bytes": 114768,
+                "count": 4
+              },
+              "stub_live": {
+                "bytes": 18464,
+                "count": 2
+              },
+              "tombstones": 0,
+              "used_bytes": 44970520,
+              "walked_bytes": 44970520
+            },
+            {
+              "dead": {
+                "bytes": 976232,
+                "count": 2
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 609856,
+                "count": 2
+              },
+              "space": "malloc",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "walked_bytes": 1586088
+            }
+          ],
+          "used_bytes": 67192016
+        },
+        "strings": {
+          "dead": {
+            "bytes": 38773992,
+            "count": 29188
+          },
+          "id": 3,
+          "late_marked": {
+            "bytes": 0,
+            "count": 0
+          },
+          "live": {
+            "bytes": 1861848,
+            "count": 27580
+          },
+          "type": "string"
+        }
+      }
+    ],
+    "last": [
+      {
+        "seq": 72,
+        "pre_arm_rss_bytes": 249565184,
+        "totals": {
+          "dead_bytes": 35805464,
+          "dead_objects": 33454,
+          "late_marked_bytes": 0,
+          "late_marked_objects": 0,
+          "live_bytes": 28378112,
+          "live_objects": 225549,
+          "non_regex_side_table_bytes": 21498401,
+          "reachability_pass": true,
+          "regex_side_table_bytes": 0,
+          "side_table_bytes": 21498401
+        },
+        "arena": {
+          "block_pool_bytes": 27262976,
+          "capacity_bytes": 77594624,
+          "free_list_bytes": 0,
+          "live_allocated_bytes_estimate": 61735560,
+          "old_free_bytes": 6540688,
+          "spaces": [
+            {
+              "blocks": 2,
+              "capacity_bytes": 2097152,
+              "dead": {
+                "bytes": 375976,
+                "count": 4713
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 864,
+                "count": 21
+              },
+              "object_starts_bytes": 32768,
+              "space": "nursery_eden",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "tombstones": 57,
+              "used_bytes": 376840,
+              "walked_bytes": 376840
+            },
+            {
+              "blocks": 1,
+              "capacity_bytes": 1048576,
+              "dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "object_starts_bytes": 16384,
+              "space": "survivor0",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "tombstones": 0,
+              "used_bytes": 0,
+              "walked_bytes": 0
+            },
+            {
+              "blocks": 1,
+              "capacity_bytes": 1048576,
+              "dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "object_starts_bytes": 16384,
+              "space": "survivor1",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "tombstones": 2,
+              "used_bytes": 0,
+              "walked_bytes": 0
+            },
+            {
+              "blocks": 2,
+              "capacity_bytes": 2097152,
+              "dead": {
+                "bytes": 1577296,
+                "count": 28389
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 126208,
+                "count": 1565
+              },
+              "object_starts_bytes": 32768,
+              "space": "longlived",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "tombstones": 0,
+              "used_bytes": 1703504,
+              "walked_bytes": 1703504
+            },
+            {
+              "blocks": 68,
+              "capacity_bytes": 71303168,
+              "dead": {
+                "bytes": 33852192,
+                "count": 352
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 27641184,
+                "count": 223961
+              },
+              "object_starts_bytes": 1114112,
+              "space": "old",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 18464,
+                "count": 2
+              },
+              "tombstones": 18,
+              "used_bytes": 68052528,
+              "walked_bytes": 61511840
+            },
+            {
+              "dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 609856,
+                "count": 2
+              },
+              "space": "malloc",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "walked_bytes": 609856
+            }
+          ],
+          "used_bytes": 70132872
+        },
+        "strings": {
+          "dead": {
+            "bytes": 35205288,
+            "count": 26481
+          },
+          "id": 3,
+          "late_marked": {
+            "bytes": 0,
+            "count": 0
+          },
+          "live": {
+            "bytes": 2550208,
+            "count": 27587
+          },
+          "type": "string"
+        }
+      }
+    ]
+  },
+  {
+    "arm": "currentc170-base",
+    "case": "zodwork",
+    "natural_fulls": 0,
+    "live_bytes_range": null,
+    "highest_pre_arm_rss": [],
+    "first": [],
+    "last": []
+  },
+  {
+    "arm": "currentc170-gc",
+    "case": "tscwork",
+    "natural_fulls": 78,
+    "live_bytes_range": [
+      27733784,
+      28766688
+    ],
+    "highest_pre_arm_rss": [
+      {
+        "seq": 0,
+        "pre_arm_rss_bytes": 250646528,
+        "totals": {
+          "dead_bytes": 40659504,
+          "dead_objects": 39258,
+          "late_marked_bytes": 0,
+          "late_marked_objects": 0,
+          "live_bytes": 27985368,
+          "live_objects": 226993,
+          "non_regex_side_table_bytes": 16543304,
+          "reachability_pass": true,
+          "regex_side_table_bytes": 0,
+          "side_table_bytes": 16543304
+        },
+        "arena": {
+          "block_pool_bytes": 0,
+          "capacity_bytes": 114294784,
+          "free_list_bytes": 0,
+          "live_allocated_bytes_estimate": 60216848,
+          "old_free_bytes": 0,
+          "spaces": [
+            {
+              "blocks": 59,
+              "capacity_bytes": 61865984,
+              "dead": {
+                "bytes": 20517848,
+                "count": 9682
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 144,
+                "count": 1
+              },
+              "object_starts_bytes": 966656,
+              "space": "nursery_eden",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "tombstones": 0,
+              "used_bytes": 20517992,
+              "walked_bytes": 20517992
+            },
+            {
+              "blocks": 1,
+              "capacity_bytes": 1048576,
+              "dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "object_starts_bytes": 16384,
+              "space": "survivor0",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "tombstones": 0,
+              "used_bytes": 0,
+              "walked_bytes": 0
+            },
+            {
+              "blocks": 3,
+              "capacity_bytes": 3145728,
+              "dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "object_starts_bytes": 49152,
+              "space": "survivor1",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "tombstones": 0,
+              "used_bytes": 0,
+              "walked_bytes": 0
+            },
+            {
+              "blocks": 2,
+              "capacity_bytes": 2097152,
+              "dead": {
+                "bytes": 1577296,
+                "count": 28389
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 126208,
+                "count": 1565
+              },
+              "object_starts_bytes": 32768,
+              "space": "longlived",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "tombstones": 0,
+              "used_bytes": 1703504,
+              "walked_bytes": 1703504
+            },
+            {
+              "blocks": 44,
+              "capacity_bytes": 46137344,
+              "dead": {
+                "bytes": 17588128,
+                "count": 1185
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 27249160,
+                "count": 225425
+              },
+              "object_starts_bytes": 720896,
+              "space": "old",
+              "stub_dead": {
+                "bytes": 114768,
+                "count": 4
+              },
+              "stub_live": {
+                "bytes": 18464,
+                "count": 2
+              },
+              "tombstones": 0,
+              "used_bytes": 44970520,
+              "walked_bytes": 44970520
+            },
+            {
+              "dead": {
+                "bytes": 976232,
+                "count": 2
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 609856,
+                "count": 2
+              },
+              "space": "malloc",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "walked_bytes": 1586088
+            }
+          ],
+          "used_bytes": 67192016
+        },
+        "strings": {
+          "dead": {
+            "bytes": 38773992,
+            "count": 29188
+          },
+          "id": 3,
+          "late_marked": {
+            "bytes": 0,
+            "count": 0
+          },
+          "live": {
+            "bytes": 1861848,
+            "count": 27580
+          },
+          "type": "string"
+        }
+      },
+      {
+        "seq": 9,
+        "pre_arm_rss_bytes": 237547520,
+        "totals": {
+          "dead_bytes": 56405376,
+          "dead_objects": 74750,
+          "late_marked_bytes": 0,
+          "late_marked_objects": 0,
+          "live_bytes": 28079256,
+          "live_objects": 225537,
+          "non_regex_side_table_bytes": 17322902,
+          "reachability_pass": true,
+          "regex_side_table_bytes": 0,
+          "side_table_bytes": 17322902
+        },
+        "arena": {
+          "block_pool_bytes": 13631488,
+          "capacity_bytes": 91226112,
+          "free_list_bytes": 0,
+          "live_allocated_bytes_estimate": 73818216,
+          "old_free_bytes": 3278512,
+          "spaces": [
+            {
+              "blocks": 4,
+              "capacity_bytes": 4194304,
+              "dead": {
+                "bytes": 3618072,
+                "count": 45047
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 504,
+                "count": 5
+              },
+              "object_starts_bytes": 65536,
+              "space": "nursery_eden",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "tombstones": 55,
+              "used_bytes": 3618576,
+              "walked_bytes": 3618576
+            },
+            {
+              "blocks": 1,
+              "capacity_bytes": 1048576,
+              "dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "object_starts_bytes": 16384,
+              "space": "survivor0",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "tombstones": 0,
+              "used_bytes": 0,
+              "walked_bytes": 0
+            },
+            {
+              "blocks": 1,
+              "capacity_bytes": 1048576,
+              "dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "object_starts_bytes": 16384,
+              "space": "survivor1",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "tombstones": 2,
+              "used_bytes": 0,
+              "walked_bytes": 0
+            },
+            {
+              "blocks": 2,
+              "capacity_bytes": 2097152,
+              "dead": {
+                "bytes": 1577296,
+                "count": 28389
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 126208,
+                "count": 1565
+              },
+              "object_starts_bytes": 32768,
+              "space": "longlived",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "tombstones": 0,
+              "used_bytes": 1703504,
+              "walked_bytes": 1703504
+            },
+            {
+              "blocks": 79,
+              "capacity_bytes": 82837504,
+              "dead": {
+                "bytes": 51210008,
+                "count": 1314
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 27342688,
+                "count": 223965
+              },
+              "object_starts_bytes": 1294336,
+              "space": "old",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 18464,
+                "count": 2
+              },
+              "tombstones": 6,
+              "used_bytes": 81849672,
+              "walked_bytes": 78571160
+            },
+            {
+              "dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 609856,
+                "count": 2
+              },
+              "space": "malloc",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "walked_bytes": 609856
+            }
+          ],
+          "used_bytes": 87171752
+        },
+        "strings": {
+          "dead": {
+            "bytes": 52830848,
+            "count": 34458
+          },
+          "id": 3,
+          "late_marked": {
+            "bytes": 0,
+            "count": 0
+          },
+          "live": {
+            "bytes": 2275712,
+            "count": 27590
+          },
+          "type": "string"
+        }
+      },
+      {
+        "seq": 63,
+        "pre_arm_rss_bytes": 236765184,
+        "totals": {
+          "dead_bytes": 59621800,
+          "dead_objects": 95726,
+          "late_marked_bytes": 0,
+          "late_marked_objects": 0,
+          "live_bytes": 28546296,
+          "live_objects": 225541,
+          "non_regex_side_table_bytes": 17348290,
+          "reachability_pass": true,
+          "regex_side_table_bytes": 0,
+          "side_table_bytes": 17348290
+        },
+        "arena": {
+          "block_pool_bytes": 10485760,
+          "capacity_bytes": 94371840,
+          "free_list_bytes": 0,
+          "live_allocated_bytes_estimate": 74523616,
+          "old_free_bytes": 1696000,
+          "spaces": [
+            {
+              "blocks": 6,
+              "capacity_bytes": 6291456,
+              "dead": {
+                "bytes": 5359312,
+                "count": 66733
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 800,
+                "count": 11
+              },
+              "object_starts_bytes": 98304,
+              "space": "nursery_eden",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "tombstones": 53,
+              "used_bytes": 5360112,
+              "walked_bytes": 5360112
+            },
+            {
+              "blocks": 1,
+              "capacity_bytes": 1048576,
+              "dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "object_starts_bytes": 16384,
+              "space": "survivor0",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "tombstones": 0,
+              "used_bytes": 0,
+              "walked_bytes": 0
+            },
+            {
+              "blocks": 1,
+              "capacity_bytes": 1048576,
+              "dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "object_starts_bytes": 16384,
+              "space": "survivor1",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "tombstones": 2,
+              "used_bytes": 0,
+              "walked_bytes": 0
+            },
+            {
+              "blocks": 2,
+              "capacity_bytes": 2097152,
+              "dead": {
+                "bytes": 1577296,
+                "count": 28389
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 126208,
+                "count": 1565
+              },
+              "object_starts_bytes": 32768,
+              "space": "longlived",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "tombstones": 0,
+              "used_bytes": 1703504,
+              "walked_bytes": 1703504
+            },
+            {
+              "blocks": 80,
+              "capacity_bytes": 83886080,
+              "dead": {
+                "bytes": 52685192,
+                "count": 604
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 27809432,
+                "count": 223963
+              },
+              "object_starts_bytes": 1310720,
+              "space": "old",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 18464,
+                "count": 2
+              },
+              "tombstones": 5,
+              "used_bytes": 82209088,
+              "walked_bytes": 80513088
+            },
+            {
+              "dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 609856,
+                "count": 2
+              },
+              "space": "malloc",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "walked_bytes": 609856
+            }
+          ],
+          "used_bytes": 89272704
+        },
+        "strings": {
+          "dead": {
+            "bytes": 54449944,
+            "count": 37518
+          },
+          "id": 3,
+          "late_marked": {
+            "bytes": 0,
+            "count": 0
+          },
+          "live": {
+            "bytes": 2718456,
+            "count": 27589
+          },
+          "type": "string"
+        }
+      }
+    ],
+    "first": [
+      {
+        "seq": 0,
+        "pre_arm_rss_bytes": 250646528,
+        "totals": {
+          "dead_bytes": 40659504,
+          "dead_objects": 39258,
+          "late_marked_bytes": 0,
+          "late_marked_objects": 0,
+          "live_bytes": 27985368,
+          "live_objects": 226993,
+          "non_regex_side_table_bytes": 16543304,
+          "reachability_pass": true,
+          "regex_side_table_bytes": 0,
+          "side_table_bytes": 16543304
+        },
+        "arena": {
+          "block_pool_bytes": 0,
+          "capacity_bytes": 114294784,
+          "free_list_bytes": 0,
+          "live_allocated_bytes_estimate": 60216848,
+          "old_free_bytes": 0,
+          "spaces": [
+            {
+              "blocks": 59,
+              "capacity_bytes": 61865984,
+              "dead": {
+                "bytes": 20517848,
+                "count": 9682
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 144,
+                "count": 1
+              },
+              "object_starts_bytes": 966656,
+              "space": "nursery_eden",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "tombstones": 0,
+              "used_bytes": 20517992,
+              "walked_bytes": 20517992
+            },
+            {
+              "blocks": 1,
+              "capacity_bytes": 1048576,
+              "dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "object_starts_bytes": 16384,
+              "space": "survivor0",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "tombstones": 0,
+              "used_bytes": 0,
+              "walked_bytes": 0
+            },
+            {
+              "blocks": 3,
+              "capacity_bytes": 3145728,
+              "dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "object_starts_bytes": 49152,
+              "space": "survivor1",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "tombstones": 0,
+              "used_bytes": 0,
+              "walked_bytes": 0
+            },
+            {
+              "blocks": 2,
+              "capacity_bytes": 2097152,
+              "dead": {
+                "bytes": 1577296,
+                "count": 28389
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 126208,
+                "count": 1565
+              },
+              "object_starts_bytes": 32768,
+              "space": "longlived",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "tombstones": 0,
+              "used_bytes": 1703504,
+              "walked_bytes": 1703504
+            },
+            {
+              "blocks": 44,
+              "capacity_bytes": 46137344,
+              "dead": {
+                "bytes": 17588128,
+                "count": 1185
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 27249160,
+                "count": 225425
+              },
+              "object_starts_bytes": 720896,
+              "space": "old",
+              "stub_dead": {
+                "bytes": 114768,
+                "count": 4
+              },
+              "stub_live": {
+                "bytes": 18464,
+                "count": 2
+              },
+              "tombstones": 0,
+              "used_bytes": 44970520,
+              "walked_bytes": 44970520
+            },
+            {
+              "dead": {
+                "bytes": 976232,
+                "count": 2
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 609856,
+                "count": 2
+              },
+              "space": "malloc",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "walked_bytes": 1586088
+            }
+          ],
+          "used_bytes": 67192016
+        },
+        "strings": {
+          "dead": {
+            "bytes": 38773992,
+            "count": 29188
+          },
+          "id": 3,
+          "late_marked": {
+            "bytes": 0,
+            "count": 0
+          },
+          "live": {
+            "bytes": 1861848,
+            "count": 27580
+          },
+          "type": "string"
+        }
+      }
+    ],
+    "last": [
+      {
+        "seq": 77,
+        "pre_arm_rss_bytes": 216723456,
+        "totals": {
+          "dead_bytes": 35866400,
+          "dead_objects": 36731,
+          "late_marked_bytes": 0,
+          "late_marked_objects": 0,
+          "live_bytes": 28676784,
+          "live_objects": 225548,
+          "non_regex_side_table_bytes": 17113450,
+          "reachability_pass": true,
+          "regex_side_table_bytes": 0,
+          "side_table_bytes": 17113450
+        },
+        "arena": {
+          "block_pool_bytes": 27262976,
+          "capacity_bytes": 77594624,
+          "free_list_bytes": 0,
+          "live_allocated_bytes_estimate": 61829080,
+          "old_free_bytes": 6315808,
+          "spaces": [
+            {
+              "blocks": 2,
+              "capacity_bytes": 2097152,
+              "dead": {
+                "bytes": 641440,
+                "count": 7993
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 1008,
+                "count": 17
+              },
+              "object_starts_bytes": 32768,
+              "space": "nursery_eden",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "tombstones": 57,
+              "used_bytes": 642448,
+              "walked_bytes": 642448
+            },
+            {
+              "blocks": 1,
+              "capacity_bytes": 1048576,
+              "dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "object_starts_bytes": 16384,
+              "space": "survivor0",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "tombstones": 0,
+              "used_bytes": 0,
+              "walked_bytes": 0
+            },
+            {
+              "blocks": 1,
+              "capacity_bytes": 1048576,
+              "dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "object_starts_bytes": 16384,
+              "space": "survivor1",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "tombstones": 2,
+              "used_bytes": 0,
+              "walked_bytes": 0
+            },
+            {
+              "blocks": 2,
+              "capacity_bytes": 2097152,
+              "dead": {
+                "bytes": 1577296,
+                "count": 28389
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 126208,
+                "count": 1565
+              },
+              "object_starts_bytes": 32768,
+              "space": "longlived",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "tombstones": 0,
+              "used_bytes": 1703504,
+              "walked_bytes": 1703504
+            },
+            {
+              "blocks": 68,
+              "capacity_bytes": 71303168,
+              "dead": {
+                "bytes": 33647664,
+                "count": 349
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 27939712,
+                "count": 223964
+              },
+              "object_starts_bytes": 1114112,
+              "space": "old",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 18464,
+                "count": 2
+              },
+              "tombstones": 18,
+              "used_bytes": 67921648,
+              "walked_bytes": 61605840
+            },
+            {
+              "dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "late_marked": {
+                "bytes": 0,
+                "count": 0
+              },
+              "live": {
+                "bytes": 609856,
+                "count": 2
+              },
+              "space": "malloc",
+              "stub_dead": {
+                "bytes": 0,
+                "count": 0
+              },
+              "stub_live": {
+                "bytes": 0,
+                "count": 0
+              },
+              "walked_bytes": 609856
+            }
+          ],
+          "used_bytes": 70267600
+        },
+        "strings": {
+          "dead": {
+            "bytes": 35022592,
+            "count": 27051
+          },
+          "id": 3,
+          "late_marked": {
+            "bytes": 0,
+            "count": 0
+          },
+          "live": {
+            "bytes": 2848736,
+            "count": 27590
+          },
+          "type": "string"
+        }
+      }
+    ]
+  },
+  {
+    "arm": "currentc170-gc",
+    "case": "zodwork",
+    "natural_fulls": 0,
+    "live_bytes_range": null,
+    "highest_pre_arm_rss": [],
+    "first": [],
+    "last": []
+  }
+]
