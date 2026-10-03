@@ -95,7 +95,9 @@ pub(super) fn fact_tree_leaves<'e>(
 /// another property access is that access's RECEIVER (`o.a.length` reads
 /// `o.a` as an object), and a read beneath an element access or a call is
 /// that operation's key, receiver or argument: none of them is a Number
-/// operand, so none may ask the region for a Number lane (R).
+/// operand, so none may ask the region for a Number lane (R). Nor is a value
+/// only tested for truthiness: a conditional's test (`o.a ? 1 : 0`; its arms
+/// are the values) and a `!` operand.
 fn number_operand_reads(e: &Expr, out: &mut Vec<(usize, Recv, String)>) {
     match e {
         Expr::PropertyGet {
@@ -109,6 +111,18 @@ fn number_operand_reads(e: &Expr, out: &mut Vec<(usize, Recv, String)>) {
         Expr::IndexGet { .. } | Expr::Call { .. } | Expr::CallSpread { .. } | Expr::New { .. } => {
             return
         }
+        Expr::Conditional {
+            then_expr,
+            else_expr,
+            ..
+        } => {
+            number_operand_reads(then_expr, out);
+            number_operand_reads(else_expr, out);
+            return;
+        }
+        Expr::Unary {
+            op: UnaryOp::Not, ..
+        } => return,
         _ => {}
     }
     perry_hir::walker::walk_expr_children(e, &mut |child| number_operand_reads(child, out));

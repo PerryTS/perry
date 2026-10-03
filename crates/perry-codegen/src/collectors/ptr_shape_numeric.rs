@@ -598,6 +598,22 @@ pub(crate) fn region_number_flow_reads(
                 locals.push(*id);
                 return;
             }
+            // A value only tested for truthiness does not flow into the
+            // result: a conditional's test (its arms are the values) and a
+            // `!` operand (the result is a Boolean).
+            Expr::Conditional {
+                then_expr,
+                else_expr,
+                ..
+            } => {
+                deps(then_expr, reads, locals);
+                deps(else_expr, reads, locals);
+                return;
+            }
+            Expr::Unary {
+                op: perry_hir::UnaryOp::Not,
+                ..
+            } => return,
             _ => {}
         }
         perry_hir::walker::walk_expr_children(e, &mut |child| deps(child, reads, locals));
