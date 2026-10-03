@@ -1,9 +1,9 @@
 GC RSS and instruction work — draft progress, 2026-10-03
 
 LATEST STATE (2026-10-03)
-Published source is based on main334, with shared full-mark/retained visitors,
-compact page indices and the proposed pool reuse window. Main was fetched again
-and has advanced to e532bf3d0e; rebase and fresh validation are next. No GC branch
+Current source rebased onto fetched main e532bf3d0e, with shared full-mark/
+retained visitors, compact page indices and the proposed pool reuse window.
+The runtime rebuilt and passed macOS 4,862 / 0 failed / 5 ignored. No GC branch
 codegen, shape/header layout or ABI changes are authored.
 
 Frozen main69 normal-auto comparison is COMPLETE and independently reverified:
@@ -26,7 +26,9 @@ NOT exact GC instruction deltas or new-main measurements. See instruction-profil
 summary.json, instruction-profile-verification.json and its verifier.
 
 The Linux v6 reuse-window pipeline has acquired the benchmark lock and is
-actively building/testing. It retains the rejected visitor specialization to
+running application measurements after its Linux runtime (4,834), FFI/events
+and protected-moving linked stages passed. Its two real residency/publication
+tests ran. It retains the rejected visitor specialization to
 isolate pool policy. The paired user/kernel diagnostic is queued behind it.
 Current source still requires its own Linux/app acceptance after that decision.
 
@@ -715,3 +717,30 @@ runtime TS/Zod is 24 cells; all 17 normal-auto applications total 204 cells.
 All scripts pass Python/bash syntax; source transfer/verification is in progress.
 The job is NOT queued: v6 measurements must first decide the pool window. Its
 prepared script receipt is not a performance-acceptance claim.
+
+CURRENT-MAIN e532 INPUTS AND VALIDATION
+Rebased onto e532bf3d0e, including #10495/#10497 inherited/function-holder reads,
+#10741 loop admission, fresh class template construction and closure-call
+argument rooting. Our changes still author no codegen/shape/header/ABI edits.
+The rebuilt Mac runtime passed 4,862 tests / 0 failures / 5 ignored. Node pin
+and 404-file test-registration checks passed; source/product manifests retain
+explicit hashes and original build scopes. No Linux/app acceptance is claimed.
+
+Fresh pristine source and 23-path overlay are archived. Updated v12 scripts
+require the new class-template test and runtime symbol, actual fresh codegen
+compiles in both arms, and the new runtime policy tests. Linked coverage is
+40 default/protected-moving executions (10 cases x two arms x two modes),
+adding closure-call-argument rooting, fresh class statics and inherited/function
+reads to the earlier six cases. Every moving case must copy objects and protect
+from-space. Full-runtime TS/Zod remains 24 cells; normal-auto remains all
+17 workloads / 204 cells. No current-main334 artifact is reused as proof about
+e532. Scripts passed syntax checks and remain unqueued until the pool-policy
+evidence has been assessed. current-maine532-source-and-validation.json binds
+source archives, Mac tests and the prepared scripts.
+
+INHERITED MAIN FILE-CAP FAILURE
+The e532 rebase's file-size check fails on codegen/string_pool.rs: 2,068 lines
+against the 2,000 cap. That file is byte-identical to pristine e532; no GC-branch
+edit caused it. It is part of the campaign's fresh class-template/codegen work.
+No independent codegen refactor is made here. Current-main validation records
+this actual failure; the draft cannot claim all required checks passed.
