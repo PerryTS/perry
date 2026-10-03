@@ -1,0 +1,30 @@
+{
+  "scope": "Queued v3/v4/v5/main69 primary matrices only; active v2 unchanged",
+  "change": "Add minor-faults and major-faults to each perf run; require all four counters. Plain RSS/CPU runs and production sources unchanged.",
+  "files": [
+    {
+      "path": "gc-runtime-pool-auto-matrix.py",
+      "before_sha256": "5341445e3612a58f7570b670f19ebad19a94aa95968f2c80eb3cb14c23f9d2a7",
+      "after_sha256": "d5033036f2acc53f80f13db5c6f9fafcb5753a37c817e118e5172d4a5871b12b",
+      "backup": "gc-runtime-pool-auto-matrix-before-fault-events.py"
+    },
+    {
+      "path": "gc-runtime-inline-auto-matrix.py",
+      "before_sha256": "ddc781302bb7405623ca360d5e131f68579fcf820442decbdc29d6917de5c868",
+      "after_sha256": "1c755a92507a86bd6b34cdd12ba78118261871f16f233eceb6225ded3e5f7a32",
+      "backup": "gc-runtime-inline-auto-matrix-before-fault-events.py"
+    },
+    {
+      "path": "gc-runtime-pages-auto-matrix.py",
+      "before_sha256": "503385e617716b3673c5c7ff401a49f1240cb4900475053c1982aee158a3724f",
+      "after_sha256": "7d751366f94807abfa13a4cf5fc885f910b212036ecec1094c1518efdb86df42",
+      "backup": "gc-runtime-pages-auto-matrix-before-fault-events.py"
+    },
+    {
+      "path": "gc-runtime-main69-auto-matrix.py",
+      "before_sha256": "c9847fafcc8c9262ac5da6465c02f850163a0534c71e9ff2a098cc6296f34b2c",
+      "after_sha256": "95c5eb68108c3db6b62ae8accdb73ef672ca8e30317f9f8055915c71965d617b",
+      "backup": "gc-runtime-main69-auto-matrix-before-fault-events.py"
+    }
+  ]
+}

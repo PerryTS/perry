@@ -293,3 +293,30 @@ keeps those separate from executable-permission RSS. This is evidence for
 a generated-code footprint audit after the current runtime comparisons, not
 a lower bound or an estimate that heap compaction could save those bytes.
 No codegen/header/shape changes are included in this attribution step.
+
+Measurement acceptance preparation
+The queued v3/v4/v5/main69 normal-auto matrices now measure minor and major
+page faults on ALL 17 workloads, alongside instructions/cycles. This closes
+a gap in the earlier plan, which observed fault costs only on full-runtime
+TS/Zod. Plain RSS/CPU runs remain separate. The active v2 matrix is unchanged.
+Before replacing the four queued scripts, verified the active v2 process and
+that none of the four later matrix processes existed. Original scripts and
+before/after hashes are retained (gc-auto-fault-events-revision.json).
+
+Added summarize-gc-comparison.py: require a successful terminal matrix receipt,
+all 204 unique cells (24 for no-auto), exact Node output independent of the
+recorded correctness flag, consistent executable digests, successful matching
+builds and current binary hashes. Summaries retain every repeat plus min,
+median, max and signed changes for RSS, CPU, instructions, cycles and faults.
+Missing/zero/nonfinite counters cannot silently become a passing zero. A zero
+fault baseline retains its absolute change without an invented percentage.
+check-gc-summary-verifier.py accepts three complete synthetic matrices and
+rejects 12 corrupted inputs (including a build from the wrong workload). This verifies the summarizer, not applications.
+
+Usage after a queued fault-enabled normal-auto matrix succeeds:
+python3 summarize-gc-comparison.py /root/rss-header-20261002/gc-auto-main69 \
+  --arms main69-base main69-gc --suite auto --fault-events \
+  --complete /root/rss-header-20261002/gc-runtime-main69-auto.exit
+Do not declare acceptance from an average across workloads: inspect each
+case's RSS/instruction tradeoff and investigate regressions. The summarizer
+deliberately makes no automatic performance-acceptance verdict.
