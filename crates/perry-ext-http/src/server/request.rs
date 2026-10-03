@@ -591,12 +591,17 @@ pub extern "C" fn js_node_http_im_resume_self(handle: i64) -> i64 {
     handle
 }
 
-/// `req.destroy()` — mark destroyed and fire `'close'`.
+/// Destroy a request handle, or the transport behind an accepted socket.
 #[no_mangle]
 pub extern "C" fn js_node_http_im_destroy(handle: i64) {
     if let Some(im) = get_handle_mut::<IncomingMessage>(handle) {
         im.destroyed = true;
     } else {
+        return;
+    }
+    if crate::server::turnloop_h2::conn::destroy_socket(handle)
+        || crate::server::turnloop_serve::destroy_socket(handle)
+    {
         return;
     }
     close_incoming_message(handle);
@@ -1266,6 +1271,19 @@ mod add_header_line_tests {
         let marker = 1234.5_f64;
         assert!(incoming_socket_assign(handle, marker));
         assert_eq!(incoming_socket_override(handle), Some(marker));
+        perry_ffi::drop_handle(handle);
+    }
+
+    #[test]
+    fn standalone_destroy_keeps_immediate_message_close() {
+        let handle = js_node_http_incoming_message_standalone_new(f64::from_bits(
+            crate::server::types::TAG_UNDEFINED,
+        ));
+        js_node_http_im_destroy(handle);
+        assert_eq!(js_node_http_im_destroyed(handle), 1);
+        assert!(get_handle::<IncomingMessage>(handle).unwrap().close_emitted);
+        js_node_http_im_destroy(handle);
+        assert!(get_handle::<IncomingMessage>(handle).unwrap().close_emitted);
         perry_ffi::drop_handle(handle);
     }
 }

@@ -244,6 +244,21 @@ pub(crate) fn connections_of(server_handle: i64) -> Vec<i64> {
         .collect()
 }
 
+/// Route a JS accepted-socket handle to its live transport, if this is ours.
+pub(crate) fn destroy_socket(socket_handle: i64) -> bool {
+    let conn_id = conns()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .find_map(|(id, conn)| (conn.socket_handle == socket_handle).then_some(*id));
+    if let Some(conn_id) = conn_id {
+        destroy_connection(conn_id);
+        true
+    } else {
+        false
+    }
+}
+
 /// Whether a connection has a request in flight (`closeIdleConnections`,
 /// and `server.close()` since Node 19): a response under way, a request whose
 /// head has been decoded, or bytes of a request whose head has not completed
