@@ -869,10 +869,24 @@ pub(crate) unsafe fn typed_array_index_get_dynamic(owner_bits: usize, key: f64) 
     if jsval.is_int32() {
         return typed_array_get_numeric_index_for(owner, kind, jsval.as_int32() as f64);
     }
+    if !jsval.is_number() {
+        // `undefined`, `null`, a boolean, an object or a BigInt: ToPropertyKey
+        // first. `ta[undefined]` reads the ordinary property "undefined", and
+        // `ta[1n]` the element at "1", so the key takes the string dispatch
+        // above. Before, every such key fell to the `undefined` below.
+        return typed_array_index_get_dynamic(owner_bits, property_key_string(key));
+    }
     if key.is_finite() {
         return typed_array_get_numeric_index_for(owner, kind, key);
     }
     f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+/// ToPropertyKey for a non-Symbol, non-string key, as a NaN-boxed string.
+/// May run a user `toString` and allocate.
+unsafe fn property_key_string(key: f64) -> f64 {
+    let key_ptr = crate::builtins::js_string_coerce(key);
+    crate::value::js_nanbox_string(key_ptr as i64)
 }
 
 #[no_mangle]
@@ -920,6 +934,21 @@ pub extern "C" fn js_typed_array_index_set_dynamic(
         }
         if jsval.is_int32() {
             typed_array_set_numeric_index(owner, jsval.as_int32() as f64, value);
+        } else if !jsval.is_number() {
+            // `undefined`, `null`, a boolean, an object or a BigInt: ToPropertyKey
+            // first, then the string dispatch above. `ta[undefined] = v` creates
+            // the ordinary property "undefined"; it used to be dropped. The key
+            // conversion can run user code and collect, so `value` is rooted
+            // across it (the typed array itself never moves).
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let value_handle = scope.root_nanbox_f64(value);
+            let key_ptr =
+                crate::builtins::js_string_coerce(key) as *const crate::string::StringHeader;
+            let value = value_handle.get_nanbox_f64();
+            if let Some(name) = string_header_str(key_ptr) {
+                typed_array_set_property_by_name(owner, name, value);
+            }
+            return value;
         } else if key.is_finite() {
             typed_array_set_numeric_index(owner, key, value);
         }
