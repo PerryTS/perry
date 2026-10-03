@@ -233,6 +233,26 @@ pub(crate) fn proven_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         Expr::String(_) | Expr::WtfString(_) | Expr::I18nString { .. } | Expr::TypeOf(_) => {
             Some(HirType::String)
         }
+        // `String(x)` and `${x}` return a string primitive or throw, whatever
+        // `x` is (#10762). Without this, `const s = String(n)` lost the proof
+        // its own initializer carries, and `s.charCodeAt(i)` fell to the
+        // generic method site while `String(n).charCodeAt(i)` took the inline
+        // string lowering. The value may be SSO, not only a heap string; the
+        // string lowerings tag-dispatch a proven local for exactly that.
+        Expr::StringCoerce(_) | Expr::TemplateStringCoerce(_) => Some(HirType::String),
+        // `+` with a string literal on either side concatenates: a string or a
+        // throw, whatever the other operand is (`"" + n`, `"k" + i`). Only a
+        // literal counts; a declared `string` operand is not a proof (#7837).
+        Expr::Binary {
+            op: BinaryOp::Add,
+            left,
+            right,
+        } if [left, right]
+            .iter()
+            .any(|side| matches!(side.as_ref(), Expr::String(_) | Expr::WtfString(_))) =>
+        {
+            Some(HirType::String)
+        }
         // `Symbol()` identities are system-allocated and never relocated;
         // `Symbol.for()` identities are process-lifetime `Box` allocations.
         // Recording the constructor provenance (rather than trusting a
