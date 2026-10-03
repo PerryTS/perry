@@ -783,3 +783,57 @@ u64 fields, 160-byte payload, 168 bytes including the existing 8-byte GC header.
 instance_birth is at payload offset 144, native_state at 152. This is layout
 proof only, not a new owner census or RSS result; the forthcoming Linux observer
 must assert those allocations and remeasure owner/shape/canonical distributions.
+
+QB6 FRESH-MAIN BUILD AND LINKED VALIDATION (2026-10-03)
+Used only /root/rss-gc-build-20261003 on the explicitly authorized temporary
+build host, with separate source, target and runtime paths per arm; 8 Cargo
+jobs per arm. Both pristine e532 and production GC compiler/static-wrapper
+builds completed in 208 seconds. All products/logs and archive/source bindings
+were verified and copied to the Mac and original benchmark host, well before
+the rental deadline. Both compilers launch on that host. Linux runtime tests
+passed 4,846/0/5; FFI 75/0; events 15/0. Both real page-window tests and the
+new-main shape/class-template tests actually passed. No private tag/cache/
+capture experiment was included in those production builds.
+
+The current-main linked suite passes all 40 executions (20 default, 20 moving)
+and every moving run copied objects and protected from-space. 28 successful
+r3 executions were retained with their original manifest/executable bindings;
+12 were measured in r4. Stronger density was needed for read-only fixtures.
+Every-poll function-constructor stress exceeded the 300-second guard on pristine
+baseline; that timeout remains recorded. Normal paced stress succeeds and moves
+objects. The fresh-class-static fixture has no copying at its normal size, so
+its derived GC fixture inserts three explicit collections between class creation
+and later static reads. Original source is unchanged, and Node output matches
+both original and derived versions. See linked verification for exact scope.
+
+WINDOW COMPARISON COMPLETE (306/306 normal-auto, 24/24 full-runtime)
+The repaired frozen main69 matrix finished with all outputs correct and was
+independently rechecked using the complete executable/build/oracle/counter
+validator. The window versus immediate discard reduces TS normal-auto
+instructions 10.11% with RSS -0.16%; full-runtime instructions -6.23%, RSS +0.07%
+and minor faults -83.79%. Some other normal-auto RSS increases remain: trees
++3.72%, strings +2.91%, grow/churn +2.44%. The window is a provisional CPU/RSS
+tradeoff, not a universal minimum or final current-main acceptance.
+Against pristine main69, that frozen window arm has TS RSS -2.31%, instructions
+-3.82%; documents/pipeline RSS roughly -10% to -12%. Request processing still
+has +7.25% instructions, so that combination remains unacceptable. It retains
+the rejected visitor specialization to isolate pool policy. The current source
+uses the shared visitor and must be judged against fresh e532 separately.
+
+Fresh e532 full-runtime TS/Zod binaries are compiled on qb6 and bound to source
+and coherent products. Their 24 measurements are now queued/running under the
+original host's benchmark lock. Normal-auto builds for all 17 cases proceed on
+qb6 separately. The first auto attempt stopped before any builds because the
+request fixture's npm dependencies had not been transferred; the retry supplies
+the exact original packages/configuration, excludes build caches and keeps
+separate evidence. Artifacts/logs are continuously copied off qb6.
+
+PRIVATE TAG-WORD INSTRUCTION PROBE
+Private commit 6fc7b304f8 changes only mark_field_into_worklist's high-word tag
+comparison, retaining proxy observation, exact pointer validation, raw-pointer
+bounds and marking/worklist semantics. All 65,536 tag words match the old
+predicate; the e532 Mac runtime passes 4,862/0/5. Actual optimized arm64 default-
+feature rlib callback counts are 125 -> 124; the usual tagged-pointer comparison
+is 8 -> 7 static instructions. No x86 linked instruction/cycle/RSS benefit has
+been measured, so the patch remains a review artifact and is unapplied to
+production source. See tag-word-v13-validation.json and the patch/assembly.

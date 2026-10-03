@@ -1,0 +1,24 @@
+{
+  "scope": "306 actual executions, projected without altering recorded cells",
+  "raw_matrix_sha256": "c754a7ce28efcf15fd46d81917b1b39b2c9b6434c8ab83d58db23fb497307fd2",
+  "projected": [
+    {
+      "baseline": "main69-base",
+      "candidate": "main69-window",
+      "input_hashes": {
+        "builds": "29cce45c51b4cfeb46db9e6c523e6d2d0f6ee10cc4aa18238f48a95a6c75b6e8",
+        "oracle": "2c7624378552bbed27dc711d3a6f7021dfcdd87e25bf59ac8ae3becd2efce70b",
+        "runs": "b522ef4a46aad453c7b32e23653162a3c8062749988c78405cddf921004758cd"
+      }
+    },
+    {
+      "baseline": "main69-gc",
+      "candidate": "main69-window",
+      "input_hashes": {
+        "builds": "29cce45c51b4cfeb46db9e6c523e6d2d0f6ee10cc4aa18238f48a95a6c75b6e8",
+        "oracle": "2c7624378552bbed27dc711d3a6f7021dfcdd87e25bf59ac8ae3becd2efce70b",
+        "runs": "ff93785d8b5c711c96061ab8cedec0ff3e219acd320648c6d499e7a141b174ae"
+      }
+    }
+  ]
+}
