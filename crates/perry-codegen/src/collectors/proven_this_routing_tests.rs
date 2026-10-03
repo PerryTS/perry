@@ -728,10 +728,7 @@ fn guarded_boolean_method_truthiness_is_native_only_on_the_proven_arm() {
     );
     let fallback = bs
         .iter()
-        .find(|(_, body)| {
-            body.iter()
-                .any(|line| line.contains("@js_native_call_method_by_id("))
-        })
+        .find(|(_, body)| body.iter().any(|line| is_dynamic_method_fallback(line)))
         .unwrap_or_else(|| panic!("no dynamic override fallback in:\n{probe}"));
     assert!(
         fallback
@@ -785,10 +782,7 @@ fn guarded_bitset_method_truthiness_uses_raw_number_only_on_the_proven_arm() {
     );
     let fallback = bs
         .iter()
-        .find(|(_, body)| {
-            body.iter()
-                .any(|line| line.contains("@js_native_call_method_by_id("))
-        })
+        .find(|(_, body)| body.iter().any(|line| is_dynamic_method_fallback(line)))
         .unwrap_or_else(|| panic!("no dynamic bitset override fallback in:\n{probe}"));
     assert!(
         fallback
@@ -873,7 +867,7 @@ fn erased_boolean_return_annotation_does_not_license_a_native_result() {
     let ir = emit(&guarded_boolean_site_module(false), false);
     let probe = function_body(&ir, "__probeBoolean(");
     let dynamic_call = probe
-        .find("@js_native_call_method_by_id(")
+        .find("@js_native_call_method_by_id")
         .unwrap_or_else(|| panic!("no guarded method fallback in:\n{probe}"));
     let truthy = probe
         .rfind("@js_is_truthy(")
@@ -1653,3 +1647,10 @@ fn tower_route_refused_when_clone_deletes_one_field_site() {
 // avoid. The knob direction is exercised out-of-process instead, by the census
 // (`benchmarks/repsel_census/README.md`), which re-runs the whole corpus under
 // the knob on every CI job and asserts `ptr-shape-consumed` drops to zero.
+
+/// The guarded direct-call site's dynamic fallback: the plain dispatch, or the
+/// learning form a site with a learned receiver word uses.
+fn is_dynamic_method_fallback(line: &str) -> bool {
+    line.contains("@js_native_call_method_by_id(")
+        || line.contains("@js_native_call_method_by_id_learn(")
+}

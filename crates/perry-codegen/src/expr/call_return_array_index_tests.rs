@@ -180,7 +180,7 @@ fn same_call_returned_array_uses_array_index_store_and_evaluates_receiver_once()
         "the proven array receiver must not enter the generic Proxy-compatible PutValue ladder:\n{write_ir}"
     );
     assert_eq!(
-        write_ir
+        outside_learned_arms(&write_ir)
             .matches(
             "call double @perry_method_call_return_array_put_value_ts__Store__getData("
         )
@@ -200,7 +200,7 @@ fn same_call_returned_array_uses_array_length_store_and_evaluates_receiver_once(
         "a call with an Array return type must use ArraySetLength semantics:\n{clear_ir}"
     );
     assert_eq!(
-        clear_ir
+        outside_learned_arms(&clear_ir)
             .matches("@perry_method_call_return_array_put_value_ts__Store__getData")
             .count(),
         1,
@@ -241,10 +241,29 @@ fn distinct_call_receiver_stays_on_explicit_receiver_put_value_path() {
         "the distinct receiver must be passed to the generic PutValue helper:\n{write_ir}"
     );
     assert_eq!(
-        write_ir
+        outside_learned_arms(&write_ir)
             .matches("call double @perry_method_call_return_array_put_value_ts__Store__getData(")
             .count(),
         2,
         "target and distinct receiver calls are independently evaluated"
     );
+}
+
+/// `ir` without the blocks of a guarded method site's learned-word arm. That
+/// arm calls the same body as the declared-class arm on a mutually exclusive
+/// edge, so a count of "how many times is the base evaluated" is per arm.
+fn outside_learned_arms(ir: &str) -> String {
+    let mut out = String::new();
+    let mut in_learned = false;
+    for line in ir.lines() {
+        let trimmed = line.trim_end();
+        if !line.starts_with(' ') && trimmed.ends_with(':') {
+            in_learned = trimmed.starts_with("method_direct.learned.");
+        }
+        if !in_learned {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
 }

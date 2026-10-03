@@ -708,6 +708,8 @@ fn ic_diag_note(
     crate::hot_diag::ic_note(site, bytes, reason);
 }
 
+#[path = "ic_miss/class_field_define_fast.rs"]
+mod class_field_define_fast;
 #[path = "ic_miss/packed_get.rs"]
 mod packed_get;
 pub use packed_get::{js_object_get_field_ic_miss, js_object_get_field_ic_miss_packed};
@@ -1955,6 +1957,13 @@ pub extern "C" fn js_class_field_add(receiver: f64, key: f64, value: f64) -> f64
     let receiver = scope.root_nanbox_f64(receiver);
     let key = scope.root_nanbox_f64(key);
     let value = scope.root_nanbox_f64(value);
+    if class_field_define_fast::try_define_new_class_field(
+        receiver.get_nanbox_f64(),
+        key.get_nanbox_f64(),
+        value.get_nanbox_f64(),
+    ) {
+        return value.get_nanbox_f64();
+    }
     // Use [[DefineOwnProperty]] for both ordinary objects and Proxies.  The
     // ordinary define path bypasses an inherited setter; the Proxy path invokes
     // the receiver's `defineProperty` trap.  A normal `[[Set]]` helper cannot
