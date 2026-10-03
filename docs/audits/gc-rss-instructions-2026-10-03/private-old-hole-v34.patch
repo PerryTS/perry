@@ -1,0 +1,146 @@
+diff --git a/crates/perry-runtime/src/arena/block.rs b/crates/perry-runtime/src/arena/block.rs
+index 515b8f1592..49f53c8b6b 100644
+--- a/crates/perry-runtime/src/arena/block.rs
++++ b/crates/perry-runtime/src/arena/block.rs
+@@ -82,0 +83,6 @@ fn block_size_for(min_size: usize) -> usize {
++/// The caller owns this complete byte range and no byte in it remains live.
++/// Keep the mapping and advise only complete interior pages.
++pub(crate) unsafe fn discard_dead_payload_pages(data: *mut u8, size: usize) -> usize {
++    decommit::release(data, size)
++}
++
+diff --git a/crates/perry-runtime/src/arena/mod.rs b/crates/perry-runtime/src/arena/mod.rs
+index 6afd722cea..9298226fec 100644
+--- a/crates/perry-runtime/src/arena/mod.rs
++++ b/crates/perry-runtime/src/arena/mod.rs
+@@ -54 +54 @@ pub(crate) use block::{
+-    drain_block_pool_if_requested,
++    discard_dead_payload_pages, drain_block_pool_if_requested,
+diff --git a/crates/perry-runtime/src/gc/cycle.rs b/crates/perry-runtime/src/gc/cycle.rs
+index 6cd4ba06e0..2338e63edd 100644
+--- a/crates/perry-runtime/src/gc/cycle.rs
++++ b/crates/perry-runtime/src/gc/cycle.rs
+@@ -626,0 +627 @@ impl GcCycleState {
++        super::old_free::discard_previously_free_large_payload_pages();
+diff --git a/crates/perry-runtime/src/gc/old_free.rs b/crates/perry-runtime/src/gc/old_free.rs
+index ed7b2077c2..f2dd3234f1 100644
+--- a/crates/perry-runtime/src/gc/old_free.rs
++++ b/crates/perry-runtime/src/gc/old_free.rs
+@@ -286,0 +287,53 @@ pub(super) fn old_free_rebuild_from_old_blocks(parse: impl FnMut(usize) -> bool)
++/// At full-collection entry, these holes were already free before this
++/// collection and were not consumed during the preceding mutator interval.
++/// The list is authoritative and unlinking precedes every block recycle.
++/// Preserve each header (heap walking) and its first payload word (the list
++/// link); only complete interior pages of the remaining dead payload qualify.
++/// No new heap walk, metadata table, layout bit or collection trigger.
++/// Repeated advice of a still-listed span is safe; its instruction cost must
++/// be measured before adopting this policy.
++pub(super) fn discard_previously_free_large_payload_pages() -> usize {
++    #[cfg(unix)]
++    {
++        if !OLD_FREE_NONEMPTY.with(Cell::get) {
++            return 0;
++        }
++        let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
++        if page <= 0 {
++            return 0;
++        }
++        let prefix = GC_HEADER_SIZE + OLD_FREE_LINK_BYTES;
++        let minimum = (page as usize).saturating_mul(2).saturating_add(prefix);
++        OLD_FREE_MAP.with(|map| {
++            let heads = map.borrow();
++            let mut advised = 0;
++            // Small classes cannot contain a whole owned payload page. The
++            // size-class map lets us skip them without reading every header.
++            for (&total_size, &head) in &heads.large {
++                if total_size < minimum {
++                    continue;
++                }
++                let mut hole = head;
++                while hole != 0 {
++                    unsafe {
++                        let next = old_free_link(hole);
++                        let header = (hole - GC_HEADER_SIZE) as *const GcHeader;
++                        debug_assert_eq!((*header).obj_type, 0);
++                        debug_assert_eq!((*header).size as usize, total_size);
++                        advised += crate::arena::discard_dead_payload_pages(
++                            (hole + OLD_FREE_LINK_BYTES) as *mut u8,
++                            total_size - prefix,
++                        );
++                        hole = next;
++                    }
++                }
++            }
++            advised
++        })
++    }
++    #[cfg(not(unix))]
++    {
++        0
++    }
++}
++
+@@ -445,0 +499,63 @@ pub(super) fn old_free_entry_count() -> usize {
++
++#[cfg(all(test, target_os = "linux"))]
++#[test]
++fn old_hole_page_advice_preserves_headers_links_neighbors_and_actual_reuse() {
++    crate::arena::tests::run_with_fresh_arenas(|| unsafe {
++        let _change = crate::gc::heap_generation::HeapChange::begin(
++            crate::gc::heap_generation::HeapChangeKind::Sweep,
++        );
++        old_free_reset_for_test();
++        let page = libc::sysconf(libc::_SC_PAGESIZE) as usize;
++        let payload = 4 * page + 56;
++        let first = crate::arena::arena_alloc_gc_old(payload, 8, GC_TYPE_STRING);
++        let neighbor = crate::arena::arena_alloc_gc_old(56, 8, GC_TYPE_STRING);
++        let second = crate::arena::arena_alloc_gc_old(payload, 8, GC_TYPE_STRING);
++        std::ptr::write_bytes(first, 0xa5, payload);
++        std::ptr::write_bytes(second, 0xa5, payload);
++        std::ptr::write_bytes(neighbor, 0xcc, 56);
++        let first_header = first.sub(GC_HEADER_SIZE) as *mut GcHeader;
++        let second_header = second.sub(GC_HEADER_SIZE) as *mut GcHeader;
++        let total = (*first_header).size as usize;
++        assert_eq!((*second_header).size as usize, total);
++        super::invalidate_dead_old_arena_header(first_header, total);
++        super::invalidate_dead_old_arena_header(second_header, total);
++        old_free_push_for_test(first as usize, total);
++        old_free_push_for_test(second as usize, total);
++        let bytes_before = old_free_bytes();
++        let resident = |user: *mut u8| {
++            let begin = user.add(OLD_FREE_LINK_BYTES) as usize;
++            let aligned = begin.next_multiple_of(page);
++            let end = (user as usize + payload) / page * page;
++            let count = (end - aligned) / page;
++            let mut bits = vec![0u8; count];
++            assert_eq!(
++                libc::mincore(aligned as *mut _, count * page, bits.as_mut_ptr()),
++                0
++            );
++            bits.iter().filter(|&&b| b & 1 != 0).count()
++        };
++        assert!(resident(first) >= 3 && resident(second) >= 3);
++        assert!(discard_previously_free_large_payload_pages() > 0);
++        assert_eq!(resident(first), 0);
++        assert_eq!(resident(second), 0);
++        assert_eq!((*first_header).size as usize, total);
++        assert_eq!((*second_header).size as usize, total);
++        assert_eq!((*first_header).obj_type, 0);
++        assert_eq!((*second_header).obj_type, 0);
++        assert_eq!(old_free_link(second as usize), first as usize);
++        assert_eq!(old_free_link(first as usize), 0);
++        assert_eq!(old_free_bytes(), bytes_before);
++        for i in 0..56 {
++            assert_eq!(*neighbor.add(i), 0xcc, "live neighbor remains intact");
++        }
++        let reused = crate::arena::arena_alloc_gc_old(payload, 8, GC_TYPE_STRING);
++        assert_eq!(reused, second, "actual old allocator consumes advised hole");
++        std::ptr::write_bytes(reused, 0x5a, payload);
++        assert!(resident(reused) >= 3);
++        discard_previously_free_large_payload_pages();
++        assert!(resident(reused) >= 3, "reused span is no longer eligible");
++        assert_eq!(*reused.add(2 * page), 0x5a);
++        assert_eq!(old_free_take_exact(total, None), Some(first as usize));
++        assert_eq!(old_free_take_exact(total, None), None);
++    });
++}
