@@ -1,3 +1,35 @@
+PRIVATE ENTRY FULL17 MATRIX VERIFIED (2026-10-03 23:53Z)
+All45build records (30exact reused controls +15fresh entry builds),306fresh
+measurements/17cases pass source/product/raw output/RSS/perf/auto archive
+.text verification. 749 evidence files copied locally and rehashed.
+Base2026ecfe, production6c761801fa, privateentry6e311851fa. Not main07.
+Important default-build cost: TS private RSS-2.462%, instructions+1.979%,
+faults-0.192%. Four-case noauto benefit did NOT predict this instruction cost.
+Trees RSS-11.626%, instructions+0.060%, faults+1.162%. All signed cases:
+Case private vsGC: RSS% / instructions% / minorfaults%.
+12_large_live_set: +0.126 / +0.568 / -0.009
+14_grow_then_churn: -0.075 / +0.023 / +0.004
+23-binary-trees: -11.626 / +0.060 / +1.162
+30-string-build: +0.080 / +0.403 / +0.001
+31-json: +0.033 / +0.186 / +0.020
+51-pipeline: +0.068 / +0.333 / +0.035
+60-ring-churn: +0.546 / +0.081 / -0.166
+71-async-worker: -0.992 / +0.308 / -0.005
+72-request-processing: +0.495 / +0.028 / -0.011
+73-retain-then-release: -1.344 / +0.359 / -0.477
+70-documents-replace: -0.098 / +0.321 / +0.055
+70-documents-retain: -1.531 / +0.373 / -0.502
+70-documents-transition: +0.062 / +0.358 / +0.007
+tscwork: -2.462 / +1.979 / -0.192
+zodwork: -0.606 / +0.107 / +0.115
+00-noop: +0.000 / -0.109 / -1.818
+15-crc32: -0.322 / +0.002 / -0.079
+This policy remains UNAPPLIED. Next instruction investigation: separate
+kernel/user costs and check repeated advice on the same idle block. Avoiding
+repeated advice must retain RSS gains and reset eligibility on actual reuse.
+No cause is established solely by these application counters. Main07retest
+and actual real-collection/control subject remain separately queued.
+
 MAIN07 MAC FFI/EVENTS VERIFIED (2026-10-03 23:33Z)
 Rebased current main07FFI75/events15pass, plus5FFIdoc tests (13ignored).
 Terminal0, all5010inputs rehashed post-test, rawlog sections/hash verified.
