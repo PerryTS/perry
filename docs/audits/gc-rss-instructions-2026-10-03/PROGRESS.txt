@@ -1,5 +1,20 @@
 GC RSS and instruction work — draft progress, 2026-10-03
 
+LATEST STATE
+Draft rebased onto main 69de7f3526134fabb8ee5c87c23fe9ba71d4de69, including
+the campaign's #11783 rooting fixes and #11785 API manifest repair.
+Current implementation adds compact GC page metadata/object lists and sparse
+page-directory shrink after full reclaim. Shape/header formats stay unchanged.
+The prior visitor revision passed 4,835 macOS tests; the page-table revision
+initially passed 4,846 with one capacity-test assertion failure. The test now
+samples capacity after removals, isolating our helper from HashMap tombstones.
+Latest-main runtime tests are running. All application acceptance remains open.
+Running isolated comparisons retain the original f6c873/ebc858 production base.
+Those results cannot serve as final latest-main acceptance; a fresh baseline
+and consolidated candidate comparison is required after them. Source hashes:
+pages-source-and-validation.json (latest main), earlier manifests (frozen arms).
+
+
 Objective
 Minimize compiled-program peak RSS with Perry's GC while minimizing the
 instructions required to retain those savings. Application correctness,
@@ -7,7 +22,7 @@ moving collection, FFI/events, idle/async behavior and retained/churn mixes
 remain acceptance requirements. This draft does not establish an absolute
 RSS minimum or a finished performance result.
 
-Current base
+Original measurement base
 f6c873d99622d1bb751f198cfbd6cf3475251935, fetched from main on October 3.
 The existing measured baseline is ebc858cb9806845998cee28decc666c3ea226fd2.
 The intervening commit changes CI/test/docs files only. Crates, Cargo inputs
@@ -196,7 +211,7 @@ The pool revision with the fixture repair also passed macOS: 4,835 passed,
 0 failed, 5 ignored. Linux scan-revision FFI passed all 75 tests.
 See queue-fixture-validation.json for hashes and the original repeat results.
 
-Next GC instruction experiment is now included (validation pending):
+Visitor instruction experiment is included (macOS passed, Linux/A/B pending):
 instantiate the existing shared visitor body for full marking and retained-old
 parent rebuilding, removing per-slot indirect callbacks without changing the
 slots visited. Compare instructions, code size and RSS before accepting it.
@@ -207,8 +222,8 @@ Visitor experiment validation plan
 Current head adds two hot caller instantiations of the existing enumeration:
 trace_heap_rewrite_slots and remember_retained_old_to_young_slots. No slot,
 weak-edge rule, descriptor case, collection threshold or shape fact changes.
-The macOS runtime suite is running; these changes are NOT covered by the
-previous 4,835-pass pool-revision result. Linux driver is queued behind the
+Its own macOS runtime suite passed 4,835 tests, 0 failed, 5 ignored.
+Linux/application results are still pending for this visitor revision. Linux driver is queued behind the
 scan/pool sequence and will stop if its predecessor fails.
 The follow-up driver first compares frozen scan and pool arms on original
 TS/Zod full-runtime programs (24 runs), including instructions, cycles and
@@ -222,3 +237,26 @@ Drivers: gc-runtime-scan-pool-resume.sh and gc-runtime-inline-v4-run.sh.
 New receipts: gc-runtime-scan-v2r1-build.exit,
 gc-runtime-scan-pool-resume.exit, gc-runtime-inline-v4-run.exit.
 Original failure and all preceding source manifests remain immutable.
+
+GC page-table compaction
+- Keep OldPageMeta's external snapshot unchanged; stored counters shrink from
+  104 to 56 bytes per page. Dirty-slot work remains usize and epochs remain u64.
+- Group 64 neighboring page facts in a chunk with explicit presence bits and
+  release a chunk when its final page is removed. This avoids one hash bucket
+  per page; old arena blocks register dense page ranges.
+- Store in-page object starts as u16 byte offsets. One full entering address
+  handles an object starting before the page, even when it spans gigabytes.
+  Preserve insertion order, deduplication, partial-removal and promoted-run rules.
+- Shrink sparse map capacity after full-cycle removals, with twofold retained
+  headroom and fourfold sparsity admission. Collection thresholds are unchanged.
+- Discover every page_meta Rust module in both source obligation audits. The
+  former fixed list omitted sweep_tally; its existing flush-free writer rule
+  is now explicit. Directory shrink need not expand described object runs.
+Tests compare compact storage against independent maps/vectors through reuse,
+missing pages, high addresses, boundary crossings, removals and wide epochs.
+At the old TypeScript census, the two targeted tables requested 7,607,168 bytes.
+That is the target, not a measured saving. Normal-auto and full-runtime A/B,
+page-fault/code-size observations and repeated TS/Zod census remain required.
+Isolated pre-rebase driver: gc-runtime-pages-v5-run.sh, source revision v5r1.
+Latest-main tests: logs/gc-runtime-pages-main69-macos.log. The original failed
+log gc-runtime-pages-v5-macos.log is retained; never relabel it as a pass.
