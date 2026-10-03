@@ -1977,6 +1977,7 @@ js_native_call_method	f64	f64,ptr,usize,ptr,usize
 js_native_call_method_apply	f64	f64,ptr,usize,i64
 js_native_call_method_apply_by_id	f64	f64,i64,i64
 js_native_call_method_by_id	f64	f64,i64,ptr,usize
+js_native_call_method_by_id_learn	f64	f64,i64,ptr,usize,ptr,i32u
 js_native_call_method_nullsafe	f64	f64,ptr,usize,ptr,usize
 js_native_call_method_patched_proto	f64	f64,ptr,usize,ptr,usize
 js_native_call_method_patched_proto_apply	f64	f64,ptr,usize,i64
@@ -2594,6 +2595,7 @@ js_object_get_field_ic_overflow_load	f64	ptr,ptr,i32s,ptr
 js_object_get_field_ic_slow	f64	i64,ptr,ptr,ptr
 js_object_get_index_polymorphic	f64	i64,f64
 js_object_get_own_field_or_undef	f64	f64,ptr,usize
+js_object_get_own_field_or_undef_learn	f64	f64,ptr,usize,ptr
 js_object_get_own_property_descriptor	f64	f64,f64
 js_object_get_own_property_descriptors	f64	f64
 js_object_get_own_property_names	f64	f64
@@ -3908,6 +3910,7 @@ js_typed_feedback_native_call_method_by_id	f64	i64,f64,i64,ptr,usize
 js_typed_feedback_numeric_array_index_get_guard	i32s	i64,f64,i32s,i32s
 js_typed_feedback_numeric_array_index_set_guard	i32s	i64,f64,i32s,f64,i32s
 js_typed_feedback_numeric_array_push_guard	i32s	i64,f64,f64
+js_typed_feedback_object_get_field_by_key_f64	f64	i64,ptr,f64,f64
 js_typed_feedback_object_get_field_by_name_f64	f64	i64,ptr,ptr
 js_typed_feedback_object_get_field_by_value_f64	f64	i64,ptr,f64
 js_typed_feedback_object_set_field_by_name	void	i64,ptr,ptr,f64
