@@ -97,6 +97,7 @@ pub use adopt::{
 /// Published so perry-ext-http can `turnloop_net::transfer` an upgraded
 /// connection here by name rather than by a duplicated literal.
 pub const TURNLOOP_SUBSYSTEM: u8 = turnloop_io::SUBSYSTEM;
+mod cork;
 mod option_setters;
 pub use option_setters::{
     js_net_server_noop_self, js_net_socket_get_type_of_service, js_net_socket_noop_self,
@@ -353,6 +354,7 @@ pub(crate) struct SocketState {
     /// Bytes `write()` accepted that have not left yet — Node's
     /// `writableLength`, which `write()`'s return value is judged against.
     pub(crate) bytes_queued: u64,
+    pub(crate) cork: cork::CorkBuffer,
     /// #11111 — a `write()` returned `false` (the queue reached
     /// `writableHighWaterMark`) and `'drain'` has not fired since. Node's
     /// `writableNeedDrain`; cleared when the queue empties and `'drain'` is
@@ -381,6 +383,32 @@ impl SocketState {
     /// caller drops the lock first and then reports through
     /// [`turnloop_io::submission_failed`] or its own path.
     pub(crate) fn command(&mut self, id: i64, cmd: SocketCommand) -> Result<(), String> {
+        if self.cork.depth != 0
+            && !self.unconnected_write_failed
+            && !self.destroyed
+            && !self.writable_ended
+        {
+            if let SocketCommand::Write(bytes, completion) = cmd {
+                self.bytes_queued = self.bytes_queued.saturating_add(bytes.len() as u64);
+                self.cork.push(bytes, completion);
+                return Ok(());
+            }
+        }
+        if matches!(cmd, SocketCommand::End(_)) {
+            self.cork.depth = 0;
+            self.flush_cork(id)?;
+        } else if matches!(cmd, SocketCommand::Destroy) {
+            // Completion records stay rooted until Close dispatches them in
+            // token order, including writes already submitted to the transport.
+            self.bytes_queued = self
+                .bytes_queued
+                .saturating_sub(self.cork.bytes.len() as u64);
+            self.cork.discard();
+        }
+        self.command_transport(id, cmd)
+    }
+
+    fn command_transport(&mut self, id: i64, cmd: SocketCommand) -> Result<(), String> {
         let bytes = match &cmd {
             SocketCommand::Write(bytes, _) => bytes.len() as u64,
             _ => 0,
@@ -394,6 +422,11 @@ impl SocketState {
             // Configuration commands may precede connect(), but there is no
             // transport to accept writes until a connection is submitted.
             if self.awaiting_connect {
+                if matches!(cmd, SocketCommand::Destroy) {
+                    // No driver owns a never-connected socket, so it cannot
+                    // report Closed. Queue terminal cleanup ourselves.
+                    push_event(PendingNetEvent::Close(id));
+                }
                 return Ok(());
             }
             return Err("Socket write failed".to_string());
@@ -413,7 +446,7 @@ impl SocketState {
         let mut queued = None;
         let result = turnloop_io::command(id, cmd, &mut queued);
         if let Some(queued) = queued {
-            self.bytes_queued = queued;
+            self.bytes_queued = queued.saturating_add(self.cork.bytes.len() as u64);
         }
         result
     }
@@ -455,6 +488,7 @@ pub(crate) fn register_turnloop_socket(
             bytes_read: 0,
             bytes_written: 0,
             bytes_queued: 0,
+            cork: crate::cork::CorkBuffer::default(),
             need_drain: false,
             timeout: None,
             type_of_service: 0,
@@ -497,6 +531,7 @@ impl SocketState {
             bytes_read: 0,
             bytes_written: 0,
             bytes_queued: 0,
+            cork: crate::cork::CorkBuffer::default(),
             need_drain: false,
             timeout: None,
             type_of_service: 0,
@@ -750,6 +785,7 @@ pub unsafe extern "C" fn js_net_socket_alloc() -> i64 {
             bytes_read: 0,
             bytes_written: 0,
             bytes_queued: 0,
+            cork: crate::cork::CorkBuffer::default(),
             need_drain: false,
             timeout: None,
             type_of_service: 0,
@@ -1291,6 +1327,7 @@ where
             bytes_read: 0,
             bytes_written: 0,
             bytes_queued: 0,
+            cork: crate::cork::CorkBuffer::default(),
             need_drain: false,
             timeout: None,
             type_of_service: 0,

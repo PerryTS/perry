@@ -585,12 +585,22 @@ fn split_by_delimiter(s: *const StringHeader, delimiter: &str, limit: i32) -> *m
             // `is_ascii` is the same predicate as `all(|b| b < 0x80)`, but std
             // tests a word at a time. The byte-at-a-time form was ~74% of this
             // function's own time splitting a 211-byte JWT on "." (#10519).
-            str_data.is_ascii(),
+            // A limit can discard a very long tail (JWT split(".", 1)).
+            // Only the retained ranges need an ASCII metadata proof.
+            str_data.as_bytes()[..ranges
+                .as_slice()
+                .last()
+                .map(|&(offset, len)| (offset + len) as usize)
+                .unwrap_or(0)]
+                .is_ascii(),
             (*s).flags & STRING_FLAG_HAS_LONE_SURROGATES != 0,
         )
     };
     let part_ranges = ranges.as_slice();
     let n = part_ranges.len();
+    if n == 1 && part_ranges[0] == (0, unsafe { (*s).byte_len }) {
+        return split_single_element(s);
+    }
 
     let scope = crate::gc::RuntimeHandleScope::new();
     let s_handle = scope.root_string_ptr(s);
