@@ -19,12 +19,12 @@ pub(super) fn jsvalue_as_f64(v: f64) -> Option<f64> {
 
 /// Read a numeric constructor option (e.g. `highWaterMark`) off the opts
 /// object, returning `None` when absent or non-numeric.
-pub(super) fn opt_number(opts: f64, key: &[u8]) -> Option<f64> {
+pub(super) fn opt_number(opts: f64, key: &'static [u8]) -> Option<f64> {
     jsvalue_as_f64(get_hidden_value(opts, hidden_key(key))?)
 }
 
 /// Read a string constructor option and preserve the existing JS string value.
-pub(super) fn opt_string_value(opts: f64, key: &[u8]) -> Option<f64> {
+pub(super) fn opt_string_value(opts: f64, key: &'static [u8]) -> Option<f64> {
     let value = get_hidden_value(opts, hidden_key(key))?;
     if JSValue::from_bits(value.to_bits()).is_any_string() {
         Some(value)
@@ -35,11 +35,11 @@ pub(super) fn opt_string_value(opts: f64, key: &[u8]) -> Option<f64> {
 
 /// Read a boolean constructor option, returning `true` only when the option
 /// is present and truthy.
-pub(super) fn opt_bool(opts: f64, key: &[u8]) -> bool {
+pub(super) fn opt_bool(opts: f64, key: &'static [u8]) -> bool {
     get_hidden_value(opts, hidden_key(key)).is_some_and(|v| crate::value::js_is_truthy(v) != 0)
 }
 
-pub(super) fn resolve_object_mode(opts: f64, specific_object_mode: &[u8]) -> bool {
+pub(super) fn resolve_object_mode(opts: f64, specific_object_mode: &'static [u8]) -> bool {
     opt_bool(opts, specific_object_mode) || opt_bool(opts, b"objectMode")
 }
 
@@ -66,7 +66,11 @@ pub(super) fn default_hwm(object_mode: bool) -> f64 {
 /// (`readableHighWaterMark` / `writableHighWaterMark`) falls back to the
 /// generic `highWaterMark`, then to the platform default for the stream's
 /// mode (#1537: 65536 for byte streams, 16 for objectMode).
-pub(super) fn resolve_hwm(opts: f64, specific: &[u8], specific_object_mode: &[u8]) -> f64 {
+pub(super) fn resolve_hwm(
+    opts: f64,
+    specific: &'static [u8],
+    specific_object_mode: &'static [u8],
+) -> f64 {
     if let Some(v) = opt_number(opts, specific).or_else(|| opt_number(opts, b"highWaterMark")) {
         return v;
     }
@@ -269,7 +273,7 @@ pub(super) fn init_writable_state(stream: f64, opts: f64) {
         f64::from_bits(if decode_strings { TAG_TRUE } else { TAG_FALSE }),
     );
     let default_encoding =
-        opt_string_value(opts, b"defaultEncoding").unwrap_or_else(|| string_value(b"utf8"));
+        opt_string_value(opts, b"defaultEncoding").unwrap_or_else(|| literal_string_value(b"utf8"));
     set_hidden_value(
         stream,
         hidden_writable_default_encoding_key(),

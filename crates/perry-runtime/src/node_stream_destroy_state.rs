@@ -21,7 +21,7 @@ pub(super) extern "C" fn ns_destroy_error_microtask(
     let bits = err.to_bits();
     if bits != TAG_UNDEFINED && bits != TAG_NULL {
         set_hidden_value(stream, hidden_error_key(), err);
-        let error = super::string_value(b"error");
+        let error = super::literal_string_value(b"error");
         let _ = super::event_emitter::emit_stream_event(stream, error, &[err]);
     }
     super::mark_stream_closed_and_emit_close(stream);

@@ -929,6 +929,10 @@ test_gap_gc_11559_spill_headroom_store
 # registration reading the retired closure. moment 2.31.0 module init under a
 # seeded schedule (#11635).
 test_gap_gc_11635_func_proto_register_across_call
+# #11828: node:stream held the stream and its chunks in Rust locals across
+# hidden-key allocations, `data` listeners and pipe writes;
+# Readable.from(asyncGen).pipe(createGunzip()) hung or wrote through a retired stream.
+test_gap_gc_11828_stream_readable_from_pipe
 # #11816: filter/find/findLast held the callback's element in a Rust local
 # across the callback; a moving minor there left the pre-move address in the
 # result (an `Object.entries` pair read back as garbage).

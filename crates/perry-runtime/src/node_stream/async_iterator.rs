@@ -483,7 +483,7 @@ fn attach_iterator_listener(
     stream: f64,
     event: &[u8],
     info: *const crate::closure::JsFunctionInfo,
-    store_key: &[u8],
+    store_key: &'static [u8],
 ) {
     let cb = js_closure_alloc(info, 1);
     js_closure_set_capture_f64(cb, 0, iterator);
@@ -569,7 +569,7 @@ fn iterator_ensure_attached(iterator: f64, stream: f64) {
     resume_iterator_source(stream);
 }
 
-fn remove_iterator_listener(iterator: f64, stream: f64, event: &[u8], store_key: &[u8]) {
+fn remove_iterator_listener(iterator: f64, stream: f64, event: &[u8], store_key: &'static [u8]) {
     if let Some(cb_value) = get_hidden_value(iterator, hidden_key(store_key)) {
         if uses_method_listeners(stream) {
             call_stream_listener_method(stream, b"off", event, cb_value);
@@ -813,7 +813,7 @@ fn install_async_iterator_symbol(target: f64, info: *const crate::closure::JsFun
 
 fn set_rooted_iterator_value(
     iterator: &crate::gc::RuntimeHandle<'_>,
-    key_bytes: &[u8],
+    key_bytes: &'static [u8],
     value: f64,
 ) {
     let scope = crate::gc::RuntimeHandleScope::new();
