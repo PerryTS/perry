@@ -1,3 +1,21 @@
+PRIVATE EMPTY-EDEN PROBE LAUNCHED — 2026-10-03 20:29Z
+Private3843fcb54a adds13lines in arena/block.rs and reset.rs; production source
+unchanged. In the existing idle-Eden pass, an offset-zero block outside the
+allocator's recent window has already survived a complete mutator interval.
+Its first idle observation now advises complete interior pages, retaining
+mapping/metadata; the second observation's existing detachment remains intact.
+No new object/header/shape/TLS/layout field, GC frequency or threshold change.
+The follow-up read-only observer completed73/78natural fulls; all39empty Eden
+blocks at the first full have existing dead_cycles=1. This motivates testing
+advice before detachment rather than adding another independent age field.
+Own isolated Linux build/runtime-test wrapper416618 is running. Four-workload
+48execution RSS/perf comparison421271 is queued under the shared heavy lock,
+using the unchanged verified GC-proposal control and a fresh private archive.
+Source4994tracked inputs differs only in the two arena paths. Further full17-
+case/moving acceptance is required if this initial experiment proves useful.
+No private source is adopted on build success alone. Review patch and scripts
+are in this draft; no application saving is claimed for the new probe yet.
+
 LATEST VERIFIED STATE — 2026-10-03 20:25Z
 Production head remains the c170-based GC proposal; no private helper adopted.
 228 production application runs and 204 private ELF runs independently verified.
