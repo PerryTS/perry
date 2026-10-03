@@ -72,6 +72,47 @@ fn a_present_key_is_answered_by_the_receivers_shape() {
     assert_eq!(read(&obj, &b), 22.0f64.to_bits());
 }
 
+/// A key the shape's word compare cannot match (a non-atom string, or a key
+/// past the inline positions) is answered by the receiver's own lookup, which
+/// files the slot in the read stub: the next read of that text on a receiver
+/// of this shape is the stub's, for an inline and an overflow slot alike. A
+/// write to the key keeps the shape, and the stub reads the new value.
+#[test]
+fn an_own_key_the_words_miss_is_read_once_and_then_answered_by_the_stub() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _global = crate::object::js_get_global_this();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj = scope.root_raw_mut_ptr(literal_object());
+    // Twelve keys on an 8-slot literal: the last ones live in overflow slots.
+    // Keys short enough to carry content bits (the stub key), and distinct
+    // from every other test's.
+    let names: Vec<Vec<u8>> = (0..12).map(|i| format!("Zo{i}").into_bytes()).collect();
+    for (i, name) in names.iter().enumerate() {
+        let key = scope.root_string_ptr(atom(name));
+        set(&obj, &key, i as f64 + 0.5);
+    }
+    for i in [1usize, 11] {
+        let copy = scope.root_string_ptr(crate::string::js_string_from_bytes(
+            names[i].as_ptr(),
+            names[i].len() as u32,
+        ));
+        assert_eq!(
+            answer(&obj, &copy),
+            None,
+            "premise: nothing filed for key {i} yet"
+        );
+        assert_eq!(read(&obj, &copy), (i as f64 + 0.5).to_bits());
+        assert_eq!(
+            answer(&obj, &copy),
+            Some((i as f64 + 0.5).to_bits()),
+            "the own read must file key {i} in the stub"
+        );
+        let key = scope.root_string_ptr(atom(&names[i]));
+        set(&obj, &key, 99.0);
+        assert_eq!(read(&obj, &copy), 99.0f64.to_bits());
+    }
+}
+
 /// An absent key is filed only after the generic read answered `undefined`,
 /// and the verdict rests on `%Object.prototype%`'s ShapeId: adding the key
 /// there drops it, and the read then finds the inherited value.
