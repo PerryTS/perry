@@ -244,8 +244,9 @@ fn descriptor_blocks_class_field_get(obj_addr: usize, class_id: u32, key_name: &
 /// the receiver carries `expected_shape_id` and that `field_index` is in bounds.
 ///
 /// The shape is the authority (charter step 5): a receiver stamped with
-/// `expected_shape_id` holds a raw double in every slot whose lane in that
-/// shape is not `Any`, and a store that would break that generalizes the lane
+/// `expected_shape_id` holds a raw double only in an `F64` (or deprecated
+/// `F64`) lane; SPECIAL ConstFn lanes are pointer-bearing. A store that would
+/// break an F64 lane generalizes it
 /// and restamps the receiver first. So "slot K is raw-f64" is the lane of the
 /// expected shape at K; nothing per object is consulted.
 #[inline]
@@ -255,7 +256,7 @@ fn class_field_raw_f64_layout_contract(
     require_raw_f64: bool,
 ) -> bool {
     !require_raw_f64
-        || !crate::object::field_rep_store::shape_slot_is_any(expected_shape_id, field_index)
+        || crate::object::field_rep_store::shape_slot_is_f64(expected_shape_id, field_index)
 }
 
 fn class_field_get_contract(
@@ -301,7 +302,10 @@ fn class_field_get_contract(
         let keys = descriptor.keys as usize as *const ArrayHeader;
         let valid = crate::object::object_is_regular(obj)
             && class_id == expected_class_id
-            && shape_id == expected_shape_id
+            && crate::object::field_rep_store::final_shape_matches_birth(
+                shape_id,
+                expected_shape_id,
+            )
             && expected_field_index < descriptor.live_inline_slot_count
             && expected_field_index < descriptor.logical_key_count
             && plain_array_index_guard(keys, expected_field_index, true)
@@ -344,16 +348,13 @@ fn class_field_fast_contract(
         let obj = object_addr as *const ObjectHeader;
         let descriptor = crate::object::shapes::object_shape_descriptor(obj);
         let shape_id = crate::object::shapes::object_shape_stamp(obj);
-        // The ShapeId compare is the whole proof, the lane included: the
-        // expected id is the class's birth shape, whose rep is part of its
-        // identity, so a receiver that carries it carries its lanes. A lane
-        // that is not `Any` there sends the store through the checked
-        // funnel (charter step 5).
+        // Birth or a compatible completed shape proves the offsets and
+        // numeric lanes. The setter separately requires the live boxed lane
+        // to be Any before skipping the checked store funnel.
         let shape_ok = (*obj).class_id == expected_class_id
-            && shape_id == expected_shape_id
-            && crate::object::field_rep_store::shape_slot_is_any(
+            && crate::object::field_rep_store::final_shape_matches_birth(
+                shape_id,
                 expected_shape_id,
-                expected_field_index,
             )
             && descriptor.is_some_and(|facts| {
                 facts.object_kind.is_ordinary_layout()
@@ -444,6 +445,13 @@ fn class_field_set_fast_contract(
         return false;
     }
     unsafe {
+        let live_shape =
+            crate::object::shapes::object_shape_stamp(object_addr as *const ObjectHeader);
+        if !require_raw_f64
+            && !crate::object::field_rep_store::shape_slot_is_any(live_shape, expected_field_index)
+        {
+            return false;
+        }
         let Some(gc_header) = gc_header_for_user_addr(object_addr) else {
             return false;
         };
@@ -845,7 +853,7 @@ fn class_field_get_one_path(
     }
     let key = (key as u64 & crate::value::POINTER_MASK) as *const crate::StringHeader;
     if probe_mru {
-        if let Some(value) = unsafe { class_field_get_from_shape(bits, key, cache_slot, false) } {
+        if let Some(value) = unsafe { class_field_get_from_shape(bits, cache_slot) } {
             return value;
         }
     }
@@ -861,24 +869,14 @@ fn class_field_get_one_path(
 
 /// The answers the receiver's shape gives without the ladder, in the order
 /// the emitted generic read asks them: the site's own word, the site's holder
-/// entry, then (on its declined edge) the inherited-read cache. `None` for
-/// everything else.
-///
-/// `leaf`: the caller is the S2 GC-leaf entry, so an inherited ACCESSOR entry
-/// (which runs a getter) is declined, as `js_inherited_read_cache_hit_f64`
-/// declines it for the emitted read. Otherwise the cache is asked once, as
-/// the ladder's own first question (`get_field_ic_miss_impl`'s hook A) asks
-/// it, getter included.
+/// entry. `None` for everything else.
 ///
 /// # Safety
-/// `cache_slot` is null or the site's live read cache; `key` is the interned
-/// key with its tag masked off.
+/// `cache_slot` is null or the site's live read cache.
 #[inline(always)]
 unsafe fn class_field_get_from_shape(
     bits: u64,
-    key: *const crate::StringHeader,
     cache_slot: *mut crate::object::PicCacheSlot,
-    leaf: bool,
 ) -> Option<f64> {
     // POINTER tag above the handle band: the receiver test every emitted
     // generic read makes before either lookup.
@@ -900,22 +898,7 @@ unsafe fn class_field_get_from_shape(
         crate::hot_diag::recv_route_note_runtime(crate::hot_diag::RT_ROUTE_CLASS_MISS_SHAPE);
         return Some(value);
     }
-    let value = if leaf {
-        let value =
-            crate::object::inherited_read_cache::js_inherited_read_cache_hit_f64(handle, key);
-        (value.to_bits() != crate::value::TAG_HOLE).then_some(value)
-    } else {
-        match crate::object::inherited_read_cache::inherited_read_cache_lookup(handle, key) {
-            crate::object::inherited_read_cache::Lookup::Hit(value) => {
-                Some(f64::from_bits(value.bits()))
-            }
-            _ => None,
-        }
-    };
-    if value.is_some() {
-        crate::hot_diag::recv_route_note_runtime(crate::hot_diag::RT_ROUTE_CLASS_MISS_SHAPE);
-    }
-    value
+    None
 }
 
 /// `js_class_field_get_ic`'s guard-FAIL arm with typed feedback on.
@@ -1050,9 +1033,8 @@ pub extern "C" fn js_class_field_get_ic_fast(
         if !typed_feedback_enabled()
             && !crate::value::JSValue::from_bits(key as u64).is_short_string()
         {
-            let key = (key as u64 & crate::value::POINTER_MASK) as *const crate::StringHeader;
             if let Some(value) =
-                unsafe { class_field_get_from_shape(receiver.to_bits(), key, cache_slot, true) }
+                unsafe { class_field_get_from_shape(receiver.to_bits(), cache_slot) }
             {
                 return value;
             }

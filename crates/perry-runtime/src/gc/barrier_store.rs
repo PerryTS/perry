@@ -107,10 +107,12 @@ fn slot_holds_raw_f64(parent_user: usize, slot_index: usize) -> bool {
             if (*header).gc_flags & GC_FLAG_FORWARDED != 0 {
                 return false;
             }
-            return crate::object::field_rep_store::object_slot_rep(
+            let rep = crate::object::field_rep_store::object_slot_rep(
                 parent_user as *const crate::object::ObjectHeader,
                 slot_index,
-            ) != crate::object::field_rep::REP_ANY;
+            );
+            return rep == crate::object::field_rep::REP_F64
+                || rep == crate::object::field_rep::REP_F64_DEPRECATED;
         }
     }
     false

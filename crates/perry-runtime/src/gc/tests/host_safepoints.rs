@@ -1,3 +1,6 @@
+use super::super::heap_budget::{
+    gc_trigger_absolute_ceiling_bytes, gc_trigger_headroom_floor_bytes,
+};
 use super::super::*;
 use super::support::*;
 
@@ -564,4 +567,207 @@ fn a_nursery_cap_only_trigger_is_deferred_to_the_collector_that_can_discharge_it
     let completed = complete_host_safepoint_cycle();
     assert_eq!(completed.status, JS_GC_STEP_STATUS_COMPLETED);
     assert!(!gc_budgeted_cycle_active());
+}
+
+// ── #11736: the re-arm point must not depend on which collector ran ─────────
+
+/// Which collector discharges the arena trigger in the parity fixture.
+#[derive(Clone, Copy, Debug)]
+enum Discharge {
+    /// Host safepoints drive a budgeted, non-moving minor to completion.
+    Budgeted,
+    /// The precise safepoint runs a copying (moving) minor.
+    Moving,
+}
+
+/// What a discharge leaves behind for the pacer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Rearm {
+    arena_total: usize,
+    next_trigger: usize,
+    step: usize,
+}
+
+/// Allocate unrooted garbage until the arena has grown by `blocks` blocks.
+fn grow_eden_with_garbage(blocks: usize) {
+    let target = crate::arena::arena_total_bytes() + blocks * crate::arena::BLOCK_SIZE;
+    while crate::arena::arena_total_bytes() < target {
+        let _ = young_leaf();
+    }
+}
+
+/// Bytes of Eden that are mapped (tombstoned slots excluded).
+fn eden_mapped_bytes() -> usize {
+    crate::arena::ARENA.with(|arena| unsafe {
+        (*arena.get())
+            .blocks
+            .iter()
+            .filter(|block| !block.data.is_null())
+            .map(|block| block.size)
+            .sum()
+    })
+}
+
+/// Allocate unrooted garbage until the young generation holds `bytes`.
+fn fill_young_with_garbage(bytes: usize) {
+    while crate::arena::copying_from_space_in_use_bytes() < bytes {
+        let _ = young_leaf();
+    }
+}
+
+fn run_moving_minor(trigger_guard: &GcTriggerThresholdTestGuard) {
+    trigger_guard.make_arena_trigger_due();
+    let collections = gc_collection_count();
+    let copying = super::super::instruments::copying_minor_cycles();
+    assert!(super::super::gc_safepoint_moving_minor());
+    // ★ Live subject: a moving minor really ran.
+    assert_eq!(gc_collection_count(), collections + 1);
+    assert!(super::super::instruments::copying_minor_cycles() > copying);
+}
+
+/// The TypeScript sequence from #11736, on a fresh thread: Eden holds blocks
+/// that a non-moving collection has already found empty once, the whole-arena
+/// trigger goes due without the mutator touching them, and `discharge` takes it.
+fn rearm_after_idle_eden(discharge: Discharge) -> (Rearm, usize) {
+    std::thread::spawn(move || {
+        let _guard = CopyingNurseryTestGuard::new(1);
+        let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        reset_old_reclaim_pressure();
+
+        // Ten blocks of garbage, then a non-moving minor: it resets the dead
+        // blocks outside its keep window and counts each of them idle once.
+        grow_eden_with_garbage(10);
+        trigger_guard.make_arena_trigger_due();
+        let _ = complete_host_safepoint_cycle();
+        let before = crate::arena::arena_total_bytes();
+
+        // A small heap re-arms at the absolute ceiling whatever its total, which
+        // would hide the very difference this measures. The floor step keeps
+        // the re-arm at `total + step`, where the total shows.
+        GC_STEP_BYTES.with(|s| s.set(gc_trigger_headroom_floor_bytes()));
+        trigger_guard.make_arena_trigger_due();
+        // ★ Live subject: the trigger is due, and nothing in Eden was touched.
+        assert!(before >= super::super::policy::next_arena_trigger_base());
+        let collections = gc_collection_count();
+        match discharge {
+            Discharge::Budgeted => {
+                let completed = complete_host_safepoint_cycle();
+                assert_eq!(completed.status, JS_GC_STEP_STATUS_COMPLETED);
+                assert_eq!(gc_collection_count(), collections + 1);
+            }
+            Discharge::Moving => run_moving_minor(&trigger_guard),
+        }
+        let rearm = Rearm {
+            arena_total: crate::arena::arena_total_bytes(),
+            next_trigger: GC_NEXT_TRIGGER_BYTES.with(|t| t.get()),
+            step: GC_STEP_BYTES.with(|s| s.get()),
+        };
+        (rearm, before)
+    })
+    .join()
+    .unwrap()
+}
+
+/// ★ #11736: the same heap re-arms the whole-arena trigger at the same point
+/// whichever collector discharges it.
+///
+/// The non-moving reclaim releases an Eden block on its second idle
+/// collection. Before #11736 the moving minor's from-space reset zeroed that
+/// count and kept every block, so `arena_total_bytes()` — the re-arm basis —
+/// came out one block higher per idle block, and the trigger with it. On
+/// TypeScript that was 62 MB and +28 MB of peak RSS, decided by whether the
+/// arena sat exactly on the trigger (host poll, budgeted) or one block over
+/// (precise safepoint, moving).
+///
+/// Fails on the defect: the moving arm keeps the idle blocks the budgeted arm
+/// releases, so its total and its trigger are higher by those blocks.
+#[test]
+fn the_arena_trigger_rearms_at_the_same_point_whichever_collector_discharged_it() {
+    let (budgeted, budgeted_before) = rearm_after_idle_eden(Discharge::Budgeted);
+    let (moving, moving_before) = rearm_after_idle_eden(Discharge::Moving);
+
+    // ★ Live subject: both arms start from the same heap, and the budgeted
+    // arm really released idle blocks — otherwise equality below proves
+    // nothing about them.
+    assert_eq!(
+        budgeted_before, moving_before,
+        "both arms must discharge the same heap"
+    );
+    assert!(
+        budgeted.arena_total + 2 * crate::arena::BLOCK_SIZE <= budgeted_before,
+        "the fixture must present idle Eden blocks the non-moving reclaim releases \
+         (before={budgeted_before} after={})",
+        budgeted.arena_total
+    );
+    // ★ Live subject: the re-arm is the total-relative one, not the ceiling,
+    // so a total that differed would move the trigger with it.
+    assert!(
+        budgeted.next_trigger < gc_trigger_absolute_ceiling_bytes(),
+        "the fixture must re-arm below the ceiling (next={})",
+        budgeted.next_trigger
+    );
+    assert_eq!(
+        moving, budgeted,
+        "the re-arm point must depend on the heap, not on which collector ran"
+    );
+}
+
+/// ★ #11736's other half: the moving minor keeps the nursery it is using, and
+/// returns only the blocks it stopped using.
+///
+/// Phase 1 is the CPU guard. A copying workload fills the same Eden blocks
+/// every cycle; if the moving minor counted a used block as idle it would
+/// release and re-map part of its own nursery every other collection.
+/// Phase 2 is the release: once the mutator stops reaching some blocks, the
+/// first moving minor that finds them idle keeps them (one idle collection is
+/// not two), and the second releases them.
+#[test]
+fn the_moving_minor_keeps_its_working_nursery_and_releases_blocks_it_stopped_using() {
+    std::thread::spawn(|| {
+        let _guard = CopyingNurseryTestGuard::new(1);
+        let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        reset_old_reclaim_pressure();
+
+        grow_eden_with_garbage(8);
+        run_moving_minor(&trigger_guard);
+        let steady_total = crate::arena::arena_total_bytes();
+        // Reaching into the last mapped block touches every one of them.
+        let working_set = eden_mapped_bytes() - crate::arena::BLOCK_SIZE / 2;
+
+        // ── phase 1: the same nursery, refilled, through three moving minors
+        for cycle in 0..3 {
+            fill_young_with_garbage(working_set);
+            // ★ Live subject: the refill used the kept blocks, not new ones.
+            assert_eq!(
+                crate::arena::arena_total_bytes(),
+                steady_total,
+                "cycle {cycle}: the refill must reuse the nursery's own blocks"
+            );
+            run_moving_minor(&trigger_guard);
+            assert_eq!(
+                crate::arena::arena_total_bytes(),
+                steady_total,
+                "cycle {cycle}: a moving minor must not release blocks the mutator used"
+            );
+        }
+
+        // ── phase 2: the mutator now reaches only the first block or so
+        fill_young_with_garbage(crate::arena::BLOCK_SIZE / 2);
+        run_moving_minor(&trigger_guard);
+        assert_eq!(
+            crate::arena::arena_total_bytes(),
+            steady_total,
+            "one idle collection must not release a block"
+        );
+        fill_young_with_garbage(crate::arena::BLOCK_SIZE / 2);
+        run_moving_minor(&trigger_guard);
+        assert!(
+            crate::arena::arena_total_bytes() + 2 * crate::arena::BLOCK_SIZE <= steady_total,
+            "the second idle collection must release the blocks the mutator stopped using \
+             (steady={steady_total} now={})",
+            crate::arena::arena_total_bytes()
+        );
+    })
+    .join()
+    .unwrap();
 }

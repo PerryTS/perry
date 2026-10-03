@@ -986,126 +986,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                                         field_index,
                                     );
                                 let requires_raw_f64_str = if requires_raw_f64 { "1" } else { "0" };
-                                // #5093 loop versioning: inside the fast clone of a
-                                // class-field versioned loop, a tracked raw-f64 field
-                                // store on the proven receiver lowers to an inline
-                                // plain-finite value check + bare slot store on the
-                                // preheader-cached object pointer. A value that is
-                                // not a plain finite double (±Inf/NaN, or any NaN-box
-                                // tag — including INT32-boxed integers) side-exits to
-                                // the slow clone's preheader BEFORE the store, so the
-                                // slow clone re-executes the whole iteration and
-                                // routes the value through the runtime guard exactly
-                                // as today (downgrade semantics preserved).
-                                if requires_raw_f64 {
-                                    let loop_fact =
-                                        match object.as_ref() {
-                                            Expr::LocalGet(recv_id) => {
-                                                crate::expr::class_field_loop_fact_lookup(
-                                                    &ctx.class_field_loop_facts,
-                                                    *recv_id,
-                                                    &class_name,
-                                                    property,
-                                                )
-                                                .filter(|(_, loop_idx)| *loop_idx == field_index)
-                                                .map(|(fact, _)| {
-                                                    (
-                                                        fact.obj_ptr.clone(),
-                                                        fact.side_exit_label.clone(),
-                                                    )
-                                                })
-                                            }
-                                            _ => None,
-                                        };
-                                    if let Some((obj_ptr, side_exit_label)) = loop_fact {
-                                        let field_idx_str = field_index.to_string();
-                                        let store_idx =
-                                            ctx.new_block("class_field_loop_store.fast");
-                                        let store_label = ctx.block_label(store_idx);
-                                        {
-                                            let blk = ctx.block();
-                                            let val_bits = blk.bitcast_double_to_i64(&val_double);
-                                            let finite = crate::expr::class_field_inline_guard::
-                                        emit_plain_finite_number_check(blk, &val_bits);
-                                            blk.cond_br(&finite, &store_label, &side_exit_label);
-                                        }
-                                        ctx.current_block = store_idx;
-                                        super::store_census::bump(
-                                            ctx,
-                                            super::store_census::CFIELD_LOOP_RAW,
-                                        );
-                                        {
-                                            let header_skip =
-                                                crate::target_layout::object_header_size_bytes(
-                                                    ctx.target_triple,
-                                                )
-                                                .to_string();
-                                            let blk = ctx.block();
-                                            let fields_base =
-                                                blk.gep(I8, &obj_ptr, &[(I64, &header_skip)]);
-                                            let field_ptr = blk.gep(
-                                                DOUBLE,
-                                                &fields_base,
-                                                &[(I64, &field_idx_str)],
-                                            );
-                                            // No raw-f64 canonicalization call is needed:
-                                            // INT32-boxed and NaN values — the only
-                                            // inputs `js_array_numeric_value_to_raw_f64`
-                                            // rewrites — cannot pass the finite check.
-                                            //
-                                            // GC_STORE_AUDIT(POINTER_FREE): the inline
-                                            // finite check proved `val_double` is a
-                                            // genuine (unboxed, finite) double, never a
-                                            // heap pointer — no edge, no write barrier.
-                                            blk.store(DOUBLE, &val_double, &field_ptr);
-                                        }
-                                        let stored = LoweredValue {
-                                            semantic: SemanticKind::JsNumber,
-                                            rep: NativeRep::F64,
-                                            llvm_ty: DOUBLE,
-                                            value: val_double.clone(),
-                                        };
-                                        ctx.record_lowered_value_with_access_mode_and_facts(
-                                            "ClassFieldSet",
-                                            None,
-                                            "class_field_set.loop_raw_f64_store",
-                                            &stored,
-                                            Some(BoundsState::Guarded {
-                                                guard_id: "class_field_loop_preheader_check"
-                                                    .to_string(),
-                                            }),
-                                            None,
-                                            Some(BufferAccessMode::CheckedNative),
-                                            None,
-                                            None,
-                                            None,
-                                            vec![raw_f64_layout_fact(
-                                                None,
-                                                "consumed",
-                                                "class_field_loop_preheader_check",
-                                                None,
-                                            )],
-                                            Vec::new(),
-                                            false,
-                                            false,
-                                            vec![
-                                                format!("class={}", class_name),
-                                                format!("field={}", property),
-                                                format!("field_index={}", field_idx_str),
-                                                "receiver_proof=loop_preheader_shape_check"
-                                                    .to_string(),
-                                                "field_layout=raw_f64_slot_array".to_string(),
-                                                "loop_versioning=class_field_fast_clone"
-                                                    .to_string(),
-                                                "rhs_numeric_guard=inline_plain_finite_check"
-                                                    .to_string(),
-                                                "store_guard_failure=side_exit_slow_restart"
-                                                    .to_string(),
-                                            ],
-                                        );
-                                        return Ok(val_double);
-                                    }
-                                }
                                 // Representation-selection Phase 3b: shape-proven
                                 // Ptr<Shape> receiver (collectors/ptr_shape.rs) — no
                                 // guard call, no shape diamond. Raw-f64 slots keep the
@@ -1127,6 +1007,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                                     .ptr_shape_receiver_fact(object.as_ref())
                                     .map(|fact| fact.class_name == class_name)
                                     .unwrap_or(false);
+                                // A contained offset proof may carry completed
+                                // ConstFn facts. Writing that boxed slot must
+                                // deprecate/restamp through the checked funnel.
+                                let ptr_shape_proven = ptr_shape_proven
+                                    && (requires_raw_f64
+                                        || !crate::codegen::slot_may_be_constfn(
+                                            &keys_global_name,
+                                            field_index,
+                                        ));
                                 if ptr_shape_proven {
                                     ctx.note_ptr_shape_consumed(object.as_ref(), "ptr_shape_set");
                                     super::store_census::bump(
@@ -1332,18 +1221,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                                     );
                                     return Ok(val_double);
                                 }
-                                // #5093: build the guard operands once, up front, so both
-                                // the inline shape pre-check and the guard-call fallback
-                                // can reference them.
-                                let (obj_bits, obj_handle, key_raw, val_bits) = {
+                                // #5093: build only the noncollecting precheck operands here.
+                                // The guard and fallback materialize fresh key handles
+                                // and consume rooted receiver/value snapshots below.
+                                let (obj_bits, obj_handle, val_bits) = {
                                     let blk = ctx.block();
                                     let obj_bits = blk.bitcast_double_to_i64(&recv_box);
                                     let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
-                                    let key_box = blk.load(DOUBLE, &key_handle_global);
-                                    let key_bits = blk.bitcast_double_to_i64(&key_box);
-                                    let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
                                     let val_bits = blk.bitcast_double_to_i64(&val_double);
-                                    (obj_bits, obj_handle, key_raw, val_bits)
+                                    (obj_bits, obj_handle, val_bits)
                                 };
                                 let fast_idx = ctx.new_block("class_field_set.fast");
                                 let fallback_idx = ctx.new_block("class_field_set.fallback");
@@ -1354,7 +1240,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
 
                                 // #5093: inline shape pre-check. On a hit this branches
                                 // straight to the store, skipping the call; on a miss the
-                                // guard-call path below runs unchanged.
+                                // guard-call path below adopts the evaluated operands into roots.
                                 //
                                 // #7854: this used to be gated on `requires_raw_f64`,
                                 // leaving every BOXED declared field (`string`, a class
@@ -1370,7 +1256,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                                 // taken the boxed inline precheck since #7288: the write
                                 // barrier, layout note and string demote come from
                                 // `emit_jsvalue_slot_store_pointer_tested` (which the
-                                // shared `fast_label` block below calls, with the very
+                                // common store emitter below calls, with the very
                                 // same value-side predicates), NOT from the guard; and a
                                 // setter in the chain is already refused upstream by
                                 // `class_field_global_index`'s `accessor_in_chain`.
@@ -1416,154 +1302,144 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                                 &keys_global_name,
                                 field_index,
                             );
-                                super::store_census::bump(ctx, super::store_census::CFIELD_IC_CALL);
-                                let guard_ok = ctx.block().call(
-                                    I32,
-                                    "js_typed_feedback_class_field_set_guard",
-                                    &[
-                                        (I64, &site_id),
-                                        (DOUBLE, &recv_box),
-                                        (I32, &expected_class_id_str),
-                                        (I32, &expected_shape_id),
-                                        (I64, &key_raw),
-                                        (I32, &field_idx_str),
-                                        (DOUBLE, &val_double),
-                                        (I32, requires_raw_f64_str),
-                                    ],
-                                );
-                                let guard_pass = ctx.block().icmp_ne(I32, &guard_ok, "0");
-                                ctx.block()
-                                    .cond_br(&guard_pass, &fast_label, &fallback_label);
-
-                                ctx.current_block = fast_idx;
-                                super::store_census::bump(
-                                    ctx,
-                                    super::store_census::CFIELD_GUARD_STORE,
-                                );
-                                // #5334 lever D: a value that is a non-pointer by
-                                // construction (number / bool / undefined / null /
-                                // comparison / arithmetic) creates no parent→child heap
-                                // reference, so the generational write barrier is a
-                                // semantic no-op and can be skipped. Computed before the
-                                // block builder is borrowed below. The LAYOUT NOTE is
-                                // kept regardless: it records the slot's pointer-ness for
-                                // minor-scan skipping, and a non-pointer write into a
-                                // slot that previously held a pointer is a real
-                                // transition the GC must observe. Same soundness standard
-                                // as the array-store barrier elision.
-                                let field_set_barrier_needed =
-                                    !expr_produces_non_pointer_bits_by_construction(ctx, value);
-                                // #7469: value-side elision of the addref and layout
-                                // note on the guarded arm — computed here because the
-                                // predicates take `&FnCtx` and the block builder is
-                                // borrowed below.
-                                let guarded_addref_needed =
-                                    class_field_store_needs_string_addref(ctx, value);
-                                let raw_stored_value = {
-                                    // arm64_32 watchOS: the object fields region begins at
-                                    // `size_of::<ObjectHeader>()` past the user pointer — 16 on
-                                    // both LP64 and ILP32 since #8047. A hardcoded offset writes
-                                    // class fields to the wrong word when the header changes; the paired inline read
-                                    // (`property_get`) and the runtime setter must agree, so
-                                    // derive it from the target triple (no-op on 64-bit; see
-                                    // `target_layout`).
-                                    let header_skip =
-                                        crate::target_layout::object_header_size_bytes(
-                                            ctx.target_triple,
-                                        )
-                                        .to_string();
-                                    let field_ptr = {
-                                        let blk = ctx.block();
-                                        let obj_ptr = blk.inttoptr(I64, &obj_handle);
-                                        let fields_base =
-                                            blk.gep(I8, &obj_ptr, &[(I64, &header_skip)]);
-                                        blk.gep(DOUBLE, &fields_base, &[(I64, &field_idx_str)])
-                                    };
-                                    let raw_stored_value = if requires_raw_f64 {
-                                        // Guarded raw-f64 slots are pointer-free by typed
-                                        // shape descriptor; non-number writes miss the
-                                        // guard and use the boxed setter fallback.
-                                        // #10907: canonicalize only off the
-                                        // plain-finite path.
-                                        //
-                                        // GC_STORE_AUDIT(POINTER_FREE): typed raw-f64 class
-                                        // slots contain numbers only.
-                                        emit_raw_f64_class_field_slot_store(
+                                let guardcall_idx = ctx.current_block;
+                                // Keep the inline hit free of root traffic. The collecting
+                                // guard has a separate store diamond using refreshed operands.
+                                let emit_guarded_store =
+                                    |ctx: &mut FnCtx<'_>,
+                                     obj_bits: &str,
+                                     obj_handle: &str,
+                                     val_double: &str| {
+                                        super::store_census::bump(
                                             ctx,
-                                            value,
-                                            &val_double,
-                                            &field_ptr,
+                                            super::store_census::CFIELD_GUARD_STORE,
                                         );
-                                        Some(val_double.clone())
-                                    } else {
-                                        // #5334 lever D: skip the barrier when the value
-                                        // is a non-pointer by construction. #7469 extends
-                                        // the same value-expression gating to the addref
-                                        // and layout note — the Phase 4b.1 predicates are
-                                        // value-side-only proofs (see their docs: safe in
-                                        // every layout state the receiver can be in), so
-                                        // they apply on this guarded arm exactly as on
-                                        // the ptr-shape-proven arm above. The guard
-                                        // passing does not change what the VALUE can be;
-                                        // `requires_raw_f64` is false here, which is the
-                                        // precondition `class_field_store_needs_layout_note`
-                                        // documents.
-                                        //
-                                        // #7511: this is the arm the shared
-                                        // `<class>_constructor` symbol lands on, where the
-                                        // value is an opaque function parameter and lever D
-                                        // can never fire. Whatever survives it is decided by
-                                        // ONE live test of the stored bits instead of three
-                                        // cross-crate calls that each re-ask the same
-                                        // question — see
-                                        // `emit_jsvalue_slot_store_pointer_tested`.
-                                        let field_addr = ctx.block().ptrtoint(&field_ptr, I64);
-                                        emit_jsvalue_slot_store_pointer_tested(
-                                            ctx,
-                                            &field_ptr,
-                                            &val_double,
-                                            &obj_handle,
-                                            guarded_addref_needed,
-                                            &obj_bits,
-                                            &field_addr,
-                                            field_set_barrier_needed,
-                                            "class_field_set",
-                                        );
-                                        None
-                                    };
-                                    ctx.block().br(&merge_label);
-                                    raw_stored_value
-                                };
-                                if let Some(numeric_value) = raw_stored_value {
-                                    let stored = LoweredValue {
-                                        semantic: SemanticKind::JsNumber,
-                                        rep: NativeRep::F64,
-                                        llvm_ty: DOUBLE,
-                                        value: numeric_value.clone(),
-                                    };
-                                    ctx.record_lowered_value_with_access_mode_and_facts(
-                                        "ClassFieldSet",
-                                        None,
-                                        "class_field_set.raw_f64_store",
-                                        &stored,
-                                        Some(BoundsState::Guarded {
-                                            guard_id: "class_field_set_guard".to_string(),
-                                        }),
-                                        None,
-                                        Some(BufferAccessMode::CheckedNative),
-                                        None,
-                                        None,
-                                        None,
-                                        vec![raw_f64_layout_fact(
-                                            None,
-                                            "consumed",
-                                            "class_field_set_guard",
-                                            None,
-                                        )],
-                                        Vec::new(),
-                                        false,
-                                        false,
-                                        vec![
+                                        // #5334 lever D: a value that is a non-pointer by
+                                        // construction (number / bool / undefined / null /
+                                        // comparison / arithmetic) creates no parent→child heap
+                                        // reference, so the generational write barrier is a
+                                        // semantic no-op and can be skipped. Computed before the
+                                        // block builder is borrowed below. The LAYOUT NOTE is
+                                        // kept regardless: it records the slot's pointer-ness for
+                                        // minor-scan skipping, and a non-pointer write into a
+                                        // slot that previously held a pointer is a real
+                                        // transition the GC must observe. Same soundness standard
+                                        // as the array-store barrier elision.
+                                        let field_set_barrier_needed =
+                                            !expr_produces_non_pointer_bits_by_construction(
+                                                ctx, value,
+                                            );
+                                        // #7469: value-side elision of the addref and layout
+                                        // note on the guarded arm — computed here because the
+                                        // predicates take `&FnCtx` and the block builder is
+                                        // borrowed below.
+                                        let guarded_addref_needed =
+                                            class_field_store_needs_string_addref(ctx, value);
+                                        let raw_stored_value = {
+                                            // arm64_32 watchOS: the object fields region begins at
+                                            // `size_of::<ObjectHeader>()` past the user pointer — 16 on
+                                            // both LP64 and ILP32 since #8047. A hardcoded offset writes
+                                            // class fields to the wrong word when the header changes; the paired inline read
+                                            // (`property_get`) and the runtime setter must agree, so
+                                            // derive it from the target triple (no-op on 64-bit; see
+                                            // `target_layout`).
+                                            let header_skip =
+                                                crate::target_layout::object_header_size_bytes(
+                                                    ctx.target_triple,
+                                                )
+                                                .to_string();
+                                            let field_ptr = {
+                                                let blk = ctx.block();
+                                                let obj_ptr = blk.inttoptr(I64, obj_handle);
+                                                let fields_base =
+                                                    blk.gep(I8, &obj_ptr, &[(I64, &header_skip)]);
+                                                blk.gep(
+                                                    DOUBLE,
+                                                    &fields_base,
+                                                    &[(I64, &field_idx_str)],
+                                                )
+                                            };
+                                            if requires_raw_f64 {
+                                                // Guarded raw-f64 slots are pointer-free by typed
+                                                // shape descriptor; non-number writes miss the
+                                                // guard and use the boxed setter fallback.
+                                                // #10907: canonicalize only off the
+                                                // plain-finite path.
+                                                //
+                                                // GC_STORE_AUDIT(POINTER_FREE): typed raw-f64 class
+                                                // slots contain numbers only.
+                                                emit_raw_f64_class_field_slot_store(
+                                                    ctx, value, val_double, &field_ptr,
+                                                );
+                                                Some(val_double.to_string())
+                                            } else {
+                                                // #5334 lever D: skip the barrier when the value
+                                                // is a non-pointer by construction. #7469 extends
+                                                // the same value-expression gating to the addref
+                                                // and layout note — the Phase 4b.1 predicates are
+                                                // value-side-only proofs (see their docs: safe in
+                                                // every layout state the receiver can be in), so
+                                                // they apply on this guarded arm exactly as on
+                                                // the ptr-shape-proven arm above. The guard
+                                                // passing does not change what the VALUE can be;
+                                                // `requires_raw_f64` is false here, which is the
+                                                // precondition `class_field_store_needs_layout_note`
+                                                // documents.
+                                                //
+                                                // #7511: this is the arm the shared
+                                                // `<class>_constructor` symbol lands on, where the
+                                                // value is an opaque function parameter and lever D
+                                                // can never fire. Whatever survives it is decided by
+                                                // ONE live test of the stored bits instead of three
+                                                // cross-crate calls that each re-ask the same
+                                                // question — see
+                                                // `emit_jsvalue_slot_store_pointer_tested`.
+                                                let field_addr =
+                                                    ctx.block().ptrtoint(&field_ptr, I64);
+                                                emit_jsvalue_slot_store_pointer_tested(
+                                                    ctx,
+                                                    &field_ptr,
+                                                    val_double,
+                                                    obj_handle,
+                                                    guarded_addref_needed,
+                                                    obj_bits,
+                                                    &field_addr,
+                                                    field_set_barrier_needed,
+                                                    "class_field_set",
+                                                );
+                                                None
+                                            }
+                                        };
+                                        if let Some(numeric_value) = raw_stored_value {
+                                            let stored = LoweredValue {
+                                                semantic: SemanticKind::JsNumber,
+                                                rep: NativeRep::F64,
+                                                llvm_ty: DOUBLE,
+                                                value: numeric_value.clone(),
+                                            };
+                                            ctx.record_lowered_value_with_access_mode_and_facts(
+                                                "ClassFieldSet",
+                                                None,
+                                                "class_field_set.raw_f64_store",
+                                                &stored,
+                                                Some(BoundsState::Guarded {
+                                                    guard_id: "class_field_set_guard".to_string(),
+                                                }),
+                                                None,
+                                                Some(BufferAccessMode::CheckedNative),
+                                                None,
+                                                None,
+                                                None,
+                                                vec![raw_f64_layout_fact(
+                                                    None,
+                                                    "consumed",
+                                                    "class_field_set_guard",
+                                                    None,
+                                                )],
+                                                Vec::new(),
+                                                false,
+                                                false,
+                                                vec![
                                     format!("class={}", class_name),
                                     format!("class_id={}", expected_class_id_str),
                                     format!("field={}", property),
@@ -1573,19 +1449,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                                     "field_layout=raw_f64_slot_array".to_string(),
                                     "pointer_bitmap=non_pointer".to_string(),
                                 ],
-                                    );
-                                    ctx.record_lowered_value_with_access_mode(
-                                        "WriteBarrierElided",
-                                        None,
-                                        "write_barrier.elided_raw_f64_class_field",
-                                        &stored,
-                                        None,
-                                        None,
-                                        None,
-                                        None,
-                                        false,
-                                        false,
-                                        vec![
+                                            );
+                                            ctx.record_lowered_value_with_access_mode(
+                                                "WriteBarrierElided",
+                                                None,
+                                                "write_barrier.elided_raw_f64_class_field",
+                                                &stored,
+                                                None,
+                                                None,
+                                                None,
+                                                None,
+                                                false,
+                                                false,
+                                                vec![
                                     "reason=raw_f64_class_field_pointer_free".to_string(),
                                     format!("class={}", class_name),
                                     format!("class_id={}", expected_class_id_str),
@@ -1596,79 +1472,164 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                                     "field_layout=raw_f64_slot_array".to_string(),
                                     "pointer_bitmap=non_pointer".to_string(),
                                 ],
-                                    );
-                                }
-
-                                ctx.current_block = fallback_idx;
-                                super::store_census::bump(
-                                    ctx,
-                                    super::store_census::CFIELD_GUARD_FALLBACK,
-                                );
-                                let blk = ctx.block();
-                                // #5334 lever A: the guard already ran and FAILED in the
-                                // entry block, so this cold arm is a pure guard-miss
-                                // fallback. Outline the two operations it used to emit
-                                // inline (record_fallback + by-name set) into ONE
-                                // `js_class_field_set_fallback` call. Semantics are
-                                // byte-identical; only the emitted IR shrinks (cold path
-                                // → zero hot-loop cost). `obj_bits` keeps the full
-                                // NaN-box tag; `key_raw` is POINTER_MASK-stripped — the
-                                // same operands the two calls received.
-                                blk.call_void(
-                                    "js_class_field_set_fallback",
-                                    &[
-                                        (I64, &site_id),
-                                        (I64, &obj_bits),
-                                        (I64, &key_raw),
-                                        (DOUBLE, &val_double),
-                                    ],
-                                );
-                                blk.br(&merge_label);
-                                if requires_raw_f64 {
-                                    let fallback = LoweredValue {
-                                        semantic: SemanticKind::JsValue,
-                                        rep: NativeRep::JsValue,
-                                        llvm_ty: DOUBLE,
-                                        value: val_double.clone(),
+                                            );
+                                        }
                                     };
-                                    ctx.record_lowered_value_with_access_mode_and_facts(
-                                        "ClassFieldSet",
-                                        None,
-                                        "js_object_set_field_by_name",
-                                        &fallback,
-                                        Some(BoundsState::Unknown),
-                                        None,
-                                        Some(BufferAccessMode::DynamicFallback),
-                                        Some(MaterializationReason::RuntimeApi),
-                                        None,
-                                        None,
-                                        Vec::new(),
-                                        vec![
-                                            raw_f64_layout_fact(
-                                                None,
-                                                "rejected",
-                                                "class_field_set_guard",
-                                                Some(MaterializationReason::RuntimeApi),
-                                            ),
-                                            raw_f64_layout_fact(
-                                                None,
-                                                "invalidated",
-                                                "runtime_api",
-                                                Some(MaterializationReason::RuntimeApi),
-                                            ),
-                                        ],
-                                        false,
-                                        false,
-                                        vec![
-                                            format!("class={}", class_name),
-                                            format!("field={}", property),
-                                            format!("field_index={}", field_idx_str),
+
+                                ctx.current_block = fast_idx;
+                                emit_guarded_store(ctx, &obj_bits, &obj_handle, &val_double);
+                                let fast_end = ctx.block().label.clone();
+                                ctx.block().br(&merge_label);
+
+                                ctx.current_block = guardcall_idx;
+                                let cold_val = rooting::with_rooted_group(ctx, 2, |ctx, group| {
+                                    let receiver = group.adopt_emitted(
+                                        ctx,
+                                        rooting::Repr::Boxed,
+                                        &recv_box,
+                                        true,
+                                    );
+                                    let rhs = group.adopt_emitted(
+                                        ctx,
+                                        rooting::Repr::Boxed,
+                                        &val_double,
+                                        true,
+                                    );
+                                    let cold_fast_idx = ctx.new_block("class_field_set.cold_fast");
+                                    let cold_merge_idx =
+                                        ctx.new_block("class_field_set.cold_merge");
+                                    let cold_fast_label = ctx.block_label(cold_fast_idx);
+                                    let cold_merge_label = ctx.block_label(cold_merge_idx);
+                                    let guard_receiver = group.reread_emitted(ctx, receiver);
+                                    let guard_rhs = group.reread_emitted(ctx, rhs);
+                                    let key_raw = {
+                                        let blk = ctx.block();
+                                        let key_box = blk.load(DOUBLE, &key_handle_global);
+                                        let key_bits = blk.bitcast_double_to_i64(&key_box);
+                                        blk.and(I64, &key_bits, POINTER_MASK_I64)
+                                    };
+                                    super::store_census::bump(
+                                        ctx,
+                                        super::store_census::CFIELD_IC_CALL,
+                                    );
+                                    let guard_ok = ctx.block().call(
+                                        I32,
+                                        "js_typed_feedback_class_field_set_guard",
+                                        &[
+                                            (I64, &site_id),
+                                            (DOUBLE, &guard_receiver),
+                                            (I32, &expected_class_id_str),
+                                            (I32, &expected_shape_id),
+                                            (I64, &key_raw),
+                                            (I32, &field_idx_str),
+                                            (DOUBLE, &guard_rhs),
+                                            (I32, requires_raw_f64_str),
                                         ],
                                     );
-                                }
+                                    let guard_pass = ctx.block().icmp_ne(I32, &guard_ok, "0");
+                                    ctx.block().cond_br(
+                                        &guard_pass,
+                                        &cold_fast_label,
+                                        &fallback_label,
+                                    );
+
+                                    ctx.current_block = cold_fast_idx;
+                                    let cold_receiver = group.reread_emitted(ctx, receiver);
+                                    let cold_rhs = group.reread_emitted(ctx, rhs);
+                                    let cold_bits =
+                                        ctx.block().bitcast_double_to_i64(&cold_receiver);
+                                    let cold_handle =
+                                        ctx.block().and(I64, &cold_bits, POINTER_MASK_I64);
+                                    emit_guarded_store(ctx, &cold_bits, &cold_handle, &cold_rhs);
+                                    ctx.block().br(&cold_merge_label);
+
+                                    ctx.current_block = fallback_idx;
+                                    super::store_census::bump(
+                                        ctx,
+                                        super::store_census::CFIELD_GUARD_FALLBACK,
+                                    );
+                                    let fallback_receiver = group.reread_emitted(ctx, receiver);
+                                    let fallback_rhs = group.reread_emitted(ctx, rhs);
+                                    let blk = ctx.block();
+                                    let fallback_bits =
+                                        blk.bitcast_double_to_i64(&fallback_receiver);
+                                    let key_box = blk.load(DOUBLE, &key_handle_global);
+                                    let key_bits = blk.bitcast_double_to_i64(&key_box);
+                                    let fallback_key = blk.and(I64, &key_bits, POINTER_MASK_I64);
+                                    // #5334 lever A: the guard already ran and FAILED in the
+                                    // entry block, so this cold arm is a pure guard-miss
+                                    // fallback. Outline the two operations it used to emit
+                                    // inline (record_fallback + by-name set) into ONE
+                                    // `js_class_field_set_fallback` call. Semantics are
+                                    // byte-identical; only the emitted IR shrinks (cold path
+                                    // → zero hot-loop cost). The refreshed receiver retains its
+                                    // NaN-box tag and the freshly-loaded key is mask-stripped.
+                                    blk.call_void(
+                                        "js_class_field_set_fallback",
+                                        &[
+                                            (I64, &site_id),
+                                            (I64, &fallback_bits),
+                                            (I64, &fallback_key),
+                                            (DOUBLE, &fallback_rhs),
+                                        ],
+                                    );
+                                    blk.br(&cold_merge_label);
+                                    if requires_raw_f64 {
+                                        let fallback = LoweredValue {
+                                            semantic: SemanticKind::JsValue,
+                                            rep: NativeRep::JsValue,
+                                            llvm_ty: DOUBLE,
+                                            value: fallback_rhs.clone(),
+                                        };
+                                        ctx.record_lowered_value_with_access_mode_and_facts(
+                                            "ClassFieldSet",
+                                            None,
+                                            "js_object_set_field_by_name",
+                                            &fallback,
+                                            Some(BoundsState::Unknown),
+                                            None,
+                                            Some(BufferAccessMode::DynamicFallback),
+                                            Some(MaterializationReason::RuntimeApi),
+                                            None,
+                                            None,
+                                            Vec::new(),
+                                            vec![
+                                                raw_f64_layout_fact(
+                                                    None,
+                                                    "rejected",
+                                                    "class_field_set_guard",
+                                                    Some(MaterializationReason::RuntimeApi),
+                                                ),
+                                                raw_f64_layout_fact(
+                                                    None,
+                                                    "invalidated",
+                                                    "runtime_api",
+                                                    Some(MaterializationReason::RuntimeApi),
+                                                ),
+                                            ],
+                                            false,
+                                            false,
+                                            vec![
+                                                format!("class={}", class_name),
+                                                format!("field={}", property),
+                                                format!("field_index={}", field_idx_str),
+                                            ],
+                                        );
+                                    }
+
+                                    ctx.current_block = cold_merge_idx;
+                                    // A fallback setter can collect again. The assignment returns
+                                    // the saved RHS, even if user code overwrote its source binding.
+                                    Ok(group.reread_emitted(ctx, rhs))
+                                })?;
+                                let cold_end = ctx.block().label.clone();
+                                ctx.block().br(&merge_label);
 
                                 ctx.current_block = merge_idx;
-                                Ok(val_double)
+                                Ok(ctx.block().phi(
+                                    DOUBLE,
+                                    &[(&val_double, &fast_end), (&cold_val, &cold_end)],
+                                ))
                             },
                         );
                     }
@@ -1701,3 +1662,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
         _ => unreachable!("expr/mod.rs dispatched a variant not handled by this submodule"),
     }
 }
+
+#[cfg(test)]
+#[path = "collecting_root_tests.rs"]
+mod collecting_root_tests;

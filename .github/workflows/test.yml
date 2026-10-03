@@ -14,7 +14,7 @@ name: CI
 #                              + one pending, so a burst of merges is tested at
 #                              its tip). PR tier unscoped + medium-weight jobs.
 #   full   schedule / tags /   everything, incl. parity, compile-smoke,
-#          workflow_dispatch   doc-tests, package smokes, the 8-shard
+#          workflow_dispatch   doc-tests, package smokes, the 12-shard
 #          / label             auto-optimize gap suite. `full-suite-gate` is
 #                              what release-packages.yml waits for.
 #
@@ -314,6 +314,7 @@ jobs:
           python3 scripts/ci_plan.py --self-test
           python3 scripts/ci_pr_files.py --self-test
           python3 scripts/ci_cargo_test_shard.py --self-test
+          python3 scripts/ci_compile_smoke_shard.py --self-test
           python3 scripts/ci_cargo_test_shard.py --package perry \
             --total-shards "${{ fromJSON(needs.plan.outputs.plan).cargo_test_perry.total }}" \
             --validate
@@ -352,14 +353,14 @@ jobs:
         if: ${{ !cancelled() }}
         run: python3 scripts/test_capture_linux_incident.py
 
-      - name: Public benchmark evidence freshness
+      - name: Public benchmark harness tests
         if: ${{ !cancelled() }}
-        run: |
-          PYTHONPATH=. python3 tests/test_public_baseline.py
-          # README embedded table is optional since #6736 (marketing landing
-          # page); this wrapper still enforces artifact freshness + RESULTS.md
-          # drift. Kept out of public_baseline.py to preserve harness_fingerprint.
-          python3 benchmarks/ci_public_baseline_check.py
+        run: PYTHONPATH=. python3 tests/test_public_baseline.py
+
+      # Public benchmark evidence freshness is temporarily paused at
+      # maintainer request while compiler changes land. After a complete
+      # quiet-host baseline refresh, restore a step that runs:
+      # python3 benchmarks/ci_public_baseline_check.py
 
       # File-size gate (v0.5.1019): fails the PR if any tracked source
       # file exceeds the LOC threshold (5000 initially; eventual target
@@ -927,6 +928,7 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           ./scripts/gc_repsel_matrix.sh --self-test-liveness-parser
+          ./scripts/gc_repsel_matrix.sh --self-test-fixture-env
           python3 scripts/gc_repsel_matrix_merge.py --self-test
           python3 scripts/gc_matrix_liveness_check.py --self-test
           python3 scripts/gc_matrix_liveness_check.py --check-registry
@@ -1409,7 +1411,19 @@ jobs:
             # `function_apply_with_runtime_args_defers_to_a_located_aot_error`
             # pass.
             if printf '%s\n' "$scope" | grep -qE '^(perry|perry-stdlib)$'; then
-              cargo build --release -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static
+              if printf '%s\n' "$scope" | grep -qx 'perry' && [ "${{ needs.plan.outputs.tier }}" != "full" ]; then
+                # Sweep tier runs every perry integration target here, including
+                # the coherent-require fixtures. Prepare their providers in one
+                # graph outside the fixture's ten-minute spawnSync bound, else
+                # the fixture rebuilds the perry-dev graph and ETIMEDOUTs.
+                cargo build --release -p perry -p perry-runtime -p perry-stdlib \
+                  -p perry-runtime-static -p perry-stdlib-static \
+                  -p perry-ext-events -p perry-ext-http -p perry-ext-net \
+                  -p perry-ext-typescript -p perry-ext-ws -p perry-ext-zlib
+                export PERRY_TEST_RUNTIME_PREBUILT=1
+              else
+                cargo build --release -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static
+              fi
               export PERRY_RUNTIME_DIR="$PWD/target/release"
             fi
             find target/debug/deps -maxdepth 1 -type f -perm -111 ! -name '*.so' -delete 2>/dev/null || true
@@ -1590,7 +1604,7 @@ jobs:
 
       - name: Run perry integration shard ${{ matrix.shard }}
         env:
-          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C linker-features=-lld"
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C linker-features=-lld -C force-unwind-tables=yes -C force-frame-pointers=yes"
           CARGO_PROFILE_TEST_DEBUG: "0"
           CARGO_PROFILE_DEV_DEBUG: "0"
           SHARD: ${{ matrix.shard }}
@@ -1605,6 +1619,7 @@ jobs:
           shard_heartbeat_pid=$!
           trap 'kill "$shard_heartbeat_pid" 2>/dev/null || true' EXIT
 
+          node --test scripts/test-require-runtime.test.mjs
           mapfile -t test_targets < <(
             python3 scripts/ci_cargo_test_shard.py --package perry \
               --shard "$SHARD" --total-shards "$TOTAL_SHARDS"
@@ -1618,8 +1633,20 @@ jobs:
 
           # Match cargo-test's shipped panic semantics and provide the static
           # archives used by PERRY_NO_AUTO_OPTIMIZE=1 integration fixtures.
-          cargo build --release -p perry-runtime -p perry-stdlib \
-            -p perry-runtime-static -p perry-stdlib-static
+          if printf '%s\n' "${test_targets[@]}" | grep -qE '^(bun_text_modules|bun_embedded_compression|import_meta_require_value|minsize_inline_policy|child_output_late_iterator|async_resource_own_bind)$'; then
+            # Build the coherent require providers outside the fixture's
+            # ten-minute timeout, as the scoped integration job does.
+            # Otherwise fresh full-tier shards rebuild the perry-dev graph
+            # inside a bounded Node fixture and fail before running it.
+            cargo build --release -p perry -p perry-runtime -p perry-stdlib \
+              -p perry-runtime-static -p perry-stdlib-static \
+              -p perry-ext-events -p perry-ext-http -p perry-ext-net \
+              -p perry-ext-typescript -p perry-ext-ws -p perry-ext-zlib
+            export PERRY_TEST_RUNTIME_PREBUILT=1
+          else
+            cargo build --release -p perry-runtime -p perry-stdlib \
+              -p perry-runtime-static -p perry-stdlib-static
+          fi
           export PERRY_RUNTIME_DIR="$PWD/target/release"
           export CARGO_BUILD_JOBS=1
 
@@ -1812,8 +1839,7 @@ jobs:
               cargo build --release -p perry -p perry-runtime -p perry-stdlib \
                 -p perry-runtime-static -p perry-stdlib-static \
                 -p perry-ext-events -p perry-ext-http -p perry-ext-net \
-                -p perry-ext-typescript -p perry-ext-ws -p perry-ext-zlib \
-                --features perry-stdlib/external-net-pump
+                -p perry-ext-typescript -p perry-ext-ws -p perry-ext-zlib
               export PERRY_TEST_RUNTIME_PREBUILT=1
             else
               runtime_packages=(-p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static)
@@ -2976,7 +3002,7 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # gap-suite (was `conformance-smoke`): the gap suite, sharded. Runs in every
-  # tier -- 6 fast-mode shards on a PR, 3 in the sweep, 8 auto-optimize shards
+  # tier -- 6 fast-mode shards on a PR, 3 in the sweep, 12 auto-optimize shards
   # in the full tier (scripts/ci_plan.py GAP_SUITE). The `gate` fan-in below is
   # what branch protection requires; a single shard's red bubbles up through it.
   # ---------------------------------------------------------------------------
@@ -3057,7 +3083,7 @@ jobs:
     # protection requires. 2026-08-16: in the harness's default (auto-optimize)
     # mode 96% of a shard's wall time was ~10 tests at ~200 s each -- the
     # feature-stripped runtime rebuild per distinct feature set, redone in
-    # every shard. That mode is now the full tier's 8-shard arm; PR and sweep
+    # every shard. That mode is now the full tier's 12-shard arm; PR and sweep
     # tiers use `fast` mode against one prebuilt release build (~1.5 s/test).
     strategy:
       fail-fast: false
@@ -3475,14 +3501,23 @@ jobs:
 
 
   # ---------------------------------------------------------------------------
-  # Compile smoke test (all 130+ test files must compile)
+  # Compile smoke test (all top-level test files must compile)
   # ---------------------------------------------------------------------------
   compile-smoke:
+    name: compile-smoke (${{ matrix.shard }}/4)
     # Sweep/full-tier only. Chained behind `check` so a sweep's fan-out does
     # not take every runner slot the moment a merge lands -- PR gates share
     # the same 20-slot pool.
     needs: [plan, check]
     if: fromJSON(needs.plan.outputs.plan).jobs.compile_smoke
+    # The unsharded current-head job ran into the hosted six-hour limit while
+    # still compiling (run36914319295). Every top-level test stays assigned
+    # exactly once; each shard retains the default auto-optimize path.
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        shard: [1, 2, 3, 4]
     # Release-publish decoupling (see `parity` above): aspirational extended
     # suite, informational only — does not block package publishing.
     # Was macos-14 — moved to ubuntu-latest in v0.5.392. The smoke
@@ -3750,8 +3785,8 @@ jobs:
           # as a belt-and-suspenders safety net for any remaining race
           # corner the lock doesn't catch.
           NJOBS="${PERRY_SMOKE_JOBS:-6}"
-          printf '%s\n' test-files/*.ts \
-            | xargs -P "$NJOBS" -n 1 -I{} bash -c 'compile_one "$@"' _ {}
+          python3 scripts/ci_compile_smoke_shard.py --shard '${{ matrix.shard }}/4' \
+            | xargs -0 -r -P "$NJOBS" -I{} bash -c 'compile_one "$@"' _ {}
 
           # Count markers via shopt nullglob + bash array length. Pre-fix
           # we used `ls -1 "$LOGS_DIR"/*.fail | wc -l` which fails when
@@ -3794,7 +3829,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: compile-smoke-error-logs
+          name: compile-smoke-error-logs-${{ matrix.shard }}
           path: /tmp/perry_smoke_logs/*.compile_error.log
           if-no-files-found: ignore
 

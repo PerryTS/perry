@@ -330,14 +330,15 @@ pub(super) fn replace(
             let this = local.root_nanbox_f64(f64::from_bits(TAG_UNDEFINED));
             let copies = &mut copies;
             let value = call_native(replacement, &this, args, memory, |set| {
-                let matched = copies.copy(start, end, budget)?;
-                set(0, js_nanbox_string(matched as i64));
+                let matched = copies.copy_value(start, end, budget)?;
+                set(0, matched);
                 let mut slot = 1;
                 for pair in record[2..].as_chunks::<2>().0 {
                     // An unset capture is the `undefined` the slot already holds.
                     if pair[0] != u32::MAX {
-                        let capture = copies.copy(pair[0] as usize, pair[1] as usize, budget)?;
-                        set(slot, js_nanbox_string(capture as i64));
+                        let capture =
+                            copies.copy_value(pair[0] as usize, pair[1] as usize, budget)?;
+                        set(slot, capture);
                     }
                     slot += 1;
                 }
@@ -352,14 +353,14 @@ pub(super) fn replace(
             }
         } else {
             let mut args = List::new(&local)?;
-            let matched = copies.copy(start, end, budget)?;
-            args.push(js_nanbox_string(matched as i64), budget)?;
+            let matched = copies.copy_value(start, end, budget)?;
+            args.push(matched, budget)?;
             for pair in record[2..].as_chunks::<2>().0 {
                 if pair[0] == u32::MAX {
                     args.push(f64::from_bits(TAG_UNDEFINED), budget)?;
                 } else {
-                    let capture = copies.copy(pair[0] as usize, pair[1] as usize, budget)?;
-                    args.push(js_nanbox_string(capture as i64), budget)?;
+                    let capture = copies.copy_value(pair[0] as usize, pair[1] as usize, budget)?;
+                    args.push(capture, budget)?;
                 }
             }
             args.push(position as f64, budget)?;

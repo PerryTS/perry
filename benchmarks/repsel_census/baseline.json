@@ -2,6 +2,38 @@
   "schema_version": 1,
   "workloads": [
     {
+      "name": "fixture_ptr_shape_straight_line",
+      "role": "liveness",
+      "source": "benchmarks/repsel_census/fixtures/fixture_ptr_shape_straight_line.ts",
+      "floors": {
+        "ptr-shape": 1,
+        "ptr-shape-consumed": 1,
+        "ptr-numarray": 0,
+        "canonical-i32": 0,
+        "canonical-u32": 0,
+        "canonical-str": 0,
+        "int-valued-ta": 0,
+        "spec-abi-entry": 0,
+        "spec-abi-taptr-slot": 0
+      },
+      "candidates": {
+        "ptr-shape": 1,
+        "ptr-numarray": 0,
+        "canonical-slot": 0,
+        "int-valued-ta": 0,
+        "spec-abi": 1
+      },
+      "unconsumed_mechanisms": {},
+      "consumption_sites": {
+        "ptr_shape_get_number": 1,
+        "class_field_get_number.shape_proven_load": 1,
+        "ptr_shape_set": 1,
+        "ptr_shape_update": 1,
+        "ptr_shape_method": 1
+      },
+      "alloc_buckets": {}
+    },
+    {
       "name": "fixture_ptr_shape",
       "role": "liveness",
       "source": "benchmarks/repsel_census/fixtures/fixture_ptr_shape.ts",
@@ -23,11 +55,13 @@
         "int-valued-ta": 0,
         "spec-abi": 1
       },
-      "unconsumed_mechanisms": {},
+      "unconsumed_mechanisms": {
+        "region_shape_authority": 1
+      },
       "consumption_sites": {
-        "ptr_shape_get_number": 2,
-        "ptr_shape_set": 1,
-        "ptr_shape_method": 1
+        "ptr_shape_get_number": 1,
+        "ptr_shape_region_get": 1,
+        "ptr_shape_region_set": 1
       },
       "alloc_contexts": {},
       "alloc_buckets": {}
@@ -54,13 +88,13 @@
         "int-valued-ta": 0,
         "spec-abi": 1
       },
-      "unconsumed_mechanisms": {},
+      "unconsumed_mechanisms": {
+        "region_shape_authority": 1
+      },
       "consumption_sites": {
         "ptr_shape_get_number": 1,
-        "class_field_get_number.shape_proven_load": 1,
-        "ptr_shape_set": 1,
-        "ptr_shape_update": 1,
-        "ptr_shape_method": 1
+        "ptr_shape_region_get": 1,
+        "ptr_shape_region_set": 1
       },
       "alloc_contexts": {},
       "alloc_buckets": {}
@@ -73,7 +107,7 @@
         "ptr-shape": 3,
         "ptr-shape-consumed": 3,
         "ptr-numarray": 0,
-        "canonical-i32": 1,
+        "canonical-i32": 2,
         "canonical-u32": 0,
         "canonical-str": 0,
         "int-valued-ta": 0,
@@ -82,17 +116,19 @@
       },
       "candidates": {
         "ptr-shape": 3,
-        "ptr-numarray": 0,
-        "canonical-slot": 2,
+        "ptr-numarray": 1,
+        "canonical-slot": 3,
         "int-valued-ta": 0,
         "spec-abi": 1
       },
-      "unconsumed_mechanisms": {},
+      "unconsumed_mechanisms": {
+        "region_shape_authority": 2
+      },
       "consumption_sites": {
-        "ptr_shape_get_number": 3,
+        "class_field_get.shape_proven_load": 2,
         "ptr_shape_method": 1,
-        "class_field_get.shape_proven_load": 1,
-        "ptr_shape_set": 2
+        "ptr_shape_region_get": 2,
+        "ptr_shape_region_set": 2
       },
       "alloc_contexts": {},
       "alloc_buckets": {}
@@ -119,10 +155,12 @@
         "int-valued-ta": 0,
         "spec-abi": 0
       },
-      "unconsumed_mechanisms": {},
+      "unconsumed_mechanisms": {
+        "region_shape_authority": 1
+      },
       "consumption_sites": {
-        "class_field_get.shape_proven_load": 1,
-        "ptr_shape_set": 1
+        "ptr_shape_region_get": 1,
+        "ptr_shape_region_set": 1
       },
       "alloc_contexts": {},
       "alloc_buckets": {
@@ -838,5 +876,5 @@
       "alloc_buckets": {}
     }
   ],
-  "generated_at": "2026-08-02T04:34:29.412488Z"
+  "generated_at": "2026-10-02T20:15:04.218376Z"
 }
