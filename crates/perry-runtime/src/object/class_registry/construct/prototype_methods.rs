@@ -28,7 +28,14 @@ pub(crate) fn lookup_prototype_method(class_id: u32, name: &str) -> Option<f64> 
                     }
                 }
             }
-            match crate::object::class_generic_origin(cid).or_else(|| get_parent_class_id(cid)) {
+            // A relinked `C.prototype` no longer inherits from the parent
+            // class's prototype, so the parent's assignments are off its chain.
+            let next = match crate::object::class_generic_origin(cid) {
+                Some(origin) => Some(origin),
+                None if super::super::class_decl_prototype_relinked(cid) => None,
+                None => get_parent_class_id(cid),
+            };
+            match next {
                 Some(p) if p != 0 && p != cid => {
                     cid = p;
                     depth += 1;

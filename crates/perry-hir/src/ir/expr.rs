@@ -63,6 +63,14 @@ pub enum Expr {
     // Variables
     LocalGet(LocalId),
     LocalSet(LocalId, Box<Expr>),
+    /// Evaluate `value` once, bind its result only while evaluating `body`.
+    /// Unlike a statement local this also works inside field initializers.
+    /// Native codegen uses a reusable frame root, without a closure or heap box.
+    ScopedTemp {
+        id: LocalId,
+        value: Box<Expr>,
+        body: Box<Expr>,
+    },
     GlobalGet(GlobalId),
     GlobalSet(GlobalId, Box<Expr>),
     /// Dynamic object-environment read produced by `with (obj) { name }`.

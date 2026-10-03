@@ -2,6 +2,64 @@ use super::*;
 use std::fmt::Write as FmtWrite;
 
 impl JsEmitter {
+    /// Reconstruct the elementary optional-chain forms in JS parameter scope,
+    /// where a body-local temporary is inaccessible. Complex historical JS
+    /// default lowering is retained by the compiler-only substitution above.
+    fn emit_optional_parameter_default(&mut self, id: LocalId, value: &Expr, body: &Expr) -> bool {
+        let Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } = body
+        else {
+            return false;
+        };
+        if !matches!(then_expr.as_ref(), Expr::Undefined)
+            || !matches!(condition.as_ref(), Expr::Compare { op: CompareOp::LooseEq, left, right } if matches!(left.as_ref(), Expr::LocalGet(local) if *local == id) && matches!(right.as_ref(), Expr::Null))
+        {
+            return false;
+        }
+        let (access, args) = match else_expr.as_ref() {
+            Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } if matches!(object.as_ref(), Expr::LocalGet(local) if *local == id) => {
+                (else_expr.as_ref(), None)
+            }
+            Expr::Call { callee, args, .. } if matches!(callee.as_ref(), Expr::LocalGet(local) if *local == id) => {
+                (callee.as_ref(), Some(args))
+            }
+            Expr::Call { callee, args, .. } if matches!(callee.as_ref(), Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } if matches!(object.as_ref(), Expr::LocalGet(local) if *local == id)) => {
+                (callee.as_ref(), Some(args))
+            }
+            _ => return false,
+        };
+        self.output.push('(');
+        self.emit_expr(value);
+        self.output.push_str(")?.");
+        match access {
+            Expr::PropertyGet { property, .. } => {
+                self.output.push('[');
+                self.output.push_str(&self.quote_string(property));
+                self.output.push(']');
+            }
+            Expr::IndexGet { index, .. } => {
+                self.output.push('[');
+                self.emit_expr(index);
+                self.output.push(']');
+            }
+            _ => {}
+        }
+        if let Some(args) = args {
+            self.output.push('(');
+            for (index, arg) in args.iter().enumerate() {
+                if index != 0 {
+                    self.output.push_str(", ");
+                }
+                self.emit_expr(arg);
+            }
+            self.output.push(')');
+        }
+        true
+    }
+
     // --- Expression emission ---
 
     pub fn emit_expr(&mut self, expr: &Expr) {
@@ -47,6 +105,12 @@ impl JsEmitter {
 
             // --- Variables ---
             Expr::LocalGet(id) => {
+                if self.in_parameter_default {
+                    if let Some(value) = self.parameter_temp_values.get(id).cloned() {
+                        self.emit_expr(&value);
+                        return;
+                    }
+                }
                 let name = self.get_local_name(*id);
                 self.output.push_str(&name);
             }
@@ -55,6 +119,31 @@ impl JsEmitter {
                 let _ = write!(self.output, "({} = ", name);
                 self.emit_expr(val);
                 self.output.push(')');
+            }
+            Expr::ScopedTemp { id, value, body } => {
+                if self.in_parameter_default {
+                    if self.emit_optional_parameter_default(*id, value, body) {
+                        return;
+                    }
+                    // JS parameter defaults have their own lexical environment:
+                    // body-local lets cannot be used here. Preserve the previous
+                    // JS backend's expansion for complex shapes; native optional
+                    // syntax below handles simple defaults without duplication.
+                    let previous = self.parameter_temp_values.insert(*id, value.as_ref().clone());
+                    self.emit_expr(body);
+                    if let Some(previous) = previous {
+                        self.parameter_temp_values.insert(*id, previous);
+                    } else {
+                        self.parameter_temp_values.remove(id);
+                    }
+                    return;
+                }
+                let (value_name, result_name) = self.scoped_temp_names(*id);
+                let _ = write!(self.output, "({value_name} = ");
+                self.emit_expr(value);
+                let _ = write!(self.output, ", {result_name} = ");
+                self.emit_expr(body);
+                let _ = write!(self.output, ", {value_name} = undefined, {result_name})");
             }
             Expr::GlobalGet(id) => {
                 let name = self.get_global_name(*id);

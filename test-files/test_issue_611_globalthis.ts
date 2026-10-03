@@ -1,3 +1,4 @@
+// parity-env: PERRY_GLOBAL_SCRIPT_THIS=1
 // Issue #611 (Effect Utils.ts SIGSEGV) bisected to: globalThis[<computedKey>]
 // reads/writes were dropped — `(globalThis as any)[id] = m; (globalThis as
 // any)[id]` returned undefined instead of `m`. Effect's GlobalValue.ts uses

@@ -37,6 +37,12 @@ impl WasmModuleEmitter {
         // Scan body for local variable declarations
         let param_count = hir_func.params.len() as u32;
         let mut extra_locals = 0u32;
+        collect_param_locals(
+            &hir_func.params,
+            &mut local_map,
+            &mut extra_locals,
+            param_count,
+        );
         collect_locals(
             &hir_func.body,
             &mut local_map,
@@ -95,6 +101,7 @@ impl WasmModuleEmitter {
 
         // Scan body for additional locals
         let mut extra_locals = 0u32;
+        collect_param_locals(params, &mut local_map, &mut extra_locals, param_idx);
         collect_locals(body, &mut local_map, &mut extra_locals, param_idx);
 
         let temp_local_idx = param_idx + extra_locals;
@@ -130,6 +137,17 @@ impl WasmModuleEmitter {
 
         let param_count = 1 + ctor.params.len();
         let mut extra_locals = 0u32;
+        collect_param_locals(
+            &ctor.params,
+            &mut local_map,
+            &mut extra_locals,
+            param_count as u32,
+        );
+        for field in &class.fields {
+            if let Some(init) = &field.init {
+                collect_expr_locals(init, &mut local_map, &mut extra_locals, param_count as u32);
+            }
+        }
         collect_locals(
             &ctor.body,
             &mut local_map,
@@ -215,6 +233,12 @@ impl WasmModuleEmitter {
 
         let param_count = 1 + method.params.len();
         let mut extra_locals = 0u32;
+        collect_param_locals(
+            &method.params,
+            &mut local_map,
+            &mut extra_locals,
+            param_count as u32,
+        );
         collect_locals(
             &method.body,
             &mut local_map,
@@ -317,7 +341,9 @@ impl<'a> FuncEmitCtx<'a> {
     /// top-level `const xs = []` were pushing `I64Const(0)` into the temp — see
     /// Issue #133 item 3.
     pub(super) fn emit_local_or_global_get(&self, func: &mut Function, id: &LocalId) {
-        if let Some(&gidx) = self
+        if self.scoped_temp_ids.contains(id) {
+            func.instruction(&Instruction::LocalGet(self.local_map[id]));
+        } else if let Some(&gidx) = self
             .emitter
             .module_let_globals
             .get(&(self.emitter.current_mod_idx, *id))

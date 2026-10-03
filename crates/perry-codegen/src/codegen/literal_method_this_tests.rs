@@ -366,3 +366,67 @@ fn anon_shape_is_registered_before_its_shape_id_is_minted() {
         "js_register_anon_shape_class_id must run before the class ShapeId is minted"
     );
 }
+
+/// Cyclic imports can invoke hoisted functions before dependency bodies finish.
+/// Literal infrastructure must be ready then, without publishing declared-class
+/// keys/prototypes/constructors ahead of their existing evaluation boundary.
+#[test]
+fn cyclic_literal_bootstrap_precedes_dependencies_without_prewarming_user_classes() {
+    let mut hir = literal_module(method(METHOD, false, false));
+    hir.classes.push(anon_shape(2, "Declared", 91, 70));
+    let opts = CompileOptions {
+        emit_ir_only: true,
+        is_entry_module: false,
+        module_init_deps: vec!["consumer_ts".into()],
+        ..Default::default()
+    };
+    let ir = String::from_utf8(compile_module(&hir, opts).unwrap()).unwrap();
+    let body = |symbol: &str| {
+        let start = ir
+            .lines()
+            .find(|line| line.starts_with("define ") && line.contains(&format!("@{symbol}(")))
+            .unwrap();
+        let at = ir.find(start).unwrap();
+        &ir[at..at + ir[at..].find("\n}\n").unwrap()]
+    };
+    let wrapper = body("literal_method_this_test__init");
+    let prepare = wrapper
+        .find("@__perry_prepare_literals_literal_method_this_test")
+        .unwrap();
+    let dependency = wrapper.find("@consumer_ts__init()").unwrap();
+    let module_body = wrapper
+        .find("@literal_method_this_test__init_body")
+        .unwrap();
+    assert!(
+        prepare < dependency && dependency < module_body,
+        "{wrapper}"
+    );
+    assert_eq!(wrapper.matches("@js_run_module_init_catching(").count(), 2);
+    let prepare = body("__perry_prepare_literals_literal_method_this_test");
+    assert!(
+        prepare.contains("load i8") && prepare.contains("br i1"),
+        "{prepare}"
+    );
+    assert!(!prepare.contains("_class_chunk"), "{prepare}");
+    let literal_chunks = ir
+        .split("\n}\n")
+        .filter(|chunk| {
+            chunk.lines().any(|line| {
+                line.starts_with("define ")
+                    && line.contains("__perry_init_strings_literal_method_this_test_literal_chunk")
+            })
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(literal_chunks.contains("call void @js_register_anon_shape_class_id"));
+    assert!(literal_chunks.contains("@perry_class_keys_literal_method_this_test____AnonShape_"));
+    assert!(!literal_chunks.contains("@perry_class_keys_literal_method_this_test__Declared"));
+    assert!(!literal_chunks.contains("call void @js_register_class_constructor"));
+    assert!(!literal_chunks.contains("call void @js_register_class_getter"));
+    let strings = body("__perry_init_strings_literal_method_this_test");
+    assert!(
+        strings.find("@__perry_prepare_literals_").unwrap() < strings.find("_class_chunk").unwrap()
+    );
+    assert!(body("literal_method_this_test__init_body")
+        .contains("call void @__perry_init_strings_literal_method_this_test()"));
+}

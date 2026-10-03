@@ -147,3 +147,6 @@ mod max_width_tests {
         assert!(wasm.windows(symbol.len()).any(|bytes| bytes == symbol));
     }
 }
+
+#[cfg(test)]
+mod scoped_temp_tests;

@@ -34,7 +34,7 @@ pub(super) fn collect_closures_from_stmts(
                     collect_closures_from_stmts(eb, out);
                 }
             }
-            Stmt::While { condition, body } => {
+            Stmt::While { condition, body } | Stmt::DoWhile { condition, body } => {
                 collect_closures_from_expr(condition, out);
                 collect_closures_from_stmts(body, out);
             }
@@ -54,6 +54,9 @@ pub(super) fn collect_closures_from_stmts(
                     collect_closures_from_expr(u, out);
                 }
                 collect_closures_from_stmts(body, out);
+            }
+            Stmt::Labeled { body, .. } => {
+                collect_closures_from_stmts(std::slice::from_ref(body.as_ref()), out);
             }
             Stmt::Try {
                 body,
@@ -91,6 +94,10 @@ pub(super) fn collect_closures_from_expr(
     out: &mut Vec<(FuncId, Vec<Param>, Vec<Stmt>, Vec<LocalId>, Vec<LocalId>)>,
 ) {
     match expr {
+        Expr::ScopedTemp { value, body, .. } => {
+            collect_closures_from_expr(value, out);
+            collect_closures_from_expr(body, out);
+        }
         Expr::Closure {
             func_id,
             params,
@@ -106,7 +113,12 @@ pub(super) fn collect_closures_from_expr(
                 captures.clone(),
                 mutable_captures.clone(),
             ));
-            // Also collect nested closures
+            // Also collect nested closures, including parameter defaults.
+            for param in params {
+                if let Some(default) = &param.default {
+                    collect_closures_from_expr(default, out);
+                }
+            }
             collect_closures_from_stmts(body, out);
         }
         Expr::Call { callee, args, .. } => {

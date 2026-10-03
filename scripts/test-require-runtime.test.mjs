@@ -91,9 +91,10 @@ test('scoped CI prepares coherent providers for each standalone native consumer'
     for (const name of ['perry', 'perry-runtime', 'perry-stdlib', 'perry-runtime-static',
       'perry-stdlib-static', 'perry-ext-events', 'perry-ext-http', 'perry-ext-net',
       'perry-ext-typescript', 'perry-ext-ws', 'perry-ext-zlib']) {
-      assert(calls[0].includes(`-p ${name} `), name);
+      assert((calls[0] + " ").includes(`-p ${name} `), name);
     }
-    assert.match(calls[0], /--features perry-stdlib\/external-net-pump$/);
+    assert.doesNotMatch(calls[0], /--features(?:=| )/,
+      'shared prebuilt stdlib must retain the standalone require helper default feature graph');
   }
 });
 
@@ -120,6 +121,57 @@ test('scoped CI does not mark unrelated or partial runtime setup prepared', () =
 
 test('scoped CI propagates provider-build failure before declaring prepared', () => {
   const result = ciSetup('perry minsize_inline_policy 1500', 73);
+  assert.equal(result.status, 73, result.stderr);
+  assert.doesNotMatch(result.stdout, /^prepared:/m);
+});
+
+function shardSetup(targets, cargoExit = 0) {
+  const workflow = fs.readFileSync(path.join(root, '.github/workflows/test.yml'), 'utf8');
+  const shard = workflow.split('  cargo-test-perry:\n')[1]?.split('  # Scoped e2e:')[0];
+  assert(shard, 'full-tier integration shard must be present');
+  const setup = shard.match(/^ {10}if printf[\s\S]*?^ {10}export CARGO_BUILD_JOBS=1$/m);
+  assert(setup, 'full-tier runtime setup must be present');
+  assert(targets.every(name => /^[a-z0-9_]+$/.test(name)));
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('PERRY_')));
+  const script = `set -euo pipefail
+cargo() { printf 'cargo:%s\\n' "$*"; return ${cargoExit}; }
+test_targets=(${targets.join(' ')})
+${setup[0]}
+printf 'prepared:%s\\nruntime:%s\\n' "\${PERRY_TEST_RUNTIME_PREBUILT-unset}" "\${PERRY_RUNTIME_DIR-unset}"
+`;
+  return spawnSync('bash', ['-c', script], { cwd: root, env, encoding: 'utf8', timeout: 10_000 });
+}
+
+test('full-tier shards prepare every bounded require consumer before executing fixtures', () => {
+  for (const suite of ['bun_text_modules', 'bun_embedded_compression', 'import_meta_require_value',
+    'minsize_inline_policy', 'child_output_late_iterator', 'async_resource_own_bind']) {
+    const result = shardSetup(['issue_10274_request_proxy_headers', suite]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /prepared:1\n/, suite);
+    assert(result.stdout.includes(`runtime:${root}target/release\n`), result.stdout);
+    const calls = result.stdout.split('\n').filter(line => line.startsWith('cargo:'));
+    assert.equal(calls.length, 1);
+    for (const name of ['perry', 'perry-runtime', 'perry-stdlib', 'perry-runtime-static',
+      'perry-stdlib-static', 'perry-ext-events', 'perry-ext-http', 'perry-ext-net',
+      'perry-ext-typescript', 'perry-ext-ws', 'perry-ext-zlib']) {
+      assert((calls[0] + " ").includes(`-p ${name} `), name);
+    }
+    assert.doesNotMatch(calls[0], /--features(?:=| )/,
+      'shared prebuilt stdlib must retain the standalone require helper default feature graph');
+  }
+});
+
+test('full-tier shards never mark unrelated or partially named targets prepared', () => {
+  for (const targets of [['unrelated'], ['bun_embedded_compression_extra'], ['async_resource_own_bind_extra']]) {
+    const result = shardSetup(targets);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /prepared:unset\n/);
+    assert.doesNotMatch(result.stdout, /-p perry-ext-/);
+  }
+});
+
+test('full-tier shards stop on provider-build failure before declaring prepared', () => {
+  const result = shardSetup(['bun_embedded_compression'], 73);
   assert.equal(result.status, 73, result.stderr);
   assert.doesNotMatch(result.stdout, /^prepared:/m);
 });

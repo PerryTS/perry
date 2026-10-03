@@ -154,6 +154,7 @@ _CODEGEN_SUITES = [
     "static_symbol_hygiene",
     "string_array_length_9160",
     "temp_root_operand_temporaries",
+    "thread_immutable_globals",
     "typed_array_rmw_8692",
     "typed_array_update_lowering",
     "typed_shape_descriptor",

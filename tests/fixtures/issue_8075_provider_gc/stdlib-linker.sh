@@ -26,6 +26,8 @@ stdlib_provider_exports=(
   js_response_get_headers
   js_response_new
   js_stdlib_init_dispatch
+  js_stdlib_install_compiled
+  js_stdlib_register_feature_installer
   js_stream_unwrap_handle
 )
 
@@ -78,6 +80,10 @@ if [[ -n "$original_export_list" ]]; then
 fi
 
 if [[ "$saw_runtime_rlib" == true && "$host_os" == Darwin ]]; then
+  # The stdlib provider also links the runtime rlib, whose locale helpers
+  # call CoreFoundation and Objective-C. The runtime dylib's link flags do
+  # not propagate to this separate image.
+  arguments+=('-framework' 'CoreFoundation' '-framework' 'Foundation')
   arguments+=('-Wl,-rpath,@loader_path' '-Wl,-flat_namespace' '-Wl,-interposable')
 elif [[ "$saw_runtime_rlib" == true ]]; then
   # shellcheck disable=SC2016 # $ORIGIN must reach the ELF linker literally.

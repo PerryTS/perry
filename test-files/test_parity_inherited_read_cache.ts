@@ -76,9 +76,8 @@ function warm(read: () => unknown, n: number): unknown {
   // `Object.setPrototypeOf(o, null)` belongs here and is deliberately absent:
   // perry answers it from the prototype `o` was BORN with, because the generic
   // read falls back to the class registry when the recorded chain misses
-  // (#10827). That is a pre-existing divergence -- `PERRY_INHERITED_IC=0`
-  // prints the same wrong value -- and this cache declines the case, so
-  // asserting it here would make this file red for someone else's bug. Case 8
+  // (#10827). That is a pre-existing divergence in the generic getter, so
+  // asserting it here would make this file red for another bug. Case 8
   // covers a null prototype the receiver was born with, and 4c already proves
   // `setPrototypeOf` on the receiver invalidates an entry.
 }

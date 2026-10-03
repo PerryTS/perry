@@ -14,6 +14,10 @@
 use crate::{compile_module, AppMetadata, CompileOptions};
 use perry_hir::{Expr, Module, ModuleInitKind, Stmt};
 
+#[path = "front_contract_tests.rs"]
+mod front_contract;
+use front_contract::{front_call_block, verify_front_directory};
+
 fn ir_opts(debug_locations: bool, module_source: Option<&str>) -> CompileOptions {
     CompileOptions {
         static_shape_ids: Vec::new(),
@@ -21,6 +25,7 @@ fn ir_opts(debug_locations: bool, module_source: Option<&str>) -> CompileOptions
         target: None,
         is_entry_module: true,
         non_entry_module_prefixes: Vec::new(),
+        thread_literal_module_prefixes: Vec::new(),
         nextjs_path_init_modules: Vec::new(),
         import_function_prefixes: std::collections::HashMap::new(),
         import_function_ffi_aliases: std::collections::HashMap::new(),
@@ -570,7 +575,7 @@ fn generic_property_get_tries_ways_before_calling_the_miss_handler() {
         on_miss.starts_with("pic.miss.front"),
         "the compare's miss edge must reach the front (the ways) first: {token:?}"
     );
-    let (front_label, front) = tower_block(&blocks, "pic.miss.front");
+    let (front_label, front) = front_call_block(&blocks);
     assert!(
         front
             .iter()
@@ -707,7 +712,7 @@ fn a_spill_entry_is_served_by_the_leaf_front_before_the_slow_call() {
     use crate::expr::property_get::generic_dispatch::PACKED_SPILL_FLIP;
     let ir = emit(false, None);
     let blocks = tower_blocks(&ir);
-    let (front_label, front) = tower_block(&blocks, "pic.miss.front");
+    let (front_label, front) = front_call_block(&blocks);
     let call = front
         .iter()
         .find(|l| l.contains("@js_object_get_field_ic_front("))
@@ -1087,15 +1092,6 @@ fn generic_property_get_slot_load_is_reached_only_through_every_guard() {
         "the overflow-bit test must not gate the inline slot load — a spill \
          entry is refused by the ShapeId compare itself:\n{chain}"
     );
-    // The inherited-read hook (#10834/#10842) lives on the DECLINED edge. Its
-    // answer must never be a condition on the way to the own slot load: if it
-    // were, an own read would pay a call, and this walk would have collected
-    // the call's result in the chain.
-    assert!(
-        !chain.contains("js_inherited_read_cache_hit_f64"),
-        "the inherited-read hook must not gate the inline slot load:\n{chain}"
-    );
-
     // The GC header is not read on the way to the slot load at all: neither
     // the kind byte (#10828 closed rule 3 — a `+4` word equal to a live
     // ShapeId proves `GC_TYPE_OBJECT`) nor the descriptor flag (#10824 closed
@@ -1185,11 +1181,9 @@ fn generic_property_get_slot_load_is_reached_only_through_every_guard() {
         !blocks.iter().any(|(l, _)| l.starts_with("pic.way")),
         "no way block may be expanded per site:\n{func}"
     );
-    let front_body = blocks
-        .iter()
-        .find(|(l, _)| l.starts_with("pic.miss.front"))
-        .map(|(_, body)| body.join("\n"))
-        .expect("the miss front block");
+    let front_blocks = tower_blocks(&ir);
+    let (_, front) = front_call_block(&front_blocks);
+    let front_body = front.join("\n");
     let term = front_body
         .lines()
         .rev()
@@ -1514,6 +1508,9 @@ fn the_front_reads_its_directory_without_a_call_where_the_target_allows() {
             .split("\ndefine ")
             .find(|f| f.contains("\npic.miss.front"))
             .unwrap_or_else(|| panic!("{target}: no function contains the front:\n{ir}"));
+        let blocks = tower_blocks(&ir);
+        front_call_block(&blocks);
+        verify_front_directory(&blocks).unwrap_or_else(|e| panic!("{target}: {e}\n{func}"));
         let dir_call = func.contains("call ptr @perry_shape_dir_cell(");
         match inline_form {
             Some(form) => {
@@ -1621,7 +1618,6 @@ fn the_generic_tower_is_one_leaf_call_two_exits_and_a_bounded_number_of_blocks()
         .filter(|c| {
             c.starts_with("js_object_get_field")
                 || c.starts_with("js_typed_feedback_object_get_field")
-                || c.starts_with("js_inherited_read_cache")
                 || *c == "js_throw_type_error_property_access"
         })
         .collect();
@@ -1647,18 +1643,15 @@ fn the_generic_tower_is_one_leaf_call_two_exits_and_a_bounded_number_of_blocks()
         fronts[0].contains(" = call double "),
         "the front is nounwind, a plain call:\n{func}"
     );
-    // A non-`length` site confirms from this agent's own directory: the dir
-    // operand is slot 0 of `PERRY_AGENT_PTRS` (one initial-exec load in this
-    // ELF executable), never the empty directory a `length` site passes.
+    // A non-`length` site confirms from this agent's own directory: slot 0
+    // of the target's per-agent block, or the empty directory when Apple's
+    // direct TLS lookup is unavailable. Follow the actual call operand.
     assert!(
         !fronts[0].contains("@PERRY_EMPTY_SHAPE_DIR"),
         "only a `length` site passes the empty directory:\n{}",
         fronts[0]
     );
-    assert!(
-        func.contains("getelementptr i8, ptr @PERRY_AGENT_PTRS, i64 0"),
-        "the dir operand is PERRY_AGENT_PTRS slot 0:\n{func}"
-    );
+    verify_front_directory(&tower_blocks(&ir)).unwrap_or_else(|e| panic!("{e}\n{func}"));
 
     let blocks: Vec<&str> = func
         .lines()
@@ -1748,45 +1741,13 @@ fn a_spill_entry_is_recognised_by_the_front_and_nowhere_at_the_site() {
     );
 }
 
-/// The inherited-read cache (#10834/#10842) is asked on the NEVER-PRIMED edge
-/// and nowhere else. A read whose key lives on the prototype chain is never an
-/// own slot on the receiver's shape, so a site that only reads such a key never
-/// resolves its per-site cache. The first placement asked on EVERY path into
-/// the exit and charged each own-key miss a declining probe (+88 on a
-/// megamorphic site, +89 on a spill read, measured).
-///
-/// First-read D3: the probe moved into the slow entry
-/// (`js_object_get_field_ic_slow`, which asks it only when the site's cache
-/// slot is unresolved), behind the leaf front — so an own-key way, spill or
-/// latched read never reaches it, and the site expands none of it. Pinned
-/// here, each of which would otherwise fail silently (the program still
-/// computes the right value through the slow entry):
-///
-/// 1. no block of the site calls the hook — in particular none on a path to
-///    the inline slot load (the CFG-walk test asserts the same from the other
-///    side);
-/// 2. the slow entry is called from `pic.miss.call` only, with the same four
-///    operands (the never-primed test reads the cache slot);
-/// 3. `pic.miss.call` is reached from the front only on its `TAG_HOLE`
-///    decline, so a front-served read never pays the probe;
-/// 4. the merge takes the slow entry's value from `pic.miss.call`.
+/// The generic read's collecting slow entry belongs on the miss-front decline.
+/// Own-word and holder-shape hits bypass it. The call keeps all four operands,
+/// and the merge uses the value returned by that one miss entry.
 #[test]
-fn the_inherited_read_cache_is_asked_on_the_never_primed_edge_only() {
+fn the_generic_slow_read_is_called_only_after_the_front_declines() {
     let ir = emit(false, None);
     let blocks = tower_blocks(&ir);
-    // 1.
-    let holders: Vec<&str> = blocks
-        .iter()
-        .filter(|(_, body)| {
-            body.iter()
-                .any(|l| l.contains("@js_inherited_read_cache_hit_f64("))
-        })
-        .map(|(l, _)| l.as_str())
-        .collect();
-    assert!(
-        holders.is_empty(),
-        "the inherited hook belongs to the slow entry, not the site: {holders:?}"
-    );
     // 2.
     let slow_callers: Vec<(&str, &String)> = blocks
         .iter()
@@ -1811,7 +1772,7 @@ fn the_inherited_read_cache_is_asked_on_the_never_primed_edge_only() {
          slot and the packed word:\n{slow_line}"
     );
     // 3.
-    let (_, front) = tower_block(&blocks, "pic.miss.front");
+    let (_, front) = front_call_block(&blocks);
     let (cond, served, declined) = tower_cond_br(front);
     assert!(
         front

@@ -256,6 +256,11 @@ impl WasmModuleEmitter {
         }
 
         for func in &module.functions {
+            for param in &func.params {
+                if let Some(default) = &param.default {
+                    self.collect_strings_in_expr(default);
+                }
+            }
             self.collect_strings_in_stmts(&func.body);
         }
         for stmt in &module.init {
@@ -304,20 +309,40 @@ impl WasmModuleEmitter {
             }
             for method in &class.methods {
                 self.intern_string(&method.name);
+                for param in &method.params {
+                    if let Some(default) = &param.default {
+                        self.collect_strings_in_expr(default);
+                    }
+                }
                 self.collect_strings_in_stmts(&method.body);
             }
             for method in &class.static_methods {
                 self.intern_string(&method.name);
+                for param in &method.params {
+                    if let Some(default) = &param.default {
+                        self.collect_strings_in_expr(default);
+                    }
+                }
                 self.collect_strings_in_stmts(&method.body);
             }
             for (name, getter) in &class.getters {
                 self.intern_string(name);
                 self.intern_string(&format!("__get_{}", name));
+                for param in &getter.params {
+                    if let Some(default) = &param.default {
+                        self.collect_strings_in_expr(default);
+                    }
+                }
                 self.collect_strings_in_stmts(&getter.body);
             }
             for (name, setter) in &class.setters {
                 self.intern_string(name);
                 self.intern_string(&format!("__set_{}", name));
+                for param in &setter.params {
+                    if let Some(default) = &param.default {
+                        self.collect_strings_in_expr(default);
+                    }
+                }
                 self.collect_strings_in_stmts(&setter.body);
             }
             for field in &class.fields {
@@ -426,6 +451,10 @@ impl WasmModuleEmitter {
 
     pub(super) fn collect_strings_in_expr(&mut self, expr: &Expr) {
         match expr {
+            Expr::ScopedTemp { value, body, .. } => {
+                self.collect_strings_in_expr(value);
+                self.collect_strings_in_expr(body);
+            }
             Expr::String(s) => {
                 self.intern_string(s);
             }
@@ -454,7 +483,12 @@ impl WasmModuleEmitter {
                 self.collect_strings_in_expr(then_expr);
                 self.collect_strings_in_expr(else_expr);
             }
-            Expr::Closure { body, .. } => {
+            Expr::Closure { params, body, .. } => {
+                for param in params {
+                    if let Some(default) = &param.default {
+                        self.collect_strings_in_expr(default);
+                    }
+                }
                 self.collect_strings_in_stmts(body);
             }
             Expr::NativeMethodCall {

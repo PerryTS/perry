@@ -73,6 +73,39 @@ pub(super) fn resolve_source_module_idx(
     best.map(|(i, _)| i)
 }
 
+pub(super) fn collect_expr_locals(
+    expr: &Expr,
+    map: &mut BTreeMap<LocalId, u32>,
+    count: &mut u32,
+    offset: u32,
+) {
+    if matches!(expr, Expr::Closure { .. }) {
+        return;
+    }
+    if let Expr::ScopedTemp { id, .. } = expr {
+        if !map.contains_key(id) {
+            map.insert(*id, offset + *count);
+            *count += 1;
+        }
+    }
+    perry_hir::walker::walk_expr_children(expr, &mut |child| {
+        collect_expr_locals(child, map, count, offset)
+    });
+}
+
+pub(super) fn collect_param_locals(
+    params: &[Param],
+    map: &mut BTreeMap<LocalId, u32>,
+    count: &mut u32,
+    offset: u32,
+) {
+    for param in params {
+        if let Some(default) = &param.default {
+            collect_expr_locals(default, map, count, offset);
+        }
+    }
+}
+
 pub(super) fn collect_locals(
     stmts: &[Stmt],
     map: &mut BTreeMap<LocalId, u32>,
@@ -81,28 +114,52 @@ pub(super) fn collect_locals(
 ) {
     for stmt in stmts {
         match stmt {
-            Stmt::Let { id, .. } if !map.contains_key(id) => {
-                map.insert(*id, offset + *count);
-                *count += 1;
+            Stmt::Let { id, init, .. } => {
+                if !map.contains_key(id) {
+                    map.insert(*id, offset + *count);
+                    *count += 1;
+                }
+                if let Some(init) = init {
+                    collect_expr_locals(init, map, count, offset);
+                }
+            }
+            Stmt::Expr(expr) | Stmt::Throw(expr) => collect_expr_locals(expr, map, count, offset),
+            Stmt::Return(expr) => {
+                if let Some(expr) = expr {
+                    collect_expr_locals(expr, map, count, offset);
+                }
             }
             Stmt::If {
+                condition,
                 then_branch,
                 else_branch,
-                ..
             } => {
+                collect_expr_locals(condition, map, count, offset);
                 collect_locals(then_branch, map, count, offset);
-                if let Some(eb) = else_branch {
-                    collect_locals(eb, map, count, offset);
+                if let Some(body) = else_branch {
+                    collect_locals(body, map, count, offset);
                 }
             }
-            Stmt::While { body, .. } => {
+            Stmt::While { condition, body } | Stmt::DoWhile { condition, body } => {
+                collect_expr_locals(condition, map, count, offset);
                 collect_locals(body, map, count, offset);
             }
-            Stmt::For { init, body, .. } => {
-                if let Some(init_stmt) = init {
-                    collect_locals(std::slice::from_ref(init_stmt.as_ref()), map, count, offset);
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
+                if let Some(init) = init {
+                    collect_locals(std::slice::from_ref(init.as_ref()), map, count, offset);
+                }
+                for expr in [condition, update].into_iter().flatten() {
+                    collect_expr_locals(expr, map, count, offset);
                 }
                 collect_locals(body, map, count, offset);
+            }
+            Stmt::Labeled { body, .. } => {
+                collect_locals(std::slice::from_ref(body.as_ref()), map, count, offset)
             }
             Stmt::Try {
                 body,
@@ -110,21 +167,28 @@ pub(super) fn collect_locals(
                 finally,
             } => {
                 collect_locals(body, map, count, offset);
-                if let Some(c) = catch {
-                    if let Some((id, _)) = &c.param {
+                if let Some(catch) = catch {
+                    if let Some((id, _)) = &catch.param {
                         if !map.contains_key(id) {
                             map.insert(*id, offset + *count);
                             *count += 1;
                         }
                     }
-                    collect_locals(&c.body, map, count, offset);
+                    collect_locals(&catch.body, map, count, offset);
                 }
-                if let Some(f) = finally {
-                    collect_locals(f, map, count, offset);
+                if let Some(body) = finally {
+                    collect_locals(body, map, count, offset);
                 }
             }
-            Stmt::Switch { cases, .. } => {
+            Stmt::Switch {
+                discriminant,
+                cases,
+            } => {
+                collect_expr_locals(discriminant, map, count, offset);
                 for case in cases {
+                    if let Some(test) = &case.test {
+                        collect_expr_locals(test, map, count, offset);
+                    }
                     collect_locals(&case.body, map, count, offset);
                 }
             }
@@ -462,5 +526,50 @@ pub(super) fn resolve_export_to_func(
         find_local_fn(name)
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod scoped_collection_tests {
+    use super::*;
+
+    fn capture(id: LocalId) -> Expr {
+        Expr::ScopedTemp {
+            id,
+            value: Box::new(Expr::Number(1.0)),
+            body: Box::new(Expr::LocalGet(id)),
+        }
+    }
+
+    #[test]
+    fn parameter_default_capture_preserves_parameter_slots() {
+        let param = Param {
+            id: 2,
+            name: "arg".into(),
+            ty: perry_hir::types::Type::Any,
+            default: Some(capture(3)),
+            decorators: vec![],
+            is_rest: false,
+            arguments_object: None,
+        };
+        let mut map = BTreeMap::from([(2, 0)]);
+        let mut count = 0;
+        collect_param_locals(&[param], &mut map, &mut count, 1);
+        assert_eq!(map, BTreeMap::from([(2, 0), (3, 1)]));
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn closure_captures_belong_to_the_closure_activation() {
+        let ast =
+            perry_parser::parse_typescript("const closure = () => get()?.value;", "scoped.ts")
+                .unwrap();
+        let module = perry_hir::lower::lower_module(&ast, "scoped", "scoped.ts").unwrap();
+        let mut map = BTreeMap::new();
+        let mut count = 0;
+        collect_locals(&module.init, &mut map, &mut count, 0);
+        // The declaration belongs here; the closure's ScopedTemp does not.
+        assert_eq!(count, 1);
+        assert_eq!(map.len(), 1);
     }
 }

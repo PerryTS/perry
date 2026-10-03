@@ -119,27 +119,6 @@ fn static_of(word: u64) -> usize {
     }
 }
 
-/// The accessor a pair VALUE holds, without re-proving that it is one — for a
-/// cache hit whose entry proved it at prime time (the holder's key is an
-/// accessor, and a slot of an accessor key is written only by an accessor
-/// install, which transitions the holder's ShapeId).
-///
-/// # Safety
-/// `value` is a NaN-boxed pointer to a pair.
-#[inline(always)]
-pub(crate) unsafe fn pair_of_value_unchecked(value: u64) -> Accessor {
-    let w = crate::array::array_elements_ptr((value & POINTER_MASK) as *const ArrayHeader);
-    let (raw_get_word, raw_set_word) = (*w.add(PAIR_RAW_GET), *w.add(PAIR_RAW_SET));
-    Accessor {
-        get: closure_of(*w.add(PAIR_GET)),
-        set: closure_of(*w.add(PAIR_SET)),
-        raw_get: raw_of(raw_get_word),
-        raw_set: raw_of(raw_set_word),
-        static_get: static_of(raw_get_word),
-        static_set: static_of(raw_set_word),
-    }
-}
-
 #[inline]
 fn closure_word(bits: u64) -> u64 {
     if bits == 0 {
@@ -210,6 +189,35 @@ pub(crate) unsafe fn pair_of_value(value: u64) -> Option<Accessor> {
         static_get: static_of(raw_get_word),
         static_set: static_of(raw_set_word),
     })
+}
+
+/// The compiled INSTANCE getter at an already-proved accessor slot, or
+/// `Some(0)` for a setter-only pair (whose read is `undefined`). A class
+/// accessor site's hit needs neither closure nor static-entry decoding.
+/// The pair's tag, GC kind and length are still checked on every hit because
+/// the slot's value may be replaced without a holder ShapeId transition.
+///
+/// # Safety
+/// `value` is the slot value of a key proved to carry `ENTRY_ACCESSOR`.
+#[inline]
+pub(crate) unsafe fn raw_instance_getter_of_value(value: u64) -> Option<usize> {
+    if value & TAG_MASK != POINTER_TAG {
+        return None;
+    }
+    let pair = (value & POINTER_MASK) as *const ArrayHeader;
+    let header = crate::value::addr_class::try_read_gc_header(pair as usize)?;
+    if header.obj_type != crate::gc::GC_TYPE_ARRAY || (*pair).length as usize != PAIR_LEN {
+        return None;
+    }
+    let w = crate::array::array_elements_ptr(pair);
+    let raw_get = raw_of(*w.add(PAIR_RAW_GET));
+    let raw_set = raw_of(*w.add(PAIR_RAW_SET));
+    // A compiled setter does not make a closure getter callable through
+    // the raw getter ABI. Let the generic accessor path invoke that closure.
+    if raw_get == 0 && closure_of(*w.add(PAIR_GET)) != 0 {
+        return None;
+    }
+    (raw_get != 0 || raw_set != 0).then_some(raw_get)
 }
 
 /// The accessor stored in `obj`'s slot for key position `pos`.

@@ -318,7 +318,7 @@ codegen-units = 1
 codegen-units = 1
 
 [workspace.package]
-version = "0.5.1654"
+version = "0.5.1656"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/PerryTS/perry"
@@ -352,11 +352,11 @@ swc_ecma_ast = "19.0"
 swc_ecma_visit = "19.0"
 swc_common = "18.0"
 swc_ecma_codegen = "21.0"
-swc_bundler = "37.0"
-swc_ecma_loader = "18.0"
+swc_bundler = "56.0"
+swc_ecma_loader = "27.0"
 swc_ecma_transforms_base = "32.0"
-swc_ecma_transforms_react = "35.0"
-swc_ecma_transforms_typescript = "35.0"
+swc_ecma_transforms_react = "55.0"
+swc_ecma_transforms_typescript = "55.0"
 
 # Runtime dependencies
 # bdwgc for garbage collection (Boehm GC)
@@ -507,7 +507,7 @@ rustls-pemfile = "2"
 socket2 = "0.6"
 futures-util = "0.3"
 url = "2"
-dirs = "6"
+dirs = "7"
 
 # .env file loading (for publish command)
 

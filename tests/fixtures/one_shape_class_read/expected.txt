@@ -1,0 +1,12 @@
+class-absent 0
+after-gc 0
+own-shadow 500
+prototype-add 8200
+prototype-value 10400
+prototype-delete 500
+object-prototype-add 12600
+object-prototype-delete 500
+first-terminal 500
+first-terminal-add 14800
+second-terminal 500
+second-terminal-add 19200

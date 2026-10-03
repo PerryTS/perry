@@ -81,9 +81,8 @@ fn numeric_key_on_a_declared_array_keeps_the_guarded_array_tier() {
     );
 }
 
-#[test]
-fn numeric_layout_oob_array_read_returns_undefined_inline() {
-    let ir = ir_for(
+fn numeric_layout_oob_array_read_ir() -> String {
+    ir_for(
         "numeric_layout_oob_array_read",
         vec![
             Stmt::Let {
@@ -115,7 +114,12 @@ fn numeric_layout_oob_array_read_returns_undefined_inline() {
                 }),
             },
         ],
-    );
+    )
+}
+
+#[test]
+fn numeric_layout_oob_array_read_returns_undefined_inline() {
+    let ir = numeric_layout_oob_array_read_ir();
     assert!(
         ir.contains("arr.guard.oob") && ir.contains("9222246136947933185"),
         "a numeric-layout OOB read must inline the undefined tag:\n{ir}"
@@ -123,6 +127,58 @@ fn numeric_layout_oob_array_read_returns_undefined_inline() {
     assert!(
         ir.contains("arr.guard.numeric_in_bounds"),
         "only the in-bounds arm may require the numeric element-layout proof:\n{ir}"
+    );
+}
+
+#[test]
+fn instrumented_numeric_array_read_keeps_handle_phi_first() {
+    // Census enablement is cached process-wide. Use a fresh test process so
+    // this test also exercises the instrument when the suite defaults to OFF.
+    const CHILD: &str = "NUMERIC_PHI_TEST_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let current = std::thread::current();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([current.name().unwrap(), "--exact", "--test-threads=1"])
+            .env(CHILD, "1")
+            .env("PERRY_STORE_CENSUS", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "instrumented array read failed: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+        return;
+    }
+    assert!(super::store_census::enabled());
+    let ir = numeric_layout_oob_array_read_ir();
+    let mut in_fast = false;
+    let mut instructions = Vec::new();
+    for line in ir.lines() {
+        if !line.starts_with(char::is_whitespace) && line.ends_with(':') {
+            if in_fast {
+                break;
+            }
+            in_fast = line.starts_with("arr.fast.");
+        } else if in_fast && !line.trim().is_empty() {
+            instructions.push(line.trim());
+        }
+    }
+    assert!(!instructions.is_empty(), "numeric fast route absent:\n{ir}");
+    assert!(
+        instructions[0].contains(" = phi i64 ")
+            && instructions[0].contains("%arr.guard.numeric_in_bounds.")
+            && instructions[0].contains("%arr.guard.cold."),
+        "the admitted inline/cold handles must merge before any ordinary instruction: {instructions:?}"
+    );
+    assert!(
+        instructions
+            .iter()
+            .skip(1)
+            .any(|line| line.contains("@PERRY_STORE_CENSUS")),
+        "the fast route's census must actually be emitted: {instructions:?}"
     );
 }
 
