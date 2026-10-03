@@ -1,4 +1,34 @@
-PRIVATE OLD-HOLE PAYLOAD PROBE READY — 2026-10-03 22:16Z
+FRESH MAIN FOUR-CASE COMPARISON VERIFIED — 2026-10-03 22:25Z
+All12fresh builds succeed;72/72 runs are Node-correct and independently
+verified against source, nine actual compiler/static products, binaries, raw
+RSS/perf counters and recomputed signed summaries. 187raw files copied and
+rehashed locally. Baseline2026ecfe; production runtime6c761801fa; private
+entry6e311851fa. Full-runtime subset, not full17normal-auto acceptance.
+
+Rebased production versus main (RSS/instructions/minor faults):
+TS262.000->258.078MiB, -1.497% / -2.479% / +28.613%;
+Zod27.867->28.066MiB, +0.715% / -0.240% / -0.327%;
+requests66.828->64.586MiB, -3.355% / -0.714% / -6.014%;
+strings224.688->212.832MiB, -5.276% / -0.162% / +5.153%.
+Do not relabel old c170 measurements as these new-main results.
+
+PRIVATE collection-entry policy versus rebased production:
+TS258.078->240.785MiB, -6.701% RSS / -0.186% instructions / +13.186% faults;
+Zod +0.167% RSS / +0.049% instructions / +0.151% faults;
+requests +0.502% RSS / +0.078% instructions / -0.053% faults;
+strings -0.202% RSS / +0.068% instructions / +0.056% faults.
+The useful TS gain still needs full17normal-auto and actual moving acceptance.
+This policy remains UNAPPLIED; all ranges and signed costs remain published.
+TS RSS ranges: main254.438..262.121; proposal247.941..258.305;
+entry240.012..240.988MiB. No automatic statistical acceptance verdict.
+
+Rebased MacFFI75/events15pass, plus5FFIdoc tests (13ignored), independently
+bound to4999source inputs and terminal0. Source runtime/proposal unchanged.
+Normal-auto799887 and old-hole build943752 still live/queued on the shared
+heavy lock. Further memory work targets large old free spans; no claim that
+radical RSS reduction, every cost improvement or an absolute minimum is done.
+
+PRIVATE OLD-HOLE PAYLOAD PROBE READY — 2026-10-03 22:14Z
 Separate privated1a45c55d7 (four paths), UNAPPLIED. Full-state constructor
 advises only already-listed large old free spans, including budgeted fulls
 once per cycle. Headers and intrusive links remain; consumed holes disappear
@@ -16,7 +46,7 @@ Linux build/test943752queued behind live jobs. Review patch/Mac proof published.
 Current TypeScript base/gc builds finished; entry variant's51LLVMunits finished
 and linking is in progress. No private application RSS result claimed yet.
 
-PRIVATE ENTRY POLICY LINUX TESTS COMPLETE — 2026-10-03 22:06Z
+PRIVATE ENTRY POLICY LINUX TESTS COMPLETE — 2026-10-03 22:05Z
 Private6e311851fa Linux4862/0/5passes, including the real mincore subject:
 aged empty Eden pages leave RSS; fresh/recent/in-use pages and reused data
 remain intact; mapping/bitmap/age stay unchanged. 4999 tracked inputs, six
