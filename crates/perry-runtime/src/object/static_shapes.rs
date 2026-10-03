@@ -252,12 +252,35 @@ pub(crate) fn finalize_constfn_static(
         // Validation only reads inline data and Rust-owned metadata; it cannot collect.
         return object;
     };
-    // This mint does not canonicalize/allocate GC keys or enter JS. Its
-    // summary/hash/slab path allocates only Rust-owned Box/Vec storage and
-    // contains no safepoint or deferred-GC lock drop. The raw keys argument
-    // is therefore consumed without collection; the rooted object owns its
-    // keys throughout. A collecting interner must root/reload the argument
-    // inside the mint, not rely on the validation below.
+    let requested = Some(requested).filter(|&id| id != 0);
+    // A record already under the requested id (the seed's, or a worker's
+    // installed seed) is the only shape this receiver may take under that
+    // id. The mint would either hit it by facts or abort on the miss, and a
+    // miss is reachable from an ordinary receiver: equal key NAMES in a
+    // different keys array. Compare the complete record here instead; a match
+    // is stamped without minting, anything else is a refusal that leaves the
+    // receiver untouched.
+    if let Some((id, existing)) =
+        requested.and_then(|id| shapes::shape_descriptor_by_id(id).map(|d| (id, d)))
+    {
+        return root.with_mut_ptr::<super::ObjectHeader, _>(|obj| {
+            if final_record_names_receiver(&existing, &current, count, live, rep, &infos) {
+                // SAFETY: `obj` is the rooted receiver validated above;
+                // nothing between that validation and here can collect.
+                unsafe { shapes::stamp_object_shape_id_with_carrier_note(obj, id) };
+                note_static_request("finalized-constfn", id, id);
+            }
+            obj as usize as u64
+        });
+    }
+    // The mint must be treated as a collection point: the GC call-effects
+    // classifier cannot prove it non-collecting (the key-attribute and
+    // keys-array resolvers reach a collector). The receiver is therefore
+    // rooted across it and re-read below. The raw keys argument is the rooted
+    // receiver's keys array; if a collection inside the mint moved it, the
+    // minted record names the old address, and the identity check after the
+    // mint refuses instead of stamping it. No record sits under `requested`
+    // (checked above), so the adoption cannot be refused.
     let (minted, obj) = root.across_mut::<super::ObjectHeader, _>(|| {
         shapes::final_shape_ensure_constfn(
             current.keys as usize as *const ArrayHeader,
@@ -266,7 +289,7 @@ pub(crate) fn finalize_constfn_static(
             class_id,
             rep,
             &infos,
-            Some(requested).filter(|&id| id != 0),
+            requested,
         )
     });
     // Reload and revalidate after the mint; no closure address spans it.
@@ -274,30 +297,43 @@ pub(crate) fn finalize_constfn_static(
         unsafe { finalized_constfn_facts(obj, packed, count, live, class_id, rep, &infos, rebuilt) }
     {
         if let Ok(id) = minted {
-            // The interner compares every fact on its by-facts hit and aborts
-            // a conflicting requested-id adoption. Still check the complete
-            // record here, including learned deprecation, before publication.
+            // Still check the complete record here, including learned
+            // deprecation, before publication.
             if shapes::shape_descriptor_by_id(id).is_some_and(|d| {
-                d.keys == current.keys
-                    && d.logical_key_count == count
-                    && d.live_inline_slot_count == live
-                    && d.proto_id == current.proto_id
-                    && d.object_kind == current.object_kind
-                    && d.semantic_generation == 0
-                    && d.hole_count == 0
-                    && d.summary == 0
-                    && d.rep == rep
-                    && d.deprecation_targets() == (0, 0)
-                    && d.special_constfn_mask
-                        == infos.iter().fold(0, |mask, i| mask | (1 << i.slot))
-                    && d.constfn_infos() == infos
+                final_record_names_receiver(&d, &current, count, live, rep, &infos)
             }) {
                 unsafe { shapes::stamp_object_shape_id_with_carrier_note(obj, id) };
-                note_static_request("finalized-constfn", requested, id);
+                note_static_request("finalized-constfn", requested.unwrap_or(0), id);
             }
         }
     }
     obj as usize as u64
+}
+
+/// Whether the shape record `d` describes the validated receiver `current`
+/// with the finalized ConstFn facts: the same keys array (identity, not just
+/// equal names), bounds, prototype and kind, a birth record with no learned
+/// deprecation, and exactly the requested bodies.
+fn final_record_names_receiver(
+    d: &shapes::ShapeDescriptor,
+    current: &shapes::ShapeDescriptor,
+    count: u32,
+    live: u32,
+    rep: u64,
+    infos: &[shapes::ConstFnSlotInfo],
+) -> bool {
+    d.keys == current.keys
+        && d.logical_key_count == count
+        && d.live_inline_slot_count == live
+        && d.proto_id == current.proto_id
+        && d.object_kind == current.object_kind
+        && d.semantic_generation == 0
+        && d.hole_count == 0
+        && d.summary == 0
+        && d.rep == rep
+        && d.deprecation_targets() == (0, 0)
+        && d.special_constfn_mask == infos.iter().fold(0, |mask, i| mask | (1 << i.slot))
+        && d.constfn_infos() == infos
 }
 
 /// No getter, proxy, or user code runs during this validation. All slots are

@@ -1496,8 +1496,7 @@ fn lower_new_impl_inner<'a>(
                 // for the final slot (mirrors method_has_rest, #672).
                 // Field initializers / an inlined constructor body were lowered
                 // between the instance allocation and here, so refresh again.
-                lowered_args = refresh_rooted_args(ctx, group)?;
-                let marshalled = marshal_imported_ctor_args(ctx, &ctor, &lowered_args, group);
+                let marshalled = marshal_imported_ctor_args(ctx, &ctor, lowered_args.len(), group)?;
                 let ctor_param_types: Vec<crate::types::LlvmType> = std::iter::once(DOUBLE)
                     .chain(marshalled.iter().map(|_| DOUBLE))
                     .collect();
@@ -1525,10 +1524,10 @@ fn lower_new_impl_inner<'a>(
                 // Initializers, argument packing and class-value lookup may
                 // collect. The rooted this-slot also owns any replacement this.
                 let ctor_this = ctx.block().load(DOUBLE, &this_slot);
-                let marshalled: Vec<_> = marshalled
+                let marshalled = marshalled
                     .iter()
                     .map(|arg| arg.reread(ctx, group))
-                    .collect();
+                    .collect::<Result<Vec<_>>>()?;
                 let mut ctor_args = vec![(DOUBLE, ctor_this.as_str())];
                 ctor_args.extend(marshalled.iter().map(|arg| (DOUBLE, arg.as_str())));
                 let _ = ctx.block().call(DOUBLE, &ctor.symbol, &ctor_args);
@@ -1539,8 +1538,7 @@ fn lower_new_impl_inner<'a>(
                 // slot into an array when the ctor's last param is `...rest`.
                 // Field initializers / an inlined constructor body were lowered
                 // between the instance allocation and here, so refresh again.
-                lowered_args = refresh_rooted_args(ctx, group)?;
-                let marshalled = marshal_imported_ctor_args(ctx, &ctor, &lowered_args, group);
+                let marshalled = marshal_imported_ctor_args(ctx, &ctor, lowered_args.len(), group)?;
                 let ctor_param_types: Vec<crate::types::LlvmType> = std::iter::once(DOUBLE)
                     .chain(marshalled.iter().map(|_| DOUBLE))
                     .collect();
@@ -1565,10 +1563,10 @@ fn lower_new_impl_inner<'a>(
                 // Read after every collecting preparation step, immediately
                 // before dispatch; obj_box still holds the allocation address.
                 let ctor_this = ctx.block().load(DOUBLE, &this_slot);
-                let marshalled: Vec<_> = marshalled
+                let marshalled = marshalled
                     .iter()
                     .map(|arg| arg.reread(ctx, group))
-                    .collect();
+                    .collect::<Result<Vec<_>>>()?;
                 let mut ctor_args = vec![(DOUBLE, ctor_this.as_str())];
                 ctor_args.extend(marshalled.iter().map(|arg| (DOUBLE, arg.as_str())));
                 let ctor_ret = ctx.block().call(DOUBLE, &ctor.symbol, &ctor_args);

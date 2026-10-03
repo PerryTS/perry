@@ -337,6 +337,31 @@ pub(crate) fn cached_key_add_admits(target: u32, slot: u32, value_bits: Option<u
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Test seam: the number of [`publish_key_add_edge`] publications after
+    /// which a copying minor collection runs, modelling a mint that collects.
+    /// Only a test arms it; it is compiled out of every non-test build.
+    pub(crate) static TEST_COLLECT_AFTER_KEY_ADD_PUBLISH: std::cell::Cell<u32> =
+        const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn test_collect_after_publish() {
+    let armed = TEST_COLLECT_AFTER_KEY_ADD_PUBLISH.with(|c| {
+        let n = c.get();
+        c.set(n.saturating_sub(1));
+        n > 0
+    });
+    if armed {
+        crate::gc::gc_collect_minor();
+    }
+}
+
+#[cfg(not(test))]
+#[inline(always)]
+fn test_collect_after_publish() {}
+
 /// T2 at a slow-path key-add: publish the keys edge `new_keys`, which appends
 /// `slot`, with the successor's rep in the last publish. For F64 the final
 /// shape precedes the caller's value store. For ConstFn, an Any intermediate
@@ -366,23 +391,29 @@ pub(crate) unsafe fn publish_key_add_edge(
     inline: bool,
 ) -> u32 {
     let rep = key_add_rep(pred_rep, slot, value_bits, inline);
-    // A ConstFn birth may be minted only for an executable-image body. Root
-    // the closure across the structural Any publication, which can collect.
-    // The final SPECIAL shape is published only after the current closure
-    // has been written into the now traced Any slot.
+    // A ConstFn birth may be minted only for an executable-image body.
     let candidate = if inline && slot < REP_SLOTS && !super::dictionary::is_dictionary(obj) {
         value_bits.and_then(|bits| unsafe { constfn_store_info(bits) })
     } else {
         None
     };
-    let scope = candidate.map(|_| crate::gc::RuntimeHandleScope::new());
-    let value_root = scope
-        .as_ref()
+    // Every publication below mints, and the GC call-effects classifier
+    // cannot prove a mint non-collecting (the keys-array resolvers and the
+    // attribute lookup reach a collector), so each one is a collection point.
+    // Root the receiver and re-read it at every use after the first publish;
+    // root the closure too, so the ConstFn prewrite stores its current
+    // address. The final SPECIAL shape is published only after that closure
+    // has been written into the now traced Any slot.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_raw_mut_ptr(obj);
+    let value_root = candidate
         .zip(value_bits)
-        .map(|(scope, bits)| scope.root_nanbox_f64(f64::from_bits(bits)));
+        .map(|(_, bits)| scope.root_nanbox_f64(f64::from_bits(bits)));
     if inline && slot >= super::object_live_slot_count(obj) {
-        super::set_object_keys(obj, new_keys);
-        super::shapes::publish_object_live_slot_count_rep(obj, slot + 1, Some(rep));
+        receiver.with_mut_ptr(|obj| super::set_object_keys(obj, new_keys));
+        receiver.with_mut_ptr(|obj| {
+            super::shapes::publish_object_live_slot_count_rep(obj, slot + 1, Some(rep))
+        });
     } else {
         if slot_rep(rep, slot) == field_rep::REP_F64 {
             if let Some(bits) = value_bits.and_then(field_rep::f64_slot_bits) {
@@ -392,6 +423,7 @@ pub(crate) unsafe fn publish_key_add_edge(
         let live = super::object_live_slot_count(obj);
         super::set_object_keys_with_live_rep(obj, new_keys, live, rep);
     }
+    test_collect_after_publish();
     let fresh_bits = value_root
         .as_ref()
         .map(|root| root.get_nanbox_f64().to_bits())
@@ -403,19 +435,24 @@ pub(crate) unsafe fn publish_key_add_edge(
         // The current shape describes this slot as Any. The regular store
         // barrier makes the closure visible to a moving collection before
         // the body-specific shape is minted or stamped.
-        super::slot_store::store_object_field_slot(obj, slot as usize, bits);
+        receiver.with_mut_ptr(|obj| {
+            super::slot_store::store_object_field_slot(obj, slot as usize, bits)
+        });
     }
-    let id = publish_key_add_rep(obj, pred_rep, slot, fresh_bits, inline, constfn_info);
+    let id = receiver.with_mut_ptr(|obj| {
+        publish_key_add_rep(obj, pred_rep, slot, fresh_bits, inline, constfn_info)
+    });
+    test_collect_after_publish();
     let value_bits = value_root
         .as_ref()
         .map(|root| root.get_nanbox_f64().to_bits())
         .or(value_bits);
-    match value_bits {
+    receiver.with_mut_ptr(|obj| match value_bits {
         Some(bits) if inline && id != 0 && !crate::object::dictionary::is_dictionary(obj) => {
             converge_key_add(obj, id, slot, bits)
         }
         _ => id,
-    }
+    })
 }
 
 /// The fix-up after [`publish_key_add_edge`]: restamp `obj` to the successor

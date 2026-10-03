@@ -777,14 +777,24 @@ fn balanced_add_roots_left_intermediate_across_right_subtree() {
     });
 }
 
-fn imported_constructor_ir(walk_ancestor: bool, has_rest: bool, has_arguments: bool) -> String {
+/// `backstop == false` compiles without `root_reload`, so the IR is what the
+/// `new` lowering itself emits rather than what the whole-function reload pass
+/// repairs afterwards.
+fn imported_constructor_ir(
+    walk_ancestor: bool,
+    has_rest: bool,
+    has_arguments: bool,
+    backstop: bool,
+) -> String {
     let mut opts = crate::temp_root_coverage::entry_opts();
     opts.imported_classes.push(crate::ImportedClass {
         name: "WorkerMade".to_string(),
         local_alias: None,
         namespace: None,
         source_prefix: "worker_producer_ts".to_string(),
-        constructor_param_count: (usize::from(has_rest) + usize::from(has_arguments)).max(1),
+        // One positional parameter ahead of any packed slot, so every
+        // configuration dispatches a positional operand as well as arrays.
+        constructor_param_count: 1 + usize::from(has_rest) + usize::from(has_arguments),
         has_own_constructor: true,
         constructor_has_rest: has_rest,
         constructor_has_synthetic_arguments: has_arguments,
@@ -855,21 +865,24 @@ fn imported_constructor_ir(walk_ancestor: bool, has_rest: bool, has_arguments: b
         },
     ));
     let symbol = user_function_symbol(&module.name, "probe");
-    let ir =
-        String::from_utf8(compile_module(&module, opts).expect("imported ctor fixture compiles"))
-            .unwrap();
+    let previous = crate::root_reload::TEST_SKIP_ROOT_RELOAD.with(|skip| skip.replace(!backstop));
+    let compiled = compile_module(&module, opts);
+    crate::root_reload::TEST_SKIP_ROOT_RELOAD.with(|skip| skip.set(previous));
+    let ir = String::from_utf8(compiled.expect("imported ctor fixture compiles")).unwrap();
     function_slice(&ir, &symbol).to_string()
 }
 
 #[test]
 fn imported_constructor_receiver_refreshes_after_initializers_and_call_preparation() {
     crate::temp_root_coverage::under_both_lowerings(|mode| {
-        for walk_ancestor in [false, true] {
+        for (walk_ancestor, backstop) in
+            [(false, true), (true, true), (false, false), (true, false)]
+        {
             for (has_rest, has_arguments) in
                 [(false, false), (true, false), (false, true), (true, true)]
             {
                 let packed = has_rest || has_arguments;
-                let ir = imported_constructor_ir(walk_ancestor, has_rest, has_arguments);
+                let ir = imported_constructor_ir(walk_ancestor, has_rest, has_arguments, backstop);
                 let blocks = blocks(&ir);
                 let (entry, _) = block(&blocks, "entry.", &ir);
                 let cfg = ColdCfg {
@@ -884,11 +897,12 @@ fn imported_constructor_receiver_refreshes_after_initializers_and_call_preparati
                 let call = calls[0];
                 let operands = temp_slots::call_operands(call.text, ctor).unwrap();
                 let (this_slot, read) = cfg.slot_read(&operands[0], call);
-                // Fixed arguments keep their existing root; packed arrays
-                // must each own a distinct expression root through dispatch.
-                let fixed_arg = (!packed).then(|| cfg.slot_read(&operands[1], call));
+                // The positional argument is re-read from its root at
+                // dispatch; packed arrays must each own a distinct expression
+                // root through dispatch.
+                let fixed_arg = Some(cfg.slot_read(&operands[1], call));
                 let packed_reads: Vec<_> = if packed {
-                    operands[1..]
+                    operands[2..]
                         .iter()
                         .map(|arg| cfg.root_read(arg, call))
                         .collect()
@@ -990,6 +1004,60 @@ fn imported_constructor_receiver_refreshes_after_initializers_and_call_preparati
                                 "fixed argument reread follows collecting preparation",
                             );
                         }
+                    }
+                }
+                // Every value pushed into a packed array, and the positional
+                // operand at dispatch, is re-read from its root below every
+                // collecting call that precedes its use: the array allocation,
+                // each earlier push, and the class-value lookup.
+                let collecting = |site: &Site<'_>| {
+                    [
+                        "js_array_alloc",
+                        "js_array_push_f64",
+                        "js_array_push_f64_temp_rooted",
+                        "js_class_value",
+                    ]
+                    .iter()
+                    .any(|helper| site.text.contains(&format!("@{helper}(")))
+                };
+                let pushes: Vec<_> = cfg
+                    .sites()
+                    .into_iter()
+                    .filter_map(|site| {
+                        ["js_array_push_f64", "js_array_push_f64_temp_rooted"]
+                            .into_iter()
+                            .find(|helper| site.text.contains(&format!("@{helper}(")))
+                            .map(|helper| (site, helper))
+                    })
+                    .filter(|(site, _)| cfg.dominates(*site, call))
+                    .collect();
+                let expected_pushes = usize::from(has_rest) + 2 * usize::from(has_arguments);
+                assert_eq!(
+                    pushes.len(),
+                    expected_pushes,
+                    "{mode}: one push per packed element:\n{ir}"
+                );
+                let mut checked: Vec<(Site<'_>, Site<'_>)> = pushes
+                    .iter()
+                    .map(|(push, helper)| {
+                        let pushed = temp_slots::call_operands(push.text, helper).unwrap();
+                        (*push, cfg.slot_read(&pushed[1], *push).1)
+                    })
+                    .collect();
+                if let Some((_, arg_read)) = fixed_arg {
+                    checked.push((call, arg_read));
+                }
+                for (consumer, value_read) in checked {
+                    for site in cfg.sites().into_iter().filter(|site| {
+                        collecting(site)
+                            && !(site.label == consumer.label && site.index == consumer.index)
+                            && cfg.dominates(*site, consumer)
+                    }) {
+                        cfg.assert_before(
+                            site,
+                            value_read,
+                            "argument reread follows every collecting call before its use",
+                        );
                     }
                 }
                 for (slot, packed_read) in packed_reads {

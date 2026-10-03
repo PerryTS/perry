@@ -392,3 +392,95 @@ fn cached_constfn_key_add_preserves_preceding_f64_lane() {
         assert_eq!(capture_body(current, closure::JsThis::UNDEFINED), 43.0);
     }
 }
+
+/// M2 (#11680 audit): `publish_key_add_edge` treats every mint as a
+/// collection point for the RECEIVER as well as the closure. A copying minor
+/// after the structural publish (and, in the second run, also after the rep
+/// publish) moves the receiver; the ConstFn prewrite, the SPECIAL stamp and
+/// the convergence must all land on the moved object, and the evacuation
+/// verifier must find no from-space reference.
+#[test]
+fn slow_constfn_key_add_survives_collection_inside_each_publish() {
+    slow_key_add_with_collections("cfslowmv1", 1);
+    slow_key_add_with_collections("cfslowmv2", 2);
+}
+
+fn slow_key_add_with_collections(method_key: &str, collections: u32) {
+    let _guard = gc::CopyingNurseryTestGuard::new(0);
+    let _triggers = gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _forced = gc::knob_overrides::ForcedEvacuationTestGuard::on();
+    let _verify = gc::knob_overrides::VerifyEvacuationTestGuard::on();
+    gc::register_runtime_handle_root_scanner_for_tests();
+    gc::gc_register_mutable_root_scanner(crate::string::scan_intern_table_roots_mut);
+    gc::gc_register_mutable_root_scanner(object::scan_object_cache_roots_mut);
+    gc::gc_register_mutable_root_scanner(object::scan_shape_cache_roots_mut);
+    gc::gc_register_mutable_root_scanner(object::scan_transition_cache_roots_mut);
+    gc::gc_register_mutable_root_scanner(shapes::scan_shape_table_rekey_mut);
+    let previous =
+        gc::set_conservative_stack_scan_override(Some(gc::ConservativeStackScanMode::Disabled));
+    struct Restore(Option<gc::ConservativeStackScanMode>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            gc::set_conservative_stack_scan_override(self.0);
+            field_rep_store::TEST_COLLECT_AFTER_KEY_ADD_PUBLISH.with(|n| n.set(0));
+        }
+    }
+    let _restore = Restore(previous);
+    let scope = gc::RuntimeHandleScope::new();
+    unsafe {
+        let key = scope.root_raw_mut_ptr(key(method_key));
+        let method = scope.root_raw_mut_ptr(closure::js_closure_alloc(info(), 1));
+        method.with_mut_ptr(|m| closure::js_closure_set_capture_f64(m, 0, 41.0));
+        let obj = scope.root_raw_mut_ptr(object::js_object_alloc(0, 4));
+        let original = obj.with_mut_ptr::<ObjectHeader, _>(|o| o as usize);
+        assert!(crate::arena::pointer_in_nursery(original));
+        field_rep_store::TEST_COLLECT_AFTER_KEY_ADD_PUBLISH.with(|n| n.set(collections));
+        obj.with_mut_ptr(|o| {
+            key.with_mut_ptr(|k| {
+                object::js_object_set_field_by_name(
+                    o,
+                    k,
+                    f64::from_bits(method.with_mut_ptr(|m| bits(m))),
+                )
+            })
+        });
+        assert_eq!(
+            field_rep_store::TEST_COLLECT_AFTER_KEY_ADD_PUBLISH.with(|n| n.get()),
+            0,
+            "{method_key}: every armed collection must run inside the slow key-add"
+        );
+        assert_ne!(
+            obj.with_mut_ptr::<ObjectHeader, _>(|o| o as usize),
+            original,
+            "{method_key}: the receiver must move inside the publish"
+        );
+        let stamp = obj.with_mut_ptr(|o| shapes::object_shape_stamp(o));
+        let record = shapes::shape_descriptor_by_id(stamp).expect("stamped record");
+        assert_eq!(
+            record.special_constfn_mask, 1,
+            "{method_key}: the moved receiver must carry the ConstFn shape"
+        );
+        assert_eq!(
+            obj.with_mut_ptr(|o| field_rep_store::object_slot_rep(o, 0)),
+            field_rep::REP_SPECIAL
+        );
+        method.with_mut_ptr::<closure::ClosureHeader, _>(|m| {
+            assert_eq!(
+                obj.with_mut_ptr(|o| slot(o)) as usize,
+                m as usize,
+                "{method_key}: the moved receiver's slot must hold the current closure"
+            )
+        });
+        assert_eq!(
+            capture_body(obj.with_mut_ptr(|o| slot(o)), closure::JsThis::UNDEFINED),
+            41.0
+        );
+        obj.with_mut_ptr(|o| {
+            field_rep_store::assert_field_rep_lanes(o, shapes::object_shape_record(o), 1)
+        });
+        // One more evacuation: a stale SPECIAL slot or stamp left in
+        // from-space would surface here.
+        let (_, moved) = obj.across_mut::<ObjectHeader, _>(|| gc::gc_collect_minor());
+        assert_eq!(capture_body(slot(moved), closure::JsThis::UNDEFINED), 41.0);
+    }
+}
