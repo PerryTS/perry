@@ -1,0 +1,25 @@
+{
+  "kind": "Synthetic sabotage checks for the result verifier, not application results.",
+  "valid_matrix_cells": [
+    24,
+    204,
+    204
+  ],
+  "rejected_corruptions": [
+    "missing last cell",
+    "duplicate replaces required cell",
+    "wrong output despite correct flag",
+    "failed process despite correct flag",
+    "timeout despite zero status",
+    "binary changes between modes",
+    "missing RSS",
+    "NaN CPU",
+    "negative counter",
+    "missing fault counter",
+    "zero instructions",
+    "build digest exists but belongs to a different workload"
+  ],
+  "zero_baseline_percentage_remains_null": true,
+  "analyzer_sha256": "48da921922ecfa57ecb23813ddbd1eb3eb4f43a47aafd8a4a9cfa88a09ee7907",
+  "selftest_sha256": "f67097df3b09095889c5c84d08a7c9bd02602446321415aa78e5971fa9d4f16f"
+}
