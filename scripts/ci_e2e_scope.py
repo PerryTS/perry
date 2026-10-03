@@ -145,6 +145,7 @@ _CODEGEN_SUITES = [
     # no longer had to be there. Re-pointed at the property; 262/262 green, and
     # the suite belongs in the per-PR map rather than in the exclusions.
     "native_proof_regressions",
+    "concat_site_agent_ownership",
     "node_test_mock_property_presence",
     "perry_builtin_name_collision",
     "private_guard_declaring_class",
@@ -154,6 +155,7 @@ _CODEGEN_SUITES = [
     "static_symbol_hygiene",
     "string_array_length_9160",
     "temp_root_operand_temporaries",
+    "thread_agent_strings",
     "thread_immutable_globals",
     "typed_array_rmw_8692",
     "typed_array_update_lowering",
