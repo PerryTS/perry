@@ -1,0 +1,3149 @@
+{
+  "scope": "User instruction self samples; approximate attribution, not exact instruction deltas, elapsed time, or peak RSS.",
+  "records": [
+    {
+      "prefix": "gc-auto-current0ed-qb6-v17r1-partial",
+      "arm": "current0ed-base",
+      "case": "tscwork",
+      "repeat": 0,
+      "correct": true,
+      "symbol_sha256": "4bd339d95e3053d62fff6299afe0566655cd23307e8827dec67e4dfb19419a56",
+      "plain_sha256": "d3e6ac7d8c54453d92f1480f49acc34d44a50080ccaef8cf79bbccb00eff79ee",
+      "text_sha256": "ba00299dc7b75cad31c7e9f69bf7d1b3ca2e63ed0dc4936453a6d2873a4619c2",
+      "attribution": {
+        "event_count_approx": 61436000000,
+        "samples": 61436,
+        "lost_samples": 0,
+        "gc_self_samples": 48039,
+        "arena_self_samples": 1554,
+        "unresolved_samples": 24,
+        "top_symbols": [
+          {
+            "percent": 11.11,
+            "samples": 6823,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::trace::trace_heap_rewrite_slots::{closure#0}"
+          },
+          {
+            "percent": 8.02,
+            "samples": 4928,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::layout_slot_visit::visit_gc_rewrite_slots::<perry_runtime::gc::verify::remember_retained_old_to_young_slots::{closure#0}>::{closure#0}"
+          },
+          {
+            "percent": 7.43,
+            "samples": 4564,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::trace::trace_heap_rewrite_slots::{closure#0}::{closure#0}"
+          },
+          {
+            "percent": 6.4,
+            "samples": 3933,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::trace::ValidPointerSet>::contains"
+          },
+          {
+            "percent": 6.18,
+            "samples": 3798,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::verify::remember_evacuated_old_to_young_slot"
+          },
+          {
+            "percent": 5.39,
+            "samples": 3314,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::layout_slot_visit::visit_gc_layout_slot_descriptors.specialized.6"
+          },
+          {
+            "percent": 4.37,
+            "samples": 2687,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::layout_slot_visit::visit_gc_layout_slot_descriptors"
+          },
+          {
+            "percent": 3.49,
+            "samples": 2144,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::trace::ValidPointerSetBuilder>::step"
+          },
+          {
+            "percent": 3.01,
+            "samples": 1848,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::layout::child_slots::GcMutableSlotDescriptor>::visit_slots"
+          },
+          {
+            "percent": 2.48,
+            "samples": 1526,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::verify::remember_retained_old_to_young_slots"
+          },
+          {
+            "percent": 2.43,
+            "samples": 1493,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::layout_tables::per_object_slot_mask"
+          },
+          {
+            "percent": 2.42,
+            "samples": 1485,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] perry_runtime::object::shapes::note_old_generation_carrier"
+          },
+          {
+            "percent": 2.36,
+            "samples": 1448,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::barrier::remembered_child_needs_tracking"
+          },
+          {
+            "percent": 2.02,
+            "samples": 1240,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::cycle::GcCycleState>::step_sweep"
+          },
+          {
+            "percent": 1.46,
+            "samples": 898,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::trace::drain_trace_worklist_step"
+          },
+          {
+            "percent": 1.41,
+            "samples": 868,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::oldgen::sweep_objects::ArenaSweepObjectsState>::reclaim_dead_object"
+          },
+          {
+            "percent": 1.34,
+            "samples": 826,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::layout::child_slots::HeapChildSlotIterator>::new"
+          },
+          {
+            "percent": 1.02,
+            "samples": 625,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::types::gc_type_finalize_unmarked_payload"
+          },
+          {
+            "percent": 0.99,
+            "samples": 610,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::verify::remember_retained_old_to_young_slots::{closure#0}"
+          },
+          {
+            "percent": 0.98,
+            "samples": 604,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::verify::OldToYoungRememberedRebuildState>::step"
+          },
+          {
+            "percent": 0.83,
+            "samples": 511,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::dead_owner::PostTraceProbe>::owner_is_dead"
+          },
+          {
+            "percent": 0.62,
+            "samples": 378,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::trace::try_mark_raw_root_addr"
+          },
+          {
+            "percent": 0.61,
+            "samples": 376,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::arena::walk::ArenaObjectCursor>::ensure_current_block"
+          },
+          {
+            "percent": 0.55,
+            "samples": 338,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::barrier::leaf::decode_raw_pointer_candidate"
+          },
+          {
+            "percent": 0.49,
+            "samples": 299,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] js_object_get_field_ic_front"
+          },
+          {
+            "percent": 0.43,
+            "samples": 264,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] <hashbrown::raw::RawTable<(usize, alloc::vec::Vec<alloc::sync::Arc<perry_runtime::atomics_futex::Waiter>>)>>::remove_entry::<hashbrown::map::equivalent_key<usize, usize, alloc::vec::Vec<alloc::sync::Arc<perry_runtime::atomics_futex::Waiter>>>::{closure#0}>"
+          },
+          {
+            "percent": 0.38,
+            "samples": 233,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] perry_runtime::object::visit_overflow_field_slots_mut::<perry_runtime::gc::layout_slot_visit::visit_gc_rewrite_slot_descriptors_with<false, perry_runtime::gc::layout_slot_visit::visit_gc_rewrite_slots<perry_runtime::gc::verify::remember_retained_old_to_young_slots::{closure#0}>::{closure#0}>::{closure#2}>"
+          },
+          {
+            "percent": 0.37,
+            "samples": 230,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] js_closure_call1"
+          },
+          {
+            "percent": 0.34,
+            "samples": 209,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] perry_runtime::arena::page_meta::flush_deferred_old_page_registrations_batch"
+          },
+          {
+            "percent": 0.31,
+            "samples": 191,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] perry_runtime::arena::page_meta::old_page_account_swept_object"
+          },
+          {
+            "percent": 0.3,
+            "samples": 183,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::malloc::gc_malloc_header_is_tracked"
+          },
+          {
+            "percent": 0.29,
+            "samples": 181,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] perry_runtime::box::has_cell_type"
+          },
+          {
+            "percent": 0.27,
+            "samples": 164,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] perry_runtime::object::descriptor_state::get_accessor_descriptor"
+          },
+          {
+            "percent": 0.24,
+            "samples": 149,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::layout::child_slots::HeapChildSlotIterator as core::iter::traits::iterator::Iterator>::next"
+          },
+          {
+            "percent": 0.24,
+            "samples": 145,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::copying::CopyingNurseryCollector>::mark_addr"
+          },
+          {
+            "percent": 0.23,
+            "samples": 143,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::arena::page_meta::page_class::PageGenerationCacheSet>::insert"
+          },
+          {
+            "percent": 0.23,
+            "samples": 140,
+            "dso": "libc.so.6",
+            "symbol": "[.] __memcmp_evex_movbe"
+          },
+          {
+            "percent": 0.22,
+            "samples": 138,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] _mi_page_malloc_zero"
+          },
+          {
+            "percent": 0.22,
+            "samples": 136,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::trace::ValidPointerSetBuilder>::step_arena_walk"
+          },
+          {
+            "percent": 0.21,
+            "samples": 126,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] perry_runtime::object::object_ops::descriptor_helpers::define_property_force_store_value"
+          }
+        ]
+      },
+      "data_sha256": "a9e06e0f5856a3077da549e2e62e966b39b13e8eeedc2de430d127e009beaf56",
+      "report_sha256": "1e84db4f451ad601bbd899be322c49db2bc8b5ddd2f3c5d83da7342cdaaed2c2"
+    },
+    {
+      "prefix": "gc-auto-current0ed-qb6-v17r1-partial",
+      "arm": "current0ed-gc",
+      "case": "tscwork",
+      "repeat": 0,
+      "correct": true,
+      "symbol_sha256": "5548559d478a9bb933b75fc9ed38441296ad6c612163254c737be229b059f199",
+      "plain_sha256": "7b201d21972f1d846f52c0a0ef00e7b11c06cc2b3a080bbef6627b379c1de521",
+      "text_sha256": "22a39606c03c83f77cdebc6e1b0a4f39612ba64d4c1a44d2c5db13d5855149d8",
+      "attribution": {
+        "event_count_approx": 59695000000,
+        "samples": 59695,
+        "lost_samples": 0,
+        "gc_self_samples": 47770,
+        "arena_self_samples": 1505,
+        "unresolved_samples": 32,
+        "top_symbols": [
+          {
+            "percent": 8.72,
+            "samples": 5206,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::trace::trace_heap_rewrite_slots::{closure#0}::{closure#0}"
+          },
+          {
+            "percent": 7.97,
+            "samples": 4758,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::trace::trace_heap_rewrite_slots::{closure#0}"
+          },
+          {
+            "percent": 7.93,
+            "samples": 4734,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::layout_slot_visit::visit_gc_rewrite_slots::<perry_runtime::gc::verify::remember_retained_old_to_young_slots::{closure#0}>::{closure#0}"
+          },
+          {
+            "percent": 6.75,
+            "samples": 4028,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::layout_slot_visit::visit_gc_layout_slot_descriptors.specialized.6"
+          },
+          {
+            "percent": 6.56,
+            "samples": 3916,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::verify::remember_evacuated_old_to_young_slot"
+          },
+          {
+            "percent": 6.09,
+            "samples": 3637,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::layout_slot_visit::visit_gc_layout_slot_descriptors"
+          },
+          {
+            "percent": 5.81,
+            "samples": 3467,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::trace::ValidPointerSet>::contains"
+          },
+          {
+            "percent": 3.55,
+            "samples": 2118,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::trace::ValidPointerSetBuilder>::step"
+          },
+          {
+            "percent": 3.04,
+            "samples": 1813,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::layout::child_slots::GcMutableSlotDescriptor>::visit_slots"
+          },
+          {
+            "percent": 2.51,
+            "samples": 1496,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::layout_tables::per_object_slot_mask"
+          },
+          {
+            "percent": 2.42,
+            "samples": 1446,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::trace::drain_trace_worklist_step"
+          },
+          {
+            "percent": 2.35,
+            "samples": 1401,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::barrier::remembered_child_needs_tracking"
+          },
+          {
+            "percent": 2.19,
+            "samples": 1308,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::verify::remember_retained_old_to_young_slots"
+          },
+          {
+            "percent": 2.14,
+            "samples": 1280,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::cycle::GcCycleState>::step_sweep"
+          },
+          {
+            "percent": 1.44,
+            "samples": 859,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::oldgen::sweep_objects::ArenaSweepObjectsState>::reclaim_dead_object"
+          },
+          {
+            "percent": 1.3,
+            "samples": 778,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::layout::child_slots::HeapChildSlotIterator>::new"
+          },
+          {
+            "percent": 1.05,
+            "samples": 628,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::verify::remember_retained_old_to_young_slots::{closure#0}"
+          },
+          {
+            "percent": 0.99,
+            "samples": 593,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::types::gc_type_finalize_unmarked_payload"
+          },
+          {
+            "percent": 0.86,
+            "samples": 513,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::dead_owner::PostTraceProbe>::owner_is_dead"
+          },
+          {
+            "percent": 0.75,
+            "samples": 448,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::verify::OldToYoungRememberedRebuildState>::step"
+          },
+          {
+            "percent": 0.63,
+            "samples": 378,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::trace::try_mark_raw_root_addr"
+          },
+          {
+            "percent": 0.45,
+            "samples": 268,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::arena::walk::ArenaObjectCursor>::ensure_current_block"
+          },
+          {
+            "percent": 0.44,
+            "samples": 264,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] js_object_get_field_ic_front"
+          },
+          {
+            "percent": 0.43,
+            "samples": 256,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::barrier::leaf::decode_raw_pointer_candidate"
+          },
+          {
+            "percent": 0.41,
+            "samples": 247,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::arena::page_meta::storage::PageMetaMap>::get_or_insert"
+          },
+          {
+            "percent": 0.39,
+            "samples": 232,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] perry_runtime::object::visit_overflow_field_slots_mut::<perry_runtime::gc::layout_slot_visit::visit_gc_rewrite_slot_descriptors_with<false, perry_runtime::gc::layout_slot_visit::visit_gc_rewrite_slots<perry_runtime::gc::verify::remember_retained_old_to_young_slots::{closure#0}>::{closure#0}>::{closure#2}>"
+          },
+          {
+            "percent": 0.38,
+            "samples": 224,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] js_closure_call1"
+          },
+          {
+            "percent": 0.36,
+            "samples": 213,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] perry_runtime::arena::page_meta::flush_deferred_old_page_registrations_batch"
+          },
+          {
+            "percent": 0.32,
+            "samples": 189,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] perry_runtime::box::has_cell_type"
+          },
+          {
+            "percent": 0.3,
+            "samples": 179,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] <hashbrown::raw::RawTable<(usize, alloc::vec::Vec<alloc::sync::Arc<perry_runtime::atomics_futex::Waiter>>)>>::remove_entry::<hashbrown::map::equivalent_key<usize, usize, alloc::vec::Vec<alloc::sync::Arc<perry_runtime::atomics_futex::Waiter>>>::{closure#0}>"
+          },
+          {
+            "percent": 0.28,
+            "samples": 165,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::copying::CopyingNurseryCollector>::mark_addr"
+          },
+          {
+            "percent": 0.28,
+            "samples": 165,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] perry_runtime::object::descriptor_state::get_accessor_descriptor"
+          },
+          {
+            "percent": 0.27,
+            "samples": 161,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::malloc::gc_malloc_header_is_tracked"
+          },
+          {
+            "percent": 0.26,
+            "samples": 158,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::arena::page_meta::page_class::PageGenerationCacheSet>::insert"
+          },
+          {
+            "percent": 0.26,
+            "samples": 154,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::layout::child_slots::HeapChildSlotIterator as core::iter::traits::iterator::Iterator>::next"
+          },
+          {
+            "percent": 0.25,
+            "samples": 151,
+            "dso": "libc.so.6",
+            "symbol": "[.] __memcmp_evex_movbe"
+          },
+          {
+            "percent": 0.23,
+            "samples": 136,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::trace::ValidPointerSetBuilder>::step_arena_walk"
+          },
+          {
+            "percent": 0.2,
+            "samples": 120,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::copying::CopyingNurseryCollector>::scan_object_fields"
+          },
+          {
+            "percent": 0.2,
+            "samples": 117,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] js_native_call_method"
+          },
+          {
+            "percent": 0.2,
+            "samples": 117,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] perry_runtime::object::object_ops::descriptor_helpers::define_property_force_store_value"
+          }
+        ]
+      },
+      "data_sha256": "457e025bd400badaa1127f8385b4c80141c1ba2767f506f6932a2ac91f13fe36",
+      "report_sha256": "52d2f31258bd01d9b230f1e459c6f087eb08b7b94454489d747b614629c76a9f"
+    },
+    {
+      "prefix": "gc-auto-current0ed-qb6-v17r1-partial",
+      "arm": "current0ed-base",
+      "case": "zodwork",
+      "repeat": 0,
+      "correct": true,
+      "symbol_sha256": "3d5447165ee57f7104fd5a318a2200bde73da6ea16132a9f2228d5031607d124",
+      "plain_sha256": "0819c427d837eed8fe82810cc5a7455920a33dac2c51520a0d71a6272d8076cd",
+      "text_sha256": "47e8fba3eee9e9654f24d67ffc991ea618c67e09dfe54fba933ce4a52f767fc4",
+      "attribution": {
+        "event_count_approx": 916000000,
+        "samples": 916,
+        "lost_samples": 0,
+        "gc_self_samples": 63,
+        "arena_self_samples": 42,
+        "unresolved_samples": 0,
+        "top_symbols": [
+          {
+            "percent": 3.93,
+            "samples": 36,
+            "dso": "libc.so.6",
+            "symbol": "[.] __memcmp_evex_movbe"
+          },
+          {
+            "percent": 3.82,
+            "samples": 35,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] <core::hash::sip::Hasher<core::hash::sip::Sip13Rounds> as core::hash::Hasher>::write"
+          },
+          {
+            "percent": 3.49,
+            "samples": 32,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::class_registry::parent_static::method_owner_class_id"
+          },
+          {
+            "percent": 3.38,
+            "samples": 31,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::native_get::try_data_get_bytes"
+          },
+          {
+            "percent": 3.06,
+            "samples": 28,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::keys_lookup::keys_find_slot_by_bytes_resolved"
+          },
+          {
+            "percent": 2.73,
+            "samples": 25,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] js_function_bind"
+          },
+          {
+            "percent": 2.29,
+            "samples": 21,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] core::str::converts::from_utf8"
+          },
+          {
+            "percent": 2.07,
+            "samples": 19,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] js_method_site_miss"
+          },
+          {
+            "percent": 2.07,
+            "samples": 19,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::keys_lookup::keys_find_slot_by_bytes"
+          },
+          {
+            "percent": 1.97,
+            "samples": 18,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] js_class_method_bind"
+          },
+          {
+            "percent": 1.97,
+            "samples": 18,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] js_typed_feedback_native_call_method"
+          },
+          {
+            "percent": 1.97,
+            "samples": 18,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::closure::dynamic_props::is_closure_ptr"
+          },
+          {
+            "percent": 1.75,
+            "samples": 16,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::closure::props::object_own_get"
+          },
+          {
+            "percent": 1.53,
+            "samples": 14,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::arena::allocators::arena_alloc"
+          },
+          {
+            "percent": 1.53,
+            "samples": 14,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::arena::allocators::arena_alloc"
+          },
+          {
+            "percent": 1.31,
+            "samples": 12,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::class_registry::state::class_decl_prototype_object"
+          },
+          {
+            "percent": 1.2,
+            "samples": 11,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] <std::hash::random::RandomState as core::hash::BuildHasher>::hash_one::<&str>"
+          },
+          {
+            "percent": 1.2,
+            "samples": 11,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::class_registry::parent_static::is_registered_class_prototype_object"
+          },
+          {
+            "percent": 1.09,
+            "samples": 10,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::spill::overflow_get"
+          },
+          {
+            "percent": 0.98,
+            "samples": 9,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] <std::thread::local::LocalKey<core::cell::RefCell<std::collections::hash::map::HashMap<usize, u32, perry_runtime::fast_hash::PtrHasher>>>>::with::<perry_runtime::object::native_module::callable_exports::builtin_closure_metadata::builtin_closure_length::{closure#0}, core::option::Option<u32>>"
+          },
+          {
+            "percent": 0.98,
+            "samples": 9,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] _mi_page_malloc_zero"
+          },
+          {
+            "percent": 0.98,
+            "samples": 9,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] js_object_get_own_field_or_undef"
+          },
+          {
+            "percent": 0.98,
+            "samples": 9,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] js_string_from_bytes_with_capacity"
+          },
+          {
+            "percent": 0.98,
+            "samples": 9,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::typed_feedback::guard_observe"
+          },
+          {
+            "percent": 0.87,
+            "samples": 8,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::shapes::shape_descriptor_intern_with_special_mode"
+          },
+          {
+            "percent": 0.76,
+            "samples": 7,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::copying::CopyingNurseryCollector>::mark_classified"
+          },
+          {
+            "percent": 0.76,
+            "samples": 7,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] js_native_call_method"
+          },
+          {
+            "percent": 0.76,
+            "samples": 7,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] js_object_get_field"
+          },
+          {
+            "percent": 0.76,
+            "samples": 7,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] mi_theap_malloc_aligned"
+          },
+          {
+            "percent": 0.76,
+            "samples": 7,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] node_modules_zod_lib_index_mjs__ZodType_constructor"
+          },
+          {
+            "percent": 0.76,
+            "samples": 7,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] perry_method_node_modules_zod_lib_index_mjs__ZodObject___parse"
+          },
+          {
+            "percent": 0.76,
+            "samples": 7,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::closure::dynamic_props::closure_get_dynamic_prop_keyed"
+          },
+          {
+            "percent": 0.76,
+            "samples": 7,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::canonical_keys::probe_node"
+          },
+          {
+            "percent": 0.76,
+            "samples": 7,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::field_get_set::get_field_by_name::get_field_by_name_past_data_probe"
+          },
+          {
+            "percent": 0.66,
+            "samples": 6,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::copying::CopyingNurseryCollector>::mark_addr"
+          },
+          {
+            "percent": 0.66,
+            "samples": 6,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] <std::hash::random::RandomState as core::hash::BuildHasher>::hash_one::<&(u32, alloc::string::String)>"
+          },
+          {
+            "percent": 0.66,
+            "samples": 6,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::gc::barrier_store::runtime_store_jsvalue_slot_layout_deferred"
+          },
+          {
+            "percent": 0.66,
+            "samples": 6,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::class_registry::class_meta::class_name_for_id"
+          },
+          {
+            "percent": 0.66,
+            "samples": 6,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::field_set_by_name::tail::set_field_by_name_object_tail"
+          },
+          {
+            "percent": 0.66,
+            "samples": 6,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::set::is_registered_set"
+          }
+        ]
+      },
+      "data_sha256": "d640988cbca23ffcb56fedca14b74636dac7fbf894c29e152900b9f913d5c312",
+      "report_sha256": "c823f8a66dd4bdf7316464afc8b402b87d87150343a990cabad4cd5bb45045d1"
+    },
+    {
+      "prefix": "gc-auto-current0ed-qb6-v17r1-partial",
+      "arm": "current0ed-gc",
+      "case": "zodwork",
+      "repeat": 0,
+      "correct": true,
+      "symbol_sha256": "884c5adfe26165b4d5e28cd7eb6409d5acd91f4e78481be502663894ee847170",
+      "plain_sha256": "ac293400554dbdd36340b831233e398f0d3c57fb3ea438007ae12d01e138288f",
+      "text_sha256": "6ef0888a289f54cb65421f1f0ee622bf3f2a9e2875e02369b0cb95ce574355c2",
+      "attribution": {
+        "event_count_approx": 922000000,
+        "samples": 922,
+        "lost_samples": 0,
+        "gc_self_samples": 66,
+        "arena_self_samples": 35,
+        "unresolved_samples": 2,
+        "top_symbols": [
+          {
+            "percent": 4.23,
+            "samples": 39,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] <core::hash::sip::Hasher<core::hash::sip::Sip13Rounds> as core::hash::Hasher>::write"
+          },
+          {
+            "percent": 3.69,
+            "samples": 34,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::class_registry::parent_static::method_owner_class_id"
+          },
+          {
+            "percent": 3.58,
+            "samples": 33,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::keys_lookup::keys_find_slot_by_bytes_resolved"
+          },
+          {
+            "percent": 3.04,
+            "samples": 28,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::native_get::try_data_get_bytes"
+          },
+          {
+            "percent": 2.71,
+            "samples": 25,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] js_function_bind"
+          },
+          {
+            "percent": 2.71,
+            "samples": 25,
+            "dso": "libc.so.6",
+            "symbol": "[.] __memcmp_evex_movbe"
+          },
+          {
+            "percent": 2.49,
+            "samples": 23,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::closure::dynamic_props::is_closure_ptr"
+          },
+          {
+            "percent": 2.39,
+            "samples": 22,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::arena::allocators::arena_alloc"
+          },
+          {
+            "percent": 2.06,
+            "samples": 19,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::keys_lookup::keys_find_slot_by_bytes"
+          },
+          {
+            "percent": 1.84,
+            "samples": 17,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] core::str::converts::from_utf8"
+          },
+          {
+            "percent": 1.74,
+            "samples": 16,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] js_method_site_miss"
+          },
+          {
+            "percent": 1.63,
+            "samples": 15,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] js_native_call_method"
+          },
+          {
+            "percent": 1.63,
+            "samples": 15,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] js_typed_feedback_native_call_method"
+          },
+          {
+            "percent": 1.52,
+            "samples": 14,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] js_class_method_bind"
+          },
+          {
+            "percent": 1.41,
+            "samples": 13,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::closure::props::object_own_get"
+          },
+          {
+            "percent": 1.41,
+            "samples": 13,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::spill::overflow_get"
+          },
+          {
+            "percent": 1.3,
+            "samples": 12,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::field_get_set::accessors::own_data_field_by_name"
+          },
+          {
+            "percent": 1.19,
+            "samples": 11,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::shapes::shape_descriptor_intern_with_special_mode"
+          },
+          {
+            "percent": 1.19,
+            "samples": 11,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::proxy::private_element_receiver"
+          },
+          {
+            "percent": 1.08,
+            "samples": 10,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] <std::hash::random::RandomState as core::hash::BuildHasher>::hash_one::<&str>"
+          },
+          {
+            "percent": 1.08,
+            "samples": 10,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::class_registry::state::class_decl_prototype_object"
+          },
+          {
+            "percent": 0.98,
+            "samples": 9,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::copying::CopyingNurseryCollector>::mark_classified"
+          },
+          {
+            "percent": 0.98,
+            "samples": 9,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] _mi_page_malloc_zero"
+          },
+          {
+            "percent": 0.98,
+            "samples": 9,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] mi_theap_malloc_aligned"
+          },
+          {
+            "percent": 0.98,
+            "samples": 9,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] node_modules_zod_lib_index_mjs__ZodType_constructor"
+          },
+          {
+            "percent": 0.98,
+            "samples": 9,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::field_set_by_name::tail::set_field_by_name_object_tail"
+          },
+          {
+            "percent": 0.87,
+            "samples": 8,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::copying::CopyingNurseryCollector>::mark_addr"
+          },
+          {
+            "percent": 0.87,
+            "samples": 8,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] js_object_get_own_field_or_undef"
+          },
+          {
+            "percent": 0.87,
+            "samples": 8,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] js_object_set_field"
+          },
+          {
+            "percent": 0.87,
+            "samples": 8,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::field_get_set::ic_miss::private_evaluation_brand_value"
+          },
+          {
+            "percent": 0.87,
+            "samples": 8,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::shapes::shape_object_kind_by_id"
+          },
+          {
+            "percent": 0.76,
+            "samples": 7,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::alloc::object_alloc_class_inline_keys_impl"
+          },
+          {
+            "percent": 0.76,
+            "samples": 7,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::keys_lookup::keys_array_dense_slots"
+          },
+          {
+            "percent": 0.65,
+            "samples": 6,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] js_string_from_bytes_with_capacity"
+          },
+          {
+            "percent": 0.65,
+            "samples": 6,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] perry_method_node_modules_zod_lib_index_mjs__ZodObject___parse"
+          },
+          {
+            "percent": 0.65,
+            "samples": 6,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::closure::dynamic_props::closure_get_dynamic_prop_keyed"
+          },
+          {
+            "percent": 0.65,
+            "samples": 6,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::gc::roots::runtime_handles::runtime_handle_stack_cold"
+          },
+          {
+            "percent": 0.65,
+            "samples": 6,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::class_registry::registration::is_class_id_registered"
+          },
+          {
+            "percent": 0.65,
+            "samples": 6,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::native_module::class_prototype_method_value_for_name"
+          },
+          {
+            "percent": 0.65,
+            "samples": 6,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::shapes::shape_object_kind_by_id"
+          }
+        ]
+      },
+      "data_sha256": "d68df54c6c9945b3111e1d8e433966cc1b0ad4f3e3b4db38712402588bbd7f1c",
+      "report_sha256": "1b7bb6e3bc3809f230d2f7236ef4aa46bc6d0b1147201c7c87caf5b1e9ce435c"
+    },
+    {
+      "prefix": "gc-auto-current0ed-qb6-v17r1-partial",
+      "arm": "current0ed-base",
+      "case": "30-string-build",
+      "repeat": 0,
+      "correct": true,
+      "symbol_sha256": "9cd7bab0172db3d552060bbdcfa8bcb7f19f5362fae26747d2dc0a278478f534",
+      "plain_sha256": "f60aafbf67bcb8d80f1eb9623c112deb325a1eb734b3ed7fc6d35ff5b3677844",
+      "text_sha256": "7c2f92bd6a606e247b154b99679b7a79e72676d4233009e124a79f06c3254ea2",
+      "attribution": {
+        "event_count_approx": 16280000000,
+        "samples": 16280,
+        "lost_samples": 0,
+        "gc_self_samples": 3470,
+        "arena_self_samples": 626,
+        "unresolved_samples": 34,
+        "top_symbols": [
+          {
+            "percent": 38.73,
+            "samples": 6306,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] main"
+          },
+          {
+            "percent": 9.48,
+            "samples": 1543,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] js_string_concat_chain"
+          },
+          {
+            "percent": 6.35,
+            "samples": 1033,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::gc::copying::run_copied_minor_attempt"
+          },
+          {
+            "percent": 4.85,
+            "samples": 789,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::string::split::split_by_delimiter"
+          },
+          {
+            "percent": 3.89,
+            "samples": 634,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::string::string_storage_alloc"
+          },
+          {
+            "percent": 3.44,
+            "samples": 560,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] <perry_runtime::gc::trace::ValidPointerSetBuilder>::step"
+          },
+          {
+            "percent": 2.84,
+            "samples": 462,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::arena::allocators::arena_alloc"
+          },
+          {
+            "percent": 2.7,
+            "samples": 439,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] js_string_index_to_i32"
+          },
+          {
+            "percent": 2.51,
+            "samples": 409,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] js_string_char_code_at"
+          },
+          {
+            "percent": 2.49,
+            "samples": 406,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] js_array_note_numeric_write"
+          },
+          {
+            "percent": 2.25,
+            "samples": 366,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] <perry_runtime::gc::trace::ValidPointerSet>::contains"
+          },
+          {
+            "percent": 2.17,
+            "samples": 354,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::gc::barrier_store::barrier_child_prologue"
+          },
+          {
+            "percent": 1.76,
+            "samples": 287,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::string::concat::format_number_into"
+          },
+          {
+            "percent": 1.69,
+            "samples": 275,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::gc::layout::layout_note_slot"
+          },
+          {
+            "percent": 1.64,
+            "samples": 267,
+            "dso": "libc.so.6",
+            "symbol": "[.] __memmove_avx512_unaligned_erms"
+          },
+          {
+            "percent": 1.46,
+            "samples": 238,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] <perry_runtime::gc::cycle::GcCycleState>::step_sweep"
+          },
+          {
+            "percent": 1.39,
+            "samples": 227,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::array::join::try_join_well_formed"
+          },
+          {
+            "percent": 1.29,
+            "samples": 210,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] trunc"
+          },
+          {
+            "percent": 0.87,
+            "samples": 142,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] js_write_barrier_slot_validated_parent"
+          },
+          {
+            "percent": 0.84,
+            "samples": 137,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::gc::trace::trace_heap_rewrite_slots::{closure#0}::{closure#0}"
+          },
+          {
+            "percent": 0.69,
+            "samples": 112,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::gc::trace::trace_heap_rewrite_slots::{closure#0}"
+          },
+          {
+            "percent": 0.5,
+            "samples": 82,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::array::element_shape::note_element_store_with_bit"
+          },
+          {
+            "percent": 0.48,
+            "samples": 78,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::string::concat::canonicalize_surrogate_pairs"
+          },
+          {
+            "percent": 0.47,
+            "samples": 76,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::gc::barrier::write_barrier_decoded_parent"
+          },
+          {
+            "percent": 0.44,
+            "samples": 71,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] js_add_throw_if_symbol"
+          },
+          {
+            "percent": 0.42,
+            "samples": 68,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] js_to_primitive_default_for_add"
+          },
+          {
+            "percent": 0.4,
+            "samples": 65,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::gc::roots::runtime_handles::runtime_handle_stack_cold"
+          },
+          {
+            "percent": 0.33,
+            "samples": 54,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::value::dynamic_arith::to_primitive_default_for_add"
+          },
+          {
+            "percent": 0.28,
+            "samples": 46,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] <perry_runtime::gc::copying::CopyingNurseryCollector>::mark_addr"
+          },
+          {
+            "percent": 0.23,
+            "samples": 38,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::string::slice_ops::case_convert"
+          },
+          {
+            "percent": 0.2,
+            "samples": 33,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::gc::barrier::write_barrier_slot_decoded"
+          },
+          {
+            "percent": 0.17,
+            "samples": 28,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] <perry_runtime::gc::barrier::maintenance::RememberedSetClearState>::step_counted"
+          },
+          {
+            "percent": 0.17,
+            "samples": 28,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::arena::promote::flush_page_run"
+          },
+          {
+            "percent": 0.16,
+            "samples": 26,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] <hashbrown::raw::RawTable<(usize, perry_runtime::array::element_shape::ElementShapeRecord)>>::remove_entry::<hashbrown::map::equivalent_key<usize, usize, perry_runtime::array::element_shape::ElementShapeRecord>::{closure#0}>"
+          },
+          {
+            "percent": 0.14,
+            "samples": 22,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] <perry_runtime::gc::copying::CopyingNurseryCollector>::mark_classified"
+          },
+          {
+            "percent": 0.14,
+            "samples": 22,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] <perry_runtime::gc::oldgen::sweep_objects::ArenaSweepObjectsState>::reclaim_dead_object"
+          },
+          {
+            "percent": 0.14,
+            "samples": 22,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] js_string_addref_if_heap_string"
+          },
+          {
+            "percent": 0.14,
+            "samples": 22,
+            "dso": "[unknown]",
+            "symbol": "[k] 0xffffffff91400b90"
+          },
+          {
+            "percent": 0.12,
+            "samples": 20,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] <hashbrown::raw::RawTable<(usize, perry_runtime::arena::page_meta::OldPageMeta)>>::remove_entry::<hashbrown::map::equivalent_key<usize, usize, perry_runtime::arena::page_meta::OldPageMeta>::{closure#0}>"
+          },
+          {
+            "percent": 0.12,
+            "samples": 20,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] <perry_runtime::gc::copying::CopyingNurseryCollector>::scan_object_fields"
+          }
+        ]
+      },
+      "data_sha256": "ac07eddf2d21416fd575953858fbf56ae7f1934c66a8175f47a200c5fbf45fd6",
+      "report_sha256": "18fd865a4b10ea2fbf6edc7e9bf8cf07f46d50f0e3db0ca58b0292fc98c97da7"
+    },
+    {
+      "prefix": "gc-auto-current0ed-qb6-v17r1-partial",
+      "arm": "current0ed-gc",
+      "case": "30-string-build",
+      "repeat": 0,
+      "correct": true,
+      "symbol_sha256": "ed1de741bea3dd9409b6d3378953085e93429defbfa37745b6d23d0512f8f320",
+      "plain_sha256": "66ec4fe512620ce8db1637c3603f6e0203acf533444a2748972ac79eb31fbb52",
+      "text_sha256": "807b88cfc8a11e6daab21a893c14ff938ccf4453acd31b2811623814108399b1",
+      "attribution": {
+        "event_count_approx": 16307000000,
+        "samples": 16307,
+        "lost_samples": 0,
+        "gc_self_samples": 3668,
+        "arena_self_samples": 639,
+        "unresolved_samples": 30,
+        "top_symbols": [
+          {
+            "percent": 32.4,
+            "samples": 5283,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] main"
+          },
+          {
+            "percent": 8.76,
+            "samples": 1428,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] js_string_concat_chain"
+          },
+          {
+            "percent": 6.29,
+            "samples": 1025,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::gc::copying::run_copied_minor_attempt"
+          },
+          {
+            "percent": 5.17,
+            "samples": 843,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] js_string_index_to_i32"
+          },
+          {
+            "percent": 5.05,
+            "samples": 823,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::string::split::split_by_delimiter"
+          },
+          {
+            "percent": 4.3,
+            "samples": 701,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] js_string_char_code_at"
+          },
+          {
+            "percent": 3.4,
+            "samples": 554,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] <perry_runtime::gc::trace::ValidPointerSetBuilder>::step"
+          },
+          {
+            "percent": 3.06,
+            "samples": 499,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::string::string_storage_alloc"
+          },
+          {
+            "percent": 3.02,
+            "samples": 492,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::arena::allocators::arena_alloc"
+          },
+          {
+            "percent": 2.75,
+            "samples": 449,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::gc::barrier_store::barrier_child_prologue"
+          },
+          {
+            "percent": 2.65,
+            "samples": 432,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] trunc"
+          },
+          {
+            "percent": 2.26,
+            "samples": 369,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] js_array_note_numeric_write"
+          },
+          {
+            "percent": 2.23,
+            "samples": 363,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] <perry_runtime::gc::trace::ValidPointerSet>::contains"
+          },
+          {
+            "percent": 1.87,
+            "samples": 305,
+            "dso": "libc.so.6",
+            "symbol": "[.] __memmove_avx512_unaligned_erms"
+          },
+          {
+            "percent": 1.56,
+            "samples": 254,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::string::concat::format_number_into"
+          },
+          {
+            "percent": 1.48,
+            "samples": 241,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] <perry_runtime::gc::cycle::GcCycleState>::step_sweep"
+          },
+          {
+            "percent": 1.29,
+            "samples": 211,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::gc::roots::runtime_handles::runtime_handle_stack_cold"
+          },
+          {
+            "percent": 1.22,
+            "samples": 199,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::array::join::try_join_well_formed"
+          },
+          {
+            "percent": 0.98,
+            "samples": 159,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::gc::layout::layout_note_slot"
+          },
+          {
+            "percent": 0.96,
+            "samples": 157,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::gc::trace::trace_heap_rewrite_slots::{closure#0}::{closure#0}"
+          },
+          {
+            "percent": 0.92,
+            "samples": 150,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] js_to_primitive_default_for_add"
+          },
+          {
+            "percent": 0.9,
+            "samples": 146,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::string::concat::canonicalize_surrogate_pairs"
+          },
+          {
+            "percent": 0.88,
+            "samples": 143,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::array::element_shape::note_element_store_with_bit"
+          },
+          {
+            "percent": 0.82,
+            "samples": 133,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] js_write_barrier_slot_validated_parent"
+          },
+          {
+            "percent": 0.69,
+            "samples": 112,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::gc::barrier::write_barrier_decoded_parent"
+          },
+          {
+            "percent": 0.58,
+            "samples": 94,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::gc::trace::trace_heap_rewrite_slots::{closure#0}"
+          },
+          {
+            "percent": 0.51,
+            "samples": 83,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::value::dynamic_arith::to_primitive_default_for_add"
+          },
+          {
+            "percent": 0.35,
+            "samples": 57,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::gc::barrier::write_barrier_slot_decoded"
+          },
+          {
+            "percent": 0.25,
+            "samples": 40,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::string::slice_ops::case_convert"
+          },
+          {
+            "percent": 0.22,
+            "samples": 36,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] <perry_runtime::gc::copying::CopyingNurseryCollector>::mark_addr"
+          },
+          {
+            "percent": 0.21,
+            "samples": 35,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] <perry_runtime::gc::barrier::maintenance::RememberedSetClearState>::step_counted"
+          },
+          {
+            "percent": 0.21,
+            "samples": 35,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] js_add_throw_if_symbol"
+          },
+          {
+            "percent": 0.21,
+            "samples": 34,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] <perry_runtime::arena::page_meta::storage::PageMetaMap>::get_or_insert"
+          },
+          {
+            "percent": 0.15,
+            "samples": 25,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] <hashbrown::raw::RawTable<(usize, perry_runtime::array::element_shape::ElementShapeRecord)>>::remove_entry::<hashbrown::map::equivalent_key<usize, usize, perry_runtime::array::element_shape::ElementShapeRecord>::{closure#0}>"
+          },
+          {
+            "percent": 0.15,
+            "samples": 25,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] <perry_runtime::gc::oldgen::sweep_objects::ArenaSweepObjectsState>::reclaim_dead_object"
+          },
+          {
+            "percent": 0.14,
+            "samples": 23,
+            "dso": "[unknown]",
+            "symbol": "[k] 0xffffffff91400b90"
+          },
+          {
+            "percent": 0.12,
+            "samples": 20,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] <perry_runtime::gc::copying::CopyingNurseryCollector>::scan_object_fields"
+          },
+          {
+            "percent": 0.12,
+            "samples": 19,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] <perry_runtime::gc::copying::CopyingNurseryCollector>::mark_classified"
+          },
+          {
+            "percent": 0.12,
+            "samples": 19,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] <perry_runtime::gc::oldgen::sweep_batch::PendingOldUnregister>::flush"
+          },
+          {
+            "percent": 0.1,
+            "samples": 17,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::gc::copying::remembered_scan::scan_remembered_dirty_slots_copying::<perry_runtime::gc::copying::run_copied_minor_attempt::{closure#7}>::{closure#0}::{closure#0}"
+          }
+        ]
+      },
+      "data_sha256": "d80460761de41c782c479c6d327d42f7fecda02c7045614c4f309d530abb23c5",
+      "report_sha256": "414ea6b7701ca6efbf53ba0fa1eea17ea38b5f4d7966640a2b808db4a74fc429"
+    },
+    {
+      "prefix": "gc-auto-current0ed-qb6-v17r1-partial",
+      "arm": "current0ed-gc",
+      "case": "30-string-build",
+      "repeat": 1,
+      "correct": true,
+      "symbol_sha256": "ed1de741bea3dd9409b6d3378953085e93429defbfa37745b6d23d0512f8f320",
+      "plain_sha256": "66ec4fe512620ce8db1637c3603f6e0203acf533444a2748972ac79eb31fbb52",
+      "text_sha256": "807b88cfc8a11e6daab21a893c14ff938ccf4453acd31b2811623814108399b1",
+      "attribution": {
+        "event_count_approx": 16306000000,
+        "samples": 16306,
+        "lost_samples": 0,
+        "gc_self_samples": 3472,
+        "arena_self_samples": 592,
+        "unresolved_samples": 29,
+        "top_symbols": [
+          {
+            "percent": 39.13,
+            "samples": 6380,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] main"
+          },
+          {
+            "percent": 8.6,
+            "samples": 1402,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] js_string_concat_chain"
+          },
+          {
+            "percent": 6.32,
+            "samples": 1031,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::gc::copying::run_copied_minor_attempt"
+          },
+          {
+            "percent": 5.28,
+            "samples": 861,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::string::split::split_by_delimiter"
+          },
+          {
+            "percent": 3.53,
+            "samples": 575,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::string::string_storage_alloc"
+          },
+          {
+            "percent": 3.4,
+            "samples": 554,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] <perry_runtime::gc::trace::ValidPointerSetBuilder>::step"
+          },
+          {
+            "percent": 2.74,
+            "samples": 446,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::arena::allocators::arena_alloc"
+          },
+          {
+            "percent": 2.61,
+            "samples": 425,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] js_string_char_code_at"
+          },
+          {
+            "percent": 2.45,
+            "samples": 399,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] js_string_index_to_i32"
+          },
+          {
+            "percent": 2.29,
+            "samples": 374,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] js_array_note_numeric_write"
+          },
+          {
+            "percent": 2.29,
+            "samples": 373,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] <perry_runtime::gc::trace::ValidPointerSet>::contains"
+          },
+          {
+            "percent": 2.18,
+            "samples": 356,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::gc::barrier_store::barrier_child_prologue"
+          },
+          {
+            "percent": 1.86,
+            "samples": 304,
+            "dso": "libc.so.6",
+            "symbol": "[.] __memmove_avx512_unaligned_erms"
+          },
+          {
+            "percent": 1.83,
+            "samples": 299,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::string::concat::format_number_into"
+          },
+          {
+            "percent": 1.44,
+            "samples": 234,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] <perry_runtime::gc::cycle::GcCycleState>::step_sweep"
+          },
+          {
+            "percent": 1.33,
+            "samples": 217,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::array::join::try_join_well_formed"
+          },
+          {
+            "percent": 1.2,
+            "samples": 196,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::gc::layout::layout_note_slot"
+          },
+          {
+            "percent": 1.14,
+            "samples": 186,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] trunc"
+          },
+          {
+            "percent": 0.93,
+            "samples": 152,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] js_write_barrier_slot_validated_parent"
+          },
+          {
+            "percent": 0.92,
+            "samples": 150,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::gc::trace::trace_heap_rewrite_slots::{closure#0}::{closure#0}"
+          },
+          {
+            "percent": 0.91,
+            "samples": 148,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::gc::roots::runtime_handles::runtime_handle_stack_cold"
+          },
+          {
+            "percent": 0.83,
+            "samples": 136,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] js_to_primitive_default_for_add"
+          },
+          {
+            "percent": 0.76,
+            "samples": 124,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::array::element_shape::note_element_store_with_bit"
+          },
+          {
+            "percent": 0.56,
+            "samples": 92,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::gc::trace::trace_heap_rewrite_slots::{closure#0}"
+          },
+          {
+            "percent": 0.46,
+            "samples": 75,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::string::concat::canonicalize_surrogate_pairs"
+          },
+          {
+            "percent": 0.42,
+            "samples": 69,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::gc::barrier::write_barrier_decoded_parent"
+          },
+          {
+            "percent": 0.42,
+            "samples": 68,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::value::dynamic_arith::to_primitive_default_for_add"
+          },
+          {
+            "percent": 0.4,
+            "samples": 65,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] js_add_throw_if_symbol"
+          },
+          {
+            "percent": 0.25,
+            "samples": 40,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::string::slice_ops::case_convert"
+          },
+          {
+            "percent": 0.22,
+            "samples": 36,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] <perry_runtime::gc::barrier::maintenance::RememberedSetClearState>::step_counted"
+          },
+          {
+            "percent": 0.21,
+            "samples": 34,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] <perry_runtime::arena::page_meta::storage::PageMetaMap>::get_or_insert"
+          },
+          {
+            "percent": 0.2,
+            "samples": 32,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] <perry_runtime::gc::copying::CopyingNurseryCollector>::mark_addr"
+          },
+          {
+            "percent": 0.2,
+            "samples": 32,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] js_string_addref_if_heap_string"
+          },
+          {
+            "percent": 0.17,
+            "samples": 27,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::gc::barrier::write_barrier_slot_decoded"
+          },
+          {
+            "percent": 0.15,
+            "samples": 25,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] <perry_runtime::gc::oldgen::sweep_objects::ArenaSweepObjectsState>::reclaim_dead_object"
+          },
+          {
+            "percent": 0.15,
+            "samples": 25,
+            "dso": "[unknown]",
+            "symbol": "[k] 0xffffffff91400b90"
+          },
+          {
+            "percent": 0.14,
+            "samples": 23,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] <hashbrown::raw::RawTable<(usize, perry_runtime::array::element_shape::ElementShapeRecord)>>::remove_entry::<hashbrown::map::equivalent_key<usize, usize, perry_runtime::array::element_shape::ElementShapeRecord>::{closure#0}>"
+          },
+          {
+            "percent": 0.14,
+            "samples": 23,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] <perry_runtime::gc::copying::CopyingNurseryCollector>::mark_classified"
+          },
+          {
+            "percent": 0.14,
+            "samples": 23,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::gc::copying::remembered_scan::scan_remembered_dirty_slots_copying::<perry_runtime::gc::copying::run_copied_minor_attempt::{closure#7}>::{closure#0}::{closure#0}"
+          },
+          {
+            "percent": 0.12,
+            "samples": 20,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build-symbols",
+            "symbol": "[.] <perry_runtime::gc::copying::CopyingNurseryCollector>::scan_object_fields"
+          }
+        ]
+      },
+      "data_sha256": "8bcc9ab72446e57f8ccde1121ba64f5809bb2f16063d86fe30c6b31f09c897ad",
+      "report_sha256": "ebc453b13078bf5e017fe4ef194f95fe62801b8ba86aa15b499507cf9f1b2efb"
+    },
+    {
+      "prefix": "gc-auto-current0ed-qb6-v17r1-partial",
+      "arm": "current0ed-base",
+      "case": "30-string-build",
+      "repeat": 1,
+      "correct": true,
+      "symbol_sha256": "9cd7bab0172db3d552060bbdcfa8bcb7f19f5362fae26747d2dc0a278478f534",
+      "plain_sha256": "f60aafbf67bcb8d80f1eb9623c112deb325a1eb734b3ed7fc6d35ff5b3677844",
+      "text_sha256": "7c2f92bd6a606e247b154b99679b7a79e72676d4233009e124a79f06c3254ea2",
+      "attribution": {
+        "event_count_approx": 16280000000,
+        "samples": 16280,
+        "lost_samples": 0,
+        "gc_self_samples": 3517,
+        "arena_self_samples": 697,
+        "unresolved_samples": 39,
+        "top_symbols": [
+          {
+            "percent": 33.27,
+            "samples": 5416,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] main"
+          },
+          {
+            "percent": 7.58,
+            "samples": 1234,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] js_string_concat_chain"
+          },
+          {
+            "percent": 6.26,
+            "samples": 1019,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::gc::copying::run_copied_minor_attempt"
+          },
+          {
+            "percent": 5.38,
+            "samples": 876,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] js_string_index_to_i32"
+          },
+          {
+            "percent": 4.87,
+            "samples": 793,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::string::split::split_by_delimiter"
+          },
+          {
+            "percent": 3.66,
+            "samples": 596,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::string::concat::format_number_into"
+          },
+          {
+            "percent": 3.48,
+            "samples": 566,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] js_string_char_code_at"
+          },
+          {
+            "percent": 3.43,
+            "samples": 559,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] <perry_runtime::gc::trace::ValidPointerSetBuilder>::step"
+          },
+          {
+            "percent": 3.16,
+            "samples": 514,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::arena::allocators::arena_alloc"
+          },
+          {
+            "percent": 2.32,
+            "samples": 378,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] trunc"
+          },
+          {
+            "percent": 2.28,
+            "samples": 371,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::string::string_storage_alloc"
+          },
+          {
+            "percent": 2.19,
+            "samples": 357,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::gc::barrier_store::barrier_child_prologue"
+          },
+          {
+            "percent": 2.05,
+            "samples": 334,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] js_to_primitive_default_for_add"
+          },
+          {
+            "percent": 1.95,
+            "samples": 317,
+            "dso": "libc.so.6",
+            "symbol": "[.] __memmove_avx512_unaligned_erms"
+          },
+          {
+            "percent": 1.68,
+            "samples": 274,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] js_array_note_numeric_write"
+          },
+          {
+            "percent": 1.55,
+            "samples": 253,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] <perry_runtime::gc::trace::ValidPointerSet>::contains"
+          },
+          {
+            "percent": 1.54,
+            "samples": 250,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::gc::trace::trace_heap_rewrite_slots::{closure#0}::{closure#0}"
+          },
+          {
+            "percent": 1.35,
+            "samples": 219,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] <perry_runtime::gc::cycle::GcCycleState>::step_sweep"
+          },
+          {
+            "percent": 1.33,
+            "samples": 216,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::value::dynamic_arith::to_primitive_default_for_add"
+          },
+          {
+            "percent": 1.23,
+            "samples": 201,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::gc::roots::runtime_handles::runtime_handle_stack_cold"
+          },
+          {
+            "percent": 1.22,
+            "samples": 199,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::array::join::try_join_well_formed"
+          },
+          {
+            "percent": 0.83,
+            "samples": 135,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::string::concat::canonicalize_surrogate_pairs"
+          },
+          {
+            "percent": 0.77,
+            "samples": 126,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::gc::layout::layout_note_slot"
+          },
+          {
+            "percent": 0.71,
+            "samples": 115,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::gc::barrier::write_barrier_decoded_parent"
+          },
+          {
+            "percent": 0.69,
+            "samples": 112,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::gc::trace::trace_heap_rewrite_slots::{closure#0}"
+          },
+          {
+            "percent": 0.6,
+            "samples": 97,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] js_write_barrier_slot_validated_parent"
+          },
+          {
+            "percent": 0.46,
+            "samples": 75,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::gc::barrier::write_barrier_slot_decoded"
+          },
+          {
+            "percent": 0.29,
+            "samples": 48,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::array::element_shape::note_element_store_with_bit"
+          },
+          {
+            "percent": 0.25,
+            "samples": 41,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] js_add_throw_if_symbol"
+          },
+          {
+            "percent": 0.23,
+            "samples": 38,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::string::slice_ops::case_convert"
+          },
+          {
+            "percent": 0.23,
+            "samples": 37,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] <perry_runtime::gc::copying::CopyingNurseryCollector>::mark_addr"
+          },
+          {
+            "percent": 0.21,
+            "samples": 34,
+            "dso": "[unknown]",
+            "symbol": "[k] 0xffffffff91400b90"
+          },
+          {
+            "percent": 0.18,
+            "samples": 30,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] <hashbrown::raw::RawTable<(usize, perry_runtime::array::element_shape::ElementShapeRecord)>>::remove_entry::<hashbrown::map::equivalent_key<usize, usize, perry_runtime::array::element_shape::ElementShapeRecord>::{closure#0}>"
+          },
+          {
+            "percent": 0.18,
+            "samples": 30,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] <perry_runtime::gc::barrier::maintenance::RememberedSetClearState>::step_counted"
+          },
+          {
+            "percent": 0.18,
+            "samples": 29,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::arena::promote::flush_page_run"
+          },
+          {
+            "percent": 0.17,
+            "samples": 28,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] <perry_runtime::gc::copying::CopyingNurseryCollector>::mark_classified"
+          },
+          {
+            "percent": 0.16,
+            "samples": 26,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] perry_runtime::arena::page_meta::old_page_account_swept_object"
+          },
+          {
+            "percent": 0.15,
+            "samples": 25,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] <perry_runtime::gc::oldgen::sweep_objects::ArenaSweepObjectsState>::reclaim_dead_object"
+          },
+          {
+            "percent": 0.14,
+            "samples": 23,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] <alloc::vec::Vec<usize>>::retain::<perry_runtime::arena::page_meta::unregister_old_objects_batch::{closure#1}::{closure#0}::{closure#0}>"
+          },
+          {
+            "percent": 0.13,
+            "samples": 21,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build-symbols",
+            "symbol": "[.] <perry_runtime::gc::copying::CopyingNurseryCollector>::scan_object_fields"
+          }
+        ]
+      },
+      "data_sha256": "9bf2fba70180588916e1d74ec7ed72740e361804784fbc30970e8926932d48f6",
+      "report_sha256": "fd5496843bab283977e3a3e63b2fbdbf13306476e3578c9bf6b6f56f21c9008c"
+    },
+    {
+      "prefix": "gc-auto-current0ed-qb6-v17r1-partial",
+      "arm": "current0ed-gc",
+      "case": "zodwork",
+      "repeat": 1,
+      "correct": true,
+      "symbol_sha256": "884c5adfe26165b4d5e28cd7eb6409d5acd91f4e78481be502663894ee847170",
+      "plain_sha256": "ac293400554dbdd36340b831233e398f0d3c57fb3ea438007ae12d01e138288f",
+      "text_sha256": "6ef0888a289f54cb65421f1f0ee622bf3f2a9e2875e02369b0cb95ce574355c2",
+      "attribution": {
+        "event_count_approx": 922000000,
+        "samples": 922,
+        "lost_samples": 0,
+        "gc_self_samples": 53,
+        "arena_self_samples": 36,
+        "unresolved_samples": 1,
+        "top_symbols": [
+          {
+            "percent": 4.56,
+            "samples": 42,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] <core::hash::sip::Hasher<core::hash::sip::Sip13Rounds> as core::hash::Hasher>::write"
+          },
+          {
+            "percent": 3.9,
+            "samples": 36,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::class_registry::parent_static::method_owner_class_id"
+          },
+          {
+            "percent": 3.04,
+            "samples": 28,
+            "dso": "libc.so.6",
+            "symbol": "[.] __memcmp_evex_movbe"
+          },
+          {
+            "percent": 2.49,
+            "samples": 23,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] js_function_bind"
+          },
+          {
+            "percent": 2.49,
+            "samples": 23,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::closure::dynamic_props::is_closure_ptr"
+          },
+          {
+            "percent": 2.49,
+            "samples": 23,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::closure::props::object_own_get"
+          },
+          {
+            "percent": 2.49,
+            "samples": 23,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::native_get::try_data_get_bytes"
+          },
+          {
+            "percent": 2.17,
+            "samples": 20,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::class_registry::state::class_decl_prototype_object"
+          },
+          {
+            "percent": 2.17,
+            "samples": 20,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::keys_lookup::keys_find_slot_by_bytes_resolved"
+          },
+          {
+            "percent": 2.06,
+            "samples": 19,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] js_method_site_miss"
+          },
+          {
+            "percent": 1.95,
+            "samples": 18,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::keys_lookup::keys_find_slot_by_bytes"
+          },
+          {
+            "percent": 1.84,
+            "samples": 17,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] core::str::converts::from_utf8"
+          },
+          {
+            "percent": 1.84,
+            "samples": 17,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::arena::allocators::arena_alloc"
+          },
+          {
+            "percent": 1.52,
+            "samples": 14,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] <std::hash::random::RandomState as core::hash::BuildHasher>::hash_one::<&(u32, alloc::string::String)>"
+          },
+          {
+            "percent": 1.41,
+            "samples": 13,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] node_modules_zod_lib_index_mjs__ZodType_constructor"
+          },
+          {
+            "percent": 1.3,
+            "samples": 12,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::spill::overflow_get"
+          },
+          {
+            "percent": 1.19,
+            "samples": 11,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] js_native_call_method"
+          },
+          {
+            "percent": 1.19,
+            "samples": 11,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::arena::allocators::arena_alloc"
+          },
+          {
+            "percent": 1.08,
+            "samples": 10,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] js_object_get_field"
+          },
+          {
+            "percent": 1.08,
+            "samples": 10,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::shapes::shape_descriptor_intern_with_special_mode"
+          },
+          {
+            "percent": 1.08,
+            "samples": 10,
+            "dso": "libc.so.6",
+            "symbol": "[.] __memmove_avx512_unaligned_erms"
+          },
+          {
+            "percent": 0.98,
+            "samples": 9,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] js_class_method_bind"
+          },
+          {
+            "percent": 0.98,
+            "samples": 9,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] js_object_set_field"
+          },
+          {
+            "percent": 0.87,
+            "samples": 8,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] <std::hash::random::RandomState as core::hash::BuildHasher>::hash_one::<&str>"
+          },
+          {
+            "percent": 0.87,
+            "samples": 8,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] js_typed_feedback_native_call_method"
+          },
+          {
+            "percent": 0.87,
+            "samples": 8,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::keys_lookup::keys_array_dense_slots"
+          },
+          {
+            "percent": 0.76,
+            "samples": 7,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::copying::CopyingNurseryCollector>::mark_addr"
+          },
+          {
+            "percent": 0.76,
+            "samples": 7,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] js_object_get_own_field_or_undef"
+          },
+          {
+            "percent": 0.76,
+            "samples": 7,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] mi_theap_malloc_aligned"
+          },
+          {
+            "percent": 0.76,
+            "samples": 7,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::closure::registry::closure_length"
+          },
+          {
+            "percent": 0.76,
+            "samples": 7,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::class_registry::parent_static::is_class_object_ptr"
+          },
+          {
+            "percent": 0.76,
+            "samples": 7,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::field_get_set::accessors::own_data_field_by_name"
+          },
+          {
+            "percent": 0.76,
+            "samples": 7,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::field_get_set::ic_miss::private_evaluation_brand_value"
+          },
+          {
+            "percent": 0.65,
+            "samples": 6,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::copying::CopyingNurseryCollector>::scan_object_fields::{closure#0}"
+          },
+          {
+            "percent": 0.65,
+            "samples": 6,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] js_array_alloc"
+          },
+          {
+            "percent": 0.65,
+            "samples": 6,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] js_closure_alloc"
+          },
+          {
+            "percent": 0.65,
+            "samples": 6,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::canonical_keys::probe_node"
+          },
+          {
+            "percent": 0.65,
+            "samples": 6,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::descriptor_state::plain_data_write_may_intercept"
+          },
+          {
+            "percent": 0.65,
+            "samples": 6,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::native_module::class_prototype_method_value_for_name"
+          },
+          {
+            "percent": 0.65,
+            "samples": 6,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::shapes::object_shape_descriptor"
+          }
+        ]
+      },
+      "data_sha256": "4b1e194d3b9e7b800f619b8f509f3b14b5cea5447a17c4b289d776cc47e94605",
+      "report_sha256": "ccc3421f8d9c12fe6c8f61fae7c598ef14819e1b873ecc9f43eeecb2e2cc6d16"
+    },
+    {
+      "prefix": "gc-auto-current0ed-qb6-v17r1-partial",
+      "arm": "current0ed-base",
+      "case": "zodwork",
+      "repeat": 1,
+      "correct": true,
+      "symbol_sha256": "3d5447165ee57f7104fd5a318a2200bde73da6ea16132a9f2228d5031607d124",
+      "plain_sha256": "0819c427d837eed8fe82810cc5a7455920a33dac2c51520a0d71a6272d8076cd",
+      "text_sha256": "47e8fba3eee9e9654f24d67ffc991ea618c67e09dfe54fba933ce4a52f767fc4",
+      "attribution": {
+        "event_count_approx": 916000000,
+        "samples": 916,
+        "lost_samples": 0,
+        "gc_self_samples": 52,
+        "arena_self_samples": 43,
+        "unresolved_samples": 2,
+        "top_symbols": [
+          {
+            "percent": 3.93,
+            "samples": 36,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] <core::hash::sip::Hasher<core::hash::sip::Sip13Rounds> as core::hash::Hasher>::write"
+          },
+          {
+            "percent": 3.28,
+            "samples": 30,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::keys_lookup::keys_find_slot_by_bytes_resolved"
+          },
+          {
+            "percent": 3.06,
+            "samples": 28,
+            "dso": "libc.so.6",
+            "symbol": "[.] __memcmp_evex_movbe"
+          },
+          {
+            "percent": 2.84,
+            "samples": 26,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::keys_lookup::keys_find_slot_by_bytes"
+          },
+          {
+            "percent": 2.73,
+            "samples": 25,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] js_class_method_bind"
+          },
+          {
+            "percent": 2.51,
+            "samples": 23,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::arena::allocators::arena_alloc"
+          },
+          {
+            "percent": 2.51,
+            "samples": 23,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::class_registry::parent_static::method_owner_class_id"
+          },
+          {
+            "percent": 2.07,
+            "samples": 19,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] js_function_bind"
+          },
+          {
+            "percent": 2.07,
+            "samples": 19,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::closure::dynamic_props::is_closure_ptr"
+          },
+          {
+            "percent": 2.07,
+            "samples": 19,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::native_get::try_data_get_bytes"
+          },
+          {
+            "percent": 1.97,
+            "samples": 18,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] js_method_site_miss"
+          },
+          {
+            "percent": 1.86,
+            "samples": 17,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::closure::props::object_own_get"
+          },
+          {
+            "percent": 1.75,
+            "samples": 16,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] js_typed_feedback_native_call_method"
+          },
+          {
+            "percent": 1.75,
+            "samples": 16,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::class_registry::state::class_decl_prototype_object"
+          },
+          {
+            "percent": 1.64,
+            "samples": 15,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] js_string_from_bytes_with_capacity"
+          },
+          {
+            "percent": 1.53,
+            "samples": 14,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] core::str::converts::from_utf8"
+          },
+          {
+            "percent": 1.53,
+            "samples": 14,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::spill::overflow_get"
+          },
+          {
+            "percent": 1.42,
+            "samples": 13,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] <std::hash::random::RandomState as core::hash::BuildHasher>::hash_one::<&str>"
+          },
+          {
+            "percent": 1.2,
+            "samples": 11,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] <std::thread::local::LocalKey<core::cell::RefCell<std::collections::hash::map::HashMap<usize, u32, perry_runtime::fast_hash::PtrHasher>>>>::with::<perry_runtime::object::native_module::callable_exports::builtin_closure_metadata::builtin_closure_length::{closure#0}, core::option::Option<u32>>"
+          },
+          {
+            "percent": 1.2,
+            "samples": 11,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::keys_lookup::keys_array_dense_slots"
+          },
+          {
+            "percent": 1.09,
+            "samples": 10,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] _mi_page_malloc_zero"
+          },
+          {
+            "percent": 0.98,
+            "samples": 9,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] js_array_alloc"
+          },
+          {
+            "percent": 0.98,
+            "samples": 9,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] js_nanbox_get_pointer"
+          },
+          {
+            "percent": 0.98,
+            "samples": 9,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] js_native_call_method"
+          },
+          {
+            "percent": 0.98,
+            "samples": 9,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::alloc::object_alloc_class_inline_keys_impl"
+          },
+          {
+            "percent": 0.98,
+            "samples": 9,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::field_get_set::accessors::own_data_field_by_name"
+          },
+          {
+            "percent": 0.98,
+            "samples": 9,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::iterator_prototypes::call_overridden_iterator_next"
+          },
+          {
+            "percent": 0.98,
+            "samples": 9,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::shapes::shape_descriptor_intern_with_special_mode"
+          },
+          {
+            "percent": 0.87,
+            "samples": 8,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::array::iter_object::dispatch_array_iterator_method_inner"
+          },
+          {
+            "percent": 0.76,
+            "samples": 7,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::copying::CopyingNurseryCollector>::mark_classified"
+          },
+          {
+            "percent": 0.76,
+            "samples": 7,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] js_object_set_field"
+          },
+          {
+            "percent": 0.76,
+            "samples": 7,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] mi_malloc_aligned"
+          },
+          {
+            "percent": 0.76,
+            "samples": 7,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::arena::allocators::arena_alloc"
+          },
+          {
+            "percent": 0.76,
+            "samples": 7,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::class_registry::registration::is_class_id_registered"
+          },
+          {
+            "percent": 0.76,
+            "samples": 7,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::string::string_storage_alloc"
+          },
+          {
+            "percent": 0.66,
+            "samples": 6,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::copying::CopyingNurseryCollector>::mark_addr"
+          },
+          {
+            "percent": 0.66,
+            "samples": 6,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] <perry_runtime::object::native_module::callable_exports::builtin_closure_metadata::BUILTIN_CLOSURE_LENGTH::{K#0}::{closure#0} as core::ops::function::FnOnce<(core::option::Option<&mut core::option::Option<core::cell::RefCell<std::collections::hash::map::HashMap<usize, u32, perry_runtime::fast_hash::PtrHasher>>>>,)>>::call_once"
+          },
+          {
+            "percent": 0.66,
+            "samples": 6,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::class_registry::class_meta::is_anon_shape_class_id"
+          },
+          {
+            "percent": 0.66,
+            "samples": 6,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::slot_store::store_object_field_slot"
+          },
+          {
+            "percent": 0.55,
+            "samples": 5,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork-symbols",
+            "symbol": "[.] js_string_coerce"
+          }
+        ]
+      },
+      "data_sha256": "099af12ded91eb4acd42de6b4530ff3cf61d6af7516319618ba8730f2f8d71b7",
+      "report_sha256": "cc72f4430c6188482d8d43f080905f594e5cccbc32ee172cb27456f329914be0"
+    },
+    {
+      "prefix": "gc-auto-current0ed-qb6-v17r1-partial",
+      "arm": "current0ed-gc",
+      "case": "tscwork",
+      "repeat": 1,
+      "correct": true,
+      "symbol_sha256": "5548559d478a9bb933b75fc9ed38441296ad6c612163254c737be229b059f199",
+      "plain_sha256": "7b201d21972f1d846f52c0a0ef00e7b11c06cc2b3a080bbef6627b379c1de521",
+      "text_sha256": "22a39606c03c83f77cdebc6e1b0a4f39612ba64d4c1a44d2c5db13d5855149d8",
+      "attribution": {
+        "event_count_approx": 59666000000,
+        "samples": 59666,
+        "lost_samples": 0,
+        "gc_self_samples": 47602,
+        "arena_self_samples": 1641,
+        "unresolved_samples": 33,
+        "top_symbols": [
+          {
+            "percent": 9.43,
+            "samples": 5629,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::trace::trace_heap_rewrite_slots::{closure#0}"
+          },
+          {
+            "percent": 7.85,
+            "samples": 4685,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::layout_slot_visit::visit_gc_rewrite_slots::<perry_runtime::gc::verify::remember_retained_old_to_young_slots::{closure#0}>::{closure#0}"
+          },
+          {
+            "percent": 7.6,
+            "samples": 4536,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::layout_slot_visit::visit_gc_layout_slot_descriptors.specialized.6"
+          },
+          {
+            "percent": 7.4,
+            "samples": 4417,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::layout_slot_visit::visit_gc_layout_slot_descriptors"
+          },
+          {
+            "percent": 6.37,
+            "samples": 3803,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::verify::remember_evacuated_old_to_young_slot"
+          },
+          {
+            "percent": 6.21,
+            "samples": 3706,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::trace::ValidPointerSet>::contains"
+          },
+          {
+            "percent": 5.31,
+            "samples": 3166,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::trace::trace_heap_rewrite_slots::{closure#0}::{closure#0}"
+          },
+          {
+            "percent": 3.55,
+            "samples": 2119,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::trace::ValidPointerSetBuilder>::step"
+          },
+          {
+            "percent": 3.5,
+            "samples": 2091,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::layout::child_slots::GcMutableSlotDescriptor>::visit_slots"
+          },
+          {
+            "percent": 2.68,
+            "samples": 1597,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::layout_tables::per_object_slot_mask"
+          },
+          {
+            "percent": 2.56,
+            "samples": 1525,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::trace::drain_trace_worklist_step"
+          },
+          {
+            "percent": 2.22,
+            "samples": 1326,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::barrier::remembered_child_needs_tracking"
+          },
+          {
+            "percent": 2.04,
+            "samples": 1217,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::cycle::GcCycleState>::step_sweep"
+          },
+          {
+            "percent": 1.49,
+            "samples": 890,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::types::gc_type_finalize_unmarked_payload"
+          },
+          {
+            "percent": 1.47,
+            "samples": 875,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::verify::remember_retained_old_to_young_slots"
+          },
+          {
+            "percent": 1.35,
+            "samples": 804,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::layout::child_slots::HeapChildSlotIterator>::new"
+          },
+          {
+            "percent": 1.14,
+            "samples": 679,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::oldgen::sweep_objects::ArenaSweepObjectsState>::reclaim_dead_object"
+          },
+          {
+            "percent": 1.11,
+            "samples": 660,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::verify::remember_retained_old_to_young_slots::{closure#0}"
+          },
+          {
+            "percent": 0.78,
+            "samples": 466,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::dead_owner::PostTraceProbe>::owner_is_dead"
+          },
+          {
+            "percent": 0.69,
+            "samples": 411,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::verify::OldToYoungRememberedRebuildState>::step"
+          },
+          {
+            "percent": 0.54,
+            "samples": 320,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] js_object_get_field_ic_front"
+          },
+          {
+            "percent": 0.46,
+            "samples": 277,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::arena::page_meta::page_class::PageGenerationCacheSet>::insert"
+          },
+          {
+            "percent": 0.41,
+            "samples": 242,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::trace::try_mark_raw_root_addr"
+          },
+          {
+            "percent": 0.4,
+            "samples": 240,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::arena::page_meta::storage::PageMetaMap>::get_or_insert"
+          },
+          {
+            "percent": 0.4,
+            "samples": 238,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] js_closure_call1"
+          },
+          {
+            "percent": 0.4,
+            "samples": 237,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] perry_runtime::box::has_cell_type"
+          },
+          {
+            "percent": 0.34,
+            "samples": 202,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::malloc::gc_malloc_header_is_tracked"
+          },
+          {
+            "percent": 0.33,
+            "samples": 199,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] perry_runtime::arena::page_meta::flush_deferred_old_page_registrations_batch"
+          },
+          {
+            "percent": 0.31,
+            "samples": 185,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::arena::walk::ArenaObjectCursor>::ensure_current_block"
+          },
+          {
+            "percent": 0.3,
+            "samples": 181,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] perry_runtime::object::visit_overflow_field_slots_mut::<perry_runtime::gc::layout_slot_visit::visit_gc_rewrite_slot_descriptors_with<false, perry_runtime::gc::layout_slot_visit::visit_gc_rewrite_slots<perry_runtime::gc::verify::remember_retained_old_to_young_slots::{closure#0}>::{closure#0}>::{closure#2}>"
+          },
+          {
+            "percent": 0.29,
+            "samples": 174,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] perry_runtime::object::descriptor_state::get_accessor_descriptor"
+          },
+          {
+            "percent": 0.27,
+            "samples": 164,
+            "dso": "libc.so.6",
+            "symbol": "[.] __memcmp_evex_movbe"
+          },
+          {
+            "percent": 0.25,
+            "samples": 150,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] _mi_page_malloc_zero"
+          },
+          {
+            "percent": 0.25,
+            "samples": 149,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] js_native_call_method"
+          },
+          {
+            "percent": 0.23,
+            "samples": 137,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::layout::child_slots::HeapChildSlotIterator as core::iter::traits::iterator::Iterator>::next"
+          },
+          {
+            "percent": 0.22,
+            "samples": 129,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::barrier::leaf::decode_raw_pointer_candidate"
+          },
+          {
+            "percent": 0.21,
+            "samples": 125,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::copying::CopyingNurseryCollector>::mark_addr"
+          },
+          {
+            "percent": 0.21,
+            "samples": 125,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::trace::ValidPointerSetBuilder>::step_arena_walk"
+          },
+          {
+            "percent": 0.2,
+            "samples": 120,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] perry_runtime::object::shapes::shape_descriptor_intern_with_special_mode"
+          },
+          {
+            "percent": 0.2,
+            "samples": 119,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::roots::mark_mutable_root_slots_step"
+          }
+        ]
+      },
+      "data_sha256": "7a5f7e69fb380c8e64b5f6bb847daa6f2abd9c75c41e4a6a0aa0c4190e6c2fd2",
+      "report_sha256": "cf5e2e19d23e82176e59d38a8a11f9d7d8a55b2a15123054408809efc1d36cfa"
+    },
+    {
+      "prefix": "gc-auto-current0ed-qb6-v17r1-partial",
+      "arm": "current0ed-base",
+      "case": "tscwork",
+      "repeat": 1,
+      "correct": true,
+      "symbol_sha256": "4bd339d95e3053d62fff6299afe0566655cd23307e8827dec67e4dfb19419a56",
+      "plain_sha256": "d3e6ac7d8c54453d92f1480f49acc34d44a50080ccaef8cf79bbccb00eff79ee",
+      "text_sha256": "ba00299dc7b75cad31c7e9f69bf7d1b3ca2e63ed0dc4936453a6d2873a4619c2",
+      "attribution": {
+        "event_count_approx": 61442000000,
+        "samples": 61442,
+        "lost_samples": 0,
+        "gc_self_samples": 46475,
+        "arena_self_samples": 1598,
+        "unresolved_samples": 40,
+        "top_symbols": [
+          {
+            "percent": 13.16,
+            "samples": 8086,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::trace::trace_heap_rewrite_slots::{closure#0}"
+          },
+          {
+            "percent": 7.27,
+            "samples": 4464,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::layout_slot_visit::visit_gc_rewrite_slots::<perry_runtime::gc::verify::remember_retained_old_to_young_slots::{closure#0}>::{closure#0}"
+          },
+          {
+            "percent": 7.12,
+            "samples": 4373,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::trace::ValidPointerSet>::contains"
+          },
+          {
+            "percent": 6.48,
+            "samples": 3979,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::verify::remember_evacuated_old_to_young_slot"
+          },
+          {
+            "percent": 5.06,
+            "samples": 3111,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::layout_slot_visit::visit_gc_layout_slot_descriptors.specialized.6"
+          },
+          {
+            "percent": 4.65,
+            "samples": 2858,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] perry_runtime::object::shapes::note_old_generation_carrier"
+          },
+          {
+            "percent": 4.56,
+            "samples": 2803,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::trace::trace_heap_rewrite_slots::{closure#0}::{closure#0}"
+          },
+          {
+            "percent": 3.73,
+            "samples": 2289,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::layout_slot_visit::visit_gc_layout_slot_descriptors"
+          },
+          {
+            "percent": 3.49,
+            "samples": 2145,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::trace::ValidPointerSetBuilder>::step"
+          },
+          {
+            "percent": 3.26,
+            "samples": 2006,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::layout::child_slots::GcMutableSlotDescriptor>::visit_slots"
+          },
+          {
+            "percent": 2.58,
+            "samples": 1586,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::barrier::remembered_child_needs_tracking"
+          },
+          {
+            "percent": 2.41,
+            "samples": 1480,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::layout_tables::per_object_slot_mask"
+          },
+          {
+            "percent": 1.95,
+            "samples": 1200,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::verify::remember_retained_old_to_young_slots"
+          },
+          {
+            "percent": 1.88,
+            "samples": 1154,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::cycle::GcCycleState>::step_sweep"
+          },
+          {
+            "percent": 1.53,
+            "samples": 940,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::types::gc_type_finalize_unmarked_payload"
+          },
+          {
+            "percent": 1.41,
+            "samples": 867,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::trace::drain_trace_worklist_step"
+          },
+          {
+            "percent": 1.23,
+            "samples": 755,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::layout::child_slots::HeapChildSlotIterator>::new"
+          },
+          {
+            "percent": 1.04,
+            "samples": 641,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::oldgen::sweep_objects::ArenaSweepObjectsState>::reclaim_dead_object"
+          },
+          {
+            "percent": 0.84,
+            "samples": 514,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::verify::remember_retained_old_to_young_slots::{closure#0}"
+          },
+          {
+            "percent": 0.78,
+            "samples": 481,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::dead_owner::PostTraceProbe>::owner_is_dead"
+          },
+          {
+            "percent": 0.76,
+            "samples": 470,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::verify::OldToYoungRememberedRebuildState>::step"
+          },
+          {
+            "percent": 0.49,
+            "samples": 304,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] js_object_get_field_ic_front"
+          },
+          {
+            "percent": 0.45,
+            "samples": 276,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] perry_runtime::arena::page_meta::old_page_account_swept_object"
+          },
+          {
+            "percent": 0.44,
+            "samples": 268,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::arena::walk::ArenaObjectCursor>::ensure_current_block"
+          },
+          {
+            "percent": 0.4,
+            "samples": 247,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::barrier::leaf::decode_raw_pointer_candidate"
+          },
+          {
+            "percent": 0.39,
+            "samples": 239,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::arena::page_meta::page_class::PageGenerationCacheSet>::insert"
+          },
+          {
+            "percent": 0.39,
+            "samples": 238,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::malloc::gc_malloc_header_is_tracked"
+          },
+          {
+            "percent": 0.37,
+            "samples": 228,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] perry_runtime::object::visit_overflow_field_slots_mut::<perry_runtime::gc::layout_slot_visit::visit_gc_rewrite_slot_descriptors_with<false, perry_runtime::gc::layout_slot_visit::visit_gc_rewrite_slots<perry_runtime::gc::verify::remember_retained_old_to_young_slots::{closure#0}>::{closure#0}>::{closure#2}>"
+          },
+          {
+            "percent": 0.37,
+            "samples": 225,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] js_closure_call1"
+          },
+          {
+            "percent": 0.36,
+            "samples": 222,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] perry_runtime::gc::trace::try_mark_raw_root_addr"
+          },
+          {
+            "percent": 0.32,
+            "samples": 198,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] perry_runtime::object::descriptor_state::get_accessor_descriptor"
+          },
+          {
+            "percent": 0.32,
+            "samples": 194,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] perry_runtime::box::has_cell_type"
+          },
+          {
+            "percent": 0.31,
+            "samples": 190,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] perry_runtime::arena::page_meta::flush_deferred_old_page_registrations_batch"
+          },
+          {
+            "percent": 0.28,
+            "samples": 173,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] <hashbrown::raw::RawTable<(usize, alloc::vec::Vec<alloc::sync::Arc<perry_runtime::atomics_futex::Waiter>>)>>::remove_entry::<hashbrown::map::equivalent_key<usize, usize, alloc::vec::Vec<alloc::sync::Arc<perry_runtime::atomics_futex::Waiter>>>::{closure#0}>"
+          },
+          {
+            "percent": 0.25,
+            "samples": 153,
+            "dso": "libc.so.6",
+            "symbol": "[.] __memcmp_evex_movbe"
+          },
+          {
+            "percent": 0.24,
+            "samples": 149,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::layout::child_slots::HeapChildSlotIterator as core::iter::traits::iterator::Iterator>::next"
+          },
+          {
+            "percent": 0.24,
+            "samples": 146,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::copying::CopyingNurseryCollector>::mark_classified"
+          },
+          {
+            "percent": 0.23,
+            "samples": 141,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] js_native_call_method"
+          },
+          {
+            "percent": 0.22,
+            "samples": 137,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] _mi_page_malloc_zero"
+          },
+          {
+            "percent": 0.22,
+            "samples": 133,
+            "dso": "gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::trace::ValidPointerSetBuilder>::step_arena_walk"
+          }
+        ]
+      },
+      "data_sha256": "c4c0c941ee360f88c1b88aa604f41e807aa780647e3f080ebd24a5bea2c67c67",
+      "report_sha256": "b9c3dac129ba1bbfbdb7eaf3c51cf290145b480b2d916f76c9d7cf49a5d26536"
+    }
+  ]
+}

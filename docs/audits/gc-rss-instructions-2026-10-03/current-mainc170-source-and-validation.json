@@ -1,0 +1,77 @@
+{
+  "base": "c17090892e2a749bb4a3f2a0022e0f8274f0320c",
+  "source_head": "f60e41c5ba519167252e94248dea8e9090990eea",
+  "macos_runtime": {
+    "passed": 4872,
+    "failed": 0,
+    "ignored": 5,
+    "log_sha256": "8bccf85dfc6a16829c76f39a278f344af4e8b32b1aaf28c5c38e853425d04605"
+  },
+  "authored_gc_paths": {
+    "crates/perry-runtime/src/arena/block.rs": "80fe691f930208ac5562b40d4fddd7471f65f37cfc0ae32728d074e764c9df1f",
+    "crates/perry-runtime/src/arena/block/decommit.rs": "373112473c98732dd1e9e5b513de2f994f70ca7e0d19416ea3401d4e53062fa3",
+    "crates/perry-runtime/src/arena/block/reuse_window_tests.rs": "52668541321e94786fad55cf6193c6499ac4f763a2ce908be31a11b2d707ff25",
+    "crates/perry-runtime/src/arena/mod.rs": "1b26f18e84cc6cdf2a10711591f31aea5d5c087a8b3ebe919ebe743aec67e404",
+    "crates/perry-runtime/src/arena/page_meta/compact.rs": "9cb37c3003560cf46de300159ba98829e8ed45b469ce63f2b4e2ce081e65e481",
+    "crates/perry-runtime/src/arena/page_meta/compact/tests.rs": "35e121f6aa1bc4f36dee0c04595daeb5455c31fcaf0fb2798037bef16f9056ea",
+    "crates/perry-runtime/src/arena/page_meta/maintenance.rs": "cf4a8ec96ce435c5a7fd56ef5cf151709af84d1c1820d38204a0ea809b921e4a",
+    "crates/perry-runtime/src/arena/page_meta/mod.rs": "045b85c7a87e780f1d5bc9b65c2c273fe1182e3c2059f9095e0394a9c39037e8",
+    "crates/perry-runtime/src/arena/page_meta/storage.rs": "021733aa3126f82f2abc774bf2ee2111cf9c94654e9494de2e9c41de6f3ab49a",
+    "crates/perry-runtime/src/arena/page_meta/sweep_tally.rs": "ebb54d8d153cc0ce5237e09c16f1cc6388b2da06ec2971e7907e28136ba82fd0",
+    "crates/perry-runtime/src/arena/tests.rs": "741b32a49e3631bef59af384b72bf397e77abffd9b17e22fa9e822678b9e4f7b",
+    "crates/perry-runtime/src/arena/tests_page_meta_audit.rs": "4743a1775a167f7ac0a2d0bbb4eb1030605557476dc21324fa14a5a8a34113f6",
+    "crates/perry-runtime/src/arena/tests_promoted_runs.rs": "ea18f705c24ec5ced08d8df089ba8631c2b9b47936430103530f03f81169c0d1",
+    "crates/perry-runtime/src/arena/walk.rs": "14637c65e2ef68fdf8901dc797ba35a730c015667a0b86193295f3fbdce1472b",
+    "crates/perry-runtime/src/gc/cycle.rs": "61c0c5e44e00de3761ca37ada59a679baf3daf28de5d217751fa47c4b43f476d",
+    "crates/perry-runtime/src/gc/layout_slot_visit.rs": "197316543dc4a86cc531c64a383f2044b878acfa41bc694840814f35f3b9387a",
+    "crates/perry-runtime/src/gc/malloc.rs": "d56d2bc9a4c819b9ec9d83f879c775d865436abebafe8717e3009e5c56386e51",
+    "crates/perry-runtime/src/gc/mod.rs": "59f842ca83a2ffa6b3f92b2bdf4b3bfba3898a96a349e8d059a82ecb9e667b0b",
+    "crates/perry-runtime/src/gc/tests/alloc.rs": "b1aecc30fdfffd7f9336d0f7b7a08168deed189c8d47c2b5f0051459ce084edf",
+    "crates/perry-runtime/src/gc/tests/full_rebuild_skip.rs": "665bbb157c621dd5dd1b80913de079c7ed3b5cac02aa67909a4f548da99bf078",
+    "crates/perry-runtime/src/gc/verify.rs": "3dd3c7326dd5d1d159dd9d21d58968e5f55ec608cf38b30af33895bd2465145b",
+    "crates/perry-runtime/src/turnloop_pool/tests.rs": "5e78833ca5151d13a25b39303fd9d4af3adac66c7dd523ec62e6dc31f6a6ccfc"
+  },
+  "compiler_guard_fix": "80bc874875 inherited from main; both fresh request builds succeed. All 30 normal-auto and 4 full-runtime app builds succeed. Application output/performance measurements are pending.",
+  "full_application_acceptance": false,
+  "older_evidence": "All0ed measurements, snapshots and private experiments remain bound to0ed and are not relabelled.",
+  "linux_build_and_linked_verification": {
+    "base": "c17090892e2a749bb4a3f2a0022e0f8274f0320c",
+    "source_head": "f60e41c5ba519167252e94248dea8e9090990eea",
+    "host": "qb6",
+    "inputs_sha256": "97466af85bef4f8b911eb23bb47ab48a3259b32a622a4e5e797e3b31b30d4c7c",
+    "products": {
+      "base/libperry_stdlib.a": "82f2067e79a442b9a398e979e6ef53ba769378f330fe26a4871111a8f358ef2b",
+      "base/libperry_runtime.a": "d74923ff61ec7ad36bfcd7bb7d5b5b3e4471e9942b32944a6736dea060b191a8",
+      "base/perry": "bce7585a30faf01992633b8397508a9daff2daa34790395a82e0c5bfa4241a5c",
+      "gc/libperry_stdlib.a": "7a474ff01c5b02e3720400afd00b024c7a5958bc77929ceb8ca35215d3c2aa8b",
+      "gc/libperry_runtime.a": "a012ac997377676dc88dc3ad78d7a2a9bdc803b2fb0c6d63500916f6546a42bc",
+      "gc/perry": "57a9e13b5d784bcefe9f7d1ed011f2bb1548f5fbe1616c183adc78efb0c395bb"
+    },
+    "logs": {
+      "base-build.log": "7819c81374e77c03b07effa605529cdf840da3e2fe5c4640ab0338e69de318af",
+      "gc-build.log": "0e1dd3e2941ecd5d1cd522e5f642bc27e91c15151d880d36e32aff831b6ced84",
+      "gc-runtime-tests.log": "f57a1939061b650e32f5ee830460696537e5974ef0092a7f0ef3694efbf75157",
+      "gc-ffi-tests.log": "e6bd5073c604f56cf0690d78666a2c29d36cc61d326fb1b1cdf31d866b102253",
+      "gc-events-tests.log": "e50b63f562fac06bb7e62fc6248c2a9adc6d6511798a03dbe5d518f965679108"
+    },
+    "tests": {
+      "runtime": 4856,
+      "ffi": 75,
+      "events": 15
+    },
+    "linked": {
+      "executions": 44,
+      "default": 22,
+      "moving": 22,
+      "all_copied_and_protected": true,
+      "manifest_sha256": "1ce897340c931383fc57ef63a16c7ad547762a9b451e7e0c71a348965f7d63af"
+    },
+    "auto_build_coverage": {
+      "build_records": 30,
+      "successful": 30,
+      "failed_sources": [],
+      "scope": "Complete build coverage; failed builds excluded from acceptance."
+    },
+    "performance_acceptance": false
+  }
+}

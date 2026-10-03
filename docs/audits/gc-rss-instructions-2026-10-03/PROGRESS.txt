@@ -980,3 +980,44 @@ Largest non-overlapping RSS investigation: retained arena backing at peak,
 release latency/reuse and old-hole compaction cost. Whole free-block advice is
 implemented; intrusive headers/free-chain links prevent blind advice of small
 holes. The measured memory floor is not yet an established absolute minimum.
+
+NEW FETCHED MAIN c170 (2026-10-03)
+Main80bc874875 fixes the obsolete Float64 guard by receiver storage byte;
+c17090892e adds callback-element rooting. Rebased draft without conflicts:
+f60e41c5ba519167252e94248dea8e9090990eea. All production changes remain22GC
+paths; no authored object/header/codegen/ABI edits. New Mac4872/0/5 passes.
+Fresh Linux compiler/static wrappers rebuilt in ownsource/target/runtime;
+Linux4856/0/5,FFI75/events15 and44linked executions pass. All22moving runs
+actuallycopy/protect, including the new11816callback-element fixture.
+Both newmain request builds have succeeded; runtime oracle/perf acceptance
+is pending, so earlier compiler blocker is fixed in source/build only so far.
+Normal-auto arms compile in parallel, eight workers perarm, isolated manifests.
+Full-runtime build pass is separate; sources/logs/products copied off by17:55Z.
+No0ed measurement or census is relabelled as c170 evidence.
+
+PRIVATE CALLBACK CAPTURE ON 0ed: NO MATERIAL APP BENEFIT
+Linux4856tests and20linked runs pass, including10actual copied/protected.
+24full-runtime measurements pass: TS instructions-0.081%,RSS+0.147%;
+Zod instructions+0.220%,RSS+0.553%. This remains unapplied, as does tag-word
+shortening. Static ARM callback instruction counts did not translate into
+substantial app savings; no further source claims are made from them.
+Current0ed exact normal-auto instruction profiles completed12runs with zero
+lost samples. TS GC self samples remain~76-80% of user instruction samples,
+so tracing/remembered-parent work is still the priority. Zod samples are too
+small to assign its0.66% aggregate regression to a specific function reliably.
+Sample percentages are diagnostic, not exact instruction deltas.
+
+CURRENT c170 BUILD COVERAGE COMPLETE; MEASUREMENTS STARTED
+All30 normal-auto builds succeeded, covering all17 workloads; all4full-runtime
+TS/Zod builds succeeded. Independent archive/source/log/product/linked checks
+pass. No request case is excluded on c170. All final exports are copied from
+qb6 to local and to the original measurement host before the rental deadline.
+Fresh24full-runtime then204normal-auto measurements run under the shared heavy
+lock on the original host. Acceptance is pending, not inferred from builds.
+
+CURRENT c170 FULL-RUNTIME COMPARISON COMPLETE
+24/24 correct executions. TS peak RSS248.402->239.219MiB(-3.697%),
+instructions-0.36%,minor faults+42.64%; Zod29.184->29.258MiB(+0.254%),instructions-0.56%.
+These are fresh c170 results, three repetitions on the original shared host.
+Full17-case204normal-auto comparison remains running; no universal acceptance
+is claimed. Detailed repetitions and counters remain in the bound summary.
