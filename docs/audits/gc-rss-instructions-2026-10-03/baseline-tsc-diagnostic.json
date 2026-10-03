@@ -1,0 +1,66 @@
+{
+  "base": "ebc858cb9806845998cee28decc666c3ea226fd2",
+  "scope": "no-auto full-runtime diagnostic; not primary normal-auto result",
+  "source_sha256": "0bc65e9930534ac2bde638a5a5c2f280a78e3848223ceff46f8ee97662451a7a",
+  "plain_binary_sha256": "458bb1fe0fb7b40d39b5b2e73258d92a62130ee4c9c5a806817e0ddaf5bc2a75",
+  "symbol_binary_sha256": "0b335b8f7736dc5f522155387156401882d9dc5483bc69c50062dc7c75665c4d",
+  "plain_runs": [
+    {
+      "repeat": 0,
+      "peak_rss_bytes": 257863680,
+      "user_s": 8.85,
+      "sys_s": 0.34,
+      "correct": true
+    },
+    {
+      "repeat": 1,
+      "peak_rss_bytes": 257892352,
+      "user_s": 8.86,
+      "sys_s": 0.33,
+      "correct": true
+    },
+    {
+      "repeat": 2,
+      "peak_rss_bytes": 257994752,
+      "user_s": 7.57,
+      "sys_s": 0.3,
+      "correct": true
+    }
+  ],
+  "perf_runs": [
+    {
+      "repeat": 0,
+      "events": {
+        "instructions": 65760456675,
+        "cycles": 41312851261
+      },
+      "correct": true
+    },
+    {
+      "repeat": 1,
+      "events": {
+        "instructions": 65757458196,
+        "cycles": 41624945796
+      },
+      "correct": true
+    },
+    {
+      "repeat": 2,
+      "events": {
+        "instructions": 65749192961,
+        "cycles": 30798044845
+      },
+      "correct": true
+    }
+  ],
+  "gc_instruction_self_sample_percent": [
+    73.72,
+    73.64
+  ],
+  "trace": {
+    "full_collections": 82,
+    "minor_collections": 6,
+    "full_trigger": "old_gen_bytes"
+  },
+  "observer_limitation": "A debugger run reached 77 fulls, so the attempted full #80 snapshot never fired. Its output correctness is not a successful census. New observations use an early natural full."
+}

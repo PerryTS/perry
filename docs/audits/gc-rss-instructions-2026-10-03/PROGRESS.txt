@@ -1,0 +1,126 @@
+GC RSS and instruction work — draft progress, 2026-10-03
+
+Objective
+Minimize compiled-program peak RSS with Perry's GC while minimizing the
+instructions required to retain those savings. Application correctness,
+moving collection, FFI/events, idle/async behavior and retained/churn mixes
+remain acceptance requirements. This draft does not establish an absolute
+RSS minimum or a finished performance result.
+
+Current base
+f6c873d99622d1bb751f198cfbd6cf3475251935, fetched from main on October 3.
+The existing measured baseline is ebc858cb9806845998cee28decc666c3ea226fd2.
+The intervening commit changes CI/test/docs files only. Crates, Cargo inputs
+and toolchain inputs are identical (main-production-equivalence.json).
+
+Implemented in this draft
+1. MallocState's exact-pointer set has no backing allocation until activation.
+   Preserve the existing initial/heavy growth headroom when it becomes active.
+   The independent Linux allocator probe avoids 73,744 bytes initially and
+   4,718,608 bytes for an inactive heavy registry. These are requested backing
+   bytes, NOT measured application RSS savings. An active registry retains
+   its full membership and headroom.
+2. Remembered-set rebuilding drops snapshots of uniformly nursery/longlived
+   blocks before iterating objects. Keep old, unknown and mixed ranges, plus
+   the existing malloc-parent walk and global census block indices.
+   Generation classification is essential: in-place promotion retags Eden
+   old before transferring its blocks to OLD_ARENA. Filtering by arena owner
+   alone was rejected during the audit. A new test exercises that window.
+   Other tests compare the resulting remembered edges with the original
+   whole-heap walk and require at least 40,000 avoided young-object visits.
+3. Reuse the copying collector's exact already-noted shape-carrier predicate
+   in the generic layout visitor. Skip a generation probe and a repeated
+   carrier note only when both epoch flags already make that note a no-op.
+   Continue enumerating the shape's keys edge and all other child slots.
+
+Validation so far
+Current six-file runtime/test patch: 4,834 passed, 0 failed, 5 ignored on
+macOS arm64, serial perry-runtime unit suite. Source hashes and log digest
+are in source-and-validation.json. This includes the promotion-window test.
+Earlier lazy-registry-only revision: Linux runtime 4,813 passed / 5 ignored;
+FFI with runtime-link 75 passed; events 15 passed; compiler and both static
+wrappers built together successfully. Those Linux results do not validate
+the two subsequent scan optimizations. Their Linux run is queued.
+
+Current measurements
+Clean-main TypeScript, three fresh plain processes, full runtime/no auto:
+peak RSS 257,863,680 / 257,892,352 / 257,994,752 bytes (about 246 MiB).
+Total retired instructions about 65.75 billion. Two user-instruction sample
+profiles attribute 73.72% / 73.64% of self samples to GC functions. This is
+sampled instruction attribution, not an exact GC-only instruction counter
+or a wall-time fraction. The separate trace reports 82 fulls and 6 minors;
+all full triggers are old_gen_bytes. Fulls reclaim substantial garbage,
+so raising thresholds to suppress them is not an established improvement.
+Main costs: slot visitors/marking, retained-edge rebuild, pointer validation,
+shape carrier notes, valid-pointer-set construction and sweep.
+
+Heap attribution requested by the shape campaign
+Observers now read shape slabs/directories/extras/ConstFn lists and distinct
+ObjectMeta allocations, then reconcile type counts/bytes with runtime census.
+The synthetic observer preflight passes: 11 shape records, 2 extras and
+2 ConstFn entries; 80 requested bytes omitted by the stock shape counter.
+The four per-object accessor/descriptor summary fields reserve 32 bytes per
+ObjectMeta. Exact TS/Zod totals remain pending; do not extrapolate the probe.
+The first TS census attempted full #80 from a plain trace. Under GDB the
+program reached only 77 fulls; the hook never armed. The successful stdout
+was NOT a successful census. Failed evidence is preserved. The replacement
+uses the third natural synchronous full (or an earlier one for a shorter
+workload), clearly separate from peak RSS. Each snapshot owns its counts;
+debugger/native fallback can affect liveness and collection counts.
+Native ownership observation separately reconciles resident anonymous pages
+to smaps and splits canonical-key indices by actual allocation stack. Mixed
+pages remain unassigned; requested/usable/resident bytes remain separate.
+
+Earlier experiments still relevant, held separately
+The larger rss-header-20261002 experimental tree contains cold metadata,
+header, arena and GC-policy experiments plus dynamic string accumulation.
+An older combined experiment reduced TypeScript median RSS 237.45 -> 180.30
+MiB and instructions about 80%, chiefly by reducing transient string
+allocation (about 2.36 GB -> 75.6 MB cumulative arena allocation). These are
+historical comparisons between those experimental arms, NOT gains proven
+for this draft versus latest main. The broad tree is frozen pending isolation
+and coordination; it is not a landable combined implementation. An eight-byte
+TOTAL object header remains unimplemented and unproven.
+
+Shape campaign boundary
+The owner-approved order is #10498 prototype-in-shape first, compact header
+later with coordinated codegen/ABI offsets. The campaign owns prototype,
+brand/flag placement; accessors and descriptor summaries (#10498/#10871);
+function descriptors (#10507); array named props/layout; closure/ConstFn
+layout; canonical-key/reverse indices (#10753); and shape record layout.
+This draft changes GC traversal/control only and adds no side table or shape
+format. Residual exotic/symbol/prototype table restructuring still requires
+a concrete coordination proposal before implementation. No such rewrite is
+underway. The existing exact shape no-op predicate is reused unchanged.
+
+Queued work and remaining acceptance
+- Linux current-candidate runtime/FFI/events plus coherent static build.
+- Three compiled rooting/old-to-young fixtures on baseline and candidate,
+  default and stress modes. Stress must match Node output, copy objects and
+  report protected retired from-space. A zero-moving run is not a pass.
+- Normal-auto 17-case A/B, 3 RSS/CPU and 3 instruction/cycle measurements per
+  case/arm (204 executions), exact complete stdout against Node 26.5.1.
+- Finish TS/Zod census and native ownership attribution; inspect remaining
+  allocation amplification and expensive GC callbacks for further changes.
+- Competitors: latest npm ScriptC 0.2.1, Porffor alpha15 (72d048d73d49), and
+  Static Hermes static_h ade4a2b20246 pinned. Porffor/Hermes refreshed runs
+  complete; ScriptC's initial attempts could not find unversioned clang.
+  A retry uses installed LLVM 22. Genuine language/output failures stay
+  visible and are not ranked as low-RSS wins. Final Perry comparison pending.
+- Preserve the strongest validated memory changes while measuring each
+  instruction optimization. Review real-app tradeoffs and run CI gates
+  before this draft is ready to merge. No merge is requested now.
+
+Where Claude can inspect running evidence
+Build host: perrymaster.skelpo.net, /root/rss-header-20261002.
+Current source: perry-gc-runtime-main (updated by the queued v2 build).
+Frozen earlier products: gc-runtime-main; next products: gc-runtime-scan-main.
+Drivers: campaign-v2-run.sh, comparator-scriptc-retry.sh,
+gc-runtime-scan-v2-run.sh. They serialize on /root/.perry-heavy.lock.
+The scan driver runs build -> linked moving checks -> normal-auto matrix.
+State files: campaign-main-v2.exit, campaign-main-native-v2.exit,
+comparator-scriptc-retry.exit, gc-runtime-scan-v2-build.exit,
+gc-runtime-scan-v2-linked.exit, gc-runtime-scan-v2-auto.exit.
+Absent exit files are not proof that a process is alive: inspect its PID.
+The raw logs, source/binary hashes, harnesses and frozen experimental reports
+are retained there; current PR source hashes must match the v2 manifest.

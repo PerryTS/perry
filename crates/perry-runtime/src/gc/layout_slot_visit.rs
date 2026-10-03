@@ -136,7 +136,13 @@ pub(super) unsafe fn visit_gc_layout_slot_descriptors_inline<F>(
         // next full trace recomputes it. A to-space survivor IS nursery, so a
         // young carrier still relies on the edge emitted just below.
         let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
-        if !crate::arena::pointer_in_nursery(user_ptr as usize) {
+        // The copying drain uses this same exact no-op test. Once a shape's
+        // old-carrier flags are set for the epoch, another carrier changes
+        // neither flag nor the candidate list. Avoid its generation lookup
+        // and the repeated note; still enumerate the shared keys edge below.
+        if !crate::object::shapes::old_generation_carrier_already_noted(child_slots.object_shape)
+            && !crate::arena::pointer_in_nursery(user_ptr as usize)
+        {
             crate::object::shapes::note_old_generation_carrier(child_slots.object_shape);
         }
         crate::object::gc_shape_keys_edge_slot(child_slots.object_shape)
