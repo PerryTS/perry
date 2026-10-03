@@ -537,5 +537,7 @@ pub(crate) unsafe fn mark_array_layout_unknown(arr: *mut ArrayHeader) {
     crate::gc::layout_mark_unknown(arr as *mut u8);
 }
 
-/// Minimum initial capacity for arrays to reduce reallocations
-pub(crate) const MIN_ARRAY_CAPACITY: u32 = 16;
+/// Small initial backing for empty/small arrays. Four slots let common short
+/// child lists fill without growth, while leaves avoid the former 16-slot
+/// reserve (#11744). Arrays that grow still double through `js_array_grow`.
+pub(crate) const MIN_ARRAY_CAPACITY: u32 = 4;
