@@ -116,5 +116,15 @@
       "sha256": "a84f2145f9a18ca99405b08f7a5782340d0ba4992396b608805bac3ac507fef6"
     }
   },
-  "remote_source_transfer": "Both archives and all 23 overlay members rehashed successfully on the build host."
+  "remote_source_transfer": "Both archives and all 23 overlay members rehashed successfully on the build host.",
+  "linux_build_server_validation": {
+    "build_verification": "qb6-current-maine532-build-verification.json",
+    "linked_verification": "qb6-current-maine532-linked-verification.json",
+    "runtime_tests": 4846,
+    "ffi_tests": 75,
+    "events_tests": 15,
+    "linked_default": 20,
+    "linked_moving_copied_and_protected": 20,
+    "performance_acceptance": false
+  }
 }

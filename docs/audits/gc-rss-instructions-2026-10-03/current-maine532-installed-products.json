@@ -1,0 +1,17 @@
+{
+  "products": {
+    "/root/rss-header-20261002/currente532-base/perry": "5fc1976badd158f1b0afe25a8acb1d37dfcfeb4b26044ba69b878ab144b62b4b",
+    "/root/rss-header-20261002/currente532-base/libperry_runtime.a": "3e9e3ddd6ba571cc141ecfe2311d17b2e0241b45e5547cba8308c9782d59ae27",
+    "/root/rss-header-20261002/currente532-base/libperry_stdlib.a": "521f62a94c8632d469c100f1977935030ad7e362cbc99915f3969e53c2959987",
+    "/root/rss-header-20261002/currente532-gc/perry": "6303abe96dfd52120b79e20d719fa91707ae32124f21068d3ae840f9f379dc87",
+    "/root/rss-header-20261002/currente532-gc/libperry_runtime.a": "251967a6b26d915276b8f8b117b7fa6a0a67bedf820f74f61fd15e5bf54f2cc1",
+    "/root/rss-header-20261002/currente532-gc/libperry_stdlib.a": "e50804252ca5af2be85fe708c494a72c4752405693516d36b8f0c11ba994eb68"
+  },
+  "proof_sha256": "4c683f47209d793f7cb9f92de087fb80a4d715171f36d07cad036624b600a895",
+  "source_archives": {
+    "perry-currente532-source.tar.gz": "254af5e6a8a5e5b7bc9a917c627f36b2051896dde42b51843f044383a96f8562",
+    "gc-runtime-currente532-v12-source.tar.gz": "0b2378605c8a2f9ff51eaa44329a9a407668ce8b5d535778aab6dfa36eb0f467"
+  },
+  "runtime_symbols_verified": true,
+  "scope": "Installed fresh e532 compiler/static runtime products from own build server; no application performance result."
+}
