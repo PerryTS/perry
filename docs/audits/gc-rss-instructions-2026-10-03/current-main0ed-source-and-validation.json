@@ -38,7 +38,7 @@
     "test_threads": 1
   },
   "inherited_main_changes": [
-    "1fe7fe898e: hidden-global declarations across codegen units, fixes the fresh e532 request-build blocker",
+    "1fe7fe898e: related hidden-global declaration fix included; fresh request compilation still fails on undeclared PERRY_TA_VIEW_GUARD",
     "263c6f5507: ordinary prototype is a shape fact; no independent metadata split"
   ],
   "linux": {
