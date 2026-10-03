@@ -8,7 +8,8 @@ page-directory shrink after full reclaim. Shape/header formats stay unchanged.
 The prior visitor revision passed 4,835 macOS tests; the page-table revision
 initially passed 4,846 with one capacity-test assertion failure. The test now
 samples capacity after removals, isolating our helper from HashMap tombstones.
-Latest-main runtime tests are running. All application acceptance remains open.
+Latest-main macOS runtime: 4,849 passed, 0 failed, 5 ignored.
+Linux and all application acceptance remain open.
 Running isolated comparisons retain the original f6c873/ebc858 production base.
 Those results cannot serve as final latest-main acceptance; a fresh baseline
 and consolidated candidate comparison is required after them. Source hashes:
@@ -260,3 +261,17 @@ page-fault/code-size observations and repeated TS/Zod census remain required.
 Isolated pre-rebase driver: gc-runtime-pages-v5-run.sh, source revision v5r1.
 Latest-main tests: logs/gc-runtime-pages-main69-macos.log. The original failed
 log gc-runtime-pages-v5-macos.log is retained; never relabel it as a pass.
+
+Latest-main validation result
+The complete current source on main69 passed the macOS runtime suite:
+4,849 passed, 0 failed, 5 ignored. Source and log hashes are recorded in
+pages-source-and-validation.json. This includes all new table tests and both
+expanded obligation audits. No Rust inputs changed after that successful run.
+Fresh-main source archive and separate candidate overlay are uploaded. The
+main69 driver builds a pristine baseline and the consolidated candidate in
+separate roots/targets, runs candidate runtime/FFI/events, linked moving checks,
+24 full-runtime TS/Zod diagnostic runs and 204 normal-auto executions. It is
+queued after the isolated older-base arms, whose results remain separately
+identified. Final comparator join must use these fresh-main normal-auto results.
+Source roots: perry-main69-base / perry-main69-gc (created only on admission).
+Driver: gc-runtime-main69-run.sh; receipt: gc-runtime-main69-run.exit.

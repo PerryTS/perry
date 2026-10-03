@@ -25,7 +25,7 @@
     "crates/perry-runtime/src/gc/verify.rs": "a2469bca4e1e1e199d4dfe2bd3722ccecb8ebeb4a2b5d2bab0a4d805ca67962a",
     "crates/perry-runtime/src/turnloop_pool/tests.rs": "5e78833ca5151d13a25b39303fd9d4af3adac66c7dd523ec62e6dc31f6a6ccfc"
   },
-  "validation": "Latest-main macOS runtime suite running. Original pre-rebase compaction attempt:4846 passed,1 failed,5 ignored. Repaired capacity test samples HashMap capacity after removals; that failure is preserved. Linux isolated-stage runs use the earlier frozen base; latest-main application acceptance pending.",
+  "validation": "Latest-main macOS full runtime suite:4849 passed,0 failed,5 ignored. Original pre-rebase compaction attempt:4846 passed,1 failed,5 ignored; repaired test samples HashMap capacity after removals. Linux and latest-main application A/B remain pending.",
   "original_failure_log_sha256": "118fae334fc478cb5f7cef591448c72c8c65c1043e63c07116cca4196e47211e",
   "prior_measurement_base": "f6c873d99622d1bb751f198cfbd6cf3475251935",
   "latest_main_delta_files": [
@@ -41,5 +41,6 @@
     "crates/perry-runtime/src/object/static_shapes.rs",
     "crates/perry-runtime/src/object/static_shapes_tests.rs",
     "docs/src/api/reference.md"
-  ]
+  ],
+  "latest_main_macos_log_sha256": "362d4d4ce4671934f09e1afef20fec182f834daea2221f05184f65aab463e7b8"
 }
