@@ -848,7 +848,9 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
         // walk also follows the generic-origin edge, so a dynamic RHS holding a
         // generic class (`const C = Gen; x instanceof C`) matches an instance of
         // one of its specializations.
-        if let Some(answer) = relinked_instance_chain_answer(value, obj_class_id, class_id) {
+        if let Some(answer) =
+            super::relinked_object_chain_answer(obj_ptr, value, obj_class_id, class_id)
+        {
             return if answer { true_val } else { false_val };
         }
         if class_chain_reaches(obj_class_id, class_id) {

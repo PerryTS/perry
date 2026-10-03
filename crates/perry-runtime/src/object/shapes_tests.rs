@@ -530,6 +530,63 @@ mod descriptor_tests_8067 {
         }
     }
 
+    /// The identity kind is a fact of the id's value: every band mints each
+    /// kind of identity under its own kind bits, which is what lets
+    /// `object_prototype_word` skip the record read.
+    #[test]
+    fn a_shape_id_says_what_kind_of_prototype_identity_it_names() {
+        let cases = [
+            (PROTO_ID_DEFAULT, SHAPE_ID_KIND_PLAIN),
+            (PROTO_ID_CLASS | 7, SHAPE_ID_KIND_PLAIN),
+            (PROTO_ID_PER_OBJECT, SHAPE_ID_KIND_PLAIN),
+            (42, SHAPE_ID_KIND_WORD),
+            (
+                PROTO_ID_MIXED | (7 << PROTO_ID_MIXED_SERIAL_BITS) | 42,
+                SHAPE_ID_KIND_WORD,
+            ),
+            (PROTO_ID_UNIQUE | 5, SHAPE_ID_KIND_WORD),
+            (PROTO_ID_NULL, SHAPE_ID_KIND_NULL),
+        ];
+        for (proto_id, kind) in cases {
+            assert_eq!(proto_id_kind(proto_id), kind, "{proto_id:#x}");
+            for _ in 0..3 {
+                for id in [
+                    alloc_shape_id(proto_id).unwrap(),
+                    alloc_dictionary_shape_id(proto_id).unwrap(),
+                    alloc_exotic_shape_id(proto_id).unwrap(),
+                ] {
+                    assert_eq!(shape_word_kind(id), kind, "{id:#x}");
+                    assert_eq!(shape_word_may_be_linked(id), kind != 0, "{id:#x}");
+                }
+            }
+        }
+        // A counter that reaches another kind's granule skips to its own next
+        // one, and one that would skip past the band's end parks there.
+        let g = 1u32 << SHAPE_ID_KIND_SHIFT;
+        let next = std::sync::atomic::AtomicU32::new(SHAPE_ID_BASE + g - 1);
+        let plain = |next: &std::sync::atomic::AtomicU32| {
+            alloc_shape_id_of_kind(next, SHAPE_ID_END, SHAPE_ID_KIND_PLAIN)
+        };
+        assert_eq!(plain(&next), Ok(SHAPE_ID_BASE + g - 1));
+        assert_eq!(plain(&next), Ok(SHAPE_ID_BASE + 4 * g));
+        let next = std::sync::atomic::AtomicU32::new(SHAPE_ID_BASE + g);
+        assert_eq!(
+            alloc_shape_id_of_kind(&next, SHAPE_ID_END, SHAPE_ID_KIND_NULL),
+            Ok(SHAPE_ID_BASE + 2 * g)
+        );
+        let next = std::sync::atomic::AtomicU32::new(SHAPE_ID_BASE + 3 * g);
+        assert_eq!(
+            alloc_shape_id_of_kind(&next, SHAPE_ID_END, SHAPE_ID_KIND_WORD),
+            Ok(SHAPE_ID_BASE + 5 * g)
+        );
+        let next = std::sync::atomic::AtomicU32::new(SHAPE_ID_END - 1);
+        assert_eq!(plain(&next), Err(ShapeIdExhausted));
+        assert_eq!(
+            next.load(std::sync::atomic::Ordering::Relaxed),
+            SHAPE_ID_END
+        );
+    }
+
     #[test]
     fn exhaustion_parks_without_reuse_or_alias() {
         let next = std::sync::atomic::AtomicU32::new(SHAPE_ID_END - 1);
@@ -566,7 +623,8 @@ mod descriptor_tests_8067 {
         let keys = 0x8067_0000_0000_1700usize;
         let local = shape_descriptor_ensure(keys as *const ArrayHeader, 1, 1)
             .expect("shape range unexpectedly exhausted");
-        let external = alloc_shape_id().expect("shape range unexpectedly exhausted");
+        let external =
+            alloc_shape_id(PROTO_ID_DEFAULT).expect("shape range unexpectedly exhausted");
         assert!(shapes_slot_list::install_external_shape_id(
             external,
             keys as *const ArrayHeader,

@@ -1141,17 +1141,92 @@ const _: () = assert!(DICTIONARY_SHAPE_ID_BASE < SHAPE_ID_END);
 /// stamp arriving on another thread must never alias an id that thread
 /// allocated for a different shape. Monotonic — ids are NEVER reused, so
 /// a stale stamp or cache entry can only miss, not falsely hit.
-static SHAPE_ID_NEXT: std::sync::atomic::AtomicU32 =
-    std::sync::atomic::AtomicU32::new(STATIC_SHAPE_ID_END);
+static SHAPE_ID_NEXT: [std::sync::atomic::AtomicU32; 3] = [
+    std::sync::atomic::AtomicU32::new(STATIC_SHAPE_ID_END),
+    std::sync::atomic::AtomicU32::new(STATIC_SHAPE_ID_END),
+    std::sync::atomic::AtomicU32::new(STATIC_SHAPE_ID_END),
+];
 
-/// The dictionary band's own monotonic counter (see
-/// [`DICTIONARY_SHAPE_ID_BASE`]); never reused, parks at `SHAPE_ID_END`.
-static DICTIONARY_SHAPE_ID_NEXT: std::sync::atomic::AtomicU32 =
-    std::sync::atomic::AtomicU32::new(DICTIONARY_SHAPE_ID_BASE);
+/// The dictionary band's own monotonic counters (see
+/// [`DICTIONARY_SHAPE_ID_BASE`]), one per identity kind
+/// ([`SHAPE_ID_KIND_SHIFT`]); never reused, each parks at the band's end.
+static DICTIONARY_SHAPE_ID_NEXT: [std::sync::atomic::AtomicU32; 3] = [
+    std::sync::atomic::AtomicU32::new(DICTIONARY_SHAPE_ID_BASE),
+    std::sync::atomic::AtomicU32::new(DICTIONARY_SHAPE_ID_BASE),
+    std::sync::atomic::AtomicU32::new(DICTIONARY_SHAPE_ID_BASE),
+];
 
-/// The exotic band's own monotonic counter ([`EXOTIC_SHAPE_ID_BASE`]).
-static EXOTIC_SHAPE_ID_NEXT: std::sync::atomic::AtomicU32 =
-    std::sync::atomic::AtomicU32::new(EXOTIC_SHAPE_ID_BASE);
+/// The exotic band's own monotonic counters ([`EXOTIC_SHAPE_ID_BASE`]).
+static EXOTIC_SHAPE_ID_NEXT: [std::sync::atomic::AtomicU32; 3] = [
+    std::sync::atomic::AtomicU32::new(EXOTIC_SHAPE_ID_BASE),
+    std::sync::atomic::AtomicU32::new(EXOTIC_SHAPE_ID_BASE),
+    std::sync::atomic::AtomicU32::new(EXOTIC_SHAPE_ID_BASE),
+];
+
+/// # The identity kind: a ShapeId says what kind of prototype identity it names
+///
+/// Bits 20-21 of a ShapeId are its identity KIND ([`proto_id_kind`]):
+/// * [`SHAPE_ID_KIND_PLAIN`] (0): an identity that answers by itself and
+///   records no prototype: the realm default, a compiled class's declaration
+///   prototype, a per-object identity;
+/// * [`SHAPE_ID_KIND_WORD`] (1): a LINKED identity with a word naming its
+///   prototype (a recorded prototype's serial, `MIXED`, a `UNIQUE` link);
+/// * [`SHAPE_ID_KIND_NULL`] (2): a null [[Prototype]].
+///
+/// Every band draws its ids from one counter per kind, and the counters hand
+/// out 2^20-id granules in turn (kind 3 is never minted), so the kind is a
+/// fact of the id's VALUE, fixed at the mint (`ShapeSlab::insert` asserts
+/// it). The static band (`[SHAPE_ID_BASE, STATIC_SHAPE_ID_END)`, 2^20 ids) is
+/// one plain granule: the compiler names only class and literal shapes.
+///
+/// It is what lets `object_prototype_word` answer the common receiver (a
+/// literal, a class instance on its class's prototype) in one compare of the
+/// header word, as the receiver's class id did before the prototype moved
+/// into the shape, answer a null link from the header, and read the shape
+/// record only for a word identity. Granules are page-aligned
+/// (`shapes_store` pages hold 2^15 records), so the kinds cost no record
+/// memory: a kind's untouched pages are never allocated.
+pub(crate) const SHAPE_ID_KIND_SHIFT: u32 = 20;
+pub(crate) const SHAPE_ID_KIND_MASK: u32 = 3 << SHAPE_ID_KIND_SHIFT;
+pub(crate) const SHAPE_ID_KIND_PLAIN: u32 = 0;
+pub(crate) const SHAPE_ID_KIND_WORD: u32 = 1;
+pub(crate) const SHAPE_ID_KIND_NULL: u32 = 2;
+/// One granule of each kind (and the never-minted fourth).
+const SHAPE_ID_KIND_GROUP: u32 = 4 << SHAPE_ID_KIND_SHIFT;
+const _: () = assert!(STATIC_SHAPE_ID_END - SHAPE_ID_BASE <= 1 << SHAPE_ID_KIND_SHIFT);
+const _: () = assert!(SHAPE_ID_BASE % SHAPE_ID_KIND_GROUP == 0);
+const _: () = assert!(DICTIONARY_SHAPE_ID_BASE % SHAPE_ID_KIND_GROUP == 0);
+const _: () = assert!(EXOTIC_SHAPE_ID_BASE % SHAPE_ID_KIND_GROUP == 0);
+const _: () = assert!(SHAPE_ID_END % SHAPE_ID_KIND_GROUP == 0);
+
+/// The identity kind `header_word` (an `ObjectHeader`'s ShapeId word, or
+/// whatever else it holds) carries in its kind bits.
+#[inline(always)]
+pub(crate) fn shape_word_kind(header_word: u32) -> u32 {
+    (header_word & SHAPE_ID_KIND_MASK) >> SHAPE_ID_KIND_SHIFT
+}
+
+/// Does `header_word` possibly name a linked prototype identity (a word or
+/// null)? `false` proves the receiver's shape identity is plain:
+/// `object_prototype_word` answers from its meta record or 0, without
+/// reading the shape record.
+#[inline(always)]
+pub(crate) fn shape_word_may_be_linked(header_word: u32) -> bool {
+    header_word & SHAPE_ID_KIND_MASK != 0
+}
+
+/// The ShapeId kind ([`SHAPE_ID_KIND_SHIFT`]) of prototype identity
+/// `proto_id`.
+#[inline]
+pub(crate) fn proto_id_kind(proto_id: u64) -> u32 {
+    if proto_id == PROTO_ID_NULL {
+        SHAPE_ID_KIND_NULL
+    } else if shapes_prototype::proto_id_carries_word(proto_id) {
+        SHAPE_ID_KIND_WORD
+    } else {
+        SHAPE_ID_KIND_PLAIN
+    }
+}
 
 static SHAPE_SEMANTIC_NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
@@ -1216,6 +1291,7 @@ pub(crate) enum ShapeDescriptorError {
     InvalidFacts,
 }
 
+#[cfg(test)]
 fn alloc_shape_id_from(
     next: &std::sync::atomic::AtomicU32,
     end: u32,
@@ -1240,44 +1316,94 @@ fn alloc_shape_id_from(
     }
 }
 
-/// An ORDINARY-band ShapeId: every mint except a dictionary shape's.
-fn alloc_shape_id() -> Result<u32, ShapeIdExhausted> {
-    alloc_shape_id_from(&SHAPE_ID_NEXT, DICTIONARY_SHAPE_ID_BASE)
+/// [`alloc_shape_id_from`] for one identity kind ([`SHAPE_ID_KIND_SHIFT`]):
+/// an id whose kind bits are `kind`. A counter that reaches another kind's
+/// granule skips to its own next one, so a band's counters interleave
+/// granule by granule.
+fn alloc_shape_id_of_kind(
+    next: &std::sync::atomic::AtomicU32,
+    end: u32,
+    kind: u32,
+) -> Result<u32, ShapeIdExhausted> {
+    use std::sync::atomic::Ordering;
+    loop {
+        let current = next.load(Ordering::Relaxed);
+        let mut id = current;
+        if shape_word_kind(id) != kind {
+            // This kind's granule in the current group, or the next group's.
+            id = (id & !(SHAPE_ID_KIND_GROUP - 1)) | (kind << SHAPE_ID_KIND_SHIFT);
+            if id < current {
+                id = id.saturating_add(SHAPE_ID_KIND_GROUP);
+            }
+        }
+        if id >= end {
+            next.store(end, Ordering::Relaxed);
+            return Err(ShapeIdExhausted);
+        }
+        if next
+            .compare_exchange_weak(current, id + 1, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+        {
+            return Ok(id);
+        }
+    }
+}
+
+/// An ORDINARY-band ShapeId for a shape whose identity is `proto_id`: every
+/// mint except a dictionary or exotic shape's.
+fn alloc_shape_id(proto_id: u64) -> Result<u32, ShapeIdExhausted> {
+    let kind = proto_id_kind(proto_id);
+    alloc_shape_id_of_kind(
+        &SHAPE_ID_NEXT[kind as usize],
+        DICTIONARY_SHAPE_ID_BASE,
+        kind,
+    )
 }
 
 /// A dictionary-band ShapeId ([`DICTIONARY_SHAPE_ID_BASE`]).
-fn alloc_dictionary_shape_id() -> Result<u32, ShapeIdExhausted> {
-    alloc_shape_id_from(&DICTIONARY_SHAPE_ID_NEXT, EXOTIC_SHAPE_ID_BASE)
+fn alloc_dictionary_shape_id(proto_id: u64) -> Result<u32, ShapeIdExhausted> {
+    let kind = proto_id_kind(proto_id);
+    alloc_shape_id_of_kind(
+        &DICTIONARY_SHAPE_ID_NEXT[kind as usize],
+        EXOTIC_SHAPE_ID_BASE,
+        kind,
+    )
 }
 
 /// An exotic-band ShapeId ([`EXOTIC_SHAPE_ID_BASE`]).
-fn alloc_exotic_shape_id() -> Result<u32, ShapeIdExhausted> {
-    alloc_shape_id_from(&EXOTIC_SHAPE_ID_NEXT, SHAPE_ID_END)
+fn alloc_exotic_shape_id(proto_id: u64) -> Result<u32, ShapeIdExhausted> {
+    let kind = proto_id_kind(proto_id);
+    alloc_shape_id_of_kind(&EXOTIC_SHAPE_ID_NEXT[kind as usize], SHAPE_ID_END, kind)
 }
 
 /// The band a new shape's id is drawn from is decided by its generation
 /// namespace: a dictionary generation (bit 62 set, bit 63 clear —
 /// `dictionary::next_generation`) mints in the dictionary band, everything
-/// else in the ordinary band.
-fn alloc_shape_id_for_generation(semantic_generation: u64) -> Result<u32, ShapeIdExhausted> {
+/// else in the ordinary band. Its identity decides the kind.
+fn alloc_shape_id_for_generation(
+    semantic_generation: u64,
+    proto_id: u64,
+) -> Result<u32, ShapeIdExhausted> {
     const DETERMINISTIC_BIT: u64 = 1 << 63;
     let tag = crate::object::dictionary::DICTIONARY_GENERATION_TAG;
     if semantic_generation & (DETERMINISTIC_BIT | tag) == tag {
-        alloc_dictionary_shape_id()
+        alloc_dictionary_shape_id(proto_id)
     } else {
-        alloc_shape_id()
+        alloc_shape_id(proto_id)
     }
 }
 
-/// The next ShapeId this process would hand out.
+/// The ordinary-band ids this process has handed out, as a counter.
 ///
 /// Tests assert the DELTA across a workload, because ids come from a 2^30
-/// counter that is never reused and parks (fail-stop) at the end: a path that
+/// range that is never reused and parks (fail-stop) at the end: a path that
 /// mints one id per operation is a process-LIFETIME bug, not merely a memory
 /// cost, and nothing in the program's output ever reveals it.
 #[cfg(test)]
 pub(crate) fn test_shape_id_counter() -> u32 {
-    SHAPE_ID_NEXT.load(std::sync::atomic::Ordering::Relaxed)
+    SHAPE_ID_NEXT.iter().fold(0u32, |sum, next| {
+        sum.wrapping_add(next.load(std::sync::atomic::Ordering::Relaxed))
+    })
 }
 
 /// Get or create the exact structural descriptor. The public allocation and
@@ -1708,9 +1834,9 @@ fn shape_descriptor_intern_with_special_mode(
     let id = match adopted {
         Some(id) => id,
         None => if object_kind.is_exotic() {
-            alloc_exotic_shape_id()
+            alloc_exotic_shape_id(proto_id)
         } else {
-            alloc_shape_id_for_generation(semantic_generation)
+            alloc_shape_id_for_generation(semantic_generation, proto_id)
         }
         .map_err(|_| ShapeDescriptorError::IdExhausted)?,
     };
@@ -4039,6 +4165,7 @@ pub(crate) unsafe fn object_shape_identity(obj: *const crate::object::ObjectHead
 
 /// The first synthetic class id (`class_registry::prototype_objects`): a
 /// plain function constructor's instances.
+#[cfg(test)]
 pub(crate) const SYNTHETIC_CLASS_ID_BASE: u32 =
     crate::object::class_registry::prototype_objects::SYNTHETIC_CLASS_ID_BASE;
 
@@ -4046,8 +4173,10 @@ pub(crate) const SYNTHETIC_CLASS_ID_BASE: u32 =
 /// prototype is the default or the class's). A receiver that has a meta
 /// record has it there (the prototype funnel writes both, and a
 /// `PROTO_ID_PER_OBJECT` receiver's shape answers nothing); a meta-less
-/// function-constructor instance reads it from its shape's identity word
-/// (`shapes_prototype`). Allocation-free.
+/// receiver reads it from its shape's identity word (`shapes_prototype`).
+/// Only a word identity has one, and the ShapeId says which those are
+/// ([`SHAPE_ID_KIND_SHIFT`]): every other receiver answers 0 (or null) from
+/// its header word, with no shape-record read. Allocation-free.
 ///
 /// # Safety
 /// `obj` is a live `ObjectHeader`.
@@ -4057,12 +4186,43 @@ pub(crate) const SYNTHETIC_CLASS_ID_BASE: u32 =
 /// `OBJ_FLAG_NULL_PROTO`), which answers 0 as it always has: every reader
 /// tests that header bit for the born-null case, and a recorded null would
 /// send it down the re-prototyped-receiver paths instead.
-#[inline]
+#[inline(always)]
 pub(crate) unsafe fn object_prototype_word(obj: *const crate::object::ObjectHeader) -> u64 {
     let meta = (*obj).meta;
     if !meta.is_null() && (*meta).prototype != 0 {
         return (*meta).prototype;
     }
+    // A default, class or per-object identity answers 0 from the id alone,
+    // and a null link from the header.
+    let word = (*obj).parent_class_id;
+    match shape_word_kind(word) {
+        SHAPE_ID_KIND_PLAIN => 0,
+        SHAPE_ID_KIND_NULL if is_shape_id(word) => null_linked_prototype_word(obj),
+        _ => linked_object_prototype_word(obj),
+    }
+}
+
+/// [`object_prototype_word`] of a meta-less receiver whose ShapeId names the
+/// null identity: `TAG_NULL`, or 0 on a cell born null.
+///
+/// # Safety
+/// `obj` is a live `ObjectHeader`.
+#[inline(never)]
+unsafe fn null_linked_prototype_word(obj: *const crate::object::ObjectHeader) -> u64 {
+    match crate::value::addr_class::try_read_gc_header(obj as usize) {
+        Some(header) if header._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 => 0,
+        _ => crate::value::TAG_NULL,
+    }
+}
+
+/// [`object_prototype_word`] of a meta-less receiver whose ShapeId may name
+/// a linked identity: the shape record's identity, and that identity's word.
+/// Out of line, so every caller's common answer stays a few inlined compares.
+///
+/// # Safety
+/// `obj` is a live `ObjectHeader`.
+#[inline(never)]
+unsafe fn linked_object_prototype_word(obj: *const crate::object::ObjectHeader) -> u64 {
     // The agent directory read: never null, an absent id reads the empty
     // record (identity 0, the default).
     let proto_id = (*ShapeSlab::agent_record(object_shape_stamp(obj))).proto_id;
@@ -4116,8 +4276,11 @@ pub(crate) unsafe fn object_proto_id_for(
         // A compiled class instance linked to its own class's declaration
         // prototype (runtime wiring of a native-base subclass instance) has
         // exactly the prototype its class implies: the class identity, so it
-        // shares its class's shapes and its class surface stays exact.
-        if class != 0 {
+        // shares its class's shapes and its class surface stays exact. A
+        // declaration prototype is an object of its own class
+        // (`class_decl_prototype_value`), so only such a prototype can be
+        // it: the registry is asked only then.
+        if class != 0 && bits_name_object_of_class(recorded, class) {
             let decl = crate::object::class_registry::class_decl_prototype_object(class);
             if !decl.is_null() && crate::value::js_nanbox_pointer(decl as i64).to_bits() == recorded
             {
@@ -4157,6 +4320,24 @@ pub(crate) unsafe fn object_proto_id_for(
         return PROTO_ID_CLASS | u64::from(class_id);
     }
     PROTO_ID_DEFAULT
+}
+
+/// Do `bits` name a live ordinary object whose class id is `class`?
+///
+/// # Safety
+/// `bits` are a recorded [[Prototype]] word.
+#[inline]
+unsafe fn bits_name_object_of_class(bits: u64, class: u32) -> bool {
+    let value = crate::value::JSValue::from_bits(bits);
+    if !value.is_pointer() {
+        return false;
+    }
+    let addr = value.as_pointer::<u8>() as usize;
+    matches!(
+        crate::value::addr_class::try_read_gc_header(addr),
+        Some(header) if header.obj_type == crate::gc::GC_TYPE_OBJECT
+            && (*(addr as *const crate::object::ObjectHeader)).class_id == class
+    )
 }
 
 /// The prototype identity recorded in shape `id`, or `None` for an id with no
@@ -5176,7 +5357,10 @@ pub(crate) fn shape_table_census() -> Vec<crate::gc::census::SideTableRow> {
     ));
     // Ids ever minted by this process: the slab is indexed by id, so the gap
     // between this and `shapes.descriptors` is what chunk release reclaims.
-    let minted = SHAPE_ID_NEXT.load(std::sync::atomic::Ordering::Relaxed) - STATIC_SHAPE_ID_END;
+    let minted = SHAPE_ID_NEXT
+        .iter()
+        .map(|next| next.load(std::sync::atomic::Ordering::Relaxed) - STATIC_SHAPE_ID_END)
+        .sum::<u32>();
     rows.push(("shapes.ids_minted(process)", minted as usize, 0));
     // How the descriptor population splits by [[Prototype]] identity kind,
     // and how many distinct prototype identities it names: what the

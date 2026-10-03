@@ -96,9 +96,9 @@ fn the_agent_directory_is_the_agent_slab_and_an_absent_id_reads_empty() {
         }
         let table = &crate::state::state().shapes;
         let ids = [
-            alloc_shape_id().unwrap(),
-            alloc_dictionary_shape_id().unwrap(),
-            alloc_exotic_shape_id().unwrap(),
+            alloc_shape_id(super::super::PROTO_ID_DEFAULT).unwrap(),
+            alloc_dictionary_shape_id(super::super::PROTO_ID_DEFAULT).unwrap(),
+            alloc_exotic_shape_id(super::super::PROTO_ID_DEFAULT).unwrap(),
         ];
         let reps = [0b01u64, 0b01 << 2, 0b10 << 4];
         for (&id, &rep) in ids.iter().zip(&reps) {

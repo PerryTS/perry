@@ -850,6 +850,13 @@ pub(crate) fn object_has_individual_class_prototype(obj_ptr: usize) -> bool {
         let Some(obj) = meta_capable_object(obj_ptr) else {
             return false;
         };
+        // An unlinked identity (the ShapeId says so) is the default, a
+        // class's or a per-object one: never another class's link, since a
+        // link of a class instance to anything but its own class's
+        // declaration prototype is a linked identity.
+        if !crate::object::shapes::shape_word_may_be_linked((*obj).parent_class_id) {
+            return false;
+        }
         let implied = crate::object::shapes::class_proto_id((*obj).class_id);
         if implied == crate::object::shapes::PROTO_ID_DEFAULT {
             return false;
@@ -871,14 +878,14 @@ pub(crate) fn object_prototype_is_foreign(obj_ptr: usize) -> bool {
         let Some(obj) = meta_capable_object(obj_ptr) else {
             return false;
         };
+        let recorded = crate::object::shapes::object_prototype_word(obj);
+        if recorded == 0 {
+            return false;
+        }
         // A class object's [[Prototype]] is its heritage (the parent
         // constructor): its declared static chain. A user relink of one arms
         // `any_class_chain_relinked`, which the static walks consult.
         if crate::object::class_registry::is_class_object_ptr(obj.cast()) {
-            return false;
-        }
-        let recorded = crate::object::shapes::object_prototype_word(obj);
-        if recorded == 0 {
             return false;
         }
         let value = crate::value::JSValue::from_bits(recorded);

@@ -617,7 +617,7 @@ pub(crate) unsafe fn rekey_stable_tombstone_shape_after_squeeze(
     if !super::is_shape_id(old_id) {
         return None;
     }
-    let new_id = super::alloc_shape_id().ok()?;
+    let new_id = super::alloc_shape_id(current.proto_id).ok()?;
     let generation = super::SHAPE_SEMANTIC_NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     if generation == 0 {
         super::shape_id_exhausted_abort();
@@ -1029,7 +1029,7 @@ fn rekey_predecessor_for_delete(
     {
         return 0;
     }
-    let Ok(id) = super::alloc_shape_id() else {
+    let Ok(id) = super::alloc_shape_id(live.proto_id) else {
         return 0;
     };
     let mut inner = table.inner.borrow_mut();
@@ -1088,7 +1088,7 @@ fn mint_detached_delete_successor(
     hole_count: u32,
     proto_id: u64,
 ) -> u32 {
-    let Ok(id) = super::alloc_shape_id() else {
+    let Ok(id) = super::alloc_shape_id(proto_id) else {
         return 0;
     };
     let mut record = ShapeRecord::new(

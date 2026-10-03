@@ -1179,6 +1179,17 @@ impl ShapeSlab {
     pub(super) fn insert(&mut self, id: u32, mut record: ShapeRecord) -> Option<ShapeRecord> {
         let (band, index) = locate(id);
         assert!(band < 3, "ShapeSlab::insert: id outside the ShapeId range");
+        // The id's identity kind is a fact the prototype readers trust
+        // without reading this record (`shapes::SHAPE_ID_KIND_SHIFT`): a
+        // plain or null kind names exactly that identity. (The other kinds
+        // send a reader to this record.)
+        let kind = super::shape_word_kind(id);
+        assert!(
+            !matches!(kind, super::SHAPE_ID_KIND_PLAIN | super::SHAPE_ID_KIND_NULL)
+                || kind == super::proto_id_kind(record.proto_id),
+            "ShapeSlab::insert: identity {:#x} under ShapeId {id:#x} of kind {kind}",
+            record.proto_id
+        );
         let band = band as u8;
         record.set(RECORD_FLAG_PRESENT, true);
         let (page, chunk, slot) = Self::split(index);
