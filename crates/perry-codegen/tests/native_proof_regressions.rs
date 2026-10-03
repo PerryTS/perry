@@ -15484,11 +15484,12 @@ fn static_put_value_uses_write_pic_for_call_free_rhs() {
     );
     assert!(
         ir.contains(
-            "_packed_set = private global [4 x i64] \
-             [i64 4294967295, i64 4294967295, i64 0, i64 0]"
+            "_packed_set = private global [5 x i64] \
+             [i64 4294967295, i64 4294967295, i64 0, i64 0, i64 0]"
         ),
         "the site record must be born EMPTY: its existing-key word and its key-add \
-         pre-shape word both 0xFFFF_FFFF, which no receiver word equals:\n{ir}"
+         pre-shape word both 0xFFFF_FFFF, which no receiver word equals, and no \
+         ConstFn body:\n{ir}"
     );
     assert!(
         ir.contains("put.add.check") && ir.contains("put.add.hit.store"),

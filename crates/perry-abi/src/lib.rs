@@ -587,3 +587,30 @@ pub const METHOD_SITE_CONSTFN: u64 = 1 << 59;
 pub const METHOD_SITE_INDEX_MASK: u64 = (1 << 59) - 1;
 /// `object::ObjectMeta::spill` (the object-owned overflow buffer).
 pub const OBJECT_META_SPILL_OFFSET: usize = 32;
+
+/// `proxy::put_value::packed_add::PackedSetSite` — the static-key store
+/// site (`@perry_ic_N_packed_set`) the emitted `o.k = v` reads
+/// (`perry-codegen/src/expr/put_value_store_ic.rs`): the existing-key word,
+/// the primary key-add memo `{shapes, guard}`, the runtime's add-way block,
+/// and the site's ConstFn body.
+pub const PACKED_SET_SITE_WORDS: usize = 5;
+/// The site's one ConstFn body: the `JsFunctionInfo` address every
+/// ConstFn-flagged entry of the site (existing-key word, existing-key way,
+/// add memo) names, 0 until the first is published. Written once, before
+/// the first flagged entry, and never changed: a flagged entry hits only for
+/// a closure of exactly this body.
+pub const PACKED_SET_CONSTFN_INFO_WORD: usize = 4;
+/// The existing-key word's (and way's) bit for a slot whose lane is ConstFn
+/// in the word's ShapeId: the emitted hit stores only a closure of the site's
+/// body. Bit 63 is the `F64` lane bit; the slot index is below bit 62.
+pub const PACKED_SET_CONSTFN_SLOT: u64 = 1 << 62;
+/// The key-add guard's bit for a successor whose lane at the slot is
+/// ConstFn (the slot field is the guard's low 16 bits; bit 15 is the `F64`
+/// lane bit, the index is below bit 14).
+pub const PACKED_ADD_CONSTFN_SLOT: u64 = 1 << 14;
+/// `closure::CAPTURES_THIS_FLAG` / `closure::NO_THIS_REBIND_FLAG`, the high
+/// bits of `ClosureHeader::capture_count`. A closure with the first and not
+/// the second is a rebindable `this` clone, which never satisfies a ConstFn
+/// claim (`field_rep_store::constfn_store_info`).
+pub const CLOSURE_CAPTURES_THIS_FLAG: u32 = 0x8000_0000;
+pub const CLOSURE_NO_THIS_REBIND_FLAG: u32 = 0x4000_0000;
