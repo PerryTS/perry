@@ -211,6 +211,12 @@ pub(crate) struct Receiver {
     slots: Vec<String>,
     /// A static supplier's slots, compile-time constants (any number of keys).
     static_slots: Option<Vec<u32>>,
+    /// A body region nested in a loop region, F copy: the loop's preheader
+    /// guard (and its re-check) already proved this loop-invariant receiver,
+    /// and its facts are FRESH at the split (the body region is entered only
+    /// from the loop's F-body), so the body region copies the loop's guard
+    /// results instead of guarding it again (D2).
+    inherited: bool,
 }
 
 /// Whether this exact fresh bare read is protected by an R bit in an
@@ -538,7 +544,7 @@ fn begin_with(
             plan(
                 ctx,
                 body,
-                cands,
+                cands.clone(),
                 &wide,
                 HashMap::new(),
                 &Env::default(),
@@ -593,8 +599,43 @@ fn begin_with(
                 expected_shape: None,
                 slots: Vec::new(),
                 static_slots: None,
+                inherited: false,
             })
             .collect();
+        // D2: the nested body region's loop-invariant receivers are guarded
+        // here, once, with the loop's own (and re-checked with them); the
+        // body region's F copy inherits the result. A receiver wider than a
+        // learned word is inherited only when its static supplier serves it
+        // (otherwise the body region guards it itself, or not at all).
+        if let Some((_, ip)) = &inner {
+            for (r, k, st, sm, bm, rm) in &ip.receivers {
+                if !cands.contains(r)
+                    || receivers.iter().any(|rv| rv.recv == *r)
+                    || (k.len() > MAX_KEYS
+                        && !static_class_name(ctx, *r, None)
+                            .is_some_and(|c| static_keys_served(ctx, &c, k, *bm)))
+                {
+                    continue;
+                }
+                receivers.push(Receiver {
+                    recv: *r,
+                    uses_ptr_shape_class: false,
+                    keys: k.clone(),
+                    has_store: *st,
+                    stored_mask: effective_stored_mask(*sm, k.len()),
+                    boxed_mask: *bm,
+                    r_mask: *rm,
+                    vt_mask: *rm,
+                    spill: "false".to_string(),
+                    sites: None,
+                    word: String::new(),
+                    expected_shape: None,
+                    slots: Vec::new(),
+                    static_slots: None,
+                    inherited: false,
+                });
+            }
+        }
         let mut all = "true".to_string();
         for rv in receivers.iter_mut() {
             let (word, pass, spill) = emit_guard(ctx, rv)?;
@@ -910,6 +951,7 @@ fn body_pending(p: Plan, body: &[Stmt], split_at: usize) -> Pending {
             expected_shape: None,
             slots: Vec::new(),
             static_slots: None,
+            inherited: false,
         })
         .collect();
     Pending {
@@ -1250,7 +1292,10 @@ pub(crate) fn lower_split(
                 decide = (rc_idx, ok);
             }
         }
-        None if receivers.len() == 1 && !has_static_supplier(ctx, &receivers[0]) => {
+        None if receivers.len() == 1
+            && !receivers[0].inherited
+            && !has_static_supplier(ctx, &receivers[0]) =>
+        {
             // Body region, one receiver with no static supplier: load the
             // learned word now (F-body decodes it); the rest of the guard is
             // emitted at the end, as branches straight into whichever F
@@ -1264,9 +1309,13 @@ pub(crate) fn lower_split(
             decide = (ctx.current_block, String::new());
         }
         None => {
-            // Body region: the full guard, every iteration.
+            // Body region: the full guard, every iteration (an inherited
+            // receiver's was the loop's).
             let mut all = "true".to_string();
             for rv in receivers.iter_mut() {
+                if rv.inherited {
+                    continue;
+                }
                 let (word, pass, spill) = emit_guard(ctx, rv)?;
                 rv.spill = spill;
                 let pass = emit_value_tests(ctx, rv, &word, &pass)?;
@@ -1333,7 +1382,14 @@ pub(crate) fn lower_split(
         });
         let r = match &inner {
             Some(ib) => {
-                ctx.region_loops.push((**ib).clone());
+                let mut ib = (**ib).clone();
+                for irv in ib.receivers.iter_mut() {
+                    if let Some(prv) = receivers.iter().find(|p| p.recv == irv.recv) {
+                        *irv = prv.clone();
+                        irv.inherited = true;
+                    }
+                }
+                ctx.region_loops.push(ib);
                 let j = ctx.region_loops.len() - 1;
                 let r = lower_split(ctx, tail, j, lower_list);
                 ctx.region_loops.truncate(j);
