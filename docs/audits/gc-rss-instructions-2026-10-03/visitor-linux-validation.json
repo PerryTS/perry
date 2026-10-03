@@ -79,5 +79,6 @@
     }
   ],
   "noauto_summary_sha256": "be12780cd9166c3e1357e8bac62b284ddd2e98f7314c1dfd8382833cb2c11a5c",
-  "normal_auto": "in progress; no performance acceptance verdict"
+  "normal_auto": "complete 204/204; see visitor-comparison.json; specialization rejected",
+  "normal_auto_summary_sha256": "3b07278560a3c8e6e5d192ab908fb82fb00e19b5518301870d9d0faf447f624b"
 }
