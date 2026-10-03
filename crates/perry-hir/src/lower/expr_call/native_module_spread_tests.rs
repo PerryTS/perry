@@ -223,3 +223,105 @@ fn mixed_fixed_and_spread_math_calls_keep_the_spread_marker() {
         );
     }
 }
+
+// ── JS built-in statics and global functions with a spread argument ────────
+//
+// prettier's `getSupportInfo` merges every plugin's option table with
+// `Object.assign({}, ...plugins.map(({ options }) => options), core)`. The
+// `Object.assign` fast path took the spread operand as ONE source, so the
+// merged table held the array's indices ("0", "1") instead of the options,
+// and `prettier.format` threw `Unexpected type undefined`. The same
+// positional folding hit `JSON.stringify(...)`, `Number.isInteger(...)`,
+// `Array.of(...)`, `parseInt(...)` and the rest of those arms.
+// Behaviour against node: `test-files/test_gap_builtin_static_spread_args.ts`.
+
+#[test]
+fn object_assign_with_spread_declines_the_static_fast_path() {
+    let h = hir(r#"
+        const plugins: any[] = [{ name: "a" }, { options: { x: 1 } }];
+        const merged = Object.assign({}, ...plugins.map(({ options }) => options), { y: 2 });
+        console.log(merged);
+    "#);
+    assert!(h.contains("CallSpread"), "expected CallSpread, got: {h}");
+    assert!(
+        !h.contains("ObjectAssign"),
+        "Object.assign still folded the spread operand positionally: {h}"
+    );
+}
+
+#[test]
+fn object_assign_without_spread_keeps_the_static_fast_path() {
+    let h = hir("const t: any = {}; console.log(Object.assign(t, { x: 1 }, { y: 2 }));");
+    assert!(
+        h.contains("ObjectAssign"),
+        "Object.assign lost its fast path: {h}"
+    );
+}
+
+#[test]
+fn builtin_statics_with_spread_decline_their_fast_paths() {
+    for (src, folded) in [
+        (
+            "const a: any[] = [{ k: 1 }]; console.log(Object.keys(...a));",
+            "ObjectKeys",
+        ),
+        (
+            "function f(a: any[]) { return Array.of(...a); } console.log(f([1]));",
+            "Array([LocalGet",
+        ),
+        (
+            "function f(a: any[]) { return Math.hypot(...a); } console.log(f([3, 4]));",
+            "MathHypot",
+        ),
+        (
+            "const a: any[] = [{ k: 1 }]; console.log(Reflect.ownKeys(...a));",
+            "ReflectOwnKeys",
+        ),
+        (
+            "const a: any[] = [{ k: 1 }]; console.log(JSON.stringify(...a));",
+            "JsonStringify",
+        ),
+        (
+            "const a: any[] = [2]; console.log(Number.isInteger(...a));",
+            "NumberIsInteger",
+        ),
+        (
+            "const a: any[] = [\"ff\", 16]; console.log(parseInt(...a));",
+            "ParseInt",
+        ),
+    ] {
+        let h = hir(src);
+        assert!(
+            h.contains("CallSpread"),
+            "expected CallSpread for `{src}`, got: {h}"
+        );
+        assert!(
+            !h.contains(folded),
+            "`{src}` still folded into {folded}: {h}"
+        );
+    }
+}
+
+#[test]
+fn builtin_statics_without_spread_keep_their_fast_paths() {
+    for (src, folded) in [
+        (
+            "const o: any = { k: 1 }; console.log(Object.keys(o));",
+            "ObjectKeys",
+        ),
+        (
+            "const n: any = 2; console.log(Number.isInteger(n));",
+            "NumberIsInteger",
+        ),
+        (
+            "const s: any = \"ff\"; console.log(parseInt(s, 16));",
+            "ParseInt",
+        ),
+    ] {
+        let h = hir(src);
+        assert!(
+            h.contains(folded),
+            "`{src}` lost its {folded} fast path: {h}"
+        );
+    }
+}

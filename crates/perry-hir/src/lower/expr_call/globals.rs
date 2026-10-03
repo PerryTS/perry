@@ -29,6 +29,13 @@ pub(super) fn try_global_builtins(
             return Ok(Err(args));
         }
         match func_name {
+            // A spread call declines: see `call_has_spread_arg`. Not `BigInt`
+            // / `Symbol`: called as values they do not yet reach the real
+            // built-in, so the generic tail is no better for them today.
+            "parseInt" | "parseFloat" | "Number" | "String" | "Boolean" | "Object" | "Array"
+            | "isNaN" | "isFinite" | "atob" | "btoa" | "encodeURI" | "decodeURI"
+            | "encodeURIComponent" | "decodeURIComponent" | "structuredClone"
+                if has_spread => {}
             "parseInt" => {
                 let string_arg = if !args.is_empty() {
                     Box::new(args.remove(0))

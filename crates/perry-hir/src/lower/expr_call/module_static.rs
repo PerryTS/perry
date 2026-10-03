@@ -376,7 +376,8 @@ pub(super) fn try_module_static_methods(
             // and the string-literal computed form (`JSON["parse"](...)`) so the
             // computed key does not fall through to generic dispatch (→
             // `TypeError: value is not a function`).
-            if obj_ident.sym.as_ref() == "JSON" {
+            // A spread call declines: see `call_has_spread_arg`.
+            if obj_ident.sym.as_ref() == "JSON" && !has_spread {
                 if let Some(method_name) = super::static_call_prop_name(&member.prop) {
                     match method_name {
                         "parse" => {
@@ -649,6 +650,11 @@ pub(super) fn try_module_static_methods(
             // and the string-literal computed form (`Math["max"](...)`).
             if obj_ident.sym.as_ref() == "Math" {
                 if let Some(method_name) = super::static_call_prop_name(&member.prop) {
+                    // Only `min` / `max` have arms written for a spread; every
+                    // other spread call declines (see `call_has_spread_arg`).
+                    if has_spread && !matches!(method_name, "min" | "max") {
+                        return Ok(Err(args));
+                    }
                     match method_name {
                         "floor" if !args.is_empty() => {
                             return Ok(Ok(Expr::MathFloor(Box::new(
@@ -899,7 +905,8 @@ pub(super) fn try_module_static_methods(
             }
 
             // Check for Number.methodName() static calls. #6677: computed form too.
-            if obj_ident.sym.as_ref() == "Number" {
+            // A spread call declines: see `call_has_spread_arg`.
+            if obj_ident.sym.as_ref() == "Number" && !has_spread {
                 if let Some(method_name) = super::static_call_prop_name(&member.prop) {
                     match method_name {
                         // A missing argument is `undefined` (Type ≠ Number), so

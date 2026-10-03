@@ -16,7 +16,8 @@ pub(super) fn try_reflect_statics(
     obj_name: &str,
     args: Vec<Expr>,
 ) -> Result<Result<Expr, Vec<Expr>>> {
-    if obj_name == "Reflect" {
+    // A spread call declines: see `call_has_spread_arg`.
+    if obj_name == "Reflect" && !super::super::call_has_spread_arg(call) {
         // #6677: accept the string-literal computed form too.
         if let Some(method_name) = super::super::static_call_prop_name(&member.prop) {
             match method_name {
