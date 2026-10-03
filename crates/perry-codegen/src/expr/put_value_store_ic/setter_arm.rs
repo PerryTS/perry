@@ -107,11 +107,24 @@ pub(super) fn emit_setter_arm(
         blk.cond_br(&tagged, &recv_l, next_label);
         addr
     };
+    // The entry's address fields are `usize`: 4 bytes on an ILP32 target, whose
+    // layout differs from the host's (`abi::setter_site_layout`).
+    let ilp32 = crate::target_layout::target_is_ilp32(ctx.target_triple);
+    let layout = abi::setter_site_layout(if ilp32 { 4 } else { 8 });
     let field = |ctx: &mut FnCtx<'_>, offset: usize, ty| -> String {
         let blk = ctx.block();
         let a = blk.add(I64, &entry, &offset.to_string());
         let p = blk.inttoptr(I64, &a);
         blk.load(ty, &p)
+    };
+    // A pointer-sized field, widened to i64.
+    let addr_field = |ctx: &mut FnCtx<'_>, offset: usize| -> String {
+        if ilp32 {
+            let narrow = field(ctx, offset, I32);
+            ctx.block().zext(I32, &narrow, I64)
+        } else {
+            field(ctx, offset, I64)
+        }
     };
 
     ctx.current_block = recv_idx;
@@ -123,7 +136,7 @@ pub(super) fn emit_setter_arm(
     }
 
     ctx.current_block = holder_idx;
-    let holder = field(ctx, abi::SETTER_SITE_HOLDER_OFFSET, I64);
+    let holder = addr_field(ctx, layout.holder);
     let holder_shape = field(ctx, abi::SETTER_SITE_HOLDER_SHAPE_OFFSET, I32);
     {
         let blk = ctx.block();
@@ -135,9 +148,9 @@ pub(super) fn emit_setter_arm(
     }
 
     ctx.current_block = lane_idx;
-    let slot = field(ctx, abi::SETTER_SITE_SLOT_OFFSET, I32);
-    let pair = field(ctx, abi::SETTER_SITE_PAIR_OFFSET, I64);
-    let code = field(ctx, abi::SETTER_SITE_CODE_OFFSET, I64);
+    let slot = field(ctx, layout.slot, I32);
+    let pair = addr_field(ctx, layout.pair);
+    let code = addr_field(ctx, layout.code);
     {
         let blk = ctx.block();
         let slot64 = blk.zext(I32, &slot, I64);

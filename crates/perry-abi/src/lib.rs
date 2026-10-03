@@ -572,9 +572,46 @@ pub const SETTER_SITE_ADDRESS_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 pub const SETTER_SITE_RECV_SHAPE_OFFSET: usize = 0;
 pub const SETTER_SITE_HOLDER_SHAPE_OFFSET: usize = 4;
 pub const SETTER_SITE_HOLDER_OFFSET: usize = 8;
-pub const SETTER_SITE_SLOT_OFFSET: usize = 16;
-pub const SETTER_SITE_PAIR_OFFSET: usize = 24;
-pub const SETTER_SITE_CODE_OFFSET: usize = 32;
+
+/// Byte offsets of the entry's pointer-sized fields and the u32 slot, for a
+/// target whose pointers are `ptr_bytes` wide (8 on LP64, 4 on ILP32 such as
+/// wasm32). The entry is `#[repr(C)]` with `usize` address fields, so the
+/// offsets after the two u32 ShapeIds follow the target's pointer width; the
+/// runtime asserts the `SETTER_SITE_*_OFFSET` constants (this crate's own
+/// target width) against `offset_of!`, and codegen asks for the width of the
+/// target it emits for.
+pub const fn setter_site_layout(ptr_bytes: usize) -> SetterSiteLayout {
+    let slot = SETTER_SITE_HOLDER_OFFSET + ptr_bytes;
+    let pair = (slot + 4).next_multiple_of(ptr_bytes);
+    SetterSiteLayout {
+        holder: SETTER_SITE_HOLDER_OFFSET,
+        slot,
+        pair,
+        code: pair + ptr_bytes,
+    }
+}
+
+/// See [`setter_site_layout`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SetterSiteLayout {
+    pub holder: usize,
+    pub slot: usize,
+    pub pair: usize,
+    pub code: usize,
+}
+
+const SETTER_SITE_NATIVE: SetterSiteLayout = setter_site_layout(core::mem::size_of::<usize>());
+pub const SETTER_SITE_SLOT_OFFSET: usize = SETTER_SITE_NATIVE.slot;
+pub const SETTER_SITE_PAIR_OFFSET: usize = SETTER_SITE_NATIVE.pair;
+pub const SETTER_SITE_CODE_OFFSET: usize = SETTER_SITE_NATIVE.code;
+const _: () = assert!(
+    setter_site_layout(8).slot == 16
+        && setter_site_layout(8).pair == 24
+        && setter_site_layout(8).code == 32
+        && setter_site_layout(4).slot == 12
+        && setter_site_layout(4).pair == 16
+        && setter_site_layout(4).code == 20
+);
 /// The site's holder state word, and its bit for a LATCHED site: one that
 /// refused, or whose non-own receivers took several shapes. Its misses ask the
 /// inherited-read hook, as a never-primed site's do.
