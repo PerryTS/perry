@@ -61,6 +61,13 @@ pub const STATIC_CALL_MEMO_C_OFFSET: usize = 8;
 pub const STATIC_CALL_MEMO_OWNER_OFFSET: usize = 16;
 pub const STATIC_CALL_MEMO_VALUE_OFFSET: usize = 24;
 
+/// #11759 (c′): the capture slot of a class function object (an INT32) that
+/// says whether the object is its declaration's first evaluation, and the
+/// value generated code stores there when the first evaluation hands the
+/// shared class out (`INT32_TAG | 1`; the slot is born `INT32_TAG | 0`).
+pub const CLASS_EVALUATION_STATE_CAPTURE: usize = 1;
+pub const CLASS_FIRST_EVALUATION_STATE: u64 = 0x7FFE_0000_0000_0001;
+
 /// `gc::GC_TYPE_CLOSURE`: the GcHeader type byte (at payload - 8) that makes a
 /// cell a function object. The kind is this byte, never a payload magic.
 pub const GC_TYPE_CLOSURE: u8 = 4;

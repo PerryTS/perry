@@ -15,6 +15,37 @@ use crate::types::{DOUBLE, I32, I64, PTR};
 
 use super::{emit_root_nanbox_store_for_expr, lower_expr, nanbox_pointer_inline, FnCtx};
 
+/// Initialize a class evaluation's lexical self-binding `owner` with the
+/// evaluated class value `class_box`.
+pub(crate) fn store_evaluation_owner(
+    ctx: &mut FnCtx<'_>,
+    owner: perry_hir::types::LocalId,
+    class_box: &str,
+) {
+    let Some(slot) = ctx.locals.get(&owner).cloned() else {
+        return;
+    };
+    if matches!(
+        ctx.local_type_hint(&owner),
+        Some(perry_hir::types::Type::Array(_))
+    ) {
+        // Shared-mutable capture rewriting turns a self binding captured by
+        // its own methods into a one-element cell. Initialize the cell's
+        // value, preserving the handle stored in the local slot.
+        let cell_box = ctx.block().load(DOUBLE, &slot);
+        let cell_bits = ctx.block().bitcast_double_to_i64(&cell_box);
+        let cell = ctx
+            .block()
+            .and(I64, &cell_bits, crate::nanbox::POINTER_MASK_I64);
+        ctx.block().call_void(
+            "js_array_set_f64",
+            &[(I64, &cell), (I32, "0"), (DOUBLE, class_box)],
+        );
+    } else {
+        ctx.block().store(DOUBLE, class_box, &slot);
+    }
+}
+
 /// The compiled symbols for `template`'s `static { … }` blocks, in declaration
 /// order (#685).
 ///
@@ -605,285 +636,24 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::ClassExprFresh {
             template,
             evaluation_owner,
-            named_statics,
-            computed_keys,
-            computed_statics,
-            static_init_order,
-            captured_args,
+            shared_first_evaluation,
+            ..
         } => {
-            let template_cid = ctx.class_ids.get(template).copied().unwrap_or(0);
-            let tcid_str = template_cid.to_string();
-            // The template's own record (its template cell), which the
-            // module's string-pool initializer defines for every template it
-            // evaluates.
-            let cell = if template_cid == 0 {
-                "null".to_string()
-            } else {
-                format!(
-                    "@{}",
-                    crate::codegen::fresh_class_templates::template_cell_global(template_cid)
-                )
-            };
-            // Room for the evaluation's own `length`, `name` and static
-            // methods, its pinned parent, its captured environment and its
-            // prototype object besides its static fields, so the template's
-            // shapes are all inline slots (`class_object_template`).
-            let own_member_slots =
-                3 + ctx.classes.get(template).map_or(0, |c| {
-                    c.static_methods.len() + usize::from(c.extends_expr.is_some())
-                }) + usize::from(!captured_args.is_empty());
-            let nfields = (named_statics.len() + own_member_slots).to_string();
-            // A static FIELD named `length` / `name` takes over the intrinsic
-            // property; it is created as an ordinary one.
-            let field_mask =
-                named_statics
-                    .iter()
-                    .fold(0u32, |mask, (name, _)| match name.as_str() {
-                        "length" => mask | 1,
-                        "name" => mask | 2,
-                        _ => mask,
-                    });
-            // #1789 / #6438: the evaluation's class object, stamped with
-            // class_id = template and marked a class object
-            // (ShapeObjectKind::Class, so `typeof` reports "function" and
-            // `new`/`instanceof` read the class_id from it), owning its
-            // `length`, `name` and static methods and pinned to THIS
-            // evaluation's parent. The lowering sequences
-            // `RegisterClassParentDynamic` immediately ahead of this node, so
-            // `CLASS_DYNAMIC_PARENT_VALUE[template]` still holds that parent;
-            // later evaluations overwrite it, but each object keeps its own
-            // edge. Every evaluation after the template's first is allocated
-            // directly in the template's final shape.
-            let obj = ctx.block().call(
-                I64,
-                "js_class_evaluation_object",
-                &[
-                    (I32, &tcid_str),
-                    (I32, &nfields),
-                    (I32, &field_mask.to_string()),
-                    (PTR, &cell),
-                ],
-            );
-            // #7154: the fresh class object is a raw SSA register while the
-            // evaluation allocates (every static initializer and captured
-            // argument), and an evacuating minor relocates it, after which each
-            // later `js_object_set_field_by_name` would write into from-space —
-            // the statics would land on the abandoned copy. So the object is
-            // always held in a rooted group (`Expr::Object`'s contract since
-            // #6951), re-read before each use. (`CLASS_OBJECT_VALUES` does not
-            // protect the register: it is a forwarded root that keeps the
-            // OBJECT alive but never rewrites `%obj`.)
-            let block_fns = static_block_fns(ctx, template);
-            let protect_handle = true;
-            with_rooted_group(ctx, 1, |ctx, group| {
-                let rooted = group.adopt_emitted(ctx, Repr::Ptr, &obj, protect_handle);
-                // A named class expression's lexical self-binding is
-                // initialized immediately after the class value is created,
-                // before computed names and static initializers run. The
-                // compiler-private owner let was emitted at body entry, so its
-                // slot is already shadow-bound and remains a GC root while the
-                // initializer sequence allocates.
-                if let Some(owner) = evaluation_owner {
-                    if let Some(slot) = ctx.locals.get(owner).cloned() {
-                        let obj = group.reread_emitted(ctx, rooted);
-                        let obj_box = nanbox_pointer_inline(ctx.block(), &obj);
-                        if matches!(
-                            ctx.local_type_hint(owner),
-                            Some(perry_hir::types::Type::Array(_))
-                        ) {
-                            // Shared-mutable capture rewriting turns a self
-                            // binding captured by its own methods into a
-                            // one-element cell. Initialize the cell's value,
-                            // preserving the handle stored in the local slot.
-                            let cell_box = ctx.block().load(DOUBLE, &slot);
-                            let cell_bits = ctx.block().bitcast_double_to_i64(&cell_box);
-                            let cell =
-                                ctx.block()
-                                    .and(I64, &cell_bits, crate::nanbox::POINTER_MASK_I64);
-                            ctx.block().call_void(
-                                "js_array_set_f64",
-                                &[(I64, &cell), (I32, "0"), (DOUBLE, &obj_box)],
-                            );
-                        } else {
-                            ctx.block().store(DOUBLE, &obj_box, &slot);
-                        }
-                    }
-                }
-                // Resolve all ComputedPropertyNames before any static field
-                // initializer, preserving class-body order. Hidden own slots
-                // carry the resulting PropertyKeys for both the static phase
-                // below and later instance construction.
-                for (name, key_expr) in computed_keys {
-                    let key_value = lower_expr(ctx, key_expr)?;
-                    let key_idx = ctx.strings.intern(name);
-                    let key_handle_global =
-                        format!("@{}", ctx.strings.entry(key_idx).handle_global);
-                    let obj = group.reread_emitted(ctx, rooted);
-                    let blk = ctx.block();
-                    let storage_key = blk.load(DOUBLE, &key_handle_global);
-                    let storage_bits = blk.bitcast_double_to_i64(&storage_key);
-                    let storage_raw = blk.and(I64, &storage_bits, crate::nanbox::POINTER_MASK_I64);
-                    blk.call_void(
-                        "js_object_set_field_by_name",
-                        &[(I64, &obj), (I64, &storage_raw), (DOUBLE, &key_value)],
-                    );
-                }
-                // #1787: snapshot the captured outer-scope values onto the class
-                // object as the `__perry_ctor_caps` own array (in the constructor's
-                // capture-param order). `new <thisClassObjectValue>()` reads it back
-                // in `js_new_function_construct` and replays the constructor with the
-                // right captured environment — which the static `new ClassName()`
-                // inlining can't do once the class escapes its defining scope.
-                if !captured_args.is_empty() {
-                    let cap_len = captured_args.len().to_string();
-                    let caps_arr = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap_len)]);
-                    // #7615 slice 8: the capture snapshot is an ACCUMULATOR — the
-                    // array holds the only reference to everything pushed so far
-                    // while the next element is lowered — and it was threaded
-                    // through a bare SSA register, which is #6951's shape exactly.
-                    //
-                    // The window is EMPTY on today's HIR, and the flag says so
-                    // rather than the code assuming it: `captured_args` is built at
-                    // exactly one site (`lower/lower_expr/arm_class.rs`) as
-                    // `ids.iter().map(|id| Expr::LocalGet(*id))`, and
-                    // `expr_may_trigger_gc` answers `false` for every `LocalGet`.
-                    // So `protect_caps` is false today, `advance` threads the same
-                    // register the old code threaded, and the emitted IR is byte
-                    // for byte what it was. What changes is that the day a
-                    // non-inert expression reaches this list it is rooted by
-                    // construction instead of silently entering the window.
-                    let protect_caps = any_operand_may_collect(ctx, captured_args.iter());
-                    // #6523: these capture loads are Perry-internal materialization
-                    // at the class's DEFINITION site, same as the
-                    // `RegisterClassCaptures` snapshot loads above (#6052). A
-                    // captured `const` declared AFTER the class (bundled semver's
-                    // `class Comparator` + trailing debug/require consts) is still
-                    // in its dead zone here — legal JS, since TDZ applies at
-                    // method-call time. Without the suppression window the checked
-                    // box read threw "Cannot access undefined before
-                    // initialization" while merely DEFINING the class. Suppressed
-                    // loads snapshot `undefined`; the #6037 refresh statements
-                    // re-register the live values right after each captured
-                    // refresh the evaluated object's array right after each
-                    // captured binding's initializer runs.
-                    let caps_box = with_rooted_accumulator(
-                        ctx,
-                        Repr::Ptr,
-                        &caps_arr,
-                        protect_caps,
-                        |ctx, acc| {
-                            ctx.block().call_void("js_tdz_suppress_begin", &[]);
-                            for (index, arg) in captured_args.iter().enumerate() {
-                                let v = lower_expr(ctx, arg)?;
-                                // The evaluation publishes a class-environment
-                                // class's slots before any static initializer
-                                // or member can read them.
-                                super::class_env::store_class_env_slot(
-                                    ctx,
-                                    template,
-                                    index as u32,
-                                    &v,
-                                    arg,
-                                );
-                                acc.advance(ctx, "js_array_push_f64", &[Arg::Plain(DOUBLE, &v)]);
-                            }
-                            ctx.block().call_void("js_tdz_suppress_end", &[]);
-                            Ok(())
-                        },
-                        |ctx, arr| Ok(nanbox_pointer_inline(ctx.block(), arr)),
-                    )?;
-                    // #7154: re-read the class object — the capture lowerings above
-                    // are arbitrary expressions and may have moved it.
-                    let obj = group.reread_emitted(ctx, rooted);
-                    // Its own `__perry_ctor_caps`: one recorded transition from
-                    // the template's final shape (`class_object_template`).
-                    ctx.block().call_void(
-                        "js_class_object_set_ctor_caps",
-                        &[(I64, &obj), (DOUBLE, &caps_box), (PTR, &cell)],
-                    );
-                    // A guarded class environment learns this evaluation; the
-                    // first one publishes its captures into the slots.
-                    let obj = group.reread_emitted(ctx, rooted);
-                    let obj_box = nanbox_pointer_inline(ctx.block(), &obj);
-                    super::class_env::publish_guarded(
-                        ctx,
-                        template,
-                        "js_class_env_evaluate",
-                        &obj_box,
-                        &caps_box,
-                    );
-                }
-                // Static fields and blocks execute only after every computed
-                // name has been resolved, then in their original ClassBody
-                // order. Each vector index is recorded by HIR lowering.
-                for step in static_init_order {
-                    match step {
-                        perry_hir::ClassFreshStaticInit::Named(index) => {
-                            let Some((name, init)) = named_statics.get(*index as usize) else {
-                                continue;
-                            };
-                            let storage_name = if name.starts_with('#') {
-                                private_static_storage_name(template_cid, name)
-                            } else {
-                                name.clone()
-                            };
-                            let key_idx = ctx.strings.intern(&storage_name);
-                            let key_handle_global =
-                                format!("@{}", ctx.strings.entry(key_idx).handle_global);
-                            let value = lower_expr(ctx, init)?;
-                            let obj = group.reread_emitted(ctx, rooted);
-                            let blk = ctx.block();
-                            let key_box = blk.load(DOUBLE, &key_handle_global);
-                            let key_bits = blk.bitcast_double_to_i64(&key_box);
-                            let key_raw = blk.and(I64, &key_bits, crate::nanbox::POINTER_MASK_I64);
-                            blk.call_void(
-                                "js_object_set_field_by_name",
-                                &[(I64, &obj), (I64, &key_raw), (DOUBLE, &value)],
-                            );
-                        }
-                        perry_hir::ClassFreshStaticInit::Computed(index) => {
-                            let Some((key_slot, init)) = computed_statics.get(*index as usize)
-                            else {
-                                continue;
-                            };
-                            let value = lower_expr(ctx, init)?;
-                            let key_idx = ctx.strings.intern(key_slot);
-                            let entry = ctx.strings.entry(key_idx);
-                            let key_bytes = format!("@{}", entry.bytes_global);
-                            let key_len = entry.byte_len.to_string();
-                            let obj = group.reread_emitted(ctx, rooted);
-                            let obj_box = nanbox_pointer_inline(ctx.block(), &obj);
-                            let resolved_key = ctx.block().call(
-                                DOUBLE,
-                                "js_object_get_own_field_or_undef",
-                                &[(DOUBLE, &obj_box), (PTR, &key_bytes), (I64, &key_len)],
-                            );
-                            ctx.block().call(
-                                DOUBLE,
-                                "js_object_set_property_key",
-                                &[
-                                    (DOUBLE, &obj_box),
-                                    (DOUBLE, &resolved_key),
-                                    (DOUBLE, &value),
-                                ],
-                            );
-                        }
-                        perry_hir::ClassFreshStaticInit::Block(index) => {
-                            let Some(fn_name) = block_fns.get(*index as usize) else {
-                                continue;
-                            };
-                            let obj = group.reread_emitted(ctx, rooted);
-                            let obj_box = nanbox_pointer_inline(ctx.block(), &obj);
-                            ctx.block()
-                                .call_void("js_static_this_arm_value", &[(DOUBLE, &obj_box)]);
-                            ctx.block().call(DOUBLE, fn_name, &[]);
-                        }
-                    }
-                }
-                let obj = group.reread_emitted(ctx, rooted);
-                let obj_box = nanbox_pointer_inline(ctx.block(), &obj);
-                Ok(obj_box)
-            })
+            // #11759 (c′): the first evaluation is the shared class; the
+            // fresh class object below is every later one.
+            if let Some(first_init) = shared_first_evaluation {
+                return super::class_first_evaluation::lower(
+                    ctx,
+                    template,
+                    *evaluation_owner,
+                    first_init,
+                    expr,
+                );
+            }
+            lower_class_evaluation_object(ctx, expr)
+        }
+        Expr::ClassIsFirstEvaluation { value, template } => {
+            super::class_first_evaluation::lower_is_first(ctx, value, template)
         }
         Expr::SetFunctionPrototype {
             func,
@@ -1128,4 +898,284 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // returns a fresh object pointer that we re-NaN-box.
         _ => unreachable!("expr/mod.rs dispatched a variant not handled by this submodule"),
     }
+}
+
+/// One evaluation's class object (`Expr::ClassExprFresh`): a fresh heap class
+/// object carrying the evaluation's statics, captures and self-binding.
+pub(crate) fn lower_class_evaluation_object(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
+    let Expr::ClassExprFresh {
+        template,
+        evaluation_owner,
+        named_statics,
+        computed_keys,
+        computed_statics,
+        static_init_order,
+        captured_args,
+        evaluated_parent,
+        ..
+    } = expr
+    else {
+        unreachable!("lower_class_evaluation_object takes a ClassExprFresh");
+    };
+    // #11759 (c′): this evaluation's parent is the evaluated class its
+    // binding holds; register it for `js_class_evaluation_object` to pin, as
+    // a runtime heritage value does.
+    if let Some(parent) = evaluated_parent {
+        lower_expr(
+            ctx,
+            &Expr::RegisterClassParentDynamic {
+                class_name: template.clone(),
+                parent_expr: parent.clone(),
+            },
+        )?;
+    }
+    let template_cid = ctx.class_ids.get(template).copied().unwrap_or(0);
+    let tcid_str = template_cid.to_string();
+    // The template's own record (its template cell), which the module's
+    // string-pool initializer defines for every template it evaluates.
+    let cell = if template_cid == 0 {
+        "null".to_string()
+    } else {
+        format!(
+            "@{}",
+            crate::codegen::fresh_class_templates::template_cell_global(template_cid)
+        )
+    };
+    // Room for the evaluation's own `length`, `name` and static
+    // methods, its pinned parent, its captured environment and its
+    // prototype object besides its static fields, so the template's
+    // shapes are all inline slots (`class_object_template`).
+    let own_member_slots =
+        3 + ctx.classes.get(template).map_or(0, |c| {
+            c.static_methods.len()
+                + usize::from(c.extends_expr.is_some() || evaluated_parent.is_some())
+        }) + usize::from(!captured_args.is_empty());
+    let nfields = (named_statics.len() + own_member_slots).to_string();
+    // A static FIELD named `length` / `name` takes over the intrinsic
+    // property; it is created as an ordinary one.
+    let field_mask = named_statics
+        .iter()
+        .fold(0u32, |mask, (name, _)| match name.as_str() {
+            "length" => mask | 1,
+            "name" => mask | 2,
+            _ => mask,
+        });
+    // #1789 / #6438: the evaluation's class object, stamped with
+    // class_id = template and marked a class object
+    // (ShapeObjectKind::Class, so `typeof` reports "function" and
+    // `new`/`instanceof` read the class_id from it), owning its
+    // `length`, `name` and static methods and pinned to THIS
+    // evaluation's parent. The lowering sequences
+    // `RegisterClassParentDynamic` immediately ahead of this node, so
+    // `CLASS_DYNAMIC_PARENT_VALUE[template]` still holds that parent;
+    // later evaluations overwrite it, but each object keeps its own
+    // edge. Every evaluation after the template's first is allocated
+    // directly in the template's final shape.
+    let obj = ctx.block().call(
+        I64,
+        "js_class_evaluation_object",
+        &[
+            (I32, &tcid_str),
+            (I32, &nfields),
+            (I32, &field_mask.to_string()),
+            (PTR, &cell),
+        ],
+    );
+    // #7154: the fresh class object is a raw SSA register while the
+    // evaluation allocates (every static initializer and captured
+    // argument), and an evacuating minor relocates it, after which each
+    // later `js_object_set_field_by_name` would write into from-space —
+    // the statics would land on the abandoned copy. So the object is
+    // always held in a rooted group (`Expr::Object`'s contract since
+    // #6951), re-read before each use. (`CLASS_OBJECT_VALUES` does not
+    // protect the register: it is a forwarded root that keeps the
+    // OBJECT alive but never rewrites `%obj`.)
+    let block_fns = static_block_fns(ctx, template);
+    let protect_handle = true;
+    with_rooted_group(ctx, 1, |ctx, group| {
+        let rooted = group.adopt_emitted(ctx, Repr::Ptr, &obj, protect_handle);
+        // A named class expression's lexical self-binding is
+        // initialized immediately after the class value is created,
+        // before computed names and static initializers run. The
+        // compiler-private owner let was emitted at body entry, so its
+        // slot is already shadow-bound and remains a GC root while the
+        // initializer sequence allocates.
+        if let Some(owner) = evaluation_owner {
+            let obj = group.reread_emitted(ctx, rooted);
+            let obj_box = nanbox_pointer_inline(ctx.block(), &obj);
+            store_evaluation_owner(ctx, *owner, &obj_box);
+        }
+        // Resolve all ComputedPropertyNames before any static field
+        // initializer, preserving class-body order. Hidden own slots
+        // carry the resulting PropertyKeys for both the static phase
+        // below and later instance construction.
+        for (name, key_expr) in computed_keys {
+            let key_value = lower_expr(ctx, key_expr)?;
+            let key_idx = ctx.strings.intern(name);
+            let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+            let obj = group.reread_emitted(ctx, rooted);
+            let blk = ctx.block();
+            let storage_key = blk.load(DOUBLE, &key_handle_global);
+            let storage_bits = blk.bitcast_double_to_i64(&storage_key);
+            let storage_raw = blk.and(I64, &storage_bits, crate::nanbox::POINTER_MASK_I64);
+            blk.call_void(
+                "js_object_set_field_by_name",
+                &[(I64, &obj), (I64, &storage_raw), (DOUBLE, &key_value)],
+            );
+        }
+        // #1787: snapshot the captured outer-scope values onto the class
+        // object as the `__perry_ctor_caps` own array (in the constructor's
+        // capture-param order). `new <thisClassObjectValue>()` reads it back
+        // in `js_new_function_construct` and replays the constructor with the
+        // right captured environment — which the static `new ClassName()`
+        // inlining can't do once the class escapes its defining scope.
+        if !captured_args.is_empty() {
+            let cap_len = captured_args.len().to_string();
+            let caps_arr = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap_len)]);
+            // #7615 slice 8: the capture snapshot is an ACCUMULATOR — the
+            // array holds the only reference to everything pushed so far
+            // while the next element is lowered — and it was threaded
+            // through a bare SSA register, which is #6951's shape exactly.
+            //
+            // The window is EMPTY on today's HIR, and the flag says so
+            // rather than the code assuming it: `captured_args` is built at
+            // exactly one site (`lower/lower_expr/arm_class.rs`) as
+            // `ids.iter().map(|id| Expr::LocalGet(*id))`, and
+            // `expr_may_trigger_gc` answers `false` for every `LocalGet`.
+            // So `protect_caps` is false today, `advance` threads the same
+            // register the old code threaded, and the emitted IR is byte
+            // for byte what it was. What changes is that the day a
+            // non-inert expression reaches this list it is rooted by
+            // construction instead of silently entering the window.
+            let protect_caps = any_operand_may_collect(ctx, captured_args.iter());
+            // #6523: these capture loads are Perry-internal materialization
+            // at the class's DEFINITION site, same as the
+            // `RegisterClassCaptures` snapshot loads above (#6052). A
+            // captured `const` declared AFTER the class (bundled semver's
+            // `class Comparator` + trailing debug/require consts) is still
+            // in its dead zone here — legal JS, since TDZ applies at
+            // method-call time. Without the suppression window the checked
+            // box read threw "Cannot access undefined before
+            // initialization" while merely DEFINING the class. Suppressed
+            // loads snapshot `undefined`; the #6037 refresh statements
+            // re-register the live values right after each captured
+            // refresh the evaluated object's array right after each
+            // captured binding's initializer runs.
+            let caps_box = with_rooted_accumulator(
+                ctx,
+                Repr::Ptr,
+                &caps_arr,
+                protect_caps,
+                |ctx, acc| {
+                    ctx.block().call_void("js_tdz_suppress_begin", &[]);
+                    for (index, arg) in captured_args.iter().enumerate() {
+                        let v = lower_expr(ctx, arg)?;
+                        // The evaluation publishes a class-environment
+                        // class's slots before any static initializer
+                        // or member can read them.
+                        super::class_env::store_class_env_slot(
+                            ctx,
+                            template,
+                            index as u32,
+                            &v,
+                            arg,
+                        );
+                        acc.advance(ctx, "js_array_push_f64", &[Arg::Plain(DOUBLE, &v)]);
+                    }
+                    ctx.block().call_void("js_tdz_suppress_end", &[]);
+                    Ok(())
+                },
+                |ctx, arr| Ok(nanbox_pointer_inline(ctx.block(), arr)),
+            )?;
+            // #7154: re-read the class object — the capture lowerings above
+            // are arbitrary expressions and may have moved it.
+            let obj = group.reread_emitted(ctx, rooted);
+            // Its own `__perry_ctor_caps`: one recorded transition from
+            // the template's final shape (`class_object_template`).
+            ctx.block().call_void(
+                "js_class_object_set_ctor_caps",
+                &[(I64, &obj), (DOUBLE, &caps_box), (PTR, &cell)],
+            );
+            // A guarded class environment learns this evaluation; the
+            // first one publishes its captures into the slots.
+            let obj = group.reread_emitted(ctx, rooted);
+            let obj_box = nanbox_pointer_inline(ctx.block(), &obj);
+            super::class_env::publish_guarded(
+                ctx,
+                template,
+                "js_class_env_evaluate",
+                &obj_box,
+                &caps_box,
+            );
+        }
+        // Static fields and blocks execute only after every computed
+        // name has been resolved, then in their original ClassBody
+        // order. Each vector index is recorded by HIR lowering.
+        for step in static_init_order {
+            match step {
+                perry_hir::ClassFreshStaticInit::Named(index) => {
+                    let Some((name, init)) = named_statics.get(*index as usize) else {
+                        continue;
+                    };
+                    let storage_name = if name.starts_with('#') {
+                        private_static_storage_name(template_cid, name)
+                    } else {
+                        name.clone()
+                    };
+                    let key_idx = ctx.strings.intern(&storage_name);
+                    let key_handle_global =
+                        format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                    let value = lower_expr(ctx, init)?;
+                    let obj = group.reread_emitted(ctx, rooted);
+                    let blk = ctx.block();
+                    let key_box = blk.load(DOUBLE, &key_handle_global);
+                    let key_bits = blk.bitcast_double_to_i64(&key_box);
+                    let key_raw = blk.and(I64, &key_bits, crate::nanbox::POINTER_MASK_I64);
+                    blk.call_void(
+                        "js_object_set_field_by_name",
+                        &[(I64, &obj), (I64, &key_raw), (DOUBLE, &value)],
+                    );
+                }
+                perry_hir::ClassFreshStaticInit::Computed(index) => {
+                    let Some((key_slot, init)) = computed_statics.get(*index as usize) else {
+                        continue;
+                    };
+                    let value = lower_expr(ctx, init)?;
+                    let key_idx = ctx.strings.intern(key_slot);
+                    let entry = ctx.strings.entry(key_idx);
+                    let key_bytes = format!("@{}", entry.bytes_global);
+                    let key_len = entry.byte_len.to_string();
+                    let obj = group.reread_emitted(ctx, rooted);
+                    let obj_box = nanbox_pointer_inline(ctx.block(), &obj);
+                    let resolved_key = ctx.block().call(
+                        DOUBLE,
+                        "js_object_get_own_field_or_undef",
+                        &[(DOUBLE, &obj_box), (PTR, &key_bytes), (I64, &key_len)],
+                    );
+                    ctx.block().call(
+                        DOUBLE,
+                        "js_object_set_property_key",
+                        &[
+                            (DOUBLE, &obj_box),
+                            (DOUBLE, &resolved_key),
+                            (DOUBLE, &value),
+                        ],
+                    );
+                }
+                perry_hir::ClassFreshStaticInit::Block(index) => {
+                    let Some(fn_name) = block_fns.get(*index as usize) else {
+                        continue;
+                    };
+                    let obj = group.reread_emitted(ctx, rooted);
+                    let obj_box = nanbox_pointer_inline(ctx.block(), &obj);
+                    ctx.block()
+                        .call_void("js_static_this_arm_value", &[(DOUBLE, &obj_box)]);
+                    ctx.block().call(DOUBLE, fn_name, &[]);
+                }
+            }
+        }
+        let obj = group.reread_emitted(ctx, rooted);
+        let obj_box = nanbox_pointer_inline(ctx.block(), &obj);
+        Ok(obj_box)
+    })
 }

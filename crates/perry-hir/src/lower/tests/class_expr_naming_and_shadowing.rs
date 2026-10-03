@@ -90,7 +90,7 @@ fn nested_class_shadowing_outer_var_constructs_the_class_not_the_local() {
     let body = format!("{:#?}", mk.body);
 
     assert!(
-        !body.contains("NewDynamic"),
+        constructs_only_through_own_evaluation(&mk.body, "A"),
         "`new A()` inside A's own method must not construct through an \
          enclosing-scope local slot: {body}"
     );
@@ -535,7 +535,7 @@ fn first_of_several_same_named_nested_classes_constructs_itself() {
     let body = format!("{:#?}", mk.body);
 
     assert!(
-        !body.contains("NewDynamic"),
+        constructs_only_through_own_evaluation(&mk.body, "i"),
         "`new i()` inside i's own method must not construct through the \
          enclosing binding's slot: {body}"
     );
@@ -583,4 +583,51 @@ fn method_local_shadowing_the_class_name_still_wins_in_new() {
         body.contains("NewDynamic"),
         "a method-scope local named after the class must still win for `new`: {body}"
     );
+}
+
+/// Every by-value `new` in `body` constructs class `class_name`'s own
+/// evaluation (#11759 (c′): a declaration that may be evaluated more than
+/// once constructs its first evaluation statically and a later one through
+/// the evaluation its member reads from the class environment), never an
+/// enclosing scope's binding of the same name.
+fn constructs_only_through_own_evaluation(body: &[crate::ir::Stmt], class_name: &str) -> bool {
+    use crate::ir::{Expr, Stmt};
+    // Locals the body binds to its class environment.
+    let own: Vec<crate::types::LocalId> = body
+        .iter()
+        .filter_map(|stmt| match stmt {
+            Stmt::Let {
+                id,
+                init: Some(Expr::ClassEnvGet { class_name: c, .. }),
+                ..
+            } if c == class_name => Some(*id),
+            _ => None,
+        })
+        .collect();
+    let reads_own = |e: &Expr| match e {
+        Expr::LocalGet(id) => own.contains(id),
+        Expr::IndexGet { object, .. } => {
+            matches!(object.as_ref(), Expr::LocalGet(id) if own.contains(id))
+        }
+        Expr::ClassEnvGet { class_name: c, .. } => c == class_name,
+        _ => false,
+    };
+    let mut ok = true;
+    fn visit(e: &Expr, check: &mut dyn FnMut(&Expr)) {
+        check(e);
+        crate::walker::walk_expr_children(e, &mut |c| visit(c, check));
+    }
+    for stmt in body {
+        crate::walker::stmt_any_expr(stmt, &mut |e| {
+            visit(e, &mut |x| {
+                if let Expr::NewDynamic { callee, .. } = x {
+                    if !reads_own(callee) {
+                        ok = false;
+                    }
+                }
+            });
+            false
+        });
+    }
+    ok
 }

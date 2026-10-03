@@ -1627,8 +1627,16 @@ fn rewrite_expr(expr: &mut Expr, shared: &HashSet<LocalId>, index_uses: &HashSet
             computed_keys,
             computed_statics,
             captured_args,
+            shared_first_evaluation,
+            evaluated_parent,
             ..
         } => {
+            if let Some(init) = shared_first_evaluation {
+                rewrite_expr(init, shared, index_uses);
+            }
+            if let Some(parent) = evaluated_parent {
+                rewrite_expr(parent, shared, index_uses);
+            }
             for (_, v) in named_statics.iter_mut() {
                 rewrite_expr(v, shared, index_uses);
             }

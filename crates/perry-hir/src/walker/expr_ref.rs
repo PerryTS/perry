@@ -642,8 +642,16 @@ where
             computed_keys,
             computed_statics,
             captured_args,
+            shared_first_evaluation,
+            evaluated_parent,
             ..
         } => {
+            if let Some(init) = shared_first_evaluation {
+                f(init);
+            }
+            if let Some(parent) = evaluated_parent {
+                f(parent);
+            }
             for (_, v) in named_statics {
                 f(v);
             }
@@ -656,6 +664,9 @@ where
             for a in captured_args {
                 f(a);
             }
+        }
+        Expr::ClassIsFirstEvaluation { value, .. } => {
+            f(value);
         }
         Expr::SetFunctionPrototype { func, proto, .. } => {
             f(func);

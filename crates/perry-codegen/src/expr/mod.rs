@@ -3051,6 +3051,7 @@ pub(crate) mod calls;
 mod child_proc;
 pub(crate) mod class_env;
 pub(crate) mod class_field_push;
+pub(crate) mod class_first_evaluation;
 mod closure;
 mod compare;
 pub(crate) mod region_guard;

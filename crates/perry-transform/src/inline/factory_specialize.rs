@@ -1163,6 +1163,8 @@ pub fn fresh_export_dynamic_heritage_factories(module: &mut Module) {
             computed_statics: Vec::new(),
             static_init_order: Vec::new(),
             captured_args: Vec::new(),
+            shared_first_evaluation: None,
+            evaluated_parent: None,
         });
     }
 }

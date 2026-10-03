@@ -280,6 +280,33 @@ pub fn intersect_exact_receiver_facts(
         .collect()
 }
 
+/// The class `init` constructs: `new C()`, or #11759 (c′)'s `new C()`
+/// through a declaration that may be evaluated more than once, which builds
+/// the first evaluation statically and a later one by value. Every evaluation
+/// runs C's constructor and carries C's declaration-time method table on its
+/// prototype; a write to any evaluation's `prototype` goes through the
+/// binding, which `collect_module_prototype_facts` counts as opaque.
+pub(crate) fn constructed_class(init: &Expr) -> Option<&String> {
+    match init {
+        Expr::New { class_name, .. } => Some(class_name),
+        Expr::Conditional {
+            condition,
+            then_expr,
+            ..
+        } if matches!(condition.as_ref(), Expr::ClassIsFirstEvaluation { .. }) => {
+            match then_expr.as_ref() {
+                Expr::ClassEnvStamp { instance, .. } => match instance.as_ref() {
+                    Expr::New { class_name, .. } => Some(class_name),
+                    _ => None,
+                },
+                Expr::New { class_name, .. } => Some(class_name),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
 pub fn apply_exact_receiver_stmt_effect(stmt: &Stmt, facts: &mut ExactReceiverFacts) {
     match stmt {
         Stmt::Let { id, init, .. } => {
@@ -287,7 +314,7 @@ pub fn apply_exact_receiver_stmt_effect(stmt: &Stmt, facts: &mut ExactReceiverFa
             if let Some(init) = init {
                 invalidate_exact_receivers_for_expr(init, facts);
                 kill_referenced_exact_receivers(init, facts);
-                if let Expr::New { class_name, .. } = init {
+                if let Some(class_name) = constructed_class(init) {
                     facts.insert(
                         *id,
                         ExactReceiverFact {

@@ -45,7 +45,8 @@ pub(crate) use class_computed::{
     class_computed_member_registration_expr, prepare_ordered_class_computed_names,
 };
 pub(crate) use class_decl::{
-    fresh_class_decl_self_binding, lower_class_decl, lower_class_from_ast,
+    fresh_class_decl_self_binding, guard_shared_first_capture_snapshot, guard_shared_first_new,
+    guard_shared_first_static_get, lower_class_decl, lower_class_from_ast,
 };
 pub(crate) use class_members::{
     lower_class_method, lower_class_method_with_name, lower_class_prop, lower_constructor,

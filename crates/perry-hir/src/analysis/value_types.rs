@@ -829,6 +829,7 @@ pub fn infer_expr_type<F: HirTypeFacts + ?Sized>(expr: &Expr, env: &F) -> Type {
             Type::Object(ObjectType::default())
         }
         Expr::ClassExprFresh { .. } => Type::Object(ObjectType::default()),
+        Expr::ClassIsFirstEvaluation { .. } => Type::Boolean,
         Expr::SetFunctionPrototype { proto, .. } => infer_expr_type(proto, env),
         Expr::GetFunctionPrototypeMethod { .. } => optional_type(function_type_for_return(None)),
         Expr::MapNew => generic_type("Map"),

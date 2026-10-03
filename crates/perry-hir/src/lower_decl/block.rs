@@ -677,10 +677,14 @@ pub fn lower_fn_body_block_stmt(
                         for s in body.iter_mut() {
                             super::class_captures::append_new_args_stmt(s, &cname, &cap_args, true);
                         }
-                        let re_reg = Stmt::Expr(Expr::RegisterClassCaptures {
-                            class_name: cname,
-                            captures,
-                        });
+                        let re_reg = crate::lower_decl::guard_shared_first_capture_snapshot(
+                            ctx,
+                            &cname,
+                            Stmt::Expr(Expr::RegisterClassCaptures {
+                                class_name: cname.clone(),
+                                captures,
+                            }),
+                        );
                         re_reg_capsets.push((re_reg.clone(), captured.iter().copied().collect()));
                         re_regs.push(re_reg);
                     }

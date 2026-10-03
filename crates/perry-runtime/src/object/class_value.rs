@@ -228,10 +228,32 @@ fn class_value_slot(class_id: u32) -> *mut *mut ClosureHeader {
     }
 }
 
+/// Capture slot of a class function object holding its evaluation state, an
+/// INT32. `0`: the object names the class's evaluations as a group, so a
+/// per-evaluation class object's static writes are mirrored into it (#6530).
+/// `1`: the object IS its declaration's first evaluation (#11759 (c′)), a
+/// class of its own; later evaluations never write into it. Generated code
+/// sets it when the first evaluation hands the shared class out.
+const CLASS_EVALUATION_STATE_SLOT: usize = crate::codegen_abi::CLASS_EVALUATION_STATE_CAPTURE;
+
+/// Is class `class_id`'s function object its declaration's first evaluation
+/// (see [`CLASS_EVALUATION_STATE_SLOT`])? A class whose function object was
+/// never minted has no evaluation to protect.
+pub(crate) fn class_value_is_first_evaluation(class_id: u32) -> bool {
+    class_value_cached(class_id).is_some_and(|closure| {
+        // SAFETY: a live class function object minted with two capture slots.
+        unsafe {
+            *crate::closure::closure_capture_slots_mut(closure).add(CLASS_EVALUATION_STATE_SLOT)
+                == crate::codegen_abi::CLASS_FIRST_EVALUATION_STATE
+        }
+    })
+}
+
 /// Allocate the class function object for `class_id`: a closure born in the
 /// old generation and pinned (it lives as long as the agent and never moves),
 /// code pointer
-/// [`js_class_constructor_called`], capture slot 0 = the class id as INT32.
+/// [`js_class_constructor_called`], capture slot 0 = the class id as INT32,
+/// capture slot 1 = its evaluation state ([`CLASS_EVALUATION_STATE_SLOT`]).
 ///
 /// Never collects: callers hold raw receiver pointers across the lookup, so
 /// the old-arena allocation runs under a [`crate::gc::GcSuppressScope`].
@@ -243,22 +265,27 @@ fn class_value_mint(class_id: u32) -> *mut ClosureHeader {
         "a class function object belongs to a compiled class id, never a builtin or synthetic band: {class_id:#x}"
     );
     let _no_collect = crate::gc::GcSuppressScope::new();
-    let payload = crate::closure::closure_payload_size(1);
+    let payload = crate::closure::closure_payload_size(2);
     let ptr = crate::arena::arena_alloc_gc_old_born_tenured(
         payload,
         std::mem::align_of::<ClosureHeader>(),
         crate::gc::GC_TYPE_CLOSURE,
     ) as *mut ClosureHeader;
     unsafe {
-        // GC_STORE_AUDIT(INIT): fresh class function object; the one capture
-        // is an INT32 class id and the props edge is null — pointer-free.
-        (*ptr).capture_count = 1;
+        // GC_STORE_AUDIT(INIT): fresh class function object; both captures
+        // are INT32s (class id, evaluation state) and the props edge is null —
+        // pointer-free.
+        (*ptr).capture_count = 2;
         (*ptr).shape_id = crate::closure::shape::function_class_shape();
         (*ptr).info = &CLASS_CONSTRUCTOR_INFO;
         (*ptr).props = std::ptr::null_mut();
         std::ptr::write(
             crate::closure::closure_capture_slots_mut(ptr),
             crate::value::INT32_TAG | class_id as u64,
+        );
+        std::ptr::write(
+            crate::closure::closure_capture_slots_mut(ptr).add(CLASS_EVALUATION_STATE_SLOT),
+            crate::value::INT32_TAG,
         );
         crate::gc::layout_init_pointer_free(ptr as *mut u8);
         // Born old AND pinned: the address is the class's identity for the

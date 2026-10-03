@@ -139,6 +139,19 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
     // ref) must fall through to the unresolved-RHS `TypeError` below
     // instead of being dispatched into `js_instanceof` as a bogus class id.
     if let Some(class_id) = class_ref_id(type_ref) {
+        // #11759 (c′): the class function object is the first evaluation of a
+        // declaration whose later evaluations share its template id. A value
+        // with an individually recorded prototype chain (an instance of a
+        // later evaluation) answers by its actual chain.
+        if crate::object::class_value::class_value_is_first_evaluation(class_id)
+            && super::prototype_chain::object_static_prototype(value_addr(value)).is_some()
+        {
+            return f64::from_bits(if ordinary_has_instance_prototype_walk(value, type_ref) {
+                crate::value::TAG_TRUE
+            } else {
+                TAG_FALSE
+            });
+        }
         return js_instanceof(value, class_id);
     }
     // #9502: a heap class object's template id identifies its code, not its
@@ -149,9 +162,15 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
         // without attaching an evaluated prototype. Retain that representation's
         // class-id check; a recorded prototype (a fact of the receiver's
         // shape) is authoritative.
-        if super::prototype_chain::object_static_prototype(value_addr(value)).is_none() {
-            let obj = crate::JSValue::from_bits(bits).as_pointer::<ObjectHeader>();
-            return js_instanceof(value, js_object_get_class_id(obj));
+        let obj = crate::JSValue::from_bits(bits).as_pointer::<ObjectHeader>();
+        let template = js_object_get_class_id(obj);
+        // #11759 (c′): when the template's class function object is the
+        // declaration's first evaluation, a template-id instance belongs to
+        // THAT evaluation, never to this later one: the chain decides.
+        if super::prototype_chain::object_static_prototype(value_addr(value)).is_none()
+            && !crate::object::class_value::class_value_is_first_evaluation(template)
+        {
+            return js_instanceof(value, template);
         }
         return f64::from_bits(if ordinary_has_instance_prototype_walk(value, type_ref) {
             crate::value::TAG_TRUE
