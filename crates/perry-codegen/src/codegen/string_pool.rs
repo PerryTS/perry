@@ -721,6 +721,20 @@ pub(super) fn emit_string_pool(
             .unwrap_or(0)
             .to_string();
         let cid_str = class_id.to_string();
+        // A literal birth names the plain prototype (`BirthProto::Literal`), so
+        // its shape mints pass class id 0, exactly as the startup literal seed
+        // (`js_shape_seed_plain`) does. Passing the anonymous class's own id was
+        // equivalent only while that id had no vtable class: per-module class
+        // ids collide, so an `__AnonShape_*` id can also be another module's
+        // DECLARED class, and the mint then derived that class's prototype --
+        // different facts under the one static id the driver assigned to this
+        // content, which the mint refuses with an abort. The keys array still
+        // carries the real id (`js_build_class_keys_array` above).
+        let mint_cid_str = if birth.literal {
+            "0".to_string()
+        } else {
+            cid_str.clone()
+        };
         let fc_str = field_count.to_string();
         let packed_ref = if packed.is_empty() {
             "null".to_string()
@@ -790,7 +804,7 @@ pub(super) fn emit_string_pool(
                     (I64, &arr),
                     (I32, &fc_str),
                     (I32, &live.to_string()),
-                    (I32, &cid_str),
+                    (I32, &mint_cid_str),
                     (I32, &requested),
                     (I64, &rep_str),
                 ],
@@ -809,7 +823,7 @@ pub(super) fn emit_string_pool(
                         (I64, &arr),
                         (I32, &fc_str),
                         (I32, &birth_live.to_string()),
-                        (I32, &cid_str),
+                        (I32, &mint_cid_str),
                         (I64, &rep_str),
                     ],
                 ),
@@ -819,7 +833,7 @@ pub(super) fn emit_string_pool(
                     &[
                         (I64, &arr),
                         (I32, &fc_str),
-                        (I32, &cid_str),
+                        (I32, &mint_cid_str),
                         (I64, &rep_str),
                     ],
                 ),

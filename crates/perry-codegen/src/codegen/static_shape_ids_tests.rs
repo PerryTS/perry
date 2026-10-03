@@ -560,3 +560,220 @@ fn literal_key_cache_mints_require_a_seed_even_without_a_guard() {
         vec![(assigned[&literal], literal)]
     );
 }
+
+/// A class with plain `this.f = f` fields, as `mint_anon_shape_class`
+/// synthesizes for an object literal (or as a declared class would look).
+fn field_class(
+    id: u32,
+    name: &str,
+    fields: &[&str],
+    ctor_id: u32,
+    param_base: u32,
+) -> perry_hir::Class {
+    use perry_hir::types::Type;
+    use perry_hir::{ClassField, Expr, Function, Param, Stmt};
+    let params: Vec<Param> = fields
+        .iter()
+        .enumerate()
+        .map(|(i, f)| Param {
+            id: param_base + i as u32,
+            name: (*f).to_string(),
+            ty: Type::Any,
+            default: None,
+            decorators: Vec::new(),
+            is_rest: false,
+            arguments_object: None,
+        })
+        .collect();
+    let body = params
+        .iter()
+        .map(|p| {
+            Stmt::Expr(Expr::PropertySet {
+                object: Box::new(Expr::This),
+                property: p.name.clone(),
+                value: Box::new(Expr::LocalGet(p.id)),
+            })
+        })
+        .collect();
+    perry_hir::Class {
+        id,
+        name: name.to_string(),
+        type_params: Vec::new(),
+        extends: None,
+        extends_name: None,
+        native_extends: None,
+        extends_expr: None,
+        heritage_lexically_shadowed: false,
+        fields: fields
+            .iter()
+            .map(|f| ClassField {
+                name: (*f).to_string(),
+                key_expr: None,
+                ty: Type::Any,
+                init: None,
+                is_private: false,
+                is_readonly: false,
+                decorators: Vec::new(),
+            })
+            .collect(),
+        constructor: Some(Function {
+            id: ctor_id,
+            name: "constructor".to_string(),
+            type_params: Vec::new(),
+            params,
+            return_type: Type::Void,
+            body,
+            is_async: false,
+            is_generator: false,
+            is_strict: true,
+            is_exported: false,
+            captures: Vec::new(),
+            decorators: Vec::new(),
+            was_plain_async: false,
+            was_unrolled: false,
+        }),
+        methods: Vec::new(),
+        getters: Vec::new(),
+        setters: Vec::new(),
+        static_accessor_names: Vec::new(),
+        static_accessor_fn_ids: Vec::new(),
+        static_fields: Vec::new(),
+        static_methods: Vec::new(),
+        computed_members: Vec::new(),
+        decorators: Vec::new(),
+        is_exported: false,
+        aliases: Vec::new(),
+        is_nested: false,
+        alloc_width_hint: 0,
+        specialized_from: None,
+    }
+}
+
+/// `const o = { a: 1 }` (an `__AnonShape_*` birth) beside `new Point(2)`.
+fn literal_and_declared_module() -> perry_hir::Module {
+    use perry_hir::types::Type;
+    use perry_hir::{Expr, Stmt};
+    let mut hir = perry_hir::Module::new("literal_birth_mint_test");
+    hir.classes.push(field_class(
+        1,
+        "__AnonShape_000000000000a001",
+        &["a"],
+        90,
+        60,
+    ));
+    hir.classes.push(field_class(2, "Point", &["x"], 91, 70));
+    for (id, class, v) in [
+        (50, "__AnonShape_000000000000a001", 1.0),
+        (51, "Point", 2.0),
+    ] {
+        hir.init.push(Stmt::Let {
+            id,
+            name: format!("v{id}"),
+            ty: Type::Any,
+            mutable: false,
+            init: Some(Expr::New {
+                class_name: class.to_string(),
+                args: vec![Expr::Number(v)],
+                type_args: Vec::new(),
+                byte_offset: 0,
+                cap_args_appended: 0,
+            }),
+        });
+    }
+    hir
+}
+
+/// The arguments of every `call ... @callee(...)` in `ir`, as their value text
+/// (call instructions only: the module's `declare` line names the callee too).
+fn mint_calls(ir: &str, callee: &str) -> Vec<Vec<String>> {
+    let needle = format!("@{callee}(");
+    ir.lines()
+        .filter(|line| line.contains(" call ") && !line.trim_start().starts_with("declare"))
+        .filter_map(|line| {
+            let start = line.find(&needle)? + needle.len();
+            let end = start + line[start..].find(')')?;
+            Some(
+                line[start..end]
+                    .split(", ")
+                    .map(|arg| arg.rsplit(' ').next().unwrap_or("").to_string())
+                    .collect(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn a_literal_birth_mints_its_shape_with_the_plain_prototype_on_both_routes() {
+    // Per-module class ids collide: an `__AnonShape_*` id can also be another
+    // module's DECLARED class. Passing it to the shape mint let the runtime
+    // derive that class's prototype for a plain literal, so two modules' equal
+    // literal contents -- ONE static id -- reached the mint with different
+    // facts and the second aborted ("the static ShapeId ... was refused by the
+    // shape mint"; OpenCode's TUI: ajv's and json5's `{ x }` literals). A
+    // literal birth names the plain prototype, as the startup literal seed
+    // (`js_shape_seed_plain`) does: class id 0.
+    let hir = literal_and_declared_module();
+
+    // Lazy route (no static id): `(keys, field_count, class_id, rep)`.
+    let lazy = String::from_utf8(
+        crate::compile_module(
+            &hir,
+            crate::CompileOptions {
+                emit_ir_only: true,
+                ..Default::default()
+            },
+        )
+        .expect("module compiles"),
+    )
+    .expect("UTF-8 IR");
+    let calls = mint_calls(&lazy, "js_object_shape_id_for_class_keys");
+    assert_eq!(calls.len(), 2, "one lazy mint per birth class:\n{lazy}");
+    let class_ids: Vec<&str> = calls.iter().map(|args| args[2].as_str()).collect();
+    assert!(
+        class_ids.contains(&"0"),
+        "the literal's mint must name class id 0: {calls:?}"
+    );
+    assert!(
+        class_ids.iter().any(|cid| *cid != "0"),
+        "a declared class keeps its own class id (its prototype is a shape fact): {calls:?}"
+    );
+
+    // Static route: the driver assigned the literal's content an id.
+    let content = BirthShape {
+        keys: b"a\0".to_vec(),
+        key_count: 1,
+        live: 1,
+        proto: BirthProto::Literal,
+        typed: None,
+        rep: 0,
+        constfn: Vec::new(),
+    };
+    let requested = SHAPE_ID_BASE + 7;
+    let stat = String::from_utf8(
+        crate::compile_module(
+            &hir,
+            crate::CompileOptions {
+                emit_ir_only: true,
+                static_shape_ids: vec![(content, requested)],
+                ..Default::default()
+            },
+        )
+        .expect("module compiles"),
+    )
+    .expect("UTF-8 IR");
+    // `(keys, field_count, live, class_id, requested, rep)`
+    let calls = mint_calls(&stat, "js_object_shape_id_for_class_keys_static");
+    let literal: Vec<&Vec<String>> = calls
+        .iter()
+        .filter(|args| args[4] == requested.to_string())
+        .collect();
+    assert_eq!(
+        literal.len(),
+        1,
+        "the driver's id must reach the literal's static mint for this test to mean anything: {calls:?}\n{stat}"
+    );
+    assert_eq!(
+        literal[0][3], "0",
+        "the literal's static mint must name class id 0, as its seed does: {calls:?}"
+    );
+}

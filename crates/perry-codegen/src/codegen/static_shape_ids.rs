@@ -329,6 +329,9 @@ pub(crate) struct ClassBirth {
     pub wide_live: u32,
     /// Its content, when it is nameable.
     pub shape: Option<BirthShape>,
+    /// An anonymous object-literal class (`__AnonShape_*`): its birth names
+    /// the plain prototype ([`BirthProto::Literal`]), never a class one.
+    pub literal: bool,
 }
 
 /// `(keys global, packed names, field count, raw-f64 mask words, pointer mask
@@ -387,6 +390,7 @@ pub(crate) fn class_birth(
         class_id,
         wide_live,
         shape,
+        literal,
     }
 }
 
