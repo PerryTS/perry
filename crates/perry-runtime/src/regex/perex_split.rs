@@ -11,7 +11,7 @@ use super::perex_replace_storage::{boxed, call, length, text, List, Pieces, Unit
 use super::perex_runtime::{self as host, CaptureMode, EngineError};
 use super::perex_strings::SpanCopies;
 use crate::gc::{RuntimeHandle, RuntimeHandleScope};
-use crate::value::{js_nanbox_pointer, js_nanbox_string, TAG_NULL, TAG_UNDEFINED};
+use crate::value::{js_nanbox_pointer, TAG_NULL, TAG_UNDEFINED};
 use perex::binding::{BoundProgram, BoundSubject, SubjectError};
 use perex::input::Position;
 use perex::Budget;
@@ -149,7 +149,6 @@ fn forward_split(
         CaptureMode::Full
     };
     while q < size {
-        let local = RuntimeHandleScope::new();
         let (found, position) = host::find_near(
             forward,
             bound,
@@ -184,27 +183,16 @@ fn forward_split(
             return Ok(output.value());
         }
         p = end;
-        let count = found.captures.as_ref().map_or(0, |captures| captures.len());
-        if count > 1 {
-            let (array, _) = api::caught(|| {
-                super::perex_results::materialize(
-                    input,
-                    bound,
-                    forward,
-                    &found,
-                    // Captures lie within this match, just behind the search's end.
-                    Some(position),
-                    false,
-                    budget,
-                    &mut host::poll,
-                )
-            })??;
-            let array = local.root_raw_mut_ptr(array);
-            for capture in 1..count {
-                let value = array.with_const_ptr::<crate::array::ArrayHeader, _>(|array| {
-                    crate::array::js_array_get_f64(array, capture as u32)
-                });
-                output.push(value, budget)?;
+        if let Some(captures) = &found.captures {
+            // These private builtin exec results are unobservable. Copy only
+            // the captures the split returns, directly into its rooted list.
+            // Captures in lookarounds may precede or follow the full match.
+            for capture in captures.iter().skip(1) {
+                if let Some(span) = capture {
+                    push_span(&mut output, &mut copies, span.start(), span.end(), budget)?;
+                } else {
+                    output.push_unseen(f64::from_bits(TAG_UNDEFINED), budget)?;
+                }
                 if output.len() == lim {
                     charged(budget);
                     return Ok(output.value());
@@ -226,8 +214,8 @@ fn push_span(
     end: usize,
     budget: &mut Budget,
 ) -> Result<(), EngineError> {
-    let result = copies.copy(start, end, budget)?;
-    output.push_unseen(js_nanbox_string(result as i64), budget)
+    let result = copies.copy_value(start, end, budget)?;
+    output.push_unseen(result, budget)
 }
 
 /// Split by an untouched RegExp without its protocol Gets (#10518).

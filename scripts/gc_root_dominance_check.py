@@ -646,6 +646,9 @@ ALLOC_RE = re.compile(
     # fresh objects/collections handed back as a whole
     r"object_keys\w*|object_values\w*|object_entries\w*|object_from_entries|"
     r"object_assign\w*|object_group_by|object_coerce|"
+    # A rooted finalizer returns the refreshed heap receiver. Its result is
+    # a new SSA snapshot and must not cross later collectors without a root.
+    r"object_finalize_constfn_static|"
     r"object_get_own_property_descriptor\w*|object_get_own_property_names|"
     r"object_get_own_property_symbols|"
     r"map_from_iterable|set_from_iterable|map_group_by|"
@@ -5373,6 +5376,37 @@ def self_test():
     that has not been shown to work.
     """
     ok = True
+    # A finalizer hands back its current rooted receiver, a heap-valued SSA
+    # source even though it did not allocate that object. Prove both the late
+    # store detector and stale-register detector still see that return value.
+    finalizer = """define i64 @perry_fn_selftest__constfn(i64 %receiver) {
+entry.0:
+  %slot = alloca i64
+  call void @js_shadow_frame_enter(i32 1)
+  %obj = call i64 @js_object_finalize_constfn_static(i64 %receiver, i32 1, ptr null, i32 1, i32 1, i32 1, i32 0, i64 3, ptr null, i32 1)
+  %poll = call double @js_gc_loop_safepoint(double 0.0)
+  store i64 %obj, ptr %slot
+  call void @js_shadow_slot_bind(i32 0, ptr %slot)
+  ret i64 %obj
+}
+"""
+    rooted_finalizer = finalizer.replace(
+        "  %poll = call double @js_gc_loop_safepoint(double 0.0)\n", ""
+    ).replace(
+        "  ret i64 %obj", "  %poll = call double @js_gc_loop_safepoint(double 0.0)\n"
+        "  %fresh = load i64, ptr %slot\n  ret i64 %fresh"
+    )
+    with tempfile.TemporaryDirectory() as td:
+        for name, fixture, expected in [("late", finalizer, 1), ("rooted", rooted_finalizer, 0)]:
+            path = os.path.join(td, name + ".ll")
+            with open(path, "w") as fh:
+                fh.write(fixture)
+            hits, _ = _scan([path], False, "alloc")
+            stale = check_func_stale(path, parse_file(path)[0], moving_only=True)
+            if len(hits) != expected or bool(stale) != bool(expected):
+                print(f"self-test FAIL: ConstFn {name} return: late roots={len(hits)}, "
+                      f"stale={len(stale)}, expected {expected}", file=sys.stderr)
+                ok = False
     with tempfile.TemporaryDirectory() as td:
         planted = os.path.join(td, "planted.ll")
         clean = os.path.join(td, "clean.ll")

@@ -31,7 +31,7 @@ THE THREE TIERS
          `await-tests` dispatches this and waits for the `full-suite-gate` job),
          and PRs carrying the `run-extended-tests` label. The sweep plus the
          slow/opt-in suites (parity, compile-smoke, doc-tests, package smokes,
-         the gap suite in its 8-shard auto-optimize mode).
+         the gap suite in its 12-shard auto-optimize mode).
 
 PR SCOPE
 --------
@@ -123,7 +123,10 @@ TIERS = ("pr", "sweep", "full")
 GAP_SUITE = {
     "pr": {"mode": "fast", "total": 6},
     "sweep": {"mode": "fast", "total": 3},
-    "full": {"mode": "full", "total": 8},
+    # Current 8-way full runs hit the 110-minute bound while still compiling
+    # (e.g. run36914319295, shard1 reached137/152). Preserve auto-optimize
+    # coverage and distribute the complete corpus across more workers.
+    "full": {"mode": "full", "total": 12},
 }
 
 # Parity: full tier only, sharded. The unsharded job was killed by GitHub's
@@ -138,7 +141,7 @@ PARITY_SHARDS = 12
 # The growing `perry` integration inventory cannot finish serially inside
 # cargo-test's 180-minute release bound (#8914). Eight round-robin shards put
 # the observed low-cache workload below 90 minutes while fitting alongside the
-# existing eight gap workers in the org's 20-runner pool.  The regular
+# gap workers in the org's 20-runner pool. The regular
 # `cargo-test` job still covers the perry bin/unit target and every other
 # package; this matrix owns only `perry` integration targets.
 PERRY_INTEGRATION_SHARDS = 8
@@ -460,7 +463,7 @@ def _self_test() -> int:
             "shards": list(range(1, PERRY_INTEGRATION_SHARDS + 1)),
         },
     )
-    check("full: 8 auto-optimize gap shards", full["gap"]["total"] == 8 and full["gap"]["mode"] == "full")
+    check("full: 12 auto-optimize gap shards", full["gap"] == {"mode": "full", "total": 12, "shards": list(range(1, 13)), "update_snapshot": False})
     check("full: parity sharded (6h-cap kill, 2026-08-16)", full["parity"]["total"] >= 2 and full["parity"]["shards"][0] == 1)
     check("full: full GC matrix has four shards", full["gc_stress"] == {"mode": "all", "total": 4, "shards": [1, 2, 3, 4]})
 

@@ -276,7 +276,7 @@ pub(crate) use slot_rep::{
     deny_canonical_context, deny_canonical_i32, load_canonical_local_boxed, local_is_canonical_str,
     local_rep_is_canonical_i32, note_canonical_local, ptr_shape_context_rule_text,
     store_canonical_local_from_double, CanonicalI32Denial, SlotRep, PTR_SHAPE_NO_ACCESS_SITE,
-    PTR_SHAPE_SCALAR_REPLACED,
+    PTR_SHAPE_REGION_AUTHORITY, PTR_SHAPE_SCALAR_REPLACED,
 };
 
 pub(crate) use dispatch::{lower_expr, lower_math_operand};
@@ -381,6 +381,10 @@ pub(crate) struct FnCtx<'a> {
     /// collected from structural initializers with module-wide write
     /// invalidation; ordinary local type predicates do not consult them.
     pub module_global_proven_types: &'a std::collections::HashMap<u32, HirType>,
+    /// This module's immutable-global transfer plans by LocalId. Every read of
+    /// such a binding goes through `codegen::global_transfer::emit_read`.
+    pub module_global_transfers:
+        &'a std::collections::HashMap<u32, crate::codegen::global_transfer::GlobalTransfer>,
     /// Bindings assigned after declaration anywhere in this region.
     ///
     /// A TypeScript annotation describes the source-level contract, but an
@@ -1085,19 +1089,6 @@ pub(crate) struct FnCtx<'a> {
     /// removed the moment the local leaves that scope.
     pub suppressed_cleared_shadow_slots: std::collections::HashSet<u32>,
 
-    /// #5093: scoped loop-versioning facts for monomorphic class-field loops.
-    /// Pushed only around the FAST clone of `lower_class_field_versioned_for`
-    /// (`stmt/loops.rs`): the loop preheader already proved the receiver's
-    /// exact class shape (class_id, keys identity, field_count, typed-layout
-    /// intact bit, not-frozen, inline-guard enable flag), and the matcher
-    /// proved the fast body is call-free (no allocation ⇒ no GC ⇒ the cached
-    /// `obj_ptr` cannot move and the shape cannot change mid-loop). Inside
-    /// that clone, `recv.field` GET/SET on a tracked raw-f64 field lowers to
-    /// a bare GEP+load/store on `obj_ptr` with no guard and no fallback call;
-    /// SET keeps an inline plain-finite-number check that side-exits to the
-    /// slow clone's preheader BEFORE committing any side effect of the
-    /// current iteration.
-    pub class_field_loop_facts: Vec<ClassFieldLoopFact>,
     /// Step 4b (#10884): loop / body regions whose body is not lowered yet
     /// (`stmt::region_loop`), and the facts active while an F-body lowers.
     pub region_loops: Vec<crate::stmt::region_loop::Pending>,
@@ -2150,30 +2141,6 @@ pub(crate) struct StringWindowArrayFact {
     pub max_idx_exclusive: i64,
 }
 
-/// #5093: one fact per (receiver, versioned loop). See
-/// `FnCtx::class_field_loop_facts` for the safety argument.
-#[derive(Debug, Clone)]
-pub(crate) struct ClassFieldLoopFact {
-    /// LocalId of the loop-invariant receiver (plain local or module global).
-    pub recv_local_id: u32,
-    pub scope_id: u32,
-    /// Class the preheader check proved exactly (by class_id compare).
-    pub class_name: String,
-    /// SSA name of the receiver object pointer, `inttoptr`'d in the
-    /// preheader's deref block. Dominates every block of the fast clone and
-    /// is stable for the clone's whole lifetime because the fast body is
-    /// call-free (no allocation ⇒ no GC ⇒ no evacuation).
-    pub obj_ptr: String,
-    /// Slow clone's preheader label. A raw-f64 store whose value fails the
-    /// inline plain-finite check branches here; the slow clone re-executes
-    /// the current iteration from scratch (no side effect has committed yet).
-    pub side_exit_label: String,
-    /// property name -> packed slot index. Every entry is a declared raw-f64
-    /// candidate field validated by the matcher via
-    /// `class_field_global_index` / `class_field_declared_type`.
-    pub fields: std::collections::BTreeMap<String, u32>,
-}
-
 /// #10123: where the fast clone's element index comes from.
 ///
 /// The class-keyed arm admits [`Self::Counter`] only — the preheader's
@@ -2495,23 +2462,6 @@ pub(crate) fn element_shape_loop_fact_for_property_get<'f>(
         }),
         _ => None,
     }
-}
-
-/// Find the innermost active class-field loop fact covering
-/// `(recv_local_id, class_name, property)`. Returns the fact and the packed
-/// slot index of the field.
-pub(crate) fn class_field_loop_fact_lookup<'f>(
-    facts: &'f [ClassFieldLoopFact],
-    recv_local_id: u32,
-    class_name: &str,
-    property: &str,
-) -> Option<(&'f ClassFieldLoopFact, u32)> {
-    facts.iter().rev().find_map(|fact| {
-        if fact.recv_local_id != recv_local_id || fact.class_name != class_name {
-            return None;
-        }
-        fact.fields.get(property).map(|idx| (fact, *idx))
-    })
 }
 
 /// Build a linker-unique inline-cache global name.
@@ -2890,8 +2840,9 @@ impl<'a> FnCtx<'a> {
     }
 
     /// The `Ptr<Shape>` fact for `e` ignoring the context gate — the proof the
-    /// analysis actually produced, as opposed to the proof codegen is allowed
-    /// to act on. Report-only.
+    /// analysis actually produced, as opposed to permission for an unguarded
+    /// access. Used for reporting and for class provenance in a separately
+    /// shape-guarded region; never grants native-slot or numeric permission.
     fn ptr_shape_fact_ignoring_context(
         &self,
         e: &perry_hir::Expr,
@@ -2901,6 +2852,20 @@ impl<'a> FnCtx<'a> {
             perry_hir::Expr::This => self.proven_this.as_ref(),
             _ => None,
         }
+    }
+
+    /// Class provenance for a region's static supplier, never a license for
+    /// raw access. The supplier must validate the live ShapeId and obtain all
+    /// offsets/representations from that shape. Unlike the unguarded accessor,
+    /// this route is valid while region lowering owns representation authority.
+    /// Other unguarded-context denials do not invalidate a class hint either:
+    /// region eligibility still rejects unsupported bindings, and its guarded
+    /// loads re-read tagged roots. No native-slot permission is inherited here.
+    /// The collection OFF knob removes the fact itself; this accessor cannot
+    /// recreate it from a type annotation.
+    pub(crate) fn ptr_shape_region_class(&self, e: &perry_hir::Expr) -> Option<String> {
+        self.ptr_shape_fact_ignoring_context(e)
+            .map(|fact| fact.class_name.clone())
     }
 
     /// Record that a selected `Ptr<Shape>` proof was dropped by the context
@@ -2939,7 +2904,7 @@ impl<'a> FnCtx<'a> {
             tier: crate::opt_report::Tier::CompilerLimitation,
             issue: Some(issue),
             detail: Some(format!(
-                "proven Ptr<Shape> of class {}; every access site keeps the guard diamond",
+                "proven Ptr<Shape> of class {}; this access cannot use the unguarded receiver route",
                 fact.class_name
             )),
         });
@@ -2948,7 +2913,10 @@ impl<'a> FnCtx<'a> {
     /// Record that codegen COMMITTED to a `Ptr<Shape>` lowering for `e`.
     ///
     /// Call from the taken branch of a site that has already decided to emit
-    /// the guard-free form — never from the accessor, which answers `Some` at
+    /// the guard-free form, or from an emitted region access whose static
+    /// supplier was selected using this fact's class provenance. The region's
+    /// ShapeId guard still owns its slot/representation authority. Never call
+    /// from the accessor, which answers `Some` at
     /// sites that then reject the fact on a class or numeric-field mismatch and
     /// emit the guarded diamond anyway.
     pub(crate) fn note_ptr_shape_consumed(&self, e: &perry_hir::Expr, site: &'static str) {

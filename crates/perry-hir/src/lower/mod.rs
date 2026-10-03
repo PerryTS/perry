@@ -66,7 +66,7 @@ mod for_of_guard;
 pub(crate) use for_of_guard::lower_stmt_for_of;
 mod stmt_loops;
 pub(crate) use stmt_loops::{
-    insert_iterator_close_on_abrupt, lazy_iter_for_stmt, lazy_or_index_elem, lower_stmt_for_in,
+    lazy_iter_for_stmt, lazy_or_index_elem, lower_stmt_for_in, record_iterator_loop_label,
     wrap_lazy_for_of_body_close_on_throw,
 };
 mod module_decl;
