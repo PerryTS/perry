@@ -95,6 +95,57 @@ impl<'a> FailedScratch<'a> {
     }
 }
 
+/// RAII backstop for compile-scoped temp paths (#11495).
+///
+/// The explicit `remove_dir_all` calls at each success exit are not enough on
+/// their own: every `?` between creating a path and reaching that exit — a
+/// failed `.ll` write (ENOSPC, the very state a leak produces), no assembler
+/// found, a missing `ld` — returned with the path still on disk. Dropping this
+/// removes whatever it owns on every exit, panics included, unless the path
+/// was deliberately retained: `keep` (`PERRY_LLVM_KEEP_IR`) disarms it up
+/// front, and a directory carrying a retention marker — written only by
+/// [`FailedScratch`] once it has claimed the diagnostic slot — is left alone.
+pub(super) struct TempPathGuard {
+    paths: Vec<std::path::PathBuf>,
+    keep: bool,
+}
+
+impl TempPathGuard {
+    pub(super) fn new(keep: bool) -> Self {
+        Self {
+            paths: Vec::new(),
+            keep,
+        }
+    }
+
+    pub(super) fn with(path: &Path, keep: bool) -> Self {
+        let mut guard = Self::new(keep);
+        guard.push(path);
+        guard
+    }
+
+    pub(super) fn push(&mut self, path: &Path) {
+        self.paths.push(path.to_path_buf());
+    }
+}
+
+impl Drop for TempPathGuard {
+    fn drop(&mut self) {
+        if self.keep {
+            return;
+        }
+        for path in &self.paths {
+            if path.is_dir() {
+                if !path.join(FAILED_MARKER).exists() && !path.join(EXPLICIT_KEEP_MARKER).exists() {
+                    let _ = fs::remove_dir_all(path);
+                }
+            } else {
+                let _ = fs::remove_file(path);
+            }
+        }
+    }
+}
+
 /// Best-effort startup cleanup. A live owner always wins, even when its scratch
 /// is old; explicit `PERRY_LLVM_KEEP_IR` output is never treated as stale.
 pub(super) fn reap_stale_llvm_scratch_once(tmp_dir: &Path) {
