@@ -235,6 +235,30 @@ fn lower_new_impl(
     // `new` site that roots anything.
     let mut group = open_rooted_group(args.len() + 1);
     let result = lower_new_impl_inner(ctx, class_name, args, cap_args_appended, &mut group);
+    let result = result.map(|boxed| {
+        if ctx.block().is_terminated() || !crate::codegen::static_constfn::has_final_shapes() {
+            return boxed;
+        }
+        let candidate = ctx
+            .classes
+            .get(class_name)
+            .and_then(|class| crate::codegen::static_constfn::anon_props(class, args));
+        if let Some(props) = candidate {
+            if let Some(rep) = ctx
+                .class_keys_globals
+                .get(class_name)
+                .and_then(|keys| ctx.class_birth_reps.get(keys))
+                .copied()
+            {
+                let bits = ctx.block().bitcast_double_to_i64(&boxed);
+                let handle = ctx.block().and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
+                let handle =
+                    crate::codegen::static_constfn::finalize_literal(ctx, &props, rep, &handle);
+                return nanbox_pointer_inline(ctx.block(), &handle);
+            }
+        }
+        crate::codegen::static_constfn::finalize_class(ctx, class_name, &boxed)
+    });
     group.release(ctx);
     result
 }
@@ -1622,16 +1646,10 @@ fn lower_new_impl_inner<'a>(
                 // Field initializers / an inlined constructor body were lowered
                 // between the instance allocation and here, so refresh again.
                 lowered_args = refresh_rooted_args(ctx, group)?;
-                let marshalled = marshal_imported_ctor_args(ctx, &ctor, &lowered_args);
-                let mut ctor_args: Vec<(crate::types::LlvmType, &str)> =
-                    Vec::with_capacity(1 + marshalled.len());
-                ctor_args.push((DOUBLE, &obj_box));
+                let marshalled = marshal_imported_ctor_args(ctx, &ctor, &lowered_args, group);
                 let ctor_param_types: Vec<crate::types::LlvmType> = std::iter::once(DOUBLE)
                     .chain(marshalled.iter().map(|_| DOUBLE))
                     .collect();
-                for la in &marshalled {
-                    ctor_args.push((DOUBLE, la.as_str()));
-                }
                 // Walked to an ANCESTOR ctor: its return-override does not replace
                 // the leaf instance, so discard the return value. Declared DOUBLE
                 // to match the symbol's real signature (see codegen/mod.rs).
@@ -1653,6 +1671,15 @@ fn lower_new_impl_inner<'a>(
                     None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
                 };
                 let nt_save = crate::rooting::new_target_save(ctx, &nt_ref);
+                // Initializers, argument packing and class-value lookup may
+                // collect. The rooted this-slot also owns any replacement this.
+                let ctor_this = ctx.block().load(DOUBLE, &this_slot);
+                let marshalled: Vec<_> = marshalled
+                    .iter()
+                    .map(|arg| arg.reread(ctx, group))
+                    .collect();
+                let mut ctor_args = vec![(DOUBLE, ctor_this.as_str())];
+                ctor_args.extend(marshalled.iter().map(|arg| (DOUBLE, arg.as_str())));
                 let _ = ctx.block().call(DOUBLE, &ctor.symbol, &ctor_args);
                 crate::rooting::new_target_restore(ctx, &nt_save);
             } else if let Some(ctor) = ctx.imported_class_ctors.get(class_name).cloned() {
@@ -1662,17 +1689,10 @@ fn lower_new_impl_inner<'a>(
                 // Field initializers / an inlined constructor body were lowered
                 // between the instance allocation and here, so refresh again.
                 lowered_args = refresh_rooted_args(ctx, group)?;
-                let marshalled = marshal_imported_ctor_args(ctx, &ctor, &lowered_args);
-                // Pass `this` as NaN-boxed double (same as compile_method's this_arg).
-                let mut ctor_args: Vec<(crate::types::LlvmType, &str)> =
-                    Vec::with_capacity(1 + marshalled.len());
-                ctor_args.push((DOUBLE, &obj_box));
+                let marshalled = marshal_imported_ctor_args(ctx, &ctor, &lowered_args, group);
                 let ctor_param_types: Vec<crate::types::LlvmType> = std::iter::once(DOUBLE)
                     .chain(marshalled.iter().map(|_| DOUBLE))
                     .collect();
-                for la in &marshalled {
-                    ctor_args.push((DOUBLE, la.as_str()));
-                }
                 // The standalone `<class>_constructor` symbol returns DOUBLE: the
                 // value an explicit `return <obj/fn>` produced (ECMAScript ctor
                 // return-override) or `undefined` for an ordinary ctor. Capture it
@@ -1691,6 +1711,15 @@ fn lower_new_impl_inner<'a>(
                     None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
                 };
                 let nt_save = crate::rooting::new_target_save(ctx, &nt_ref);
+                // Read after every collecting preparation step, immediately
+                // before dispatch; obj_box still holds the allocation address.
+                let ctor_this = ctx.block().load(DOUBLE, &this_slot);
+                let marshalled: Vec<_> = marshalled
+                    .iter()
+                    .map(|arg| arg.reread(ctx, group))
+                    .collect();
+                let mut ctor_args = vec![(DOUBLE, ctor_this.as_str())];
+                ctor_args.extend(marshalled.iter().map(|arg| (DOUBLE, arg.as_str())));
                 let ctor_ret = ctx.block().call(DOUBLE, &ctor.symbol, &ctor_args);
                 crate::rooting::new_target_restore(ctx, &nt_save);
                 ctx.block().store(DOUBLE, &ctor_ret, &ctor_result_slot);

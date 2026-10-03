@@ -31,6 +31,8 @@ pub use operations::{js_weakmap_delete, js_weakmap_get, js_weakmap_has, js_weakm
 pub(crate) mod sliced;
 #[cfg(test)]
 pub(crate) mod test_support;
+#[cfg(test)]
+mod trace_slot_tests;
 
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
@@ -388,6 +390,7 @@ pub(crate) unsafe fn is_weak_holder_header(header: *mut crate::gc::GcHeader) -> 
     )
 }
 
+#[inline]
 pub(crate) unsafe fn is_weak_target_trace_slot(
     header: *mut crate::gc::GcHeader,
     slot: *mut u64,
@@ -403,6 +406,22 @@ pub(crate) unsafe fn is_weak_target_trace_slot(
     ) {
         return false;
     }
+    is_weak_branded_target_trace_slot(obj, class_id, slot)
+}
+
+/// Bound and target-slot handling after the caller has checked the weak brand.
+/// Keep this shape lookup out of the common per-slot GC callback body.
+///
+/// # Safety
+/// `obj` is the readable object payload of the checked GC header, and
+/// `class_id` is its checked weak-holder class. This helper does not collect.
+#[cold]
+#[inline(never)]
+unsafe fn is_weak_branded_target_trace_slot(
+    obj: *mut ObjectHeader,
+    class_id: u32,
+    slot: *mut u64,
+) -> bool {
     // #8113: ONE bound lookup. This runs per traced slot, and the bound is a
     // shape-table probe now rather than a header word, so the three separate
     // reads the arms below used to make were three probes.

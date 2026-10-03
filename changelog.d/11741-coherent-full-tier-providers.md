@@ -1,0 +1,1 @@
+Build coherent runtime providers before full-tier require integration shards enter bounded fixtures, preserving unwind tables and frame pointers. Prevents fresh-runner provider rebuilds from timing out before compressed-asset and async-resource regressions execute.

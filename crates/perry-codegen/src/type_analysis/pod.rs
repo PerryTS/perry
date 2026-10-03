@@ -504,6 +504,11 @@ pub(crate) fn numeric_proof_is_declared_only(ctx: &FnCtx<'_>, expr: &Expr) -> bo
         Expr::PropertyGet {
             object, property, ..
         } => {
+            // R admits this exact fresh bare read only after the shape's F64
+            // representation check; there is no boxed fallback in F.
+            if crate::stmt::region_loop::is_f64_read(ctx, expr) {
+                return false;
+            }
             // `.length` is produced by the runtime, not read out of a
             // user-writable slot.
             if property == "length" {
@@ -546,18 +551,6 @@ pub(crate) fn numeric_proof_is_declared_only(ctx: &FnCtx<'_>, expr: &Expr) -> bo
             let Some(class_name) = receiver_class_name(ctx, object) else {
                 return false;
             };
-            if let Expr::LocalGet(recv_id) = object.as_ref() {
-                if crate::expr::class_field_loop_fact_lookup(
-                    &ctx.class_field_loop_facts,
-                    *recv_id,
-                    &class_name,
-                    property,
-                )
-                .is_some()
-                {
-                    return false;
-                }
-            }
             let ptr_shape_numeric = ctx
                 .ptr_shape_receiver_fact(object.as_ref())
                 .map(|fact| fact.class_name == class_name && fact.numeric_fields.contains(property))

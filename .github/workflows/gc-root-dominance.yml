@@ -788,6 +788,9 @@ jobs:
       # filter. `|| true` is deliberate and is the ONLY one in this file —
       # this step is not a gate and must not be read as one.
       - name: Unfiltered hazard census (diagnostic, not a gate)
+        # Keep this diagnostic within the remaining job budget after the
+        # required checks; its timeout must not cancel successful gates.
+        timeout-minutes: 5
         # The explicit opt-out `gc_gate_wiring_check.py` looks for. Without it
         # that gate reads the `|| true` below as a swallowed failure -- which
         # is exactly right for a gating step and exactly wrong for this one, so

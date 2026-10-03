@@ -147,6 +147,15 @@ pub fn for_each_worker_new_mut<F: FnMut(&mut Expr)>(module: &mut Module, f: &mut
 
 /// Immutable sibling of [`for_each_worker_new_mut`].
 pub fn for_each_worker_new<F: FnMut(&Expr)>(module: &Module, f: &mut F) {
+    for_each_module_expr(module, &mut |expr| {
+        if matches!(expr, Expr::WorkerNew { .. }) {
+            f(expr);
+        }
+    });
+}
+
+/// Visit every module expression, including closure bodies and parameter defaults.
+pub fn for_each_module_expr<F: FnMut(&Expr)>(module: &Module, f: &mut F) {
     for stmt in &module.init {
         visit_stmt_for_worker_new_ref(stmt, f);
     }
@@ -725,9 +734,7 @@ fn visit_expr_for_worker_new<F: FnMut(&mut Expr)>(expr: &mut Expr, f: &mut F) {
 }
 
 fn visit_expr_for_worker_new_ref<F: FnMut(&Expr)>(expr: &Expr, f: &mut F) {
-    if matches!(expr, Expr::WorkerNew { .. }) {
-        f(expr);
-    }
+    f(expr);
     if let Expr::Closure { body, .. } = expr {
         for s in body {
             visit_stmt_for_worker_new_ref(s, f);

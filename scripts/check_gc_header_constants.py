@@ -124,8 +124,6 @@ REGISTRY: list[Restatement] = [
      "GC_FLAG_ARENA", "allocation-site copy of the baked header word"),
 
     # --- the class-field inline guard ---------------------------------------
-    ("crates/perry-codegen/src/expr/class_field_inline_guard.rs", "GC_TYPE_OBJECT",
-     "GC_TYPE_OBJECT", "guard: obj_type byte"),
     ("crates/perry-codegen/src/expr/class_field_inline_guard.rs", "GC_FLAG_FORWARDED_I8",
      "GC_FLAG_FORWARDED - 256", "guard: gc_flags 0x80 spelled as a signed i8"),
 
@@ -136,10 +134,6 @@ REGISTRY: list[Restatement] = [
     ("crates/perry-codegen/src/expr/put_value_store_ic.rs", "ADD_REFUSE_RESERVED",
      "OBJ_FLAG_HAS_DESCRIPTORS | OBJ_FLAG_STABLE_TOMBSTONES",
      "key-add hit: per-object flags refused before the stamp"),
-    ("crates/perry-codegen/src/expr/class_field_inline_guard.rs",
-     "OBJ_FLAG_READ_FAST_PATH_BLOCKED",
-     "OBJ_FLAG_ARRAY_DESCRIPTORS | OBJ_FLAG_HAS_DESCRIPTORS",
-     "guard: #5654 per-receiver descriptor veto (a COMPOSITE of two flags)"),
     ("crates/perry-codegen/src/expr/class_field_inline_guard.rs",
      "OBJ_FLAG_WRITE_FAST_PATH_BLOCKED",
      "OBJ_FLAG_ARRAY_DESCRIPTORS | OBJ_FLAG_HAS_DESCRIPTORS"
