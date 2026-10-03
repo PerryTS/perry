@@ -1,0 +1,1 @@
+- **perry-api-manifest**: `net.Socket.writableCorked` is listed in the API manifest. #11757 wired it into the codegen native table and perry-ext-net but not the manifest, so `manifest_consistency` was red on main. API docs regenerated.
