@@ -26,4 +26,6 @@ prototypes keep the latch.
 Instructions per op (qb6, `PERRY_NO_AUTO_OPTIMIZE=1`): #10503 `if_many`
 32.65M → 7.71M per tokenizer run; #10504 `setproto_chain` / `proto_assign`
 27.57M → 7.47M; #10501 `private` 7,540 → 1,844, `private_field_rw` 2,011 →
-485, `private_method_call` 3,478 → 1,953; #10508 `method_ee` 994 → 190.
+485, `private_method_call` 3,478 → 1,953; #10508 `new_ee` 557,688 → 151,225,
+`method_ee` 994 → 190, `emit_ee` 54,887 → 51,146. Real code is flat to slightly
+better (tsc instructions −0.05%, Zod −1.4%).
