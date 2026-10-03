@@ -50,7 +50,8 @@ pub(crate) use allocators::{
 #[cfg(test)]
 pub(crate) use block::old_gen_in_use_bytes_slot_index;
 pub(crate) use block::{
-    arena_cell_alloc, arena_cell_try_alloc_current, drain_block_pool_if_requested,
+    advance_block_pool_reuse_window, arena_cell_alloc, arena_cell_try_alloc_current,
+    drain_block_pool_if_requested,
     new_object_start_bitmap, old_gen_in_use_bytes_sub, release_arena_block,
     request_block_pool_drain, Arena, ArenaBlock, ArenaBlockRelease, BlockPoolDrainStats,
     ACTIVE_SURVIVOR, ARENA, ARENA_TOTAL_BYTES, BLOCK_SIZE, FRESH_GENERAL_BLOCK_MIN_USED_BYTES,
