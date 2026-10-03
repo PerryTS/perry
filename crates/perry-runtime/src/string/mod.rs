@@ -107,6 +107,8 @@ mod append;
 mod base64_codec;
 mod char_ops;
 mod compare;
+#[cfg(test)]
+pub(crate) use compare::test_key_byte_reads;
 pub(crate) mod concat;
 pub(crate) mod concat_site;
 mod format;
