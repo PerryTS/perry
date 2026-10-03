@@ -41,7 +41,14 @@
     "1fe7fe898e: hidden-global declarations across codegen units, fixes the fresh e532 request-build blocker",
     "263c6f5507: ordinary prototype is a shape fact; no independent metadata split"
   ],
-  "linux": "Fresh coherent compiler/static-wrapper builds running in own qb6 source/target/runtime directories; previous evidence remains frozen e532.",
+  "linux": {
+    "verified_builds_and_linked": "qb6-current-main0ed-build-verification.json",
+    "runtime_tests": 4856,
+    "ffi_tests": 75,
+    "events_tests": 15,
+    "default_linked": 20,
+    "moving_linked_all_copied_and_protected": 20
+  },
   "application_acceptance": false,
   "author_scope": "GC-private proposal only; no authored codegen/shape/object-header/ABI changes."
 }

@@ -855,3 +855,20 @@ current owner/shape/canonical attribution must precede any proposed metadata
 split. The original-host e532 no-auto measurement is queued behind foreign
 benchmark-lock owners; those processes are untouched. Latest-main performance
 acceptance and the 17-case final matrix remain open.
+
+MAIN0ed COHERENT BUILDS / LINUX / LINKED VERIFIED
+Both new compiler/static-wrapper builds completed in 165-166 seconds on qb6.
+Independent source/product/log verification passes; 4,856 runtime, 75 FFI and
+15 event tests pass. Both real residency/publication tests actually run. All
+40 fresh linked executions match Node; every one of the 20 moving executions
+copies objects and protects from-space. Derived fresh-class collections retain
+the original Node output. The prototype-in-shape work is included in both arms.
+Latest-main real/full and normal-auto app builds are live in separate own paths;
+artifacts/logs are continuously copied off. Final 24/204 performance acceptance
+and current owner/shape/canonical census are not yet complete.
+
+FROZEN e532 FULL-RUNTIME MEASUREMENTS COMPLETE
+The original-host shared-visitor/window/page proposal's 24 cells completed after
+the foreign lock owner released: TS RSS 251.09 -> 248.012 MiB (-1.23%),
+instructions -2.30%; Zod RSS +0.53%, instructions +0.28%. The latter instruction
+cost remains reported. This is e532 evidence, not a current-main0ed result.
