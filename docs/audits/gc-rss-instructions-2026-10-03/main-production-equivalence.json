@@ -1,0 +1,21 @@
+{
+  "time_utc": "2026-10-03T07:16:17.636285+00:00",
+  "measured_base": "ebc858cb9806845998cee28decc666c3ea226fd2",
+  "latest_main_fetched": "f6c873d99622d1bb751f198cfbd6cf3475251935",
+  "upstream_changed_paths": [
+    ".github/workflows/gc-moving-witnesses.yml",
+    ".github/workflows/test.yml",
+    "changelog.d/11756-full-gap-budget-headroom.md",
+    "changelog.d/11756-gc-witness-fixture-env.md",
+    "changelog.d/11756-windows-thread-global-effects.md",
+    "changelog.d/11767-thread-global-e2e-routing.md",
+    "docs/src/testing/ci-tiers.md",
+    "scripts/ci_plan.py",
+    "test-files/test_gap_gc_container_value_rooting.ts"
+  ],
+  "compiler_runtime_build_inputs_unchanged": true,
+  "crate_tree_hashes": {
+    "ebc858cb9806845998cee28decc666c3ea226fd2": "0a88527ec3a74579701182745b3cd328d5c0c9fa",
+    "f6c873d99622d1bb751f198cfbd6cf3475251935": "0a88527ec3a74579701182745b3cd328d5c0c9fa"
+  }
+}
