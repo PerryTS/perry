@@ -177,6 +177,15 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
     // Array.from's array-like fallback can receive a Proxy record. Its id is
     // not a heap header; route it inside the existing low-address guard so
     // ordinary heap receivers do not perform a proxy registry lookup.
+    // #10515: a receiver admitted to the byte-view cache (a live, owning,
+    // inline-storage Uint8Array) answers an in-bounds integer index with its
+    // byte, before the receiver-classification ladder below re-derives the
+    // same fact from the buffer registries. A miss changes nothing.
+    if let Some(index) = numeric_key_i32_index(idx) {
+        if let Some(byte) = crate::buffer::cached_u8_read(raw as usize, index) {
+            return byte as f64;
+        }
+    }
     if crate::value::addr_class::is_handle_band(raw as usize) {
         if let Some(proxy) =
             crate::array::array_ptr_as_proxy(raw as *const crate::array::ArrayHeader)

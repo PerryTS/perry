@@ -129,8 +129,22 @@ pub(super) fn lower_inline_dyn_typed_array_set(
 }
 
 /// The complete dynamic `[[Set]]`, preserving the source function's
-/// assignment strictness.
+/// assignment strictness, behind the byte-store arm for an admitted
+/// `Uint8Array` (#10515, [`super::u8_buffer_read::emit_u8_cached_dyn_set`]).
 fn emit_dyn_index_set_runtime(
+    ctx: &mut FnCtx<'_>,
+    obj_box: &str,
+    idx_d: &str,
+    val_double: &str,
+    strict: bool,
+) {
+    super::u8_buffer_read::emit_u8_cached_dyn_set(ctx, obj_box, idx_d, val_double, |ctx| {
+        emit_dyn_index_set_full(ctx, obj_box, idx_d, val_double, strict)
+    });
+}
+
+/// The runtime's complete dynamic `[[Set]]`.
+fn emit_dyn_index_set_full(
     ctx: &mut FnCtx<'_>,
     obj_box: &str,
     idx_d: &str,
