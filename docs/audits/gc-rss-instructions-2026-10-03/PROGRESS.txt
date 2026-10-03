@@ -8,7 +8,9 @@ page-directory shrink after full reclaim. Shape/header formats stay unchanged.
 The prior visitor revision passed 4,835 macOS tests; the page-table revision
 initially passed 4,846 with one capacity-test assertion failure. The test now
 samples capacity after removals, isolating our helper from HashMap tombstones.
-Latest-main macOS runtime: 4,849 passed, 0 failed, 5 ignored.
+Prior immediate-discard main69 macOS runtime: 4,849 passed.
+Current reuse-window proposal: 4,850 passed, 0 failed, 5 ignored.
+See the v6 section and source-and-validation manifest below.
 Consolidated Linux/application acceptance remains open. V2 isolated results
 and the pool build-freshness correction are documented below.
 Running isolated comparisons retain the original f6c873/ebc858 production base.
@@ -446,3 +448,43 @@ criteria must derive from allocation/reuse demand and GC/idle boundaries, not
 workload names or benchmark-only settings. Existing v4/v5/main69 measurements
 continue with immutable sources to isolate visitor/page-table effects; their
 results cannot automatically accept the immediate-discard policy.
+
+CURRENT PROPOSAL: pooled-block publication grace window (v6)
+Implemented on top of the consolidated main69 candidate. A newly pooled block
+starts with two publication ticks: the first completed collection preserves
+resident contents; the following completed collection discards interior pages
+if the block remains unused. Taking/re-pooling a block restarts the window.
+Expired entries are advised only once. Critical, emergency and idle drains
+retain their existing immediate allocation-release behavior.
+
+This is a reuse heuristic indexed by completed collections. With normal pacing
+it provides the intervening mutator an opportunity to reuse storage; consecutive
+explicit/forced collections can advance the clock without an allocation gap.
+It does not prove a block can never be needed again. Application fault/RSS/CPU
+results must decide whether this criterion is worthwhile; no benchmark names,
+new GC knobs or threshold changes are involved. Private pool entries gain one
+small countdown field; no per-live-object side table or shape/header ABI changes.
+
+Release executes before pause accounting on both full/budgeted publication and
+the copied-minor fast path. macOS focused reuse test and the complete runtime
+suite passed: 4,850 passed, 0 failed, 5 ignored. Test registration and whitespace
+checks passed. reuse-window-source-and-validation.json binds all 23 runtime
+inputs, archive and logs. Linux has an actual mincore test through full GC
+publication; it remains pending, as do FFI/events, moving and application checks.
+
+A separate v6 driver is queued behind existing isolated/full-main measurements
+and the final instruction-profile diagnostic. It copies immutable source/build
+inputs into independent roots, refreshes Cargo inputs/cache stamps, requires
+both new policy tests and the new policy code in the production archive, then
+runs linked/moving checks and a full-runtime TS/Zod policy A/B. Normal-auto is
+three arms: pristine main69, immediate-discard consolidated main69, and the
+reuse-window candidate. There are 306 actual runs (17 x 3 x 2 x 3).
+project-gc-window-comparison.py derives two verified 204-cell comparisons from
+those cells without creating or altering measurements. A synthetic integration
+check passes both projections and rejects five corrupted matrices. That checks
+measurement handling only; application acceptance remains open.
+
+New roots/products: perry-main69-window / main69-window-target / main69-window.
+Driver: gc-runtime-window-v6-run.sh; terminal receipt of the same stem.
+Current PR implementation is v6; earlier v2/v3/v4/v5/immediate-main69 results
+validate their pinned revisions, not the newly changed policy on current HEAD.

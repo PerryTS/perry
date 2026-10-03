@@ -1,0 +1,18 @@
+{
+  "scope": "Check three-arm projection with synthetic binaries and corrupted matrices.",
+  "valid_cells": 306,
+  "projected_cells": [
+    204,
+    204
+  ],
+  "rejected": [
+    "missing cell",
+    "duplicate cell",
+    "wrong stdout",
+    "failed cell",
+    "wrong binary digest"
+  ],
+  "projector_sha256": "d9f54483ae5a06b0491c7e4be286b92147e8dcb22c468b056a00e5cfa2017406",
+  "verifier_sha256": "48da921922ecfa57ecb23813ddbd1eb3eb4f43a47aafd8a4a9cfa88a09ee7907",
+  "selftest_sha256": "f8e01a006644a73de5800d98cb52669804668430ce027b7eaa7fe99b04bcd9b3"
+}
