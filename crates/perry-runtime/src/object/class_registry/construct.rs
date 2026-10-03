@@ -37,6 +37,10 @@ pub extern "C" fn js_new_target_value() -> f64 {
     f64::from_bits(CURRENT_NEW_TARGET.with(|value| value.get()))
 }
 
+mod compiled_function;
+pub(crate) use compiled_function::{
+    forget_birth_record_of_class, ordinary_compiled_function_has_instance, OrdinaryInstanceof,
+};
 mod rooted_arguments;
 pub(crate) use rooted_arguments::construct_rooted_arguments;
 #[cfg(feature = "regex-engine")]
@@ -275,6 +279,15 @@ pub unsafe extern "C-unwind" fn js_new_function_construct(
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
+    // #10507: an ordinary compiled function is none of the exotic callees
+    // below — a fact of its body, read once from its info.
+    if let Some(closure) = compiled_function::ordinary_compiled_function(func_value) {
+        if let Some(result) = compiled_function::construct_ordinary_compiled_function(
+            func_value, closure, args_ptr, args_len,
+        ) {
+            return result;
+        }
+    }
     // A class value (its function object, or the legacy immediate) constructs
     // its class: decided first, one closure probe, before the exotic arms.
     if let Some(class_cid) = constructor_class_ref_id(func_value) {
@@ -1213,34 +1226,13 @@ pub unsafe extern "C-unwind" fn js_new_function_construct(
         // result is discarded — JS `new` semantics use the receiver,
         // not the returned value (object returns would override, but
         // dayjs and siblings rely on the receiver mutation pattern).
-        // #7280: `nan_boxed` (the `this` this call is building) and
-        // the two DISPLACED new.target values are held across a call that runs a
-        // user constructor body — see the long note in
-        // `construct_registered_class_ref`. Unrooted, the evacuating minor
-        // moves the instance and this arm returns the pre-move address;
-        // reproduced by `new inst.ctor(x)` where `inst.ctor` is a plain
-        // function, 200/200 iterations wrong under
-        // `PERRY_GC_MOVING_LOOP_POLLS=1 PERRY_GC_SCHEDULE_SEED=1 PERRY_GC_SCHEDULE_RATE=1`.
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let inst_handle = scope.root_nanbox_f64(nan_boxed);
-        let prev_new_target = crate::object::js_new_target_get();
-        let prev_new_target_handle = scope.root_nanbox_f64(prev_new_target);
-        crate::object::js_new_target_set(func_value);
-        let prev_current_new_target =
-            CURRENT_NEW_TARGET.with(|value| value.replace(func_value.to_bits()));
-        let prev_current_new_target_handle = scope.root_nanbox_u64(prev_current_new_target);
-        let result = crate::closure::native_call_value_this(
-            func_value,
-            crate::closure::JsThis::from_f64(inst_handle.get_nanbox_f64()),
-            args_ptr,
-            args_len,
+        // Reproduced unrooted by `new inst.ctor(x)` where `inst.ctor` is a
+        // plain function, 200/200 iterations wrong under
+        // `PERRY_GC_MOVING_LOOP_POLLS=1 PERRY_GC_SCHEDULE_SEED=1 PERRY_GC_SCHEDULE_RATE=1`
+        // (#7280): the helper roots the instance across the body.
+        return compiled_function::run_constructor_body(
+            func_value, nan_boxed, args_ptr, args_len, false,
         );
-        CURRENT_NEW_TARGET.with(|value| value.set(prev_current_new_target_handle.get_nanbox_u64()));
-        crate::object::js_new_target_set(prev_new_target_handle.get_nanbox_f64());
-        if constructor_return_overrides_this(result) {
-            return result;
-        }
-        return inst_handle.get_nanbox_f64();
     }
     // Ordinary objects, symbols and every other non-callable heap value do not
     // have [[Construct]]. The historical placeholder return made `new
@@ -1430,6 +1422,11 @@ fn bound_function_target_ptr(value: f64) -> Option<*mut crate::closure::ClosureH
 
 pub(crate) fn is_bound_function_closure_value(value: f64) -> bool {
     bound_function_target_ptr(value).is_some()
+}
+
+/// `value`'s `[[BoundTargetFunction]]` when it is a bound function (one layer).
+pub(crate) fn bound_function_target_value(value: f64) -> Option<f64> {
+    bound_function_target_ptr(value).map(|ptr| crate::closure::js_closure_get_capture_f64(ptr, 0))
 }
 
 /// Walk through any number of `Function.prototype.bind` wrapper layers to the

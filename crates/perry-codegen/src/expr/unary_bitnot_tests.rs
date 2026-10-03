@@ -75,6 +75,26 @@ fn erased_direct_bitnot_retains_bigint_dispatch() {
     );
 }
 
+/// #10511: the erased operand keeps the helper, but only on the COLD arm of
+/// one inline test (the binary bitwise guard, `|v| < 2^63`), so a Number
+/// operand never reaches the call. Reverting `~` to the unconditional helper
+/// keeps the call but loses the guard blocks, and this goes red.
+#[test]
+fn erased_direct_bitnot_takes_the_inline_number_guard() {
+    let ir = ir_for(
+        "guarded_erased_bitnot",
+        vec![erased(X, "x"), result(bitnot(Expr::LocalGet(X)))],
+    );
+    assert!(
+        ir.contains("guarded_bitnot.numeric") && ir.contains("guarded_bitnot.dynamic"),
+        "an erased ~x must be one inline Number test with a cold helper arm:\n{ir}"
+    );
+    assert!(
+        ir.contains("0x43E0000000000000"),
+        "the guard is the binary bitwise operators' |v| < 2^63 test:\n{ir}"
+    );
+}
+
 #[test]
 fn potentially_bigint_binary_result_retains_bitnot_dispatch() {
     let unknown_value = |id| Expr::PropertyGet {

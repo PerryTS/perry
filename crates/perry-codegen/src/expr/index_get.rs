@@ -44,13 +44,12 @@ mod foreign_counter;
 pub(super) mod guarded_array;
 pub(crate) use foreign_counter::{
     affine_counter_occurrences, affine_index_fits_i64, emit_affine_index_i64_with,
-    packed_f64_loop_index_parts,
+    packed_f64_loop_index_parts, packed_f64_loop_offset_read,
 };
-use foreign_counter::{
-    affine_packed_loop_read, emit_affine_index_i64, foreign_packed_loop_read,
-    packed_f64_loop_offset_read,
+use foreign_counter::{affine_packed_loop_read, emit_affine_index_i64, foreign_packed_loop_read};
+pub(crate) use guarded_array::{
+    emit_array_region_guard, emit_typed_f64_region_guard, ArrayRegionDense,
 };
-pub(crate) use guarded_array::emit_array_region_guard;
 mod inline_dyn_typed_array;
 
 use guarded_array::{
@@ -1449,11 +1448,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 ));
             }
             if is_string_expr(ctx, index) {
-                // Dynamic string key: unbox both pointers and call.
-                // `key_handle` routes through `unbox_str_handle` because the
-                // key may be an SSO value (e.g. from JSON.parse, .slice, or
-                // any short-string-producing op); the runtime fn dereferences
-                // it as `*StringHeader`. Issue #214 SSO bug class.
+                // Dynamic string key: pass the key VALUE. It may be an SSO
+                // value (e.g. from JSON.parse, .slice, or any
+                // short-string-producing op); the by-key entry's generic
+                // fallback materialises it before anything dereferences it as
+                // `*StringHeader` (issue #214 SSO bug class).
                 let preserve_class_ref_bits =
                     index_object_is_class_or_proto_ref(ctx, object.as_ref());
                 // #7154: `o[f()]` evaluates the base first and the key second,
@@ -1476,17 +1475,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // list rather than from a hand-written `collects` flag.
                 return rooting::with_operands_rooted(ctx, &[object, index], |ctx, vals| {
                     let (obj_box, key_box) = (&vals[0], &vals[1]);
+                    // #10753: the key travels as its VALUE. The by-key entry
+                    // answers from the receiver's shape first (the key word
+                    // against the shape's canonical key list, then the read
+                    // stub's own-slot and confirmed-absent entries) and only
+                    // then takes the by-value read, which materialises an SSO
+                    // key itself, rooting the receiver across it. Unboxing the
+                    // key here (`js_get_string_pointer_unified`) cost a call
+                    // and, for an SSO key, an allocation on every read; and
+                    // with no allocation left before the call, the raw handle
+                    // below crosses no collection point (#7640 section D).
                     let blk = ctx.block();
-                    // #7640 section D: the KEY is unboxed first. `unbox_str_handle`
-                    // is not a mask — it calls `js_get_string_pointer_unified`,
-                    // which materialises an SSO value into a fresh heap
-                    // `StringHeader`, i.e. one allocation. Deriving the receiver's
-                    // raw untagged pointer above it put a pointer NO ROOT CAN NAME
-                    // across a potential collection point (#7280 taxonomy (a): a
-                    // raw `i64` cannot be repaired by re-reading a `double` slot).
-                    // Swapping the two lines closes it at zero runtime cost —
-                    // the same two instructions, in the other order.
-                    let key_handle = unbox_str_handle(blk, key_box);
                     let obj_bits = blk.bitcast_double_to_i64(obj_box);
                     let obj_handle =
                         classref_preserving_handle(blk, &obj_bits, preserve_class_ref_bits);
@@ -1498,8 +1497,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     );
                     Ok(ctx.block().call(
                         DOUBLE,
-                        "js_typed_feedback_object_get_field_by_name_f64",
-                        &[(I64, &site_id), (I64, &obj_handle), (I64, &key_handle)],
+                        "js_typed_feedback_object_get_field_by_key_f64",
+                        &[
+                            (I64, &site_id),
+                            (I64, &obj_handle),
+                            (DOUBLE, key_box),
+                            (DOUBLE, obj_box),
+                        ],
                     ))
                 });
             }
@@ -1603,10 +1607,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     "object[index]",
                     TypedFeedbackContract::object_get_by_name(),
                 );
+                // #10753: the by-key entry answers from shapes before it
+                // takes the by-value read (see the dynamic-string arm above).
                 let v_str = ctx.block().call(
                     DOUBLE,
-                    "js_typed_feedback_object_get_field_by_value_f64",
-                    &[(I64, &site_id), (I64, &str_obj_handle), (DOUBLE, &idx_box)],
+                    "js_typed_feedback_object_get_field_by_key_f64",
+                    &[
+                        (I64, &site_id),
+                        (I64, &str_obj_handle),
+                        (DOUBLE, &idx_box),
+                        (DOUBLE, &obj_box),
+                    ],
                 );
                 let str_end_lbl = ctx.block().label.clone();
                 ctx.block().br(&merge_lbl);

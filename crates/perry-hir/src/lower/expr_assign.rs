@@ -186,6 +186,12 @@ fn register_assignment_native_instance(
 }
 
 pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) -> Result<Expr> {
+    // #11797: a compound / logical member assignment used as a value
+    // (`(levels[depth++] ??= new Set()).add(x)`) reaches here, not the
+    // statement-level hoist below, and lowered its target twice.
+    if let Some(expr) = compound_member_assign_once(ctx, assign)? {
+        return Ok(expr);
+    }
     // Detect assignments from native module calls and register for cross-function tracking.
     // e.g., `mongoClient = await MongoClient.connect(uri)` registers mongoClient as a mongodb instance.
     if assign.op == ast::AssignOp::Assign {
@@ -1389,6 +1395,130 @@ fn compound_binary_op(op: ast::AssignOp) -> Option<BinaryOp> {
         ExpAssign => BinaryOp::Pow,
         Assign | AndAssign | OrAssign | NullishAssign => return None,
     })
+}
+
+/// Whether evaluating `e` twice could be observed: anything but a name, a
+/// literal, `this`, or reads and arithmetic over those. Conservative: a shape
+/// not listed counts as side-effecting.
+fn may_have_side_effects(e: &ast::Expr) -> bool {
+    match e {
+        ast::Expr::Ident(_) | ast::Expr::This(_) | ast::Expr::Lit(_) => false,
+        ast::Expr::Paren(p) => may_have_side_effects(&p.expr),
+        ast::Expr::TsAs(t) => may_have_side_effects(&t.expr),
+        ast::Expr::TsNonNull(t) => may_have_side_effects(&t.expr),
+        ast::Expr::TsSatisfies(t) => may_have_side_effects(&t.expr),
+        ast::Expr::TsTypeAssertion(t) => may_have_side_effects(&t.expr),
+        ast::Expr::Member(m) => {
+            may_have_side_effects(&m.obj)
+                || matches!(&m.prop, ast::MemberProp::Computed(c) if may_have_side_effects(&c.expr))
+        }
+        ast::Expr::Bin(b) => may_have_side_effects(&b.left) || may_have_side_effects(&b.right),
+        ast::Expr::Unary(u) => u.op == ast::UnaryOp::Delete || may_have_side_effects(&u.arg),
+        ast::Expr::Cond(c) => {
+            may_have_side_effects(&c.test)
+                || may_have_side_effects(&c.cons)
+                || may_have_side_effects(&c.alt)
+        }
+        _ => true,
+    }
+}
+
+/// #11797: the expression form of `hoist_compound_member_assign`. The base and
+/// a computed key are each evaluated once into a `ScopedTemp`, then the read
+/// and the write use the temps; the value is the write's (or, for a logical
+/// assignment, the short-circuit's) result. Only taken when the base or key
+/// has side effects, so plain `obj.n += 1` / `a[i] += x` keep their lowering.
+fn compound_member_assign_once(
+    ctx: &mut LoweringContext,
+    assign: &ast::AssignExpr,
+) -> Result<Option<Expr>> {
+    let bin_op = compound_binary_op(assign.op);
+    let logical_op = logical_assignment_op(assign.op);
+    if bin_op.is_none() && logical_op.is_none() {
+        return Ok(None);
+    }
+    let ast::AssignTarget::Simple(ast::SimpleAssignTarget::Member(member)) = &assign.left else {
+        return Ok(None);
+    };
+    if matches!(member.prop, ast::MemberProp::PrivateName(_)) {
+        return Ok(None);
+    }
+    if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
+        let n = obj_ident.sym.as_ref();
+        if ctx.is_proxy_local(n) || !ctx.active_with_envs_for_ident(n).is_empty() {
+            return Ok(None);
+        }
+    }
+    let key_has_effects =
+        matches!(&member.prop, ast::MemberProp::Computed(c) if may_have_side_effects(&c.expr));
+    if !may_have_side_effects(&member.obj) && !key_has_effects {
+        return Ok(None);
+    }
+
+    let base = lower_expr(ctx, &member.obj)?;
+    let base_id = ctx.fresh_local();
+    let (prop, key) = match &member.prop {
+        ast::MemberProp::Ident(i) => (Some(i.sym.to_string()), None),
+        ast::MemberProp::Computed(c) => {
+            (None, Some((ctx.fresh_local(), lower_expr(ctx, &c.expr)?)))
+        }
+        ast::MemberProp::PrivateName(_) => unreachable!("guarded above"),
+    };
+    let key_id = key.as_ref().map(|(id, _)| *id);
+    let read = match (&prop, key_id) {
+        (Some(p), _) => Expr::PropertyGet {
+            byte_offset: 0,
+            object: Box::new(Expr::LocalGet(base_id)),
+            property: p.clone(),
+        },
+        (None, Some(k)) => Expr::IndexGet {
+            object: Box::new(Expr::LocalGet(base_id)),
+            index: Box::new(Expr::LocalGet(k)),
+        },
+        _ => unreachable!(),
+    };
+    let write_of = |value: Expr| -> Expr {
+        match (&prop, key_id) {
+            (Some(p), _) => Expr::PropertySet {
+                object: Box::new(Expr::LocalGet(base_id)),
+                property: p.clone(),
+                value: Box::new(value),
+            },
+            (None, Some(k)) => Expr::IndexSet {
+                object: Box::new(Expr::LocalGet(base_id)),
+                index: Box::new(Expr::LocalGet(k)),
+                value: Box::new(value),
+            },
+            _ => unreachable!(),
+        }
+    };
+    // RHS once, after the read; a logical assignment writes only on the
+    // branch that needs it (`read OP (target = rhs)`).
+    let rhs = lower_expr(ctx, &assign.right)?;
+    let mut body = match bin_op {
+        Some(op) => write_of(Expr::Binary {
+            op,
+            left: Box::new(read),
+            right: Box::new(rhs),
+        }),
+        None => Expr::Logical {
+            op: logical_op.unwrap(),
+            left: Box::new(read),
+            right: Box::new(write_of(rhs)),
+        },
+    };
+    if let Some((id, value)) = key {
+        body = Expr::ScopedTemp {
+            id,
+            value: Box::new(value),
+            body: Box::new(body),
+        };
+    }
+    Ok(Some(Expr::ScopedTemp {
+        id: base_id,
+        value: Box::new(base),
+        body: Box::new(body),
+    }))
 }
 
 /// #6071: statement-level compound assignment to a member/index target

@@ -34,7 +34,18 @@ fn verify_front_flow(blocks: &Blocks) -> Result<usize, String> {
     };
     let (entry, _) = tower_block(blocks, "pic.miss.front");
     let (token, token_body) = tower_block(blocks, "pic.token");
-    if predecessors(blocks, entry) != [token] || tower_cond_br(token_body).2 != entry {
+    // The front is reached from the token compare's false edge, directly or
+    // (#10498) through the class-accessor arm, whose every guard declines to
+    // it and each of which the token compare dominates.
+    let front_preds: Vec<&str> = if blocks.iter().any(|(l, _)| l.starts_with("pic.acc.")) {
+        verify_accessor_arm(blocks)?
+    } else {
+        if tower_cond_br(token_body).2 != entry {
+            return Err("the front entry must be dominated by the token compare".into());
+        }
+        vec![token]
+    };
+    if predecessors(blocks, entry) != front_preds {
         return Err("the front entry must be dominated by the token compare".into());
     }
     // Every branch between the token miss and the front call resolves the
@@ -51,7 +62,7 @@ fn verify_front_flow(blocks: &Blocks) -> Result<usize, String> {
             ));
         }
         for (label, expected_targets, expected_preds) in [
-            (entry, vec![tsd, slow], vec![token]),
+            (entry, vec![tsd, slow], front_preds.clone()),
             (tsd, vec![fast, slow], vec![entry]),
             (fast, vec![join], vec![tsd]),
             (slow, vec![join], vec![entry, tsd]),
@@ -133,6 +144,93 @@ fn verify_front_flow(blocks: &Blocks) -> Result<usize, String> {
         );
     }
     Ok(*index)
+}
+
+/// The class-accessor arm's guards, in chain order (#10498, `accessor_arm.rs`).
+pub(super) const ACCESSOR_ARM_GUARDS: [&str; 6] = [
+    "pic.acc.empty",
+    "pic.acc.cache",
+    "pic.acc.recv",
+    "pic.acc.kind",
+    "pic.acc.holder",
+    "pic.acc.lane",
+];
+
+/// #10498: the class-accessor arm on `pic.token`'s false edge, ahead of the
+/// front. Returns its guard blocks in chain order, after proving that
+///
+/// * the token compare's false edge is the first guard;
+/// * every guard ends in a live conditional branch whose true edge is the
+///   next guard (the last guard's is the call block) and whose false edge is
+///   the front's entry;
+/// * every guard and the call block has exactly one predecessor (the token
+///   compare for the first, the previous guard otherwise), so every guard
+///   dominates the call;
+/// * the call block makes exactly one call, an indirect
+///   `call double %code(double %recv)` (the compiled getter), and continues
+///   only to the tower's merge.
+pub(super) fn verify_accessor_arm(blocks: &Blocks) -> Result<Vec<&str>, String> {
+    let find = |prefix: &str| -> Result<(&str, &[String]), String> {
+        let found: Vec<_> = blocks
+            .iter()
+            .filter(|(l, _)| l.starts_with(prefix))
+            .collect();
+        match found.as_slice() {
+            [(l, b)] => Ok((l.as_str(), b.as_slice())),
+            _ => Err(format!("expected one `{prefix}` block: {found:?}")),
+        }
+    };
+    let (token, token_body) = find("pic.token")?;
+    let (front, _) = find("pic.miss.front")?;
+    let (call, call_body) = find("pic.acc.call")?;
+    let mut guards = Vec::new();
+    for prefix in ACCESSOR_ARM_GUARDS {
+        guards.push(find(prefix)?);
+    }
+    if tower_cond_br(token_body).2 != guards[0].0 {
+        return Err("the token compare's false edge must enter the accessor arm".into());
+    }
+    for (i, (label, body)) in guards.iter().enumerate() {
+        if !body.last().is_some_and(|l| l.starts_with("br i1 %")) {
+            return Err(format!(
+                "accessor guard {label} must branch on a live predicate"
+            ));
+        }
+        let (_, on_true, on_false) = tower_cond_br(body);
+        let next = guards.get(i + 1).map(|(l, _)| *l).unwrap_or(call);
+        if on_true != next || on_false != front {
+            return Err(format!(
+                "accessor guard {label} must continue to {next} and decline to the front: {body:?}"
+            ));
+        }
+        let pred = if i == 0 { token } else { guards[i - 1].0 };
+        if predecessors(blocks, label) != [pred] {
+            return Err(format!(
+                "accessor guard {label} must be reached only from {pred}"
+            ));
+        }
+    }
+    if predecessors(blocks, call) != [guards[guards.len() - 1].0] {
+        return Err("the getter call must be reached only through every guard".into());
+    }
+    let calls: Vec<&String> = call_body
+        .iter()
+        .filter(|l| l.contains(" call ") || l.contains(" invoke ") || l.starts_with("call "))
+        .collect();
+    if calls.len() != 1 || !calls[0].contains(" = call double %") {
+        return Err(format!(
+            "the accessor arm makes exactly one indirect getter call: {call_body:?}"
+        ));
+    }
+    if !call_body
+        .last()
+        .is_some_and(|l| l.starts_with("br label %pget.recv_merge."))
+    {
+        return Err(format!(
+            "the getter's answer must reach the merge: {call_body:?}"
+        ));
+    }
+    Ok(guards.iter().map(|(l, _)| *l).collect())
 }
 
 pub(super) fn front_call_block(blocks: &Blocks) -> (&str, &[String]) {
@@ -361,5 +459,20 @@ fn front_contract_rejects_lookup_bypasses_wrong_slots_and_wrong_declines() {
         let body = &mut wrong.iter_mut().find(|(l, _)| l == entry).unwrap().1;
         *body.last_mut().unwrap() = format!("br label %{slow}");
         assert!(verify_front_flow(&wrong).is_err(), "{target}: front bypass");
+        // #10498: an accessor guard that stops declining, or the receiver
+        // compare jumped over, must be caught.
+        if blocks.iter().any(|(l, _)| l.starts_with("pic.acc.")) {
+            for guard in ACCESSOR_ARM_GUARDS {
+                let mut wrong = blocks.clone();
+                let (label, body) = tower_block(&blocks, guard);
+                let (_, on_true, _) = tower_cond_br(body);
+                let body = &mut wrong.iter_mut().find(|(l, _)| l == label).unwrap().1;
+                *body.last_mut().unwrap() = format!("br label %{on_true}");
+                assert!(
+                    verify_front_flow(&wrong).is_err(),
+                    "{target}: accessor guard {guard} skipped"
+                );
+            }
+        }
     }
 }

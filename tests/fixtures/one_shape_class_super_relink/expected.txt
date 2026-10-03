@@ -1,0 +1,60 @@
+call-base ok:PB.m
+call-after-patch ok:patched:true
+own-m-unchanged PC.m
+call-primed-patch ok:QB.m / ok:QB.patched
+call-via-getter ok:getter:true
+typeof-via-getter function
+call-before-delete ok:DB.m
+call-after-delete TypeError
+typeof-after-delete undefined
+call-primed-relink ok:RB.m / ok:RX.m
+call-missing TypeError
+call-private-tripped ok:VB.m7
+typeof-base function
+value-is-proto-m true
+typeof-primed-patch ok:function / ok:number
+value-after-patch 5
+data-primed ok:undefined / ok:42
+getter-receiver XB.g:c
+getter-redefined XB.g2:c
+getter-after-relink XY.g:c
+data-after-relink undefined
+get-on-null-home TypeError
+static-base ok:SB.s:SC
+static-after-patch ok:SB.s-patched:SC
+static-data SB.k
+static-after-relink ok:SD.s
+static-typeof-after-relink function
+static-data-after-relink SD.k
+static-inst-only-call TypeError
+static-inst-only-typeof undefined
+static-inst-only-value undefined
+static-prefers-static ok:StB.static-s
+inst-before true,false
+inst-old-parent false
+inst-new-chain true,true,true,true
+inst-subclass true,true,false,true
+inst-dynamic-rhs false
+inst-fresh-instance false,true
+inst-hasInstance true,false
+inst-null false,true,false
+inst-plain false,true
+inst-relinked-back true
+inst-primed ok:true,false / ok:false,true
+inst-own-proto false,false,true
+inst-via-plain-mid false,true,true,true
+inst-to-null-proto-object false,true,false
+inst-mid-relink false,true,true,true
+inst-mid-relink-dynamic false,true
+inst-own-proto-plain false,true,true
+inst-own-proto-null false,false,false
+inst-primed-object ok:true,false,true / ok:false,true,true
+dunder-direct true,false,UE,UE,false,true
+dunder-alias true,UE
+dunder-computed true
+dunder-null ,undefined,false
+dunder-ignored true,UB
+dunder-primed ok:UE:false / ok:UB:true
+plain-super 8
+native-base got:5
+map-base 101

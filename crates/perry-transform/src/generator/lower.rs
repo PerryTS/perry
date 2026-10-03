@@ -443,27 +443,6 @@ pub fn transform_generator_function_with_extra_captures(
     // record + routing machinery (kept off for generators without one).
     let has_yielding_finally = finallys.iter().any(|f| f.finally_entry_state.is_some());
 
-    // #4438 B2-finally: append the completion-resume check to each yielding
-    // finally's completion-check state. After the finally body runs (on either
-    // the happy path or an abrupt completion routed into it), re-raise a pending
-    // throw/return; on the normal path (pending_type == 0) it's inert and the
-    // state falls through to post-finally.
-    //
-    // Async generators need this for the same reason sync ones do: now that the
-    // dispatch loop routes body-internal throws (below), a throw routed into a
-    // yielding finally must be re-raised after the finally body — otherwise it is
-    // silently swallowed.
-    {
-        let resume = build_completion_resume_stmts(pending_type_id, pending_value_id, done_id);
-        for route in &finallys {
-            if let Some(cc) = route.completion_check_state {
-                if let Some(state) = states.iter_mut().find(|s| s.num == cc) {
-                    state.body.extend(resume.iter().cloned());
-                }
-            }
-        }
-    }
-
     // Collect hoisted var IDs first so we know which Lets to rewrite.
     //
     // #6345: NOT every body `Let` may be hoisted. A `let`/`const` declared in a
@@ -496,6 +475,34 @@ pub fn transform_generator_function_with_extra_captures(
     // through the prealloc box (`js_box_set`) instead of shadowing the capture.
     for (id, _, _) in &prologue_hoist {
         hoisted_ids.insert(*id);
+    }
+
+    // #4438 B2-finally: append the completion-resume check to each yielding
+    // finally's completion-check state. After the finally body runs (on either
+    // the happy path or an abrupt completion routed into it), re-raise a pending
+    // throw/return; on the normal path (pending_type == 0) it's inert and the
+    // state falls through to post-finally.
+    //
+    // Async generators need this for the same reason sync ones do: now that the
+    // dispatch loop routes body-internal throws (below), a throw routed into a
+    // yielding finally must be re-raised after the finally body — otherwise it is
+    // silently swallowed.
+    {
+        let resume = build_completion_resume_stmts(
+            pending_type_id,
+            pending_value_id,
+            done_id,
+            state_id,
+            &finallys,
+            &hoisted_ids,
+        );
+        for route in &finallys {
+            if let Some(cc) = route.completion_check_state {
+                if let Some(state) = states.iter_mut().find(|s| s.num == cc) {
+                    state.body.extend(resume.iter().cloned());
+                }
+            }
+        }
     }
 
     // Rewrite `Let { id, init: Some(expr) }` → `Expr(LocalSet(id, expr))` for hoisted

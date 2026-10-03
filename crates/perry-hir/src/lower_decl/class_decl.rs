@@ -179,7 +179,7 @@ pub fn lower_class_decl(
     let heritage_lexically_shadowed = match class_decl.class.super_class.as_deref() {
         Some(ast::Expr::Ident(ident)) => {
             let n = ident.sym.to_string();
-            !ctx.class_renames.contains_key(&n) && ctx.locals.lookup(&n).is_some()
+            ctx.heritage_ident_is_lexical_local(&n)
         }
         _ => false,
     };
@@ -287,9 +287,8 @@ pub fn lower_class_decl(
                 .require_destructured_native_locals
                 .get(&parent_name)
                 .is_some_and(|key| *key == canonical_parent_name);
-            let locally_shadowed = !ctx.class_renames.contains_key(&parent_name)
-                && ctx.locals.lookup(&parent_name).is_some()
-                && !require_native_reexport;
+            let locally_shadowed =
+                ctx.heritage_ident_is_lexical_local(&parent_name) && !require_native_reexport;
             if native_parent.is_some() && !locally_shadowed {
                 // Keep `extends_name` populated alongside `native_extends`
                 // so SuperCall codegen + downstream chain walks still

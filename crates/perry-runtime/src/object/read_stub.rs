@@ -75,13 +75,20 @@ fn bucket_of(token: u64, key_bits: u64) -> usize {
     ((h >> 40) as usize) & (READ_STUB_BUCKETS - 1)
 }
 
+/// An entry word with this bit set is a CONFIRMED ABSENCE, not a slot: an
+/// ordinary Get of the key on a receiver of the entry's shape answers
+/// `undefined`, as long as the terminal object still has the ShapeId in the
+/// word's low 32 bits (0: the shape's [[Prototype]] is null, there is no
+/// terminal to check). See [`read_stub_prime_absent`].
+const ABSENT_ENTRY: u64 = 1 << 63;
+
 #[inline(always)]
-fn read_stub_probe(token: u64, key_bits: u64) -> Option<u32> {
+fn read_stub_probe(token: u64, key_bits: u64) -> Option<u64> {
     READ_STUB.with(|t| {
         for way in t[bucket_of(token, key_bits)].iter() {
-            let (tok, kb, slot) = way.get();
+            let (tok, kb, word) = way.get();
             if tok == token && kb == key_bits && tok != 0 {
-                return Some(slot as u32);
+                return Some(word);
             }
         }
         None
@@ -89,7 +96,7 @@ fn read_stub_probe(token: u64, key_bits: u64) -> Option<u32> {
 }
 
 #[inline(always)]
-fn read_stub_insert(token: u64, key_bits: u64, slot: u32) {
+fn read_stub_insert(token: u64, key_bits: u64, slot: u64) {
     // A stub entry answers for a shape like a site word does: never for a
     // dictionary shape (`shapes::DICTIONARY_SHAPE_ID_BASE`).
     if !crate::object::shapes::is_site_matchable_token(token) || key_bits == 0 {
@@ -97,7 +104,7 @@ fn read_stub_insert(token: u64, key_bits: u64, slot: u32) {
     }
     READ_STUB.with(|t| {
         let bucket = &t[bucket_of(token, key_bits)];
-        let entry = (token, key_bits, slot as u64);
+        let entry = (token, key_bits, slot);
         for way in bucket.iter() {
             let (tok, kb, _) = way.get();
             if tok == token && kb == key_bits {
@@ -181,8 +188,69 @@ unsafe fn stub_receiver_token(obj: *const ObjectHeader) -> Option<u64> {
 #[inline(always)]
 pub(crate) unsafe fn read_stub_lookup(obj: *const ObjectHeader, key_bits: u64) -> Option<f64> {
     let token = stub_receiver_token(obj)?;
-    let slot = read_stub_probe(token, key_bits)?;
-    read_slot_by_tag(obj, obj as usize, slot)
+    let word = read_stub_probe(token, key_bits)?;
+    if word & ABSENT_ENTRY != 0 {
+        return None;
+    }
+    read_slot_by_tag(obj, obj as usize, word as u32)
+}
+
+/// [`read_stub_lookup`] for the computed-key read (`object::dynamic_key_read`),
+/// which also takes an ABSENT entry's answer: `undefined`, once the terminal
+/// object named in the entry still has the ShapeId it was confirmed under.
+///
+/// The receiver's own token is half the proof: a ShapeId pins the exact own
+/// key set, that no own key is an accessor (a descriptor change transitions
+/// it, #10824) and the [[Prototype]] identity, so a receiver that matches
+/// lacks the key exactly as the primed one did and links where it did. The
+/// other half is the terminal's ShapeId: `%Object.prototype%` lacked the key
+/// at that id, and any key add, delete or descriptor change on it moves it.
+///
+/// # Safety
+/// As [`stub_receiver_token`].
+#[inline(always)]
+pub(crate) unsafe fn read_stub_lookup_or_absent(
+    obj: *const ObjectHeader,
+    key_bits: u64,
+) -> Option<f64> {
+    let token = stub_receiver_token(obj)?;
+    let word = read_stub_probe(token, key_bits)?;
+    if word & ABSENT_ENTRY == 0 {
+        return read_slot_by_tag(obj, obj as usize, word as u32);
+    }
+    let terminal = word as u32;
+    if terminal != 0 {
+        let proto = crate::array::object_prototype_addr_if_resolved();
+        if proto == 0
+            || crate::object::shapes::object_shape_stamp(proto as *const ObjectHeader) != terminal
+        {
+            return None;
+        }
+    }
+    Some(f64::from_bits(crate::value::TAG_UNDEFINED))
+}
+
+/// Record that a Get of `key_bits` on a receiver with `token`'s shape answers
+/// `undefined` while `%Object.prototype%` has ShapeId `terminal` (0: the shape
+/// links to null). Only `dynamic_key_read` calls this, after the generic Get
+/// returned `undefined` for a receiver whose shapes it had proved lack the key
+/// (`method_site::read_holder::dynamic_absent_terminal`), the A2 holder's own
+/// discipline: shape facts, confirmed by the getter, before anything is filed.
+///
+/// `token` is the one [`stub_receiver_token`] returned for that receiver
+/// before the Get, so the entry names the shape the facts were proved on.
+pub(crate) fn read_stub_prime_absent(token: u64, key_bits: u64, terminal: u32) {
+    read_stub_insert(token, key_bits, ABSENT_ENTRY | u64::from(terminal));
+}
+
+/// The stub token for `obj`, or `None` when the stub must not answer for it
+/// (see [`stub_receiver_token`]); what [`read_stub_prime_absent`] files under.
+///
+/// # Safety
+/// As [`stub_receiver_token`].
+#[inline]
+pub(crate) unsafe fn read_stub_token(obj: *const ObjectHeader) -> Option<u64> {
+    stub_receiver_token(obj).filter(|&t| crate::object::shapes::is_site_matchable_token(t))
 }
 
 /// Record that `key_bits` lives at `slot_word` (carrying
@@ -194,7 +262,7 @@ pub(crate) unsafe fn read_stub_lookup(obj: *const ObjectHeader, key_bits: u64) -
 #[inline]
 pub(crate) unsafe fn read_stub_prime(obj: *const ObjectHeader, key_bits: u64, slot_word: u32) {
     if let Some(token) = stub_receiver_token(obj) {
-        read_stub_insert(token, key_bits, slot_word);
+        read_stub_insert(token, key_bits, u64::from(slot_word));
     }
 }
 
@@ -255,12 +323,12 @@ unsafe fn read_slot_by_tag(obj: *const ObjectHeader, addr: usize, slot: u32) -> 
 /// through [`read_stub_prime`]'s shared receiver guard (#10768).
 #[cfg(test)]
 pub(crate) fn read_stub_insert_raw_for_test(token: u64, key_bits: u64, slot: u32) {
-    read_stub_insert(token, key_bits, slot)
+    read_stub_insert(token, key_bits, u64::from(slot))
 }
 
 #[cfg(test)]
 pub(crate) fn read_stub_probe_raw_for_test(token: u64, key_bits: u64) -> Option<u32> {
-    read_stub_probe(token, key_bits)
+    read_stub_probe(token, key_bits).map(|word| word as u32)
 }
 
 #[cfg(test)]

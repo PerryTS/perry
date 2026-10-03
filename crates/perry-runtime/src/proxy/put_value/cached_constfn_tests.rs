@@ -1,5 +1,7 @@
-//! Raw emitted stores may cache other slots of a completed ConstFn shape,
-//! but a write to its SPECIAL slot must retain the checked store funnel.
+//! Raw emitted stores may cache other slots of a completed ConstFn shape.
+//! A write to its SPECIAL slot is published only FLAGGED, naming the site's
+//! one body: the hit then admits only a closure of that body, and every
+//! other value keeps the checked store funnel.
 use super::*;
 use crate::object::shapes::{object_shape_stamp, shape_descriptor_by_id, ShapeObjectKind};
 
@@ -39,6 +41,11 @@ fn birth() -> f64 {
     assert!(d.live_inline_slot_count >= 4);
     assert_eq!(d.rep, crate::object::field_rep::REP_ANY);
     value
+}
+
+fn body_of(value: f64) -> u64 {
+    unsafe { crate::object::field_rep_store::constfn_store_info(value.to_bits()) }
+        .expect("a permanent-image closure names its body")
 }
 
 fn object(value: f64) -> *mut crate::ObjectHeader {
@@ -82,7 +89,7 @@ fn assert_stored(receiver: f64, method: *const crate::StringHeader, value: f64) 
 }
 
 #[test]
-fn packed_set_refuses_special_but_keeps_other_slots_of_the_completed_shape() {
+fn packed_set_flags_special_with_the_site_body_and_keeps_other_slots() {
     let _lock = crate::gc::global_side_table_test_lock();
     let _no_gc = crate::gc::GcSuppressScope::new();
     let method = key(b"cached_cf_packed_method");
@@ -96,11 +103,27 @@ fn packed_set_refuses_special_but_keeps_other_slots_of_the_completed_shape() {
     let site: &'static PackedSetSite = Box::leak(Box::new(PackedSetSite::empty()));
     let mut ways = packed_set_cache_empty();
     let mut slot: PackedSetWaysSlot = &mut ways;
-    unsafe { prime_packed_set(first, method, &mut slot, &site.set) };
-    assert_eq!(site.set.load(Ordering::Relaxed), PACKED_SET_EMPTY);
-    assert!(ways[..PACKED_SET_WAYS]
+    // A site without a record (the full-outline form) has no body word:
+    // the SPECIAL slot keeps the checked miss.
+    let mut bare_ways = packed_set_cache_empty();
+    let mut bare_slot: PackedSetWaysSlot = &mut bare_ways;
+    unsafe { prime_packed_set(first, method, &mut bare_slot, std::ptr::null()) };
+    assert!(bare_ways[..PACKED_SET_WAYS]
         .iter()
         .all(|w| *w == PACKED_SET_EMPTY));
+
+    unsafe { prime_packed_set(first, method, &mut slot, &site.set) };
+    let word = site.set.load(Ordering::Relaxed);
+    assert_eq!(word as u32, final_id, "a SPECIAL slot primes the word");
+    assert_ne!(word & PACKED_SET_CONSTFN_SLOT, 0, "flagged ConstFn");
+    assert_eq!(word & PACKED_SET_F64_SLOT, 0);
+    assert_eq!(((word & !PACKED_SET_FLAGS) >> 32) as u32, 2, "slot index");
+    assert_eq!(
+        site.constfn_info.load(Ordering::Relaxed),
+        body_of(a),
+        "the site names the shape's body"
+    );
+    assert_eq!(ways[0], word, "the way carries the same flagged entry");
 
     let same = closure(false);
     js_put_value_set_packed_miss(first, method, same, 0, &mut slot, &site.set);
@@ -110,7 +133,6 @@ fn packed_set_refuses_special_but_keeps_other_slots_of_the_completed_shape() {
         "generic same-body store preserves fact"
     );
     assert_stored(first, method, same);
-    assert_eq!(site.set.load(Ordering::Relaxed), PACKED_SET_EMPTY);
 
     let scalar = key(b"cached_cf_scalar");
     crate::object::js_object_set_field_by_name(object(first), scalar, 2.5);
@@ -126,6 +148,15 @@ fn packed_set_refuses_special_but_keeps_other_slots_of_the_completed_shape() {
     unsafe { prime_packed_set(first, key(b"cached_cf_seed"), &mut slot, &site.set) };
     assert_eq!(site.set.load(Ordering::Relaxed) as u32, mixed);
     assert_eq!(site.set.load(Ordering::Relaxed) & PACKED_SET_F64_SLOT, 0);
+
+    // A ConstFn slot of another body is never flagged at this site: the
+    // site's body word is claimed once and never changes.
+    let other_method = key(b"cached_cf_packed_other");
+    let third = completed(other_method, closure(true));
+    let site_word_before = site.set.load(Ordering::Relaxed);
+    unsafe { prime_packed_set(third, other_method, &mut slot, &site.set) };
+    assert_eq!(site.set.load(Ordering::Relaxed), site_word_before);
+    assert_eq!(site.constfn_info.load(Ordering::Relaxed), body_of(a));
 
     let replacement = closure(true);
     js_put_value_set_packed_miss(second, method, replacement, 0, &mut slot, &site.set);
@@ -144,7 +175,7 @@ fn packed_set_refuses_special_but_keeps_other_slots_of_the_completed_shape() {
 }
 
 #[test]
-fn packed_add_refuses_special_successor_before_any_memo_publication() {
+fn packed_add_serves_only_the_site_body_of_a_special_successor() {
     let _lock = crate::gc::global_side_table_test_lock();
     let _no_gc = crate::gc::GcSuppressScope::new();
     let method = key(b"cached_cf_append_method");
@@ -163,23 +194,50 @@ fn packed_add_refuses_special_successor_before_any_memo_publication() {
             .special_constfn_mask,
         1 << 1
     );
-    assert_eq!(site.add_shapes.load(Ordering::Relaxed), PACKED_SET_EMPTY);
-    assert_eq!(site.add_guard.load(Ordering::Relaxed), 0);
-    assert_eq!(site.add_ways.load(Ordering::Relaxed), 0);
+    let shapes = site.add_shapes.load(Ordering::Relaxed);
+    assert_eq!((shapes as u32, (shapes >> 32) as u32), (pre, final_id));
+    let guard = site.add_guard.load(Ordering::Relaxed);
+    assert_ne!(
+        guard & super::super::packed_add::ADD_CONSTFN_SLOT,
+        0,
+        "flagged"
+    );
+    assert_eq!(guard & super::super::packed_add::ADD_F64_SLOT, 0);
+    assert_eq!(site.constfn_info.load(Ordering::Relaxed), body_of(a));
+
+    // Another body is refused before anything is stamped.
+    let foreign = closure(true);
     assert_eq!(
-        unsafe { super::super::packed_add::packed_add_try(site, second, a) },
+        unsafe { super::super::packed_add::packed_add_try(site, second, foreign) },
         None
     );
     assert_eq!(stamp(second), pre, "declining add changes nothing");
-
-    let b = closure(false);
-    js_put_value_set_packed_miss(second, method, b, 0, &mut slot, &site.set);
+    // So is a non-closure value.
     assert_eq!(
-        stamp(second),
-        final_id,
-        "same-body generic append shares final id"
+        unsafe { super::super::packed_add::packed_add_try(site, second, 1.5) },
+        None
     );
+    assert_eq!(stamp(second), pre);
+
+    // A closure of the site's body (other captures, other address) is served
+    // onto exactly the successor, holding THIS closure.
+    let b = closure(false);
+    assert_ne!(a.to_bits(), b.to_bits());
+    assert_eq!(
+        unsafe { super::super::packed_add::packed_add_try(site, second, b) }.map(f64::to_bits),
+        Some(b.to_bits())
+    );
+    assert_eq!(stamp(second), final_id, "same-body memo shares final id");
     assert_stored(second, method, b);
+
+    // A foreign body through the miss appends on its own shape and leaves the
+    // site's memo and body as they were.
+    let fourth = birth();
+    js_put_value_set_packed_miss(fourth, method, foreign, 0, &mut slot, &site.set);
+    assert_ne!(stamp(fourth), final_id);
+    assert_stored(fourth, method, foreign);
+    assert_eq!(site.add_shapes.load(Ordering::Relaxed), shapes);
+    assert_eq!(site.constfn_info.load(Ordering::Relaxed), body_of(a));
     let replacement = closure(true);
     js_put_value_set_packed_miss(second, method, replacement, 0, &mut slot, &site.set);
     assert_ne!(stamp(second), final_id);
@@ -190,6 +248,15 @@ fn packed_add_refuses_special_successor_before_any_memo_publication() {
         0
     );
     assert_stored(second, method, replacement);
+    // The overwrite deprecated the ConstFn lane, which moved the validity
+    // word: the memo no longer serves its successor.
+    let fifth = birth();
+    assert_eq!(stamp(fifth), pre);
+    assert_eq!(
+        unsafe { super::super::packed_add::packed_add_try(site, fifth, closure(false)) },
+        None
+    );
+    assert_eq!(stamp(fifth), pre);
 }
 
 #[test]

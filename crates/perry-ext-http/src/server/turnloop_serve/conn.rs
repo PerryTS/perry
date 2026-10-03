@@ -23,7 +23,7 @@ use crate::server::request::{
     alloc_connection_socket, alloc_incoming_message, handle_to_pointer_f64, incoming_socket_assign,
     IncomingMessage,
 };
-use crate::server::response::{alloc_server_response_for_turnloop, ResponseShape};
+use crate::server::response::{alloc_http1_server_response_for_turnloop, ResponseShape};
 use crate::server::server::{with_base_server, HttpPendingRequest};
 
 /// The request being decoded, before it becomes an `IncomingMessage`.
@@ -724,7 +724,8 @@ fn finish_request(c: &mut Conn, building: Building) -> (HttpPendingRequest, bool
     // `'connection'` listener's argument — same handle, every request on
     // this connection.
     incoming_socket_assign(im_handle, handle_to_pointer_f64(c.socket_handle));
-    let sr_handle = alloc_server_response_for_turnloop(c.id, c.seq, im_handle);
+    let sr_handle =
+        alloc_http1_server_response_for_turnloop(c.id, c.seq, im_handle, c.socket_handle);
 
     let is_check_continue = building.expects_continue
         && with_base_server(c.server_handle, |server| {

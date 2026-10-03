@@ -1339,8 +1339,26 @@ pub(super) fn probe_read_once(stream: f64) {
     invoke_read_once_inner(stream, false);
 }
 
+/// The `_read` implementation Node would call. `Readable.prototype.read`
+/// calls `this._read(n)` at read time, so the method is resolved when the
+/// stream is read, not when it was constructed. Node turns `options.read`
+/// into an own `_read`; Perry keeps it in the hidden read slot. Precedence:
+/// an own `_read` assigned after the constructor ran (`this._read = fn` in a
+/// `Readable.call(this)` subclass, as light-my-request's `Request` does),
+/// then `options.read`, then a `_read` on the prototype chain.
+fn resolve_read_callback(stream: f64) -> Option<f64> {
+    let own = crate::object::js_object_get_own_field_or_undef(stream, b"_read".as_ptr(), 5);
+    if is_callable_value(own) {
+        return Some(own);
+    }
+    if let Some(read) = get_hidden_value(stream, hidden_read_key()) {
+        return Some(read);
+    }
+    get_hidden_value(stream, hidden_key(b"_read")).filter(|v| is_callable_value(*v))
+}
+
 fn invoke_read_once_inner(stream: f64, emit_default_error: bool) {
-    let Some(read) = get_hidden_value(stream, hidden_read_key()) else {
+    let Some(read) = resolve_read_callback(stream) else {
         if emit_default_error {
             maybe_emit_default_read_error(stream);
         }

@@ -214,6 +214,16 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                 let obj_value = f64::from_bits(metadata_obj_value.get_heap_word_u64());
                 let class_obj = extract_obj_ptr(obj_value);
                 if !class_obj.is_null() {
+                    // `prototype`: `{ !w, !e, !c }`, owned for the object's
+                    // whole life (`class_object_has_prototype_property`).
+                    if super::field_get_set::class_object_has_prototype_property(
+                        method_name.as_bytes(),
+                    ) {
+                        let proto = f64::from_bits(
+                            super::field_get_set::class_object_prototype_value(class_obj).bits(),
+                        );
+                        return build_data_descriptor(proto, false, false, false);
+                    }
                     let class_id = super::js_object_get_class_id(class_obj);
                     if let Some((acc, attrs)) =
                         super::class_registry::class_dynamic_static_accessor_descriptor(
@@ -973,6 +983,13 @@ pub(crate) use builders::{
 /// Takes a NaN-boxed f64 object pointer, returns a NaN-boxed f64 array pointer.
 #[no_mangle]
 pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
+    // A class object stores everything it owns except `prototype`
+    // (`class_object_has_prototype_property`), which was created with it,
+    // right after `length` and `name`.
+    if super::class_registry::is_class_object_value(obj_value) {
+        let names = js_object_get_own_property_names_shape(obj_value);
+        return class_object_names_with_prototype(names);
+    }
     // An elements-backed Array-subclass instance: present indices, then
     // `length`, then the shape's own string keys.
     if crate::array::subclass_elements::backed_value(obj_value).is_some() {
@@ -990,6 +1007,45 @@ pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
         return names;
     }
     js_object_get_own_property_names_shape(obj_value)
+}
+
+/// `names` (a class object's stored own keys, in creation order) with
+/// `prototype` inserted where ClassDefinitionEvaluation created it: after the
+/// leading `length` / `name` that are still the object's first keys.
+fn class_object_names_with_prototype(names: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let names = scope.root_nanbox_f64(names);
+    let mut out: Vec<String> = Vec::new();
+    unsafe {
+        let arr = crate::value::js_nanbox_get_pointer(names.get_nanbox_f64())
+            as *const crate::array::ArrayHeader;
+        for i in 0..crate::array::js_array_length(arr) {
+            let v = crate::array::js_array_get_f64(arr, i);
+            let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+            if let Some((p, len)) = crate::string::str_bytes_from_jsvalue(v, &mut scratch) {
+                out.push(
+                    String::from_utf8_lossy(std::slice::from_raw_parts(p, len as usize))
+                        .into_owned(),
+                );
+            }
+        }
+    }
+    let at = out
+        .iter()
+        .position(|n| n != "length" && n != "name")
+        .unwrap_or(out.len());
+    out.insert(at, "prototype".to_string());
+    let result = crate::array::js_array_alloc(out.len() as u32);
+    let result = scope.root_raw_mut_ptr(result);
+    for name in out {
+        let s = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        result.with_mut_ptr::<crate::array::ArrayHeader, _>(|r| {
+            crate::array::js_array_push(r, JSValue::string_ptr(s));
+        });
+    }
+    result.with_mut_ptr::<crate::array::ArrayHeader, _>(|r| {
+        f64::from_bits((r as u64) | 0x7FFD_0000_0000_0000)
+    })
 }
 
 /// [`js_object_get_own_property_names`] over the shape alone.

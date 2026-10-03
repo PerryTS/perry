@@ -368,8 +368,9 @@ pub(in crate::expr) fn lower_inline_dyn_typed_array_get(
     // coarsest split that keeps every load in bounds — reading 8 bytes from a
     // `Uint8Array`'s last element is not ours to take.)
     //
-    // `PERRY_TA_VIEW_GUARD == 0` is the licence to compute the data pointer as
-    // `header + 16` without consulting the view registries; a raised guard,
+    // The receiver's own storage byte (`TA_STORAGE_INLINE`) is the licence to
+    // compute the data pointer as `header + 16` without consulting the view
+    // registries (#10516); an external-storage receiver,
     // like a BigInt lane or an out-of-range index, leaves through
     // `arrlike.ic.miss` — the same exit the old `tav.get.slow` edge reached.
     //
@@ -382,7 +383,7 @@ pub(in crate::expr) fn lower_inline_dyn_typed_array_get(
     // went from -9.98% to -6.65%.
     //
     // #10118: the brand test DECIDES ON THE TAG ALONE. Everything else in the
-    // guard set — the view guard, the element kind and its range test, the
+    // guard set — the storage byte, the element kind and its range test, the
     // bounds check — is meaningful only once the tag says typed array, so it
     // sits behind the tag in `tav.kind_guard`. An Array-subclass instance or a
     // `JSON.parse` array reaching this arm pays one `icmp` and leaves, instead
@@ -394,15 +395,19 @@ pub(in crate::expr) fn lower_inline_dyn_typed_array_get(
     ctx.block()
         .cond_br(&is_typed_array, &ta_kind_guard_label, &elem_kind_label);
 
-    // Past the tag, a receiver this guard rejects (a raised view guard, a
+    // Past the tag, a receiver this guard rejects (external storage, a
     // BigInt/Float16 lane, an out-of-range index) cannot be an ordinary object
     // either, so it leaves straight through the exit rather than re-testing
     // `GC_TYPE_OBJECT` it is guaranteed to fail.
     ctx.current_block = ta_kind_guard_idx;
     let (ta_kind, ta_ok) = {
         let blk = ctx.block();
-        let view_guard = blk.load(I64, "@PERRY_TA_VIEW_GUARD");
-        let inline_storage = blk.icmp_eq(I64, &view_guard, "0");
+        // #10516: the receiver's own storage byte (header byte 10,
+        // `TA_STORAGE_INLINE` = 0) licenses `data == header + 16`.
+        let storage_addr = blk.add(I64, &object_raw, "10");
+        let storage_ptr = blk.inttoptr(I64, &storage_addr);
+        let storage = blk.load(I8, &storage_ptr);
+        let inline_storage = blk.icmp_eq(I8, &storage, "0");
         let kind_addr = blk.add(I64, &object_raw, "8");
         let kind_ptr = blk.inttoptr(I64, &kind_addr);
         let kind_i8 = blk.load(I8, &kind_ptr);
@@ -434,7 +439,7 @@ pub(in crate::expr) fn lower_inline_dyn_typed_array_get(
         let elem_size = blk.zext(I8, &size_i8, I64);
         let offset = blk.mul(I64, &object_idx_i64, &elem_size);
         // `data = header + size_of::<TypedArrayHeader>()`, proven by the
-        // cleared view guard above.
+        // inline storage byte above.
         let data_base = blk.add(I64, &object_raw, "16");
         (elem_size, blk.add(I64, &data_base, &offset))
     };

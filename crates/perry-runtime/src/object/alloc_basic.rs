@@ -122,6 +122,67 @@ fn object_alloc_with_parent_impl(
     }
 }
 
+/// An object born on a known birth shape: `class_id`, `field_count` live
+/// inline slots (all `undefined`), stamped `shape_id` — a keyless ShapeId
+/// minted for exactly that class and bound (#10507's prototype birth
+/// record), so no descriptor is derived from the object.
+pub(crate) fn object_alloc_born(
+    class_id: u32,
+    field_count: u32,
+    shape_id: u32,
+) -> *mut ObjectHeader {
+    let alloc_field_count = std::cmp::max(field_count as usize, crate::object::INLINE_SLOT_FLOOR);
+    let total_size =
+        std::mem::size_of::<ObjectHeader>() + alloc_field_count * std::mem::size_of::<JSValue>();
+    let ptr = arena_alloc_gc(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader;
+    unsafe {
+        (*ptr).class_id = class_id;
+        (*ptr).parent_class_id = 0;
+        // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
+        (*ptr).meta = ptr::null_mut();
+        let fields_ptr = (ptr as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut JSValue;
+        for i in 0..alloc_field_count {
+            // GC_STORE_AUDIT(INIT): freshly allocated object field slot is initialized pointer-free.
+            ptr::write(fields_ptr.add(i), JSValue::undefined());
+        }
+        crate::gc::layout_init_pointer_free(ptr as *mut u8);
+        if crate::arena::pointer_in_nursery(ptr as usize) {
+            // A nursery newborn: no proof to retire, nobody inherits from it
+            // and no old-generation carrier to note — the stamp is the store.
+            // GC_STORE_AUDIT(POINTER_FREE): a ShapeId, never a heap reference.
+            (*ptr).parent_class_id = shape_id;
+        } else {
+            crate::object::shapes::stamp_object_shape_id_with_carrier_note(ptr, shape_id);
+        }
+    }
+    ptr
+}
+
+/// The storage `js_object_alloc(class_id, field_count)` allocates (header,
+/// `undefined` slots, pointer-free layout) with NO shape published: its
+/// stamp word is 0. The caller stamps the object's shape before anything
+/// else can allocate: a per-evaluation class object or prototype born
+/// directly in its template's final shape (`class_object_template`).
+pub(crate) fn object_alloc_unpublished(class_id: u32, field_count: u32) -> *mut ObjectHeader {
+    let header_size = std::mem::size_of::<ObjectHeader>();
+    let alloc_field_count = std::cmp::max(field_count as usize, crate::object::INLINE_SLOT_FLOOR);
+    let total_size = header_size + alloc_field_count * std::mem::size_of::<JSValue>();
+    let ptr = arena_alloc_gc(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader;
+    unsafe {
+        (*ptr).class_id = class_id;
+        (*ptr).parent_class_id = 0;
+        // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
+        (*ptr).meta = ptr::null_mut();
+        let fields_ptr = (ptr as *mut u8).add(header_size) as *mut JSValue;
+        for i in 0..alloc_field_count {
+            // GC_STORE_AUDIT(INIT): freshly allocated object field slot is initialized pointer-free.
+            ptr::write(fields_ptr.add(i), JSValue::undefined());
+        }
+        crate::gc::layout_init_pointer_free(ptr as *mut u8);
+    }
+    ptr
+}
+
 /// Fast object allocation using bump allocator - NO field initialization
 /// This is significantly faster for hot paths where constructor immediately sets all fields
 /// Returns a pointer to the object header with UNINITIALIZED fields

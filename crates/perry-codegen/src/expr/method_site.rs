@@ -165,7 +165,11 @@ pub(crate) fn emit_method_site(
     let object_idx = ctx.new_block("msite.object");
     let prim_l = ctx.block_label(prim_idx);
     let object_l = ctx.block_label(object_idx);
-    let lanes_idx = (!lanes.is_empty()).then(|| ctx.new_block("msite.static"));
+    // Only a lane the receiver may itself carry is compared; every lane's
+    // body is a candidate of the learned ConstFn hit below.
+    let compared: Vec<&crate::codegen::static_constfn::StaticMethodLane> =
+        lanes.iter().filter(|lane| lane.own).collect();
+    let lanes_idx = (!compared.is_empty()).then(|| ctx.new_block("msite.static"));
     let first_l = match lanes_idx {
         Some(idx) => ctx.block_label(idx),
         None => object_l.clone(),
@@ -192,10 +196,10 @@ pub(crate) fn emit_method_site(
             blk.load(I64, &wp)
         };
         let undefined = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-        for (i, lane) in lanes.iter().enumerate() {
+        for (i, lane) in compared.iter().enumerate() {
             let hit_idx = ctx.new_block("msite.static_hit");
             let hit_l = ctx.block_label(hit_idx);
-            let next_l = if i + 1 < lanes.len() {
+            let next_l = if i + 1 < compared.len() {
                 let n = ctx.new_block("msite.static");
                 (Some(n), ctx.block_label(n))
             } else {

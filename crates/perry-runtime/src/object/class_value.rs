@@ -302,11 +302,11 @@ fn class_value_mint(class_id: u32) -> *mut ClosureHeader {
 const INTRINSIC_OWN_DATA_KEYS: [&str; 2] = ["length", "name"];
 
 /// The attributes of a function's own `length` / `name`.
-const INTRINSIC_ATTRS: (bool, bool, bool) = (false, false, true);
+pub(crate) const INTRINSIC_ATTRS: (bool, bool, bool) = (false, false, true);
 
 /// The value of intrinsic own data property `key` of class `class_id`, if
 /// the class registered one.
-fn intrinsic_own_data_value(class_id: u32, key: &str) -> Option<f64> {
+pub(crate) fn intrinsic_own_data_value(class_id: u32, key: &str) -> Option<f64> {
     match key {
         "length" => super::class_registry::class_length_for_id(class_id).map(f64::from),
         "name" => super::class_registry::class_name_for_id(class_id).map(|name| {
@@ -319,7 +319,7 @@ fn intrinsic_own_data_value(class_id: u32, key: &str) -> Option<f64> {
 
 /// Does a static method or accessor of class `class_id` own `key`? Then it,
 /// not the intrinsic data property, is the class's own `key`.
-fn static_member_owns(class_id: u32, key: &str) -> bool {
+pub(crate) fn static_member_owns(class_id: u32, key: &str) -> bool {
     super::class_registry::class_has_own_static_method(class_id, key)
         || super::class_registry::class_registered_static_accessor_ptrs(class_id, key).is_some()
 }
@@ -469,6 +469,15 @@ pub(crate) fn static_method_property(
         StaticMethodProperty::Deleted
     };
     if name.starts_with('#') || is_internal_static_key(name) {
+        return live_or_next;
+    }
+    // A template evaluated to class objects keeps its statics on those objects
+    // (`define_class_object_own_properties`), each evaluation its own. The
+    // shared function object minted for the template is only the last-wins
+    // mirror of writes to any of them (`mirror_class_object_static_write`): it
+    // says nothing about what the declaration is, and one evaluation's
+    // `C.m = f` must not retire `m` for its siblings.
+    if super::class_registry::template_has_class_objects(class_id) {
         return live_or_next;
     }
     // A never-minted object owns exactly its declarations.

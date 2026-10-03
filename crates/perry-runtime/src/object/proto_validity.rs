@@ -226,7 +226,14 @@ unsafe fn ensure_meta_for_mark(obj: usize, flag: u64) -> Option<*mut crate::obje
     if meta.is_null() {
         return None;
     }
-    if (*meta).flags & flag == 0 {
+    if (*meta).flags & flag == 0 && flag != crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER {
+        // An exotic read receiver needs no private lineage: its caller
+        // restamps the [[Prototype]] identity to `PROTO_ID_PER_OBJECT`, a
+        // value no ordinary receiver's shape carries, so every shape a marked
+        // object can carry is already disjoint from every unmarked one. A
+        // counter-unique generation per arguments object minted one shape
+        // family per call (#10509).
+        //
         // The transition may allocate a descriptor, and so move the owner;
         // the meta record is reached through the owner again afterwards.
         // A prototype mark changes no slot and no descriptor, so the new

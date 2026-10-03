@@ -233,6 +233,8 @@ mod index_set_barrier_tests;
 mod instanceof_imported_rhs_tests;
 mod record_value;
 #[cfg(test)]
+mod region_array_loop_tests;
+#[cfg(test)]
 mod region_loop_tests;
 mod repsel_gates;
 mod scalar_slot_root;
@@ -2763,7 +2765,14 @@ impl<'a> FnCtx<'a> {
         &self,
         e: &perry_hir::Expr,
     ) -> Option<&crate::collectors::PtrShapeLocal> {
-        if !self.repsel_context_allows_ptr_shape {
+        // An admitted region's authority covers its receivers' STORES only
+        // (`ptr_shape_store_fact`). A read or a call's dispatch keeps the
+        // route it has outside the region: it writes nothing the region's
+        // facts rest on, and the region's own bare stores keep every lane's
+        // representation, so the exact-class proof stays true inside it.
+        if !self.repsel_context_allows_ptr_shape
+            && self.repsel_ptr_shape_context_denial != Some(PTR_SHAPE_REGION_AUTHORITY)
+        {
             // #7106 follow-up: this early return is the whole of mechanism 2.
             // The fact EXISTS — `collect_shape_proven_ptr_locals` already ran
             // and already recorded a `select()` for it — and every access site
@@ -2780,6 +2789,26 @@ impl<'a> FnCtx<'a> {
             perry_hir::Expr::This => self.proven_this.as_ref(),
             _ => None,
         }
+    }
+
+    /// The `Ptr<Shape>` proof a STORE to `e` may act on.
+    ///
+    /// An admitted loop/body region owns its receivers' stores
+    /// ([`PTR_SHAPE_REGION_AUTHORITY`]): its live ShapeId guard and store
+    /// admission replace the unguarded store route, so inside the region a
+    /// store never takes it. Reads and a call's dispatch are not under that
+    /// authority ([`FnCtx::ptr_shape_receiver_fact`]).
+    pub(crate) fn ptr_shape_store_fact(
+        &self,
+        e: &perry_hir::Expr,
+    ) -> Option<&crate::collectors::PtrShapeLocal> {
+        if !self.repsel_context_allows_ptr_shape {
+            if crate::opt_report::enabled() {
+                self.report_ptr_shape_context_drop(e);
+            }
+            return None;
+        }
+        self.ptr_shape_receiver_fact(e)
     }
 
     /// Shared exact-shape lookup for a local, with clone-parameter overlays
@@ -3055,8 +3084,8 @@ mod unary_bigint_tests;
 mod unary_bitnot_tests;
 pub(crate) use index_get::{
     affine_counter_occurrences, affine_index_fits_i64, emit_affine_index_i64_with,
-    emit_array_region_guard, numeric_index_has_integer_array_index_proof,
-    packed_f64_loop_index_parts,
+    emit_array_region_guard, emit_typed_f64_region_guard,
+    numeric_index_has_integer_array_index_proof, packed_f64_loop_index_parts, ArrayRegionDense,
 };
 pub(crate) use masked_window::masked_window_fact_for_index;
 /// Rooting coverage for the computed-store arms the TS corpora cannot reach

@@ -79,9 +79,10 @@ pub(crate) use func_ref::{
     guarded_call_return_proof, guarded_discriminant_branch_proofs, guarded_expr_proof,
     guarded_path_type,
 };
+mod direct_method_guard;
 mod jsx;
 pub(crate) mod method_override;
-pub(crate) use method_override::emit_inline_direct_method_shape_guard;
+pub(crate) use direct_method_guard::emit_inline_direct_method_shape_guard;
 #[cfg(test)]
 mod named_import_install_tests;
 mod namespace_call;

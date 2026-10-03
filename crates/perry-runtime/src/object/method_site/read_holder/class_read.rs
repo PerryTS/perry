@@ -2,8 +2,15 @@
 //!
 //! A bare CLASS ShapeId identifies the receiver's own keys but does not pin
 //! `C.prototype`: the class registry can replace that pointer without a
-//! receiver restamp. These entries therefore run only from the collecting
-//! miss arm, where they re-read the live direct prototype on every hit.
+//! receiver restamp. Every writer that can replace it bumps the class
+//! lookup-surface generation (`class_registry::class_lookup_surface_gen_bump`),
+//! so an entry records the generation under which its direct link was last
+//! proved. While the generation is unchanged the link is the recorded holder
+//! (or first hop) and the GC-leaf read front answers the entry
+//! ([`leaf_answer`]) from shape words alone, as it answers the site's own
+//! holder entry. A changed generation declines there; the collecting miss arm
+//! re-reads the live direct prototype, and a match re-proves the entry under
+//! the new generation.
 //! The entries belong to one PicCache site (word 2 points to its bounded
 //! process-lifetime record), never to a process-global `(shape, key)` table.
 
@@ -20,10 +27,18 @@ struct Entry {
     class_id: u32,
     depth: u8,
     absent: bool,
+    /// A holder slot word (`HOLDER_SLOT_SPILL` for a spill position).
     slot: u32,
     holder: usize,
     holder_shape: u32,
     hops: [(usize, u32); HOLDER_MAX_DEPTH - 1],
+    /// The class lookup-surface generation under which the receiver's direct
+    /// link was last proved to be `holder` (depth 1) or `hops[0]`.
+    generation: u64,
+    /// Every hop's ShapeId records a prototype identity that pins its next
+    /// object (the realm's `%Object.prototype%`, null, or a serial), so a
+    /// matching hop ShapeId proves the link without re-reading it.
+    pinned_hops: bool,
 }
 
 const EMPTY: Entry = Entry {
@@ -35,6 +50,8 @@ const EMPTY: Entry = Entry {
     holder: 0,
     holder_shape: 0,
     hops: [(0, 0); HOLDER_MAX_DEPTH - 1],
+    generation: 0,
+    pinned_hops: false,
 };
 
 struct Site {
@@ -65,6 +82,19 @@ unsafe fn site(c: &PicCache) -> Option<&Site> {
     Some(&*((word & crate::value::POINTER_MASK) as usize as *const Site))
 }
 
+/// Does a hop whose ShapeId records `pid` link to one fixed object for as
+/// long as the ShapeId matches? The realm's `%Object.prototype%`, null, a
+/// serial, and a MIXED identity (a class id plus the serial of the explicit
+/// prototype object) do: a serial names one prototype object, and any
+/// `setPrototypeOf` on the hop moves its ShapeId. A bare CLASS identity
+/// resolves through the class registry and is not pinned by the hop's shape.
+fn hop_identity_pins_link(pid: u64) -> bool {
+    pid == PROTO_ID_DEFAULT
+        || pid == PROTO_ID_NULL
+        || pid < crate::object::shapes::PROTO_ID_CLASS
+        || (PROTO_ID_MIXED..PROTO_ID_UNIQUE).contains(&pid)
+}
+
 /// The current link from an intermediate hop, computed by the same admitted
 /// shape/prototype rule the prime walk used. A changed or exotic link declines.
 unsafe fn admitted_next(hop: *const ObjectHeader) -> Option<usize> {
@@ -89,16 +119,23 @@ unsafe fn admitted_next(hop: *const ObjectHeader) -> Option<usize> {
     (next != 0).then_some(next)
 }
 
-unsafe fn answer(e: &Entry, recv: *const ObjectHeader) -> Option<u64> {
+unsafe fn answer(e: &mut Entry, recv: *const ObjectHeader) -> Option<u64> {
     if e.token == 0
         || e.class_id != (*recv).class_id
         || e.token != (u64::from(object_shape_stamp(recv)) | PIC_ID_TOKEN_BIT) as i64
     {
         return None;
     }
-    let direct = if e.depth == 1 { e.holder } else { e.hops[0].0 };
-    if class_link(recv)? as usize != direct {
-        return None;
+    let generation = crate::object::class_lookup_surface_generation();
+    if e.generation != generation {
+        let direct = if e.depth == 1 { e.holder } else { e.hops[0].0 };
+        if class_link(recv)? as usize != direct {
+            return None;
+        }
+        e.generation = generation;
+    }
+    if e.pinned_hops {
+        return pinned_answer(e);
     }
     let mut previous = 0usize;
     for i in 0..(e.depth as usize).saturating_sub(1) {
@@ -117,18 +154,65 @@ unsafe fn answer(e: &Entry, recv: *const ObjectHeader) -> Option<u64> {
     if e.holder == 0 || shape_word(e.holder) != e.holder_shape {
         return None;
     }
-    if e.absent {
-        Some(crate::value::TAG_UNDEFINED)
-    } else {
-        let bits = slot_bits(e.holder, e.slot);
-        // The generic inherited getter treats nullish/hole holder values as
-        // a miss and may continue to a farther prototype. The holder's
-        // ShapeId does not change on a value overwrite, so recheck each hit.
-        (bits != crate::value::TAG_UNDEFINED
-            && bits != crate::value::TAG_NULL
-            && bits != crate::value::TAG_HOLE)
-            .then_some(bits)
+    value_of(e)
+}
+
+/// The entry's answer once the receiver and its direct link are proved: the
+/// hops and the holder by ShapeId alone (the entry's hops all record pinning
+/// identities), as `entry_answer_other` proves a site's own deep entry.
+#[inline]
+unsafe fn pinned_answer(e: &Entry) -> Option<u64> {
+    for i in 0..(e.depth as usize).saturating_sub(1) {
+        let (addr, shape) = e.hops[i];
+        if addr == 0 || shape_word(addr) != shape {
+            return None;
+        }
     }
+    if e.holder == 0 || shape_word(e.holder) != e.holder_shape {
+        return None;
+    }
+    value_of(e)
+}
+
+#[inline]
+unsafe fn value_of(e: &Entry) -> Option<u64> {
+    if e.absent {
+        return Some(crate::value::TAG_UNDEFINED);
+    }
+    let bits = holder_slot_value(e.holder, e.slot)?;
+    // The generic inherited getter treats nullish/hole holder values as
+    // a miss and may continue to a farther prototype. The holder's
+    // ShapeId does not change on a value overwrite, so recheck each hit.
+    (bits != crate::value::TAG_UNDEFINED
+        && bits != crate::value::TAG_NULL
+        && bits != crate::value::TAG_HOLE)
+        .then_some(bits)
+}
+
+/// The site's class entry for `recv` from the GC-leaf read front: loads and
+/// compares only. Answers only an entry whose generation is current (the
+/// direct link is the recorded one) and whose hops are pinned by their
+/// ShapeIds; anything else declines (`None`) to the collecting miss arm.
+///
+/// # Safety
+/// `c` is a live site cache; `recv` an object whose ShapeId the caller read
+/// as `token`'s.
+#[inline]
+pub(super) unsafe fn leaf_answer(
+    c: &PicCache,
+    recv: *const ObjectHeader,
+    token: i64,
+) -> Option<u64> {
+    let s = site(c)?;
+    let generation = crate::object::class_lookup_surface_generation();
+    let class_id = (*recv).class_id;
+    for e in &s.entries {
+        if e.token == token && e.class_id == class_id && e.generation == generation && e.pinned_hops
+        {
+            return pinned_answer(e);
+        }
+    }
+    None
 }
 
 /// A class entry is served on the collecting miss path only. The GC-leaf
@@ -147,8 +231,8 @@ pub(super) unsafe fn try_hit(
     if cache.is_null() {
         return None;
     }
-    let s = site(&*cache)?;
-    for e in &s.entries {
+    let s = site(&*cache)? as *const Site as *mut Site;
+    for e in &mut (*s).entries {
         if let Some(bits) = answer(e, recv) {
             HITS.fetch_add(1, Ordering::Relaxed);
             super::super::stats_report_enabled();
@@ -194,7 +278,7 @@ pub(super) unsafe fn prime(
         let confirmed = match w.slot {
             None => bits == crate::value::TAG_UNDEFINED,
             Some(slot) => {
-                bits == slot_bits(w.holder, slot)
+                holder_slot_value(w.holder, slot) == Some(bits)
                     && bits != crate::value::TAG_HOLE
                     && bits != crate::value::TAG_UNDEFINED
                     && bits != crate::value::TAG_NULL
@@ -247,6 +331,9 @@ unsafe fn publish(cache: *mut PicCache, recv: *const ObjectHeader, w: &Walk) {
             s.next = (s.next + 1) % WAYS;
             i
         });
+    let pinned_hops = w.hops[..w.depth.saturating_sub(1)]
+        .iter()
+        .all(|&(_, shape)| shape_proto_id(shape).is_some_and(hop_identity_pins_link));
     s.entries[index] = Entry {
         token,
         class_id: (*recv).class_id,
@@ -256,6 +343,8 @@ unsafe fn publish(cache: *mut PicCache, recv: *const ObjectHeader, w: &Walk) {
         holder: w.holder,
         holder_shape: w.holder_shape,
         hops: w.hops,
+        generation: crate::object::class_lookup_surface_generation(),
+        pinned_hops,
     };
     PRIMES.fetch_add(1, Ordering::Relaxed);
     super::super::stats_report_enabled();
@@ -348,7 +437,7 @@ mod tests {
             CID, 0, 1, recv_keys, recv_shape, 0,
         );
         assert_eq!(unsafe { class_link(recv) }, Some(a as *const ObjectHeader));
-        let entry = Entry {
+        let mut entry = Entry {
             token: (PIC_ID_TOKEN_BIT | u64::from(recv_shape)) as i64,
             class_id: CID,
             depth: 1,
@@ -357,9 +446,11 @@ mod tests {
             holder: a as usize,
             holder_shape: proto_shape,
             hops: [(0, 0); HOLDER_MAX_DEPTH - 1],
+            generation: 0,
+            pinned_hops: true,
         };
         assert_eq!(
-            unsafe { answer(&entry, recv) },
+            unsafe { answer(&mut entry, recv) },
             Some(crate::value::TAG_UNDEFINED)
         );
         let mut data_entry = entry;
@@ -368,21 +459,33 @@ mod tests {
             let slot = (a as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
             // GC_STORE_AUDIT(POINTER_FREE): the test stores Number bits, never a heap pointer.
             std::ptr::write(slot, 42.0f64.to_bits());
-            assert_eq!(answer(&data_entry, recv), Some(42.0f64.to_bits()));
+            assert_eq!(answer(&mut data_entry, recv), Some(42.0f64.to_bits()));
             // GC_STORE_AUDIT(POINTER_FREE): undefined is an immediate NaN-box tag.
             std::ptr::write(slot, crate::value::TAG_UNDEFINED);
-            assert_eq!(answer(&data_entry, recv), None);
+            assert_eq!(answer(&mut data_entry, recv), None);
             // GC_STORE_AUDIT(POINTER_FREE): null is an immediate NaN-box tag.
             std::ptr::write(slot, crate::value::TAG_NULL);
-            assert_eq!(answer(&data_entry, recv), None);
+            assert_eq!(answer(&mut data_entry, recv), None);
             // GC_STORE_AUDIT(POINTER_FREE): the test stores Number bits, never a heap pointer.
             std::ptr::write(slot, 43.0f64.to_bits());
-            assert_eq!(answer(&data_entry, recv), Some(43.0f64.to_bits()));
+            assert_eq!(answer(&mut data_entry, recv), Some(43.0f64.to_bits()));
         }
         crate::object::class_decl_prototype_object_root_store(CID, b);
-        assert_eq!(unsafe { answer(&entry, recv) }, None);
+        assert_eq!(unsafe { answer(&mut entry, recv) }, None);
+        // The displaced holder's ShapeId was retired: an entry naming it can
+        // never answer again, whatever the registry says later.
+        assert_ne!(unsafe { object_shape_stamp(a) }, proto_shape);
 
         crate::object::class_decl_prototype_object_root_store(CID, a);
+        assert_eq!(unsafe { answer(&mut entry, recv) }, None);
+        let mut entry = Entry {
+            holder_shape: unsafe { object_shape_stamp(a) },
+            ..entry
+        };
+        assert_eq!(
+            unsafe { answer(&mut entry, recv) },
+            Some(crate::value::TAG_UNDEFINED)
+        );
         let record = Box::into_raw(Box::new(Site {
             entries: [entry; WAYS],
             next: 0,

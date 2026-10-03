@@ -40,12 +40,17 @@ mod let_stmt_facts;
 mod let_stmt_var_redeclare_tests;
 mod loops;
 mod masked_window_region;
+mod number_local_loop;
+#[cfg(test)]
+mod number_local_loop_tests;
 #[cfg(test)]
 mod packed_range_global_cache_rooting_tests;
 #[cfg(test)]
 mod prealloc_module_global_tests;
 #[cfg(test)]
 mod prealloc_tdz_path_tests;
+#[cfg(test)]
+mod range_loop_dense_store_tests;
 pub(crate) mod region_loop;
 mod region_read_stmts;
 pub(crate) mod stable_packed_accumulator;
@@ -266,6 +271,7 @@ fn lower_stmts_inner(ctx: &mut FnCtx<'_>, stmts: &[Stmt], emit_shadow_clears: bo
             continue;
         }
         lower_stmt(ctx, &stmts[i])?;
+        region_loop::after_stmt(ctx, &stmts[i]);
         // Representation-selection Phase 2: a TOP-LEVEL `Stmt::Let` of a
         // pre-pass-proven typed-array binding makes the binding "ready" — the
         // dominance mirror of the collector's sequential judgment. Later call

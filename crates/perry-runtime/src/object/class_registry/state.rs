@@ -345,6 +345,11 @@ pub struct VTableMethodEntry {
     /// `has_synthetic_arguments`: the rest slot holds only the args from the
     /// rest position onward, so apply/dynamic dispatch bundles them correctly.
     pub has_rest: bool,
+    /// The method's closure-convention entry (`<method>__eclo`'s
+    /// `JsFunctionInfo`) when its class is evaluated per evaluation
+    /// (`ClassExprFresh`): each evaluation's prototype holds one function
+    /// object running it. 0 otherwise.
+    pub entry: usize,
 }
 
 /// The compiled halves of one declared accessor, each 0 when that half is
@@ -467,6 +472,14 @@ pub static CLASS_STRING_MEMBER_ORDERS: ImageTable<RwLock<Option<StringMemberOrde
 /// is exact (Test262 .../class/*/dflt-params-trailing-comma).
 pub static CLASS_METHOD_BIND_LENGTHS: ImageTable<RwLock<Option<HashMap<(u32, String), u32>>>> =
     ImageTable::new(|image| &image.method_bind_lengths);
+
+/// The closure-convention entry registered for method `name` of per-evaluation
+/// class `class_id` (its vtable entry's `entry`), if any.
+pub(crate) fn class_method_entry(class_id: u32, name: &str) -> Option<usize> {
+    let guard = CLASS_VTABLE_REGISTRY.read().ok()?;
+    let entry = guard.as_ref()?.get(&class_id)?.methods.get(name)?.entry;
+    (entry != 0).then_some(entry)
+}
 
 /// Default-aware spec `.length` for STATIC methods, keyed (class_id, name).
 /// Distinct from `CLASS_METHOD_BIND_LENGTHS` (instance methods) so a class with
@@ -684,6 +697,17 @@ pub(crate) fn class_object_value_root_store(class_id: u32, obj_ptr: *mut ObjectH
     crate::gc::runtime_write_barrier_root_raw_ptr(obj_ptr);
 }
 
+/// Has a class object of template `class_id` been created? The answer is the
+/// template's own entry in `CLASS_OBJECT_VALUES`, stored with its first class
+/// object, not a copy of it: the answer stays `true` only while no writer
+/// removes an entry. A program with no per-evaluation class pays one relaxed
+/// load.
+#[inline]
+pub(crate) fn template_has_class_objects(class_id: u32) -> bool {
+    CLASS_OBJECT_EVER.load(std::sync::atomic::Ordering::Relaxed)
+        && class_object_value_for_cid(class_id).is_some()
+}
+
 /// Read back the class object registered for `class_id`, or `None` when the
 /// class never materialized as a per-evaluation object (ordinary
 /// ClassRef-valued classes).
@@ -732,6 +756,12 @@ pub(crate) fn class_prototype_object_root_store(class_id: u32, proto_ptr: *mut O
         }
         guard.as_mut().unwrap().insert(class_id, proto_ptr as usize)
     });
+    if let Some(old) = old.filter(|&old| old != 0 && old != proto_ptr as usize) {
+        // SAFETY: the registry held `old` as a live root until this store.
+        unsafe {
+            super::construct::forget_birth_record_of_class(old as *mut ObjectHeader, class_id)
+        };
+    }
     class_prototype_object_addr_index_rekey(old.unwrap_or(0), proto_ptr as usize);
     crate::gc::runtime_write_barrier_root_raw_ptr(proto_ptr);
     // A materialized prototype object can carry arbitrary later-added
@@ -799,11 +829,12 @@ pub(crate) fn class_decl_prototype_object_root_store(class_id: u32, proto_ptr: *
     if class_id == 0 || proto_ptr.is_null() {
         return;
     }
-    CLASS_DECL_PROTOTYPE_OBJECTS.with(|table| {
+    let displaced = CLASS_DECL_PROTOTYPE_OBJECTS.with(|table| {
         let mut guard = table.write().unwrap();
-        guard
-            .get_or_insert_with(DeclPrototypeTable::default)
-            .insert(class_id, proto_ptr as usize);
+        let table = guard.get_or_insert_with(DeclPrototypeTable::default);
+        let previous = table.get(class_id).unwrap_or(0);
+        table.insert(class_id, proto_ptr as usize);
+        previous
     });
     crate::gc::runtime_write_barrier_root_raw_ptr(proto_ptr);
     // Its sole caller, `class_decl_prototype_value`, argues at length against
@@ -811,6 +842,33 @@ pub(crate) fn class_decl_prototype_object_root_store(class_id: u32, proto_ptr: *
     // whole class hierarchy). The lookup-surface generation is the separate
     // counter that exists for exactly this store (#10696).
     super::class_lookup_surface_gen_bump();
+    if displaced != 0 && displaced != proto_ptr as usize {
+        retire_displaced_decl_prototype(displaced as *mut ObjectHeader);
+    }
+}
+
+/// A bare CLASS prototype identity (`shapes::PROTO_ID_CLASS | class`) names
+/// its holder through this registry, so the link `class -> C.prototype` is a
+/// fact of every receiver ShapeId that carries the identity. The link is
+/// written once per class identity; a write that REPLACES it (or a
+/// generic-origin redirect that changes what it answers) must leave no site
+/// trusting the old holder. The displaced prototype takes a semantic shape
+/// transition: a process-unique ShapeId no site was trained on. Every site
+/// that names that holder compares its ShapeId on each hit, so the relink is
+/// seen through shapes alone, without a global generation word.
+pub(crate) fn retire_displaced_decl_prototype(old: *mut ObjectHeader) {
+    if old.is_null() {
+        return;
+    }
+    // The mint is a no-move window here: `old` is a raw registry address.
+    let _no_move = crate::gc::GcSuppressScope::new();
+    // SAFETY: `old` was a registered (rooted) prototype object until the
+    // store above, and nothing between that read and here can collect.
+    unsafe {
+        if crate::object::shapes::object_shape_stamp(old) != 0 {
+            crate::object::shapes::transition_object_shape_semantics(old);
+        }
+    }
 }
 
 pub(crate) fn class_parent_closure_root_store(class_id: u32, closure_addr: usize) {

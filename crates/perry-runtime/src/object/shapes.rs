@@ -573,6 +573,34 @@ pub(crate) unsafe fn positional_key_words(
     ))
 }
 
+/// [`positional_key_words`] for the computed-key read
+/// (`object::dynamic_key_read`), which also refuses a shape whose
+/// [[Prototype]] identity is PER-OBJECT.
+///
+/// A read site's front is reached only past its own receiver tests; the
+/// computed-key read has no site, so it takes this exclusion from the shape
+/// itself. A per-object identity is how an exotic read receiver
+/// (`process.env`, an arguments object) and a module namespace project "its
+/// reads are not answered by its key list" into their shape
+/// ([`object_proto_id`]), so such a list naming the key proves nothing.
+///
+/// # Safety
+/// As [`positional_key_words`].
+#[inline]
+pub(crate) unsafe fn plain_positional_key_words(
+    dir: *const u8,
+    shape_id: u32,
+) -> Option<(PositionalKeys, usize)> {
+    let r = ShapeSlab::ordinary_record_in(dir, shape_id)?;
+    if r.proto_id == PROTO_ID_PER_OBJECT {
+        return None;
+    }
+    Some((
+        PositionalKeys(r.keys as usize as *const ArrayHeader),
+        r.position_bound_raw() as usize,
+    ))
+}
+
 /// A record's canonical keys array, for [`positional_key_words`]: its words
 /// are asked only once POSBOUND is known to be nonzero, so the front-offset
 /// arithmetic runs only on the path that reads a key.
@@ -2492,7 +2520,9 @@ static KEEP_JS_REGION_GUARD_PRIME: unsafe extern "C" fn(
 /// A read-only numeric region may also use `OrdinaryUnmarked`: the missing
 /// birth mark withdraws store permission, not the own-data slot layout.
 /// Receivers with virtual read semantics remain refused by their prototype
-/// classification, and every covered key must be requested as inline F64.
+/// classification, and every covered key must be requested as an inline
+/// Number read. A Number read (R) on a lane that is not an identity F64 lane
+/// sets [`REGION_LOOP_WORD_VALUE_TEST`]: the guard then tests the value.
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn js_region_loop_pack(
@@ -2538,7 +2568,8 @@ enum RegionRefusal {
     Range,
     /// A key a bare store may write a non-double into is not an `Any` lane.
     F64Stored,
-    /// A requested Number read is not on an identity F64 lane, or a bare
+    /// A requested Number read is spill-located, on a SPECIAL lane, or on a
+    /// non-identity lane a bare store may write a non-Number into; or a bare
     /// store targets a SPECIAL lane that requires the checked slot funnel.
     Rep,
 }
@@ -2600,6 +2631,7 @@ fn region_loop_pack(
         shape_id
     };
     let mut word = u64::from(id);
+    let mut value_test = false;
     for (i, &(spilled, n_at)) in at.iter().enumerate().take(n as usize) {
         // A canonical Number cannot preserve a ConstFn body identity. Every
         // SPECIAL write must use the checked slot funnel before storing;
@@ -2612,13 +2644,25 @@ fn region_loop_pack(
         {
             return Err(Rep);
         }
-        if r_mask & (1 << i) != 0
-            && (spilled
-                || n_at >= super::field_rep::REP_SLOTS as usize
-                || super::field_rep::slot_rep(descriptor.rep, n_at as u32)
-                    != super::field_rep::REP_F64)
-        {
-            return Err(Rep);
+        if r_mask & (1 << i) != 0 {
+            // R wants the slot's raw bits to be a canonical Number. An inline
+            // identity F64 lane guarantees it for every carrier. Any other
+            // inline lane that is not SPECIAL (Any, or a deprecated F64) can
+            // hold it per OBJECT: the word then carries
+            // `REGION_LOOP_WORD_VALUE_TEST` and the emitted guard tests each
+            // R slot's value on the object before F runs (and again on every
+            // re-check). Inside F nothing writes such a slot except a bare
+            // store, so a key a bare store may write a non-Number into
+            // (`boxed_mask`) cannot be R.
+            if spilled || n_at >= super::field_rep::REP_SLOTS as usize {
+                return Err(Rep);
+            }
+            match super::field_rep::slot_rep(descriptor.rep, n_at as u32) {
+                super::field_rep::REP_F64 => {}
+                super::field_rep::REP_SPECIAL => return Err(Rep),
+                _ if boxed_mask & (1 << i) != 0 => return Err(Rep),
+                _ => value_test = true,
+            }
         }
         if !spilled
             && boxed_mask & (1 << i) != 0
@@ -2635,6 +2679,9 @@ fn region_loop_pack(
         };
         word |= (field as u64) << (32 + REGION_GUARD_SLOT_BITS * i as u32);
     }
+    if value_test {
+        word |= REGION_LOOP_WORD_VALUE_TEST;
+    }
     Ok(word)
 }
 
@@ -2643,6 +2690,15 @@ fn region_loop_pack(
 /// object carries, so it can never match; the emitted guard tests for it
 /// FIRST and skips the receiver test (DESIGN §4.3).
 pub const REGION_LOOP_WORD_RETIRED: u64 = u64::MAX;
+
+/// Bit 63 of a published loop-region word: some key the region reads as a
+/// Number (R) sits on a lane that does not guarantee one for every carrier
+/// (an `Any` or deprecated lane), so the emitted guard must test each R
+/// slot's value on the object itself before F runs. Field indices occupy
+/// bits 32..62 at most (five 6-bit fields), so the bit is free; the word's
+/// id half is a ShapeId, so a word carrying it is never
+/// [`REGION_LOOP_WORD_RETIRED`].
+pub const REGION_LOOP_WORD_VALUE_TEST: u64 = 1 << 63;
 
 /// Compute a loop region's word ([`js_region_loop_pack`]) and publish it; the
 /// store-side twin of [`js_region_guard_prime`], with its memory ordering.
@@ -3796,6 +3852,32 @@ unsafe fn prototype_serial(bits: u64) -> u64 {
     }
 }
 
+/// The [[Prototype]] identity of an ordinary object of class `class_id` whose
+/// meta record links prototype `bits` (NaN-boxed, or `TAG_NULL`): the rule
+/// [`object_proto_id`] applies to a recorded prototype. `None` when that link
+/// has no stable identity (a prototype with no serial, or a serial past the
+/// mixed band), which `object_proto_id` answers with a fresh unique id.
+///
+/// # Safety
+/// `bits` is a live prototype value or `TAG_NULL`.
+pub(crate) unsafe fn stable_linked_proto_id(class_id: u32, bits: u64) -> Option<u64> {
+    if bits == crate::value::TAG_NULL {
+        return Some(PROTO_ID_NULL);
+    }
+    let serial = prototype_serial(bits);
+    if serial == 0 {
+        return None;
+    }
+    let class = vtable_class(class_id);
+    if class == 0 {
+        return Some(serial);
+    }
+    if serial >= 1 << PROTO_ID_MIXED_SERIAL_BITS {
+        return None;
+    }
+    Some(PROTO_ID_MIXED | u64::from(class) << PROTO_ID_MIXED_SERIAL_BITS | serial)
+}
+
 /// `obj`'s [[Prototype]] identity, read off the object: what a mint with no
 /// lineage to copy stamps into the shape. Allocation-free.
 ///
@@ -3824,21 +3906,8 @@ pub(crate) unsafe fn object_proto_id(obj: *const crate::object::ObjectHeader) ->
     let class_id = (*obj).class_id;
     let class = vtable_class(class_id);
     if !meta.is_null() && (*meta).prototype != 0 {
-        let bits = (*meta).prototype;
-        if bits == crate::value::TAG_NULL {
-            return PROTO_ID_NULL;
-        }
-        let serial = prototype_serial(bits);
-        if serial == 0 {
-            return fresh_unique_proto_id();
-        }
-        if class == 0 {
-            return serial;
-        }
-        if serial >= 1 << PROTO_ID_MIXED_SERIAL_BITS {
-            return fresh_unique_proto_id();
-        }
-        return PROTO_ID_MIXED | u64::from(class) << PROTO_ID_MIXED_SERIAL_BITS | serial;
+        return stable_linked_proto_id(class_id, (*meta).prototype)
+            .unwrap_or_else(fresh_unique_proto_id);
     }
     if class != 0 {
         return PROTO_ID_CLASS | u64::from(class);

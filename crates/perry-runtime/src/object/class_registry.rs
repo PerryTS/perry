@@ -49,6 +49,7 @@ mod construct;
 #[cfg(feature = "regex-engine")]
 pub(crate) use construct::construct_two_rooted;
 pub(crate) use construct::{construct_rooted_arguments, scan_current_new_target_root_mut};
+pub(crate) use construct::{ordinary_compiled_function_has_instance, OrdinaryInstanceof};
 mod decl_accessors;
 pub(crate) use decl_accessors::{
     class_chain_getter_value, class_chain_setter_apply, decl_prototype_own_accessor,
@@ -80,24 +81,26 @@ pub(crate) use crate::object::class_value::CLASS_ACCESSOR_DEFAULT_ATTRS;
 pub(crate) use state::async_resource_prototype_value;
 #[cfg(test)]
 pub(crate) use state::class_decl_prototype_object_root_store;
+pub(crate) use state::retire_displaced_decl_prototype;
 pub(crate) use state::{
     builtin_parent_ctor_in_chain, class_decl_prototype_method_names, class_decl_prototype_object,
     class_decl_prototype_value, class_decl_prototype_value_for_instance_class,
     class_delete_own_dynamic_prop, class_dynamic_prop_root_store, class_has_own_dynamic_prop,
-    class_id_for_decl_prototype_object, class_object_value_for_cid, class_object_value_root_store,
-    class_own_dynamic_prop_names, class_own_enumerable_field_names, class_own_static_field_value,
-    class_own_string_member_names, class_parent_closure, class_parent_closure_root_store,
-    class_proto_key_deleted, class_prototype_member_names, class_prototype_method_is_enumerable,
-    class_prototype_method_set_enumerable, class_prototype_method_value_cache_root_store,
-    class_prototype_object_addr_index_contains, class_prototype_object_addr_index_rekey,
-    class_prototype_object_root_store, class_ref_dynamic_prop_root_store,
-    class_register_declared_static_global_slot, class_static_alias_sync,
-    class_static_clear_defined_attrs, class_static_defined_attrs, class_static_key_deleted,
-    class_static_prototype, class_static_prototype_is_nulled, class_static_prototype_root_clear,
-    class_static_prototype_root_store, class_static_set_defined_attrs, decl_prototype_identity_id,
-    global_object_prototype_bits, is_bound_native_constructor_closure_value,
-    is_non_constructable_builtin_function_value, parent_closure_in_chain,
-    throw_non_constructable_builtin_function, CLASS_OBJECT_EVER,
+    class_id_for_decl_prototype_object, class_method_entry, class_object_value_for_cid,
+    class_object_value_root_store, class_own_dynamic_prop_names, class_own_enumerable_field_names,
+    class_own_static_field_value, class_own_string_member_names, class_parent_closure,
+    class_parent_closure_root_store, class_proto_key_deleted, class_prototype_member_names,
+    class_prototype_method_is_enumerable, class_prototype_method_set_enumerable,
+    class_prototype_method_value_cache_root_store, class_prototype_object_addr_index_contains,
+    class_prototype_object_addr_index_rekey, class_prototype_object_root_store,
+    class_ref_dynamic_prop_root_store, class_register_declared_static_global_slot,
+    class_static_alias_sync, class_static_clear_defined_attrs, class_static_defined_attrs,
+    class_static_key_deleted, class_static_prototype, class_static_prototype_is_nulled,
+    class_static_prototype_root_clear, class_static_prototype_root_store,
+    class_static_set_defined_attrs, decl_prototype_identity_id, global_object_prototype_bits,
+    is_bound_native_constructor_closure_value, is_non_constructable_builtin_function_value,
+    parent_closure_in_chain, template_has_class_objects, throw_non_constructable_builtin_function,
+    CLASS_OBJECT_EVER,
 };
 pub use state::{
     AccessorDecl, ClassVTable, VTableMethodEntry, CLASS_DECL_PROTOTYPE_OBJECTS,
@@ -154,6 +157,7 @@ pub(crate) use prototype_methods::{
     class_prototype_method_root_remove, class_prototype_method_root_store,
     class_prototype_relinked, invalidate_class_prototype_fast_guards,
     invalidate_class_prototype_fast_guards_for_method, mirror_prototype_method_on_object,
+    prototype_relink_may_retarget_direct_arms, retire_prototype_caches_without_direct_arms,
     synthetic_class_id_for_function,
 };
 pub use prototype_methods::{
@@ -163,10 +167,10 @@ pub use prototype_methods::{
 
 // ── construct.rs / vm_brand.rs ──────────────────────────────────────────────
 pub(crate) use construct::{
-    extends_target_must_throw, is_callable_function_value, js_value_is_constructor,
-    lookup_own_prototype_method, lookup_prototype_method, nm_ctor_child_process, nm_ctor_cluster,
-    nm_ctor_fs, nm_ctor_readline, nm_ctor_repl, nm_ctor_stream, nm_ctor_tls, nm_ctor_tty,
-    nm_ctor_vm, nm_ctor_wasi, promise_parent_in_chain,
+    bound_function_target_value, extends_target_must_throw, is_callable_function_value,
+    js_value_is_constructor, lookup_own_prototype_method, lookup_prototype_method,
+    nm_ctor_child_process, nm_ctor_cluster, nm_ctor_fs, nm_ctor_readline, nm_ctor_repl,
+    nm_ctor_stream, nm_ctor_tls, nm_ctor_tty, nm_ctor_vm, nm_ctor_wasi, promise_parent_in_chain,
 };
 pub use construct::{
     js_ctor_return_override, js_new_function_construct, js_new_function_construct_apply,
@@ -204,7 +208,7 @@ pub(crate) use registration::{
 };
 pub use registration::{
     is_class_id_registered, js_register_class_getter, js_register_class_method,
-    js_register_class_method_bind_length, js_register_class_setter,
+    js_register_class_method_bind_length, js_register_class_method_entry, js_register_class_setter,
     js_register_class_static_getter, js_register_class_static_method_bind_length,
     js_register_class_static_setter, js_register_class_string_member_order,
 };

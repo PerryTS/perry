@@ -25,9 +25,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::runtime_abi::{
-    FN_ARROW, FN_ASYNC, FN_ASYNC_GENERATOR, FN_GENERATOR, FN_HAS_DECLARED, FN_HAS_LENGTH,
-    FN_PERMANENT_IMAGE, FN_REST_SYNTHETIC_ARGUMENTS, FN_REST_USER, FN_REST_USER_AND_ARGUMENTS,
-    FN_STRICT,
+    FN_ARROW, FN_ASYNC, FN_ASYNC_GENERATOR, FN_COMPILED_BODY, FN_GENERATOR, FN_HAS_DECLARED,
+    FN_HAS_LENGTH, FN_PERMANENT_IMAGE, FN_REST_SYNTHETIC_ARGUMENTS, FN_REST_USER,
+    FN_REST_USER_AND_ARGUMENTS, FN_STRICT,
 };
 
 /// The LLVM type of a `JsFunctionInfo`, field for field (perry-abi's
@@ -235,7 +235,9 @@ fn render_definition(
         ty = INFO_TYPE,
         params = saturate_u16(def.params as u64),
         rest = facts.rest_fixed,
+        // Every body this renders is compiled source (`FN_COMPILED_BODY`).
         flags = facts.flags
+            | FN_COMPILED_BODY
             | if permanent_image {
                 FN_PERMANENT_IMAGE
             } else {
@@ -288,7 +290,7 @@ mod tests {
             vec![format!(
                 "@perry_closure_m__3$info = internal constant {INFO_TYPE} {{ ptr @perry_closure_m__3, \
                  i16 2, i16 1, i32 {}, i32 1, i32 0, ptr null, i64 0, ptr null, i32 0, i16 0, i16 0, i64 0 }}",
-                FN_REST_USER | FN_HAS_LENGTH | FN_ARROW
+                FN_REST_USER | FN_HAS_LENGTH | FN_ARROW | FN_COMPILED_BODY
             )]
         );
     }
@@ -299,8 +301,11 @@ mod tests {
         state.request("perry_closure_m__3");
         let transient = state.render_globals(|_| defined(0, "internal"), [], false);
         let permanent = state.render_globals(|_| defined(0, "internal"), [], true);
-        assert!(transient[0].contains("i32 0, i32 0"));
-        assert!(permanent[0].contains(&format!("i32 {FN_PERMANENT_IMAGE}, i32 0")));
+        assert!(transient[0].contains(&format!("i32 {FN_COMPILED_BODY}, i32 0")));
+        assert!(permanent[0].contains(&format!(
+            "i32 {}, i32 0",
+            FN_PERMANENT_IMAGE | FN_COMPILED_BODY
+        )));
     }
 
     #[test]
@@ -323,7 +328,7 @@ mod tests {
         );
         assert!(lines[0].starts_with(&format!("@{} = hidden constant", info_symbol(body))));
         assert!(lines[0].contains(&format!("ptr @{body}")));
-        assert!(lines[0].contains(&format!("i32 {FN_PERMANENT_IMAGE}")));
+        assert!(lines[0].contains(&format!("i32 {}", FN_PERMANENT_IMAGE | FN_COMPILED_BODY)));
     }
 
     #[test]

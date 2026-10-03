@@ -94,17 +94,18 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // is not readable inline (`property_get/generic_dispatch.rs`).
     module.add_external_global("PERRY_EMPTY_SHAPE_DIR", I64);
     // #5525 follow-up: the process-global typed-array kind cache + the
-    // "any exotic views live" guard, exported from perry-runtime so the codegen
+    // exported from perry-runtime so the codegen
     // can emit a guarded *inline* typed-array element load at the access site
     // (cache probe + bounds check + direct slot load) instead of an out-of-line
     // `js_dyn_index_get` call. The cache is a fixed `[64 x i64]` array of
-    // `(addr << 8) | tag` words; the view guard is a single `i64` counter that
-    // reads 0 whenever every live typed array uses inline storage (so the
-    // inline `header + 16 + idx*elem_size` load matches the runtime `data_ptr`).
+    // `(addr << 8) | tag` words. The tag of an inline-storage typed array is
+    // its bare kind; an external-storage one (a view) carries `kind | 0x80`
+    // (#10516), so a guard comparing the tag with the expected kind admits
+    // only receivers whose `header + 16 + idx*elem_size` is the runtime
+    // `data_ptr`.
     module.add_external_global("PERRY_TA_KIND_CACHE", "[64 x i64]");
     // #9342: Uint8Array inline-read admission cache (buffer/header.rs).
     module.add_external_global("PERRY_U8_INLINE_CACHE", "[64 x i64]");
-    module.add_external_global("PERRY_TA_VIEW_GUARD", I64);
     module.add_external_global("PERRY_TA_OWN_PROPS_PRESENT", I8);
     module.declare_function("js_object_alloc", I64, &[I32, I32]);
     module.declare_function("js_event_target_subclass_init", DOUBLE, &[DOUBLE, I32]);
@@ -116,7 +117,8 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // new/instanceof read class_id from it.
     module.declare_function("js_object_mark_class", VOID, &[I64]);
     // #6438: pin a per-evaluation class object's own parent edge.
-    module.declare_function("js_class_object_pin_parent", VOID, &[I64, I32]);
+    module.declare_function("js_class_evaluation_object", I64, &[I32, I32, I32]);
+    module.declare_function("js_class_object_set_ctor_caps", VOID, &[I64, DOUBLE]);
     // Shape-cache-aware variant: pre-populates keys_array via SHAPE_INLINE_CACHE,
     // so subsequent field stores can use index-based set_field (skipping the
     // per-call linear key-search done by js_object_set_field_by_name).
@@ -413,6 +415,7 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function("js_nm_install_wasi", VOID, &[]);
     module.declare_function("js_nm_install_zlib", VOID, &[]);
     module.declare_function("js_nm_install_all", VOID, &[]);
+    module.declare_function("js_nm_enable_install_all", VOID, &[]);
     module.declare_function("js_object_get_field_ic_miss", DOUBLE, &[I64, I64, PTR]);
     module.declare_function(
         "js_object_get_field_ic_miss_packed",

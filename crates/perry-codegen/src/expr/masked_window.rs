@@ -256,6 +256,7 @@ pub(crate) fn masked_store_rhs_is_genuine_f64(ctx: &FnCtx<'_>, expr: &Expr) -> b
         Expr::IndexGet { object, index } => match object.as_ref() {
             Expr::LocalGet(arr_id) => {
                 masked_window_fact_for_index(ctx, *arr_id, index.as_ref()).is_some()
+                    || counter_read_is_genuine_f64(ctx, *arr_id, index.as_ref())
             }
             _ => false,
         },
@@ -275,6 +276,24 @@ pub(crate) fn masked_store_rhs_is_genuine_f64(ctx: &FnCtx<'_>, expr: &Expr) -> b
         } => masked_store_rhs_is_genuine_f64(ctx, operand),
         _ => false,
     }
+}
+
+/// #10718: a counter-offset read (`a[i]`, `a[i ± c]`) served by an active
+/// raw-f64 `PackedF64LoopFact` materializes a genuine double. Every lowering
+/// of such a read either loads a slot the entry guard proved holds a raw-f64
+/// number (canonical by the store-side invariant) or leaves the iteration
+/// first: the hole-tolerant range copy hole-checks and side-exits, and an
+/// offset the length-bound guard does not cover bounds-checks and
+/// side-exits — both BEFORE the value exists. Affine (receiver-only) facts
+/// and the i32/u32 kinds are excluded; they are not this argument.
+fn counter_read_is_genuine_f64(ctx: &FnCtx<'_>, arr_id: u32, index: &Expr) -> bool {
+    crate::expr::index_get::packed_f64_loop_offset_read(ctx, arr_id, index).is_some_and(
+        |(fact, idx_id, _, _)| {
+            matches!(fact.array_kind, crate::expr::PackedNumericLoopKind::F64)
+                && !fact.affine_indices
+                && ctx.i32_counter_slots.contains_key(&idx_id)
+        },
+    )
 }
 
 /// Emit the in-window element STORE for a store-admitting fact: the dense

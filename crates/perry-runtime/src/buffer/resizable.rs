@@ -39,7 +39,7 @@
 //! Codegen's inline element tiers are unaffected by construction: a resizable
 //! buffer's bytes are only ever reachable through a VIEW, and every inline tier
 //! already declines views (`u8_inline_cache` admits non-view buffers only;
-//! the typed-array tiers require `PERRY_TA_VIEW_GUARD == 0`).
+//! the typed-array tiers require the receiver's `TA_STORAGE_INLINE`).
 
 use super::*;
 

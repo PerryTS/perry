@@ -1274,7 +1274,9 @@ pub(crate) fn get_field_by_name_object_tail(
                             &mut proto_read_miss,
                         )
                     {
-                        return v;
+                        if !super::class_object_template::evaluation_chain_lost_method(obj, key) {
+                            return v;
+                        }
                     }
                 }
                 let key_bytes = std::slice::from_raw_parts(
@@ -1308,7 +1310,10 @@ pub(crate) fn get_field_by_name_object_tail(
                     ) {
                         return v;
                     }
-                    if lookup_class_method_in_chain(class_id, name).is_some() {
+                    if class_walk
+                        && lookup_class_method_in_chain(class_id, name).is_some()
+                        && !super::class_object_template::evaluation_chain_lost_method(obj, key)
+                    {
                         let heap_name = {
                             let layout =
                                 std::alloc::Layout::from_size_align(key_bytes.len().max(1), 1)
@@ -1685,7 +1690,12 @@ pub(crate) fn get_field_by_name_object_tail(
                     receiver,
                     &mut proto_read_miss,
                 ) {
-                    return v;
+                    // An evaluation's prototype that lost one of the template's
+                    // methods (`class_object_template`): the template's
+                    // prototype, shared by every evaluation, must not answer.
+                    if !super::class_object_template::evaluation_chain_lost_method(obj, key) {
+                        return v;
+                    }
                 }
             }
 
@@ -1738,7 +1748,10 @@ pub(crate) fn get_field_by_name_object_tail(
             // name still shadows it). Actual `obj.method(args)` calls don't flow
             // through here — they lower directly to `js_native_call_method`.
             if let Ok(name) = std::str::from_utf8(key_bytes) {
-                if lookup_class_method_in_chain(class_id, name).is_some() {
+                if class_walk
+                    && lookup_class_method_in_chain(class_id, name).is_some()
+                    && !super::class_object_template::evaluation_chain_lost_method(obj, key)
+                {
                     // Allocate a fresh i8 buffer for the method name owned
                     // by the closure. The keys_array's StringHeader bytes
                     // could in theory be GC'd if the keys_array is not

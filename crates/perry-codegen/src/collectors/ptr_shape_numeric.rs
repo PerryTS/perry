@@ -418,6 +418,12 @@ pub(crate) struct RegionNumberAssumptions<'a> {
     pub(crate) entry_candidates: &'a HashSet<u32>,
     pub(crate) static_numbers: &'a HashSet<u32>,
     pub(crate) f64_reads: &'a HashSet<usize>,
+    /// Expressions the region evaluates on every iteration outside its
+    /// statements: a loop region's condition and update. F observes their
+    /// writes on the back edge exactly as it observes its own, and the entry
+    /// tests run once before the loop, so a local they write must be judged
+    /// by the same fixed point as a body write.
+    pub(crate) loop_control: &'a [&'a Expr],
 }
 
 /// Locals whose every write is number-producing by construction — above all
@@ -486,7 +492,7 @@ pub(crate) fn collect_numeric_by_construction_locals_in_region<'a>(
     // completely `o`'s shape was proven. Empty for every pre-existing caller.
     shape_members: &HashSet<u32>,
     shape_numeric_fields: &HashSet<String>,
-    region: Option<&RegionNumberAssumptions<'_>>,
+    region: Option<&RegionNumberAssumptions<'a>>,
 ) -> HashSet<u32> {
     // ONE write walker for both fixpoints (`collect_not_bigint_locals` and
     // this one) — see its doc for why sharing is load-bearing. `None` = a
@@ -495,6 +501,11 @@ pub(crate) fn collect_numeric_by_construction_locals_in_region<'a>(
     let mut writes: HashMap<u32, Vec<Option<&'a Expr>>> = HashMap::new();
     let mut let_bound: HashSet<u32> = HashSet::new();
     super::super::not_bigint_locals::collect_writes(stmts, &mut writes, &mut let_bound);
+    // A region's loop control runs between F iterations: every write it
+    // makes reaches F as surely as a body write does.
+    for e in region.map_or(&[][..], |r| r.loop_control) {
+        super::super::not_bigint_locals::collect_writes_expr(e, &mut writes, &mut let_bound);
+    }
     // The standalone #8105 consumer does not run the Ptr<Shape> provenance
     // walk that normally supplies `const_local_inits`. Reconstruct the same
     // safe fact from the shared exhaustive write set: one initialized write
@@ -1024,6 +1035,14 @@ mod region_number_tests {
     }
 
     fn number_set(stmts: &[Stmt], fresh_read: usize) -> HashSet<u32> {
+        number_set_with_control(stmts, &[], fresh_read)
+    }
+
+    fn number_set_with_control(
+        stmts: &[Stmt],
+        loop_control: &[&Expr],
+        fresh_read: usize,
+    ) -> HashSet<u32> {
         let boxed = HashSet::new();
         let globals = HashMap::new();
         let empty_ids = HashSet::new();
@@ -1035,6 +1054,7 @@ mod region_number_tests {
             entry_candidates: &entry,
             static_numbers: &empty_ids,
             f64_reads: &reads,
+            loop_control,
         };
         collect_numeric_by_construction_locals_in_region(
             stmts,
@@ -1087,5 +1107,65 @@ mod region_number_tests {
         assert!(after.contains(&FRESH));
         assert!(!after.contains(&STALE));
         assert!(!after.contains(&ACC), "the stale write must drop ACC");
+    }
+
+    fn fresh_ptr(stmts: &[Stmt]) -> usize {
+        match &stmts[0] {
+            Stmt::Let { init: Some(e), .. } => e as *const Expr as usize,
+            _ => unreachable!(),
+        }
+    }
+
+    /// `for (...; ...; i++, acc = "a") { const n = o.x; acc = acc + n; }`:
+    /// the update clause runs between F iterations, after the one preheader
+    /// test of ACC. Its write must be judged like a body write, or F adds
+    /// a string's bits as a double.
+    #[test]
+    fn an_update_clause_write_withdraws_the_loop_carried_number_fact() {
+        let stmts = vec![let_read(FRESH), add_to_acc(FRESH)];
+        let read = fresh_ptr(&stmts);
+        assert!(
+            number_set(&stmts, read).contains(&ACC),
+            "fixture: without loop control ACC is proven, or the check below is vacuous"
+        );
+        let string_write = Expr::LocalSet(ACC, Box::new(Expr::String("a".to_string())));
+        let after = number_set_with_control(&stmts, &[&string_write], read);
+        assert!(
+            !after.contains(&ACC),
+            "the update clause's string write must drop ACC"
+        );
+        assert!(after.contains(&FRESH));
+
+        // A number-producing loop-control write keeps the fact: the fixed
+        // point judges the write, it does not refuse every written local.
+        let numeric_write = Expr::LocalSet(
+            ACC,
+            Box::new(Expr::Binary {
+                op: perry_hir::BinaryOp::Add,
+                left: Box::new(Expr::LocalGet(ACC)),
+                right: Box::new(Expr::Number(1.0)),
+            }),
+        );
+        let kept = number_set_with_control(&stmts, &[&numeric_write], read);
+        assert!(kept.contains(&ACC));
+    }
+
+    /// `while ((acc = f()), ...)`: a condition write of an unknown value.
+    #[test]
+    fn a_condition_write_withdraws_the_loop_carried_number_fact() {
+        let stmts = vec![let_read(FRESH), add_to_acc(FRESH)];
+        let read = fresh_ptr(&stmts);
+        let call_write = Expr::LocalSet(
+            ACC,
+            Box::new(Expr::Call {
+                callee: Box::new(Expr::LocalGet(99)),
+                args: Vec::new(),
+                type_args: Vec::new(),
+                byte_offset: 0,
+            }),
+        );
+        let cond = Expr::Sequence(vec![call_write, Expr::LocalGet(ACC)]);
+        let after = number_set_with_control(&stmts, &[&cond], read);
+        assert!(!after.contains(&ACC), "the condition's write must drop ACC");
     }
 }

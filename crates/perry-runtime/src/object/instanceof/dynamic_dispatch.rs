@@ -9,6 +9,25 @@ use super::*;
 
 #[no_mangle]
 pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
+    // #10507: `x instanceof F` for an ordinary compiled function `F`: one
+    // shape compare when `x`'s ShapeId names `F.prototype`, else, for an
+    // object of no compiled class, OrdinaryHasInstance's prototype walk.
+    {
+        use crate::object::class_registry::OrdinaryInstanceof;
+        match crate::object::class_registry::ordinary_compiled_function_has_instance(
+            value, type_ref,
+        ) {
+            Some(OrdinaryInstanceof::Instance) => return f64::from_bits(crate::value::TAG_TRUE),
+            Some(OrdinaryInstanceof::PrototypeWalk) => {
+                return f64::from_bits(if ordinary_has_instance_prototype_walk(value, type_ref) {
+                    crate::value::TAG_TRUE
+                } else {
+                    crate::value::TAG_FALSE
+                });
+            }
+            None => {}
+        }
+    }
     // Proxy ids are registry handles, not closure headers. Resolve their
     // observable @@hasInstance/prototype reads before any constructor probe
     // or unwrapping of the left operand (#10364).
@@ -79,6 +98,11 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
                 }
             }
         }
+    }
+    // OrdinaryHasInstance step 2: a bound function (with no own
+    // `@@hasInstance`, answered above) is `instanceof` exactly as its target.
+    if let Some(target) = crate::object::class_registry::bound_function_target_value(type_ref) {
+        return js_instanceof_dynamic(value, target);
     }
     // OrdinaryHasInstance step 3 (#11261): a primitive is never an instance.
     // Only once the RHS is known callable — a non-callable RHS must still

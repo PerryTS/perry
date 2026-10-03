@@ -107,6 +107,12 @@ fn emit_key_handle(ctx: &mut FnCtx<'_>, key_handle_global: &str) -> String {
     blk.and(I64, &key_bits, POINTER_MASK_I64)
 }
 
+/// Does `triple` take the class-accessor arm? 64-bit targets only.
+fn accessor_arm_target(triple: &str) -> bool {
+    (triple.starts_with("x86_64") || triple.starts_with("aarch64") || triple.starts_with("arm64"))
+        && !triple.contains("32")
+}
+
 /// The receiver's handle (its 48-bit payload), materialised in the CURRENT
 /// block: re-derived from the fused receiver test's biased value for every key
 /// but `.length`, or the entry-block mask for `.length`. Only ever called on
@@ -951,10 +957,41 @@ pub(crate) fn lower_generic_property_get(
             let handle = recv_handle(ctx, fused_recv.as_ref(), &entry_handle);
             emit_plain_array_length_arm(ctx, &handle, &token_miss_label, &merge_label, true)
         });
+    // #10498: a site whose reads inherit a compiled class getter answers them
+    // inline, ahead of the front (`accessor_arm`). 64-bit targets only, as the
+    // method site: the entry's words address 8-byte slots behind the header.
+    let accessor_entry = match fused_recv.as_ref() {
+        Some(f)
+            if array_length_arm.is_none()
+                && front_idx.is_some()
+                && accessor_arm_target(ctx.target_triple) =>
+        {
+            Some((ctx.new_block("pic.acc.empty"), f.biased.clone()))
+        }
+        _ => None,
+    };
     if array_length_arm.is_none() {
-        ctx.block()
-            .cond_br(&token_eq, &hit_label, &token_miss_label);
+        let miss = accessor_entry
+            .as_ref()
+            .map(|(idx, _)| ctx.block_label(*idx))
+            .unwrap_or_else(|| token_miss_label.clone());
+        ctx.block().cond_br(&token_eq, &hit_label, &miss);
     }
+    let accessor_arm = accessor_entry.map(|(entry_idx, biased)| {
+        let header_bytes = crate::target_layout::object_header_size_bytes(ctx.target_triple) as i64;
+        super::accessor_arm::emit_class_accessor_arm(
+            ctx,
+            entry_idx,
+            &packed_word,
+            PACKED_GET_EMPTY,
+            &cache_slot_ref,
+            &biased,
+            &obj_box,
+            header_bytes,
+            &token_miss_label,
+            &merge_label,
+        )
+    });
 
     // `js_object_get_field_ic_miss` primes only slots below the descriptor's
     // exact `live_inline_slot_count`. ShapeIds are never reused, so an exact
@@ -1171,6 +1208,9 @@ pub(crate) fn lower_generic_property_get(
     ];
     if let Some((answered, front_end_label)) = front_arm.as_ref() {
         incoming.push((answered, front_end_label));
+    }
+    if let Some((value, accessor_end_label)) = accessor_arm.as_ref() {
+        incoming.push((value, accessor_end_label));
     }
     if let Some((sso_val, sso_end_label)) = sso_arm.as_ref() {
         incoming.push((sso_val, sso_end_label));

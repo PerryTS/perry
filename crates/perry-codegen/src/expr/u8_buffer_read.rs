@@ -404,6 +404,85 @@ pub(crate) fn emit_u8_cached_get_value(
     )
 }
 
+/// #10515: the byte store of an untyped `obj[i] = v` whose receiver is an
+/// admitted `Uint8Array` (a `PERRY_U8_INLINE_CACHE` hit: a live, owning,
+/// inline-storage byte view). The same facts the runtime's
+/// `cached_u8_index_set` checks after its receiver-classification ladder, read
+/// here first, from the receiver's address and the operands:
+///
+/// * the index is a number in `[0, 2^31)` that is an exact integer and below
+///   the buffer's `u32` length at offset 0 (an integer-valued double is its
+///   own canonical index; `-0` stores at 0, as `ToPropertyKey(-0)` is `"0"`);
+/// * the value is a plain number (no NaN-box tag, so `ToNumber` runs no user
+///   code) in `(-2^31, 2^31)`, whose truncation's low byte is `ToUint8`.
+///
+/// Anything else, including NaN, an infinity or a larger magnitude (whose
+/// `ToUint8` needs the modulo), runs `slow` — the complete `[[Set]]`.
+pub(crate) fn emit_u8_cached_dyn_set(
+    ctx: &mut FnCtx<'_>,
+    obj_box: &str,
+    idx_d: &str,
+    val_double: &str,
+    slow: impl FnOnce(&mut FnCtx<'_>),
+) {
+    let chk_idx = ctx.new_block("u8d.set.chk");
+    let store_idx = ctx.new_block("u8d.set.store");
+    let slow_idx = ctx.new_block("u8d.set.slow");
+    let merge_idx = ctx.new_block("u8d.set.merge");
+    let chk_label = ctx.block_label(chk_idx);
+    let store_label = ctx.block_label(store_idx);
+    let slow_label = ctx.block_label(slow_idx);
+    let merge_label = ctx.block_label(merge_idx);
+    let (hit, raw) = emit_u8_cache_admission(ctx, obj_box);
+    {
+        let blk = ctx.block();
+        // Range tests before any `fptosi`, whose out-of-range result is poison.
+        let idx_ge0 = blk.fcmp("oge", idx_d, "0.0");
+        let idx_lt = blk.fcmp("olt", idx_d, "2147483648.0");
+        let val_bits = blk.bitcast_double_to_i64(val_double);
+        // 0x7FF9 << 48: the lowest NaN-box tag.
+        let val_is_number = blk.icmp_slt(I64, &val_bits, "9221401712017801216");
+        let val_lt = blk.fcmp("olt", val_double, "2147483648.0");
+        let val_gt = blk.fcmp("ogt", val_double, "-2147483648.0");
+        let g = blk.and(I1, &hit, &idx_ge0);
+        let g = blk.and(I1, &g, &idx_lt);
+        let g = blk.and(I1, &g, &val_is_number);
+        let g = blk.and(I1, &g, &val_lt);
+        let g = blk.and(I1, &g, &val_gt);
+        blk.cond_br(&g, &chk_label, &slow_label);
+    }
+
+    ctx.current_block = chk_idx;
+    let (idx_i32, val_i32) = {
+        let blk = ctx.block();
+        let idx_i32 = blk.fptosi(DOUBLE, idx_d, I32);
+        let val_i32 = blk.fptosi(DOUBLE, val_double, I32);
+        (idx_i32, val_i32)
+    };
+    let ok = {
+        let in_bounds = emit_u8_in_bounds(ctx, &raw, &idx_i32);
+        let blk = ctx.block();
+        let idx_back = blk.sitofp(I32, &idx_i32, DOUBLE);
+        let is_int = blk.fcmp("oeq", &idx_back, idx_d);
+        blk.and(I1, &is_int, &in_bounds)
+    };
+    ctx.block().cond_br(&ok, &store_label, &slow_label);
+
+    ctx.current_block = store_idx;
+    let ptr = emit_u8_byte_ptr(ctx, &raw, &idx_i32);
+    {
+        let blk = ctx.block();
+        let byte = blk.trunc(I32, &val_i32, I8);
+        blk.store(I8, &byte, &ptr);
+        blk.br(&merge_label);
+    }
+
+    ctx.current_block = slow_idx;
+    slow(ctx);
+    ctx.block().br(&merge_label);
+    ctx.current_block = merge_idx;
+}
+
 /// Guarded inline byte WRITE in the runtime helper's i32 ABI: `val_i32` is
 /// already ToInt32'd by the caller, and the store keeps its low byte exactly
 /// as `js_buffer_set` does (`value & 0xFF`). Misses call

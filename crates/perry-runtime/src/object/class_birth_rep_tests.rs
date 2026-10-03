@@ -157,11 +157,17 @@ fn a_region_word_refuses_a_boxed_store_into_an_f64_lane() {
     );
 }
 
-/// P7: a learned region may publish a Number-read word only for an exact
-/// F64 identity lane. A wrong-rep receiver keeps the site empty for G.
+/// P7: a learned region publishes a Number-read (R) word for an exact F64
+/// identity lane as it is. On any other non-SPECIAL inline lane (an `Any`
+/// lane, or a deprecated F64 one) it publishes the word with
+/// `REGION_LOOP_WORD_VALUE_TEST`, so the emitted guard tests the slot's value
+/// on the object before F runs. An R key a bare store may write a non-Number
+/// into is refused: no guard-time test could cover that store.
 #[test]
-fn a_region_prime_refuses_a_requested_number_read_on_an_any_lane() {
-    use super::shapes::{js_region_loop_prime, REGION_GUARD_WORD_EMPTY};
+fn a_region_prime_value_tests_a_requested_number_read_on_a_non_identity_lane() {
+    use super::shapes::{
+        js_region_loop_prime, REGION_GUARD_WORD_EMPTY, REGION_LOOP_WORD_VALUE_TEST,
+    };
     use core::sync::atomic::{AtomicU64, Ordering};
 
     let k = keys(b"p7a\0p7b\0", 2);
@@ -175,25 +181,40 @@ fn a_region_prime_refuses_a_requested_number_read_on_an_any_lane() {
         ((*slots).to_bits(), (*slots.add(1)).to_bits())
     };
     let site = AtomicU64::new(REGION_GUARD_WORD_EMPTY);
-    let prime = |id, key, r_mask| unsafe {
-        js_region_loop_prime(&site, id, 1, key, 0, 0, 0, 0, 0, 0, 0, r_mask)
+    let prime = |id, key, stored, boxed, r_mask| unsafe {
+        js_region_loop_prime(&site, id, 1, key, 0, 0, 0, 0, 0, stored, boxed, r_mask)
     };
-    assert_eq!(prime(untyped, a, 1), REGION_GUARD_WORD_EMPTY);
-    assert_eq!(site.load(Ordering::Relaxed), REGION_GUARD_WORD_EMPTY);
-    assert_eq!(prime(typed, b, 1), REGION_GUARD_WORD_EMPTY);
-    assert_eq!(site.load(Ordering::Relaxed), REGION_GUARD_WORD_EMPTY);
-    let word = prime(typed, a, 1);
+    let tested = |word: u64| word & REGION_LOOP_WORD_VALUE_TEST != 0;
+
+    // An Any lane: published, and the guard must test the value.
+    let word = prime(untyped, a, 0, 0, 1);
     assert_ne!(word, REGION_GUARD_WORD_EMPTY);
     assert_eq!(site.load(Ordering::Relaxed), word);
+    assert_eq!(word as u32, untyped);
+    assert!(tested(word), "R on an Any lane must ask for a value test");
+    // The same key read without R asks for nothing.
+    assert!(!tested(prime(untyped, a, 0, 0, 0)));
+    // The typed shape's second key is an Any lane; its first is identity F64.
+    assert!(tested(prime(typed, b, 0, 0, 1)));
+    let word = prime(typed, a, 0, 0, 1);
+    assert_ne!(word, REGION_GUARD_WORD_EMPTY);
+    assert!(!tested(word), "an identity F64 lane needs no value test");
 
-    // A deprecated lane is still safe for existing objects but is no
-    // longer a publishable identity fact for a new learned region.
+    // A bare store that may write a non-Number into an R key: refused. The
+    // same store without R is admitted, so the refusal is the R + boxed pair.
+    assert_ne!(prime(untyped, a, 1, 1, 0), REGION_GUARD_WORD_EMPTY);
+    site.store(REGION_GUARD_WORD_EMPTY, Ordering::Relaxed);
+    assert_eq!(prime(untyped, a, 1, 1, 1), REGION_GUARD_WORD_EMPTY);
+    assert_eq!(site.load(Ordering::Relaxed), REGION_GUARD_WORD_EMPTY);
+
+    // A deprecated lane is no longer an identity fact for a new learned
+    // region: its R is served by the value test.
     assert!(super::shapes::shape_record_by_id(typed)
         .expect("typed shape record")
         .deprecate_rep_slot(0));
-    site.store(REGION_GUARD_WORD_EMPTY, Ordering::Relaxed);
-    assert_eq!(prime(typed, a, 1), REGION_GUARD_WORD_EMPTY);
-    assert_eq!(site.load(Ordering::Relaxed), REGION_GUARD_WORD_EMPTY);
+    let word = prime(typed, a, 0, 0, 1);
+    assert_ne!(word, REGION_GUARD_WORD_EMPTY);
+    assert!(tested(word), "a deprecated lane must ask for a value test");
 }
 
 /// Design step 4 x T1: the rep is part of a static id's content, so a class

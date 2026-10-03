@@ -10,8 +10,42 @@ fn packed_set_site_layout_matches_codegen() {
         std::mem::size_of::<PackedSetSite>(),
         8 * PACKED_SET_SITE_WORDS
     );
-    assert_eq!(PACKED_SET_SITE_WORDS, 4);
+    assert_eq!(PACKED_SET_SITE_WORDS, 5);
     assert_eq!(std::mem::offset_of!(PackedSetSite, add_ways), 24);
+    // perry_abi::PACKED_SET_CONSTFN_INFO_WORD: the site's ConstFn body,
+    // compared by the emitted ConstFn store check.
+    assert_eq!(
+        std::mem::offset_of!(PackedSetSite, constfn_info),
+        8 * crate::codegen_abi::PACKED_SET_CONSTFN_INFO_WORD
+    );
+    assert_eq!(crate::codegen_abi::PACKED_SET_CONSTFN_INFO_WORD, 4);
+    // The guard's flag bits sit above the slot index: F64 = bit 15,
+    // ConstFn = bit 14 (perry-codegen ADD_F64_SLOT / ADD_CONSTFN_SLOT).
+    assert_eq!((ADD_F64_SLOT, ADD_CONSTFN_SLOT), (1 << 15, 1 << 14));
+    assert_eq!(ADD_SLOT_MASK, (1 << 14) - 1);
+    // The existing-key word: F64 = bit 63, ConstFn = bit 62, the index below.
+    assert_eq!(
+        (
+            super::super::packed_set::PACKED_SET_F64_SLOT,
+            super::super::packed_set::PACKED_SET_CONSTFN_SLOT
+        ),
+        (1 << 63, 1 << 62)
+    );
+    // The closure facts the emitted ConstFn check reads.
+    assert_eq!(
+        (
+            crate::codegen_abi::CLOSURE_CAPTURES_THIS_FLAG,
+            crate::codegen_abi::CLOSURE_NO_THIS_REBIND_FLAG
+        ),
+        (
+            crate::closure::CAPTURES_THIS_FLAG,
+            crate::closure::NO_THIS_REBIND_FLAG
+        )
+    );
+    assert_eq!(
+        std::mem::offset_of!(crate::closure::ClosureHeader, info),
+        crate::codegen_abi::CLOSURE_INFO_OFFSET
+    );
     assert_eq!(std::mem::offset_of!(PackedSetSite, set), 0);
     assert_eq!(
         std::mem::offset_of!(PackedSetSite, add_shapes),

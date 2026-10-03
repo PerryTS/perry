@@ -90,14 +90,26 @@ pub(super) fn fact_tree_leaves<'e>(
 
 /// Candidate reads inside a Number-consuming expression. The planner's
 /// exact bare-access set filters these by freshness after the walk.
+///
+/// Only a value the operator itself consumes is a candidate. A read beneath
+/// another property access is that access's RECEIVER (`o.a.length` reads
+/// `o.a` as an object), and a read beneath an element access or a call is
+/// that operation's key, receiver or argument: none of them is a Number
+/// operand, so none may ask the region for a Number lane (R).
 fn number_operand_reads(e: &Expr, out: &mut Vec<(usize, Recv, String)>) {
-    if let Expr::PropertyGet {
-        object, property, ..
-    } = e
-    {
-        if let Some(r) = Recv::of(object) {
-            out.push((e as *const Expr as usize, r, property.clone()));
+    match e {
+        Expr::PropertyGet {
+            object, property, ..
+        } => {
+            if let Some(r) = Recv::of(object) {
+                out.push((e as *const Expr as usize, r, property.clone()));
+            }
+            return;
         }
+        Expr::IndexGet { .. } | Expr::Call { .. } | Expr::CallSpread { .. } | Expr::New { .. } => {
+            return
+        }
+        _ => {}
     }
     perry_hir::walker::walk_expr_children(e, &mut |child| number_operand_reads(child, out));
 }
@@ -147,8 +159,10 @@ pub(super) struct Planner<'p, 'a> {
     ctx: &'p FnCtx<'a>,
     cands: &'p HashSet<Recv>,
     keys: &'p HashMap<Recv, Vec<String>>,
-    /// Array receivers (S3) and their static index bound.
-    arrays: &'p HashMap<Recv, u32>,
+    /// Array receivers (S3) and what their accesses need.
+    arrays: &'p HashMap<Recv, ArrayUse>,
+    /// The loop counter and body-local copies an index proof may use.
+    env: &'p Env,
     bare: HashSet<usize>,
     /// Potential R keys, filtered against exact fresh bare reads at finish.
     number_reads: Vec<(usize, Recv, String)>,
@@ -176,9 +190,31 @@ pub(super) struct Planner<'p, 'a> {
     /// A read is usable only after this pass has itself made it bare.
     proof_reads: &'p HashSet<usize>,
     proof_locals: &'p HashSet<u32>,
+    /// #10741: a statement after which the facts may be stale sets the
+    /// region's dirty flag (lowering stores it right after the statement),
+    /// so the facts are DIRTY, not lost, from there to the back edge: the
+    /// next iteration re-checks only when such a statement ran, instead of
+    /// the loop being refused or re-checked every iteration.
+    mark_dirty: bool,
+    dirty_after: HashSet<usize>,
 }
 
 impl Planner<'_, '_> {
+    /// `e` may run JS: every fact is stale. `PERRY_REGION_DIAG=5` names
+    /// the expression that staled them (the planner's refusal trace).
+    fn stale(&self, e: &Expr, st: &mut St) {
+        if st.as_ref().is_some_and(|m| !m.is_empty())
+            && std::env::var("PERRY_REGION_DIAG").as_deref() == Ok("5")
+        {
+            let d = format!("{e:?}");
+            eprintln!(
+                "[perry region] stale at {} in {}",
+                &d[..d.len().min(160)],
+                self.ctx.func.name
+            );
+        }
+        kill(st);
+    }
     /// A primitive by construction, or a value the compiler proves a raw
     /// double (`expr_produces_canonical_raw_f64` is the predicate that already
     /// licenses an unguarded `fadd`).
@@ -189,9 +225,75 @@ impl Planner<'_, '_> {
                 self.bare.contains(&ptr) && self.proof_reads.contains(&ptr)
             }
             Expr::LocalGet(id) if self.proof_locals.contains(id) => true,
+            // A bare element read of a dense raw-f64 array: a double.
+            Expr::IndexGet { .. } => self.f64_element(e),
             Expr::Binary { left, right, .. } => self.prim(left) && self.prim(right),
             Expr::Unary { op, operand } if !matches!(op, UnaryOp::Not) => self.prim(operand),
             _ => prim(e) || crate::type_analysis::is_numeric_expr(self.ctx, e),
+        }
+    }
+
+    /// A planned-bare element read of a dense region array.
+    fn f64_element(&self, e: &Expr) -> bool {
+        let Expr::IndexGet { object, .. } = e else {
+            return false;
+        };
+        self.bare.contains(&(e as *const Expr as usize))
+            && self
+                .env
+                .array(object)
+                .and_then(|r| self.arrays.get(&r))
+                .is_some_and(|u| u.dense())
+    }
+
+    /// A canonical double by construction, for a bare element STORE: the
+    /// mirror of `expr_produces_canonical_raw_f64` over this plan's bare
+    /// element reads (lowering asks that predicate again with the facts
+    /// active). Locals count only through the static predicate — never
+    /// through a region entry assumption.
+    fn num(&self, e: &Expr) -> bool {
+        match e {
+            Expr::Number(_) | Expr::Integer(_) => true,
+            Expr::IndexGet { .. } => self.f64_element(e),
+            // Every binary operator over two Numbers yields a Number.
+            Expr::Binary { left, right, .. } => self.num(left) && self.num(right),
+            Expr::Unary { op, operand } => {
+                matches!(op, UnaryOp::Neg | UnaryOp::Pos | UnaryOp::BitNot) && self.num(operand)
+            }
+            Expr::Conditional {
+                then_expr,
+                else_expr,
+                ..
+            } => self.num(then_expr) && self.num(else_expr),
+            _ if pure_math_args(e).is_some() => {
+                pure_math_args(e).is_some_and(|args| args.iter().all(|a| self.num(a)))
+            }
+            _ => crate::type_analysis::expr_produces_canonical_raw_f64(self.ctx, e),
+        }
+    }
+
+    /// After its operands: is the element store `e` bare? Else the facts
+    /// are stale.
+    fn element_store(&mut self, e: &Expr, st: &mut St) {
+        let Some((object, index, value)) = arrays::element_store(e) else {
+            return self.stale(e, st);
+        };
+        let r = self
+            .env
+            .array(object)
+            .filter(|r| self.arrays.get(r).is_some_and(|u| u.dense() && u.store));
+        match r {
+            Some(r)
+                if self.env.index(index).is_some()
+                    && self.num(value)
+                    && st.as_ref().is_some_and(|m| m.get(&r) == Some(&FRESH)) =>
+            {
+                if self.record {
+                    self.bare.insert(e as *const Expr as usize);
+                    self.bare_arrays.insert(r);
+                }
+            }
+            _ => self.stale(e, st),
         }
     }
 
@@ -225,7 +327,7 @@ impl Planner<'_, '_> {
         }
         // Today's tower: its miss path can reach a getter/setter or reshape
         // the receiver.
-        kill(st);
+        self.stale(e, st);
     }
 
     fn exprs(&mut self, es: &[Expr], mut st: St) -> St {
@@ -259,7 +361,7 @@ impl Planner<'_, '_> {
                 st = self.expr(object, st);
                 match Recv::of(object) {
                     Some(r) => self.access(e, r, property, false, false, &mut st),
-                    None => kill(&mut st),
+                    None => self.stale(e, &mut st),
                 }
                 st
             }
@@ -285,7 +387,8 @@ impl Planner<'_, '_> {
                             !crate::type_analysis::expr_produces_canonical_raw_f64(self.ctx, value);
                         self.access(e, r, k, true, boxed, &mut st)
                     }
-                    _ => kill(&mut st),
+                    _ if arrays::element_store(e).is_some() => self.element_store(e, &mut st),
+                    _ => self.stale(e, &mut st),
                 }
                 st
             }
@@ -296,7 +399,7 @@ impl Planner<'_, '_> {
                     st = self.expr(callee, st);
                 }
                 st = self.exprs(args, st);
-                kill(&mut st);
+                self.stale(e, &mut st);
                 st
             }
             Expr::LocalSet(_, v) => self.expr(v, st),
@@ -306,10 +409,13 @@ impl Planner<'_, '_> {
             Expr::IndexGet { object, index } => {
                 st = self.expr(object, st);
                 st = self.expr(index, st);
-                let r = Recv::of(object).filter(|r| self.arrays.contains_key(r));
+                let r = self
+                    .env
+                    .array(object)
+                    .filter(|r| self.arrays.contains_key(r));
                 match r {
                     Some(r)
-                        if arrays::static_index_max(index).is_some()
+                        if self.env.index(index).is_some()
                             && st.as_ref().is_some_and(|m| m.get(&r) == Some(&FRESH)) =>
                     {
                         if self.record {
@@ -317,7 +423,34 @@ impl Planner<'_, '_> {
                             self.bare_arrays.insert(r);
                         }
                     }
-                    _ => kill(&mut st),
+                    _ => self.stale(e, &mut st),
+                }
+                st
+            }
+            // #10741: an element store into a dense region array at a proven
+            // index, of a value proven a canonical double, runs no JS and
+            // changes no fact (not the length, not the layout). Anything
+            // else is today's store, which can.
+            Expr::IndexSet {
+                object,
+                index,
+                value,
+            } => {
+                st = self.expr(object, st);
+                st = self.expr(index, st);
+                st = self.expr(value, st);
+                self.element_store(e, &mut st);
+                st
+            }
+            // Pure `Math.*` over primitives runs no JS (a spread argument
+            // iterates, so it is not one of these).
+            _ if pure_math_args(e).is_some() => {
+                let args = pure_math_args(e).unwrap_or_default();
+                for a in &args {
+                    st = self.expr(a, st);
+                }
+                if !args.iter().all(|a| self.prim(a)) {
+                    self.stale(e, &mut st);
                 }
                 st
             }
@@ -359,7 +492,7 @@ impl Planner<'_, '_> {
                 st = self.expr(left, st);
                 st = self.expr(right, st);
                 if !(self.prim(left) && self.prim(right)) {
-                    kill(&mut st);
+                    self.stale(e, &mut st);
                 }
                 st
             }
@@ -370,7 +503,7 @@ impl Planner<'_, '_> {
                 }
                 st = self.expr(operand, st);
                 if !matches!(op, UnaryOp::Not) && !self.prim(operand) {
-                    kill(&mut st);
+                    self.stale(e, &mut st);
                 }
                 st
             }
@@ -391,7 +524,7 @@ impl Planner<'_, '_> {
                 if !matches!(op, CompareOp::Eq | CompareOp::Ne)
                     && !(self.prim(left) && self.prim(right))
                 {
-                    kill(&mut st);
+                    self.stale(e, &mut st);
                 }
                 st
             }
@@ -426,7 +559,7 @@ impl Planner<'_, '_> {
             // A local ++/-- ToNumerics its operand (valueOf on an object).
             Expr::Update { id, .. } => {
                 if !self.ctx.integer_locals.contains(id) {
-                    kill(&mut st);
+                    self.stale(e, &mut st);
                 }
                 st
             }
@@ -439,7 +572,7 @@ impl Planner<'_, '_> {
                 for k in kids {
                     st = self.expr(k, st);
                 }
-                kill(&mut st);
+                self.stale(e, &mut st);
                 st
             }
         }
@@ -447,7 +580,16 @@ impl Planner<'_, '_> {
 
     fn stmts(&mut self, ss: &[Stmt], mut st: St) -> St {
         for s in ss {
+            let before = if self.mark_dirty { st.clone() } else { None };
             st = self.stmt(s, st);
+            if let (Some(b), Some(a)) = (&before, &st) {
+                if b.keys().any(|r| !a.contains_key(r)) {
+                    if self.record {
+                        self.dirty_after.insert(s as *const Stmt as usize);
+                    }
+                    st = Some(b.keys().map(|r| (*r, DIRTY)).collect());
+                }
+            }
         }
         st
     }
@@ -564,6 +706,55 @@ impl Planner<'_, '_> {
         self.continues = saved;
         // `break` can leave from anywhere: the exit is stale.
         s.map(|_| BTreeMap::new())
+    }
+}
+
+/// The arguments of a `Math.*` call that runs no JavaScript once its
+/// arguments are primitives (`ToNumber` of a primitive cannot call out);
+/// `None` for anything else, including the spread forms (they iterate).
+pub(super) fn pure_math_args(e: &Expr) -> Option<Vec<&Expr>> {
+    match e {
+        Expr::MathFloor(..)
+        | Expr::MathCeil(..)
+        | Expr::MathRound(..)
+        | Expr::MathTrunc(..)
+        | Expr::MathSign(..)
+        | Expr::MathAbs(..)
+        | Expr::MathSqrt(..)
+        | Expr::MathLog(..)
+        | Expr::MathLog2(..)
+        | Expr::MathLog10(..)
+        | Expr::MathPow(..)
+        | Expr::MathMin(..)
+        | Expr::MathMax(..)
+        | Expr::MathImul(..)
+        | Expr::MathRandom
+        | Expr::MathSin(..)
+        | Expr::MathCos(..)
+        | Expr::MathTan(..)
+        | Expr::MathAsin(..)
+        | Expr::MathAcos(..)
+        | Expr::MathAtan(..)
+        | Expr::MathAtan2(..)
+        | Expr::MathCbrt(..)
+        | Expr::MathHypot(..)
+        | Expr::MathFround(..)
+        | Expr::MathF16round(..)
+        | Expr::MathClz32(..)
+        | Expr::MathExpm1(..)
+        | Expr::MathLog1p(..)
+        | Expr::MathSinh(..)
+        | Expr::MathCosh(..)
+        | Expr::MathTanh(..)
+        | Expr::MathAsinh(..)
+        | Expr::MathAcosh(..)
+        | Expr::MathAtanh(..)
+        | Expr::MathExp(..) => {
+            let mut args = Vec::new();
+            perry_hir::walker::walk_expr_children(e, &mut |c| args.push(c));
+            Some(args)
+        }
+        _ => None,
     }
 }
 
@@ -857,13 +1048,15 @@ pub(super) fn receiver_eligible(ctx: &FnCtx<'_>, r: Recv) -> bool {
         // A derived constructor's `this` may still be in its TDZ (before
         // `super()`), and reading it throws: the preheader must not hoist
         // that read, so such a body's `this` is not a region receiver.
-        // A `this` whose shape is already PROVEN (a proven-shape method clone)
-        // reads its slots with no guard at all; a region would only add one.
+        //
+        // A receiver whose shape is already PROVEN (Ptr<Shape>, or a
+        // proven-shape method clone's `this`) stays eligible: the region adds
+        // one guard but brings the R facts and bare stores a proof alone does
+        // not (`h += o.a` on such a local: 24 -> 11 instructions), and its
+        // reads and calls keep their proven routes inside the region
+        // (`FnCtx::ptr_shape_receiver_fact`).
         Recv::This => {
-            !ctx.this_stack.is_empty()
-                && !ctx.in_static_member
-                && ctx.super_called_stack.is_empty()
-                && ctx.ptr_shape_receiver_fact(&Expr::This).is_none()
+            !ctx.this_stack.is_empty() && !ctx.in_static_member && ctx.super_called_stack.is_empty()
         }
         Recv::Local(id) => {
             !ctx.boxed_vars.contains(&id)
@@ -878,7 +1071,6 @@ pub(super) fn receiver_eligible(ctx: &FnCtx<'_>, r: Recv) -> bool {
                 && !ctx.local_slot_reps.contains_key(&id)
                 && !ctx.integer_locals.contains(&id)
                 && !ctx.receiver_descriptors.contains_buffer_view(id)
-                && ctx.ptr_shape_receiver_fact(&Expr::LocalGet(id)).is_none()
                 && (ctx.locals.contains_key(&id)
                     || ctx.closure_captures.contains_key(&id)
                     || ctx.module_globals.contains_key(&id))
@@ -898,8 +1090,10 @@ pub(super) struct Plan {
     pub(super) declared_locals: HashSet<u32>,
     pub(super) trees: HashSet<usize>,
     pub(super) recheck: Recheck,
-    /// Array receivers with a bare read, and their static index bound.
-    pub(super) arrays: Vec<(Recv, u32)>,
+    /// Array receivers with a bare access, and what their accesses need.
+    pub(super) arrays: Vec<(Recv, ArrayUse)>,
+    /// Statements after which F-body sets the dirty flag (`Planner::mark_dirty`).
+    pub(super) dirty_after: HashSet<usize>,
 }
 
 /// What the top of an iteration must do before F-body.
@@ -927,7 +1121,8 @@ pub(super) fn plan(
     ctx: &FnCtx<'_>,
     tail: &[Stmt],
     cands: HashSet<Recv>,
-    arrays: HashMap<Recv, u32>,
+    arrays: HashMap<Recv, ArrayUse>,
+    env: &Env,
     loop_ctl: Option<(Option<&Expr>, Option<&Expr>)>,
     inner: Option<(usize, &HashSet<usize>, &HashSet<usize>)>,
 ) -> Option<Plan> {
@@ -938,6 +1133,7 @@ pub(super) fn plan(
         tail,
         &cands,
         &arrays,
+        env,
         loop_ctl,
         inner,
         &empty_reads,
@@ -956,9 +1152,13 @@ pub(super) fn plan(
     if proof_reads.is_empty() {
         return Some(seed);
     }
+    let loop_control: Vec<&Expr> = loop_ctl
+        .map(|(cond, update)| cond.into_iter().chain(update).collect())
+        .unwrap_or_default();
     let (locals, _) = number_facts_from_reads(
         ctx,
         tail,
+        &loop_control,
         &proof_reads,
         &seed.number_local_uses,
         &seed.declared_locals,
@@ -971,6 +1171,7 @@ pub(super) fn plan(
             tail,
             &cands,
             &arrays,
+            env,
             loop_ctl,
             inner,
             &proof_reads,
@@ -991,8 +1192,14 @@ pub(super) fn plan(
                     })
             })
             .collect();
-        let (locals, _) =
-            number_facts_from_reads(ctx, tail, &reads, &p.number_local_uses, &p.declared_locals);
+        let (locals, _) = number_facts_from_reads(
+            ctx,
+            tail,
+            &loop_control,
+            &reads,
+            &p.number_local_uses,
+            &p.declared_locals,
+        );
         let locals: HashSet<u32> = locals.into_iter().collect();
         if !reads.is_subset(&proof_reads) || !locals.is_subset(&proof_locals) {
             return None;
@@ -1010,7 +1217,8 @@ fn plan_once<'p, 'a>(
     ctx: &'p FnCtx<'a>,
     tail: &[Stmt],
     cands: &'p HashSet<Recv>,
-    arrays: &'p HashMap<Recv, u32>,
+    arrays: &'p HashMap<Recv, ArrayUse>,
+    env: &'p Env,
     loop_ctl: Option<(Option<&Expr>, Option<&Expr>)>,
     inner: Option<(usize, &'p HashSet<usize>, &'p HashSet<usize>)>,
     proof_reads: &'p HashSet<usize>,
@@ -1052,6 +1260,7 @@ fn plan_once<'p, 'a>(
         cands: &cands,
         keys: &keys,
         arrays: &arrays,
+        env,
         bare: HashSet::new(),
         number_reads: Vec::new(),
         number_local_uses: HashSet::new(),
@@ -1067,6 +1276,9 @@ fn plan_once<'p, 'a>(
         record: true,
         proof_reads,
         proof_locals,
+        // Loop regions with array receivers and no nested body region.
+        mark_dirty: loop_ctl.is_some() && !arrays.is_empty() && inner.is_none(),
+        dirty_after: HashSet::new(),
     };
     let end = match inner {
         // The nested body region's tail: F-tail keeps the loop's facts
@@ -1128,9 +1340,10 @@ fn plan_once<'p, 'a>(
         crate::collectors::region_number_flow_reads(tail, &number_local_uses);
     number_local_uses.extend(flow_locals);
     let trees = std::mem::take(&mut p.trees);
+    let dirty_after = std::mem::take(&mut p.dirty_after);
     let bare_stores = std::mem::take(&mut p.bare_stores);
     let boxed_stores = std::mem::take(&mut p.boxed_stores);
-    let mut plan_arrays: Vec<(Recv, u32)> = std::mem::take(&mut p.bare_arrays)
+    let mut plan_arrays: Vec<(Recv, ArrayUse)> = std::mem::take(&mut p.bare_arrays)
         .into_iter()
         .map(|r| (r, arrays[&r]))
         .collect();
@@ -1259,5 +1472,6 @@ fn plan_once<'p, 'a>(
         trees,
         recheck,
         arrays: plan_arrays,
+        dirty_after,
     })
 }

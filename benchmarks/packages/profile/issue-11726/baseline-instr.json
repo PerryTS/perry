@@ -1,0 +1,187 @@
+{
+ "finished": "2026-10-01T12:00:11+0000",
+ "host": "ideal-mastodon",
+ "load_threshold": 8.0,
+ "machine": "x86_64",
+ "modes": [
+  "instr",
+  "rss"
+ ],
+ "ncpu": 16,
+ "perry_bin_dir": "/root/codex-11726-results/baseline-bins",
+ "perry_commit": "437520d02b",
+ "platform": "Linux-6.17.0-23-generic-x86_64-with-glibc2.39",
+ "schema": 1,
+ "servers": {
+  "mongo": "ok"
+ },
+ "started": "2026-10-01T11:56:51+0000",
+ "toolchain": {
+  "bun": "/root/.bun/bin/bun",
+  "bun_version": "1.4.2",
+  "node": "/opt/node-v26.5.1-linux-x64/bin/node",
+  "node_version": "26.5.1",
+  "version_problems": []
+ },
+ "workloads": {
+  "control/bare_loop": {
+   "arms": {
+    "node": {
+     "correctness_output": "control/bare_loop @- n=2000000 warm=1000\nchecksum 84a22c45",
+     "instr": {
+      "n1": [
+       491726695,
+       489894635,
+       494002356
+      ],
+      "n2": [
+       830271586,
+       835720458,
+       841340750
+      ],
+      "per_iter": 57.33229383333333
+     },
+     "load_flagged": true,
+     "load_max": 20.05,
+     "load_mean": 20.05,
+     "peak_rss_kb": 73028,
+     "status": "OK",
+     "timeout_s": 120
+    },
+    "perry": {
+     "compile_s": 1.79,
+     "correctness_output": "control/bare_loop @- n=2000000 warm=1000\nchecksum 84a22c45",
+     "instr": {
+      "n1": [
+       53375540,
+       53375241,
+       53380657
+      ],
+      "n2": [
+       209377239,
+       209379453,
+       209378148
+      ],
+      "per_iter": 26.000434666666667
+     },
+     "load_flagged": true,
+     "load_max": 20.05,
+     "load_mean": 20.05,
+     "peak_rss_kb": 11260,
+     "size_bytes": 22485256,
+     "status": "OK",
+     "timeout_s": 120
+    }
+   },
+   "n1": 2000000,
+   "n2": 8000000,
+   "warm": 1000
+  },
+  "control/prop_read": {
+   "arms": {
+    "node": {
+     "correctness_output": "control/prop_read @- n=500000 warm=1000\nchecksum d9dbf305",
+     "instr": {
+      "n1": [
+       411212581,
+       416725888,
+       426864857
+      ],
+      "n2": [
+       512057038,
+       498137541,
+       499792994
+      ],
+      "per_iter": 55.378070666666666
+     },
+     "load_flagged": true,
+     "load_max": 19.33,
+     "load_mean": 19.33,
+     "peak_rss_kb": 72828,
+     "status": "OK",
+     "timeout_s": 120
+    },
+    "perry": {
+     "compile_s": 1.56,
+     "correctness_output": "control/prop_read @- n=500000 warm=1000\nchecksum d9dbf305",
+     "instr": {
+      "n1": [
+       66516868,
+       66514383,
+       66516747
+      ],
+      "n2": [
+       261515359,
+       261515261,
+       261515047
+      ],
+      "per_iter": 129.99900933333333
+     },
+     "load_flagged": true,
+     "load_max": 19.33,
+     "load_mean": 19.33,
+     "peak_rss_kb": 11344,
+     "size_bytes": 22485752,
+     "status": "OK",
+     "timeout_s": 120
+    }
+   },
+   "n1": 500000,
+   "n2": 2000000,
+   "warm": 1000
+  },
+  "mongodb/insert_find": {
+   "arms": {
+    "node": {
+     "correctness_output": "mongodb/insert_find mongodb@7.6.0 n=500 warm=200\nchecksum 57050a96",
+     "instr": {
+      "n1": [
+       1940428986,
+       1976317454,
+       1953589244
+      ],
+      "n2": [
+       3234504093,
+       3241991874,
+       3231893814
+      ],
+      "per_iter": 853943.2326666666
+     },
+     "load_flagged": true,
+     "load_max": 18.58,
+     "load_mean": 18.39,
+     "peak_rss_kb": 119016,
+     "status": "OK",
+     "timeout_s": 120
+    },
+    "perry": {
+     "compile_s": 381.42,
+     "correctness_output": "mongodb/insert_find mongodb@7.6.0 n=500 warm=200\nchecksum 57050a96",
+     "instr": {
+      "n1": [
+       48345396420,
+       48525854984,
+       47706213516
+      ],
+      "n2": [
+       359925617172,
+       364271368932,
+       359779232291
+      ],
+      "per_iter": 207720147.168
+     },
+     "load_flagged": true,
+     "load_max": 18.29,
+     "load_mean": 16.74,
+     "peak_rss_kb": 1028816,
+     "size_bytes": 77227024,
+     "status": "OK",
+     "timeout_s": 143.4
+    }
+   },
+   "n1": 500,
+   "n2": 2000,
+   "warm": 200
+  }
+ }
+}

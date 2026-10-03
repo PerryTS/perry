@@ -589,6 +589,7 @@ js_class_env_register_slot	void	i32u,i32u,ptr
 js_class_env_register_state	void	i32u,ptr
 js_class_env_set	void	f64,i32u,i32u,f64
 js_class_env_stamp	f64	f64,i32u,f64
+js_class_evaluation_object	i64	i32u,i32u,i32u
 js_class_field_add	f64	f64,f64,f64
 js_class_field_get_ic	f64	i64,f64,i32u,i32u,ptr,i32u,i32s,ptr
 js_class_field_get_ic_fast	f64	i64,f64,i32u,i32u,ptr,i32u,i32s,ptr
@@ -601,9 +602,11 @@ js_class_lexical_binding_get	f64	f64
 js_class_lexical_binding_set	f64	f64,f64
 js_class_method_bind	f64	f64,ptr,usize
 js_class_method_bind_by_id	f64	f64,i64
+js_class_method_entry_enter_home	i64	i32u,i64,i64
+js_class_method_entry_leave	void	i64
 js_class_method_snapshot_bind	f64	f64,ptr,usize
-js_class_object_pin_parent	void	i64,i32u
 js_class_object_refresh_capture_values	void	f64,i64,f64
+js_class_object_set_ctor_caps	void	i64,f64
 js_class_prototype_method_value	f64	f64,f64
 js_class_register_capture_values	void	i32u,ptr,usize
 js_class_register_static_field	void	i32u,ptr,usize,f64,ptr
@@ -1977,6 +1980,7 @@ js_native_call_method	f64	f64,ptr,usize,ptr,usize
 js_native_call_method_apply	f64	f64,ptr,usize,i64
 js_native_call_method_apply_by_id	f64	f64,i64,i64
 js_native_call_method_by_id	f64	f64,i64,ptr,usize
+js_native_call_method_by_id_learn	f64	f64,i64,ptr,usize,ptr,i32u
 js_native_call_method_nullsafe	f64	f64,ptr,usize,ptr,usize
 js_native_call_method_patched_proto	f64	f64,ptr,usize,ptr,usize
 js_native_call_method_patched_proto_apply	f64	f64,ptr,usize,i64
@@ -2594,6 +2598,7 @@ js_object_get_field_ic_overflow_load	f64	ptr,ptr,i32s,ptr
 js_object_get_field_ic_slow	f64	i64,ptr,ptr,ptr
 js_object_get_index_polymorphic	f64	i64,f64
 js_object_get_own_field_or_undef	f64	f64,ptr,usize
+js_object_get_own_field_or_undef_learn	f64	f64,ptr,usize,ptr
 js_object_get_own_property_descriptor	f64	f64,f64
 js_object_get_own_property_descriptors	f64	f64
 js_object_get_own_property_names	f64	f64
@@ -3214,6 +3219,7 @@ js_register_class_id	void	i32u
 js_register_class_length	void	i32u,i32u
 js_register_class_method	void	i64,ptr,i64,i64,i64,i64,i64
 js_register_class_method_bind_length	void	i64,ptr,i64,i64
+js_register_class_method_entry	void	i64,ptr,i64,i64
 js_register_class_name	void	i32u,ptr,i32u
 js_register_class_parent	void	i32u,i32u
 js_register_class_parent_dynamic	void	i32u,f64
@@ -3272,6 +3278,7 @@ js_register_path_init	void	ptr,i64,i64
 js_register_path_module	void	f64,f64
 js_register_path_module_partial	void	f64,f64
 js_register_prototype_method	void	i32u,ptr,usize,f64
+js_register_readable_handle_predicate	void	ptr
 js_register_set_text_handler	void	ptr
 js_register_show_toast_handler	void	ptr
 js_register_stdin_flow_ops	void	ptr,ptr
@@ -3525,6 +3532,7 @@ js_state_get	f64	f64
 js_state_init	void	f64,f64
 js_state_set	void	f64,f64
 js_static_method_entry_enter	void	i32u,i64
+js_static_method_entry_enter_home	void	i32u,i64,i64
 js_static_method_entry_leave	void	
 js_static_this_arm_classref	void	i32u
 js_static_this_arm_value	void	f64
@@ -3917,6 +3925,7 @@ js_typed_feedback_native_call_method_by_id	f64	i64,f64,i64,ptr,usize
 js_typed_feedback_numeric_array_index_get_guard	i32s	i64,f64,i32s,i32s
 js_typed_feedback_numeric_array_index_set_guard	i32s	i64,f64,i32s,f64,i32s
 js_typed_feedback_numeric_array_push_guard	i32s	i64,f64,f64
+js_typed_feedback_object_get_field_by_key_f64	f64	i64,ptr,f64,f64
 js_typed_feedback_object_get_field_by_name_f64	f64	i64,ptr,ptr
 js_typed_feedback_object_get_field_by_value_f64	f64	i64,ptr,f64
 js_typed_feedback_object_set_field_by_name	void	i64,ptr,ptr,f64

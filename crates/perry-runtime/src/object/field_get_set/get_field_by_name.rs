@@ -1128,8 +1128,21 @@ fn get_field_by_name_past_data_probe(
                 if !name.is_empty()
                     && !super::super::class_registry::class_static_key_deleted(class_id, name)
                 {
-                    if super::super::class_registry::lookup_static_method_in_chain(class_id, name)
-                        .is_some()
+                    // A class object owns every static method its template
+                    // declares (`define_class_object_own_properties`), and so
+                    // does each earlier evaluation it inherits from, so a
+                    // declaration of a per-evaluation class found here was
+                    // DELETED from its object: it must not come back. Only a
+                    // method of a shared (never-evaluated-to-an-object) class
+                    // is served from the registry.
+                    if super::super::class_registry::lookup_static_method_owner(class_id, name)
+                        .is_some_and(|(owner, _)| {
+                            let object_owned =
+                                super::super::class_registry::class_object_value_for_cid(owner)
+                                    .is_some()
+                                    || owner == class_id;
+                            !object_owned
+                        })
                     {
                         let heap_name = {
                             let layout =

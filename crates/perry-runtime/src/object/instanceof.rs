@@ -683,6 +683,62 @@ pub(crate) fn class_chain_reaches(start: u32, want: u32) -> bool {
     }
 }
 
+/// `value instanceof <class want>` for an instance of class `start` when a
+/// user `[[Prototype]]` change sits on its way: the instance's own prototype
+/// was replaced, or a class prototype on the declared chain from `start` was
+/// relinked before that chain reaches `want`. Then the declared class ids no
+/// longer describe the chain, and `OrdinaryHasInstance` walks the live one.
+/// `None` means the declared walk answers: no such change was ever made (one
+/// latch load), or `want` is reached first.
+/// `want` is a compiled class, or `Object` (its reserved id), whose
+/// constructor is the global one.
+#[inline(always)]
+pub(crate) fn relinked_instance_chain_answer(value: f64, start: u32, want: u32) -> Option<bool> {
+    if !super::prototype_chain::any_user_prototype_override() {
+        return None;
+    }
+    relinked_instance_chain_answer_armed(value, start, want)
+}
+
+/// [`relinked_instance_chain_answer`] once a user prototype override exists.
+/// Out of line so the callers' common path stays one latch load.
+#[cold]
+#[inline(never)]
+fn relinked_instance_chain_answer_armed(value: f64, start: u32, want: u32) -> Option<bool> {
+    const CLASS_ID_OBJECT: u32 = 0xFFFF0050;
+    if want == 0 || (want != CLASS_ID_OBJECT && !super::is_class_id_registered(want)) {
+        return None;
+    }
+    let live = || {
+        let constructor = if want == CLASS_ID_OBJECT {
+            js_get_global_this_builtin_value(b"Object".as_ptr(), 6)
+        } else {
+            super::class_constructor_ref_value(want)
+        };
+        ordinary_has_instance_prototype_walk(value, constructor)
+    };
+    if super::prototype_chain::object_has_user_prototype_override(value_addr(value)) {
+        return Some(live());
+    }
+    if start == 0 {
+        return None;
+    }
+    let mut cur = start;
+    for _ in 0..64 {
+        if cur == want || crate::object::class_generic_origin(cur) == Some(want) {
+            return None;
+        }
+        if super::class_registry::class_decl_prototype_relinked(cur) {
+            return Some(live());
+        }
+        match get_parent_class_id(cur) {
+            Some(pid) if pid != 0 && pid != cur => cur = pid,
+            _ => return None,
+        }
+    }
+    None
+}
+
 /// The parent-only half of [`class_chain_reaches`], used to continue a walk that
 /// has already stepped onto a generic origin. Separate so the two edges cannot
 /// recurse into each other without bound.
@@ -788,6 +844,9 @@ fn subclass_of_builtin_reaches(value: f64, class_id: u32) -> bool {
         return false;
     }
     let cur = unsafe { (*obj).class_id };
+    if let Some(answer) = relinked_instance_chain_answer(value, cur, class_id) {
+        return answer;
+    }
     // #10624: only pay for the value-aware walk once something has pinned
     // per-evaluation heritage.
     let reaches =

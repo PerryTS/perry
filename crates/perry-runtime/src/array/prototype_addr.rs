@@ -328,6 +328,14 @@ pub(crate) fn object_prototype_addr_if_resolved() -> usize {
     memoized_prototype_addr(&prototype_addrs()[OBJECT_PROTO_CACHE]).unwrap_or(0)
 }
 
+/// `%Function.prototype%` if this thread has ALREADY memoized it, else 0 —
+/// never bootstraps, for the same reason as
+/// [`object_prototype_addr_if_resolved`]: the function-receiver holder walk
+/// (`object::method_site::read_holder`) runs under the read miss handler.
+pub(crate) fn function_prototype_addr_if_resolved() -> usize {
+    memoized_prototype_addr(&prototype_addrs()[FUNCTION_PROTO_CACHE]).unwrap_or(0)
+}
+
 /// Memoize THIS realm's `%Object.prototype%` the moment it is built, so the
 /// store path's "is this Object.prototype?" check answers for it even before
 /// the realm global exists (the class prototype chain reaches it first).

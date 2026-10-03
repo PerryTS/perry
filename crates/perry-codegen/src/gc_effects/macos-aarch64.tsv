@@ -581,6 +581,7 @@ js_class_env_register_slot	Leaf
 js_class_env_register_state	Leaf
 js_class_env_set	Reenters
 js_class_env_stamp	AllocOnly
+js_class_evaluation_object	Reenters
 js_class_field_add	Reenters
 js_class_field_get_ic	Reenters
 js_class_field_get_ic_fast	Leaf
@@ -593,9 +594,11 @@ js_class_lexical_binding_get	Reenters
 js_class_lexical_binding_set	Reenters
 js_class_method_bind	Reenters
 js_class_method_bind_by_id	Reenters
+js_class_method_entry_enter_home	Reenters
+js_class_method_entry_leave	Leaf
 js_class_method_snapshot_bind	Reenters
-js_class_object_pin_parent	Reenters
 js_class_object_refresh_capture_values	Reenters
+js_class_object_set_ctor_caps	Reenters
 js_class_prototype_method_value	Reenters
 js_class_register_capture_values	Leaf
 js_class_register_static_field	Reenters
@@ -1756,6 +1759,7 @@ js_native_call_method	Reenters
 js_native_call_method_apply	Reenters
 js_native_call_method_apply_by_id	Reenters
 js_native_call_method_by_id	Reenters
+js_native_call_method_by_id_learn	Reenters
 js_native_call_method_nullsafe	Reenters
 js_native_call_method_patched_proto	Reenters
 js_native_call_method_patched_proto_apply	Reenters
@@ -2127,6 +2131,7 @@ js_object_get_field_ic_overflow_load	Reenters
 js_object_get_field_ic_slow	Reenters
 js_object_get_index_polymorphic	Reenters
 js_object_get_own_field_or_undef	Reenters
+js_object_get_own_field_or_undef_learn	Reenters
 js_object_get_own_property_descriptor	Reenters
 js_object_get_own_property_descriptors	Reenters
 js_object_get_own_property_names	Reenters
@@ -2735,6 +2740,7 @@ js_register_class_id	Reenters
 js_register_class_length	Reenters
 js_register_class_method	Leaf
 js_register_class_method_bind_length	Reenters
+js_register_class_method_entry	Leaf
 js_register_class_name	Reenters
 js_register_class_parent	Reenters
 js_register_class_parent_dynamic	Reenters
@@ -3038,6 +3044,7 @@ js_state_get	Reenters
 js_state_init	Reenters
 js_state_set	Reenters
 js_static_method_entry_enter	Reenters
+js_static_method_entry_enter_home	Reenters
 js_static_method_entry_leave	Leaf
 js_static_this_arm_classref	Reenters
 js_static_this_arm_value	Leaf
@@ -3425,6 +3432,7 @@ js_typed_feedback_native_call_method_by_id	Reenters
 js_typed_feedback_numeric_array_index_get_guard	Reenters
 js_typed_feedback_numeric_array_index_set_guard	Reenters
 js_typed_feedback_numeric_array_push_guard	Leaf
+js_typed_feedback_object_get_field_by_key_f64	Reenters
 js_typed_feedback_object_get_field_by_name_f64	Reenters
 js_typed_feedback_object_get_field_by_value_f64	Reenters
 js_typed_feedback_object_set_field_by_name	Reenters

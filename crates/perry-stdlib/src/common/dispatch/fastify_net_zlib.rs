@@ -32,6 +32,10 @@ pub(crate) unsafe fn dispatch_zlib_stream(handle: i64, method: &str, args: &[f64
             crate::zlib::zlib_stream_on(handle, args[0], unbox_to_i64(args[1]));
             self_ref
         }
+        "off" | "removeListener" if args.len() >= 2 => {
+            crate::zlib::zlib_stream_off(handle, args[0], unbox_to_i64(args[1]));
+            self_ref
+        }
         "pipe" if !args.is_empty() => {
             crate::zlib::zlib_stream_pipe(handle, args[0]);
             args[0] // Node's `.pipe(dest)` returns `dest` for chaining

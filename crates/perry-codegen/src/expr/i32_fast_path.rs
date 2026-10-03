@@ -591,7 +591,7 @@ fn ta_int_elem_load_is_i32_provable(ctx: &FnCtx<'_>, object: &Expr, index: &Expr
 /// `Int32Array` **parameter** (`function f(S: Int32Array){ S[i] }`) lacks, since
 /// its length and inline-vs-view storage are unknown at compile time. Soundness
 /// comes from the *checked* emission ([`lower_checked_typed_array_i32_load`]): a
-/// runtime guard (pointer + inline-storage `PERRY_TA_VIEW_GUARD==0` + kind-cache
+/// runtime guard (pointer + kind-cache entry whose tag says inline storage
 /// match) and a header-length bounds check gate a bare load, an in-kind
 /// out-of-bounds read yields `0` (`== ToInt32(undefined)`), and every rejected
 /// shape (view/detached/resizable backing, wrong runtime kind) defers to the
@@ -685,7 +685,7 @@ fn i32_kind_from_class(name: &str) -> Option<(u8, crate::types::LlvmType, bool, 
 /// receiver whose storage/length is not statically known (a typed-array
 /// parameter). Mirrors the runtime `TypedArrayHeader` layout (length `u32` at
 /// offset 0, inline data at offset 16) and the process-global fast-path facts
-/// (`PERRY_TA_VIEW_GUARD`, `PERRY_TA_KIND_CACHE`). Hot path is a bare native
+/// (`PERRY_TA_KIND_CACHE`, whose tag carries inline storage). Hot path is a bare native
 /// load; a genuine in-kind out-of-bounds read merges in `0`; every guard miss
 /// defers to `js_typed_array_read_int32`. See [`checked_typed_array_i32_kind`]
 /// for the soundness argument. Callers must have proven the receiver eligible
@@ -722,11 +722,9 @@ fn lower_checked_typed_array_i32_load(
         let raw = blk.and(I64, &obj_bits, crate::nanbox::POINTER_MASK_I64);
         let tagged = blk.and(I64, &obj_bits, &tag_mask);
         let is_ptr = blk.icmp_eq(I64, &tagged, crate::nanbox::POINTER_TAG_I64);
-        // View guard 0 => every live typed array uses inline storage, so
-        // `data == header + 16`. Any view/native-arena backing bumps it,
-        // routing such receivers to the slow path.
-        let vg = blk.load(I64, "@PERRY_TA_VIEW_GUARD");
-        let vg_zero = blk.icmp_eq(I64, &vg, "0");
+        // #10516: the kind-cache tag carries the receiver's storage: an
+        // external-storage typed array (a view) caches `kind | 0x80`, so the
+        // kind compare below rejects it. No process-wide view count.
         // Kind-cache probe: slot = (raw >> 3) & 63; entry = (addr << 8) | kind.
         let slot = blk.lshr(I64, &raw, "3");
         let slot = blk.and(I64, &slot, "63");
@@ -740,8 +738,7 @@ fn lower_checked_typed_array_i32_load(
         let addr_match = blk.icmp_eq(I64, &entry_addr, &raw); // also rejects empty slot 0
         let kind_bits = blk.and(I64, &entry_val, "255");
         let kind_ok = blk.icmp_eq(I64, &kind_bits, &kind.to_string());
-        let g = blk.and(I1, &is_ptr, &vg_zero);
-        let g = blk.and(I1, &g, &addr_match);
+        let g = blk.and(I1, &is_ptr, &addr_match);
         let g = blk.and(I1, &g, &kind_ok);
         blk.cond_br(&g, &chk_label, &slow_label);
         raw

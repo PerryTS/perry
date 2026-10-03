@@ -246,6 +246,15 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
             return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
         }
 
+        // A class object owns `prototype` without storing it.
+        if super::super::class_registry::is_class_object_value(obj_value)
+            && super::super::has_own_helpers::str_from_string_header(key_str).is_some_and(|key| {
+                super::super::field_get_set::class_object_has_prototype_property(key.as_bytes())
+            })
+        {
+            return f64::from_bits(TAG_TRUE);
+        }
+
         if let Some(addr) = crate::typedarray_props::typed_array_addr_from_value(obj_value) {
             let present = crate::typedarray_props::typed_array_has_own_property(
                 addr as *const crate::typedarray::TypedArrayHeader,

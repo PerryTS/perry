@@ -63,7 +63,7 @@ pub use alloc::{
     js_object_alloc, js_object_alloc_fast, js_object_alloc_fast_with_parent,
     js_object_alloc_null_proto, js_object_alloc_with_parent, js_object_coerce,
 };
-pub(crate) use alloc_basic::object_alloc_plain;
+pub(crate) use alloc_basic::{object_alloc_born, object_alloc_plain};
 #[allow(unused_imports)]
 pub(crate) use alloc_plain::mark_object_plain_ordinary;
 pub use assign::*;
@@ -89,6 +89,7 @@ mod class_gc_roots;
 mod class_handles;
 pub mod class_image;
 mod class_registry;
+mod class_super_chain;
 pub(crate) mod class_value;
 #[cfg(test)]
 mod zeroed_cache_tests;
@@ -375,6 +376,7 @@ pub(crate) use descriptor_state::{
 };
 pub(crate) use field_get_set::FieldLookupCaches;
 pub(crate) use field_get_set::{
+    class_object_default_to_string, class_object_registry_serves_static,
     private_evaluation_brand_value, private_lexical_brand_pop, private_lexical_brand_push,
     private_lexical_brand_stack_restore, private_lexical_brand_stack_savepoint,
     private_member_access_hints_restore, private_member_access_hints_savepoint,
@@ -728,6 +730,7 @@ mod keys_lookup;
 mod object_keys;
 pub(crate) mod shaped_symbols;
 pub(crate) use object_keys::ObjectKeys;
+pub(crate) mod dynamic_key_read;
 pub(crate) mod read_stub;
 pub(crate) use keys_lookup::*;
 

@@ -423,6 +423,93 @@ fn keyed_shape_lacks_key(id: u32, key: &[u8]) -> bool {
     }
 }
 
+/// The function's own `prototype` value, read through its ShapeId (#10507):
+/// `Some(Some(v))` the value, `Some(None)` no own `prototype` yet (a base
+/// shape: nothing materialized it), `None` the shape does not say (a
+/// FunctionDictionary or class function object, or a key outside the inline
+/// slots) and the caller asks the bag.
+///
+/// A keyed Function shape is minted from the bag's ordinary descriptor
+/// (`refresh_closure_shape`), so its key list and live inline bound are the
+/// bag's: the slot of `prototype` is a fact of the immutable id, cached per
+/// agent like the intrinsic verdicts above. `prototype` of a function is a
+/// non-configurable data property, so the slot always holds its value.
+///
+/// # Safety
+/// `closure` is a proven, live closure cell.
+#[inline]
+pub(crate) unsafe fn closure_own_prototype_by_shape(
+    closure: *const ClosureHeader,
+) -> Option<Option<f64>> {
+    let id = (*closure).shape_id;
+    let slot = (id as usize).wrapping_mul(0x9E37_79B9) >> 26 & (VERDICT_CACHE_LEN - 1);
+    // SAFETY: this agent's own cell; no reference to it outlives the read.
+    let cached = PROTOTYPE_SLOT_CACHE.with(|c| (*c.as_ptr())[slot]);
+    let index = if cached.0 == id && id != 0 {
+        cached.1
+    } else {
+        let index = prototype_slot_of_shape(closure, id);
+        PROTOTYPE_SLOT_CACHE.with(|c| (*c.as_ptr())[slot] = (id, index));
+        index
+    };
+    match index {
+        PROTOTYPE_SLOT_UNKNOWN => None,
+        PROTOTYPE_SLOT_ABSENT => Some(None),
+        index => {
+            let bag = (*closure).props;
+            debug_assert!(!bag.is_null(), "a keyed Function shape has a bag");
+            let fields = (bag as *const u8).add(std::mem::size_of::<crate::object::ObjectHeader>())
+                as *const u64;
+            Some(Some(f64::from_bits(*fields.add(index as usize))))
+        }
+    }
+}
+
+const PROTOTYPE_SLOT_UNKNOWN: u32 = u32::MAX;
+const PROTOTYPE_SLOT_ABSENT: u32 = u32::MAX - 1;
+
+crate::perry_thread_local! {
+    /// Per-agent cache of Function ShapeIds' inline slot of `prototype`
+    /// ([`closure_own_prototype_by_shape`]); ShapeIds are never reused, so an
+    /// entry can only go unused, never wrong.
+    static PROTOTYPE_SLOT_CACHE: std::cell::Cell<[(u32, u32); VERDICT_CACHE_LEN]> =
+        const { std::cell::Cell::new([(0, 0); VERDICT_CACHE_LEN]) };
+}
+
+/// The inline slot of `prototype` the Function ShapeId `id` describes, or
+/// one of the two markers.
+#[cold]
+#[inline(never)]
+unsafe fn prototype_slot_of_shape(closure: *const ClosureHeader, id: u32) -> u32 {
+    if id == function_dictionary_shape() || is_class_info((*closure).info) {
+        return PROTOTYPE_SLOT_UNKNOWN;
+    }
+    let Some(descriptor) = shapes::shape_descriptor_by_id(id) else {
+        return PROTOTYPE_SLOT_UNKNOWN;
+    };
+    if descriptor.object_kind != ShapeObjectKind::Function {
+        return PROTOTYPE_SLOT_UNKNOWN;
+    }
+    if descriptor.keys == 0 || descriptor.logical_key_count == 0 {
+        return PROTOTYPE_SLOT_ABSENT;
+    }
+    let keys = descriptor.keys as usize as *const crate::array::ArrayHeader;
+    match crate::object::keys_find_slot_by_bytes_resolved(
+        keys,
+        descriptor.logical_key_count,
+        b"prototype",
+    ) {
+        None => PROTOTYPE_SLOT_ABSENT,
+        Some(index)
+            if (index as u32) < descriptor.live_inline_slot_count
+                && !crate::object::key_attrs::key_is_accessor_at(keys, index as u32) =>
+        {
+            index as u32
+        }
+        Some(_) => PROTOTYPE_SLOT_UNKNOWN,
+    }
+}
+
 /// Raw kind probe for a pointer the caller has already range/band-checked
 /// (the successor of the old `*(ptr + 12) == CLOSURE_MAGIC` read, with the
 /// same safety contract): the GC header's type byte says CLOSURE and the

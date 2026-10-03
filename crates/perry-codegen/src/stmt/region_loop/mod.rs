@@ -68,15 +68,16 @@ mod numeric_expression;
 mod plan;
 mod verify;
 
-use self::arrays::ArrayRecv;
 pub(crate) use self::arrays::{
-    alias_clone, emit_poll_refresh, is_bare_index_get, try_lower_bare_index_get, unalias_clone,
+    alias_clone, emit_poll_refresh, is_bare_index_get, is_f64_index_read, try_lower_bare_index_get,
+    try_lower_bare_index_set, unalias_clone,
 };
+use self::arrays::{ArrayRecv, ArrayUse, Env};
 use self::bare::note;
 pub(crate) use self::bare::{try_lower_bare_get, try_lower_bare_put, try_lower_fact_add_tree};
 use self::guard::{
-    decode_slots, emit_body_guard_direct, emit_guard, emit_guard_word, field_i32, handle_of,
-    has_static_supplier, lower_recv, store_admission,
+    decode_slots, emit_body_guard_direct, emit_guard, emit_guard_word, emit_recheck_eq,
+    emit_value_tests, field_i32, handle_of, has_static_supplier, lower_recv, store_admission,
 };
 pub(crate) use self::numeric_expression::try_lower_numeric_compare;
 use self::plan::{
@@ -189,8 +190,14 @@ pub(crate) struct Receiver {
     /// Bit `i`: a bare store may write `keys[i]` a value not proven a
     /// canonical double (the word must then give it an `Any` lane).
     boxed_mask: u32,
-    /// Bit `i`: a read assumes the key has an identity F64 lane.
+    /// Bit `i`: a read assumes the key holds a raw canonical Number (R).
     r_mask: u32,
+    /// Bit `i`: an R key the guard value-tests on the object when the word
+    /// carries `VALUE_TEST_BIT` (a lane that is not an identity F64 lane).
+    /// Before the guard: the R keys the plan lets a STATIC word value-test.
+    /// After it: a static word's exact `Any`-lane R keys, or every R key of a
+    /// learned word (which may ask for any of them).
+    vt_mask: u32,
     /// `i1`: the guard matched this receiver's SPILL word (flipped id).
     spill: String,
     sites: Option<(String, String)>,
@@ -205,8 +212,9 @@ pub(crate) struct Receiver {
 
 /// Whether this exact fresh bare read is protected by an R bit in an
 /// active F clone. The published word (or exact static birth id) guarantees
-/// the slot holds a canonical raw JS Number; G and post-loop have no Active
-/// fact and therefore never answer true.
+/// the slot holds a canonical raw JS Number — by its identity F64 lane, or by
+/// the guard's value test when the word carries `VALUE_TEST_BIT`; G and
+/// post-loop have no Active fact and therefore never answer true.
 pub(crate) fn is_f64_read(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     let Expr::PropertyGet {
         object, property, ..
@@ -261,6 +269,8 @@ pub(crate) struct Pending {
     spill_mode: bool,
     /// Loop regions: array receivers (S3), guarded in the preheader.
     arrays: Vec<ArrayRecv>,
+    /// Statements after which F-body sets the dirty flag.
+    dirty_after: HashSet<usize>,
     /// Loop regions with array receivers: the body region split inside
     /// F-body (a per-iteration receiver read from the array). Its fact
     /// trees' generic arms set the loop's dirty flag (its `dirty_slot` is the
@@ -300,6 +310,7 @@ pub(crate) struct Active {
     /// Array receivers (S3) and the emitted bare element reads.
     arrays: Vec<ArrayRecv>,
     emitted_arr: Vec<(usize, usize)>,
+    dirty_after: HashSet<usize>,
 }
 
 thread_local! {
@@ -410,7 +421,8 @@ fn begin_with(
     }
     // A loop region; failing that, a body region (per-iteration receiver).
     let cands = candidates_for_loop(ctx, cond, body, update);
-    let arrs = arrays::candidates(ctx, cond, body, update);
+    let env = arrays::loop_env(ctx, cond, body, update);
+    let arrs = arrays::candidates(ctx, cond, body, update, &env);
     // Array receivers (S3): the loop region, with the body region nested in
     // its F-body when there is one. Without a bare element read, today's
     // choice below.
@@ -422,20 +434,21 @@ fn begin_with(
             body,
             cands.clone(),
             arrs,
+            &env,
             Some((cond, update)),
             inner.as_ref().map(|(k, ip)| (*k, &ip.bare, &ip.trees)),
-        )
-        // A re-check every iteration re-derives the array's facts every
-        // iteration: that is the straight-line read's cost, plus a split.
-        .filter(|p| !p.arrays.is_empty() && p.recheck != Recheck::Always);
+        );
         if std::env::var("PERRY_REGION_DIAG").as_deref() == Ok("4") {
             eprintln!(
                 "[perry region] array plan in {}: {:?}",
                 ctx.func.name,
                 p.as_ref()
-                    .map(|p| (p.recheck, p.arrays.len(), p.bare.len()))
+                    .map(|p| (p.recheck, p.arrays.clone(), p.bare.len()))
             );
         }
+        // A re-check every iteration re-derives the array's facts every
+        // iteration: that is the straight-line read's cost, plus a split.
+        let p = p.filter(|p| !p.arrays.is_empty() && p.recheck != Recheck::Always);
         if let Some(p) = p {
             let bare = p.bare.len() + inner.as_ref().map_or(0, |(_, ip)| ip.bare.len());
             if pays(ctx, "loop", body_nodes(body), bare) {
@@ -449,8 +462,16 @@ fn begin_with(
     let (first, inner) = match nested {
         Some((p, inner)) => (Some(p), inner),
         None => (
-            plan(ctx, body, cands, HashMap::new(), Some((cond, update)), None)
-                .filter(|p| pays(ctx, "loop", body_nodes(body), p.bare.len())),
+            plan(
+                ctx,
+                body,
+                cands,
+                HashMap::new(),
+                &Env::default(),
+                Some((cond, update)),
+                None,
+            )
+            .filter(|p| pays(ctx, "loop", body_nodes(body), p.bare.len())),
             None,
         ),
     };
@@ -472,6 +493,11 @@ fn begin_with(
                 stored_mask: effective_stored_mask(*sm, k.len()),
                 boxed_mask: *bm,
                 r_mask: *rm,
+                // A static word's value-tested R is re-tested at every
+                // re-check; a loop that re-checks every iteration would pay
+                // that test every iteration for what R saves, so it takes no
+                // value-tested R (a learned word is decided by its bit).
+                vt_mask: if p.recheck == Recheck::Always { 0 } else { *rm },
                 spill: "false".to_string(),
                 sites: None,
                 word: String::new(),
@@ -483,23 +509,36 @@ fn begin_with(
         for rv in receivers.iter_mut() {
             let (word, pass, spill) = emit_guard(ctx, rv)?;
             rv.spill = spill;
+            let pass = emit_value_tests(ctx, rv, &word, &pass)?;
             all = ctx.block().and(I1, &all, &pass);
             decode_slots(ctx, rv, &word);
         }
         let mut arrs: Vec<ArrayRecv> = Vec::new();
-        for (r, m) in &p.arrays {
+        for (r, u) in &p.arrays {
             let a = ArrayRecv {
                 recv: *r,
-                max_index: *m,
+                max_index: u.max_index,
+                dense: u.dense(),
+                store: u.store,
+                typed: u.dense() && !arrays::declared_plain_array(ctx, *r),
+                counter: env.counter.filter(|_| u.counter),
+                aliases: env
+                    .aliases
+                    .iter()
+                    .filter(|(_, src)| Recv::Local(**src) == *r)
+                    .map(|(a, _)| *a)
+                    .collect(),
                 base_slot: ctx.func.alloca_entry(I64),
             };
             let pass = arrays::emit_guard(ctx, &a)?;
             all = ctx.block().and(I1, &all, &pass);
             arrs.push(a);
         }
+        let loop_control: Vec<&Expr> = cond.into_iter().chain(update).collect();
         let (number_locals, entry_tests) = number_facts(
             ctx,
             body,
+            &loop_control,
             &receivers,
             &p.bare_reads,
             &p.number_local_uses,
@@ -537,6 +576,7 @@ fn begin_with(
             token,
             spill_mode: false,
             arrays: arrs,
+            dirty_after: p.dirty_after,
             inner,
             parent_valid: None,
             retry: None,
@@ -586,8 +626,16 @@ fn body_region_plan(ctx: &FnCtx<'_>, body: &[Stmt]) -> Option<(usize, Plan)> {
         }
         let mut cands = HashSet::new();
         cands.insert(Recv::Local(*id));
-        if let Some(p) = plan(ctx, tail, cands, HashMap::new(), None, None)
-            .filter(|p| pays(ctx, "body", body_nodes(tail), p.bare.len()))
+        if let Some(p) = plan(
+            ctx,
+            tail,
+            cands,
+            HashMap::new(),
+            &Env::default(),
+            None,
+            None,
+        )
+        .filter(|p| pays(ctx, "body", body_nodes(tail), p.bare.len()))
         {
             return Some((i + 1, p));
         }
@@ -601,6 +649,7 @@ fn body_region_plan(ctx: &FnCtx<'_>, body: &[Stmt]) -> Option<(usize, Plan)> {
 fn number_facts(
     ctx: &FnCtx<'_>,
     tail: &[Stmt],
+    loop_control: &[&Expr],
     receivers: &[Receiver],
     bare_reads: &[(usize, Recv, String)],
     number_local_uses: &HashSet<u32>,
@@ -618,14 +667,25 @@ fn number_facts(
             })
         })
         .collect();
-    number_facts_from_reads(ctx, tail, &f64_reads, number_local_uses, declared_locals)
+    number_facts_from_reads(
+        ctx,
+        tail,
+        loop_control,
+        &f64_reads,
+        number_local_uses,
+        declared_locals,
+    )
 }
 
 /// The same 5L fixed point is used while planning and while lowering. The
 /// planner supplies only exact fresh bare reads protected by its proposed R.
+/// `loop_control` is a loop region's condition and update: they run between
+/// F iterations, after the one preheader test, so their writes are judged
+/// with the body's.
 fn number_facts_from_reads(
     ctx: &FnCtx<'_>,
     tail: &[Stmt],
+    loop_control: &[&Expr],
     f64_reads: &HashSet<usize>,
     number_local_uses: &HashSet<u32>,
     declared_locals: &HashSet<u32>,
@@ -651,6 +711,7 @@ fn number_facts_from_reads(
         entry_candidates: &entry_candidates,
         static_numbers: ctx.number_by_construction_locals,
         f64_reads,
+        loop_control,
     };
     let numeric = crate::collectors::collect_numeric_by_construction_locals_in_region(
         tail,
@@ -708,6 +769,7 @@ fn body_pending(p: Plan, body: &[Stmt], split_at: usize) -> Pending {
             stored_mask: effective_stored_mask(*sm, k.len()),
             boxed_mask: *bm,
             r_mask: *rm,
+            vt_mask: *rm,
             spill: "false".to_string(),
             sites: None,
             word: String::new(),
@@ -733,6 +795,7 @@ fn body_pending(p: Plan, body: &[Stmt], split_at: usize) -> Pending {
         token,
         spill_mode: false,
         arrays: Vec::new(),
+        dirty_after: HashSet::new(),
         inner: None,
         parent_valid: None,
         retry: None,
@@ -849,6 +912,22 @@ fn any_flag(ctx: &mut FnCtx<'_>, flags: &[String]) -> String {
     acc
 }
 
+/// `lower_stmts`' per-statement hook: in F-body, a statement after which the
+/// facts may be stale sets the dirty flag (see `Plan::dirty_after`).
+pub(crate) fn after_stmt(ctx: &mut FnCtx<'_>, s: &Stmt) {
+    let Some(slot) = ctx.region_loop_facts.last().and_then(|a| {
+        a.dirty_after
+            .contains(&(s as *const Stmt as usize))
+            .then(|| a.dirty_slot.clone())
+            .flatten()
+    }) else {
+        return;
+    };
+    if !ctx.block().is_terminated() {
+        ctx.block().store(I1, "true", &slot);
+    }
+}
+
 pub(crate) fn end(ctx: &mut FnCtx<'_>, token: Option<u64>) {
     if let Some(t) = token {
         ctx.region_loops.retain(|p| p.token != t);
@@ -919,6 +998,7 @@ pub(crate) fn lower_split(
     let trees = ctx.region_loops[idx].trees.clone();
     let dirty_slot = ctx.region_loops[idx].dirty_slot.clone();
     let arrs = ctx.region_loops[idx].arrays.clone();
+    let dirty_after = ctx.region_loops[idx].dirty_after.clone();
     // The layouts F-body must serve: a loop region's split copy was chosen by
     // its preheader (one layout); a body region chooses per iteration, so it
     // carries the all-inline copy and, unless every key it names is stored
@@ -996,7 +1076,9 @@ pub(crate) fn lower_split(
                     } else {
                         exp
                     };
-                    let eq = ctx.block().icmp_eq(I32, &sid, &exp);
+                    // A re-check follows JS that may have written an R slot
+                    // of a value-tested lane: the values are tested again.
+                    let eq = emit_recheck_eq(ctx, rv, &sid, &exp)?;
                     let eq = if rv.has_store {
                         let adm = store_admission(ctx, &h, false);
                         ctx.block().and(I1, &eq, &adm)
@@ -1039,6 +1121,7 @@ pub(crate) fn lower_split(
             for rv in receivers.iter_mut() {
                 let (word, pass, spill) = emit_guard(ctx, rv)?;
                 rv.spill = spill;
+                let pass = emit_value_tests(ctx, rv, &word, &pass)?;
                 all = ctx.block().and(I1, &all, &pass);
                 decode_slots(ctx, rv, &word);
             }
@@ -1050,9 +1133,12 @@ pub(crate) fn lower_split(
     let (number_locals, entry_tests) = if valid_slot.is_some() {
         (planned_number_locals, planned_entry_tests)
     } else {
+        // Only a body region gets here: it has no loop control of its own,
+        // and its tests run at the split on every entry.
         number_facts(
             ctx,
             tail,
+            &[],
             &receivers,
             &bare_reads,
             &number_local_uses,
@@ -1095,6 +1181,7 @@ pub(crate) fn lower_split(
             spill: mode,
             arrays: arrs.clone(),
             emitted_arr: Vec::new(),
+            dirty_after: dirty_after.clone(),
         });
         let r = match &inner {
             Some(ib) => {

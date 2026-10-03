@@ -223,10 +223,10 @@ console.log("E=" + add(2, 3) + "," + add("x", 5) + "," + add(1, "y") + "," + add
 /// behaviourally identical to the slow path across: every inlined element kind
 /// (Int8…Float64, signed/unsigned/float), in-bounds round-trips, the OOB /
 /// negative / fractional / NaN index deferrals, the kinds the inline guard
-/// excludes (Uint8Clamped clamp, BigInt, Float16), and the `PERRY_TA_VIEW_GUARD`
-/// case where a live ArrayBuffer-backed view bars the inline path so *all*
-/// typed-array accesses (even on owning arrays) take the slow path yet stay
-/// correct.
+/// excludes (Uint8Clamped clamp, BigInt, Float16), and the external-storage
+/// case where a live ArrayBuffer-backed view takes the slow path on its own
+/// storage byte (#10516) while owning arrays keep the inline path, and every
+/// access stays correct.
 #[test]
 fn inline_typed_array_fast_path_matches_slow_path() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -277,12 +277,12 @@ const c = new Uint8ClampedArray(2); s(c, 0, 300); s(c, 1, -5);
 const b = new BigInt64Array(1); s(b, 0, 5n);
 console.log("C=" + g(c,0) + "," + g(c,1) + "," + (typeof g(b,0)) + "," + g(b,0));
 
-// (D) PERRY_TA_VIEW_GUARD: once an ArrayBuffer-backed view is live, the inline
-// path must be barred for ALL typed arrays (owning included) and every access
-// must still be correct via the slow path.
+// (D) external storage (#10516): an ArrayBuffer-backed view takes the slow path
+// on its own storage byte, owning arrays keep the inline path, and every access
+// must still be correct.
 const own = new Int32Array(2); s(own, 0, 111); s(own, 1, 222);
 const ab = new ArrayBuffer(8);
-const v = new Int32Array(ab);           // bumps the view guard
+const v = new Int32Array(ab);           // external storage
 s(v, 0, 333); s(v, 1, 444);
 console.log("D=" + g(own,0) + "," + g(own,1) + "," + g(v,0) + "," + g(v,1));
 "#,

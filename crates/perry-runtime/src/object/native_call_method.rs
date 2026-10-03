@@ -11,6 +11,7 @@ use super::*;
 mod bare_receiver;
 mod collection_methods;
 mod common_methods;
+mod direct_site;
 mod disposal;
 mod function_shape;
 mod handle_methods;
@@ -125,6 +126,30 @@ pub(super) use typed_array::dispatch_typed_array_method;
 ///   `resolve_inherited_field` probe had nothing to shadow with.
 #[inline]
 unsafe fn class_vtable_fast_guard(object: f64, method_bytes: &[u8]) -> Option<(usize, u32)> {
+    class_vtable_receiver_guard::<false>(object, method_bytes)
+}
+
+/// [`class_vtable_fast_guard`], optionally accepting a receiver that carries
+/// an [`ObjectMeta`](crate::object::ObjectMeta) record for storage only.
+///
+/// With `META_STORAGE_OK`, a metadata record is accepted when every field
+/// that could change where a lookup of `method_bytes` goes is inert: no
+/// recorded `[[Prototype]]`, no flags (no prototype divergence or override,
+/// not an exotic read receiver, not itself a prototype) and no
+/// fresh-evaluation private brand. Overflow (`spill`) storage holds VALUES of
+/// keys the shape's key list already names, and descriptor state lives with
+/// the keys (an accessor or attribute for `method_bytes` is a key of that
+/// name), so the own-key scan below still answers. An instance with more
+/// fields than its inline slots (an `EventEmitter` subclass, a wide
+/// constructor) carries exactly that. Only the learned site words use this
+/// form: they are facts of one ShapeId, which every descriptor install
+/// changes, whereas the `(class, name)` cache this guard otherwise feeds is
+/// not.
+#[inline]
+unsafe fn class_vtable_receiver_guard<const META_STORAGE_OK: bool>(
+    object: f64,
+    method_bytes: &[u8],
+) -> Option<(usize, u32)> {
     let bits = object.to_bits();
     if (bits >> 48) != (crate::value::POINTER_TAG >> 48) {
         return None;
@@ -162,8 +187,15 @@ unsafe fn class_vtable_fast_guard(object: f64, method_bytes: &[u8]) -> Option<(u
     // the tower invoke the getter and call its result. That is a per-object
     // divergence the class/name cache key cannot see, and
     // `may_have_descriptor_entry` returns `false` for exactly this state.
-    if !(*obj).meta.is_null() {
-        return None;
+    let meta = (*obj).meta;
+    if !meta.is_null() {
+        if !META_STORAGE_OK
+            || (*meta).prototype != 0
+            || (*meta).flags != 0
+            || (*meta).private_evaluation_brand != 0
+        {
+            return None;
+        }
     }
     let class_id = (*obj).class_id;
     if class_id == 0 {

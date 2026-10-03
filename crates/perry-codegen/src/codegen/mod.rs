@@ -204,6 +204,7 @@ mod emission_order_tests;
 mod entry;
 pub mod entry_outline;
 mod export_value_wrappers;
+mod fresh_class_templates;
 pub(crate) mod func_registry;
 mod function;
 mod function_source_header;
@@ -2481,6 +2482,7 @@ fn compile_module_impl(
     // Step 5C: a literal's method slot holding a module function's value is a
     // ConstFn lane too; births and lowering read the same admitted set.
     static_constfn::set_module_function_values(hir, &module_prefix);
+    static_constfn::set_module_object_create_protos(hir);
     if let Some(births) = births {
         *births = static_shape_ids::module_births(
             &module_prefix,

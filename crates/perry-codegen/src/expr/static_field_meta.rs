@@ -608,85 +608,56 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         } => {
             let template_cid = ctx.class_ids.get(template).copied().unwrap_or(0);
             let tcid_str = template_cid.to_string();
-            let nfields = named_statics.len().to_string();
-            // Allocate with class_id = template; set_field_by_name below
-            // performs the keys-array transition for the named statics.
-            let obj =
-                ctx.block()
-                    .call(I64, "js_object_alloc", &[(I32, &tcid_str), (I32, &nfields)]);
-            // #1789: mark it as a class object (ShapeObjectKind::Class)
-            // so `typeof` reports "function" and `new`/`instanceof` read the
-            // class_id from this object rather than treating it as an instance.
-            ctx.block()
-                .call_void("js_object_mark_class", &[(I64, &obj)]);
-            // #6438: pin THIS evaluation's parent onto the object. The lowering
-            // sequences `RegisterClassParentDynamic` immediately ahead of this
-            // node, so `CLASS_DYNAMIC_PARENT_VALUE[template]` still holds this
-            // evaluation's parent; later evaluations overwrite it, but each
-            // object keeps its own edge. Without this, a factory invoked more
-            // than once (effect's `class DeclareClass extends make(ast) { … }`)
-            // has every instance walk to the LAST parent — reading that
-            // evaluation's `static ast` instead of its own. No-op when the class
-            // expression has no heritage.
-            ctx.block().call_void(
-                "js_class_object_pin_parent",
-                &[(I64, &obj), (I32, &tcid_str)],
+            // Room for the evaluation's own `length`, `name` and static
+            // methods, its pinned parent, its captured environment and its
+            // prototype object besides its static fields, so the template's
+            // shapes are all inline slots (`class_object_template`).
+            let own_member_slots =
+                3 + ctx.classes.get(template).map_or(0, |c| {
+                    c.static_methods.len() + usize::from(c.extends_expr.is_some())
+                }) + usize::from(!captured_args.is_empty());
+            let nfields = (named_statics.len() + own_member_slots).to_string();
+            // A static FIELD named `length` / `name` takes over the intrinsic
+            // property; it is created as an ordinary one.
+            let field_mask =
+                named_statics
+                    .iter()
+                    .fold(0u32, |mask, (name, _)| match name.as_str() {
+                        "length" => mask | 1,
+                        "name" => mask | 2,
+                        _ => mask,
+                    });
+            // #1789 / #6438: the evaluation's class object, stamped with
+            // class_id = template and marked a class object
+            // (ShapeObjectKind::Class, so `typeof` reports "function" and
+            // `new`/`instanceof` read the class_id from it), owning its
+            // `length`, `name` and static methods and pinned to THIS
+            // evaluation's parent. The lowering sequences
+            // `RegisterClassParentDynamic` immediately ahead of this node, so
+            // `CLASS_DYNAMIC_PARENT_VALUE[template]` still holds that parent;
+            // later evaluations overwrite it, but each object keeps its own
+            // edge. Every evaluation after the template's first is allocated
+            // directly in the template's final shape.
+            let obj = ctx.block().call(
+                I64,
+                "js_class_evaluation_object",
+                &[
+                    (I32, &tcid_str),
+                    (I32, &nfields),
+                    (I32, &field_mask.to_string()),
+                ],
             );
-            // #7154: the fresh class object is a raw SSA register while every
-            // static initializer and captured argument is lowered, and those
-            // allocate. An evacuating minor relocates it, after which each
-            // remaining `js_object_set_field_by_name` writes into from-space —
-            // the statics land on the abandoned copy. Same rooting contract
-            // `Expr::Object` has used since #6951.
-            //
-            // `captured_args` forces protection on its own, independently of
-            // whether the capture *expressions* collect: the snapshot below
-            // allocates a `js_array_alloc` accumulator and grows it with
-            // `js_array_push_f64` per element, and those are collection points
-            // even when every element is an inert `LocalGet`.
-            //
-            // So does a `static { … }` block, for the plainer reason that its
-            // body is arbitrary user code — which is why `block_fns` is computed
-            // HERE rather than at its loop below: the predicate has to see it.
-            // A class expression whose only statics are inert (`static x = 1`)
-            // but which carries a static block otherwise pushed no root at all,
-            // and the block's body could then relocate the object out from under
-            // the register the final `nanbox_pointer_inline` reads.
+            // #7154: the fresh class object is a raw SSA register while the
+            // evaluation allocates (every static initializer and captured
+            // argument), and an evacuating minor relocates it, after which each
+            // later `js_object_set_field_by_name` would write into from-space —
+            // the statics would land on the abandoned copy. So the object is
+            // always held in a rooted group (`Expr::Object`'s contract since
+            // #6951), re-read before each use. (`CLASS_OBJECT_VALUES` does not
+            // protect the register: it is a forwarded root that keeps the
+            // OBJECT alive but never rewrites `%obj`.)
             let block_fns = static_block_fns(ctx, template);
-            // #7211: `!named_statics.is_empty()` is the disjunct the original
-            // predicate was missing, and its absence is the interesting part.
-            //
-            // Every other clause here asks the same question — "can something
-            // the AUTHOR wrote collect?" — about a captured argument, a symbol
-            // static, a `static { … }` body, or an initializer expression.
-            // None of them asks whether the lowering's OWN emitted calls can,
-            // and the loop directly below unconditionally emits one
-            // `js_object_set_field_by_name` per named static. That helper
-            // performs the keys-array transition and allocates. So
-            // `class C { static tag = tag }` — a single inert `LocalGet`
-            // initializer — took `protect_handle == false`, kept the fresh
-            // object in a bare SSA register across a collection point, and
-            // then bound a shadow slot to the pre-move address.
-            //
-            // `js_object_mark_class` does NOT cover this, and it is the
-            // natural reason to wave it off: it files the pointer in
-            // `CLASS_OBJECT_VALUES`, which is a registered root and IS
-            // forwarded (`class_registry/gc_roots.rs:138`). That keeps the
-            // OBJECT alive and the side table's copy correct — and does
-            // nothing for `%obj`, a separate copy the collector cannot see.
-            // Reachability is not the invariant; the invariant is that the
-            // register you are still going to use was rewritten.
-            // The old `any_may_trigger_gc(named_statics)` disjunct is gone
-            // rather than kept alongside: it is now strictly subsumed — it can
-            // only be true when `named_statics` is non-empty, which is the new
-            // clause. Leaving it would read as a second, narrower opinion
-            // about the same operand and invite someone to "restore" the
-            // narrow one.
-            let protect_handle = !named_statics.is_empty()
-                || !captured_args.is_empty()
-                || !computed_keys.is_empty()
-                || !computed_statics.is_empty()
-                || !block_fns.is_empty();
+            let protect_handle = true;
             with_rooted_group(ctx, 1, |ctx, group| {
                 let rooted = group.adopt_emitted(ctx, Repr::Ptr, &obj, protect_handle);
                 // A named class expression's lexical self-binding is
@@ -804,19 +775,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         },
                         |ctx, arr| Ok(nanbox_pointer_inline(ctx.block(), arr)),
                     )?;
-                    let key_idx = ctx.strings.intern("__perry_ctor_caps");
-                    let key_handle_global =
-                        format!("@{}", ctx.strings.entry(key_idx).handle_global);
                     // #7154: re-read the class object — the capture lowerings above
                     // are arbitrary expressions and may have moved it.
                     let obj = group.reread_emitted(ctx, rooted);
-                    let blk = ctx.block();
-                    let key_box = blk.load(DOUBLE, &key_handle_global);
-                    let key_bits = blk.bitcast_double_to_i64(&key_box);
-                    let key_raw = blk.and(I64, &key_bits, crate::nanbox::POINTER_MASK_I64);
-                    blk.call_void(
-                        "js_object_set_field_by_name",
-                        &[(I64, &obj), (I64, &key_raw), (DOUBLE, &caps_box)],
+                    // Its own `__perry_ctor_caps`: one recorded transition from
+                    // the template's final shape (`class_object_template`).
+                    ctx.block().call_void(
+                        "js_class_object_set_ctor_caps",
+                        &[(I64, &obj), (DOUBLE, &caps_box)],
                     );
                     // A guarded class environment learns this evaluation; the
                     // first one publishes its captures into the slots.

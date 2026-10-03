@@ -170,12 +170,36 @@ pub(super) fn emit_body_guard_direct(
                 None => ctx.block().cond_br(cond, target, other),
             }
         };
-    to(ctx, &eq, inline_l, &flip_l, &admit);
+    // A word carrying VALUE_TEST_BIT enters F only once the object's R
+    // slots hold Numbers; the matched ShapeId makes the word's slots its own.
+    let (inline_to, spill_to) = if may_value_test(rv) {
+        let mut targets = Vec::with_capacity(2);
+        for target in [inline_l, spill_l] {
+            let vt = ctx.new_block("rloop.guard.value");
+            let test = ctx.new_block("rloop.guard.value.test");
+            let vt_l = ctx.block_label(vt);
+            let test_l = ctx.block_label(test);
+            let saved = ctx.current_block;
+            ctx.current_block = vt;
+            let need = ctx.block().icmp_slt(I64, word, "0");
+            ctx.block().cond_br(&need, &test_l, target);
+            ctx.current_block = test;
+            let ok = value_tests_on(ctx, rv, word, &handle);
+            ctx.block().cond_br(&ok, target, fail_l);
+            ctx.current_block = saved;
+            targets.push(vt_l);
+        }
+        let spill_to = targets.pop().expect("two targets");
+        (targets.pop().expect("two targets"), spill_to)
+    } else {
+        (inline_l.to_string(), spill_l.to_string())
+    };
+    to(ctx, &eq, &inline_to, &flip_l, &admit);
 
     ctx.current_block = flip;
     let exp_f = ctx.block().xor(I32, &expected, FLIP_I32);
     let eq_f = ctx.block().icmp_eq(I32, &sid, &exp_f);
-    to(ctx, &eq_f, spill_l, &miss_l, &admit);
+    to(ctx, &eq_f, &spill_to, &miss_l, &admit);
 
     ctx.current_block = miss;
     let tries = ctx.block().load(I32, &sites.tries_g);
@@ -198,7 +222,7 @@ pub(super) fn emit_body_guard_direct(
 /// Class provenance chooses the supplier when available; otherwise a class
 /// hint suffices. Neither licenses a slot access: the guard compares the live
 /// ShapeId against the supplier's id, and a different shape selects G.
-fn static_region_word(ctx: &FnCtx<'_>, rv: &Receiver) -> Option<(u64, u32, bool)> {
+fn static_region_word(ctx: &FnCtx<'_>, rv: &Receiver) -> Option<(u64, u32, u32, bool)> {
     // Use containment's exact class to select the supplier when available.
     // This consumes only class provenance: the compared ShapeId below remains
     // the sole authority for slot locations and Number representation.
@@ -220,13 +244,127 @@ fn static_region_word(ctx: &FnCtx<'_>, rv: &Receiver) -> Option<(u64, u32, bool)
         })
     })?;
     let keys_global = ctx.class_keys_globals.get(&class_name)?;
-    let (id, slots, r_mask) =
+    let (id, slots, f64_lanes) =
         crate::codegen::static_region_slots(keys_global, &rv.keys, rv.boxed_mask)?;
+    // The runtime's rule (`region_loop_pack`), decided here for the static
+    // birth shape: a requested Number read on an identity F64 lane is free,
+    // and one on an `Any` lane is served by a value test on the object
+    // unless a bare store may write that key a non-Number, or the plan does
+    // not allow value tests (`vt_mask`: a guard re-run every iteration).
+    let tested = rv.r_mask & rv.vt_mask & !f64_lanes & !rv.boxed_mask;
     let mut word = u64::from(id);
     for (i, slot) in slots.iter().enumerate() {
         word |= u64::from(*slot) << (32 + SLOT_BITS * i as u32);
     }
-    Some((word, r_mask, proven_class.is_some()))
+    if tested != 0 {
+        word |= VALUE_TEST_BIT;
+    }
+    Some((word, f64_lanes | tested, tested, proven_class.is_some()))
+}
+
+/// Bit 63 of a region word, `REGION_LOOP_WORD_VALUE_TEST`: a Number read
+/// (R) of this word sits on a lane that does not guarantee a Number for every
+/// carrier, so the guard tests the R slots' values on the object.
+pub(super) const VALUE_TEST_BIT: u64 = 1 << 63;
+
+/// The R slots' value test: each slot `rv.vt_mask` names (decoded from
+/// `word`) of the object `handle` holds a raw canonical Number now — the
+/// strict test the number entry tests use (no tag, no INT32 box, no mirror
+/// of the tag band). Only valid where `word` matched the object's ShapeId.
+fn value_tests_on(ctx: &mut FnCtx<'_>, rv: &Receiver, word: &str, handle: &str) -> String {
+    let mut ok = "true".to_string();
+    for i in 0..rv.keys.len() {
+        if (rv.r_mask & rv.vt_mask) & (1 << i) == 0 {
+            continue;
+        }
+        let shift = (32 + SLOT_BITS * i as u32).to_string();
+        let s = ctx.block().lshr(I64, word, &shift);
+        let slot = ctx.block().and(I64, &s, "63");
+        let p = super::bare::slot_ptr(ctx, handle, &slot);
+        let v = ctx.block().load(DOUBLE, &p);
+        let number = crate::stmt::loops::emit_js_value_is_number(ctx, &v);
+        ok = ctx.block().and(I1, &ok, &number);
+    }
+    ok
+}
+
+/// Does `rv` have an R slot its word may ask the guard to value-test?
+pub(super) fn may_value_test(rv: &Receiver) -> bool {
+    rv.r_mask & rv.vt_mask != 0
+}
+
+/// A loop region's re-check compare for one receiver: the object's ShapeId
+/// `sid` against the expected id `exp`, plus the R slots' value test when the
+/// word asks for one (JS may have written those slots since the guard).
+///
+/// The re-check sits on the hot path of every iteration that may run JS, so
+/// a LEARNED word without [`VALUE_TEST_BIT`] must cost exactly the plain
+/// compare. Its bit is known only at run time, so the compare is against a
+/// loop-invariant id that a word WITH the bit replaces by `EMPTY` (which no
+/// object carries): such a word fails the re-check and the loop continues in
+/// G (today's code), never in an F whose R facts were not re-proven. A static
+/// word knows its bit when compiled: one with the bit re-tests the values,
+/// one without pays nothing.
+pub(super) fn emit_recheck_eq(
+    ctx: &mut FnCtx<'_>,
+    rv: &Receiver,
+    sid: &str,
+    exp: &str,
+) -> Result<String> {
+    if !may_value_test(rv) {
+        return Ok(ctx.block().icmp_eq(I32, sid, exp));
+    }
+    if rv.expected_shape.is_some() {
+        let eq = ctx.block().icmp_eq(I32, sid, exp);
+        let word = rv.word.clone();
+        return emit_value_tests(ctx, rv, &word, &eq);
+    }
+    let need = ctx.block().icmp_slt(I64, &rv.word, "0");
+    let exp_fast = ctx.block().select(I1, &need, I32, "-1", exp);
+    Ok(ctx.block().icmp_eq(I32, sid, &exp_fast))
+}
+
+/// `pass` and, when it holds and `word` carries [`VALUE_TEST_BIT`], the R
+/// slots' value test on the receiver (re-derived from its binding: `pass`
+/// proves it is an object whose ShapeId `word` names). A word without the bit
+/// costs one sign test; a receiver with no testable R costs nothing.
+pub(super) fn emit_value_tests(
+    ctx: &mut FnCtx<'_>,
+    rv: &Receiver,
+    word: &str,
+    pass: &str,
+) -> Result<String> {
+    if !may_value_test(rv) {
+        return Ok(pass.to_string());
+    }
+    // Branch on `pass` first, then on the word's sign bit: a failing compare
+    // keeps its one branch, and a word without the bit pays one sign test.
+    let chk = ctx.new_block("rloop.guard.value.need");
+    let vt = ctx.new_block("rloop.guard.value");
+    let join = ctx.new_block("rloop.guard.value.join");
+    let chk_l = ctx.block_label(chk);
+    let vt_l = ctx.block_label(vt);
+    let join_l = ctx.block_label(join);
+    let from = ctx.block().label.clone();
+    ctx.block().cond_br(pass, &chk_l, &join_l);
+    ctx.current_block = chk;
+    let need = ctx.block().icmp_slt(I64, word, "0");
+    ctx.block().cond_br(&need, &vt_l, &join_l);
+    ctx.current_block = vt;
+    let recv_box = lower_recv(ctx, rv.recv)?;
+    let handle = handle_of(ctx, &recv_box);
+    let ok = value_tests_on(ctx, rv, word, &handle);
+    let vt_end = ctx.block().label.clone();
+    ctx.block().br(&join_l);
+    ctx.current_block = join;
+    Ok(ctx.block().phi(
+        I1,
+        &[
+            ("false", from.as_str()),
+            ("true", chk_l.as_str()),
+            (&ok, vt_end.as_str()),
+        ],
+    ))
 }
 
 /// A guard whose receiver the compiler names (DESIGN §4.1, static-exclusive):
@@ -297,7 +435,7 @@ fn emit_static_guard(
     let mut shape_edges: Vec<(&str, &str)> = miss_edges.iter().map(|l| ("0", l.as_str())).collect();
     shape_edges.push((sid.as_str(), hit_end.as_str()));
     rv.expected_shape = Some(ctx.block().phi(I32, &shape_edges));
-    Ok((word.to_string(), pass, "false".to_string()))
+    Ok(((word as i64).to_string(), pass, "false".to_string()))
 }
 
 /// Whether `rv`'s guard takes the static supplier (DESIGN §4.1). Every guard
@@ -313,11 +451,15 @@ pub(super) fn emit_guard(
 ) -> Result<(String, String, String)> {
     // A receiver whose class the compiler names takes its guard's ShapeId
     // from the driver's static id (DESIGN §4.1): no loaded supplier.
-    if let Some((w, r_mask, uses_ptr_shape_class)) = static_region_word(ctx, rv) {
+    if let Some((w, r_mask, tested, uses_ptr_shape_class)) = static_region_word(ctx, rv) {
         rv.r_mask = r_mask;
+        rv.vt_mask = tested;
         rv.uses_ptr_shape_class = uses_ptr_shape_class;
         return emit_static_guard(ctx, rv, w);
     }
+    // A learned word may carry VALUE_TEST_BIT for any R key: its guard must
+    // honour the bit whatever the plan allowed a static word.
+    rv.vt_mask = rv.r_mask;
     // A retired region (every bounded prime refused) is decided by the word
     // alone: one load and one compare, before the receiver is even tested.
     let (sites, word) = emit_guard_word(ctx, rv);

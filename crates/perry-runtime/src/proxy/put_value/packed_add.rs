@@ -76,8 +76,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use super::*;
 
 /// One static-key store site: the emitted `@perry_ic_N_packed_set`
-/// (`[4 x i64]`). **The layout must equal `perry-codegen`'s
-/// `PACKED_SET_SITE_WORDS` / `ADD_SHAPES_WORD` / `ADD_GUARD_WORD`**; pinned by
+/// (`[5 x i64]`). **The layout must equal `perry-codegen`'s
+/// `PACKED_SET_SITE_WORDS` / `ADD_SHAPES_WORD` / `ADD_GUARD_WORD`** and
+/// `perry_abi::PACKED_SET_CONSTFN_INFO_WORD`; pinned by
 /// `packed_set_site_layout_matches_codegen`.
 #[repr(C)]
 pub struct PackedSetSite {
@@ -95,6 +96,12 @@ pub struct PackedSetSite {
     /// ways at the pre-shape's home ([`add_way_home`]) and the one after it,
     /// after the primary words.
     pub add_ways: AtomicU64,
+    /// The site's ConstFn body (`perry_abi::PACKED_SET_CONSTFN_INFO_WORD`):
+    /// a `JsFunctionInfo` address, 0 = none. Claimed once by the first
+    /// ConstFn-flagged publication ([`claim_constfn_body`]) and never
+    /// changed, so every flagged entry of the site names this one body and
+    /// the emitted hit compares the stored closure's info word with it.
+    pub constfn_info: AtomicU64,
 }
 
 /// One further memo, in the primary words' format (`add_shapes`,
@@ -151,6 +158,7 @@ impl PackedSetSite {
             add_shapes: AtomicU64::new(PACKED_SET_EMPTY),
             add_guard: AtomicU64::new(0),
             add_ways: AtomicU64::new(0),
+            constfn_info: AtomicU64::new(0),
         }
     }
 }
@@ -161,7 +169,7 @@ pub const ADD_SHAPES_WORD: usize = 1;
 #[cfg_attr(not(test), allow(dead_code))]
 pub const ADD_GUARD_WORD: usize = 2;
 #[cfg_attr(not(test), allow(dead_code))]
-pub const PACKED_SET_SITE_WORDS: usize = 4;
+pub const PACKED_SET_SITE_WORDS: usize = crate::codegen_abi::PACKED_SET_SITE_WORDS;
 #[cfg_attr(not(test), allow(dead_code))]
 pub const ADD_WAYS_WORD: usize = 3;
 /// Words of one [`AddWay`].
@@ -175,7 +183,57 @@ pub const ADD_SLOT_BITS: u32 = 16;
 /// doubles the funnel canonicalizes) before it stamps anything. **Must equal
 /// perry-codegen `expr/put_value_store_ic.rs::ADD_F64_SLOT`.**
 pub const ADD_F64_SLOT: u64 = 1 << (ADD_SLOT_BITS - 1);
-const ADD_SLOT_MASK: u64 = ADD_F64_SLOT - 1;
+/// The guard's bit for a memo whose successor's lane at the slot is ConstFn:
+/// the emitted hit admits only a closure whose info word is the site's
+/// [`PackedSetSite::constfn_info`] (and that is not a rebindable `this`
+/// clone), before it stamps anything.
+pub const ADD_CONSTFN_SLOT: u64 = crate::codegen_abi::PACKED_ADD_CONSTFN_SLOT;
+const ADD_SLOT_MASK: u64 = ADD_CONSTFN_SLOT - 1;
+const _: () = assert!(ADD_CONSTFN_SLOT == 1 << (ADD_SLOT_BITS - 2));
+
+/// The body a ConstFn-flagged entry of `site` may name: `info` when the site
+/// has no body yet (claimed now) or already names it, else `false` and the
+/// caller publishes nothing (a second body at one site keeps the miss).
+/// Claimed by the primary agent before any flagged entry is published, and
+/// never changed afterwards, so no reader pairs a flagged entry with another
+/// body.
+///
+/// # Safety
+/// `site` is a live site.
+pub(crate) unsafe fn claim_constfn_body(site: *const PackedSetSite, info: u64) -> bool {
+    if info == 0 || crate::agent::current_agent() != crate::agent::PRIMARY_AGENT {
+        return false;
+    }
+    let word = &(*site).constfn_info;
+    match word.load(Ordering::Relaxed) {
+        0 => {
+            word.store(info, Ordering::Relaxed);
+            true
+        }
+        current => current == info,
+    }
+}
+
+/// The ConstFn body of `post`'s inline lane `slot`, when that lane is ConstFn
+/// and its lineage has nothing deprecated: the one admission fact of a
+/// ConstFn-flagged memo.
+fn post_constfn_body(post: u32, slot: u32) -> Option<u64> {
+    if slot >= crate::object::field_rep::REP_SLOTS {
+        return None;
+    }
+    let d = crate::object::shapes::shape_descriptor_by_id(post)?;
+    if d.special_constfn_mask & (1u32 << slot) == 0
+        || crate::object::field_rep::slot_rep(d.rep, slot) != crate::object::field_rep::REP_SPECIAL
+        || crate::object::field_rep::has_deprecated(d.rep)
+        || d.deprecation_targets() != (0, 0)
+    {
+        return None;
+    }
+    d.constfn_infos()
+        .iter()
+        .find(|entry| u32::from(entry.slot) == slot)
+        .map(|entry| entry.info)
+}
 
 const SPILL_FLIP: u32 = crate::object::field_get_set::PACKED_SPILL_FLIP;
 
@@ -293,6 +351,9 @@ pub(crate) const C_REP_VALIDITY_BUMP: usize = 25;
 pub(crate) const C_REP_CONVERGE: usize = 26;
 /// A receiver on a shape with a deprecated lane moved to the normalized shape.
 pub(crate) const C_REP_MIGRATE: usize = 27;
+/// A ConstFn key-add or overwrite was not published: the site already names
+/// another body.
+pub(crate) const C_PRIME_CONSTFN_OTHER_BODY: usize = 28;
 
 #[cfg_attr(test, allow(dead_code))]
 const CENSUS_NAMES: [&str; 48] = [
@@ -324,7 +385,7 @@ const CENSUS_NAMES: [&str; 48] = [
     "rt.rep.validity_bump",
     "rt.rep.converge",
     "rt.rep.migrate",
-    "rt.28",
+    "rt.prime.constfn_other_body",
     "rt.29",
     "rt.30",
     "rt.31",
@@ -465,8 +526,18 @@ pub(crate) unsafe fn packed_add_try(
     let post = (shapes >> 32) as u32;
     let post_d = crate::object::shapes::shape_descriptor_by_id(post)?;
     let slot = (guard & ADD_SLOT_MASK) as usize;
-    // Charter step 5 (T2): the post-shape is the class guard of the memo.
-    if !crate::object::field_rep_store::cached_key_add_admits(
+    // Charter step 5 (T2): the post-shape is the class guard of the memo. A
+    // ConstFn memo admits exactly a closure of the body its successor names
+    // (the site's body), whose lane the checked slot store below keeps.
+    if guard & ADD_CONSTFN_SLOT != 0 {
+        let body = post_constfn_body(post, slot as u32)?;
+        if spill
+            || (*site).constfn_info.load(Ordering::Relaxed) != body
+            || crate::object::field_rep_store::constfn_store_info(value.to_bits()) != Some(body)
+        {
+            return None;
+        }
+    } else if !crate::object::field_rep_store::cached_key_add_admits(
         post,
         slot as u32,
         Some(value.to_bits()),
@@ -653,12 +724,42 @@ pub(crate) unsafe fn packed_add_prime(
         census(C_PRIME_UNVERIFIED);
         return;
     }
-    // The emitted add hit stamps the successor before its raw slot store.
-    // A SPECIAL append needs the checked slow path to prewrite the current
-    // closure under Any before publishing its body-specific shape.
-    if crate::object::field_rep::slot_rep(post_d.rep, n) == crate::object::field_rep::REP_SPECIAL {
-        census(C_PRIME_UNVERIFIED);
-        return;
+    // A ConstFn append: the successor names the body of the closure this
+    // store wrote. The memo is published only for the site's one body, and
+    // its hit (emitted or runtime) admits only a closure of that body; the
+    // stamp and the slot store are not separated by any collection point, so
+    // no collector sees the ConstFn lane without the closure (the slow path's
+    // prewrite-under-Any order exists because its mint collects).
+    let constfn_body = if crate::object::field_rep::slot_rep(post_d.rep, n)
+        == crate::object::field_rep::REP_SPECIAL
+    {
+        let fields =
+            (obj as *const u8).add(std::mem::size_of::<crate::ObjectHeader>()) as *const u64;
+        match post_constfn_body(post, n) {
+            Some(body)
+                if inline
+                    && crate::object::field_rep_store::constfn_store_info(
+                        *fields.add(n as usize),
+                    ) == Some(body) =>
+            {
+                Some(body)
+            }
+            _ => {
+                census(C_PRIME_UNVERIFIED);
+                return;
+            }
+        }
+    } else {
+        None
+    };
+    if let Some(body) = constfn_body {
+        // Another body at this site keeps the miss; nothing is claimed for
+        // a site that cannot publish (see the lane and agent tests above).
+        let site_body = (*site).constfn_info.load(Ordering::Relaxed);
+        if site_body != 0 && site_body != body {
+            census(C_PRIME_CONSTFN_OTHER_BODY);
+            return;
+        }
     }
     // A marked prototype or exotic read receiver is on a private shape lineage
     // (`proto_validity::ensure_meta_for_mark`); never learn one of its shapes,
@@ -709,6 +810,16 @@ pub(crate) unsafe fn packed_add_prime(
         census(C_PRIME_UNVERIFIED);
         return;
     }
+    // The body is claimed before the flagged memo is published (the claim
+    // re-checks it after the collecting verdict above).
+    let constfn_slot = match constfn_body {
+        Some(body) if claim_constfn_body(site, body) => ADD_CONSTFN_SLOT,
+        Some(_) => {
+            census(C_PRIME_CONSTFN_OTHER_BODY);
+            return;
+        }
+        None => 0,
+    };
     // Own both ShapeIds before they can be stamped from the site.
     crate::object::shape_carriers::note_shape_id(pre);
     crate::object::shape_carriers::note_shape_id(post);
@@ -726,7 +837,7 @@ pub(crate) unsafe fn packed_add_prime(
     } else {
         0
     };
-    let guard = (generation << ADD_SLOT_BITS) | f64_slot | u64::from(n);
+    let guard = (generation << ADD_SLOT_BITS) | f64_slot | constfn_slot | u64::from(n);
     let same_pre = |word: u64| word != PACKED_SET_EMPTY && unflip(word as u32) == pre;
     // A way that holds this pre-shape (a stale guard) is superseded.
     if let Some(ways) = site_ways(site_ptr) {

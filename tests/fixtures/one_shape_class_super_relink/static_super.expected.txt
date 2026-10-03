@@ -1,0 +1,9 @@
+call-inst-only TypeError
+call-both ok:StB.static-both:StC
+call-only-static ok:StB.static-only:StC
+typeof-inst-only undefined
+typeof-both function
+value-inst-only undefined
+value-both true
+instance-side StB.inst-both
+instance-typeof-static-only undefined

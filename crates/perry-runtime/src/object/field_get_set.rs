@@ -207,6 +207,10 @@ pub(crate) use accessors::scan_accessor_receiver_override_root_mut;
 mod array_retargeted_proto;
 mod buffer_own_prop;
 mod class_object_props;
+mod class_object_template;
+pub(crate) use class_object_template::{
+    is_evaluation_prototype_with_methods, static_method_value_runs,
+};
 mod crypto_key;
 pub(crate) mod entries_shape;
 pub(crate) mod enumeration;
@@ -271,8 +275,10 @@ pub(crate) use accessors::{
     primitive_tagged_prototype_property, string_index_value,
 };
 pub(crate) use class_object_props::{
-    class_evaluation_prototype_class_id, class_object_materialized_prototype,
-    class_object_prototype_value,
+    class_evaluation_prototype_class_id, class_object_default_to_string,
+    class_object_has_prototype_property, class_object_materialized_prototype,
+    class_object_prototype_value, class_object_registry_serves_static, class_object_source_text,
+    define_class_object_own_properties,
 };
 pub(crate) use crypto_key::{
     crypto_key_property_value, CLASS_ID_BOXED_BIGINT, CLASS_ID_BOXED_BOOLEAN,

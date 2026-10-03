@@ -2,28 +2,51 @@
 //!
 //! The packed store's first eight words are own-data ways and word eight is
 //! the key-add chain verdict. Word nine names this bounded, collecting-path
-//! setter entry. The emitted leaf never reads it. A miss validates the live
-//! class-prototype link, receiver and holder shapes, inline accessor slot and
-//! raw setter before calling with the original receiver. Any uncertainty
-//! falls through to ordinary `[[Set]]`.
+//! setter entry. The emitted leaf never reads it.
+//!
+//! A hit is shape facts and the lane's own value, nothing global:
+//! * the receiver's ShapeId proves the key is not own and names the
+//!   receiver's prototype identity, hence the holder (a recorded serial, or a
+//!   bare class whose registry link retires the holder's ShapeId if it is ever
+//!   replaced: `class_registry::retire_displaced_decl_prototype`);
+//! * the holder's ShapeId proves the key's slot is still an accessor lane;
+//! * the lane still holds the primed pair, which names the compiled setter.
+//!
+//! Any uncertainty falls through to ordinary `[[Set]]`, which re-primes.
 
 use super::*;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-const SITE_TAG: u64 = 0xA2C2_0000_0000_0000;
+const SITE_TAG: u64 = crate::codegen_abi::SETTER_SITE_TAG;
+const _: () = assert!(PACKED_SET_SETTER_WORD == crate::codegen_abi::PACKED_SET_SETTER_WORD);
+const _: () = assert!(crate::value::POINTER_MASK == crate::codegen_abi::SETTER_SITE_ADDRESS_MASK);
 
+/// The site's entry. The emitted store tower reads it at the offsets
+/// `perry_abi::SETTER_SITE_*_OFFSET` pin (`setter_arm.rs` in codegen).
+#[repr(C)]
 struct Entry {
-    key: usize,
-    holder: usize,
-    class_id: u32,
     receiver_shape: u32,
-    bare_class_link: bool,
     holder_shape: u32,
+    /// The holder (a strong root, rewritten on move).
+    holder: usize,
     slot: u32,
+    /// The pair the holder's lane held at prime time: its raw address, a
+    /// strong root rewritten on move, so a hit compares one loaded word.
+    pair: usize,
+    /// The compiled setter the pair names.
     raw_set: usize,
-    validity: u64,
-    vtable_gen: u64,
+    /// The interned key (a strong root).
+    key: usize,
 }
+const _: () = {
+    use crate::codegen_abi as abi;
+    assert!(std::mem::offset_of!(Entry, receiver_shape) == abi::SETTER_SITE_RECV_SHAPE_OFFSET);
+    assert!(std::mem::offset_of!(Entry, holder_shape) == abi::SETTER_SITE_HOLDER_SHAPE_OFFSET);
+    assert!(std::mem::offset_of!(Entry, holder) == abi::SETTER_SITE_HOLDER_OFFSET);
+    assert!(std::mem::offset_of!(Entry, slot) == abi::SETTER_SITE_SLOT_OFFSET);
+    assert!(std::mem::offset_of!(Entry, pair) == abi::SETTER_SITE_PAIR_OFFSET);
+    assert!(std::mem::offset_of!(Entry, raw_set) == abi::SETTER_SITE_CODE_OFFSET);
+};
 
 crate::perry_thread_local! {
     static ENTRIES: std::cell::UnsafeCell<Vec<*mut Entry>> =
@@ -171,9 +194,6 @@ unsafe fn candidate(
         return None;
     }
 
-    let bare_class_link = (crate::object::shapes::PROTO_ID_CLASS
-        ..crate::object::shapes::PROTO_ID_MIXED)
-        .contains(&recv_shape.proto_id);
     let holder = class_link(recv)?;
     let holder_gc = crate::value::addr_class::try_read_gc_header(holder as usize)?;
     if holder_gc.obj_type != crate::gc::GC_TYPE_OBJECT
@@ -199,10 +219,8 @@ unsafe fn candidate(
     {
         return None;
     }
-    let field = (holder as *const u8)
-        .add(std::mem::size_of::<crate::ObjectHeader>() + slot as usize * 8)
-        as *const u64;
-    let acc = crate::object::accessor_pair::pair_of_value(*field)?;
+    let lane = lane_bits(holder as usize, slot);
+    let acc = crate::object::accessor_pair::pair_of_value(lane)?;
     if acc.raw_set == 0 {
         return None;
     }
@@ -215,83 +233,92 @@ unsafe fn candidate(
     Some(Entry {
         key: key as usize,
         holder: holder as usize,
-        class_id,
         receiver_shape: crate::object::shapes::object_shape_stamp(recv),
-        bare_class_link,
         holder_shape: crate::object::shapes::object_shape_stamp(holder),
         slot,
+        pair: (lane & crate::value::POINTER_MASK) as usize,
         raw_set: acc.raw_set,
-        validity: crate::object::proto_validity::proto_validity(),
-        vtable_gen: crate::object::vtable_generation(),
     })
 }
 
+/// The value of `holder`'s inline slot `slot`.
+#[inline]
+unsafe fn lane_bits(holder: usize, slot: u32) -> u64 {
+    std::ptr::read(
+        (holder as *const u8).add(std::mem::size_of::<crate::ObjectHeader>() + slot as usize * 8)
+            as *const u64,
+    )
+}
+
+/// The compiled setter `e` names for `recv`, when every fact still holds: the
+/// receiver's ShapeId (key not own, prototype identity, hence the holder),
+/// the holder's ShapeId (the slot is an accessor lane) and the lane's pair.
+/// A ShapeId match also proves a live, non-forwarded ordinary object (#10828
+/// rule 3), so nothing per-object is re-read.
+#[inline]
 unsafe fn validated_raw_set(
     e: &Entry,
     recv: *const crate::ObjectHeader,
     key: *const crate::StringHeader,
 ) -> Option<usize> {
-    let gc = crate::value::addr_class::try_read_gc_header(recv as usize)?;
-    if gc.obj_type != crate::gc::GC_TYPE_OBJECT
-        || gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
-        || gc._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0
-        || crate::object::dictionary::is_dictionary(recv)
-    {
-        return None;
-    }
-    let meta = (*recv).meta;
-    if !meta.is_null()
-        && ((*meta).elements != 0
-            || (*meta).flags & crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER != 0)
-    {
-        return None;
-    }
-    if e.key != key as usize
-        || e.class_id != (*recv).class_id
-        || e.receiver_shape != crate::object::shapes::object_shape_stamp(recv)
-        || e.validity != crate::object::proto_validity::proto_validity()
-        || e.vtable_gen != crate::object::vtable_generation()
-        || crate::object::shapes::object_shape_stamp(e.holder as *const crate::ObjectHeader)
-            != e.holder_shape
-    {
-        return None;
-    }
-    if e.bare_class_link {
-        // ShapeId proves the class-link mode. Every declared-prototype root
-        // replacement (including generic-origin redirects) bumps the validity
-        // word checked above. GC moves both the registry root and this rooted
-        // holder entry together. A per-instance prototype change must either
-        // restamp the ShapeId or leave an explicit meta link, rejected here.
-        if gc._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0
-            || (!meta.is_null() && (*meta).prototype != 0)
-            || e.holder == recv as usize
-        {
-            return None;
-        }
-    } else if class_link(recv)? as usize != e.holder {
-        // MIXED receivers keep the full live per-object link comparison.
-        return None;
-    }
-    let holder_gc = crate::value::addr_class::try_read_gc_header(e.holder)?;
-    if holder_gc.obj_type != crate::gc::GC_TYPE_OBJECT
-        || holder_gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
-    {
-        return None;
-    }
-    let field = (e.holder as *const u8)
-        .add(std::mem::size_of::<crate::ObjectHeader>() + e.slot as usize * 8)
-        as *const u64;
-    let acc = crate::object::accessor_pair::pair_of_value(*field)?;
-    (acc.raw_set == e.raw_set && acc.raw_set != 0).then_some(acc.raw_set)
+    let stamp = crate::object::shapes::object_shape_stamp(recv);
+    (stamp != 0
+        && e.receiver_shape == stamp
+        && e.key == key as usize
+        && crate::object::shapes::object_shape_stamp(e.holder as *const crate::ObjectHeader)
+            == e.holder_shape
+        && lane_bits(e.holder, e.slot) == crate::value::POINTER_TAG | e.pair as u64)
+        .then_some(e.raw_set)
 }
 
+/// Call the compiled setter with `target` as `this`. The store's result is
+/// `value`; a Number needs no root across the call, anything else is rooted
+/// (a heap value can move while the setter runs).
+#[inline]
 unsafe fn invoke(raw_set: usize, target: f64, value: f64) -> f64 {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let recv_h = scope.root_nanbox_f64(target);
-    let value_h = scope.root_nanbox_f64(value);
     let f = crate::closure::body_call::js_method_body_fn!(raw_set as *const u8; value);
-    let _ = f(recv_h.get_nanbox_f64(), value_h.get_nanbox_f64());
+    if crate::value::JSValue::from_bits(value.to_bits()).is_number() {
+        let _ = f(target, value);
+        return value;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value_h = scope.root_nanbox_f64(value);
+    let _ = f(target, value);
     value_h.get_nanbox_f64()
+}
+
+/// The receiver `target` names, when it is a heap pointer the entry could
+/// describe.
+#[inline]
+fn receiver_of(target: f64) -> Option<*const crate::ObjectHeader> {
+    let bits = target.to_bits();
+    if bits & !crate::value::POINTER_MASK != crate::value::POINTER_TAG {
+        return None;
+    }
+    let addr = (bits & crate::value::POINTER_MASK) as usize;
+    crate::value::addr_class::is_above_handle_band(addr)
+        .then_some(addr as *const crate::ObjectHeader)
+}
+
+/// The entry's hit and nothing else: allocation-free until the setter runs,
+/// and never a candidate walk, so the store-miss entry asks it before any
+/// other miss work.
+#[inline]
+pub(super) unsafe fn try_hit(
+    slot: *mut PackedSetWaysSlot,
+    target: f64,
+    key: *const crate::StringHeader,
+    value: f64,
+) -> Option<f64> {
+    let e = entry(slot)?;
+    if crate::object::method_site::WORKER_AGENTS_EXIST.load(Ordering::SeqCst) != 0 {
+        return None;
+    }
+    let raw_set = validated_raw_set(e, receiver_of(target)?, key)?;
+    if stats_enabled() {
+        HITS.fetch_add(1, Ordering::Relaxed);
+    }
+    Some(invoke(raw_set, target, value))
 }
 
 /// Collecting miss only; the emitted GC-leaf store never consults this word.
@@ -304,15 +331,7 @@ pub(super) unsafe fn try_set(
     if !primary_only() || slot.is_null() || key.is_null() {
         return None;
     }
-    let bits = target.to_bits();
-    if bits & !crate::value::POINTER_MASK != crate::value::POINTER_TAG {
-        return None;
-    }
-    let addr = (bits & crate::value::POINTER_MASK) as usize;
-    if !crate::value::addr_class::is_above_handle_band(addr) {
-        return None;
-    }
-    let recv = addr as *const crate::ObjectHeader;
+    let recv = receiver_of(target)?;
     if let Some(e) = entry(slot) {
         if let Some(raw_set) = validated_raw_set(e, recv, key) {
             if stats_enabled() {
@@ -352,6 +371,9 @@ pub(crate) fn scan_roots(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
                 ROOT_REWRITES.fetch_add(1, Ordering::Relaxed);
             }
             if visitor.visit_tagged_usize_slot(&mut e.holder, crate::value::POINTER_TAG) {
+                ROOT_REWRITES.fetch_add(1, Ordering::Relaxed);
+            }
+            if visitor.visit_tagged_usize_slot(&mut e.pair, crate::value::POINTER_TAG) {
                 ROOT_REWRITES.fetch_add(1, Ordering::Relaxed);
             }
         }
@@ -480,7 +502,10 @@ mod tests {
         }
         assert_eq!(call_set!(5.0), Some(5.0));
         assert_eq!(call_set!(6.0), Some(6.0));
-        assert!(unsafe { entry(&mut slot).unwrap().bare_class_link });
+        assert_eq!(
+            unsafe { entry(&mut slot).unwrap().raw_set },
+            first as *const () as usize
+        );
         assert_eq!(FIRST.load(Ordering::Relaxed), 2);
         p2.with_const_ptr::<crate::ObjectHeader, _>(|p| {
             crate::object::test_seed_class_decl_prototype_object_root(CID, p as usize)

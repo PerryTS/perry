@@ -756,6 +756,7 @@ mod anon_shape_collision_tests {
                 param_count: 1,
                 has_synthetic_arguments: false,
                 has_rest: false,
+                entry: 0,
             },
         );
         let mut guard = CLASS_VTABLE_REGISTRY.write().unwrap();

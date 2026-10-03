@@ -557,6 +557,15 @@ pub(crate) unsafe fn ordinary_to_primitive_number_for_add(
         }
     }
 
+    // A per-evaluation class object (`ClassExprFresh`) is a function: its
+    // `toString` is `Function.prototype.toString` unless the program put one
+    // in the way.
+    if let Some(source) =
+        crate::object::class_object_default_to_string(value_handle.get_nanbox_f64())
+    {
+        let s = crate::string::js_string_from_bytes(source.as_ptr(), source.len() as u32);
+        return OrdinaryToPrimitiveOutcome::Primitive(crate::value::js_nanbox_string(s as i64));
+    }
     match call_method_for_primitive(&scope, &value_handle, b"toString") {
         MethodOutcome::Primitive(p) => OrdinaryToPrimitiveOutcome::Primitive(p),
         MethodOutcome::NonPrimitive => OrdinaryToPrimitiveOutcome::TypeError,

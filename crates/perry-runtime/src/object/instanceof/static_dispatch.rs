@@ -578,6 +578,22 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
             if unsafe { crate::symbol::js_is_symbol(value) != 0 } {
                 return false_val;
             }
+            // A relinked class prototype (or a replaced instance prototype)
+            // can end the chain before `Object.prototype`.
+            if let Some(header) = super::super::prototype_chain::any_user_prototype_override()
+                .then(|| unsafe { crate::value::addr_class::try_read_gc_header(value_addr(value)) })
+                .flatten()
+            {
+                if header.obj_type == crate::gc::GC_TYPE_OBJECT {
+                    let obj_class_id =
+                        unsafe { (*(value_addr(value) as *const ObjectHeader)).class_id };
+                    if let Some(answer) =
+                        relinked_instance_chain_answer(value, obj_class_id, CLASS_ID_OBJECT)
+                    {
+                        return if answer { true_val } else { false_val };
+                    }
+                }
+            }
             // Covers every heap object, including a Date (now a NaN-boxed
             // `DateCell` pointer — #2089) and an Invalid Date.
             return true_val;
@@ -804,6 +820,9 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
         // walk also follows the generic-origin edge, so a dynamic RHS holding a
         // generic class (`const C = Gen; x instanceof C`) matches an instance of
         // one of its specializations.
+        if let Some(answer) = relinked_instance_chain_answer(value, obj_class_id, class_id) {
+            return if answer { true_val } else { false_val };
+        }
         if class_chain_reaches(obj_class_id, class_id) {
             return true_val;
         }
