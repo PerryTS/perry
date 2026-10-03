@@ -324,6 +324,35 @@ impl<'a> RootedGroup<'a> {
         }
     }
 
+    /// Coerce operand `i` to the RAW pointer a native callee takes, and root the
+    /// result, so a later coercion cannot strand it (#11830).
+    ///
+    /// Turning a value into its ABI pointer is not a pure step: a string
+    /// operand that is not already a heap string is materialised or
+    /// `JSON.stringify`d, which allocates and can run a user `toString` /
+    /// `toJSON`. Converting every operand in order, straight into a register,
+    /// therefore leaves each earlier raw pointer one collection away from stale.
+    /// This is the in-order half of the fix: call it once per coerced operand,
+    /// in operand order, and read the results back with
+    /// [`RootedGroup::reread_emitted`] only after the LAST one. `protect` says
+    /// whether a later coercion (or any other collecting step) follows this one;
+    /// the last coercion passes `false` and keeps its register.
+    ///
+    /// The operand is re-read from its own slot first, so the group must have
+    /// been told that a later coercion is a collecting window (`collects`) when
+    /// the operands were lowered.
+    pub(crate) fn coerce_to_ptr(
+        &mut self,
+        ctx: &mut FnCtx<'_>,
+        i: usize,
+        protect: bool,
+        coerce: impl FnOnce(&mut FnCtx<'_>, &str) -> String,
+    ) -> Result<EmittedValue> {
+        let value = self.reread(ctx, i)?;
+        let ptr = coerce(ctx, &value);
+        Ok(self.adopt_emitted(ctx, Repr::Ptr, &ptr, protect))
+    }
+
     /// Allocate an argument-accumulator array of capacity `cap` and root it in
     /// this scope.
     ///

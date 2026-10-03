@@ -86,6 +86,8 @@ pub(crate) use direct_method_guard::emit_inline_direct_method_shape_guard;
 #[cfg(test)]
 mod args_sweep_tests;
 #[cfg(test)]
+mod conversion_window_tests;
+#[cfg(test)]
 mod named_import_install_tests;
 mod namespace_call;
 mod native;
