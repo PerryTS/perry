@@ -953,6 +953,11 @@ test_gap_gc_11789_native_call_args
 test_gap_gc_11789_ctor_call_args
 # Dispatch family (class static C.m(a, b), super.m(a, b), fused Promise.resolve(v).then(f, g)).
 test_gap_gc_11789_dispatch_call_args
+# #11830: the CONVERSION window of a call. A native-table call took the raw string
+# pointer of each `StrPtr` argument in order, so coercing the second one (an
+# object goes through JSON.stringify and its toJSON) left the first pointing at
+# the retired from-space copy. ClientRequest#setHeader(name, value).
+test_gap_gc_11830_native_str_args
 
 # #11743: a field receiver and captured method cross allocating arguments.
 # Recursive child pushes observe parent identity after relocation and growth.

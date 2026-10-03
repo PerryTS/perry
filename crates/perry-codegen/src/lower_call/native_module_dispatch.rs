@@ -88,6 +88,30 @@ pub fn lower_native_module_dispatch(
     let operands: Vec<&Expr> = recv.into_iter().chain(args.iter()).collect();
     let has_receiver = recv.is_some();
     let packs_varargs = sig.args.contains(&NativeArgKind::VarArgsAsArray);
+    // #11830: coercing a `StrPtr` argument (`js_value_to_str_ptr_for_ffi`)
+    // materialises a short string or `JSON.stringify`s an object, so it
+    // allocates and can run a user `toJSON` / `toString`. Doing it argument by
+    // argument left every earlier raw pointer one collection from stale. Each
+    // such operand is therefore coerced, in order, into its own rooted slot
+    // first, and the raw pointers are read back in one pass after the last
+    // coercion. A string literal is already a heap string and keeps the
+    // in-place conversion.
+    let first_arg = usize::from(has_receiver);
+    let packed_from = sig
+        .args
+        .iter()
+        .position(|k| *k == NativeArgKind::VarArgsAsArray)
+        .unwrap_or(usize::MAX);
+    let coerces: Vec<bool> = operands
+        .iter()
+        .enumerate()
+        .map(|(o, e)| {
+            o >= first_arg
+                && o - first_arg < packed_from
+                && sig.args.get(o - first_arg) == Some(&NativeArgKind::StrPtr)
+                && !matches!(e, Expr::String(_))
+        })
+        .collect();
     let body = |ctx: &mut FnCtx<'_>, all_values: &[String]| -> Result<String> {
         // Build the LLVM arg list: receiver handle (if any) + coerced args.
         let mut llvm_args: Vec<(crate::types::LlvmType, String)> = Vec::new();
@@ -130,6 +154,11 @@ pub fn lower_native_module_dispatch(
                 NativeArgKind::F64 => {
                     llvm_args.push((DOUBLE, lowered));
                     arg_types.push(DOUBLE);
+                }
+                // Already coerced to a rooted raw pointer (see `coerces`).
+                NativeArgKind::StrPtr if coerces[first_arg + i] => {
+                    llvm_args.push((I64, lowered));
+                    arg_types.push(I64);
                 }
                 NativeArgKind::StrPtr => {
                     let blk = ctx.block();
@@ -347,16 +376,40 @@ pub fn lower_native_module_dispatch(
             }
         }
     };
-    if packs_varargs {
-        crate::rooting::with_operands_rooted_across_call(
-            ctx,
-            &operands,
-            |_| Ok(()),
-            |ctx, values, ()| body(ctx, values),
-        )
-    } else {
-        crate::rooting::with_operands_rooted(ctx, &operands, body)
-    }
+    crate::rooting::with_rooted_group(ctx, operands.len(), |ctx, group| {
+        // Incremental, one operand at a time: each is rooted BEFORE the next is
+        // lowered. A `VarArgsAsArray` tail allocates its array after the
+        // re-read, so every window is "collects" there; a later coercion is a
+        // window too.
+        for (i, operand) in operands.iter().enumerate() {
+            let collects = packs_varargs
+                || coerces[i + 1..].iter().any(|c| *c)
+                || crate::rooting::any_operand_may_collect(ctx, operands[i + 1..].iter().copied());
+            group.lower(ctx, operand, collects)?;
+        }
+        let mut pending = coerces.iter().filter(|c| **c).count();
+        let mut coerced = Vec::with_capacity(operands.len());
+        for (i, needs) in coerces.iter().enumerate() {
+            coerced.push(if *needs {
+                pending -= 1;
+                Some(group.coerce_to_ptr(ctx, i, pending > 0, |ctx, v| {
+                    ctx.block()
+                        .call(I64, "js_value_to_str_ptr_for_ffi", &[(DOUBLE, v)])
+                })?)
+            } else {
+                None
+            });
+        }
+        // Below the last coercion: re-read everything, in operand order.
+        let mut values = Vec::with_capacity(operands.len());
+        for (i, emitted) in coerced.into_iter().enumerate() {
+            values.push(match emitted {
+                Some(e) => group.reread_emitted(ctx, e),
+                None => group.reread(ctx, i)?,
+            });
+        }
+        body(ctx, &values)
+    })
 }
 
 #[cfg(test)]

@@ -197,10 +197,17 @@ fn lower_dynamic_require(ctx: &mut FnCtx<'_>, paths: &[String], arg: &Expr) -> R
 /// Params must already be lowered by the caller (exactly once, in source
 /// order) — this function only *references* them, so it is safe to call
 /// once per locale branch without duplicating side effects.
+///
+/// The placeholders are coerced in two phases (#11830). `js_string_coerce`
+/// allocates and runs a user `toString`, so a later placeholder's coercion can
+/// collect while an earlier placeholder's string — or the concatenation built
+/// so far — sits in a register. Phase one coerces every placeholder, in order,
+/// into its own rooted slot; phase two reads them back and chains the
+/// concatenations, which only allocate.
 fn emit_i18n_template(
     ctx: &mut FnCtx<'_>,
     template: &str,
-    lowered_params: &std::collections::HashMap<String, String>,
+    lowered_params: &I18nParams<'_, '_>,
 ) -> Result<String> {
     #[derive(Debug)]
     enum Part {
@@ -270,19 +277,16 @@ fn emit_i18n_template(
         return Ok(ctx.block().load(DOUBLE, &handle_global));
     }
 
-    let mut acc_handle: Option<String> = None;
+    // Phase one: coerce each placeholder into a rooted string handle.
+    let mut coerced = crate::rooting::open_rooted_group(0);
+    let mut pending = plan.iter().filter(|p| matches!(p, Part::Param(_))).count();
+    let mut handles: Vec<Option<crate::rooting::EmittedValue>> = Vec::with_capacity(plan.len());
     for part in &plan {
-        let part_handle: String = match part {
-            Part::Lit(s) => {
-                let key_idx = ctx.strings.intern(s);
-                let handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
-                let blk = ctx.block();
-                let lit_box = blk.load(DOUBLE, &handle_global);
-                unbox_to_i64(blk, &lit_box)
-            }
+        handles.push(match part {
+            Part::Lit(_) => None,
             Part::Param(name) => {
-                let v_box = match lowered_params.get(name) {
-                    Some(v) => v.clone(),
+                let v_box = match lowered_params.read(ctx, name)? {
+                    Some(v) => v,
                     None => {
                         let placeholder = format!("{{{}}}", name);
                         let key_idx = ctx.strings.intern(&placeholder);
@@ -291,9 +295,27 @@ fn emit_i18n_template(
                         ctx.block().load(DOUBLE, &handle_global)
                     }
                 };
-                let blk = ctx.block();
-                blk.call(I64, "js_string_coerce", &[(DOUBLE, &v_box)])
+                let handle = ctx
+                    .block()
+                    .call(I64, "js_string_coerce", &[(DOUBLE, &v_box)]);
+                pending -= 1;
+                Some(coerced.adopt_emitted(ctx, crate::rooting::Repr::Ptr, &handle, pending > 0))
             }
+        });
+    }
+    // Phase two: nothing below collects.
+    let mut acc_handle: Option<String> = None;
+    for (part, emitted) in plan.iter().zip(handles) {
+        let part_handle: String = match (part, emitted) {
+            (Part::Param(_), Some(e)) => coerced.reread_emitted(ctx, e),
+            (Part::Lit(s), _) => {
+                let key_idx = ctx.strings.intern(s);
+                let handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                let blk = ctx.block();
+                let lit_box = blk.load(DOUBLE, &handle_global);
+                unbox_to_i64(blk, &lit_box)
+            }
+            (Part::Param(_), None) => unreachable!("every placeholder was coerced in phase one"),
         };
         acc_handle = Some(match acc_handle {
             None => part_handle,
@@ -310,7 +332,32 @@ fn emit_i18n_template(
     // `plan` had at least one placeholder so it can't be empty;
     // `acc_handle` is therefore Some. Box the final handle.
     let final_handle = acc_handle.expect("template plan was non-empty");
-    Ok(nanbox_string_inline(ctx.block(), &final_handle))
+    let boxed = nanbox_string_inline(ctx.block(), &final_handle);
+    coerced.release(ctx);
+    Ok(boxed)
+}
+
+/// The `{name}` parameters of one `I18nString`, held in a rooted group.
+///
+/// A parameter is a user expression whose value is read in several blocks of
+/// the plural / locale diamond, with `js_string_coerce` (which can collect)
+/// between the reads. A register named at lowering time is stale after the
+/// first collection, so the values live in the group and every use re-reads
+/// its slot here (#11830).
+struct I18nParams<'g, 'a> {
+    group: &'g crate::rooting::RootedGroup<'a>,
+    index: std::collections::HashMap<String, usize>,
+}
+
+impl I18nParams<'_, '_> {
+    /// Re-read parameter `name` at this point; `None` when the template names
+    /// a parameter the call site does not pass.
+    fn read(&self, ctx: &mut FnCtx<'_>, name: &str) -> Result<Option<String>> {
+        match self.index.get(name) {
+            Some(i) => Ok(Some(self.group.reread(ctx, *i)?)),
+            None => Ok(None),
+        }
+    }
 }
 
 /// Resolve every locale's template for one i18n string-table row. An empty
@@ -379,7 +426,7 @@ fn emit_i18n_row_value(
     templates: &[String],
     default_idx: usize,
     locale_idx_val: Option<&str>,
-    lowered_params: &std::collections::HashMap<String, String>,
+    lowered_params: &I18nParams<'_, '_>,
 ) -> Result<String> {
     let all_same = templates.iter().all(|t| t == &templates[default_idx]);
     let locale_idx = match locale_idx_val {
@@ -1127,125 +1174,167 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             params,
             plural_forms,
             plural_param,
-        } => {
-            // Resolve every locale's template for the base row (and later,
-            // each plural form's row) from the flat 2D table.
-            let (templates, default_idx, locale_codes) =
-                resolve_i18n_templates(ctx.i18n, key, *string_idx);
-
-            // Lower each param exactly once, up front, so closures and
-            // side effects in arg expressions fire in source order — no
-            // matter which locale/plural branch runs (or whether the
-            // template references the param at all).
-            let mut lowered_params: std::collections::HashMap<String, String> =
-                std::collections::HashMap::with_capacity(params.len());
-            for (name, v) in params {
-                let v_box = lower_expr(ctx, v)?;
-                lowered_params.insert(name.clone(), v_box);
-            }
-
-            // A runtime locale index is only meaningful when the table
-            // metadata is consistent and there is more than one locale.
-            let multi_locale = locale_codes.len() == templates.len() && templates.len() > 1;
-
-            // Plural selection applies when the key has plural variants and
-            // this site actually passes the plural parameter.
-            let count_val = plural_param
-                .as_ref()
-                .and_then(|p| lowered_params.get(p))
-                .cloned()
-                .filter(|_| !plural_forms.is_empty());
-
-            let Some(count_val) = count_val else {
-                // Non-plural path: base row only.
-                let locale_idx = if multi_locale {
-                    Some(emit_locale_index(ctx, &locale_codes, default_idx))
-                } else {
-                    None
-                };
-                return emit_i18n_row_value(
-                    ctx,
-                    &templates,
-                    default_idx,
-                    locale_idx.as_deref(),
-                    &lowered_params,
-                );
-            };
-
-            // Plural path. The locale index feeds both the CLDR category
-            // lookup and each form's per-locale template selection.
-            let locale_idx = if multi_locale {
-                emit_locale_index(ctx, &locale_codes, default_idx)
-            } else {
-                // Single-locale build: row 0 is the only (= default) row.
-                default_idx.to_string()
-            };
-            let category = ctx.block().call(
-                I32,
-                "perry_i18n_plural_category",
-                &[(I32, &locale_idx), (DOUBLE, &count_val)],
-            );
-
-            // `other` (category 5) is the fallthrough when present; a key
-            // with no `.other` variant falls back to the base row.
-            let fallback_row: u32 = plural_forms
-                .iter()
-                .find(|(cat, _)| *cat == 5)
-                .map(|(_, idx)| *idx)
-                .unwrap_or(*string_idx);
-
-            let result_slot = ctx.func.alloca_entry(DOUBLE);
-            let join_block_idx = ctx.new_block("i18n_plural_join");
-
-            for (cat, form_idx) in plural_forms.iter().filter(|(cat, _)| *cat != 5) {
-                let blk = ctx.block();
-                let cond = blk.icmp_eq(I32, &category, &cat.to_string());
-                let match_block_idx = ctx.new_block(&format!("i18n_plural_{}", cat));
-                let next_block_idx = ctx.new_block(&format!("i18n_plural_next_{}", cat));
-                let match_label = ctx.block_label(match_block_idx);
-                let next_label = ctx.block_label(next_block_idx);
-                ctx.block().cond_br(&cond, &match_label, &next_label);
-
-                ctx.current_block = match_block_idx;
-                let (form_templates, form_default_idx, _) =
-                    resolve_i18n_templates(ctx.i18n, key, *form_idx);
-                let locale_idx_ref = multi_locale.then_some(locale_idx.as_str());
-                let val = emit_i18n_row_value(
-                    ctx,
-                    &form_templates,
-                    form_default_idx,
-                    locale_idx_ref,
-                    &lowered_params,
-                )?;
-                let join_label = ctx.block_label(join_block_idx);
-                let blk = ctx.block();
-                blk.store(DOUBLE, &val, &result_slot);
-                blk.br(&join_label);
-
-                ctx.current_block = next_block_idx;
-            }
-
-            // Fallthrough: the `other` form (or the base row).
-            let (fb_templates, fb_default_idx, _) =
-                resolve_i18n_templates(ctx.i18n, key, fallback_row);
-            let locale_idx_ref = multi_locale.then_some(locale_idx.as_str());
-            let val = emit_i18n_row_value(
-                ctx,
-                &fb_templates,
-                fb_default_idx,
-                locale_idx_ref,
-                &lowered_params,
-            )?;
-            let join_label = ctx.block_label(join_block_idx);
-            let blk = ctx.block();
-            blk.store(DOUBLE, &val, &result_slot);
-            blk.br(&join_label);
-
-            ctx.current_block = join_block_idx;
-            Ok(ctx.block().load(DOUBLE, &result_slot))
-        }
+        } => lower_i18n_string(ctx, key, *string_idx, params, plural_forms, plural_param),
 
         // -------- Child Process --------
         _ => unreachable!("expr/mod.rs dispatched a variant not handled by this submodule"),
     }
+}
+
+/// Lower an `I18nString`: resolve the table row at compile time, root the
+/// call site's params, and emit the per-locale / per-plural-form diamond.
+fn lower_i18n_string(
+    ctx: &mut FnCtx<'_>,
+    key: &str,
+    string_idx: u32,
+    params: &[(String, Box<Expr>)],
+    plural_forms: &[(u8, u32)],
+    plural_param: &Option<String>,
+) -> Result<String> {
+    // Resolve every locale's template for the base row (and later,
+    // each plural form's row) from the flat 2D table.
+    let (templates, default_idx, locale_codes) = resolve_i18n_templates(ctx.i18n, key, string_idx);
+
+    // Lower each param exactly once, up front, so closures and
+    // side effects in arg expressions fire in source order — no
+    // matter which locale/plural branch runs (or whether the
+    // template references the param at all). The values are rooted in one
+    // group that spans the whole diamond and is read back at each use
+    // (#11830); the template's own coercions are the window every param
+    // is live across, so each one is rooted.
+    crate::rooting::with_rooted_group(ctx, params.len(), |ctx, group| {
+        let mut index = std::collections::HashMap::with_capacity(params.len());
+        for (name, v) in params {
+            index.insert(name.clone(), group.lower(ctx, &**v, true)?);
+        }
+        let lowered_params = I18nParams {
+            group: &*group,
+            index,
+        };
+        lower_i18n_rows(
+            ctx,
+            key,
+            string_idx,
+            plural_forms,
+            plural_param,
+            &templates,
+            default_idx,
+            &locale_codes,
+            &lowered_params,
+        )
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lower_i18n_rows(
+    ctx: &mut FnCtx<'_>,
+    key: &str,
+    string_idx: u32,
+    plural_forms: &[(u8, u32)],
+    plural_param: &Option<String>,
+    templates: &[String],
+    default_idx: usize,
+    locale_codes: &[String],
+    lowered_params: &I18nParams<'_, '_>,
+) -> Result<String> {
+    // A runtime locale index is only meaningful when the table
+    // metadata is consistent and there is more than one locale.
+    let multi_locale = locale_codes.len() == templates.len() && templates.len() > 1;
+
+    // Plural selection applies when the key has plural variants and
+    // this site actually passes the plural parameter.
+    let count_idx = plural_param
+        .as_ref()
+        .and_then(|p| lowered_params.index.get(p))
+        .copied()
+        .filter(|_| !plural_forms.is_empty());
+
+    let Some(count_idx) = count_idx else {
+        // Non-plural path: base row only.
+        let locale_idx = if multi_locale {
+            Some(emit_locale_index(ctx, locale_codes, default_idx))
+        } else {
+            None
+        };
+        return emit_i18n_row_value(
+            ctx,
+            templates,
+            default_idx,
+            locale_idx.as_deref(),
+            lowered_params,
+        );
+    };
+
+    // Plural path. The locale index feeds both the CLDR category
+    // lookup and each form's per-locale template selection.
+    let locale_idx = if multi_locale {
+        emit_locale_index(ctx, locale_codes, default_idx)
+    } else {
+        // Single-locale build: row 0 is the only (= default) row.
+        default_idx.to_string()
+    };
+    // Re-read the count at the call, below the locale-index step.
+    let count_val = lowered_params.group.reread(ctx, count_idx)?;
+    let category = ctx.block().call(
+        I32,
+        "perry_i18n_plural_category",
+        &[(I32, &locale_idx), (DOUBLE, &count_val)],
+    );
+
+    // `other` (category 5) is the fallthrough when present; a key
+    // with no `.other` variant falls back to the base row.
+    let fallback_row: u32 = plural_forms
+        .iter()
+        .find(|(cat, _)| *cat == 5)
+        .map(|(_, idx)| *idx)
+        .unwrap_or(string_idx);
+
+    let result_slot = ctx.func.alloca_entry(DOUBLE);
+    let join_block_idx = ctx.new_block("i18n_plural_join");
+
+    for (cat, form_idx) in plural_forms.iter().filter(|(cat, _)| *cat != 5) {
+        let blk = ctx.block();
+        let cond = blk.icmp_eq(I32, &category, &cat.to_string());
+        let match_block_idx = ctx.new_block(&format!("i18n_plural_{}", cat));
+        let next_block_idx = ctx.new_block(&format!("i18n_plural_next_{}", cat));
+        let match_label = ctx.block_label(match_block_idx);
+        let next_label = ctx.block_label(next_block_idx);
+        ctx.block().cond_br(&cond, &match_label, &next_label);
+
+        ctx.current_block = match_block_idx;
+        let (form_templates, form_default_idx, _) =
+            resolve_i18n_templates(ctx.i18n, key, *form_idx);
+        let locale_idx_ref = multi_locale.then_some(locale_idx.as_str());
+        let val = emit_i18n_row_value(
+            ctx,
+            &form_templates,
+            form_default_idx,
+            locale_idx_ref,
+            lowered_params,
+        )?;
+        let join_label = ctx.block_label(join_block_idx);
+        let blk = ctx.block();
+        blk.store(DOUBLE, &val, &result_slot);
+        blk.br(&join_label);
+
+        ctx.current_block = next_block_idx;
+    }
+
+    // Fallthrough: the `other` form (or the base row).
+    let (fb_templates, fb_default_idx, _) = resolve_i18n_templates(ctx.i18n, key, fallback_row);
+    let locale_idx_ref = multi_locale.then_some(locale_idx.as_str());
+    let val = emit_i18n_row_value(
+        ctx,
+        &fb_templates,
+        fb_default_idx,
+        locale_idx_ref,
+        &lowered_params,
+    )?;
+    let join_label = ctx.block_label(join_block_idx);
+    let blk = ctx.block();
+    blk.store(DOUBLE, &val, &result_slot);
+    blk.br(&join_label);
+
+    ctx.current_block = join_block_idx;
+    Ok(ctx.block().load(DOUBLE, &result_slot))
 }

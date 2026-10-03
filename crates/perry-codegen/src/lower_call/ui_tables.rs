@@ -613,6 +613,14 @@ pub fn lower_perry_ui_table_call(
 /// rooted in one group, re-read below the last argument, and only then turned
 /// into their ABI form. The caller releases the returned group BELOW the call
 /// that consumes `llvm_args`.
+///
+/// Converting a `Str` argument is itself a collecting step (#11830): a value
+/// that is not already a heap string is materialised, number-formatted or run
+/// through a user `toString`. So the conversions are a second window. Every
+/// `Str` that needs one is converted in operand order into its own rooted
+/// slot, and the raw pointers are taken from those slots in one pass after the
+/// last conversion. A `Str` that is a string literal is already a heap string
+/// and is converted in that final pass like before.
 pub(super) fn lower_ui_args_by_kind<'a>(
     ctx: &mut FnCtx<'_>,
     kinds: &[UiArgKind],
@@ -622,16 +630,23 @@ pub(super) fn lower_ui_args_by_kind<'a>(
 ) -> Result<crate::rooting::RootedGroup<'a>> {
     enum Slot {
         Ready(crate::types::LlvmType, String),
-        Rooted(UiArgKind, usize),
+        Rooted(UiArgKind, usize, Option<crate::rooting::EmittedValue>),
     }
     let pairs: Vec<(&UiArgKind, &'a Expr)> = kinds.iter().zip(args.iter()).collect();
+    // A `Str` operand that is not a literal is coerced to a string pointer by a
+    // call that can allocate and run user code.
+    let coerced: Vec<bool> = pairs
+        .iter()
+        .map(|(kind, arg)| matches!(kind, UiArgKind::Str) && !matches!(arg, Expr::String(_)))
+        .collect();
     let mut group = crate::rooting::open_rooted_group(pairs.len());
     let mut slots: Vec<Slot> = Vec::with_capacity(pairs.len());
     for (i, (kind, arg)) in pairs.iter().enumerate() {
-        let collects = crate::rooting::any_operand_may_collect(
-            ctx,
-            pairs[i + 1..].iter().map(|(_, later)| *later),
-        );
+        let collects = coerced[i + 1..].iter().any(|c| *c)
+            || crate::rooting::any_operand_may_collect(
+                ctx,
+                pairs[i + 1..].iter().map(|(_, later)| *later),
+            );
         match kind {
             UiArgKind::Widget => {
                 // Widgets are NaN-boxed handles. Lower as JSValue, strip the
@@ -657,8 +672,20 @@ pub(super) fn lower_ui_args_by_kind<'a>(
                 slots.push(Slot::Ready(I64, i));
             }
             UiArgKind::Str | UiArgKind::F64 | UiArgKind::Closure => {
-                slots.push(Slot::Rooted(**kind, group.lower(ctx, arg, collects)?));
+                slots.push(Slot::Rooted(**kind, group.lower(ctx, arg, collects)?, None));
             }
+        }
+    }
+    // The conversion window: each coerced `Str` becomes a rooted pointer, in
+    // operand order, before any raw pointer is handed to the call.
+    let mut remaining = coerced.iter().filter(|c| **c).count();
+    for (slot, needs) in slots.iter_mut().zip(coerced.iter()) {
+        if let (Slot::Rooted(_, root, emitted), true) = (slot, needs) {
+            remaining -= 1;
+            *emitted = Some(group.coerce_to_ptr(ctx, *root, remaining > 0, |ctx, v| {
+                ctx.block()
+                    .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, v)])
+            })?);
         }
     }
     for slot in slots {
@@ -667,18 +694,23 @@ pub(super) fn lower_ui_args_by_kind<'a>(
                 llvm_args.push((ty, value));
                 runtime_param_types.push(ty);
             }
-            Slot::Rooted(kind, root) => {
-                let v = group.reread(ctx, root)?;
+            Slot::Rooted(kind, root, emitted) => {
                 if matches!(kind, UiArgKind::Str) {
-                    let h = ctx
-                        .block()
-                        .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &v)]);
+                    let h = match emitted {
+                        Some(e) => group.reread_emitted(ctx, e),
+                        None => {
+                            let v = group.reread(ctx, root)?;
+                            ctx.block()
+                                .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &v)])
+                        }
+                    };
                     llvm_args.push((I64, h));
                     runtime_param_types.push(I64);
                 } else {
                     // `F64` is a number; `Closure` a NaN-boxed pointer passed
                     // as f64 (the runtime side calls `js_closure_call0` / `N`
                     // on it, so it expects the f64 representation).
+                    let v = group.reread(ctx, root)?;
                     llvm_args.push((DOUBLE, v));
                     runtime_param_types.push(DOUBLE);
                 }

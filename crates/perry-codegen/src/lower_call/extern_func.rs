@@ -276,6 +276,7 @@ pub(super) fn lower_manifest_param(
     js_argument_index: usize,
     abi_slot_index: usize,
     val: &str,
+    coerced_ptr: Option<&str>,
     lowered: &mut Vec<String>,
     arg_types: &mut Vec<crate::types::LlvmType>,
 ) {
@@ -313,8 +314,13 @@ pub(super) fn lower_manifest_param(
             arg_types.push(DOUBLE);
         }
         NativeAbiType::String => {
+            // `coerced_ptr` is the rooted result of the coercion pass (#11830);
+            // only a string literal is still checked here.
             let blk = ctx.block();
-            let raw_ptr = blk.call(I64, "js_native_abi_check_string_ptr", &[(DOUBLE, val)]);
+            let raw_ptr = match coerced_ptr {
+                Some(ptr) => ptr.to_string(),
+                None => blk.call(I64, "js_native_abi_check_string_ptr", &[(DOUBLE, val)]),
+            };
             let ptr_val = blk.inttoptr(I64, &raw_ptr);
             let native = LoweredValue::native_handle(raw_ptr);
             record_native_abi_param(
@@ -336,7 +342,10 @@ pub(super) fn lower_manifest_param(
             // side receives a `*const StringHeader` and `serde_json`-decodes it.
             // `type_hint` 0 == TYPE_UNKNOWN (let the runtime classify the value).
             let blk = ctx.block();
-            let raw_ptr = blk.call(I64, "js_json_stringify", &[(DOUBLE, val), (I32, "0")]);
+            let raw_ptr = match coerced_ptr {
+                Some(ptr) => ptr.to_string(),
+                None => blk.call(I64, "js_json_stringify", &[(DOUBLE, val), (I32, "0")]),
+            };
             let ptr_val = blk.inttoptr(I64, &raw_ptr);
             let native = LoweredValue::native_handle(raw_ptr);
             record_native_abi_param(
@@ -924,6 +933,26 @@ pub fn try_lower_extern_func_call(
             Pod(Vec<String>, Vec<crate::types::LlvmType>),
             Plain(usize),
         }
+        enum Coercion {
+            CheckString,
+            Json,
+            Unified,
+        }
+        let coercions: Vec<Option<Coercion>> = args
+            .iter()
+            .enumerate()
+            .map(|(idx, a)| {
+                if matches!(a, Expr::String(_)) {
+                    return None;
+                }
+                match manifest_sig.as_ref().and_then(|(p, _)| p.get(idx)) {
+                    Some(NativeAbiType::String) => Some(Coercion::CheckString),
+                    Some(NativeAbiType::Json) => Some(Coercion::Json),
+                    Some(_) => None,
+                    None => is_string_expr(ctx, a).then_some(Coercion::Unified),
+                }
+            })
+            .collect();
         let mut arg_group = crate::rooting::open_rooted_group(args.len());
         let mut staged: Vec<(StagedArg, usize)> = Vec::with_capacity(args.len());
         for (idx, a) in args.iter().enumerate() {
@@ -963,13 +992,42 @@ pub fn try_lower_extern_func_call(
                 abi_slot_index += descriptor.abi_slot_count();
                 continue;
             }
-            let collects = crate::rooting::any_operand_may_collect(ctx, args[idx + 1..].iter());
+            let collects = coercions[idx + 1..].iter().any(|c| c.is_some())
+                || crate::rooting::any_operand_may_collect(ctx, args[idx + 1..].iter());
             let root = arg_group.lower(ctx, a, collects)?;
             staged.push((StagedArg::Plain(root), abi_slot_index));
             abi_slot_index += manifest_kind.map_or(1, |d| d.abi_slot_count());
         }
+        // #11830: the conversion window. A `string` / `json` parameter's raw
+        // pointer comes from a call that allocates and, for `json`, runs a
+        // user `toJSON`; taking each pointer in order stranded every earlier
+        // one. Each such argument is converted, in order, into its own rooted
+        // slot, and the pointers are read back in the pass below, after the
+        // last conversion. A string literal is already a heap string.
+        let mut pending = coercions.iter().filter(|c| c.is_some()).count();
+        let mut coerced: Vec<Option<crate::rooting::EmittedValue>> = Vec::with_capacity(args.len());
+        for (stage, coercion) in staged.iter().zip(coercions.iter()) {
+            coerced.push(match (stage, coercion) {
+                ((StagedArg::Plain(root), _), Some(coercion)) => {
+                    pending -= 1;
+                    let (callee, flag) = match coercion {
+                        Coercion::CheckString => ("js_native_abi_check_string_ptr", None),
+                        Coercion::Json => ("js_json_stringify", Some("0")),
+                        Coercion::Unified => ("js_get_string_pointer_unified", None),
+                    };
+                    Some(arg_group.coerce_to_ptr(ctx, *root, pending > 0, |ctx, v| {
+                        let blk = ctx.block();
+                        match flag {
+                            Some(f) => blk.call(I64, callee, &[(DOUBLE, v), (I32, f)]),
+                            None => blk.call(I64, callee, &[(DOUBLE, v)]),
+                        }
+                    })?)
+                }
+                _ => None,
+            });
+        }
         abi_slot_index = 0;
-        for (idx, (stage, slot_index)) in staged.into_iter().enumerate() {
+        for (idx, ((stage, slot_index), coerced)) in staged.into_iter().zip(coerced).enumerate() {
             let a = &args[idx];
             let manifest_kind: Option<&NativeAbiType> =
                 manifest_sig.as_ref().and_then(|(p, _)| p.get(idx));
@@ -982,7 +1040,11 @@ pub fn try_lower_extern_func_call(
                 }
                 StagedArg::Plain(root) => root,
             };
-            let val = arg_group.reread(ctx, root)?;
+            let coerced_ptr = coerced.map(|e| arg_group.reread_emitted(ctx, e));
+            let val = match coerced_ptr {
+                Some(_) => String::new(),
+                None => arg_group.reread(ctx, root)?,
+            };
             if let Some(descriptor) = manifest_kind {
                 lower_manifest_param(
                     ctx,
@@ -990,13 +1052,17 @@ pub fn try_lower_extern_func_call(
                     idx,
                     slot_index,
                     &val,
+                    coerced_ptr.as_deref(),
                     &mut lowered,
                     &mut arg_types,
                 );
                 abi_slot_index = slot_index + descriptor.abi_slot_count();
             } else if is_string_expr(ctx, a) {
                 let blk = ctx.block();
-                let raw_ptr = blk.call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &val)]);
+                let raw_ptr = match coerced_ptr {
+                    Some(ptr) => ptr,
+                    None => blk.call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &val)]),
+                };
                 let ptr_val = blk.inttoptr(I64, &raw_ptr);
                 lowered.push(ptr_val);
                 arg_types.push(PTR);
