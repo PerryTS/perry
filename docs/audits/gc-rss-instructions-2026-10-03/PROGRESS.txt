@@ -1,3 +1,21 @@
+PRIVATE OLD-HOLE PAYLOAD PROBE READY — 2026-10-03 22:16Z
+Separate privated1a45c55d7 (four paths), UNAPPLIED. Full-state constructor
+advises only already-listed large old free spans, including budgeted fulls
+once per cycle. Headers and intrusive links remain; consumed holes disappear
+before reuse, and recycling unlinks them before freeing the allocation.
+No new heap traversal, reserved/header/layout flag, side table or GC trigger.
+Size-class filtering skips small holes; complete owned interior pages only.
+Repeat advice remains a potential instruction cost, explicitly unproven.
+Linux test uses mincore on two real old spans sharing a size class, checks
+headers/links/live neighbors/accounting, then reuses through the actual old
+allocator and proves the reused span stays intact on subsequent advice.
+Mac4877/0/5passes with4999matched Rust/Cargo inputs. Linux subject is not
+claimed from the Mac pass. Address ratchet passes1853files with the inherited
+stream-emitter warning; original invalid --check flag attempt is preserved.
+Linux build/test943752queued behind live jobs. Review patch/Mac proof published.
+Current TypeScript base/gc builds finished; entry variant's51LLVMunits finished
+and linking is in progress. No private application RSS result claimed yet.
+
 PRIVATE ENTRY POLICY LINUX TESTS COMPLETE — 2026-10-03 22:06Z
 Private6e311851fa Linux4862/0/5passes, including the real mincore subject:
 aged empty Eden pages leave RSS; fresh/recent/in-use pages and reused data
