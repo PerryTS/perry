@@ -1026,8 +1026,12 @@ impl LlModule {
         // of literal zeros in the Claude Code binary's `__data`, 8.2% of the
         // file, purely from the promotion. Only LOCAL-linkage definitions skip
         // it (`has_local_linkage`) — that covers every generated cache and
-        // table, and keeps a strong external definition's cross-module
-        // coalescing exactly as it was.
+        // table. An EXTERNAL definition keeps its cross-module coalescing, as
+        // `weak_odr` rather than `linkonce_odr`: both fold same-named copies,
+        // but `linkonce_odr` is discardable, and LLVM drops a sole definition
+        // that nothing in its own unit uses even when another object of the
+        // link names it (a ConstFn body's `$info`, referenced only by the
+        // static shape-seed object, vanished from the binary that way).
         let mut defining_unit_count: Vec<usize> = vec![0; all_globals.len()];
         if replicate_globals {
             for need in &bucket_needs {
@@ -1069,7 +1073,11 @@ impl LlModule {
                 let owns = global_owners[gi] == bi;
                 if (replicate_globals && referenced) || owns {
                     if replicate_globals {
-                        if defining_unit_count[gi] > 1 || !has_local_linkage(def) {
+                        if !has_local_linkage(def) {
+                            // External: another object may name it, so it must
+                            // coalesce without ever being discarded.
+                            pre.push_str(&promote_external_global_for_units(def));
+                        } else if defining_unit_count[gi] > 1 {
                             pre.push_str(&promote_global_for_units(def));
                         } else {
                             pre.push_str(def);

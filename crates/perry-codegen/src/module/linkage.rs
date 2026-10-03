@@ -161,6 +161,29 @@ pub(crate) fn promote_global_for_units(line: &str) -> String {
     }
 }
 
+/// [`promote_global_for_units`] for an EXTERNAL definition: `weak_odr`.
+///
+/// Like `linkonce_odr` it lets the linker fold same-named copies — from
+/// several codegen units, or from another module — into one. Unlike it, it is
+/// not discardable: LLVM must emit the definition even when nothing in this
+/// unit uses it. An external definition can be named only from another
+/// object (a ConstFn body's `$info` is referenced by nothing but the static
+/// shape-seed object), and a discardable sole copy is removed from its owner
+/// before that object is ever linked against it.
+pub(crate) fn promote_external_global_for_units(line: &str) -> String {
+    if line.contains(" = external ") {
+        return line.to_string();
+    }
+    match line.split_once(" = ") {
+        Some((lhs, rhs)) => format!(
+            "{} = weak_odr {}",
+            lhs,
+            strip_leading_linkage(rhs.trim_start())
+        ),
+        None => line.to_string(),
+    }
+}
+
 /// Give a generated global one non-discardable definition. On every
 /// non-Mach-O target (ELF and COFF — see `replicate_globals`) each global has
 /// a unique owning codegen unit; leaving that sole definition as
