@@ -1070,3 +1070,42 @@ no remaining measurement depends on the rental host.
 Private callback-capture source is independently verified against4994tracked
 Rust/Cargo inputs, differing only in trace.rs. The21copied own generated/cache
 entries are excluded from source attestation. Probe remains unapplied.
+
+CURRENT c170 REGRESSION PROFILES COMPLETE
+Eight exact-current-binary request/Zod profiles pass output, no lost samples;
+raw reports independently hashed/reparsed. Request GC self share10.76-11.17%;
+map insertion/compaction and property lookup are large non-GC costs. Zod has
+2207-3683samples, insufficient to assign its0.634% delta to a specific helper.
+Sampled shares remain diagnostic, not exact per-function instruction deltas.
+
+NEW PRIVATE GC HELPER EXPERIMENTS (NOT IN PRODUCTION CODE)
+Weak-holder hoist ff68bb0578: remember_retained and remember_evacuated visitors
+read class weakness once per parent, continuing the exact weak-slot predicate
+only on possible weak holders. Mac4872/0/5 andLinux4856/0/5pass.
+GNU x86-64 root-scope inlining a609076923: fixed-offset, non-dropping TLS
+metadata uses the steady-state arm currently left opaque to protect Darwin
+from TLV resolver hoisting. Other targets retain the original attributes.
+Linux4856/0/5pass; instruction/RSS acceptance pending.
+Fresh unchanged GC-proposal control and both private compiler/static-wrapper
+products are built separately on the original measurement host from immutable
+c170+production sources and one-file overlays. Only our completed qb6 cache
+is reused, with every workspace Rust/Cargo input refreshed. Initial four
+workload/72execution noauto comparison is launched. No private experiment
+is added to the production PR before application evidence.
+
+PRIVATE HELPER APP STATUS (2026-10-03 18:48Z)
+All12 full-runtime TS/Zod/request/string builds succeed. Paired72execution
+measurement continues on original host under shared lock; do not restart.
+Independent4994input/9product/source-diff proof is published. The two private
+one-file patches remain unapplied to production; no benefit claimed yet.
+
+PRIVATE HELPER APP RESULTS COMPLETE AND INDEPENDENTLY VERIFIED
+72/72correct; raw source/binary/products/stdout/RSS/perf/summary proof passes.
+Weak-holder hoist: TS instructions+0.227%, Zod+0.011%, request-0.267%,
+strings-0.003%. Request RSS+3.112%; no uniform benefit. Remains rejected/unapplied.
+GNU x86-64 root-scope: instructions TS-0.028%, Zod-0.523%, request-0.382%,
+strings-0.404%; RSS TS-0.096%, Zod-0.081%, request+0.131%, strings-0.042%.
+TS minor faults+1.027%; remaining faults approximately flat. Initial benefit
+is small and cannot replace full17-case normal-auto/moving acceptance.
+Full17-case ELF/control builds and204measurements launched under shared lock,
+using separate source/runtime/target directories. Probe remains unapplied.

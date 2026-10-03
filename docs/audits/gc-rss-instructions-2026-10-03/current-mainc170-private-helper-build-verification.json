@@ -1,0 +1,33 @@
+{
+  "base": "c17090892e2a749bb4a3f2a0022e0f8274f0320c",
+  "source_input_counts": {
+    "control": 4994,
+    "weak": 4994,
+    "elf": 4994
+  },
+  "source_diffs_vs_current_gc_control": {
+    "control": [],
+    "weak": [
+      "crates/perry-runtime/src/gc/verify.rs"
+    ],
+    "elf": [
+      "crates/perry-runtime/src/gc/roots/runtime_handles.rs"
+    ]
+  },
+  "products": {
+    "control/perry": "24fb72638b46e721e967927d8f81bd833ffab9439fd9d285ff611bff13ba10a2",
+    "control/libperry_runtime.a": "ab3df3ae6c016d172d1127d55afb85bba6f72f897ebfcd54738ba4ae29289129",
+    "control/libperry_stdlib.a": "b8b6170b54a46f57a352ee22f3a697b70a585bb3f88e04d555c13a7466cdab78",
+    "weak/perry": "21b8b1f4cd04f3dd3d92abde3fe7f4433b216a4d998a7d96cd733b2717752cf1",
+    "weak/libperry_runtime.a": "c66d9bb031bc0b6057ee9c701b9ee8465897ab43eaaa96f536e7ff1b6d06643a",
+    "weak/libperry_stdlib.a": "fe67120a3e1152b94bd2da20fbd4f4d28ad5f03bfbb5aba92e24e1275a57b618",
+    "elf/perry": "f7942e98cdba7e2c63288373c702057b59b60c4753c17dfb74bb6e4281415d77",
+    "elf/libperry_runtime.a": "c21a867a45aefa6227d72055f4c1ab1b4f6373401441d8658e3b9721b071f1c4",
+    "elf/libperry_stdlib.a": "21d422af42246899f795d21f2a877b121fb510d22c050464ec95a78959669779"
+  },
+  "linux_runtime_tests": {
+    "weak": 4856,
+    "elf": 4856
+  },
+  "scope": "All tracked archive Rust/Cargo inputs and live exported product/log hashes verified independently. Private one-file probes; no app acceptance inferred."
+}
