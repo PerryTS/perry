@@ -91,7 +91,9 @@ fn wide_receiver_scan_is_accessor_free_and_still_sees_every_key() {
 #[test]
 fn method_lookup_10502_warm_guard_work_is_independent_of_own_key_count() {
     let _lock = crate::gc::global_side_table_test_lock();
-    for width in [4, 64, 512] {
+    // Widths past `own_slot::DIRECT_SCAN_MAX_KEYS`: a narrower own key list is
+    // compared directly, which is bounded by that constant instead.
+    for width in [16, 64, 512] {
         let names: Vec<String> = (0..width).map(|i| format!("f{i:03}")).collect();
         let keys: Vec<&str> = names.iter().map(String::as_str).collect();
         let receiver = class_instance(0x7A26, &keys);
