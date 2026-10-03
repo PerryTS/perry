@@ -325,3 +325,14 @@ fn builtin_statics_without_spread_keep_their_fast_paths() {
         );
     }
 }
+
+#[test]
+fn builtin_static_spread_call_keeps_its_namespace_receiver() {
+    // The collapsed static surface `PropertyGet { GlobalGet(0), "stringify" }`
+    // has no receiver for the spread dispatch ("value is not a function").
+    let h = hir("const a: any[] = [{ k: 1 }]; console.log(JSON.stringify(...a));");
+    assert!(
+        h.contains("CallSpread { callee: PropertyGet { object: PropertyGet { object: GlobalGet(0), property: \"JSON\""),
+        "the spread call lost its JSON receiver: {h}"
+    );
+}
