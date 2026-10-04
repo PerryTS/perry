@@ -1880,6 +1880,7 @@ pub(crate) fn lower_stmt(
             // one shared scope key: a second case re-declaring the name is a
             // redeclaration, not a shadow.
             let mut saved_class_renames = Vec::new();
+            let mut saved_forward_classes = Vec::new();
             let mut tdz_boxes = Vec::new();
             for case in &switch_stmt.cases {
                 tdz_boxes.extend(rebind_nested_forward_scope_lets(ctx, &case.cons));
@@ -1888,6 +1889,7 @@ pub(crate) fn lower_stmt(
                     switch_stmt.span.lo.0,
                     &case.cons,
                 ));
+                saved_forward_classes.extend(enter_forward_class_scope(ctx, &case.cons));
             }
 
             for case in &switch_stmt.cases {
@@ -1901,6 +1903,7 @@ pub(crate) fn lower_stmt(
                 cases.push(SwitchCase { test, body });
             }
 
+            exit_forward_class_scope(ctx, saved_forward_classes);
             exit_class_rename_scope(ctx, saved_class_renames);
             exit_interface_scope(ctx, interfaces);
             ctx.pop_block_scope(switch_scope_mark);

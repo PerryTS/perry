@@ -36,7 +36,9 @@ pub fn lower_block_stmt(ctx: &mut LoweringContext, block: &ast::BlockStmt) -> Re
     // alias — which would strand that function's end-of-body capture
     // re-registration on the now-stale key.
     let saved_class_renames = enter_class_rename_scope(ctx, block.span.lo.0, &block.stmts);
+    let saved_forward_classes = enter_forward_class_scope(ctx, &block.stmts);
     let lowered = lower_stmts_using_aware(ctx, &block.stmts);
+    exit_forward_class_scope(ctx, saved_forward_classes);
     exit_class_rename_scope(ctx, saved_class_renames);
     exit_interface_scope(ctx, interfaces);
     lowered.map(|mut body| {
@@ -70,6 +72,12 @@ pub(crate) fn rebind_nested_forward_scope_lets(
     ctx: &mut LoweringContext,
     stmts: &[ast::Stmt],
 ) -> Vec<LocalId> {
+    // Function bodies pre-scan their nested blocks so closures in those blocks
+    // can capture the right cells. A block directly in module code has no
+    // function-body owner to perform that scan, so discover this scope's
+    // bindings here as well. Existing span registrations make this a no-op for
+    // function-owned blocks.
+    pre_register_forward_captured_lets_in_scope(ctx, stmts);
     let mut tdz_boxes = Vec::new();
     if ctx.lexical_forward_decls.is_empty() {
         return tdz_boxes;
@@ -98,6 +106,47 @@ pub(crate) fn rebind_nested_forward_scope_lets(
         }
     }
     tdz_boxes
+}
+
+fn pre_register_forward_captured_lets_in_scope(ctx: &mut LoweringContext, stmts: &[ast::Stmt]) {
+    let mut seen_closure_refs = std::collections::HashSet::new();
+    let mut registered_here = std::collections::HashSet::new();
+    for stmt in stmts {
+        if let ast::Stmt::Decl(ast::Decl::Var(var_decl)) = stmt {
+            if matches!(
+                var_decl.kind,
+                ast::VarDeclKind::Let | ast::VarDeclKind::Const
+            ) {
+                for decl in &var_decl.decls {
+                    // A declarator's initializer may create a closure that
+                    // captures that declarator or a later sibling declarator.
+                    if let Some(init) = &decl.init {
+                        cic_expr(init, false, &mut seen_closure_refs);
+                    }
+                    if crate::lower::ambient::declarator_binds_nothing(var_decl, decl) {
+                        continue;
+                    }
+                    let mut binding_idents = Vec::new();
+                    collect_pat_forward_idents(&decl.name, &mut binding_idents);
+                    for (name, span_lo) in binding_idents {
+                        if !seen_closure_refs.contains(&name)
+                            || registered_here.contains(&name)
+                            || ctx.lexical_forward_decls.contains_key(&span_lo)
+                        {
+                            continue;
+                        }
+                        let id = ctx.fresh_local();
+                        ctx.var_hoisted_ids.insert(id);
+                        ctx.tdz_forward_ids.insert(id);
+                        ctx.nested_forward_scope_ids.insert(id);
+                        ctx.lexical_forward_decls.insert(span_lo, id);
+                        registered_here.insert(name);
+                    }
+                }
+            }
+        }
+        cic_stmt(stmt, false, &mut seen_closure_refs);
+    }
 }
 
 /// Collect identifier names referenced INSIDE any closure (arrow / function
@@ -1081,7 +1130,9 @@ pub fn lower_block_stmt_scoped(
     // #9466: this path does not route through `lower_block_stmt`, so bracket
     // block-scoped class disambiguation here.
     let saved_class_renames = enter_class_rename_scope(ctx, block.span.lo.0, &block.stmts);
+    let saved_forward_classes = enter_forward_class_scope(ctx, &block.stmts);
     let stmts = lower_block_fn_decls(ctx, block);
+    exit_forward_class_scope(ctx, saved_forward_classes);
     exit_class_rename_scope(ctx, saved_class_renames);
     exit_interface_scope(ctx, interfaces);
     // `?` deliberately AFTER the rename restore but BEFORE `pop_block_scope`,
@@ -1288,6 +1339,50 @@ pub(crate) fn exit_class_rename_scope(ctx: &mut LoweringContext, saved: ClassRen
             None => {
                 ctx.class_renames.remove(&name);
             }
+        }
+    }
+}
+
+/// Forward class declarations are lexical bindings just like `let`/`const`.
+/// Register the names for the whole block so a closure lowered before a later
+/// declaration resolves the class binding rather than an unresolved global.
+/// Preserve enclosing entries because a same-named class in a nested block is
+/// a distinct, nearer binding.
+pub(crate) type ForwardClassScopeSave = Vec<(String, bool, Option<usize>)>;
+
+pub(crate) fn enter_forward_class_scope(
+    ctx: &mut LoweringContext,
+    stmts: &[ast::Stmt],
+) -> ForwardClassScopeSave {
+    let mut saved = ForwardClassScopeSave::new();
+    let mut entered = std::collections::HashSet::new();
+    for stmt in stmts {
+        let ast::Stmt::Decl(ast::Decl::Class(class_decl)) = stmt else {
+            continue;
+        };
+        let name = class_decl.ident.sym.to_string();
+        if !entered.insert(name.clone()) {
+            continue;
+        }
+        let was_present = ctx.forward_class_names.contains(&name);
+        let previous_depth = ctx
+            .forward_class_decl_depth
+            .insert(name.clone(), ctx.scope_depth);
+        ctx.forward_class_names.insert(name.clone());
+        saved.push((name, was_present, previous_depth));
+    }
+    saved
+}
+
+pub(crate) fn exit_forward_class_scope(ctx: &mut LoweringContext, saved: ForwardClassScopeSave) {
+    for (name, was_present, previous_depth) in saved.into_iter().rev() {
+        if !was_present {
+            ctx.forward_class_names.remove(&name);
+        }
+        if let Some(depth) = previous_depth {
+            ctx.forward_class_decl_depth.insert(name, depth);
+        } else {
+            ctx.forward_class_decl_depth.remove(&name);
         }
     }
 }
