@@ -97,7 +97,7 @@ impl TraceWorklistCycleState {
             budget,
         );
         self.absorb_mark_seeds();
-        done && self.cursor >= self.worklist.len()
+        done && self.worklist.is_empty()
     }
 
     fn absorb_mark_seeds(&mut self) {
