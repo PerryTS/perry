@@ -1220,10 +1220,18 @@ fn collect_module_one(
         // `is_dynamic_target` instead of dropping the information.
         // A dynamic-only target appears as a new import with empty
         // specifiers and `is_dynamic = true`.
+        //
+        // Only a static edge that exists at run time can carry the dynamic
+        // edge. `import type { X } from "./x.ts"` (`type_only`) and
+        // `import { type X } from "./x.ts"` (`runtime_erased`) are erased:
+        // a type-only target is never queued for compilation, and an erased
+        // edge is skipped by init order and export pruning. Folding into one
+        // dropped the real `import("./x.ts")` or `new Worker(new URL("./x.ts",
+        // ...))` of the same file, so it gets its own dynamic edge instead.
         if let Some(existing) = hir_module
             .imports
             .iter_mut()
-            .find(|i| i.source == source && !i.is_dynamic)
+            .find(|i| i.source == source && !i.is_dynamic && !i.type_only && !i.runtime_erased)
         {
             existing.is_dynamic_target = true;
             continue;
