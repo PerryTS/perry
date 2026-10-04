@@ -323,6 +323,36 @@ impl LlModule {
         note(self.fn_infos.borrow_mut().facts_mut(body));
     }
 
+    /// Attach retained source directly to an ordinary compiled JS body's
+    /// static info. Raw method/accessor ABIs deliberately decline: their
+    /// reflected function objects run shared runtime thunks and still use the
+    /// copying/borrowing registry path in `string_pool`.
+    pub(crate) fn attach_fn_source(
+        &self,
+        body: &str,
+        global: &str,
+        offset: usize,
+        byte_len: usize,
+        is_non_strict_ordinary: bool,
+    ) -> bool {
+        let Some(function) = self.function_named(body) else {
+            return false;
+        };
+        if !is_js_body(function) {
+            return false;
+        }
+        self.fn_infos
+            .borrow_mut()
+            .facts_mut(body)
+            .set_source(crate::fn_info::RetainedSource {
+                global: global.to_string(),
+                offset,
+                byte_len,
+                is_non_strict_ordinary,
+            });
+        true
+    }
+
     pub(crate) fn request_static_seed_body(&mut self, body: &str) {
         self.fn_infos.borrow_mut().request_static_seed_body(body);
     }
@@ -538,6 +568,41 @@ impl LlModule {
             "@{} = private unnamed_addr constant [{} x i8] {}",
             name, total_bytes, escaped_lit
         ));
+    }
+
+    /// Emit the module's one cold retained-source blob outside the ordinary
+    /// literal pages. This is a byte blob, not a C string: every consumer
+    /// carries an explicit byte length, so no terminator is emitted.
+    pub fn add_retained_source_constant(&mut self, value: &str) -> (String, usize) {
+        let name = if self.symbol_prefix.is_empty() {
+            ".perry.retained_source".to_string()
+        } else {
+            format!("{}_.perry.retained_source", self.symbol_prefix)
+        };
+        let bytes = value.as_bytes();
+        let mut lit = String::with_capacity(bytes.len() + 8);
+        lit.push_str("c\"");
+        for &byte in bytes {
+            if (32..127).contains(&byte) && byte != b'"' && byte != b'\\' {
+                lit.push(byte as char);
+            } else {
+                lit.push('\\');
+                lit.push_str(&format!("{byte:02X}"));
+            }
+        }
+        lit.push('"');
+        let section = if self.target_triple.contains("apple") {
+            "__TEXT,__perry_src"
+        } else if self.target_triple.contains("windows") {
+            ".rdata$perry_src"
+        } else {
+            ".perry_src"
+        };
+        self.string_constants.push(format!(
+            "@{name} = private constant [{} x i8] {lit}, section \"{section}\", align 1",
+            bytes.len()
+        ));
+        (name, bytes.len())
     }
 
     /// Add a UTF-8 string constant to the module's constant pool. Returns
