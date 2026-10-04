@@ -1,7 +1,7 @@
 LATEST-MAIN MOVING INTEGRATION VERIFIED
 All 22 latest-main linked executions match fresh Node outputs; all 11 moving
 executions actually copy objects and protect retired from-space. Source,
-products, derived fixture and raw counters independently verified; all 165
+products, derived fixture and raw counters independently verified; all 99
 proof/raw files are copied locally and rehashed. Integration 0aa483aa91 on
 base ad0a2617bf now passes full runtime on both platforms and these native
 moving subjects. Latest-main application comparison and FFI/events remain
