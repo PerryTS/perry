@@ -21,6 +21,10 @@ use crate::object::{
 use crate::string::js_string_from_bytes;
 use crate::value::JSValue;
 
+#[cfg(test)]
+#[path = "stream_promises_gc_tests.rs"]
+mod gc_tests;
+
 #[inline]
 pub(crate) fn undefined_value() -> f64 {
     f64::from_bits(crate::value::TAG_UNDEFINED)
