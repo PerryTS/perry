@@ -222,37 +222,36 @@ pub extern "C" fn js_object_final_shape_id_for_class_keys_static_private(
     for name in &names {
         let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
         let key = scope.root_string_ptr(key);
-        let parent = super::canonical_keys::CanonicalKeys::from_rooted(
-            list_root.get_raw_mut_ptr::<ArrayHeader>(),
-            count,
-        );
-        let next = key.with_const_ptr::<crate::StringHeader, _>(|key| unsafe {
-            super::canonical_keys::extend_key_with_entry(
-                &proof,
-                parent,
-                key,
-                super::key_attrs::PRIVATE_FIELD_ENTRY,
-            )
+        let next = list_root.with_mut_ptr::<ArrayHeader, _>(|list| {
+            key.with_const_ptr::<crate::StringHeader, _>(|key| unsafe {
+                super::canonical_keys::extend_key_with_entry(
+                    &proof,
+                    super::canonical_keys::CanonicalKeys::from_rooted(list, count),
+                    key,
+                    super::key_attrs::PRIVATE_FIELD_ENTRY,
+                )
+            })
         });
         count = next.len();
         list_root = scope.root_raw_mut_ptr(next.as_ptr());
     }
-    let list = list_root.get_raw_mut_ptr::<ArrayHeader>() as *const ArrayHeader;
-    let summary = unsafe { super::key_attrs::keys_summary_checked(list, count) };
-    let id = shapes::publish_shape_result(shapes::shape_descriptor_intern_with_special(
-        list,
-        count,
-        live.max(count),
-        0,
-        shapes::ShapeObjectKind::Ordinary,
-        0,
-        shapes::class_proto_id(class_id),
-        summary,
-        rep,
-        &[],
-        &brand_list,
-        Some(requested).filter(|&id| id != 0),
-    ));
+    let id = list_root.with_const_ptr::<ArrayHeader, _>(|list| {
+        let summary = unsafe { super::key_attrs::keys_summary_checked(list, count) };
+        shapes::publish_shape_result(shapes::shape_descriptor_intern_with_special(
+            list,
+            count,
+            live.max(count),
+            0,
+            shapes::ShapeObjectKind::Ordinary,
+            0,
+            shapes::class_proto_id(class_id),
+            summary,
+            rep,
+            &[],
+            &brand_list,
+            Some(requested).filter(|&id| id != 0),
+        ))
+    });
     // SAFETY: `id` was resolved from this agent's live slab record above.
     unsafe { shapes::note_external_shape_carrier(shapes::shape_descriptor_by_id(id)) };
     note_static_request("class-private", requested, id);
