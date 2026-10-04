@@ -27,11 +27,16 @@
 //! * the class id is part of the word;
 //! * a ShapeId names one key list, one descriptor state and one `[[Prototype]]`
 //!   (#11342). The prime proves the key list does not contain the method name,
-//!   the object is not a dictionary, and its metadata record (if any) holds
-//!   only overflow storage: no per-instance prototype, no flags, no
-//!   descriptor summary bits, no fresh-evaluation brand. Any later own key,
-//!   descriptor or prototype change re-stamps the receiver, so the word stops
-//!   matching.
+//!   the object is not a dictionary, its metadata record (if any) holds
+//!   only overflow storage, and its ShapeId's prototype identity is the one
+//!   its class implies. Any later own key, descriptor or prototype change
+//!   re-stamps the receiver, so the word stops matching.
+//!
+//! An instance of a per-evaluation class inherits from that evaluation's
+//! prototype, whose methods are that evaluation's function objects: its
+//! ShapeId's identity names that prototype (MIXED), so it learns no word
+//! here. Its calls reach the site's chain memo, which is keyed on the same
+//! ShapeId and calls the function object its prototype holds.
 //!
 //! The word holds no address, so the collector never needs to see it, and a
 //! racing store from another agent can only publish another correct fact:
@@ -40,7 +45,7 @@
 //! The prime never allocates, so the receiver read at entry is the receiver
 //! the dispatch then sees.
 
-use super::class_receiver_guard;
+use super::class_receiver_fast_guard;
 
 /// Store `object`'s receiver word in `site` when its shape proves that an
 /// own-property lookup of `method` finds nothing, and (when
@@ -74,15 +79,19 @@ unsafe fn learn_absent_method_word(
     }
     // The receiver predicate the tower's class fast path uses — an ordinary
     // heap instance of a user class, not a dictionary, no own key equal to
-    // `method`, no recorded prototype — with a metadata record accepted only
-    // for overflow storage.
-    let Some((addr, class_id)) = class_receiver_guard::<true>(object, method) else {
+    // `method`, a metadata record only for overflow storage — inheriting from
+    // the prototype its class implies, whose method the compiled body is.
+    let Some(recv) = class_receiver_fast_guard(object, method) else {
         return;
     };
+    if !recv.recorded_prototype.is_null() {
+        return;
+    }
+    let class_id = recv.class_id;
     if expected_class_id != 0 && class_id != expected_class_id {
         return;
     }
-    let obj = addr as *const crate::object::ObjectHeader;
+    let obj = recv.addr as *const crate::object::ObjectHeader;
     let shape_id = crate::object::shapes::object_shape_stamp(obj);
     if shape_id == 0 {
         return;
@@ -114,11 +123,6 @@ pub unsafe extern "C-unwind" fn js_native_call_method_by_id_learn(
     if method_id == 0 {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-    let Some(name_ref) = crate::string::perry_string_ref_from_dispatch_id(method_id, &mut scratch)
-    else {
-        return f64::from_bits(crate::value::TAG_UNDEFINED);
-    };
     let learn = site as usize & 1 == 0;
     let record = (site as usize & !1) as *mut u64;
     let memo = if record.is_null() {
@@ -129,14 +133,20 @@ pub unsafe extern "C-unwind" fn js_native_call_method_by_id_learn(
             false,
         )
     };
-    let method = std::slice::from_raw_parts(name_ref.ptr, name_ref.len);
     // A repeat the site's memo answers: no arm took it, so there is nothing
-    // to learn from it either.
+    // to learn from it either. The memo is the site's own (not keyed), so
+    // its ways answer without the name.
     if let Some(result) =
-        super::class_holder::try_chain_memo_dispatch(object, memo, method, args_ptr, args_len)
+        super::class_holder::try_chain_memo_dispatch(object, memo, &[], args_ptr, args_len)
     {
         return result;
     }
+    let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let Some(name_ref) = crate::string::perry_string_ref_from_dispatch_id(method_id, &mut scratch)
+    else {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    };
+    let method = std::slice::from_raw_parts(name_ref.ptr, name_ref.len);
     if learn && !record.is_null() && expected_class_id != 0 {
         learn_absent_method_word(object, method, expected_class_id, record);
     }
