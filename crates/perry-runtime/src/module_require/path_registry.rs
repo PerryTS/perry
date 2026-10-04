@@ -553,35 +553,71 @@ crate::perry_thread_local! {
     /// rejections, the second app serving 500 while the first served 200.
     ///
     /// Every heap registers its own initializers as its library runs
-    /// `perry_module_init` on its own thread, so per-heap loses nothing.
+    /// `perry_module_init` on its own thread. A worker thread is the exception:
+    /// it runs only its entry's `__init`, never `perry_module_init`, so it
+    /// registers nothing itself. It is the SAME image as the thread that
+    /// spawned it, though, so it adopts that thread's table at spawn (see
+    /// [`current_path_init_image`]), exactly as it adopts the class image.
+    ///
+    /// Copy-on-write behind an `Arc` so a spawn hands its table over without
+    /// copying it; registration copies only while a worker still shares it.
     ///
     /// These are rustdoc rather than plain `//` because `perry_thread_local!`
     /// passes `#[$attr]` through onto the static it emits. A `///` placed
     /// BEFORE the macro invocation instead attaches to nothing, and `-D
     /// warnings` (a required PR gate) then rejects the build.
     static PATH_MODULE_INIT_ADDRS: std::cell::RefCell<
-        std::collections::HashMap<String, usize>,
-    > = std::cell::RefCell::new(std::collections::HashMap::new());
+        std::sync::Arc<std::collections::HashMap<String, usize>>,
+    > = std::cell::RefCell::new(std::sync::Arc::new(std::collections::HashMap::new()));
 }
 
-fn with_init_addrs<R>(f: impl FnOnce(&mut std::collections::HashMap<String, usize>) -> R) -> R {
-    PATH_MODULE_INIT_ADDRS.with(|addrs| f(&mut addrs.borrow_mut()))
+/// This thread's initializer addresses, to hand to a thread it spawns that
+/// runs the same image. Opaque: the only thing to do with it is
+/// [`adopt_path_init_image`] on the spawned thread before it runs any JS.
+#[derive(Clone)]
+pub struct PathInitImage(std::sync::Arc<std::collections::HashMap<String, usize>>);
+
+/// Capture this thread's table for a worker it is about to spawn. The
+/// addresses are code pointers of this image, so they are valid on any thread
+/// running it; the exports stay per-heap and are never handed over.
+pub fn current_path_init_image() -> PathInitImage {
+    PathInitImage(PATH_MODULE_INIT_ADDRS.with(|addrs| addrs.borrow().clone()))
+}
+
+/// Install the spawning thread's initializer addresses on this thread, so a
+/// runtime `require` of a Deferred module (one reached only through a
+/// function-local or conditional `require`) can initialize it on this heap.
+/// Without it the worker's table is empty and the require throws
+/// `MODULE_NOT_FOUND` for a module the main thread loads fine.
+pub fn adopt_path_init_image(image: PathInitImage) {
+    PATH_MODULE_INIT_ADDRS.with(|addrs| {
+        let mut addrs = addrs.borrow_mut();
+        if addrs.is_empty() {
+            *addrs = image.0;
+            return;
+        }
+        let own = std::sync::Arc::make_mut(&mut addrs);
+        for (key, &init_addr) in image.0.iter() {
+            own.entry(key.clone()).or_insert(init_addr);
+        }
+    });
 }
 
 /// Idempotent. A second, DIFFERENT address for one canonical path is rejected
 /// so an alias can never create a second logical module initialization.
 fn register_init_addr(key: &str, init_addr: usize) -> bool {
-    with_init_addrs(|addrs| match addrs.entry(key.to_string()) {
-        std::collections::hash_map::Entry::Occupied(slot) => *slot.get() == init_addr,
-        std::collections::hash_map::Entry::Vacant(slot) => {
-            slot.insert(init_addr);
-            true
+    PATH_MODULE_INIT_ADDRS.with(|addrs| {
+        let mut addrs = addrs.borrow_mut();
+        if let Some(&existing) = addrs.get(key) {
+            return existing == init_addr;
         }
+        std::sync::Arc::make_mut(&mut addrs).insert(key.to_string(), init_addr);
+        true
     })
 }
 
 fn lookup_init_addr(key: &str) -> Option<usize> {
-    with_init_addrs(|addrs| addrs.get(key).copied())
+    PATH_MODULE_INIT_ADDRS.with(|addrs| addrs.borrow().get(key).copied())
 }
 
 crate::perry_thread_local! {
@@ -1002,6 +1038,39 @@ mod path_module_registry_tests {
         });
     }
 
+    /// A worker runs its entry's `__init`, never `perry_module_init`, so it
+    /// registers no initializers itself. Without the spawner's table a
+    /// Deferred module is a miss on the worker; with it, the worker runs the
+    /// initializer on its own heap.
+    #[test]
+    fn worker_adopts_the_spawning_threads_initializers() {
+        const KEY: &str = "/worker-deferred-path.js";
+        assert!(register_init_addr(KEY, 0x3000));
+        let image = current_path_init_image();
+        let (without, with) = std::thread::spawn(move || {
+            let without = MODULE_PATH_REGISTRY
+                .with(|registry| registry.require_with(KEY, &|_addr| unreachable!()));
+            adopt_path_init_image(image);
+            let with = MODULE_PATH_REGISTRY.with(|registry| {
+                let ran = std::cell::Cell::new(0usize);
+                let outcome = registry.require_with(KEY, &|addr| {
+                    ran.set(addr);
+                    assert!(registry.register_final_exports(KEY.into(), 0xC3));
+                    Ok(())
+                });
+                assert_eq!(ran.get(), 0x3000, "the spawner's initializer must run here");
+                outcome
+            });
+            (without, with)
+        })
+        .join()
+        .unwrap();
+        assert_eq!(without, Ok(None), "a thread with no table must miss");
+        assert_eq!(with, Ok(Some(0xC3)));
+        PATH_MODULE_INIT_ADDRS
+            .with(|addrs| std::sync::Arc::make_mut(&mut addrs.borrow_mut()).remove(KEY));
+    }
+
     /// The Coop shape: many apps in one process load the SAME module path.
     /// Each heap must run its own initializer and get its own exports, with
     /// no thread refused and no initializer skipped as already-done.
@@ -1065,7 +1134,8 @@ mod path_module_registry_tests {
             registry.contains_registered(key),
             "initializer metadata is sufficient"
         );
-        with_init_addrs(|addrs| addrs.remove(key));
+        PATH_MODULE_INIT_ADDRS
+            .with(|addrs| std::sync::Arc::make_mut(&mut addrs.borrow_mut()).remove(key));
     }
 
     #[test]

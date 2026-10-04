@@ -1509,6 +1509,10 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
     // shares the parent's class tables instead of building a second copy. Its
     // entry's `js_gc_init` then finds an image already installed and keeps it.
     let class_image = perry_runtime::object::class_image::current_image_handle();
+    // Same image, so the same module initializers: a runtime `require` of a
+    // Deferred module (a function-local or conditional `require`) must find
+    // its initializer on the worker too.
+    let path_inits = perry_runtime::module_require::current_path_init_image();
     // #10399: a worker runs the module graph, so it needs the same stack
     // headroom as the blocking pool — the program's static TLS block is
     // carved from this same mapping (see `async_bridge::RUNTIME`).
@@ -1516,6 +1520,7 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
         .stack_size(crate::common::thread_config::blocking_thread_stack_size())
         .spawn(move || {
             perry_runtime::object::class_image::adopt_image(class_image);
+            perry_runtime::module_require::adopt_path_init_image(path_inits);
             // #10854/#6185: claim this thread's own agent id BEFORE it can allocate
             // or enqueue anything. A `worker_threads` Worker gets its own arena and
             // GC, but it never claimed an agent, so `current_agent()` fell back to
