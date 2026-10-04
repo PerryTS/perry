@@ -347,7 +347,7 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
         let proto_obj = if name == "Array" {
             crate::array::js_array_alloc(0) as *mut ObjectHeader
         } else {
-            js_object_alloc(0, 0)
+            super::proto_room::alloc_builtin_prototype()
         };
         if !proto_obj.is_null() {
             let proto_value = crate::value::js_nanbox_pointer(proto_obj as i64);
@@ -552,6 +552,11 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
                         bpe_attrs,
                     );
                 }
+            }
+            if name != "Array" {
+                // Its own keys are in: return the room it did not use.
+                // SAFETY: fresh, unexposed, under this bootstrap's no-move scope.
+                unsafe { super::proto_room::fit_builtin_prototype(proto_obj) };
             }
         }
         let name_bytes = name.as_bytes();

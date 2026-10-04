@@ -147,7 +147,7 @@ fn build_object_intrinsics() -> Option<ObjectPair> {
             super::super::PropertyAttrs::new(false, false, true),
         );
     }
-    let proto_obj = js_object_alloc(0, 0);
+    let proto_obj = super::proto_room::alloc_builtin_prototype();
     if proto_obj.is_null() {
         return None;
     }
@@ -169,6 +169,8 @@ fn build_object_intrinsics() -> Option<ObjectPair> {
         super::super::PropertyAttrs::new(true, false, true),
     );
     populate_builtin_prototype_methods("Object", proto_obj);
+    // SAFETY: the fresh prototype, not yet exposed, collection suppressed.
+    unsafe { super::proto_room::fit_builtin_prototype(proto_obj) };
     Some((closure_ptr, proto_obj))
 }
 
