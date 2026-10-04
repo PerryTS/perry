@@ -55,7 +55,7 @@
 1 0 crates/perry-runtime/src/async_context.rs
 5 0 crates/perry-runtime/src/async_hooks.rs
 1 0 crates/perry-runtime/src/buffer/detach.rs
-12 0 crates/perry-runtime/src/buffer/header.rs
+6 0 crates/perry-runtime/src/buffer/header.rs
 2 0 crates/perry-runtime/src/buffer/view.rs
 1 0 crates/perry-runtime/src/builtins/console.rs
 1 0 crates/perry-runtime/src/builtins/formatting/boxed_primitives.rs
@@ -102,7 +102,6 @@
 1 0 crates/perry-runtime/src/tui/hooks.rs
 1 0 crates/perry-runtime/src/tui/state.rs
 1 0 crates/perry-runtime/src/tui/tree.rs
-2 0 crates/perry-runtime/src/typedarray/mod.rs
 2 0 crates/perry-runtime/src/typedarray_props.rs
 1 0 crates/perry-runtime/src/typedarray_view.rs
 1 0 crates/perry-runtime/src/weakref.rs
@@ -149,4 +148,4 @@
 2 0 crates/perry-stdlib/src/turnloop_smtp/ffi.rs
 1 0 crates/perry-stdlib/src/webcrypto/util.rs
 5 0 crates/perry-stdlib/src/worker_threads.rs
-2 11 crates/perry-stdlib/src/zlib.rs
+0 11 crates/perry-stdlib/src/zlib.rs
