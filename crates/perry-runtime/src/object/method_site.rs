@@ -92,6 +92,7 @@
 
 use crate::object::ObjectHeader;
 
+mod function_intrinsic;
 pub(crate) mod read_holder;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -333,6 +334,10 @@ fn stats_report_enabled() -> bool {
                 let (hd, ha, hr) = read_holder::read_holder_stats();
                 let (ap, ah) = read_holder::read_accessor_stats();
                 let (cp, ch, cr) = read_holder::class_read_stats();
+                let (fp, fneg, fh) = function_intrinsic::function_intrinsic_stats();
+                eprintln!(
+                    "[method-site] fn_intrinsic_primes={fp} fn_intrinsic_negative={fneg} fn_intrinsic_hits={fh}"
+                );
                 eprintln!(
                     "[method-site] primes_own={a} primes_inherited={b} primes_function={} primes_constfn={} holder_rewrites={} misses={c} read_holder_primes={hd} read_absent_primes={ha} read_accessor_primes={ap} read_accessor_hits={ah} read_accessor_class_primes={} class_read_primes={cp} class_read_hits={ch} class_read_root_rewrites={cr} read_holder_rewrites={} read_accessor_rewrites={} read_accessor_same_shape_relinks={} read_holder_refused={hr}{refused}",
                     method_site_function_primes(),
@@ -381,6 +386,19 @@ pub unsafe extern "C-unwind" fn js_method_site_miss(
             args_ptr,
             argc,
         );
+    }
+    // A function receiver calling an intrinsic it inherits from
+    // `%Function.prototype%` (`fn.bind(this)`): the site's function-intrinsic
+    // entry answers from words, or the call primes one (`function_intrinsic`).
+    if let Some(result) = function_intrinsic::on_miss(
+        slot,
+        site_id,
+        recv,
+        std::slice::from_raw_parts(name_ref.ptr, name_ref.len),
+        args_ptr,
+        argc,
+    ) {
+        return result;
     }
     // Only an ordinary heap object can prime. Everything else (primitives,
     // handles, functions, arrays) dispatches with no extra work at all.

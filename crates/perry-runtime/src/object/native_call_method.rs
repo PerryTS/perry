@@ -14,6 +14,10 @@ mod common_methods;
 mod direct_site;
 mod disposal;
 mod function_shape;
+pub(crate) use function_shape::{
+    call_function_intrinsic, function_intrinsic_facts, function_prototype_built,
+    FunctionIntrinsicFacts,
+};
 mod handle_methods;
 mod namespace_override;
 mod object_proto;
