@@ -1,3 +1,27 @@
+LATEST-MAIN MATCHED BASELINE VERIFIED / FULL17 COMPARISON STARTED
+Pinned unmodified ad0a2617bf baseline: 5,006 inputs verified, fresh compiler
+and both static archives, Linux full runtime 4,844 passed / zero failed /
+five ignored. All ten evidence files copied locally and independently rehashed.
+V79 wrapper 2405797 has passed both fresh-build prerequisite verifiers and
+started its application builds. This compares the 5,014-input rebased adopted
+GC source against matching main: 30 fresh builds and 204 measurements over
+17 cases. No application result is claimed until terminal success and the
+independent source/product/oracle/counter verifier pass. FFI/events on this
+new integration remain outstanding; historical main07 results are unchanged.
+
+Server headroom restored by offloading only two completed, rejected
+experiments' target directories: V59 learned-floor and V68 map-prefix.
+All 15,318 archive members (including 16 TAR hardlinks) have content/size
+verification locally. Sources, exports, app binaries, measurements and
+proofs remain on server; exact target archive is retained locally with SHA
+and restoration instructions. Active /proc references were checked before
+removal. Historical verifiers needing those remote archives require their
+restoration; their original verified evidence remains valid and unchanged.
+Initial local verification incorrectly required all members to be regular
+files and stopped at a TAR hardlink; nothing was removed by that attempt.
+The corrected streaming verifier binds hardlinks to independently hashed
+regular members and verifies every manifest entry without extraction.
+
 LATEST-MAIN MOVING INTEGRATION VERIFIED
 All 22 latest-main linked executions match fresh Node outputs; all 11 moving
 executions actually copy objects and protect retired from-space. Source,
