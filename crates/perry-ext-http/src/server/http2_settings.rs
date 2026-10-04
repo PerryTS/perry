@@ -90,11 +90,11 @@ pub extern "C" fn js_node_http2_get_packed_settings(settings_bits: i64) -> *mut 
         );
     }
     if let Some(v) = map.get("initialWindowSize") {
-        let size = require_uint32("initialWindowSize", v);
         // HTTP/2 flow-control windows are limited to 2^31 - 1, not u32::MAX.
-        if size > i32::MAX as u32 {
-            throw_invalid_setting("initialWindowSize", v, ErrorKind::RangeError);
-        }
+        let size = match int_in_range(v, 0, i32::MAX as u64) {
+            Some(size) => size,
+            None => throw_invalid_setting("initialWindowSize", v, ErrorKind::RangeError),
+        };
         push_record(&mut out, ID_INITIAL_WINDOW_SIZE, size);
     }
     if let Some(v) = map.get("maxFrameSize") {
@@ -212,10 +212,11 @@ fn settings_to_map(value: JsValue) -> serde_json::Map<String, Value> {
     }
 }
 
-/// Accept an integer in `[min, max]`, returning it as `u32`.
+/// Accept a number whose raw value lies in `[min, max]`, truncated to `u32`
+/// like Node's uint32 packing (`1.5` packs as `1`, `-0.5` is out of range).
 fn int_in_range(v: &Value, min: u64, max: u64) -> Option<u32> {
     let n = v.as_f64()?;
-    if !n.is_finite() || n.fract() != 0.0 || n < min as f64 || n > max as f64 {
+    if !n.is_finite() || n < min as f64 || n > max as f64 {
         return None;
     }
     Some(n as u32)
@@ -331,29 +332,29 @@ mod tests {
         read_js_string(JsValue::from_string_ptr(result))
     }
 
+    fn pack(name: &str, value: impl std::fmt::Display) -> Result<Vec<u8>, f64> {
+        let json = alloc_string(&format!("{{\"{name}\":{value}}}"));
+        // SAFETY: the allocated JSON string is live for the parse call.
+        let settings = unsafe { perry_runtime::json::js_json_parse(json.as_raw().cast()) };
+        perry_runtime::exception::catch_js_throw(|| {
+            let buffer = js_node_http2_get_packed_settings(settings.bits() as i64);
+            value_byte_slice(JsValue::from_object_ptr(buffer))
+                .expect("packed settings must be a Buffer")
+                .to_vec()
+        })
+    }
+
+    fn error_field(error: f64, name: &str) -> String {
+        let key = alloc_string(name);
+        let value = perry_runtime::object::js_object_get_field_by_name(
+            error.to_bits() as *const perry_runtime::ObjectHeader,
+            key.as_raw().cast(),
+        );
+        read_js_string(JsValue::from_bits(value.bits()))
+    }
+
     #[test]
     fn packed_initial_window_size_boundaries() {
-        fn pack(name: &str, value: u32) -> Result<Vec<u8>, f64> {
-            let json = alloc_string(&format!("{{\"{name}\":{value}}}"));
-            // SAFETY: the allocated JSON string is live for the parse call.
-            let settings = unsafe { perry_runtime::json::js_json_parse(json.as_raw().cast()) };
-            perry_runtime::exception::catch_js_throw(|| {
-                let buffer = js_node_http2_get_packed_settings(settings.bits() as i64);
-                value_byte_slice(JsValue::from_object_ptr(buffer))
-                    .expect("packed settings must be a Buffer")
-                    .to_vec()
-            })
-        }
-
-        fn error_field(error: f64, name: &str) -> String {
-            let key = alloc_string(name);
-            let value = perry_runtime::object::js_object_get_field_by_name(
-                error.to_bits() as *const perry_runtime::ObjectHeader,
-                key.as_raw().cast(),
-            );
-            read_js_string(JsValue::from_bits(value.bits()))
-        }
-
         for value in [0, i32::MAX as u32] {
             let mut expected = Vec::new();
             push_record(&mut expected, ID_INITIAL_WINDOW_SIZE, value);
@@ -380,6 +381,40 @@ mod tests {
             assert_eq!(
                 error_field(error, "message"),
                 format!("Invalid value for setting \"initialWindowSize\": {value}")
+            );
+        }
+    }
+
+    #[test]
+    fn packed_fractional_values_range_check_raw_then_truncate() {
+        for (name, id, value, packed) in [
+            ("headerTableSize", ID_HEADER_TABLE_SIZE, 1.5, 1),
+            ("maxConcurrentStreams", ID_MAX_CONCURRENT_STREAMS, 7.25, 7),
+            (
+                "initialWindowSize",
+                ID_INITIAL_WINDOW_SIZE,
+                2147483646.9,
+                i32::MAX as u32 - 1,
+            ),
+            ("maxFrameSize", ID_MAX_FRAME_SIZE, 16384.5, 16384),
+            ("maxHeaderListSize", ID_MAX_HEADER_LIST_SIZE, 0.9, 0),
+        ] {
+            let mut expected = Vec::new();
+            push_record(&mut expected, id, packed);
+            assert_eq!(pack(name, value).unwrap(), expected, "{name} {value}");
+        }
+        for (name, value) in [
+            ("headerTableSize", -0.5),
+            ("headerTableSize", 4294967295.5),
+            ("initialWindowSize", 2147483647.5),
+            ("maxFrameSize", 16383.5),
+            ("maxFrameSize", 16777215.5),
+        ] {
+            let error = pack(name, value).expect_err("raw value is out of range");
+            assert_eq!(error_field(error, "name"), "RangeError");
+            assert_eq!(
+                error_field(error, "message"),
+                format!("Invalid value for setting \"{name}\": {value}")
             );
         }
     }
