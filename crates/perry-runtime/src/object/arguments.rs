@@ -1106,23 +1106,15 @@ pub extern "C" fn js_array_like_to_array(value: f64) -> *mut ArrayHeader {
         if crate::buffer::is_registered_buffer(addr) {
             return crate::buffer::buffer_to_array(raw as *const crate::buffer::BufferHeader);
         }
-        // A real Array → fast path (no protocol overhead).
-        //
-        // #7542: unless `Array.prototype[Symbol.iterator]` was replaced, in
-        // which case call-spread (`f(...arr)`) must drive the patched method —
-        // it decides how many arguments the callee receives, so `f(...[1,2,3])`
-        // passed 3 where node passes 1. #9846 widened the condition to the
-        // whole `array_iteration_not_pristine` fact, so a replaced
-        // `%ArrayIteratorPrototype%.next` drives `f(...arr)` as well; both are
-        // sticky flags that stay false until user code touches the prototype
-        // tower, so the fast path is untouched in every ordinary program.
+        // A real Array → fast path only when its spread is observably a dense
+        // element copy. The shared proof also rejects an own/re-parented
+        // `Symbol.iterator`, indexed accessors and patched iterator prototypes;
+        // all of those must run GetIterator for call spread (#11772).
         if crate::array::js_array_is_array(value).to_bits() == crate::value::TAG_TRUE {
-            if crate::array::array_iteration_not_pristine()
-                || crate::array::array_ptr_as_proxy(raw as *const ArrayHeader).is_some()
-            {
-                return crate::array::js_array_clone_for_spread(value);
+            if let Some(arr) = crate::array::dense_spread_source(value) {
+                return arr as *mut ArrayHeader;
             }
-            return crate::array::clean_arr_ptr(raw as *const ArrayHeader) as *mut ArrayHeader;
+            return crate::array::js_array_clone_for_spread(value);
         }
         // Generic iterable with a user `[Symbol.iterator]` (Map/Set, generator
         // objects, hand-rolled iterables, …): spread uses the ITERATOR protocol
