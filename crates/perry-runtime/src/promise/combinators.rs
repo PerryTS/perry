@@ -174,8 +174,11 @@ pub(super) fn cleanup_copied_minor_all_states_for_gc() {
 /// Create a rejected promise with the given reason
 #[no_mangle]
 pub extern "C" fn js_promise_rejected(reason: f64) -> *mut Promise {
+    // Creating the promise runs `promiseHooks` init hooks, which can collect.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let reason = scope.root_nanbox_f64(reason);
     let promise = js_promise_new();
-    js_promise_reject(promise, reason);
+    js_promise_reject(promise, reason.get_nanbox_f64());
     promise
 }
 

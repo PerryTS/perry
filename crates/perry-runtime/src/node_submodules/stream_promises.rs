@@ -88,16 +88,6 @@ fn array_ptr_from_value(value: f64) -> Option<*const crate::array::ArrayHeader> 
     Some(raw as *const crate::array::ArrayHeader)
 }
 
-fn array_values(value: f64) -> Option<Vec<f64>> {
-    let arr = array_ptr_from_value(value)?;
-    let len = crate::array::js_array_length(arr);
-    let mut values = Vec::with_capacity(len as usize);
-    for i in 0..len {
-        values.push(crate::array::js_array_get_f64(arr, i));
-    }
-    Some(values)
-}
-
 pub(crate) fn get_object_property(value: f64, name: &[u8]) -> Option<f64> {
     let obj = object_ptr_from_value(value)?;
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -452,6 +442,11 @@ fn pending_finished_promise(
     promise_value_from_ptr(promise)
 }
 
+/// Look up `destination[method]` and call it with `args()`.
+///
+/// `args` runs after the method lookup (which can run a getter and collect)
+/// and before the call, while `func` is held raw. It must therefore neither
+/// allocate nor run user code: read rooted handles and build the array only.
 fn invoke_destination_method<const N: usize>(
     destination: &crate::gc::RuntimeHandle<'_>,
     method: &[u8],
@@ -473,27 +468,22 @@ fn invoke_destination_method<const N: usize>(
     }
 }
 
-fn write_chunks_to_destination(destination: f64, chunks: &[f64]) {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let destination = scope.root_nanbox_f64(destination);
-    // The Rust snapshot cannot be rewritten by moving GC. Copy it once into
-    // a sized GC array before callbacks; one root and one word per chunk.
-    let values = {
-        let _no_gc = crate::gc::GcSuppressScope::new();
-        let mut array = crate::array::js_array_alloc(chunks.len() as u32);
-        for chunk in chunks {
-            array = crate::array::js_array_push_f64(array, *chunk);
-        }
-        scope.root_raw_mut_ptr(array)
-    };
+/// Write every element of the GC array `chunks` to `destination`, then end it.
+/// Each `write` runs user code that can collect, so both stay in handles and
+/// each chunk is read from the rooted array just before its call.
+fn write_chunks_to_destination(
+    destination: &crate::gc::RuntimeHandle<'_>,
+    chunks: &crate::gc::RuntimeHandle<'_>,
+) {
     let undef = undefined_value();
-    for i in 0..chunks.len() as u32 {
-        let _ = invoke_destination_method(&destination, b"write", || {
-            let chunk = values.with_const_ptr(|array| crate::array::js_array_get_f64(array, i));
+    let len = chunks.with_const_ptr(|array| crate::array::js_array_length(array));
+    for i in 0..len {
+        let _ = invoke_destination_method(destination, b"write", || {
+            let chunk = chunks.with_const_ptr(|array| crate::array::js_array_get_f64(array, i));
             [chunk, undef]
         });
     }
-    let _ = invoke_destination_method(&destination, b"end", || [undef]);
+    let _ = invoke_destination_method(destination, b"end", || [undef]);
 }
 
 fn is_missing_pipeline_arg(value: f64) -> bool {
@@ -549,10 +539,10 @@ fn direct_stream_promises_pipeline(source: f64, destination: f64, options: f64) 
         }
     }
 
-    match crate::node_stream::js_node_stream_readable_chunks_result(source.get_nanbox_f64()) {
+    match crate::node_stream::js_node_stream_readable_chunks_result(&scope, &source) {
         Err(err) => promise_rejected(err),
         Ok(Some(chunks)) => {
-            write_chunks_to_destination(destination.get_nanbox_f64(), &chunks);
+            write_chunks_to_destination(&destination, &chunks);
             if let Some(signal) = &signal {
                 if signal_aborted(signal.get_nanbox_f64()) {
                     return promise_rejected(signal_reason(signal.get_nanbox_f64()));
@@ -617,40 +607,78 @@ pub(crate) extern "C" fn thunk_streamP_pipeline(
         return rejection;
     }
 
-    let rest_values = match array_values(options_or_rest) {
-        Some(values) => values,
-        None => return direct_stream_promises_pipeline(source, destination, options_or_rest),
+    let Some(rest) = array_ptr_from_value(options_or_rest) else {
+        return direct_stream_promises_pipeline(source, destination, options_or_rest);
     };
+    stream_list_pipeline(source, destination, rest)
+}
 
-    if let Err(err) = validate_stream_promises_pipeline_args(source, destination, &rest_values) {
-        return promise_rejected(err);
+/// `pipeline(source, destination, [...more])`: hand every stream and a
+/// settling callback to the classic `stream.pipeline`. Creating the promise
+/// runs `promiseHooks` init hooks, and every allocation below can collect, so
+/// the inputs stay in handles and `args` is built element by element from the
+/// rooted `rest` array; no value is held raw across an allocation.
+fn stream_list_pipeline(
+    source: f64,
+    destination: f64,
+    rest: *const crate::array::ArrayHeader,
+) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let source = scope.root_nanbox_f64(source);
+    let destination = scope.root_nanbox_f64(destination);
+    let rest = scope.root_raw_const_ptr(rest);
+    let rest_len = || {
+        rest.with_const_ptr(|array: *const crate::array::ArrayHeader| {
+            crate::array::js_array_length(array)
+        })
+    };
+    let rest_at = |i: u32| {
+        rest.with_const_ptr(|array: *const crate::array::ArrayHeader| {
+            crate::array::js_array_get_f64(array, i)
+        })
+    };
+    for i in 0..rest_len() {
+        let body = rest_at(i);
+        if is_invalid_pipeline_body(body) {
+            return promise_rejected(invalid_pipeline_body_error_value(body));
+        }
     }
 
-    let promise = crate::promise::js_promise_new();
-    let promise_value = promise_value_from_ptr(promise);
-
-    let callback = js_closure_alloc(
+    let promise = scope.root_raw_mut_ptr(crate::promise::js_promise_new());
+    let callback = scope.root_raw_mut_ptr(js_closure_alloc(
         crate::fn_info!(stream_promises_pipeline_callback, 2; with_declared(2)),
         1,
-    );
-    js_closure_set_capture_f64(callback, 0, promise_value);
+    ));
+    callback.with_mut_ptr(|callback| {
+        promise.with_mut_ptr(|promise| {
+            js_closure_set_capture_f64(callback, 0, promise_value_from_ptr(promise))
+        })
+    });
 
-    let mut args = crate::array::js_array_alloc(4);
-    args = crate::array::js_array_push_f64(args, source);
-    args = crate::array::js_array_push_f64(args, destination);
-
-    for value in rest_values {
-        args = crate::array::js_array_push_f64(args, value);
+    let args = scope.root_raw_mut_ptr(crate::array::js_array_alloc(4));
+    // `js_array_push_f64` roots its receiver and the value before it can grow.
+    let push = |value: f64| {
+        args.set_raw_mut_ptr(args.with_mut_ptr(|array: *mut crate::array::ArrayHeader| {
+            crate::array::js_array_push_f64(array, value)
+        }));
+    };
+    push(source.get_nanbox_f64());
+    push(destination.get_nanbox_f64());
+    let mut i = 0;
+    while i < rest_len() {
+        push(rest_at(i));
+        i += 1;
     }
-    args = crate::array::js_array_push_f64(args, value_from_ptr(callback as *const u8));
+    push(callback.with_const_ptr(value_from_ptr));
 
+    // `js_node_stream_pipeline` copies its arguments out of `args` on entry.
     if let Err(err) = catch_stream_promises_throw(|| {
-        crate::node_stream::js_node_stream_pipeline(args as *const crate::array::ArrayHeader);
+        args.with_const_ptr(|args| crate::node_stream::js_node_stream_pipeline(args));
     }) {
-        crate::promise::js_promise_reject(promise, err);
+        promise.with_mut_ptr(|promise| crate::promise::js_promise_reject(promise, err));
     }
 
-    promise_value
+    promise.with_mut_ptr(promise_value_from_ptr)
 }
 
 #[allow(non_snake_case)] // thunk name mirrors JS API surface
