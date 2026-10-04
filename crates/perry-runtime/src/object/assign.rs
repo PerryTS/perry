@@ -116,16 +116,17 @@ unsafe fn object_define_string_key(
 /// `tgt_h` roots the target object and `src_h` the source object.
 unsafe fn copy_positional_source(
     define: bool,
+    strict_set_is_shape_equivalent: bool,
+    plan: PositionalPlan,
     tgt_h: &crate::gc::RuntimeHandle<'_>,
     src_h: &crate::gc::RuntimeHandle<'_>,
     target_is_array: bool,
 ) -> bool {
-    let (keys, key_count, hide_private) =
-        match src_h.with_const_ptr::<ObjectHeader, _>(|src| positional_source_plan(src)) {
-            PositionalPlan::Refused => return false,
-            PositionalPlan::NoKeys => return true,
-            PositionalPlan::Keys(keys, count, hide) => (keys, count, hide),
-        };
+    let (keys, key_count, hide_private) = match plan {
+        PositionalPlan::Refused => return false,
+        PositionalPlan::NoKeys => return true,
+        PositionalPlan::Keys(keys, count, hide) => (keys, count, hide),
+    };
     let scope = crate::gc::RuntimeHandleScope::new();
     let keys_h = scope.root_raw_mut_ptr(keys);
     for i in 0..key_count {
@@ -165,7 +166,20 @@ unsafe fn copy_positional_source(
         let key_h = iter_scope.root_string_ptr(key_ptr);
         tgt_h.with_mut_ptr::<ObjectHeader, _>(|t| {
             key_h.with_const_ptr::<crate::StringHeader, _>(|k| {
-                object_assign_set_string_key(define, t, target_is_array, k, val_h.get_nanbox_f64())
+                if strict_set_is_shape_equivalent {
+                    // The all-keys preflight proved that strict [[Set]] is an
+                    // own-data overwrite/add for every source key. Preserve
+                    // the positional copy's direct shape-transition store.
+                    js_object_set_field_by_name(t, k, val_h.get_nanbox_f64());
+                } else {
+                    object_assign_set_string_key(
+                        define,
+                        t,
+                        target_is_array,
+                        k,
+                        val_h.get_nanbox_f64(),
+                    );
+                }
             })
         });
     }
@@ -173,6 +187,7 @@ unsafe fn copy_positional_source(
 }
 
 /// What [`positional_source_plan`] proves about a source.
+#[derive(Clone, Copy)]
 enum PositionalPlan {
     /// Not a source the shape answers for.
     Refused,
@@ -180,6 +195,176 @@ enum PositionalPlan {
     NoKeys,
     /// Its key list, the count to copy, and whether any key can be hidden.
     Keys(*mut crate::array::ArrayHeader, usize, bool),
+}
+
+/// Can `Object.assign` use the positional source copy without changing the
+/// result of strict `Set(target, key, value, true)` for any string key in the
+/// plan?
+///
+/// The proof is entirely shape-owned. The target is an extensible ordinary
+/// object. For every source key, an own target property must be writable data;
+/// otherwise every ordinary object on the actual prototype chain is checked
+/// until the key is found (writable data permits the receiver add; an accessor
+/// or read-only data property refuses the fast path). An unshaped/exotic/proxy
+/// hop is uncertainty and therefore a refusal. No store occurs until all keys
+/// pass, so falling back cannot observe a partially copied target.
+unsafe fn positional_assign_target_is_safe(
+    target: *mut ObjectHeader,
+    target_is_array: bool,
+    plan: PositionalPlan,
+) -> bool {
+    if target_is_array {
+        return false;
+    }
+    let Some(header) = crate::value::addr_class::try_read_gc_header(target as usize) else {
+        return false;
+    };
+    let Some(target_shape) = super::shapes::object_shape_descriptor(target) else {
+        return false;
+    };
+    const BLOCKING: u16 = crate::gc::OBJ_FLAG_FROZEN
+        | crate::gc::OBJ_FLAG_SEALED
+        | crate::gc::OBJ_FLAG_NO_EXTEND
+        | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
+    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+        || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        || header._reserved & BLOCKING != 0
+        || target_shape.object_kind != super::shapes::ShapeObjectKind::Ordinary
+    {
+        return false;
+    }
+
+    let (source_keys, key_count) = match plan {
+        PositionalPlan::Refused => return false,
+        PositionalPlan::NoKeys => return true,
+        PositionalPlan::Keys(keys, count, _) => (keys, count),
+    };
+    let target_keys = super::object_keys(target);
+    let mut prototype_keys = [std::mem::MaybeUninit::uninit(); 64];
+    let Some(prototype_count) =
+        positional_prototype_shape_keys(target as usize, &mut prototype_keys)
+    else {
+        return false;
+    };
+    for i in 0..key_count {
+        let key = crate::object::ObjectKeys::new(source_keys, key_count as u32).get(i as u32);
+        if !key.is_any_string() {
+            return false;
+        }
+        let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        let Some(key_bytes) = crate::string::js_string_key_bytes(key, &mut sso) else {
+            return false;
+        };
+
+        if !target_keys.is_null() {
+            if let Some(pos) = crate::object::keys_find_slot_by_bytes(
+                target_keys.arr(),
+                target_keys.count(),
+                key_bytes,
+            ) {
+                let entry = super::key_attrs::keys_entry(target_keys.arr(), pos as u32);
+                if !super::key_attrs::entry_is_plain_writable_data(entry) {
+                    return false;
+                }
+                continue;
+            }
+        }
+        for keys in &prototype_keys[..prototype_count] {
+            let keys = *keys.assume_init_ref();
+            if keys.is_null() {
+                continue;
+            }
+            if let Some(pos) =
+                crate::object::keys_find_slot_by_bytes(keys.arr(), keys.count(), key_bytes)
+            {
+                let entry = super::key_attrs::keys_entry(keys.arr(), pos as u32);
+                if !super::key_attrs::entry_is_plain_writable_data(entry) {
+                    return false;
+                }
+                break;
+            }
+        }
+    }
+    true
+}
+
+/// Snapshot the receiver's ordinary prototype chain as shape-owned key lists.
+/// A non-ordinary hop may carry behavior not represented by such a list, so it
+/// refuses the positional proof. Resolving an unmaterialized realm-default
+/// prototype may allocate its shape-only sentinel; it runs no user code and
+/// suppresses moving collection while the caller's raw operands are live.
+unsafe fn positional_prototype_shape_keys(
+    receiver: usize,
+    out: &mut [std::mem::MaybeUninit<crate::object::ObjectKeys>; 64],
+) -> Option<usize> {
+    let mut proto = positional_shape_prototype(receiver as *const ObjectHeader)?;
+    for (depth, slot) in out.iter_mut().enumerate() {
+        let Some(addr) = proto else {
+            return Some(depth);
+        };
+        let Some(header) = crate::value::addr_class::try_read_gc_header(addr) else {
+            return None;
+        };
+        if header.obj_type != crate::gc::GC_TYPE_OBJECT
+            || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+            || header._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0
+        {
+            return None;
+        }
+        let obj = addr as *const ObjectHeader;
+        let Some(shape) = super::shapes::object_shape_descriptor(obj) else {
+            return None;
+        };
+        // Only store-admissible ordinary shapes own the whole string-keyed
+        // answer. The intrinsic Object.prototype is deliberately unmarked,
+        // but its reflected accessors/data attributes still live in its
+        // shape, so it is the one ordinary-layout root admitted explicitly.
+        let canonical_object_proto = crate::array::object_prototype_addr_matches(addr);
+        if shape.object_kind != super::shapes::ShapeObjectKind::Ordinary
+            && !(canonical_object_proto && shape.object_kind.is_ordinary_layout())
+        {
+            return None;
+        }
+        slot.write(super::object_keys(obj));
+        proto = positional_shape_prototype(obj)?;
+    }
+    None
+}
+
+/// Resolve one ordinary object's next prototype directly from the prototype
+/// identity carried by its shape. `None` is uncertainty; `Some(None)` is the
+/// end of chain. This deliberately does not call the general reflective
+/// `getPrototypeOf` machinery: class-implied/per-object identities have no
+/// shape-owned pointer word and therefore refuse this fast path.
+unsafe fn positional_shape_prototype(obj: *const ObjectHeader) -> Option<Option<usize>> {
+    let header = crate::value::addr_class::try_read_gc_header(obj as usize)?;
+    if header._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 {
+        return Some(None);
+    }
+    let shape = super::shapes::object_shape_descriptor(obj)?;
+    if shape.proto_id == super::shapes::PROTO_ID_NULL {
+        return Some(None);
+    }
+    if shape.proto_id == super::shapes::PROTO_ID_DEFAULT {
+        let intrinsic = crate::object::ensure_object_prototype_shape() as usize;
+        if intrinsic == 0 {
+            return None;
+        }
+        return Some((intrinsic != obj as usize).then_some(intrinsic));
+    }
+    let bits = super::shapes::object_prototype_word(obj);
+    if bits == 0 {
+        return None;
+    }
+    if bits == crate::value::TAG_NULL {
+        return Some(None);
+    }
+    let value = JSValue::from_bits(bits);
+    if !value.is_pointer() {
+        return None;
+    }
+    let addr = value.as_pointer::<u8>() as usize;
+    crate::value::addr_class::is_above_handle_band(addr).then_some(Some(addr))
 }
 
 /// The checks [`copy_positional_source`] makes once, on the source as it is
@@ -746,7 +931,15 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
         return target_f64;
     }
 
+    let positional_plan = if source_obj_type == crate::gc::GC_TYPE_OBJECT {
+        positional_source_plan(src)
+    } else {
+        PositionalPlan::Refused
+    };
+    let strict_set_is_shape_equivalent =
+        !define && positional_assign_target_is_safe(target, target_is_array, positional_plan);
     if !define
+        && !strict_set_is_shape_equivalent
         && matches!(
             source_obj_type,
             crate::gc::GC_TYPE_OBJECT | crate::gc::GC_TYPE_ARRAY
@@ -853,7 +1046,14 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
             });
         }
     } else if source_obj_type == crate::gc::GC_TYPE_OBJECT
-        && copy_positional_source(define, &tgt_h, &src_h, target_is_array)
+        && copy_positional_source(
+            define,
+            strict_set_is_shape_equivalent,
+            positional_plan,
+            &tgt_h,
+            &src_h,
+            target_is_array,
+        )
     {
         // Every own string key was an enumerable data property of the
         // source shape, copied by position (`copy_positional_source`).
