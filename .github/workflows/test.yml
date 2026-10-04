@@ -818,6 +818,16 @@ jobs:
           python3 scripts/raw_handle_debt.py --self-test
           python3 scripts/raw_handle_debt.py
 
+      # #11919 L1/L3. Keep the native-handle conversion census exact and
+      # monotone: id/address-keyed static tables and every production handle
+      # producer are recorded per file, while comments and test-only code are
+      # excluded. The self-test plants both categories plus test/comment noise.
+      - name: Native-handle ledger ratchet
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/native_handle_ledger.py --self-test
+          python3 scripts/native_handle_ledger.py
+
       # #8233. The debt ratchet above counts bare reads OUT OF a RuntimeHandle --
       # debt in code that ALREADY adopted the rooting API. Code that never roots
       # at all has no `get_raw_*_ptr` to count and scores ZERO, the ratchet's best
@@ -864,6 +874,18 @@ jobs:
           git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null \
             || git fetch --no-tags --depth=1 origin "$BASE_SHA"
           python3 scripts/raw_handle_debt.py --no-raise-vs "$BASE_SHA"
+
+      # The checked-out native-handle ledger is controlled by the same diff it
+      # measures. Compare it with the PR base too, so recording new tables or
+      # producers in the ledger cannot make an increase pass.
+      - name: Native-handle ledger may not rise vs. merge base
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null \
+            || git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          python3 scripts/native_handle_ledger.py --no-raise-vs "$BASE_SHA"
 
       # The gap-suite ratchet decides whether conformance-smoke goes red, so
       # its own logic is unit-checked on the cheap job rather than only being
