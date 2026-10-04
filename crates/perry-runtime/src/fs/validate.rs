@@ -246,7 +246,10 @@ pub(crate) fn describe_received_js(value: f64) -> *mut StringHeader {
                             && (*(addr as *const crate::object::ObjectHeader)).class_id != 0
                     },
                 );
-            if own.to_bits() != crate::value::TAG_TRUE
+            // TypedArray's generic path honors per-kind prototype constructor data
+            // and getters, including Node's three observable reads of the latter.
+            if !matches!(brand, Some(ViewBrand::TypedArray(_)))
+                && own.to_bits() != crate::value::TAG_TRUE
                 && !class_instance
                 && crate::object::prototype_chain::object_static_prototype(addr).is_none()
             {
