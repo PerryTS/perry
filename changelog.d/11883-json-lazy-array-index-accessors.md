@@ -1,0 +1,1 @@
+- Numeric accessor properties on lazily parsed JSON arrays now work for indexed reads and redefinitions, including `Reflect.defineProperty` rejection of invalid changes.
