@@ -1,3 +1,12 @@
+LATEST-MAIN MOVING INTEGRATION VERIFIED
+All 22 latest-main linked executions match fresh Node outputs; all 11 moving
+executions actually copy objects and protect retired from-space. Source,
+products, derived fixture and raw counters independently verified; all 165
+proof/raw files are copied locally and rehashed. Integration 0aa483aa91 on
+base ad0a2617bf now passes full runtime on both platforms and these native
+moving subjects. Latest-main application comparison and FFI/events remain
+outstanding; existing main07 metrics are not relabeled as current results.
+
 LATEST-MAIN LINUX RUNTIME VALIDATED / MOVING ACCEPTANCE QUEUED
 Exact 5,014-input integration 0aa483aa91 on fetched main ad0a2617bf: Linux
 4,867 passed, zero failures, five ignored. Fresh compiler and both static
