@@ -100,8 +100,10 @@ fn array_values(value: f64) -> Option<Vec<f64>> {
 
 pub(crate) fn get_object_property(value: f64, name: &[u8]) -> Option<f64> {
     let obj = object_ptr_from_value(value)?;
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj = scope.root_raw_const_ptr(obj);
     let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    let value = js_object_get_field_by_name_f64(obj as *const ObjectHeader, key);
+    let value = obj.with_const_ptr(|obj| js_object_get_field_by_name_f64(obj, key));
     if JSValue::from_bits(value.to_bits()).is_undefined() {
         None
     } else {
@@ -450,14 +452,21 @@ fn pending_finished_promise(
     promise_value_from_ptr(promise)
 }
 
-fn invoke_destination_method(destination: f64, method: &[u8], args: &[f64]) -> f64 {
-    let Some(func) = get_object_property(destination, method) else {
+fn invoke_destination_method<const N: usize>(
+    destination: &crate::gc::RuntimeHandle<'_>,
+    method: &[u8],
+    args: impl FnOnce() -> [f64; N],
+) -> f64 {
+    let Some(func) = get_object_property(destination.get_nanbox_f64(), method) else {
         return undefined_value();
     };
+    // A method getter can collect too. Materialize arguments only after it
+    // returns, from handles that the collector can rewrite.
+    let args = args();
     unsafe {
         crate::closure::native_call_value_this(
             func,
-            crate::closure::JsThis::from_f64(destination),
+            crate::closure::JsThis::from_f64(destination.get_nanbox_f64()),
             args.as_ptr(),
             args.len(),
         )
@@ -465,13 +474,26 @@ fn invoke_destination_method(destination: f64, method: &[u8], args: &[f64]) -> f
 }
 
 fn write_chunks_to_destination(destination: f64, chunks: &[f64]) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let destination = scope.root_nanbox_f64(destination);
+    // The Rust snapshot cannot be rewritten by moving GC. Copy it once into
+    // a sized GC array before callbacks; one root and one word per chunk.
+    let values = {
+        let _no_gc = crate::gc::GcSuppressScope::new();
+        let mut array = crate::array::js_array_alloc(chunks.len() as u32);
+        for chunk in chunks {
+            array = crate::array::js_array_push_f64(array, *chunk);
+        }
+        scope.root_raw_mut_ptr(array)
+    };
     let undef = undefined_value();
-    for chunk in chunks {
-        let args = [*chunk, undef];
-        let _ = invoke_destination_method(destination, b"write", &args);
+    for i in 0..chunks.len() as u32 {
+        let _ = invoke_destination_method(&destination, b"write", || {
+            let chunk = values.with_const_ptr(|array| crate::array::js_array_get_f64(array, i));
+            [chunk, undef]
+        });
     }
-    let end_args = [undef];
-    let _ = invoke_destination_method(destination, b"end", &end_args);
+    let _ = invoke_destination_method(&destination, b"end", || [undef]);
 }
 
 fn is_missing_pipeline_arg(value: f64) -> bool {
@@ -509,32 +531,40 @@ fn validate_stream_promises_pipeline_args(
 }
 
 fn direct_stream_promises_pipeline(source: f64, destination: f64, options: f64) -> f64 {
-    if let Err(err) = validate_stream_promises_pipeline_args(source, destination, &[]) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let source = scope.root_nanbox_f64(source);
+    let destination = scope.root_nanbox_f64(destination);
+    let options = scope.root_nanbox_f64(options);
+    if let Err(err) = validate_stream_promises_pipeline_args(
+        source.get_nanbox_f64(),
+        destination.get_nanbox_f64(),
+        &[],
+    ) {
         return promise_rejected(err);
     }
-    let signal = options_signal(options);
-    if let Some(signal) = signal {
-        if signal_aborted(signal) {
-            return promise_rejected(signal_reason(signal));
+    let signal = options_signal(options.get_nanbox_f64()).map(|value| scope.root_nanbox_f64(value));
+    if let Some(signal) = &signal {
+        if signal_aborted(signal.get_nanbox_f64()) {
+            return promise_rejected(signal_reason(signal.get_nanbox_f64()));
         }
     }
 
-    match crate::node_stream::js_node_stream_readable_chunks_result(source) {
+    match crate::node_stream::js_node_stream_readable_chunks_result(source.get_nanbox_f64()) {
         Err(err) => promise_rejected(err),
         Ok(Some(chunks)) => {
-            write_chunks_to_destination(destination, &chunks);
-            if let Some(signal) = signal {
-                if signal_aborted(signal) {
-                    return promise_rejected(signal_reason(signal));
+            write_chunks_to_destination(destination.get_nanbox_f64(), &chunks);
+            if let Some(signal) = &signal {
+                if signal_aborted(signal.get_nanbox_f64()) {
+                    return promise_rejected(signal_reason(signal.get_nanbox_f64()));
                 }
             }
             promise_undefined()
         }
         Ok(None) => {
-            if let Some(signal) = signal {
-                pending_abortable_promise(signal)
+            if let Some(signal) = &signal {
+                pending_abortable_promise(signal.get_nanbox_f64())
             } else if let Some(err) =
-                crate::node_stream::js_node_stream_hidden_error_after_read(source)
+                crate::node_stream::js_node_stream_hidden_error_after_read(source.get_nanbox_f64())
             {
                 promise_rejected(err)
             } else {
