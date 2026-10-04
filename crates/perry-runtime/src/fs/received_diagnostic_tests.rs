@@ -57,6 +57,30 @@ fn received_utf16_and_quotes() {
         text(&("'".to_owned() + "a".repeat(23).as_str() + "😀abcd")),
         &format!("type string (\"'{}\\ud83d...\")", "a".repeat(23)),
     );
+    check(text("'😀"), "type string (\"'😀\")");
+    for (bytes, expected) in [
+        (b"'\xed\xa0\xbd".as_slice(), "type string (\"'\\ud83d\")"),
+        (b"'\xed\xb1\x8d".as_slice(), "type string (\"'\\udc4d\")"),
+        (
+            b"'\"\\\n\xed\xb1\x8d".as_slice(),
+            "type string (\"'\\\"\\\\\\n\\udc4d\")",
+        ),
+    ] {
+        let ptr = crate::string::js_string_from_wtf8_bytes(bytes.as_ptr(), bytes.len() as u32);
+        check(crate::value::js_nanbox_string(ptr as i64), expected);
+    }
+    for prefix_len in [22, 23, 24] {
+        let prefix = "'".to_owned() + "a".repeat(prefix_len).as_str();
+        let suffix = match prefix_len {
+            22 => "😀...",
+            23 => "\\ud83d...",
+            _ => "...",
+        };
+        check(
+            text(&(prefix.clone() + "😀abcd")),
+            &format!("type string (\"{prefix}{suffix}\")"),
+        );
+    }
 }
 
 #[test]

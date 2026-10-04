@@ -365,12 +365,25 @@ pub unsafe extern "C" fn js_json_stringify_string(
     {
         return ptr;
     }
-    let s = match str_from_header(str_ptr) {
-        Some(s) => s,
-        None => return std::ptr::null_mut(),
-    };
-    let mut buf = String::with_capacity(s.len() + 16);
-    write_escaped_string(&mut buf, s);
+    if str_ptr.is_null() || (str_ptr as usize) < 0x1000 {
+        return std::ptr::null_mut();
+    }
+    let len = (*str_ptr).byte_len as usize;
+    let mut buf = String::with_capacity(len + 16);
+    {
+        let bytes = std::slice::from_raw_parts(crate::string::string_data(str_ptr), len);
+        // Runtime strings may contain lone UTF-16 surrogates encoded as WTF-8.
+        // Only validated UTF-8 may become &str; the byte emitter validates WTF-8
+        // before quoting it. Finish the owned copy before managed allocation.
+        match std::str::from_utf8(bytes) {
+            Ok(s) => write_escaped_string(&mut buf, s),
+            Err(_) => {
+                if !super::stringify_scalars::write_wtf8_key(&mut buf, bytes) {
+                    return std::ptr::null_mut();
+                }
+            }
+        }
+    }
     js_string_from_bytes(buf.as_ptr(), buf.len() as u32)
 }
 
@@ -403,6 +416,81 @@ pub unsafe extern "C" fn js_json_stringify_bool(value: bool) -> *mut StringHeade
 #[no_mangle]
 pub unsafe extern "C" fn js_json_stringify_null() -> *mut StringHeader {
     js_string_from_bytes(b"null".as_ptr(), 4)
+}
+
+#[cfg(test)]
+mod specialized_string_tests {
+    use super::*;
+
+    unsafe fn check(bytes: &[u8], expected: &str) {
+        let source = crate::string::js_string_from_wtf8_bytes(bytes.as_ptr(), bytes.len() as u32);
+        let result = js_json_stringify_string(source);
+        assert!(!result.is_null());
+        let output = std::slice::from_raw_parts(
+            crate::string::string_data(result),
+            (*result).byte_len as usize,
+        );
+        assert_eq!(std::str::from_utf8(output).unwrap(), expected);
+        assert_eq!(
+            (*result).utf16_len as usize,
+            expected.encode_utf16().count()
+        );
+    }
+
+    #[test]
+    fn specialized_json_quotes_wtf8_and_utf8() {
+        unsafe {
+            check(b"\xed\xa0\xbd", "\"\\ud83d\"");
+            check(b"\xed\xb1\x8d", "\"\\udc4d\"");
+            check(b"\xed\xa0\xbd\xed\xb1\x8d", "\"👍\"");
+            check(b"\xed\xb1\x8d\xed\xa0\xbd", "\"\\udc4d\\ud83d\"");
+            check(
+                b"\"\\\x00\x08\x0c\n\r\t\x1f\xed\xa0\xbd\xed\xb1\x8d\xed\xb1\x8d",
+                "\"\\\"\\\\\\u0000\\b\\f\\n\\r\\t\\u001f👍\\udc4d\"",
+            );
+            for text in ["", "plain", "é東京😀", "\"\\\0\u{8}\u{c}\n\r\t\u{1f}"] {
+                check(text.as_bytes(), &serde_json::to_string(text).unwrap());
+            }
+        }
+    }
+
+    #[test]
+    fn specialized_json_preserves_heap_threshold_semantics() {
+        unsafe {
+            for len in [63, 64, 65] {
+                let plain = "a".repeat(len);
+                check(plain.as_bytes(), &format!("\"{plain}\""));
+                let prefix = "a".repeat(len - 3);
+                for (surrogate, escaped) in
+                    [(b"\xed\xa0\xbd", "\\ud83d"), (b"\xed\xb1\x8d", "\\udc4d")]
+                {
+                    let mut bytes = prefix.as_bytes().to_vec();
+                    bytes.extend_from_slice(surrogate);
+                    check(&bytes, &format!("\"{prefix}{escaped}\""));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn specialized_json_rejects_malformed_bytes_and_low_pointers() {
+        unsafe {
+            for address in [0, 1, 0xfff] {
+                assert!(js_json_stringify_string(address as *const StringHeader).is_null());
+            }
+            for bytes in [
+                b"\xff".as_slice(),
+                b"\xed\xa0",
+                b"\xc0\x80",
+                b"\xed\xa0\xbd\xff",
+                b"\xed\xb1\x8d\x80",
+            ] {
+                let source =
+                    crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+                assert!(js_json_stringify_string(source).is_null());
+            }
+        }
+    }
 }
 
 /// Check if a string is valid JSON
