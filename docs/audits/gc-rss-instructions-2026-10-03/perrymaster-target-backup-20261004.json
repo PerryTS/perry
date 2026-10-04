@@ -1,0 +1,9 @@
+{
+  "archive": "/root/rss-gc-codex-targets-20261004.tar.zst",
+  "bytes": 17159595631,
+  "sha256": "cf6335c857be9347542a0893c1c69d4566b9b84d1e06e3d00ad24e4dee0fc36e",
+  "transfer_sha256_matches": true,
+  "zstd_integrity": true,
+  "completed_utc": "2026-10-04T06:49:47Z",
+  "scope": "23 deleted Cargo target directories only; original paths listed in cleanup ledger. Durable backup survives rental shutdown."
+}
