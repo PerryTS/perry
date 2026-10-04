@@ -371,6 +371,9 @@ fn with_received_typed_array_constructor(test: impl FnOnce(f64, f64)) {
     with_received_intrinsic_constructor("Int16Array", test);
 }
 
+static RECEIVED_CHAIN_LINK_CALLS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
 fn with_received_intrinsic_constructor(name: &str, test: impl FnOnce(f64, f64)) {
     let _lock = crate::gc::global_side_table_test_lock();
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -1182,5 +1185,375 @@ fn received_native_missing_and_undefined_intrinsic_typed_constructor() {
         let key = text("constructor");
         crate::object::js_object_delete_dynamic_value(prototype, key);
         check(value, "an instance of TypedArray");
+    });
+}
+
+// Native prototype-chain fallback coverage: classification must inspect link
+// authority (never a user-visible `constructor` Get, accessor execution or
+// Proxy trap), and the Buffer payload arm tolerates exactly one additional
+// constructor Get even when that getter throws.
+
+extern "C" fn received_chain_value_getter(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
+    RECEIVED_CONSTRUCTOR_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+// The second (payload) read throws; the render must survive it.
+extern "C" fn received_chain_throwing_value_getter(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
+    let call = RECEIVED_CONSTRUCTOR_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if call % 2 == 1 {
+        crate::exception::js_throw(text("constructor sentinel"));
+    }
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+// A chain-link constructor accessor must never execute during a render.
+extern "C" fn received_chain_link_getter(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
+    RECEIVED_CHAIN_LINK_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+fn install_received_chain_value_getter(value: f64, throwing: bool) {
+    install_received_constructor_getter(
+        value,
+        if throwing {
+            crate::fn_info!(received_chain_throwing_value_getter, 0)
+        } else {
+            crate::fn_info!(received_chain_value_getter, 0)
+        },
+    );
+}
+
+fn received_chain_link(prototype: f64) -> f64 {
+    let link = crate::value::js_nanbox_pointer(crate::object::js_object_alloc(0, 0) as i64);
+    crate::object::js_object_set_prototype_of(link, prototype);
+    link
+}
+
+// Each expected render must produce the same label on both the Rust and ABI
+// paths while firing the value accessor exactly `expected_reads` times and
+// never executing a chain-link accessor.
+fn received_chain_render_check(value: f64, expected: &str, expected_reads: usize) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(value);
+    RECEIVED_CONSTRUCTOR_CALLS.store(0, std::sync::atomic::Ordering::Relaxed);
+    RECEIVED_CHAIN_LINK_CALLS.store(0, std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(describe_received(value.get_nanbox_f64()), expected);
+    assert_eq!(
+        RECEIVED_CONSTRUCTOR_CALLS.load(std::sync::atomic::Ordering::Relaxed),
+        expected_reads,
+        "Rust render constructor reads for {expected}"
+    );
+    assert_eq!(
+        RECEIVED_CHAIN_LINK_CALLS.load(std::sync::atomic::Ordering::Relaxed),
+        0,
+        "chain-link accessor executed (Rust render)"
+    );
+    RECEIVED_CONSTRUCTOR_CALLS.store(0, std::sync::atomic::Ordering::Relaxed);
+    RECEIVED_CHAIN_LINK_CALLS.store(0, std::sync::atomic::Ordering::Relaxed);
+    let result = crate::validators::js_runtime_describe_received(value.get_nanbox_f64());
+    assert_eq!(read_js_string_pub(result), expected);
+    assert_eq!(
+        RECEIVED_CONSTRUCTOR_CALLS.load(std::sync::atomic::Ordering::Relaxed),
+        expected_reads,
+        "ABI render constructor reads for {expected}"
+    );
+    assert_eq!(
+        RECEIVED_CHAIN_LINK_CALLS.load(std::sync::atomic::Ordering::Relaxed),
+        0,
+        "chain-link accessor executed (ABI render)"
+    );
+}
+
+// Wraps the intrinsic fixture and restores the received value's own
+// constructor property and prototype even when an assertion panics.
+fn with_received_chain_value(name: &str, test: impl FnOnce(f64, f64)) {
+    with_received_intrinsic_constructor(name, |value, prototype| {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let value = scope.root_nanbox_f64(value);
+        let prototype = scope.root_nanbox_f64(prototype);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            test(value.get_nanbox_f64(), prototype.get_nanbox_f64());
+        }));
+        let key = scope.root_nanbox_f64(text("constructor"));
+        crate::object::js_object_delete_dynamic_value(value.get_nanbox_f64(), key.get_nanbox_f64());
+        crate::object::js_object_set_prototype_of(
+            value.get_nanbox_f64(),
+            prototype.get_nanbox_f64(),
+        );
+        if let Err(panic) = result {
+            std::panic::resume_unwind(panic);
+        }
+    });
+}
+
+#[test]
+fn received_chain_ab_native() {
+    with_received_chain_value("ArrayBuffer", |value, prototype| {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let value = scope.root_nanbox_f64(value);
+        // Native: one replacement link that inherits the intrinsic prototype.
+        let replacement = scope.root_nanbox_f64(received_chain_link(prototype));
+        install_received_constructor_getter(
+            replacement.get_nanbox_f64(),
+            crate::fn_info!(received_chain_link_getter, 0),
+        );
+        install_received_chain_value_getter(value.get_nanbox_f64(), false);
+        crate::object::js_object_set_prototype_of(
+            value.get_nanbox_f64(),
+            replacement.get_nanbox_f64(),
+        );
+        received_chain_render_check(value.get_nanbox_f64(), "[ArrayBuffer]", 1);
+        // Deep native: an extra ordinary link still ends on the intrinsic.
+        let deep = scope.root_nanbox_f64(received_chain_link(replacement.get_nanbox_f64()));
+        crate::object::js_object_set_prototype_of(value.get_nanbox_f64(), deep.get_nanbox_f64());
+        received_chain_render_check(value.get_nanbox_f64(), "[ArrayBuffer]", 1);
+    });
+}
+
+fn received_chain_deep_null_setup(value: f64) -> f64 {
+    // value -> replacement -> null_link -> null (a chain ending in a
+    // null-born prototype keeps the complex native label).
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(value);
+    let null_link = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+        crate::object::js_object_alloc(0, 0) as i64,
+    ));
+    crate::object::js_object_set_prototype_of(
+        null_link.get_nanbox_f64(),
+        f64::from_bits(crate::value::TAG_NULL),
+    );
+    set(
+        null_link.get_nanbox_f64(),
+        "constructor",
+        f64::from_bits(crate::value::TAG_UNDEFINED),
+    );
+    let replacement = scope.root_nanbox_f64(received_chain_link(null_link.get_nanbox_f64()));
+    install_received_constructor_getter(
+        replacement.get_nanbox_f64(),
+        crate::fn_info!(received_chain_link_getter, 0),
+    );
+    install_received_chain_value_getter(value.get_nanbox_f64(), false);
+    crate::object::js_object_set_prototype_of(value.get_nanbox_f64(), replacement.get_nanbox_f64());
+    replacement.get_nanbox_f64()
+}
+
+#[test]
+fn received_chain_ab_deep_null() {
+    with_received_chain_value("ArrayBuffer", |value, _| {
+        received_chain_deep_null_setup(value);
+        received_chain_render_check(value, "[ArrayBuffer <Complex prototype>]", 1);
+    });
+}
+
+#[test]
+fn received_chain_int16_native() {
+    with_received_chain_value("Int16Array", |value, prototype| {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let value = scope.root_nanbox_f64(value);
+        let replacement = scope.root_nanbox_f64(received_chain_link(prototype));
+        install_received_constructor_getter(
+            replacement.get_nanbox_f64(),
+            crate::fn_info!(received_chain_link_getter, 0),
+        );
+        install_received_chain_value_getter(value.get_nanbox_f64(), false);
+        crate::object::js_object_set_prototype_of(
+            value.get_nanbox_f64(),
+            replacement.get_nanbox_f64(),
+        );
+        received_chain_render_check(value.get_nanbox_f64(), "[Int16Array]", 1);
+        let deep = scope.root_nanbox_f64(received_chain_link(replacement.get_nanbox_f64()));
+        crate::object::js_object_set_prototype_of(value.get_nanbox_f64(), deep.get_nanbox_f64());
+        received_chain_render_check(value.get_nanbox_f64(), "[Int16Array]", 1);
+    });
+}
+
+#[test]
+fn received_chain_int16_deep_null() {
+    with_received_chain_value("Int16Array", |value, _| {
+        received_chain_deep_null_setup(value);
+        received_chain_render_check(value, "[Int16Array <Complex prototype>]", 1);
+    });
+}
+
+#[test]
+fn received_chain_date_native() {
+    with_received_chain_value("Date", |value, prototype| {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let value = scope.root_nanbox_f64(value);
+        let replacement = scope.root_nanbox_f64(received_chain_link(prototype));
+        install_received_constructor_getter(
+            replacement.get_nanbox_f64(),
+            crate::fn_info!(received_chain_link_getter, 0),
+        );
+        install_received_chain_value_getter(value.get_nanbox_f64(), false);
+        crate::object::js_object_set_prototype_of(
+            value.get_nanbox_f64(),
+            replacement.get_nanbox_f64(),
+        );
+        received_chain_render_check(value.get_nanbox_f64(), "1970-01-01T00:00:00.000Z", 1);
+        let deep = scope.root_nanbox_f64(received_chain_link(replacement.get_nanbox_f64()));
+        crate::object::js_object_set_prototype_of(value.get_nanbox_f64(), deep.get_nanbox_f64());
+        received_chain_render_check(value.get_nanbox_f64(), "1970-01-01T00:00:00.000Z", 1);
+    });
+}
+
+#[test]
+fn received_chain_date_deep_null() {
+    with_received_chain_value("Date", |value, _| {
+        received_chain_deep_null_setup(value);
+        received_chain_render_check(
+            value,
+            "Date <Complex prototype> 1970-01-01T00:00:00.000Z",
+            1,
+        );
+    });
+}
+
+#[test]
+fn received_chain_data_view_native() {
+    with_received_chain_value("DataView", |value, prototype| {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let value = scope.root_nanbox_f64(value);
+        let replacement = scope.root_nanbox_f64(received_chain_link(prototype));
+        install_received_constructor_getter(
+            replacement.get_nanbox_f64(),
+            crate::fn_info!(received_chain_link_getter, 0),
+        );
+        install_received_chain_value_getter(value.get_nanbox_f64(), false);
+        crate::object::js_object_set_prototype_of(
+            value.get_nanbox_f64(),
+            replacement.get_nanbox_f64(),
+        );
+        received_chain_render_check(value.get_nanbox_f64(), "[DataView]", 1);
+        let deep = scope.root_nanbox_f64(received_chain_link(replacement.get_nanbox_f64()));
+        crate::object::js_object_set_prototype_of(value.get_nanbox_f64(), deep.get_nanbox_f64());
+        received_chain_render_check(value.get_nanbox_f64(), "[DataView]", 1);
+    });
+}
+
+#[test]
+fn received_chain_data_view_deep_null() {
+    with_received_chain_value("DataView", |value, _| {
+        received_chain_deep_null_setup(value);
+        received_chain_render_check(value, "[DataView <Complex prototype>]", 1);
+    });
+}
+
+#[test]
+fn received_chain_buffer_native() {
+    with_received_chain_value("Buffer", |_original, prototype| {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        // Buffer.alloc(1): the payload arm renders the buffer's bytes, so the
+        // received fixture needs the user-facing zero-filled length-1 buffer,
+        // not the helper's zero-length allocation cell.
+        let value = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+            crate::buffer::js_buffer_alloc(1, 0) as i64,
+        ));
+        let replacement = scope.root_nanbox_f64(received_chain_link(prototype));
+        install_received_constructor_getter(
+            replacement.get_nanbox_f64(),
+            crate::fn_info!(received_chain_link_getter, 0),
+        );
+        install_received_chain_value_getter(value.get_nanbox_f64(), false);
+        crate::object::js_object_set_prototype_of(
+            value.get_nanbox_f64(),
+            replacement.get_nanbox_f64(),
+        );
+        // Node's native Buffer payload performs exactly one extra tolerated read.
+        received_chain_render_check(value.get_nanbox_f64(), "<Buffer 00>", 2);
+        // The payload read stays tolerated even when that getter throws.
+        install_received_chain_value_getter(value.get_nanbox_f64(), true);
+        received_chain_render_check(value.get_nanbox_f64(), "<Buffer 00>", 2);
+        // Deep native chains keep the payload arm and the same read budget.
+        let deep = scope.root_nanbox_f64(received_chain_link(replacement.get_nanbox_f64()));
+        crate::object::js_object_set_prototype_of(value.get_nanbox_f64(), deep.get_nanbox_f64());
+        received_chain_render_check(value.get_nanbox_f64(), "<Buffer 00>", 2);
+    });
+}
+
+#[test]
+fn received_chain_buffer_deep_null() {
+    with_received_chain_value("Buffer", |value, _| {
+        received_chain_deep_null_setup(value);
+        received_chain_render_check(value, "[Uint8Array <Complex prototype>]", 1);
+    });
+}
+
+#[test]
+fn received_chain_cyclic_is_bounded_without_user_get() {
+    with_received_chain_value("ArrayBuffer", |value, _| {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let value = scope.root_nanbox_f64(value);
+        let a = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+            crate::object::js_object_alloc(0, 0) as i64,
+        ));
+        let b = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+            crate::object::js_object_alloc(0, 0) as i64,
+        ));
+        // Spec-level relinking rejects cycles, so record the corrupt edges
+        // directly the way a corrupted/foreign link would appear.
+        crate::object::prototype_chain::object_set_static_prototype(
+            crate::value::addr_class::object_ref_addr(a.get_nanbox_f64()),
+            b.get_nanbox_u64(),
+        );
+        crate::object::prototype_chain::object_set_static_prototype(
+            crate::value::addr_class::object_ref_addr(b.get_nanbox_f64()),
+            a.get_nanbox_u64(),
+        );
+        install_received_constructor_getter(
+            a.get_nanbox_f64(),
+            crate::fn_info!(received_chain_link_getter, 0),
+        );
+        install_received_constructor_getter(
+            b.get_nanbox_f64(),
+            crate::fn_info!(received_chain_link_getter, 0),
+        );
+        install_received_chain_value_getter(value.get_nanbox_f64(), false);
+        crate::object::js_object_set_prototype_of(value.get_nanbox_f64(), a.get_nanbox_f64());
+        // A corrupt/cyclic chain is bounded and renders ordinary without
+        // invoking any user getter.
+        received_chain_render_check(value.get_nanbox_f64(), "{}", 1);
+    });
+}
+
+#[test]
+fn received_chain_ordinary_and_recorded_null_controls() {
+    with_received_chain_value("ArrayBuffer", |value, _prototype| {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let value = scope.root_nanbox_f64(value);
+        // A chain that reaches Object.prototype renders ordinary.
+        let ordinary = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+            crate::object::js_object_alloc(0, 0) as i64,
+        ));
+        crate::object::js_object_set_prototype_of(
+            ordinary.get_nanbox_f64(),
+            crate::object::builtin_prototype_value("Object"),
+        );
+        install_received_constructor_getter(
+            ordinary.get_nanbox_f64(),
+            crate::fn_info!(received_chain_link_getter, 0),
+        );
+        install_received_chain_value_getter(value.get_nanbox_f64(), false);
+        crate::object::js_object_set_prototype_of(
+            value.get_nanbox_f64(),
+            ordinary.get_nanbox_f64(),
+        );
+        received_chain_render_check(value.get_nanbox_f64(), "{}", 1);
+        // An explicitly recorded null prototype keeps the existing rendering.
+        crate::object::js_object_set_prototype_of(
+            value.get_nanbox_f64(),
+            f64::from_bits(crate::value::TAG_NULL),
+        );
+        received_chain_render_check(value.get_nanbox_f64(), "[ArrayBuffer: null prototype]", 1);
     });
 }

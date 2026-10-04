@@ -422,6 +422,65 @@ fn received_has_null_prototype(addr: usize) -> bool {
     )
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReceivedNativePrototype {
+    Intrinsic,
+    Complex,
+    Ordinary,
+}
+
+/// Inspect link authority, not properties: no constructor Get, descriptor
+/// accessor execution or Proxy trap belongs in negative-depth fallback.
+fn received_native_prototype_shape(prototype: f64, intrinsic: f64) -> ReceivedNativePrototype {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let current = scope.root_nanbox_f64(prototype);
+    let intrinsic = scope.root_nanbox_f64(intrinsic);
+    let ordinary = scope.root_nanbox_f64(crate::object::builtin_prototype_value("Object"));
+    // Match the generic runtime chain bound. Corrupt/cyclic/opaque chains
+    // conservatively retain ordinary rendering, never a new user-visible error.
+    for _ in 0..32 {
+        if current.get_nanbox_u64() == intrinsic.get_nanbox_u64() {
+            return ReceivedNativePrototype::Intrinsic;
+        }
+        if current.get_nanbox_u64() == ordinary.get_nanbox_u64()
+            || !JSValue::from_bits(current.get_nanbox_u64()).is_pointer()
+            || crate::proxy::js_proxy_is_proxy(current.get_nanbox_f64()) != 0
+        {
+            return ReceivedNativePrototype::Ordinary;
+        }
+        let addr = crate::value::addr_class::object_ref_addr(current.get_nanbox_f64());
+        match crate::object::prototype_chain::object_static_prototype(addr) {
+            Some(crate::value::TAG_NULL) => return ReceivedNativePrototype::Complex,
+            Some(bits) => current.set_nanbox_u64(bits),
+            // A later recorded edge overrides the sticky born-null header bit.
+            None if received_has_null_prototype(addr) => return ReceivedNativePrototype::Complex,
+            None => {
+                // A missing instance edge can still have a class-default link.
+                // Inspect the published class prototypes without any user Get.
+                let class_id = unsafe {
+                    crate::value::addr_class::try_read_tracked_gc_header(addr)
+                        .filter(|header| (*header.as_ptr()).obj_type == crate::gc::GC_TYPE_OBJECT)
+                        .map_or(0, |_| (*(addr as *const crate::ObjectHeader)).class_id)
+                };
+                if class_id == 0 {
+                    return ReceivedNativePrototype::Ordinary;
+                }
+                let declared = crate::object::class_decl_prototype_object(class_id);
+                let next = if declared.is_null() {
+                    crate::object::class_prototype_object(class_id)
+                } else {
+                    declared
+                };
+                if next.is_null() {
+                    return ReceivedNativePrototype::Ordinary;
+                }
+                current.set_nanbox_f64(crate::value::js_nanbox_pointer(next as i64));
+            }
+        }
+    }
+    ReceivedNativePrototype::Ordinary
+}
+
 /// The received fallback is inspection at depth -1, not public util.inspect.
 /// Resolve native identity and prototype shape without another constructor read.
 fn received_native_fallback(value: f64) -> Option<*mut StringHeader> {
@@ -434,27 +493,21 @@ fn received_native_fallback(value: f64) -> Option<*mut StringHeader> {
     let null_proto = recorded == Some(crate::value::TAG_NULL)
         || (recorded.is_none() && received_has_null_prototype(addr));
     let intrinsic = scope.root_nanbox_f64(crate::object::builtin_prototype_value(brand));
-    let custom = prototype.as_ref().is_some_and(|prototype| {
-        !null_proto && prototype.get_nanbox_u64() != intrinsic.get_nanbox_u64()
-    });
+    let shape = if null_proto {
+        ReceivedNativePrototype::Intrinsic
+    } else if let Some(prototype) = prototype.as_ref() {
+        received_native_prototype_shape(prototype.get_nanbox_f64(), intrinsic.get_nanbox_f64())
+    } else {
+        ReceivedNativePrototype::Intrinsic
+    };
+    let custom = shape == ReceivedNativePrototype::Complex;
     let typed = crate::typedarray::lookup_typed_array_kind(
         crate::value::addr_class::object_ref_addr(value.get_nanbox_f64()),
     )
     .is_some()
         || matches!(brand, "Uint8Array" | "Buffer");
-    if custom {
-        let proto_addr = prototype
-            .as_ref()
-            .map(|proto| crate::value::addr_class::object_ref_addr(proto.get_nanbox_f64()))
-            .unwrap_or(0);
-        // A plain Object-based replacement loses the native inspection arm.
-        // A chain terminating in a null-born prototype keeps complex branding.
-        if !received_has_null_prototype(proto_addr)
-            && crate::object::prototype_chain::object_static_prototype(proto_addr)
-                != Some(crate::value::TAG_NULL)
-        {
-            return Some(received_text(if typed { "[Object]" } else { "{}" }));
-        }
+    if shape == ReceivedNativePrototype::Ordinary {
+        return Some(received_text(if typed { "[Object]" } else { "{}" }));
     }
     let suffix = if null_proto {
         ": null prototype"
@@ -484,6 +537,12 @@ fn received_native_fallback(value: f64) -> Option<*mut StringHeader> {
         }));
     }
     if brand == "Buffer" && !null_proto && !custom {
+        // Node's native Buffer inspection performs one additional constructor
+        // Get, tolerating even a throwing getter before rendering its payload.
+        // This is the payload arm only, not another prototype-classification Get.
+        let _ = crate::exception::catch_js_throw(|| {
+            received_property(value.get_nanbox_f64(), "constructor")
+        });
         return Some(received_text(&crate::builtins::format_jsvalue(
             value.get_nanbox_f64(),
             0,

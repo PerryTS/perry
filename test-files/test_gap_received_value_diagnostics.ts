@@ -344,3 +344,93 @@ const proxyNullish = new Proxy({}, {
 });
 callbackError('direct-proxy-third-null', proxyNullish);
 console.log('direct-proxy-third-null-reads', proxyReads);
+
+// Native prototype chains: fallback classification must inspect link
+// authority (never a user-visible constructor Get, accessor execution or
+// Proxy trap), and the native Buffer payload arm performs exactly one extra
+// tolerated constructor Get. chainReads counts constructor Gets on the
+// received value; chainDeepReads must stay 0: no accessor installed on a
+// chain link ever executes.
+let chainReads = 0;
+let chainDeepReads = 0;
+function chainValueGetter(secondThrow: boolean): () => undefined {
+  return () => {
+    chainReads++;
+    if (secondThrow && chainReads === 2) throw new Error('constructor sentinel');
+    return undefined;
+  };
+}
+function chainLinkGetter(): () => undefined {
+  return () => {
+    chainDeepReads++;
+    return undefined;
+  };
+}
+const chainNatives: any[] = [
+  ['arraybuffer', ArrayBuffer.prototype, new ArrayBuffer(1)],
+  ['int16array', Int16Array.prototype, new Int16Array(1)],
+  ['date', Date.prototype, new Date(0)],
+  ['dataview', DataView.prototype, new DataView(new ArrayBuffer(1))],
+  ['buffer', Buffer.prototype, Buffer.alloc(1)],
+];
+const chainShapes: any[] = [
+  ['native', (proto: any) => Object.create(proto)],
+  ['deep-native', (proto: any) => Object.create(Object.create(proto))],
+  ['deep-null', () => {
+    const nullBorn: any = {};
+    Object.setPrototypeOf(nullBorn, null);
+    return Object.create(nullBorn);
+  }],
+  ['ordinary-missing', () => Object.create(Object.prototype)],
+  ['ordinary-undefined', () => Object.create(Object.prototype)],
+  ['explicit-null', () => null],
+];
+for (const entry of chainNatives) {
+  const label = entry[0], proto = entry[1], value = entry[2];
+  for (const shape of chainShapes) {
+    for (const mode of ['data', 'getter']) {
+      chainReads = 0;
+      chainDeepReads = 0;
+      try {
+        const replacement = shape[1](proto);
+        if (replacement !== null) {
+          if (mode === 'getter') {
+            Object.defineProperty(replacement, 'constructor',
+              { get: chainLinkGetter(), configurable: true });
+          } else if (shape[0] !== 'ordinary-missing') {
+            Object.defineProperty(replacement, 'constructor',
+              { value: undefined, configurable: true });
+          }
+        }
+        Object.defineProperty(value, 'constructor',
+          { get: chainValueGetter(false), configurable: true });
+        Object.setPrototypeOf(value, replacement);
+        callbackError('chain-' + label + '-' + shape[0] + '-' + mode, value);
+        if (mode === 'getter') {
+          console.log('chain-' + label + '-' + shape[0] + '-reads',
+            chainReads, chainDeepReads);
+        }
+      } finally {
+        delete value.constructor;
+        Object.setPrototypeOf(value, proto);
+      }
+    }
+    if (label === 'buffer' && (shape[0] === 'native' || shape[0] === 'deep-native')) {
+      chainReads = 0;
+      chainDeepReads = 0;
+      try {
+        const replacement = shape[1](proto);
+        Object.defineProperty(value, 'constructor',
+          { get: chainValueGetter(true), configurable: true });
+        Object.setPrototypeOf(value, replacement);
+        callbackError('chain-' + label + '-' + shape[0] + '-second-throw', value);
+        console.log('chain-' + label + '-' + shape[0] + '-second-throw-reads',
+          chainReads, chainDeepReads);
+      } finally {
+        delete value.constructor;
+        Object.setPrototypeOf(value, proto);
+      }
+    }
+  }
+  callbackError('chain-' + label + '-restored', value);
+}
