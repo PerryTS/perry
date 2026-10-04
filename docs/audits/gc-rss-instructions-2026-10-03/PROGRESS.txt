@@ -1,3 +1,25 @@
+RING ATTRIBUTION AND SUPPORT VERIFIERS PREPARED (2026-10-04 01:01Z)
+Ring source is unchanged:256-record bounded live ring,2million escaping
+replacement allocations. Full-runtime GC/originalentry/once diagnosis queued
+1614569:3fresh builds, separate plain and natural-trace invocations. Trace
+uses existing telemetry, never a forced collection. Plain/trace differences
+and auto/full-runtime differences are explicit; one diagnostic repetition
+cannot replace the full17normal-auto acceptance matrix or establish a floor.
+The diagnosis will check arena capacity/in-use, copied/live influx, triggers,
+and pool/sweep accounting before changing nursery policy. No new threshold
+or collection-frequency change is implemented. Existing policy starts at
+4MiB (before object denomination), grows above4% sustained Eden survivor
+influx and shrinks below1%, each debounced2cycles; its current4MiB floor
+prevents further shrinkage. An extension below that floor would need measured
+low influx, preserve startup4MiB and the independent16MiB lifetime budget,
+and pass all17RSS/instruction plus moving/retained/async checks. It is a
+conditional investigation, not permission to lower a blanket global knob.
+ScriptC real-support verifier prepared:4build configurations, failures and
+incorrect runs retain raw diagnostics and receive no winning RSS number.
+User/kernel counter verifier prepared for18diagnostic cells; event-running
+percentages disclosed, no causal claim inferred from a three-case split.
+All existing heavy jobs retain their handles; no observation timeout restart.
+
 LATEST COMPARATORS SOURCE-BOUND TO PERRY2026 (2026-10-04 00:47Z)
 Officialrefs rechecked00:37Z: ScriptC0.2.2/Porfforalpha15(main72d048d)/
 StaticHermesstatic_h ade4a2b unchanged. Seven source/output identities,
