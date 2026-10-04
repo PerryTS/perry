@@ -311,7 +311,8 @@ fn scan_expr_handle_uses(e: &Expr, out: &mut HashSet<LocalId>) {
     } = e
     {
         if module == "perry/ui" && is_handle_based_state_api(method) {
-            if let Some(Expr::LocalGet(id)) = args.first() {
+            if let Some(Expr::LocalGet(id)) = args.first().map(perry_hir::tdz_check::without_checks)
+            {
                 out.insert(*id);
             }
         }
@@ -502,6 +503,7 @@ fn rewrite_stmt(stmt: &mut Stmt, bindings: &HashMap<LocalId, StateBinding>, fres
 /// expression containing the un-rewritten inner `.get()`, leaving it
 /// as a plain `LocalGet(state).get()` on a holder that's now `undefined`.
 fn rewrite_expr(e: &mut Expr, bindings: &HashMap<LocalId, StateBinding>, fresh: &mut FreshIds) {
+    lift_state_arg_check(e, bindings);
     walk_expr_children_mut(e, &mut |child| rewrite_expr(child, bindings, fresh));
 
     if let Expr::Closure { body, .. } = e {
@@ -521,6 +523,40 @@ fn rewrite_expr(e: &mut Expr, bindings: &HashMap<LocalId, StateBinding>, fresh: 
     if let Some(replacement) = try_rewrite_state_access(e, bindings) {
         *e = replacement;
     }
+}
+
+/// A `perry/ui` call evaluates its first argument before anything else, so a
+/// TDZ check on a state binding passed there (#11826) can precede the whole
+/// call: `NavStack((check, s), routes)` becomes `(check, NavStack(s, routes))`,
+/// which keeps the `NavStack(state, …)` / `ForEach(state, …)` shapes this pass
+/// rewrites.
+fn lift_state_arg_check(e: &mut Expr, bindings: &HashMap<LocalId, StateBinding>) {
+    let Expr::NativeMethodCall {
+        module,
+        object: None,
+        args,
+        ..
+    } = e
+    else {
+        return;
+    };
+    if module != "perry/ui" {
+        return;
+    }
+    let Some(Expr::Sequence(parts)) = args.first_mut() else {
+        return;
+    };
+    let lift = parts.len() == 2
+        && perry_hir::tdz_check::is_read_check(&parts[0])
+        && matches!(&parts[1], Expr::LocalGet(id) if bindings.contains_key(id));
+    if !lift {
+        return;
+    }
+    let read = parts.pop().expect("two parts");
+    let check = parts.pop().expect("two parts");
+    args[0] = read;
+    let call = std::mem::replace(e, Expr::Undefined);
+    *e = Expr::Sequence(vec![check, call]);
 }
 
 /// Issue #610. Detect `ForEach(LocalGet(state_id), render)` where
@@ -562,7 +598,7 @@ fn try_rewrite_foreach(
             // Render arg can be a Closure literal or a LocalGet of a
             // closure-typed local. Anything else (a stored function ref
             // through some other shape) bails to existing codegen.
-            let render = match &args[1] {
+            let render = match perry_hir::tdz_check::without_checks(&args[1]) {
                 Expr::Closure { .. } | Expr::LocalGet(_) => args[1].clone(),
                 _ => return None,
             };

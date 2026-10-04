@@ -230,6 +230,9 @@ pub(crate) fn exported_object_literal_capabilities(
             }
         }
     }
+    // #11826: an importer must not read a binding that can still hold the
+    // dead-zone sentinel straight out of its global.
+    let tdz_seeded = perry_hir::tdz_check::checked_ids(hir);
     let mut by_local = HashMap::new();
     for stmt in crate::codegen::entry_outline::logical_entry_stmts(hir) {
         let Stmt::Let {
@@ -242,7 +245,7 @@ pub(crate) fn exported_object_literal_capabilities(
         else {
             continue;
         };
-        if !exported_locals.contains(name.as_str()) {
+        if !exported_locals.contains(name.as_str()) || tdz_seeded.contains(id) {
             continue;
         }
         if let Some(capability) = capability_from_init(hir, &func_names, *id, init) {

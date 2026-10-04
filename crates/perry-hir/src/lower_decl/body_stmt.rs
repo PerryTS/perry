@@ -1133,6 +1133,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
             let mut saved_class_renames = Vec::new();
             let mut saved_forward_classes = Vec::new();
             let mut tdz_boxes = Vec::new();
+            crate::lower_decl::register_switch_case_tdz_lets(ctx, &switch_stmt.cases);
             for case in &switch_stmt.cases {
                 tdz_boxes.extend(crate::lower_decl::rebind_nested_forward_scope_lets(
                     ctx, &case.cons,

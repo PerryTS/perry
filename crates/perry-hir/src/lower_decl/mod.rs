@@ -34,7 +34,7 @@ pub(crate) use block::{
     compute_prealloc_for_hoisted_closures, enter_class_rename_scope, enter_forward_class_scope,
     exit_class_rename_scope, exit_forward_class_scope, lower_block_stmt, lower_block_stmt_scoped,
     lower_fn_body_block_stmt, lower_stmts_using_aware, pre_register_forward_captured_lets,
-    rebind_nested_forward_scope_lets,
+    rebind_nested_forward_scope_lets, register_switch_case_tdz_lets,
 };
 pub(crate) use body_stmt::gen_capture_scan::forward_referenced_nested_generators;
 pub(crate) use body_stmt::{find_native_return_in_stmts, lower_body_stmt};

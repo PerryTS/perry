@@ -1442,3 +1442,31 @@ fn glob_pattern_none_when_fully_resolvable() {
     };
     assert_eq!(dynamic_import_glob_pattern(&arg, &consts), None);
 }
+
+/// #11826: a function that can run before a module-level `const` is
+/// initialized reads it through a TDZ check. The check only adds a throw, so
+/// the specifier is still the constant: `import(DIR + "/x.ts")` inside such a
+/// function must keep resolving statically.
+#[test]
+fn resolve_through_a_tdz_checked_const_read() {
+    let checked = |id: u32, name: &str| {
+        Expr::Sequence(vec![crate::tdz_check::check(id, name), Expr::LocalGet(id)])
+    };
+    let arg = Expr::Binary {
+        op: BinaryOp::Add,
+        left: Box::new(checked(7, "dir")),
+        right: Box::new(Expr::String("/x.ts".into())),
+    };
+    let mut consts = std::collections::HashMap::new();
+    consts.insert(7u32, Expr::String("./plugins".into()));
+    let mut visiting = std::collections::HashSet::new();
+    match resolve_import_path_with_consts(&arg, &consts, &mut visiting) {
+        Resolution::Set(v) => assert_eq!(v, vec!["./plugins/x.ts"]),
+        other => panic!("expected Set, got {other:?}"),
+    }
+    let mut visiting = std::collections::HashSet::new();
+    match resolve_import_path_with_consts(&checked(7, "dir"), &consts, &mut visiting) {
+        Resolution::Set(v) => assert_eq!(v, vec!["./plugins"]),
+        other => panic!("expected Set, got {other:?}"),
+    }
+}

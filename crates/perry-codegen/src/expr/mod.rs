@@ -92,6 +92,7 @@ mod literal_descriptor;
 #[cfg(test)]
 mod map_entry_at_tests;
 pub(crate) mod stack_guard;
+pub(crate) mod tdz_module_check;
 pub(crate) use bitset_test::is_u32_bitset_test;
 mod buffer_access;
 mod buffer_views;

@@ -1242,6 +1242,9 @@ pub fn lower_module_full_with_platform_globals(
                                 )
                         });
                         let pre_id = ctx.define_local(name.clone(), ty);
+                        if var_decl.kind != ast::VarDeclKind::Var {
+                            ctx.module_lexical_ids.insert(pre_id);
+                        }
                         // #7775: a module-level `const p = new Proxy(...)` is
                         // pre-registered here, so a function body lowered
                         // EARLIER already resolves `p` to this id. Since
@@ -1279,7 +1282,10 @@ pub fn lower_module_full_with_platform_globals(
                             ctx.script_var_decl_names.insert(name.clone());
                         }
                         if ctx.lookup_local(&name).is_none() {
-                            ctx.define_local(name.clone(), Type::Any);
+                            let leaf_id = ctx.define_local(name.clone(), Type::Any);
+                            if var_decl.kind != ast::VarDeclKind::Var {
+                                ctx.module_lexical_ids.insert(leaf_id);
+                            }
                             ctx.pre_registered_module_vars.insert(name.clone());
                             if var_decl.kind == ast::VarDeclKind::Var {
                                 ctx.pre_registered_module_var_decls.insert(name);
@@ -1509,12 +1515,38 @@ pub fn lower_module_full_with_platform_globals(
 
     // Main pass: lower everything
     for item in &ast_module.body {
+        let init_start = module.init.len();
+        let classes_before = module.classes.len();
         match item {
             ast::ModuleItem::Stmt(stmt) => {
                 lower_stmt(&mut ctx, &mut module, stmt)?;
             }
             ast::ModuleItem::ModuleDecl(decl) => {
                 lower_module_decl(&mut ctx, &mut module, decl)?;
+            }
+        }
+        // #11826: a class this statement defined directly exists from here
+        // on. Classes from a function declaration's body (or any other body)
+        // arrive through `pending_classes` below and stay unrecorded.
+        let defines_function = matches!(
+            item,
+            ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Fn(_)))
+                | ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDecl(ast::ExportDecl {
+                    decl: ast::Decl::Fn(_),
+                    ..
+                }))
+                | ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDefaultDecl(
+                    ast::ExportDefaultDecl {
+                        decl: ast::DefaultDecl::Fn(_),
+                        ..
+                    }
+                ))
+        );
+        if !defines_function {
+            for class in &module.classes[classes_before..] {
+                ctx.class_def_positions
+                    .entry(class.name.clone())
+                    .or_insert(init_start);
             }
         }
         // Flush any pending functions created during expression lowering
@@ -1904,6 +1936,18 @@ pub fn lower_module_full_with_platform_globals(
             module.enums.push(en);
         }
     }
+
+    // #11826: module-level `let`/`const` dead zone. Runs last, on the final
+    // `module.init` order, before any transform can fold a read.
+    let exports_may_run_early = super::module_tdz::may_be_in_import_cycle(&module);
+    super::module_tdz::apply(
+        &mut module,
+        &super::module_tdz::ModuleTdzFacts {
+            lexical_ids: &ctx.module_lexical_ids,
+            class_positions: &ctx.class_def_positions,
+            exports_may_run_early,
+        },
+    );
 
     module.local_source_spans = std::mem::take(&mut ctx.local_source_spans);
     module.classic_for_lexical_bindings = std::mem::take(&mut ctx.classic_for_lexical_bindings);

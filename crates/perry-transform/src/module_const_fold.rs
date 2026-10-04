@@ -240,6 +240,12 @@ fn fold_stmt(stmt: &mut Stmt, consts: &HashMap<LocalId, Expr>) {
 }
 
 fn fold_expr(expr: &mut Expr, consts: &HashMap<LocalId, Expr>) {
+    // #11826: a TDZ check's binding operand tests the binding's slot, which
+    // still holds the dead-zone sentinel when the check matters; folding it
+    // to the literal the declarator installs later would make the check pass.
+    if perry_hir::tdz_check::for_each_check_value_mut(expr, &mut |value| fold_expr(value, consts)) {
+        return;
+    }
     if let Expr::LocalGet(id) = expr {
         if let Some(lit) = consts.get(id) {
             *expr = lit.clone();
@@ -521,6 +527,30 @@ mod tests {
             left: Box::new(Expr::LocalGet(8)),
             right: Box::new(Expr::LocalGet(const_id)),
         }))
+    }
+
+    /// #11826: the binding operand of a TDZ check tests the binding's slot; a
+    /// read the check guards is an ordinary read and still folds.
+    #[test]
+    fn a_tdz_check_keeps_its_binding_operand_and_the_guarded_read_folds() {
+        let mut m = module_with_const(false, Expr::Integer(1023));
+        m.functions = vec![func(
+            1,
+            vec![Stmt::Return(Some(Expr::Sequence(vec![
+                perry_hir::tdz_check::check(3, "COMPONENT_ID_MAX"),
+                Expr::LocalGet(3),
+            ])))],
+        )];
+        run(&mut m);
+        let Stmt::Return(Some(Expr::Sequence(parts))) = &m.functions[0].body[0] else {
+            panic!("{:?}", m.functions[0].body)
+        };
+        assert_eq!(
+            perry_hir::tdz_check::checked_binding(&parts[0]),
+            Some(3),
+            "{parts:?}"
+        );
+        assert!(matches!(parts[1], Expr::Integer(1023)), "{parts:?}");
     }
 
     fn module_with_const(mutable: bool, init: Expr) -> Module {

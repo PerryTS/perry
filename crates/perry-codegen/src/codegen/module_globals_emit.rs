@@ -155,6 +155,36 @@ fn module_shadows_shared_array_buffer_intrinsic(
 /// Emit module-level globals (with exported-var getters) and static-class-field
 /// globals. `compile_time_constants` supplies init values for known synthetic
 /// consts (`__platform__`, `__plugins__`).
+/// End a getter whose entry block computed `value`: return it, or throw the
+/// TDZ ReferenceError for `binding` (a string constant and its length) while
+/// it still holds the dead-zone sentinel (#11826).
+fn emit_tdz_checked_return(
+    getter: &mut crate::function::LlFunction,
+    value: &str,
+    binding: &(String, usize),
+) {
+    use crate::types::{I32, I64, PTR};
+    let throw_label = getter.create_block("tdz").label.clone();
+    let ok_label = getter.create_block("ok").label.clone();
+    let entry = getter.block_mut(0).unwrap();
+    let bits = entry.bitcast_double_to_i64(value);
+    let is_tdz = entry.icmp_eq(I64, &bits, crate::nanbox::TAG_TDZ_I64);
+    entry.cond_br(&is_tdz, &throw_label, &ok_label);
+    let throw = getter.block_mut(1).unwrap();
+    let text = throw.call(
+        I64,
+        "js_string_from_bytes",
+        &[
+            (PTR, &format!("@{}", binding.0)),
+            (I32, &binding.1.to_string()),
+        ],
+    );
+    let name = throw.call(DOUBLE, "js_nanbox_string", &[(I64, &text)]);
+    throw.call(DOUBLE, perry_hir::tdz_check::TDZ_THROW, &[(DOUBLE, &name)]);
+    throw.unreachable();
+    getter.block_mut(2).unwrap().ret(DOUBLE, value);
+}
+
 pub(crate) fn emit_module_globals(
     llmod: &mut LlModule,
     hir: &HirModule,
@@ -173,6 +203,10 @@ pub(crate) fn emit_module_globals(
     //      as cheap stack alloca (preserves perf for the bench
     //      benchmarks that don't share state with helper functions).
     let mut referenced_from_fn: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    // #11826: bindings a TDZ check names live in a global seeded with the
+    // dead-zone sentinel, wherever the check ended up.
+    let tdz_seeded = perry_hir::tdz_check::checked_ids(hir);
+    referenced_from_fn.extend(tdz_seeded.iter().copied());
     // Live CJS value getters read the namespace even after its synthetic
     // snapshot initializers have been removed.
     referenced_from_fn.extend(cjs_property_exports.values().map(|(id, _)| *id));
@@ -453,7 +487,11 @@ pub(crate) fn emit_module_globals(
                 let global_name = format!("perry_global_{}__{}", module_prefix, id);
                 // Use the compile-time constant value if one was registered
                 // (e.g., __platform__, __plugins__). Otherwise default to 0.0.
-                let init_value = if let Some(cv) = compile_time_constants.get(id) {
+                let init_value = if tdz_seeded.contains(id) {
+                    // Every read that can run before the declarator checks for
+                    // this sentinel; the declarator's store replaces it.
+                    crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_TDZ))
+                } else if let Some(cv) = compile_time_constants.get(id) {
                     format!("{:.1}", cv)
                 } else {
                     crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
@@ -479,6 +517,7 @@ pub(crate) fn emit_module_globals(
                     && let_counts.get(id) == Some(&1)
                     && !reassigned.contains(id)
                     && !compile_time_constants.contains_key(id)
+                    && !tdz_seeded.contains(id)
                     && !cjs_live_ids.contains(id)
                     && !hir.classic_for_lexical_bindings.contains(id)
                     && init.as_ref().is_some_and(|init| {
@@ -565,6 +604,11 @@ pub(crate) fn emit_module_globals(
                                     property,
                                 );
                             } else {
+                                // #11826: an importer reading a binding that is
+                                // still in its dead zone (an import cycle) throws.
+                                let tdz_name = tdz_seeded
+                                    .contains(id)
+                                    .then(|| llmod.add_string_constant(name));
                                 let getter = llmod.define_function(&getter_name, DOUBLE, vec![]);
                                 let _ = getter.create_block("entry");
                                 let blk = getter.block_mut(0).unwrap();
@@ -572,7 +616,12 @@ pub(crate) fn emit_module_globals(
                                     Some(transfer) => blk.call(DOUBLE, &transfer.accessor, &[]),
                                     None => blk.load(DOUBLE, &format!("@{}", global_name)),
                                 };
-                                blk.ret(DOUBLE, &val);
+                                match tdz_name {
+                                    Some(binding) => {
+                                        emit_tdz_checked_return(getter, &val, &binding)
+                                    }
+                                    None => blk.ret(DOUBLE, &val),
+                                }
                             }
                         }
 

@@ -580,6 +580,10 @@ pub(crate) fn lower_rest_call_args_rooted<'a>(
 /// 2. `console.log(expr)` where `expr` lowers to a double — emits a
 ///    `js_console_log_number` call and returns `0.0` as the statement value.
 pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> Result<String> {
+    // #11826: a module-level TDZ check is an inline compare, never a call.
+    if let Some(v) = crate::expr::tdz_module_check::try_lower(ctx, callee, args)? {
+        return Ok(v);
+    }
     // #5253: localize the `ReferenceError: X is not defined` thrown by the
     // unresolved-identifier runtime helper. A bare unresolved identifier
     // (`module`, winston's stray globals, …) lowers to

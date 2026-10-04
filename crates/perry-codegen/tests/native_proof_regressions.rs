@@ -7953,6 +7953,44 @@ fn tdz_numeric_const_read_is_not_constant_folded() {
     );
 }
 
+/// #11826: a module-level TDZ check reads the binding's global, which starts
+/// out as the TDZ sentinel. Neither the global's initial value nor the
+/// checked operand may be the constant the declarator installs later (the
+/// lesson of the #9762 revert above), or a read before the declaration would
+/// pass the check and see 42.
+#[test]
+fn module_tdz_check_reads_the_sentinel_seeded_global_not_the_folded_constant() {
+    let body = vec![Stmt::Return(Some(Expr::Sequence(vec![
+        perry_hir::tdz_check::check(9, "value"),
+        Expr::LocalGet(9),
+    ])))];
+    let mut fixture = module("module_tdz_check.ts", body);
+    fixture.init = vec![Stmt::Let {
+        id: 9,
+        name: "value".to_string(),
+        ty: Type::Number,
+        mutable: false,
+        init: Some(Expr::Number(42.0)),
+    }];
+    let ir = String::from_utf8(compile_module(&fixture, empty_opts()).unwrap()).unwrap();
+    let global = ir
+        .lines()
+        .find(|line| line.starts_with("@perry_global_") && line.contains("__9 ="))
+        .unwrap_or_else(|| panic!("the checked binding must live in a module global:\n{ir}"));
+    assert!(
+        global.to_ascii_uppercase().contains("7FFC000000000011"),
+        "the checked binding's global must start as TAG_TDZ, not undefined or 42: {global}"
+    );
+    assert!(
+        ir.contains("icmp eq i64 %") && ir.contains("9222246136947933201"),
+        "the check compares the global's bits with TAG_TDZ:\n{ir}"
+    );
+    assert!(
+        ir.contains("call double @js_throw_reference_error_tdz(double"),
+        "a dead-zone read raises the TDZ ReferenceError:\n{ir}"
+    );
+}
+
 #[test]
 fn boxed_param_slot_uses_i64_js_value_bits_until_helper_edges() {
     // Asserts the SHADOW-STACK spelling of the box-pointer slot: a plain
