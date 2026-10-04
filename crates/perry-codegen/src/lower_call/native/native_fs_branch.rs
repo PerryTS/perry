@@ -771,6 +771,21 @@
                 arg_group.release(ctx);
                 return Ok(result);
             }
+            "writeSync" if args.len() == 4 => {
+                let (arg_values, arg_group) = super::lower_call_args_rooted(ctx, &args[..4])?;
+                let result = ctx.block().call(
+                    DOUBLE,
+                    "js_fs_write_sync_args",
+                    &[
+                        (DOUBLE, &arg_values[0]),
+                        (DOUBLE, &arg_values[1]),
+                        (DOUBLE, &arg_values[2]),
+                        (DOUBLE, &arg_values[3]),
+                    ],
+                );
+                arg_group.release(ctx);
+                return Ok(result);
+            }
             "writeSync" if args.len() >= 3 => {
                 let (arg_values, arg_group) = super::lower_call_args_rooted(ctx, &args[..args.len().min(3)])?;
                 let fd = arg_values[0].clone();

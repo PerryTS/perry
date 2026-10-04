@@ -1464,6 +1464,7 @@ js_fs_write_file_sync	i32s	f64,f64
 js_fs_write_file_sync_options	i32s	f64,f64,f64
 js_fs_write_string_sync_options	f64	f64,f64,f64
 js_fs_write_sync	f64	f64,f64
+js_fs_write_sync_args	f64	f64,f64,f64,f64
 js_fs_write_sync_options_dispatch	f64	f64,f64,f64
 js_fs_writev_callback	f64	f64,f64,f64,f64
 js_fs_writev_sync	f64	f64,f64,f64
