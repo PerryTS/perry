@@ -1,0 +1,18 @@
+{
+  "time_utc": "2026-10-04T05:26:10Z",
+  "removed_roots": [
+    "/root/rss-header-20261002/primary-learned-floor-main07-v59/source/target",
+    "/root/rss-header-20261002/primary-map-prefix-main07-v68/source/target"
+  ],
+  "verified_files": 15318,
+  "local_archive": "/Users/amlug/projects/perry/secret-tests/scratchpad/rss-header-20261002/rejected-auto-products-v78.tar.gz",
+  "archive_sha256": "d31a55248ebff66b0fd6e544f3be2b20e8eaa2ecc2ced040b3a1671ee77ba3f3",
+  "archive_bytes": 1842598221,
+  "manifest_sha256": "0ab8c676293ba3814c7c3e43fc40a49185ba8e3a7e09beaf68ad06a5550496cf",
+  "local_verification_sha256": "c737d385518e3a1727865a6624d40807d01a373caf7024e9205257e342c7c947",
+  "free_before_bytes": 10847051776,
+  "free_after_bytes": 18462326784,
+  "active_references": [],
+  "scope": "Only two terminal, rejected experiment auto-build target directories and the verified remote archive copy. Sources, exports, app binaries, raw measurement evidence, proofs and shared seeds remain. Exact archive retained locally.",
+  "restore": "Copy the verified local tar.gz back to /root/rss-header-20261002 and extract it there; every restored file is bound to the retained manifest."
+}

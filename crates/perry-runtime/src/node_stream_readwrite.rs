@@ -48,7 +48,7 @@ pub(super) unsafe fn own_field_by_key_bytes(obj: *const ObjectHeader, key: &[u8]
     None
 }
 
-thread_local! {
+crate::perry_thread_local! {
     /// This thread's string for each hidden-key literal, by the literal's address.
     ///
     /// The values are raw heap addresses, so this table is a GC root: the

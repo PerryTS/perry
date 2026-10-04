@@ -1,0 +1,20 @@
+{
+  "scope": "Prepared only; not queued. Fresh latest fetched main334 control and GC candidate. Must decide window from v6 evidence first.",
+  "base": "334217b507e875535648d243fe6d8cf3d2749941",
+  "files": {
+    "gc-runtime-current334-v10-build.sh": "24368715ad42dde10551252b2ea227a8adfa0f95ed01f135b46cc1f6885fc98d",
+    "gc-runtime-current334-v10-linked.py": "64a1fd0171cfe76f756f3d4b20760cc81467773482a91e84c171d8c1f3f96713",
+    "gc-runtime-current334-v10-noauto.py": "a2210b77bc823c568d40ccbaf57fffe659f6c337ff38e043551a31e0dc66357a",
+    "gc-runtime-current334-v10-auto-matrix.py": "b9c631f8500d7839436f744f8481e6bed62beba827a4f01c2d598c2c1482b233",
+    "gc-runtime-current334-v10-run.sh": "6d27bf5fcfcfc504be1361f4ce8f959b1afd8dff38fe687e05fe9d7708c43374"
+  },
+  "normal_auto_cells": 204,
+  "full_runtime_cells": 24,
+  "linked_default_moving_cells": 24,
+  "whole_workspace_mtime_refresh": true,
+  "linked_new_main_lanes": [
+    "#10498 accessors",
+    "#10753 dynamic keys",
+    "#10507 function constructors"
+  ]
+}

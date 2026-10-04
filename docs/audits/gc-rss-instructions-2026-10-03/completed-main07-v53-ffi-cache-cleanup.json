@@ -1,0 +1,15 @@
+{
+  "removed_owned_reproducible_target": "/root/rss-header-20261002/primary-main07-v53-ffi-events/target",
+  "terminal_exit": 0,
+  "live_references": [],
+  "kept_export_hashes": {
+    "result.json": "e2c637ed12ed469d0b067fe682ab0da26479b47b87024ba7bfa95bedd7fbd4d6",
+    "independent-verification.json": "19b15b436fb53710e643cfd2c67d3de226837ed644debfce0b56bcb8108a5c8b",
+    "test.log": "9e427ca850eaad46db6ae4156c19f435b59cac3fe4a449c59db28cc612c39637",
+    "complete.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "source-inputs.json": "20c72d93b8a257c97fb0dea77c7213f8aaee399016078e59b780319a6dce5d7d"
+  },
+  "root_free_before_bytes": 19311140864,
+  "root_free_after_bytes": 22832930816,
+  "scope": "Only completed own Linux FFI/event build cache removed after independent proof and local evidence copy. Source, exports, raw logs, receipts and all seeds retained."
+}

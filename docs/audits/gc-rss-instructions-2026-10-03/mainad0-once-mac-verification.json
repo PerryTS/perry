@@ -1,0 +1,30 @@
+{
+  "base": "ad0a2617bf0b9708032cf89c86575e9bd69fb074",
+  "private_integration_commit": "0aa483aa91ab901583002ec0174a50884b60ad81",
+  "source_count": 5014,
+  "runtime": {
+    "passed": 4881,
+    "failed": 0,
+    "ignored": 5,
+    "filtered": 0
+  },
+  "isolated_subprocess_tests": 8,
+  "result": {
+    "command": [
+      "cargo",
+      "+nightly-2026-08-20",
+      "test",
+      "--locked",
+      "--release",
+      "-p",
+      "perry-runtime",
+      "--lib"
+    ],
+    "rc": 0,
+    "pid": 28113,
+    "elapsed_s": 163.95371670881286,
+    "source_manifest_sha256": "dbf8185d8d490795d34c1353159dba79dca2f791b3bcce315fb7e8dd6a29baed",
+    "raw_log_sha256": "2cd2a83635e8a7bbbdccdf6644aa6f2222687c3009711ed110a49611bab3fa2e"
+  },
+  "scope": "Adopted GC and once-advice changes rebased on fetched main. Complete Mac runtime; fresh Linux/app/moving validation still required. No prefix/query/floor experiments included."
+}

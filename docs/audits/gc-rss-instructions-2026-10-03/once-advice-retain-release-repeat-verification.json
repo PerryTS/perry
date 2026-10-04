@@ -1,0 +1,83 @@
+{
+  "inputs": {
+    "prior": "gc-auto-entry-once-main07-v46",
+    "prior_verification_sha256": "f06ab54b61656441938c55eff5d5e020409a3e74152644ba2853fb1703b82bde",
+    "prior_runs_sha256": "d00b3067d57be36040912aae928616942a4565049ffff98bddad7feaa5b92ad9",
+    "prior_builds_sha256": "ff0345c71a4ae9e1b30e8764ca6bf99d0a30e507efb5de731d33146e08c22558",
+    "source": "/root/rss-header-20261002/sources/73-retain-then-release.ts",
+    "source_sha256": "24d016fddc98adaf677b689f67b3dd648516d0a4d5b318e16a2fcf0604cff5a6",
+    "binaries": {
+      "gc": {
+        "path": "/root/rss-header-20261002/bin/gc-auto-main07-v40-gc-73-retain-then-release",
+        "sha256": "6b0ffe653a2b69edeaa83d5840b4a112194edc86348277c7b0c1fd0f1194bea5"
+      },
+      "entry": {
+        "path": "/root/rss-header-20261002/bin/gc-auto-main07-v40-entry-73-retain-then-release",
+        "sha256": "7abff5646e15d6635aadf9b6aacdfc764da38a7145af4f7b3c318f5a663c4879"
+      },
+      "once": {
+        "path": "/root/rss-header-20261002/bin/gc-auto-entry-once-main07-v46-once-73-retain-then-release",
+        "sha256": "79d5c80d9465754e6263f46c99a3f16c0c3506176b3603122ea0e325e787cd3d"
+      }
+    },
+    "oracle": "RESULT 719280537\n",
+    "scope": "RSS repeats only; exact V46 binaries, default GC, no rebuild or policy change."
+  },
+  "runs": 27,
+  "repeats_per_arm": 9,
+  "summary": {
+    "gc": {
+      "values": [
+        257622016,
+        256819200,
+        261234688,
+        260583424,
+        261074944,
+        256638976,
+        261218304,
+        259010560,
+        261136384
+      ],
+      "min": 256638976,
+      "median": 260583424,
+      "max": 261234688
+    },
+    "entry": {
+      "values": [
+        261033984,
+        254267392,
+        261025792,
+        261206016,
+        257970176,
+        261312512,
+        257957888,
+        261197824,
+        259112960
+      ],
+      "min": 254267392,
+      "median": 261025792,
+      "max": 261312512
+    },
+    "once": {
+      "values": [
+        257155072,
+        257925120,
+        261099520,
+        257347584,
+        258256896,
+        261062656,
+        258678784,
+        260808704,
+        260907008
+      ],
+      "min": 257155072,
+      "median": 258678784,
+      "max": 261099520
+    }
+  },
+  "median_rss_percent_vs_gc": {
+    "entry": 0.16976060610824906,
+    "once": -0.7309137207437977
+  },
+  "scope": "Independent fresh RSS repeat proof; original V46 measurements remain preserved, no instruction claim."
+}

@@ -1,0 +1,41 @@
+{
+  "base": "07e50b14a3d23e8f914193ec4d5a679adbd7c37a",
+  "head": "297f19a20fa92a53bf080e1a7c32258478d7fc72",
+  "runtime_head": "4f9121c09b642a007e592c1d91cbe86d5d122851",
+  "previous_base": "2026ecfe6dd9df1a0a8616e3bc5c5561e8e0cf63",
+  "upstream_patch_sha256": "4c0ef426f0c4686b63da3d681dccea3ca70761dde7df32158e06e3b6b020f320",
+  "overlay_archive_sha256": "c78f97ef0181d1c6fa196fb0e7c6d1479a22788d8b04784b92e203f4b9e771f0",
+  "files": {
+    "crates/perry-runtime/src/arena/block.rs": "80fe691f930208ac5562b40d4fddd7471f65f37cfc0ae32728d074e764c9df1f",
+    "crates/perry-runtime/src/arena/block/decommit.rs": "373112473c98732dd1e9e5b513de2f994f70ca7e0d19416ea3401d4e53062fa3",
+    "crates/perry-runtime/src/arena/block/reuse_window_tests.rs": "52668541321e94786fad55cf6193c6499ac4f763a2ce908be31a11b2d707ff25",
+    "crates/perry-runtime/src/arena/mod.rs": "1b26f18e84cc6cdf2a10711591f31aea5d5c087a8b3ebe919ebe743aec67e404",
+    "crates/perry-runtime/src/arena/page_meta/compact.rs": "9cb37c3003560cf46de300159ba98829e8ed45b469ce63f2b4e2ce081e65e481",
+    "crates/perry-runtime/src/arena/page_meta/compact/tests.rs": "35e121f6aa1bc4f36dee0c04595daeb5455c31fcaf0fb2798037bef16f9056ea",
+    "crates/perry-runtime/src/arena/page_meta/maintenance.rs": "cf4a8ec96ce435c5a7fd56ef5cf151709af84d1c1820d38204a0ea809b921e4a",
+    "crates/perry-runtime/src/arena/page_meta/mod.rs": "045b85c7a87e780f1d5bc9b65c2c273fe1182e3c2059f9095e0394a9c39037e8",
+    "crates/perry-runtime/src/arena/page_meta/storage.rs": "021733aa3126f82f2abc774bf2ee2111cf9c94654e9494de2e9c41de6f3ab49a",
+    "crates/perry-runtime/src/arena/page_meta/sweep_tally.rs": "ebb54d8d153cc0ce5237e09c16f1cc6388b2da06ec2971e7907e28136ba82fd0",
+    "crates/perry-runtime/src/arena/tests.rs": "741b32a49e3631bef59af384b72bf397e77abffd9b17e22fa9e822678b9e4f7b",
+    "crates/perry-runtime/src/arena/tests_page_meta_audit.rs": "4743a1775a167f7ac0a2d0bbb4eb1030605557476dc21324fa14a5a8a34113f6",
+    "crates/perry-runtime/src/arena/tests_promoted_runs.rs": "ea18f705c24ec5ced08d8df089ba8631c2b9b47936430103530f03f81169c0d1",
+    "crates/perry-runtime/src/arena/walk.rs": "14637c65e2ef68fdf8901dc797ba35a730c015667a0b86193295f3fbdce1472b",
+    "crates/perry-runtime/src/gc/cycle.rs": "61c0c5e44e00de3761ca37ada59a679baf3daf28de5d217751fa47c4b43f476d",
+    "crates/perry-runtime/src/gc/layout_slot_visit.rs": "197316543dc4a86cc531c64a383f2044b878acfa41bc694840814f35f3b9387a",
+    "crates/perry-runtime/src/gc/malloc.rs": "d56d2bc9a4c819b9ec9d83f879c775d865436abebafe8717e3009e5c56386e51",
+    "crates/perry-runtime/src/gc/mod.rs": "59f842ca83a2ffa6b3f92b2bdf4b3bfba3898a96a349e8d059a82ecb9e667b0b",
+    "crates/perry-runtime/src/gc/tests/alloc.rs": "b1aecc30fdfffd7f9336d0f7b7a08168deed189c8d47c2b5f0051459ce084edf",
+    "crates/perry-runtime/src/gc/tests/full_rebuild_skip.rs": "665bbb157c621dd5dd1b80913de079c7ed3b5cac02aa67909a4f548da99bf078",
+    "crates/perry-runtime/src/gc/verify.rs": "3dd3c7326dd5d1d159dd9d21d58968e5f55ec608cf38b30af33895bd2465145b",
+    "crates/perry-runtime/src/turnloop_pool/tests.rs": "5e78833ca5151d13a25b39303fd9d4af3adac66c7dd523ec62e6dc31f6a6ccfc"
+  },
+  "manifest_hashes": {
+    "base": "a2ac713ba1a983b407e8a7bc1d009116feba8f23ea435f26b1a224aea6f2cecf",
+    "gc": "20c72d93b8a257c97fb0dea77c7213f8aaee399016078e59b780319a6dce5d7d"
+  },
+  "counts": {
+    "base": 5003,
+    "gc": 5010
+  },
+  "scope": "New upstream checkpoint; prior measurements remain on original source. Toolchain file is now included explicitly."
+}

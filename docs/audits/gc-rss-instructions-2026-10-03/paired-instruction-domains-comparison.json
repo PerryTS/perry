@@ -1,0 +1,240 @@
+{
+  "scope": "Paired full-runtime TypeScript user/kernel instruction counts. Three repetitions on a shared host. Diagnostic only; separate runs from the original RSS/total-instruction matrices. Kernel counts include page-fault handling and other kernel work, not a direct fault-handler attribution.",
+  "complete_cells": 12,
+  "inputs": {
+    "gc-pool-v3-noauto": {
+      "/root/rss-header-20261002/gc-pool-v3-noauto-runs.json": "57aff4f2f0fb24805a07a1e612152daefb53f5aa03cc7f4840d8c0ca745ff10b",
+      "/root/rss-header-20261002/gc-pool-v3-noauto-oracle.json": "47ad24ad2ed8d511e78425d368050fbf72066b01dc289223f37bb55e3e3fd560",
+      "/root/rss-header-20261002/gc-pool-v3-noauto-builds.json": "cea22d966a69b7a23d4ce919c63567d592a06788188e0dbbcf8dcb91f027f040",
+      "/root/rss-header-20261002/gc-pool-v3-noauto-products.json": "a9e5700c12586e5f6b3825b858d745f1b00fc44f15d37ae2d8f269ba5d4430a3",
+      "/root/rss-header-20261002/gc-runtime-pool-v3r1-noauto.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    "gc-inline-v4-noauto": {
+      "/root/rss-header-20261002/gc-inline-v4-noauto-runs.json": "59dfa10b76aac3fb99310ae0d2b833a289c585d387966220ce6f1f24944c3e03",
+      "/root/rss-header-20261002/gc-inline-v4-noauto-oracle.json": "47ad24ad2ed8d511e78425d368050fbf72066b01dc289223f37bb55e3e3fd560",
+      "/root/rss-header-20261002/gc-inline-v4-noauto-builds.json": "553f542e56ded2ed4a4c4e0727818a548c56e403091555f1285bc59fc771381e",
+      "/root/rss-header-20261002/gc-inline-v4-noauto-products.json": "a6dc25ece93c8f6c8df90292e7d0797681d8d908701478ab6ec8d447a4461188",
+      "/root/rss-header-20261002/gc-runtime-inline-v4r1-noauto.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    }
+  },
+  "comparisons": [
+    {
+      "prefix": "gc-pool-v3-noauto",
+      "baseline": "gc-runtime-scan-main",
+      "candidate": "gc-runtime-pool-r1-main",
+      "measurements": {
+        "gc-runtime-scan-main": {
+          "instructions:u": {
+            "min": 63798462330,
+            "median": 63803547046,
+            "max": 63805906919,
+            "values": [
+              63803547046,
+              63798462330,
+              63805906919
+            ]
+          },
+          "instructions:k": {
+            "min": 910178295,
+            "median": 918458658,
+            "max": 924434012,
+            "values": [
+              910178295,
+              918458658,
+              924434012
+            ]
+          },
+          "minor-faults": {
+            "min": 108704,
+            "median": 108996,
+            "max": 109310,
+            "values": [
+              108704,
+              109310,
+              108996
+            ]
+          },
+          "major-faults": {
+            "min": 0,
+            "median": 0,
+            "max": 0,
+            "values": [
+              0,
+              0,
+              0
+            ]
+          }
+        },
+        "gc-runtime-pool-r1-main": {
+          "instructions:u": {
+            "min": 63799848245,
+            "median": 63806187361,
+            "max": 63806248192,
+            "values": [
+              63799848245,
+              63806248192,
+              63806187361
+            ]
+          },
+          "instructions:k": {
+            "min": 5060593587,
+            "median": 5073916819,
+            "max": 5082407656,
+            "values": [
+              5073916819,
+              5060593587,
+              5082407656
+            ]
+          },
+          "minor-faults": {
+            "min": 812149,
+            "median": 812151,
+            "max": 812154,
+            "values": [
+              812151,
+              812149,
+              812154
+            ]
+          },
+          "major-faults": {
+            "min": 0,
+            "median": 0,
+            "max": 0,
+            "values": [
+              0,
+              0,
+              0
+            ]
+          }
+        }
+      },
+      "change": {
+        "instructions:u": {
+          "absolute": 2640315,
+          "percent": 0.004138194696445829
+        },
+        "instructions:k": {
+          "absolute": 4155458161,
+          "percent": 452.43823712748974
+        },
+        "minor-faults": {
+          "absolute": 703155,
+          "percent": 645.1200044038313
+        },
+        "major-faults": {
+          "absolute": 0,
+          "percent": null
+        }
+      }
+    },
+    {
+      "prefix": "gc-inline-v4-noauto",
+      "baseline": "gc-runtime-pool-r1-main",
+      "candidate": "gc-runtime-inline-main",
+      "measurements": {
+        "gc-runtime-pool-r1-main": {
+          "instructions:u": {
+            "min": 63787100115,
+            "median": 63801680734,
+            "max": 63805871268,
+            "values": [
+              63801680734,
+              63787100115,
+              63805871268
+            ]
+          },
+          "instructions:k": {
+            "min": 5050672681,
+            "median": 5051291686,
+            "max": 5068265621,
+            "values": [
+              5050672681,
+              5068265621,
+              5051291686
+            ]
+          },
+          "minor-faults": {
+            "min": 811205,
+            "median": 811530,
+            "max": 812163,
+            "values": [
+              811205,
+              811530,
+              812163
+            ]
+          },
+          "major-faults": {
+            "min": 0,
+            "median": 0,
+            "max": 0,
+            "values": [
+              0,
+              0,
+              0
+            ]
+          }
+        },
+        "gc-runtime-inline-main": {
+          "instructions:u": {
+            "min": 64770281866,
+            "median": 64793065317,
+            "max": 64810304705,
+            "values": [
+              64770281866,
+              64793065317,
+              64810304705
+            ]
+          },
+          "instructions:k": {
+            "min": 5049342045,
+            "median": 5052843476,
+            "max": 5055022676,
+            "values": [
+              5055022676,
+              5052843476,
+              5049342045
+            ]
+          },
+          "minor-faults": {
+            "min": 811574,
+            "median": 811653,
+            "max": 812123,
+            "values": [
+              811574,
+              811653,
+              812123
+            ]
+          },
+          "major-faults": {
+            "min": 0,
+            "median": 0,
+            "max": 0,
+            "values": [
+              0,
+              0,
+              0
+            ]
+          }
+        }
+      },
+      "change": {
+        "instructions:u": {
+          "absolute": 991384583,
+          "percent": 1.5538533963286083
+        },
+        "instructions:k": {
+          "absolute": 1551790,
+          "percent": 0.03072065714004868
+        },
+        "minor-faults": {
+          "absolute": 123,
+          "percent": 0.015156556134710009
+        },
+        "major-faults": {
+          "absolute": 0,
+          "percent": null
+        }
+      }
+    }
+  ]
+}

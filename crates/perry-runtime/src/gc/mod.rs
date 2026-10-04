@@ -437,6 +437,7 @@ fn gc_collect_minor_with_trigger_inner(
     }
     let mut trace = GcCycleTrace::new(GcCollectionKind::Minor, trigger);
     let start = Instant::now();
+    crate::arena::discard_previously_idle_eden_pages();
     crate::arena::old_pages_begin_gc_cycle();
     let previous_pause_us = gc_last_pause_us();
     let current_rss_bytes = crate::process::get_rss_bytes();
@@ -471,6 +472,7 @@ fn gc_collect_minor_with_trigger_inner(
     };
     if let Some(fast_path) = copying_outcome {
         let freed_bytes = fast_path.freed_bytes;
+        crate::arena::advance_block_pool_reuse_window();
         let elapsed_us = start.elapsed().as_micros() as u64;
         GC_STATS.with(|stats| {
             stats

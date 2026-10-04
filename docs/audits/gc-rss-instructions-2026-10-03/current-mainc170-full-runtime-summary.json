@@ -1,0 +1,376 @@
+{
+  "suite": "noauto",
+  "baseline": "currentc170-base",
+  "candidate": "currentc170-gc",
+  "complete_cells": 24,
+  "inputs": {
+    "gc-currentc170-qb6-v22-noauto-runs.json": "801e67431a4e72b44b4f54670f6ddd7236e9eb53fe3d29b0f6408be449f8f3d1",
+    "gc-currentc170-qb6-v22-noauto-oracle.json": "47ad24ad2ed8d511e78425d368050fbf72066b01dc289223f37bb55e3e3fd560",
+    "gc-currentc170-qb6-v22-noauto-builds.json": "0f8164a68233da19525ca19281f05b78baa0fe0b5917fcfeb3340cb0983b4a22"
+  },
+  "receipt": {
+    "path": "gc-currentc170-qb6-v22-noauto.exit",
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+  },
+  "limitations": "Three repetitions; shared host. Short CPU times have coarse resolution. No automatic performance-acceptance verdict.",
+  "cases": [
+    {
+      "case": "tscwork",
+      "measurements": {
+        "currentc170-base": {
+          "rss_bytes": {
+            "min": 259874816,
+            "median": 260468736,
+            "max": 261136384,
+            "values": [
+              261136384,
+              259874816,
+              260468736
+            ]
+          },
+          "cpu_seconds": {
+            "min": 4.95,
+            "median": 5.32,
+            "max": 5.47,
+            "values": [
+              4.95,
+              5.32,
+              5.47
+            ]
+          },
+          "wall_seconds": {
+            "min": 4.96,
+            "median": 5.32,
+            "max": 5.48,
+            "values": [
+              4.96,
+              5.32,
+              5.48
+            ]
+          },
+          "instructions": {
+            "min": 64222773479,
+            "median": 64223331452,
+            "max": 64230572335,
+            "values": [
+              64222773479,
+              64223331452,
+              64230572335
+            ]
+          },
+          "cycles": {
+            "min": 25613267230,
+            "median": 26248741149,
+            "max": 26420811536,
+            "values": [
+              26420811536,
+              26248741149,
+              25613267230
+            ]
+          },
+          "minor-faults": {
+            "min": 103115,
+            "median": 103140,
+            "max": 103212,
+            "values": [
+              103140,
+              103212,
+              103115
+            ]
+          },
+          "major-faults": {
+            "min": 0,
+            "median": 0,
+            "max": 0,
+            "values": [
+              0,
+              0,
+              0
+            ]
+          }
+        },
+        "currentc170-gc": {
+          "rss_bytes": {
+            "min": 250130432,
+            "median": 250839040,
+            "max": 251166720,
+            "values": [
+              250130432,
+              250839040,
+              251166720
+            ]
+          },
+          "cpu_seconds": {
+            "min": 4.8500000000000005,
+            "median": 4.88,
+            "max": 5.32,
+            "values": [
+              4.88,
+              4.8500000000000005,
+              5.32
+            ]
+          },
+          "wall_seconds": {
+            "min": 4.86,
+            "median": 4.89,
+            "max": 5.33,
+            "values": [
+              4.89,
+              4.86,
+              5.33
+            ]
+          },
+          "instructions": {
+            "min": 63965910631,
+            "median": 63995328738,
+            "max": 64040341245,
+            "values": [
+              63965910631,
+              64040341245,
+              63995328738
+            ]
+          },
+          "cycles": {
+            "min": 24389411415,
+            "median": 24842097624,
+            "max": 26899514990,
+            "values": [
+              24389411415,
+              26899514990,
+              24842097624
+            ]
+          },
+          "minor-faults": {
+            "min": 146581,
+            "median": 147116,
+            "max": 148004,
+            "values": [
+              147116,
+              148004,
+              146581
+            ]
+          },
+          "major-faults": {
+            "min": 0,
+            "median": 0,
+            "max": 0,
+            "values": [
+              0,
+              0,
+              0
+            ]
+          }
+        }
+      },
+      "change": {
+        "rss_bytes": {
+          "absolute": -9629696,
+          "percent": -3.6970640499441765
+        },
+        "cpu_seconds": {
+          "absolute": -0.4400000000000004,
+          "percent": -8.270676691729328
+        },
+        "wall_seconds": {
+          "absolute": -0.4300000000000006,
+          "percent": -8.082706766917303
+        },
+        "instructions": {
+          "absolute": -228002714,
+          "percent": -0.3550153952546209
+        },
+        "cycles": {
+          "absolute": -1406643525,
+          "percent": -5.358898992584981
+        },
+        "minor-faults": {
+          "absolute": 43976,
+          "percent": 42.63719216598798
+        },
+        "major-faults": {
+          "absolute": 0,
+          "percent": null
+        }
+      }
+    },
+    {
+      "case": "zodwork",
+      "measurements": {
+        "currentc170-base": {
+          "rss_bytes": {
+            "min": 30552064,
+            "median": 30601216,
+            "max": 30900224,
+            "values": [
+              30900224,
+              30601216,
+              30552064
+            ]
+          },
+          "cpu_seconds": {
+            "min": 0.06,
+            "median": 0.06,
+            "max": 0.09,
+            "values": [
+              0.06,
+              0.09,
+              0.06
+            ]
+          },
+          "wall_seconds": {
+            "min": 0.07,
+            "median": 0.07,
+            "max": 0.09,
+            "values": [
+              0.07,
+              0.09,
+              0.07
+            ]
+          },
+          "instructions": {
+            "min": 1020071294,
+            "median": 1020472048,
+            "max": 1020584141,
+            "values": [
+              1020071294,
+              1020472048,
+              1020584141
+            ]
+          },
+          "cycles": {
+            "min": 363385288,
+            "median": 368586713,
+            "max": 370746165,
+            "values": [
+              370746165,
+              368586713,
+              363385288
+            ]
+          },
+          "minor-faults": {
+            "min": 4032,
+            "median": 4033,
+            "max": 4039,
+            "values": [
+              4033,
+              4032,
+              4039
+            ]
+          },
+          "major-faults": {
+            "min": 0,
+            "median": 0,
+            "max": 0,
+            "values": [
+              0,
+              0,
+              0
+            ]
+          }
+        },
+        "currentc170-gc": {
+          "rss_bytes": {
+            "min": 30302208,
+            "median": 30679040,
+            "max": 30724096,
+            "values": [
+              30302208,
+              30724096,
+              30679040
+            ]
+          },
+          "cpu_seconds": {
+            "min": 0.06,
+            "median": 0.06,
+            "max": 0.06,
+            "values": [
+              0.06,
+              0.06,
+              0.06
+            ]
+          },
+          "wall_seconds": {
+            "min": 0.07,
+            "median": 0.07,
+            "max": 0.07,
+            "values": [
+              0.07,
+              0.07,
+              0.07
+            ]
+          },
+          "instructions": {
+            "min": 1014106563,
+            "median": 1014777488,
+            "max": 1015185049,
+            "values": [
+              1014106563,
+              1015185049,
+              1014777488
+            ]
+          },
+          "cycles": {
+            "min": 364113663,
+            "median": 373853172,
+            "max": 380249680,
+            "values": [
+              373853172,
+              380249680,
+              364113663
+            ]
+          },
+          "minor-faults": {
+            "min": 4025,
+            "median": 4028,
+            "max": 4036,
+            "values": [
+              4025,
+              4036,
+              4028
+            ]
+          },
+          "major-faults": {
+            "min": 0,
+            "median": 0,
+            "max": 0,
+            "values": [
+              0,
+              0,
+              0
+            ]
+          }
+        }
+      },
+      "change": {
+        "rss_bytes": {
+          "absolute": 77824,
+          "percent": 0.2543166912059913
+        },
+        "cpu_seconds": {
+          "absolute": 0.0,
+          "percent": 0.0
+        },
+        "wall_seconds": {
+          "absolute": 0.0,
+          "percent": 0.0
+        },
+        "instructions": {
+          "absolute": -5694560,
+          "percent": -0.5580319432718084
+        },
+        "cycles": {
+          "absolute": 5266459,
+          "percent": 1.4288249723206858
+        },
+        "minor-faults": {
+          "absolute": -5,
+          "percent": -0.12397718819736614
+        },
+        "major-faults": {
+          "absolute": 0,
+          "percent": null
+        }
+      }
+    }
+  ]
+}

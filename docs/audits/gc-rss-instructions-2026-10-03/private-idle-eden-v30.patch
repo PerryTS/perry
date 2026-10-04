@@ -1,0 +1,43 @@
+commit 3843fcb54a5973c3ed6681087b64d1cbf530d048
+Author:     Ralph Küpper <ralph@skelpo.com>
+AuthorDate: Sat Oct 3 22:27:23 2026 +0200
+Commit:     Ralph Küpper <ralph@skelpo.com>
+CommitDate: Sat Oct 3 22:27:23 2026 +0200
+
+    experiment: discard idle Eden interiors after their existing warm interval
+
+diff --git a/crates/perry-runtime/src/arena/block.rs b/crates/perry-runtime/src/arena/block.rs
+index 515b8f1592..f6afd8ea7c 100644
+--- a/crates/perry-runtime/src/arena/block.rs
++++ b/crates/perry-runtime/src/arena/block.rs
+@@ -225,6 +225,14 @@ fn block_pool_cap_bytes() -> usize {
+ #[path = "block/decommit.rs"]
+ mod decommit;
+ 
++/// Discard backing after an Eden block has already stayed logically empty
++/// through a complete mutator interval. The mapping and header-start bitmap
++/// stay owned by the arena; complete interior pages exclude allocator metadata.
++pub(super) fn discard_idle_eden_block_pages(block: &ArenaBlock) -> usize {
++    debug_assert_eq!(block.offset, 0);
++    unsafe { decommit::release(block.data, block.size) }
++}
++
+ /// Offer a released block to the pool. Returns false (caller deallocs) when
+ /// the pool is full or the block is null.
+ pub(crate) fn block_pool_put(data: *mut u8, size: usize) -> bool {
+diff --git a/crates/perry-runtime/src/arena/reset.rs b/crates/perry-runtime/src/arena/reset.rs
+index 1ef4262fa5..52120c15f5 100644
+--- a/crates/perry-runtime/src/arena/reset.rs
++++ b/crates/perry-runtime/src/arena/reset.rs
+@@ -311,6 +311,11 @@ pub(super) fn release_idle_eden_blocks(arena: &mut Arena) -> ArenaResetStats {
+         }
+         block.dead_cycles = block.dead_cycles.saturating_add(1);
+         if block.dead_cycles < GENERAL_DEALLOC_DEAD_CYCLES {
++            // This block was reset by the preceding collection and remained
++            // unused throughout the intervening mutator interval. Keep its
++            // mapping available, but release interior backing now instead of
++            // waiting for detachment and then another pool reuse interval.
++            super::block::discard_idle_eden_block_pages(block);
+             continue;
+         }
+         let size = block.size;

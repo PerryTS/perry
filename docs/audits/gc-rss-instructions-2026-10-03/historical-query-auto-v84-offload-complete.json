@@ -1,0 +1,17 @@
+{
+  "time_utc": "2026-10-04T05:46:17Z",
+  "removed_roots": [
+    "/root/rss-header-20261002/primary-lazy-rss-main07-v51/source/target"
+  ],
+  "verified_files": 7659,
+  "local_archive": "/Users/amlug/projects/perry/secret-tests/scratchpad/rss-header-20261002/historical-query-auto-v84.tar.gz",
+  "archive_sha256": "a4fee41787dcb786a3b98dd2eda0223f0a78fd88c5c4c714547676e8f6df9c49",
+  "archive_bytes": 921283642,
+  "manifest_sha256": "c3de66c16e6f05693a064a419217d44ce87b1080e9d67632dbe9fe1f19c15d14",
+  "local_verification_sha256": "79cdbdb4ca0f92d94037c039afdfb6e48dc4fda574e1dbb303811492b4dec21d",
+  "free_before_bytes": 13322088448,
+  "free_after_bytes": 16208146432,
+  "active_references": [],
+  "scope": "Only one terminal historical query experiment auto-build target directory. Sources, exports, app binaries, raw measurement evidence, proofs and shared seeds remain. Exact archive retained locally.",
+  "restore": "Copy the verified local tar.gz back to /root/rss-header-20261002 and extract it there; every restored file is bound to the retained manifest."
+}

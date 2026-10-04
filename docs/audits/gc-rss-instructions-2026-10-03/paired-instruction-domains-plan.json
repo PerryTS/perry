@@ -1,0 +1,13 @@
+{
+  "scope": "12 paired diagnostic executions, already measured immutable TS binaries; no new build/GC settings",
+  "files": {
+    "gc-paired-instruction-domains-v1.py": "b12393ca80ff5bb523eceacad17af241a0c6cc29d0e9c39f79ec127ec356c17a",
+    "gc-paired-instruction-domains-v1-run.sh": "d8af25923a1cbf38d02bd49cef07f4073fd74e9e8331fafff21eaa2c4b03481f"
+  },
+  "parser_validation": {
+    "valid": true,
+    "corrupt_inputs_rejected": 5
+  },
+  "execution": "pending; queued under shared benchmark lock",
+  "acceptance": "No performance conclusion from parser validation or scheduling"
+}

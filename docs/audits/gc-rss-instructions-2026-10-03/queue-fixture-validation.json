@@ -1,0 +1,135 @@
+{
+  "file": "crates/perry-runtime/src/turnloop_pool/tests.rs",
+  "baseline_sha256": "f8bc2fe6be7926794e58c04c1095fcc9349543941e8a7ccbba2a6510894fb47e",
+  "fixed_sha256": "5e78833ca5151d13a25b39303fd9d4af3adac66c7dd523ec62e6dc31f6a6ccfc",
+  "scope": "test-only worker-entry acknowledgements before queue fill; fallback assertions unchanged",
+  "original_failure": "gc-runtime-scan-v2-build.exit=101",
+  "unmodified_targeted_repeats": "30 passed; does not establish whole-suite stability",
+  "linux_runtime_result": "4816 passed; 0 failed; 5 ignored; scan revision plus fixture fix (pool change not included)",
+  "linux_log_sha256": "41db539beba50c2f777cdf554dc71cf5e24834c544b377093e64dc3eb6df7835",
+  "original_targeted_repeats": [
+    {
+      "repeat": 0,
+      "returncode": 0
+    },
+    {
+      "repeat": 1,
+      "returncode": 0
+    },
+    {
+      "repeat": 2,
+      "returncode": 0
+    },
+    {
+      "repeat": 3,
+      "returncode": 0
+    },
+    {
+      "repeat": 4,
+      "returncode": 0
+    },
+    {
+      "repeat": 5,
+      "returncode": 0
+    },
+    {
+      "repeat": 6,
+      "returncode": 0
+    },
+    {
+      "repeat": 7,
+      "returncode": 0
+    },
+    {
+      "repeat": 8,
+      "returncode": 0
+    },
+    {
+      "repeat": 9,
+      "returncode": 0
+    },
+    {
+      "repeat": 10,
+      "returncode": 0
+    },
+    {
+      "repeat": 11,
+      "returncode": 0
+    },
+    {
+      "repeat": 12,
+      "returncode": 0
+    },
+    {
+      "repeat": 13,
+      "returncode": 0
+    },
+    {
+      "repeat": 14,
+      "returncode": 0
+    },
+    {
+      "repeat": 15,
+      "returncode": 0
+    },
+    {
+      "repeat": 16,
+      "returncode": 0
+    },
+    {
+      "repeat": 17,
+      "returncode": 0
+    },
+    {
+      "repeat": 18,
+      "returncode": 0
+    },
+    {
+      "repeat": 19,
+      "returncode": 0
+    },
+    {
+      "repeat": 20,
+      "returncode": 0
+    },
+    {
+      "repeat": 21,
+      "returncode": 0
+    },
+    {
+      "repeat": 22,
+      "returncode": 0
+    },
+    {
+      "repeat": 23,
+      "returncode": 0
+    },
+    {
+      "repeat": 24,
+      "returncode": 0
+    },
+    {
+      "repeat": 25,
+      "returncode": 0
+    },
+    {
+      "repeat": 26,
+      "returncode": 0
+    },
+    {
+      "repeat": 27,
+      "returncode": 0
+    },
+    {
+      "repeat": 28,
+      "returncode": 0
+    },
+    {
+      "repeat": 29,
+      "returncode": 0
+    }
+  ],
+  "macos_pool_plus_fixture_result": "4835 passed; 0 failed; 5 ignored",
+  "macos_log_sha256": "f9fc90a615a85350154b24cf86fb603edacdf709dccb38d5cc805c9521cdc324",
+  "linux_ffi_scan_plus_fixture_result": "75 passed; 0 failed"
+}

@@ -1,0 +1,6110 @@
+[
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-base-12_large_live_set-0",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-12_large_live_set"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 107888640,
+    "wall_s": 0.3,
+    "user_s": 0.23,
+    "sys_s": 0.05,
+    "elapsed_s": 0.3375478950329125,
+    "stdout": "probe:12_large_live_set\nchecksum:1678627152\nwalked:700000\nsum:186514128\nkept:10938\nkeptSum:-466842304\n",
+    "case": "12_large_live_set",
+    "arm": "current0ed-base",
+    "mode": "plain",
+    "repeat": 0,
+    "binary_sha256": "81e28405cbeff5e4e37e862c079801566fa478439da731adca88d753067ce04d",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-gc-12_large_live_set-0",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-12_large_live_set"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 100978688,
+    "wall_s": 0.33,
+    "user_s": 0.24,
+    "sys_s": 0.05,
+    "elapsed_s": 0.3366400091908872,
+    "stdout": "probe:12_large_live_set\nchecksum:1678627152\nwalked:700000\nsum:186514128\nkept:10938\nkeptSum:-466842304\n",
+    "case": "12_large_live_set",
+    "arm": "current0ed-gc",
+    "mode": "plain",
+    "repeat": 0,
+    "binary_sha256": "39e3c0adb7e1bc1ed45fb4f09c6e8e7ca39dc9d77f6b470aaee3f88b563be1ec",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-base-14_grow_then_churn-0",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-14_grow_then_churn"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 115929088,
+    "wall_s": 0.37,
+    "user_s": 0.26,
+    "sys_s": 0.07,
+    "elapsed_s": 0.5075432052835822,
+    "stdout": "probe:14_grow_then_churn\ncacheSum:2050177040\nchurnSum:815300000\nliveSum:2008997952\n",
+    "case": "14_grow_then_churn",
+    "arm": "current0ed-base",
+    "mode": "plain",
+    "repeat": 0,
+    "binary_sha256": "b0068d78b8be77d8b2effd0cddc6005072678cddb958be2e79c6302b08c69739",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-gc-14_grow_then_churn-0",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-14_grow_then_churn"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 109531136,
+    "wall_s": 0.31,
+    "user_s": 0.24,
+    "sys_s": 0.05,
+    "elapsed_s": 0.33668720815330744,
+    "stdout": "probe:14_grow_then_churn\ncacheSum:2050177040\nchurnSum:815300000\nliveSum:2008997952\n",
+    "case": "14_grow_then_churn",
+    "arm": "current0ed-gc",
+    "mode": "plain",
+    "repeat": 0,
+    "binary_sha256": "075ebde179f3938416c3dbac40f0fe4e9f045ef75acbe1493b880532353fe0d9",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-base-23-binary-trees-0",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-23-binary-trees"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 187281408,
+    "wall_s": 2.92,
+    "user_s": 2.71,
+    "sys_s": 0.13,
+    "elapsed_s": 3.0563056538812816,
+    "stdout": "RESULT 136664414\n",
+    "case": "23-binary-trees",
+    "arm": "current0ed-base",
+    "mode": "plain",
+    "repeat": 0,
+    "binary_sha256": "db26bdef7668977c539e2dcd405064afe6f7b14411fb3e47fa6e6478cf0254bf",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-gc-23-binary-trees-0",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-23-binary-trees"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 187383808,
+    "wall_s": 3.04,
+    "user_s": 2.77,
+    "sys_s": 0.16,
+    "elapsed_s": 3.1570841958746314,
+    "stdout": "RESULT 136664414\n",
+    "case": "23-binary-trees",
+    "arm": "current0ed-gc",
+    "mode": "plain",
+    "repeat": 0,
+    "binary_sha256": "1ccc21b5f601720563f074202149d55ccd102e74e47f9676464770afd52f853f",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-base-30-string-build-0",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 224821248,
+    "wall_s": 1.58,
+    "user_s": 1.33,
+    "sys_s": 0.22,
+    "elapsed_s": 1.6947497157379985,
+    "stdout": "RESULT 60444505\n",
+    "case": "30-string-build",
+    "arm": "current0ed-base",
+    "mode": "plain",
+    "repeat": 0,
+    "binary_sha256": "f60aafbf67bcb8d80f1eb9623c112deb325a1eb734b3ed7fc6d35ff5b3677844",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-gc-30-string-build-0",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 221253632,
+    "wall_s": 1.62,
+    "user_s": 1.28,
+    "sys_s": 0.24,
+    "elapsed_s": 1.7199908713810146,
+    "stdout": "RESULT 60444505\n",
+    "case": "30-string-build",
+    "arm": "current0ed-gc",
+    "mode": "plain",
+    "repeat": 0,
+    "binary_sha256": "66ec4fe512620ce8db1637c3603f6e0203acf533444a2748972ac79eb31fbb52",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-base-31-json-0",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-31-json"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 167489536,
+    "wall_s": 2.36,
+    "user_s": 2.05,
+    "sys_s": 0.26,
+    "elapsed_s": 2.382551910355687,
+    "stdout": "RESULT 2204940400\n",
+    "case": "31-json",
+    "arm": "current0ed-base",
+    "mode": "plain",
+    "repeat": 0,
+    "binary_sha256": "8fb39433a9487f3f8373a9345b91ac05e2f060ad27b8bcc3592988c343b542c7",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-gc-31-json-0",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-31-json"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 161447936,
+    "wall_s": 2.2,
+    "user_s": 1.91,
+    "sys_s": 0.26,
+    "elapsed_s": 2.212806648109108,
+    "stdout": "RESULT 2204940400\n",
+    "case": "31-json",
+    "arm": "current0ed-gc",
+    "mode": "plain",
+    "repeat": 0,
+    "binary_sha256": "f0307de684fa4b438239c77eb708e87f107bbfc35c592ca85f22f8a63c4f8ffc",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-base-51-pipeline-0",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-51-pipeline"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 299237376,
+    "wall_s": 1.01,
+    "user_s": 0.8,
+    "sys_s": 0.16,
+    "elapsed_s": 1.0167158860713243,
+    "stdout": "RESULT 99180339350\n",
+    "case": "51-pipeline",
+    "arm": "current0ed-base",
+    "mode": "plain",
+    "repeat": 0,
+    "binary_sha256": "d924d1844367030e818215b85af3a227e68a3a12ff5c5a2b135d57211eb66c1e",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-gc-51-pipeline-0",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-51-pipeline"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 268009472,
+    "wall_s": 0.95,
+    "user_s": 0.8,
+    "sys_s": 0.14,
+    "elapsed_s": 1.0167533159255981,
+    "stdout": "RESULT 99180339350\n",
+    "case": "51-pipeline",
+    "arm": "current0ed-gc",
+    "mode": "plain",
+    "repeat": 0,
+    "binary_sha256": "e5a0b0698bd7683c53c7af162cc03cc43be0bee743c8b09be0fc927a30d5bac1",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-base-60-ring-churn-0",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-60-ring-churn"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 15286272,
+    "wall_s": 0.06,
+    "user_s": 0.04,
+    "sys_s": 0.0,
+    "elapsed_s": 0.17946512484923005,
+    "stdout": "RESULT 178646019\n",
+    "case": "60-ring-churn",
+    "arm": "current0ed-base",
+    "mode": "plain",
+    "repeat": 0,
+    "binary_sha256": "3c7b83e513bb0bdac5a979affdc543f3af3afa3dd3f19a605ed56c59831a2c05",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-gc-60-ring-churn-0",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-60-ring-churn"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 15437824,
+    "wall_s": 0.05,
+    "user_s": 0.04,
+    "sys_s": 0.0,
+    "elapsed_s": 0.18144825100898743,
+    "stdout": "RESULT 178646019\n",
+    "case": "60-ring-churn",
+    "arm": "current0ed-gc",
+    "mode": "plain",
+    "repeat": 0,
+    "binary_sha256": "062f36112298cef8a671e9c0b6fa1a4e5a9136315007b1f3161d965584985436",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-base-71-async-worker-0",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-71-async-worker"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 79835136,
+    "wall_s": 7.5,
+    "user_s": 0.36,
+    "sys_s": 0.04,
+    "elapsed_s": 7.561736663337797,
+    "stdout": "RESULT 3119851056\n",
+    "case": "71-async-worker",
+    "arm": "current0ed-base",
+    "mode": "plain",
+    "repeat": 0,
+    "binary_sha256": "8743c3b534127043a57dc03c348ab87745cee85f6c8b111db53b8633aebee2d8",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-gc-71-async-worker-0",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-71-async-worker"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 79269888,
+    "wall_s": 7.5,
+    "user_s": 0.33,
+    "sys_s": 0.05,
+    "elapsed_s": 7.502614197321236,
+    "stdout": "RESULT 3119851056\n",
+    "case": "71-async-worker",
+    "arm": "current0ed-gc",
+    "mode": "plain",
+    "repeat": 0,
+    "binary_sha256": "10180d7a912227430e9d9ea8427964f7cfe88e4198998b8bbdaa3329672bc88a",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-base-73-retain-then-release-0",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-73-retain-then-release"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 279977984,
+    "wall_s": 1.8,
+    "user_s": 1.44,
+    "sys_s": 0.26,
+    "elapsed_s": 1.9173052292317152,
+    "stdout": "RESULT 719280537\n",
+    "case": "73-retain-then-release",
+    "arm": "current0ed-base",
+    "mode": "plain",
+    "repeat": 0,
+    "binary_sha256": "f891287a2053b9e7c9c4e7f2e29ace867de2c69504065a636027ee00e22e57a6",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-gc-73-retain-then-release-0",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-73-retain-then-release"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 257630208,
+    "wall_s": 1.7,
+    "user_s": 1.4,
+    "sys_s": 0.24,
+    "elapsed_s": 1.8680884228087962,
+    "stdout": "RESULT 719280537\n",
+    "case": "73-retain-then-release",
+    "arm": "current0ed-gc",
+    "mode": "plain",
+    "repeat": 0,
+    "binary_sha256": "b8bdda74343524114b6f97f25ce9b6df83634bb259168d649719107b5757b520",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-base-70-documents-replace-0",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-70-documents",
+      "replace"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 152313856,
+    "wall_s": 1.43,
+    "user_s": 1.16,
+    "sys_s": 0.21,
+    "elapsed_s": 1.5980917527340353,
+    "stdout": "RESULT 719280537\n",
+    "case": "70-documents-replace",
+    "arm": "current0ed-base",
+    "mode": "plain",
+    "repeat": 0,
+    "binary_sha256": "4a4e5f86a494cd0ab3434498686e58793d9fb75476c71a0601f17d6ae7bb9a09",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-gc-70-documents-replace-0",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-70-documents",
+      "replace"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 137289728,
+    "wall_s": 1.37,
+    "user_s": 1.12,
+    "sys_s": 0.18,
+    "elapsed_s": 1.5411563436500728,
+    "stdout": "RESULT 719280537\n",
+    "case": "70-documents-replace",
+    "arm": "current0ed-gc",
+    "mode": "plain",
+    "repeat": 0,
+    "binary_sha256": "d6fb1588158677a5f35f29f113567ee51a37cbd14fb7c748de244fee0966b878",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-base-70-documents-retain-0",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-70-documents",
+      "retain"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 373813248,
+    "wall_s": 1.82,
+    "user_s": 1.43,
+    "sys_s": 0.33,
+    "elapsed_s": 1.864045568741858,
+    "stdout": "RESULT 719287512\n",
+    "case": "70-documents-retain",
+    "arm": "current0ed-base",
+    "mode": "plain",
+    "repeat": 0,
+    "binary_sha256": "4a4e5f86a494cd0ab3434498686e58793d9fb75476c71a0601f17d6ae7bb9a09",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-gc-70-documents-retain-0",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-70-documents",
+      "retain"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 329723904,
+    "wall_s": 1.8,
+    "user_s": 1.42,
+    "sys_s": 0.27,
+    "elapsed_s": 1.9110778123140335,
+    "stdout": "RESULT 719287512\n",
+    "case": "70-documents-retain",
+    "arm": "current0ed-gc",
+    "mode": "plain",
+    "repeat": 0,
+    "binary_sha256": "d6fb1588158677a5f35f29f113567ee51a37cbd14fb7c748de244fee0966b878",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-base-70-documents-transition-0",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-70-documents",
+      "transition"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 198328320,
+    "wall_s": 1.67,
+    "user_s": 1.34,
+    "sys_s": 0.21,
+    "elapsed_s": 1.7179580722004175,
+    "stdout": "RESULT 719284509\n",
+    "case": "70-documents-transition",
+    "arm": "current0ed-base",
+    "mode": "plain",
+    "repeat": 0,
+    "binary_sha256": "4a4e5f86a494cd0ab3434498686e58793d9fb75476c71a0601f17d6ae7bb9a09",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-gc-70-documents-transition-0",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-70-documents",
+      "transition"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 178888704,
+    "wall_s": 1.59,
+    "user_s": 1.28,
+    "sys_s": 0.21,
+    "elapsed_s": 1.676076091825962,
+    "stdout": "RESULT 719284509\n",
+    "case": "70-documents-transition",
+    "arm": "current0ed-gc",
+    "mode": "plain",
+    "repeat": 0,
+    "binary_sha256": "d6fb1588158677a5f35f29f113567ee51a37cbd14fb7c748de244fee0966b878",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-base-tscwork-0",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork",
+      "1"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 249344000,
+    "wall_s": 10.13,
+    "user_s": 9.23,
+    "sys_s": 0.49,
+    "elapsed_s": 10.245264436118305,
+    "stdout": "typescript 5.8.2 96760\n",
+    "case": "tscwork",
+    "arm": "current0ed-base",
+    "mode": "plain",
+    "repeat": 0,
+    "binary_sha256": "d3e6ac7d8c54453d92f1480f49acc34d44a50080ccaef8cf79bbccb00eff79ee",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-gc-tscwork-0",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork",
+      "1"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 239124480,
+    "wall_s": 9.8,
+    "user_s": 8.91,
+    "sys_s": 0.46,
+    "elapsed_s": 9.96642621094361,
+    "stdout": "typescript 5.8.2 96760\n",
+    "case": "tscwork",
+    "arm": "current0ed-gc",
+    "mode": "plain",
+    "repeat": 0,
+    "binary_sha256": "7b201d21972f1d846f52c0a0ef00e7b11c06cc2b3a080bbef6627b379c1de521",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-base-zodwork-0",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork",
+      "200"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 25391104,
+    "wall_s": 0.15,
+    "user_s": 0.12,
+    "sys_s": 0.02,
+    "elapsed_s": 0.18373360112309456,
+    "stdout": "200\n",
+    "case": "zodwork",
+    "arm": "current0ed-base",
+    "mode": "plain",
+    "repeat": 0,
+    "binary_sha256": "0819c427d837eed8fe82810cc5a7455920a33dac2c51520a0d71a6272d8076cd",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-gc-zodwork-0",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork",
+      "200"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 24915968,
+    "wall_s": 0.15,
+    "user_s": 0.12,
+    "sys_s": 0.02,
+    "elapsed_s": 0.1700266683474183,
+    "stdout": "200\n",
+    "case": "zodwork",
+    "arm": "current0ed-gc",
+    "mode": "plain",
+    "repeat": 0,
+    "binary_sha256": "ac293400554dbdd36340b831233e398f0d3c57fb3ea438007ae12d01e138288f",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-base-00-noop-0",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-00-noop"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 1351680,
+    "wall_s": 0.0,
+    "user_s": 0.0,
+    "sys_s": 0.0,
+    "elapsed_s": 0.16903421375900507,
+    "stdout": "RESULT 0\n",
+    "case": "00-noop",
+    "arm": "current0ed-base",
+    "mode": "plain",
+    "repeat": 0,
+    "binary_sha256": "2e3cb5acfa826bf086b94ae788963d773a7ecc3b37e8359a5ff2390f15cc6796",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-gc-00-noop-0",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-00-noop"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 1351680,
+    "wall_s": 0.0,
+    "user_s": 0.0,
+    "sys_s": 0.0,
+    "elapsed_s": 0.17155995266512036,
+    "stdout": "RESULT 0\n",
+    "case": "00-noop",
+    "arm": "current0ed-gc",
+    "mode": "plain",
+    "repeat": 0,
+    "binary_sha256": "2e3cb5acfa826bf086b94ae788963d773a7ecc3b37e8359a5ff2390f15cc6796",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-base-15-crc32-0",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-15-crc32"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 17141760,
+    "wall_s": 1.24,
+    "user_s": 1.17,
+    "sys_s": 0.0,
+    "elapsed_s": 1.386085420846939,
+    "stdout": "RESULT 62051195\n",
+    "case": "15-crc32",
+    "arm": "current0ed-base",
+    "mode": "plain",
+    "repeat": 0,
+    "binary_sha256": "35fecea831561415223878a017b28d0b97922c7568a4173c71f955d3f4f3c068",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-gc-15-crc32-0",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-15-crc32"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 16683008,
+    "wall_s": 1.06,
+    "user_s": 1.02,
+    "sys_s": 0.0,
+    "elapsed_s": 1.2055430030450225,
+    "stdout": "RESULT 62051195\n",
+    "case": "15-crc32",
+    "arm": "current0ed-gc",
+    "mode": "plain",
+    "repeat": 0,
+    "binary_sha256": "843c1d8a1d2b2608b2749b9f45fec31f76e6a4db0a2fdc8674edb3010ae33dab",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-gc-12_large_live_set-1",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-12_large_live_set"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 100761600,
+    "wall_s": 0.32,
+    "user_s": 0.22,
+    "sys_s": 0.06,
+    "elapsed_s": 0.36501721385866404,
+    "stdout": "probe:12_large_live_set\nchecksum:1678627152\nwalked:700000\nsum:186514128\nkept:10938\nkeptSum:-466842304\n",
+    "case": "12_large_live_set",
+    "arm": "current0ed-gc",
+    "mode": "plain",
+    "repeat": 1,
+    "binary_sha256": "39e3c0adb7e1bc1ed45fb4f09c6e8e7ca39dc9d77f6b470aaee3f88b563be1ec",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-base-12_large_live_set-1",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-12_large_live_set"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 107646976,
+    "wall_s": 0.3,
+    "user_s": 0.23,
+    "sys_s": 0.05,
+    "elapsed_s": 0.34456927608698606,
+    "stdout": "probe:12_large_live_set\nchecksum:1678627152\nwalked:700000\nsum:186514128\nkept:10938\nkeptSum:-466842304\n",
+    "case": "12_large_live_set",
+    "arm": "current0ed-base",
+    "mode": "plain",
+    "repeat": 1,
+    "binary_sha256": "81e28405cbeff5e4e37e862c079801566fa478439da731adca88d753067ce04d",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-gc-14_grow_then_churn-1",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-14_grow_then_churn"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 109608960,
+    "wall_s": 0.34,
+    "user_s": 0.25,
+    "sys_s": 0.06,
+    "elapsed_s": 0.5113405101001263,
+    "stdout": "probe:14_grow_then_churn\ncacheSum:2050177040\nchurnSum:815300000\nliveSum:2008997952\n",
+    "case": "14_grow_then_churn",
+    "arm": "current0ed-gc",
+    "mode": "plain",
+    "repeat": 1,
+    "binary_sha256": "075ebde179f3938416c3dbac40f0fe4e9f045ef75acbe1493b880532353fe0d9",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-base-14_grow_then_churn-1",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-14_grow_then_churn"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 116002816,
+    "wall_s": 0.36,
+    "user_s": 0.25,
+    "sys_s": 0.08,
+    "elapsed_s": 0.3687055050395429,
+    "stdout": "probe:14_grow_then_churn\ncacheSum:2050177040\nchurnSum:815300000\nliveSum:2008997952\n",
+    "case": "14_grow_then_churn",
+    "arm": "current0ed-base",
+    "mode": "plain",
+    "repeat": 1,
+    "binary_sha256": "b0068d78b8be77d8b2effd0cddc6005072678cddb958be2e79c6302b08c69739",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-gc-23-binary-trees-1",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-23-binary-trees"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 187084800,
+    "wall_s": 3.01,
+    "user_s": 2.66,
+    "sys_s": 0.2,
+    "elapsed_s": 3.1503733918070793,
+    "stdout": "RESULT 136664414\n",
+    "case": "23-binary-trees",
+    "arm": "current0ed-gc",
+    "mode": "plain",
+    "repeat": 1,
+    "binary_sha256": "1ccc21b5f601720563f074202149d55ccd102e74e47f9676464770afd52f853f",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-base-23-binary-trees-1",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-23-binary-trees"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 187183104,
+    "wall_s": 3.03,
+    "user_s": 2.71,
+    "sys_s": 0.15,
+    "elapsed_s": 3.130970234051347,
+    "stdout": "RESULT 136664414\n",
+    "case": "23-binary-trees",
+    "arm": "current0ed-base",
+    "mode": "plain",
+    "repeat": 1,
+    "binary_sha256": "db26bdef7668977c539e2dcd405064afe6f7b14411fb3e47fa6e6478cf0254bf",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-gc-30-string-build-1",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 220999680,
+    "wall_s": 1.57,
+    "user_s": 1.22,
+    "sys_s": 0.27,
+    "elapsed_s": 1.6110194479115307,
+    "stdout": "RESULT 60444505\n",
+    "case": "30-string-build",
+    "arm": "current0ed-gc",
+    "mode": "plain",
+    "repeat": 1,
+    "binary_sha256": "66ec4fe512620ce8db1637c3603f6e0203acf533444a2748972ac79eb31fbb52",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-base-30-string-build-1",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 224784384,
+    "wall_s": 1.64,
+    "user_s": 1.28,
+    "sys_s": 0.27,
+    "elapsed_s": 1.6599955740384758,
+    "stdout": "RESULT 60444505\n",
+    "case": "30-string-build",
+    "arm": "current0ed-base",
+    "mode": "plain",
+    "repeat": 1,
+    "binary_sha256": "f60aafbf67bcb8d80f1eb9623c112deb325a1eb734b3ed7fc6d35ff5b3677844",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-gc-31-json-1",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-31-json"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 161456128,
+    "wall_s": 2.23,
+    "user_s": 1.86,
+    "sys_s": 0.3,
+    "elapsed_s": 2.2769478280097246,
+    "stdout": "RESULT 2204940400\n",
+    "case": "31-json",
+    "arm": "current0ed-gc",
+    "mode": "plain",
+    "repeat": 1,
+    "binary_sha256": "f0307de684fa4b438239c77eb708e87f107bbfc35c592ca85f22f8a63c4f8ffc",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-base-31-json-1",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-31-json"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 167305216,
+    "wall_s": 2.53,
+    "user_s": 2.05,
+    "sys_s": 0.34,
+    "elapsed_s": 2.607936726883054,
+    "stdout": "RESULT 2204940400\n",
+    "case": "31-json",
+    "arm": "current0ed-base",
+    "mode": "plain",
+    "repeat": 1,
+    "binary_sha256": "8fb39433a9487f3f8373a9345b91ac05e2f060ad27b8bcc3592988c343b542c7",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-gc-51-pipeline-1",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-51-pipeline"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 267763712,
+    "wall_s": 1.0,
+    "user_s": 0.82,
+    "sys_s": 0.15,
+    "elapsed_s": 1.0270976242609322,
+    "stdout": "RESULT 99180339350\n",
+    "case": "51-pipeline",
+    "arm": "current0ed-gc",
+    "mode": "plain",
+    "repeat": 1,
+    "binary_sha256": "e5a0b0698bd7683c53c7af162cc03cc43be0bee743c8b09be0fc927a30d5bac1",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-base-51-pipeline-1",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-51-pipeline"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 299077632,
+    "wall_s": 1.13,
+    "user_s": 0.86,
+    "sys_s": 0.16,
+    "elapsed_s": 1.2364272018894553,
+    "stdout": "RESULT 99180339350\n",
+    "case": "51-pipeline",
+    "arm": "current0ed-base",
+    "mode": "plain",
+    "repeat": 1,
+    "binary_sha256": "d924d1844367030e818215b85af3a227e68a3a12ff5c5a2b135d57211eb66c1e",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-gc-60-ring-churn-1",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-60-ring-churn"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 15065088,
+    "wall_s": 0.07,
+    "user_s": 0.04,
+    "sys_s": 0.01,
+    "elapsed_s": 0.18316018860787153,
+    "stdout": "RESULT 178646019\n",
+    "case": "60-ring-churn",
+    "arm": "current0ed-gc",
+    "mode": "plain",
+    "repeat": 1,
+    "binary_sha256": "062f36112298cef8a671e9c0b6fa1a4e5a9136315007b1f3161d965584985436",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-base-60-ring-churn-1",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-60-ring-churn"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 15380480,
+    "wall_s": 0.06,
+    "user_s": 0.04,
+    "sys_s": 0.0,
+    "elapsed_s": 0.17213897500187159,
+    "stdout": "RESULT 178646019\n",
+    "case": "60-ring-churn",
+    "arm": "current0ed-base",
+    "mode": "plain",
+    "repeat": 1,
+    "binary_sha256": "3c7b83e513bb0bdac5a979affdc543f3af3afa3dd3f19a605ed56c59831a2c05",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-gc-71-async-worker-1",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-71-async-worker"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 78966784,
+    "wall_s": 7.56,
+    "user_s": 0.36,
+    "sys_s": 0.05,
+    "elapsed_s": 7.746101775672287,
+    "stdout": "RESULT 3119851056\n",
+    "case": "71-async-worker",
+    "arm": "current0ed-gc",
+    "mode": "plain",
+    "repeat": 1,
+    "binary_sha256": "10180d7a912227430e9d9ea8427964f7cfe88e4198998b8bbdaa3329672bc88a",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-base-71-async-worker-1",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-71-async-worker"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 79650816,
+    "wall_s": 7.54,
+    "user_s": 0.34,
+    "sys_s": 0.04,
+    "elapsed_s": 7.680622321087867,
+    "stdout": "RESULT 3119851056\n",
+    "case": "71-async-worker",
+    "arm": "current0ed-base",
+    "mode": "plain",
+    "repeat": 1,
+    "binary_sha256": "8743c3b534127043a57dc03c348ab87745cee85f6c8b111db53b8633aebee2d8",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-gc-73-retain-then-release-1",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-73-retain-then-release"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 258473984,
+    "wall_s": 1.68,
+    "user_s": 1.41,
+    "sys_s": 0.22,
+    "elapsed_s": 1.7185075269080698,
+    "stdout": "RESULT 719280537\n",
+    "case": "73-retain-then-release",
+    "arm": "current0ed-gc",
+    "mode": "plain",
+    "repeat": 1,
+    "binary_sha256": "b8bdda74343524114b6f97f25ce9b6df83634bb259168d649719107b5757b520",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-base-73-retain-then-release-1",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-73-retain-then-release"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 285941760,
+    "wall_s": 1.74,
+    "user_s": 1.46,
+    "sys_s": 0.25,
+    "elapsed_s": 1.911816731095314,
+    "stdout": "RESULT 719280537\n",
+    "case": "73-retain-then-release",
+    "arm": "current0ed-base",
+    "mode": "plain",
+    "repeat": 1,
+    "binary_sha256": "f891287a2053b9e7c9c4e7f2e29ace867de2c69504065a636027ee00e22e57a6",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-gc-70-documents-replace-1",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-70-documents",
+      "replace"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 137805824,
+    "wall_s": 1.37,
+    "user_s": 1.19,
+    "sys_s": 0.12,
+    "elapsed_s": 1.5410482501611114,
+    "stdout": "RESULT 719280537\n",
+    "case": "70-documents-replace",
+    "arm": "current0ed-gc",
+    "mode": "plain",
+    "repeat": 1,
+    "binary_sha256": "d6fb1588158677a5f35f29f113567ee51a37cbd14fb7c748de244fee0966b878",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-base-70-documents-replace-1",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-70-documents",
+      "replace"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 152080384,
+    "wall_s": 1.41,
+    "user_s": 1.23,
+    "sys_s": 0.17,
+    "elapsed_s": 1.5393565790727735,
+    "stdout": "RESULT 719280537\n",
+    "case": "70-documents-replace",
+    "arm": "current0ed-base",
+    "mode": "plain",
+    "repeat": 1,
+    "binary_sha256": "4a4e5f86a494cd0ab3434498686e58793d9fb75476c71a0601f17d6ae7bb9a09",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-gc-70-documents-retain-1",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-70-documents",
+      "retain"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 330797056,
+    "wall_s": 1.7,
+    "user_s": 1.44,
+    "sys_s": 0.24,
+    "elapsed_s": 1.727641735225916,
+    "stdout": "RESULT 719287512\n",
+    "case": "70-documents-retain",
+    "arm": "current0ed-gc",
+    "mode": "plain",
+    "repeat": 1,
+    "binary_sha256": "d6fb1588158677a5f35f29f113567ee51a37cbd14fb7c748de244fee0966b878",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-base-70-documents-retain-1",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-70-documents",
+      "retain"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 375644160,
+    "wall_s": 1.76,
+    "user_s": 1.5,
+    "sys_s": 0.25,
+    "elapsed_s": 1.905725338961929,
+    "stdout": "RESULT 719287512\n",
+    "case": "70-documents-retain",
+    "arm": "current0ed-base",
+    "mode": "plain",
+    "repeat": 1,
+    "binary_sha256": "4a4e5f86a494cd0ab3434498686e58793d9fb75476c71a0601f17d6ae7bb9a09",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-gc-70-documents-transition-1",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-70-documents",
+      "transition"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 179671040,
+    "wall_s": 1.49,
+    "user_s": 1.29,
+    "sys_s": 0.17,
+    "elapsed_s": 1.5838238899596035,
+    "stdout": "RESULT 719284509\n",
+    "case": "70-documents-transition",
+    "arm": "current0ed-gc",
+    "mode": "plain",
+    "repeat": 1,
+    "binary_sha256": "d6fb1588158677a5f35f29f113567ee51a37cbd14fb7c748de244fee0966b878",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-base-70-documents-transition-1",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-70-documents",
+      "transition"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 198631424,
+    "wall_s": 1.64,
+    "user_s": 1.4,
+    "sys_s": 0.23,
+    "elapsed_s": 1.7038690838962793,
+    "stdout": "RESULT 719284509\n",
+    "case": "70-documents-transition",
+    "arm": "current0ed-base",
+    "mode": "plain",
+    "repeat": 1,
+    "binary_sha256": "4a4e5f86a494cd0ab3434498686e58793d9fb75476c71a0601f17d6ae7bb9a09",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-gc-tscwork-1",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork",
+      "1"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 247541760,
+    "wall_s": 9.36,
+    "user_s": 8.9,
+    "sys_s": 0.33,
+    "elapsed_s": 9.528519871179014,
+    "stdout": "typescript 5.8.2 96760\n",
+    "case": "tscwork",
+    "arm": "current0ed-gc",
+    "mode": "plain",
+    "repeat": 1,
+    "binary_sha256": "7b201d21972f1d846f52c0a0ef00e7b11c06cc2b3a080bbef6627b379c1de521",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-base-tscwork-1",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork",
+      "1"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 248471552,
+    "wall_s": 9.87,
+    "user_s": 9.23,
+    "sys_s": 0.41,
+    "elapsed_s": 9.966512534301728,
+    "stdout": "typescript 5.8.2 96760\n",
+    "case": "tscwork",
+    "arm": "current0ed-base",
+    "mode": "plain",
+    "repeat": 1,
+    "binary_sha256": "d3e6ac7d8c54453d92f1480f49acc34d44a50080ccaef8cf79bbccb00eff79ee",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-gc-zodwork-1",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork",
+      "200"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 25694208,
+    "wall_s": 0.13,
+    "user_s": 0.11,
+    "sys_s": 0.0,
+    "elapsed_s": 0.17722658161073923,
+    "stdout": "200\n",
+    "case": "zodwork",
+    "arm": "current0ed-gc",
+    "mode": "plain",
+    "repeat": 1,
+    "binary_sha256": "ac293400554dbdd36340b831233e398f0d3c57fb3ea438007ae12d01e138288f",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-base-zodwork-1",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork",
+      "200"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 25665536,
+    "wall_s": 0.14,
+    "user_s": 0.13,
+    "sys_s": 0.0,
+    "elapsed_s": 0.16904027527198195,
+    "stdout": "200\n",
+    "case": "zodwork",
+    "arm": "current0ed-base",
+    "mode": "plain",
+    "repeat": 1,
+    "binary_sha256": "0819c427d837eed8fe82810cc5a7455920a33dac2c51520a0d71a6272d8076cd",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-gc-00-noop-1",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-00-noop"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 1351680,
+    "wall_s": 0.0,
+    "user_s": 0.0,
+    "sys_s": 0.0,
+    "elapsed_s": 0.1679947809316218,
+    "stdout": "RESULT 0\n",
+    "case": "00-noop",
+    "arm": "current0ed-gc",
+    "mode": "plain",
+    "repeat": 1,
+    "binary_sha256": "2e3cb5acfa826bf086b94ae788963d773a7ecc3b37e8359a5ff2390f15cc6796",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-base-00-noop-1",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-00-noop"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 1351680,
+    "wall_s": 0.0,
+    "user_s": 0.0,
+    "sys_s": 0.0,
+    "elapsed_s": 0.1708721276372671,
+    "stdout": "RESULT 0\n",
+    "case": "00-noop",
+    "arm": "current0ed-base",
+    "mode": "plain",
+    "repeat": 1,
+    "binary_sha256": "2e3cb5acfa826bf086b94ae788963d773a7ecc3b37e8359a5ff2390f15cc6796",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-gc-15-crc32-1",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-15-crc32"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 17043456,
+    "wall_s": 1.06,
+    "user_s": 1.04,
+    "sys_s": 0.0,
+    "elapsed_s": 1.2199840461835265,
+    "stdout": "RESULT 62051195\n",
+    "case": "15-crc32",
+    "arm": "current0ed-gc",
+    "mode": "plain",
+    "repeat": 1,
+    "binary_sha256": "843c1d8a1d2b2608b2749b9f45fec31f76e6a4db0a2fdc8674edb3010ae33dab",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-base-15-crc32-1",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-15-crc32"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 17907712,
+    "wall_s": 1.23,
+    "user_s": 1.21,
+    "sys_s": 0.0,
+    "elapsed_s": 1.3694839589297771,
+    "stdout": "RESULT 62051195\n",
+    "case": "15-crc32",
+    "arm": "current0ed-base",
+    "mode": "plain",
+    "repeat": 1,
+    "binary_sha256": "35fecea831561415223878a017b28d0b97922c7568a4173c71f955d3f4f3c068",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-base-12_large_live_set-2",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-12_large_live_set"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 107978752,
+    "wall_s": 0.31,
+    "user_s": 0.23,
+    "sys_s": 0.05,
+    "elapsed_s": 0.34513891907408834,
+    "stdout": "probe:12_large_live_set\nchecksum:1678627152\nwalked:700000\nsum:186514128\nkept:10938\nkeptSum:-466842304\n",
+    "case": "12_large_live_set",
+    "arm": "current0ed-base",
+    "mode": "plain",
+    "repeat": 2,
+    "binary_sha256": "81e28405cbeff5e4e37e862c079801566fa478439da731adca88d753067ce04d",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-gc-12_large_live_set-2",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-12_large_live_set"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 101240832,
+    "wall_s": 0.28,
+    "user_s": 0.23,
+    "sys_s": 0.04,
+    "elapsed_s": 0.33801365504041314,
+    "stdout": "probe:12_large_live_set\nchecksum:1678627152\nwalked:700000\nsum:186514128\nkept:10938\nkeptSum:-466842304\n",
+    "case": "12_large_live_set",
+    "arm": "current0ed-gc",
+    "mode": "plain",
+    "repeat": 2,
+    "binary_sha256": "39e3c0adb7e1bc1ed45fb4f09c6e8e7ca39dc9d77f6b470aaee3f88b563be1ec",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-base-14_grow_then_churn-2",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-14_grow_then_churn"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 115851264,
+    "wall_s": 0.35,
+    "user_s": 0.26,
+    "sys_s": 0.07,
+    "elapsed_s": 0.5117688998579979,
+    "stdout": "probe:14_grow_then_churn\ncacheSum:2050177040\nchurnSum:815300000\nliveSum:2008997952\n",
+    "case": "14_grow_then_churn",
+    "arm": "current0ed-base",
+    "mode": "plain",
+    "repeat": 2,
+    "binary_sha256": "b0068d78b8be77d8b2effd0cddc6005072678cddb958be2e79c6302b08c69739",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-gc-14_grow_then_churn-2",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-14_grow_then_churn"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 109596672,
+    "wall_s": 0.3,
+    "user_s": 0.23,
+    "sys_s": 0.05,
+    "elapsed_s": 0.34064380917698145,
+    "stdout": "probe:14_grow_then_churn\ncacheSum:2050177040\nchurnSum:815300000\nliveSum:2008997952\n",
+    "case": "14_grow_then_churn",
+    "arm": "current0ed-gc",
+    "mode": "plain",
+    "repeat": 2,
+    "binary_sha256": "075ebde179f3938416c3dbac40f0fe4e9f045ef75acbe1493b880532353fe0d9",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-base-23-binary-trees-2",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-23-binary-trees"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 187142144,
+    "wall_s": 2.81,
+    "user_s": 2.67,
+    "sys_s": 0.12,
+    "elapsed_s": 2.9311034781858325,
+    "stdout": "RESULT 136664414\n",
+    "case": "23-binary-trees",
+    "arm": "current0ed-base",
+    "mode": "plain",
+    "repeat": 2,
+    "binary_sha256": "db26bdef7668977c539e2dcd405064afe6f7b14411fb3e47fa6e6478cf0254bf",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-gc-23-binary-trees-2",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-23-binary-trees"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 187428864,
+    "wall_s": 2.95,
+    "user_s": 2.69,
+    "sys_s": 0.15,
+    "elapsed_s": 3.086499306373298,
+    "stdout": "RESULT 136664414\n",
+    "case": "23-binary-trees",
+    "arm": "current0ed-gc",
+    "mode": "plain",
+    "repeat": 2,
+    "binary_sha256": "1ccc21b5f601720563f074202149d55ccd102e74e47f9676464770afd52f853f",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-base-30-string-build-2",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 225091584,
+    "wall_s": 1.55,
+    "user_s": 1.32,
+    "sys_s": 0.19,
+    "elapsed_s": 1.5563533487729728,
+    "stdout": "RESULT 60444505\n",
+    "case": "30-string-build",
+    "arm": "current0ed-base",
+    "mode": "plain",
+    "repeat": 2,
+    "binary_sha256": "f60aafbf67bcb8d80f1eb9623c112deb325a1eb734b3ed7fc6d35ff5b3677844",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-gc-30-string-build-2",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 221274112,
+    "wall_s": 1.63,
+    "user_s": 1.28,
+    "sys_s": 0.21,
+    "elapsed_s": 1.697715184185654,
+    "stdout": "RESULT 60444505\n",
+    "case": "30-string-build",
+    "arm": "current0ed-gc",
+    "mode": "plain",
+    "repeat": 2,
+    "binary_sha256": "66ec4fe512620ce8db1637c3603f6e0203acf533444a2748972ac79eb31fbb52",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-base-31-json-2",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-31-json"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 167530496,
+    "wall_s": 2.47,
+    "user_s": 2.18,
+    "sys_s": 0.27,
+    "elapsed_s": 2.55944395205006,
+    "stdout": "RESULT 2204940400\n",
+    "case": "31-json",
+    "arm": "current0ed-base",
+    "mode": "plain",
+    "repeat": 2,
+    "binary_sha256": "8fb39433a9487f3f8373a9345b91ac05e2f060ad27b8bcc3592988c343b542c7",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-gc-31-json-2",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-31-json"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 161652736,
+    "wall_s": 2.12,
+    "user_s": 1.85,
+    "sys_s": 0.24,
+    "elapsed_s": 2.2173595298081636,
+    "stdout": "RESULT 2204940400\n",
+    "case": "31-json",
+    "arm": "current0ed-gc",
+    "mode": "plain",
+    "repeat": 2,
+    "binary_sha256": "f0307de684fa4b438239c77eb708e87f107bbfc35c592ca85f22f8a63c4f8ffc",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-base-51-pipeline-2",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-51-pipeline"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 299294720,
+    "wall_s": 1.07,
+    "user_s": 0.86,
+    "sys_s": 0.15,
+    "elapsed_s": 1.1805719709955156,
+    "stdout": "RESULT 99180339350\n",
+    "case": "51-pipeline",
+    "arm": "current0ed-base",
+    "mode": "plain",
+    "repeat": 2,
+    "binary_sha256": "d924d1844367030e818215b85af3a227e68a3a12ff5c5a2b135d57211eb66c1e",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-gc-51-pipeline-2",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-51-pipeline"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 267886592,
+    "wall_s": 0.93,
+    "user_s": 0.78,
+    "sys_s": 0.13,
+    "elapsed_s": 1.0067334501072764,
+    "stdout": "RESULT 99180339350\n",
+    "case": "51-pipeline",
+    "arm": "current0ed-gc",
+    "mode": "plain",
+    "repeat": 2,
+    "binary_sha256": "e5a0b0698bd7683c53c7af162cc03cc43be0bee743c8b09be0fc927a30d5bac1",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-base-60-ring-churn-2",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-60-ring-churn"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 15556608,
+    "wall_s": 0.06,
+    "user_s": 0.05,
+    "sys_s": 0.0,
+    "elapsed_s": 0.17410010006278753,
+    "stdout": "RESULT 178646019\n",
+    "case": "60-ring-churn",
+    "arm": "current0ed-base",
+    "mode": "plain",
+    "repeat": 2,
+    "binary_sha256": "3c7b83e513bb0bdac5a979affdc543f3af3afa3dd3f19a605ed56c59831a2c05",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-gc-60-ring-churn-2",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-60-ring-churn"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 15302656,
+    "wall_s": 0.06,
+    "user_s": 0.04,
+    "sys_s": 0.0,
+    "elapsed_s": 0.17517496785148978,
+    "stdout": "RESULT 178646019\n",
+    "case": "60-ring-churn",
+    "arm": "current0ed-gc",
+    "mode": "plain",
+    "repeat": 2,
+    "binary_sha256": "062f36112298cef8a671e9c0b6fa1a4e5a9136315007b1f3161d965584985436",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-base-71-async-worker-2",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-71-async-worker"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 80134144,
+    "wall_s": 7.57,
+    "user_s": 0.35,
+    "sys_s": 0.04,
+    "elapsed_s": 7.613999334163964,
+    "stdout": "RESULT 3119851056\n",
+    "case": "71-async-worker",
+    "arm": "current0ed-base",
+    "mode": "plain",
+    "repeat": 2,
+    "binary_sha256": "8743c3b534127043a57dc03c348ab87745cee85f6c8b111db53b8633aebee2d8",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-gc-71-async-worker-2",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-71-async-worker"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 79302656,
+    "wall_s": 7.49,
+    "user_s": 0.34,
+    "sys_s": 0.04,
+    "elapsed_s": 7.646371615119278,
+    "stdout": "RESULT 3119851056\n",
+    "case": "71-async-worker",
+    "arm": "current0ed-gc",
+    "mode": "plain",
+    "repeat": 2,
+    "binary_sha256": "10180d7a912227430e9d9ea8427964f7cfe88e4198998b8bbdaa3329672bc88a",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-base-73-retain-then-release-2",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-73-retain-then-release"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 280346624,
+    "wall_s": 1.7,
+    "user_s": 1.45,
+    "sys_s": 0.24,
+    "elapsed_s": 1.8647607220336795,
+    "stdout": "RESULT 719280537\n",
+    "case": "73-retain-then-release",
+    "arm": "current0ed-base",
+    "mode": "plain",
+    "repeat": 2,
+    "binary_sha256": "f891287a2053b9e7c9c4e7f2e29ace867de2c69504065a636027ee00e22e57a6",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-gc-73-retain-then-release-2",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-73-retain-then-release"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 259600384,
+    "wall_s": 1.57,
+    "user_s": 1.36,
+    "sys_s": 0.2,
+    "elapsed_s": 1.7106659929268062,
+    "stdout": "RESULT 719280537\n",
+    "case": "73-retain-then-release",
+    "arm": "current0ed-gc",
+    "mode": "plain",
+    "repeat": 2,
+    "binary_sha256": "b8bdda74343524114b6f97f25ce9b6df83634bb259168d649719107b5757b520",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-base-70-documents-replace-2",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-70-documents",
+      "replace"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 152690688,
+    "wall_s": 1.43,
+    "user_s": 1.26,
+    "sys_s": 0.16,
+    "elapsed_s": 1.5249119172804058,
+    "stdout": "RESULT 719280537\n",
+    "case": "70-documents-replace",
+    "arm": "current0ed-base",
+    "mode": "plain",
+    "repeat": 2,
+    "binary_sha256": "4a4e5f86a494cd0ab3434498686e58793d9fb75476c71a0601f17d6ae7bb9a09",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-gc-70-documents-replace-2",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-70-documents",
+      "replace"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 137945088,
+    "wall_s": 1.38,
+    "user_s": 1.22,
+    "sys_s": 0.13,
+    "elapsed_s": 1.5613299771212041,
+    "stdout": "RESULT 719280537\n",
+    "case": "70-documents-replace",
+    "arm": "current0ed-gc",
+    "mode": "plain",
+    "repeat": 2,
+    "binary_sha256": "d6fb1588158677a5f35f29f113567ee51a37cbd14fb7c748de244fee0966b878",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-base-70-documents-retain-2",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-70-documents",
+      "retain"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 373510144,
+    "wall_s": 1.69,
+    "user_s": 1.42,
+    "sys_s": 0.25,
+    "elapsed_s": 1.7149937800131738,
+    "stdout": "RESULT 719287512\n",
+    "case": "70-documents-retain",
+    "arm": "current0ed-base",
+    "mode": "plain",
+    "repeat": 2,
+    "binary_sha256": "4a4e5f86a494cd0ab3434498686e58793d9fb75476c71a0601f17d6ae7bb9a09",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-gc-70-documents-retain-2",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-70-documents",
+      "retain"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 324718592,
+    "wall_s": 1.69,
+    "user_s": 1.43,
+    "sys_s": 0.25,
+    "elapsed_s": 1.8637921209447086,
+    "stdout": "RESULT 719287512\n",
+    "case": "70-documents-retain",
+    "arm": "current0ed-gc",
+    "mode": "plain",
+    "repeat": 2,
+    "binary_sha256": "d6fb1588158677a5f35f29f113567ee51a37cbd14fb7c748de244fee0966b878",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-base-70-documents-transition-2",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-70-documents",
+      "transition"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 198758400,
+    "wall_s": 1.54,
+    "user_s": 1.32,
+    "sys_s": 0.21,
+    "elapsed_s": 1.5667093386873603,
+    "stdout": "RESULT 719284509\n",
+    "case": "70-documents-transition",
+    "arm": "current0ed-base",
+    "mode": "plain",
+    "repeat": 2,
+    "binary_sha256": "4a4e5f86a494cd0ab3434498686e58793d9fb75476c71a0601f17d6ae7bb9a09",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-gc-70-documents-transition-2",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-70-documents",
+      "transition"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 178880512,
+    "wall_s": 1.48,
+    "user_s": 1.28,
+    "sys_s": 0.18,
+    "elapsed_s": 1.525413805153221,
+    "stdout": "RESULT 719284509\n",
+    "case": "70-documents-transition",
+    "arm": "current0ed-gc",
+    "mode": "plain",
+    "repeat": 2,
+    "binary_sha256": "d6fb1588158677a5f35f29f113567ee51a37cbd14fb7c748de244fee0966b878",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-base-tscwork-2",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork",
+      "1"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 257810432,
+    "wall_s": 9.7,
+    "user_s": 9.32,
+    "sys_s": 0.35,
+    "elapsed_s": 9.770403982140124,
+    "stdout": "typescript 5.8.2 96760\n",
+    "case": "tscwork",
+    "arm": "current0ed-base",
+    "mode": "plain",
+    "repeat": 2,
+    "binary_sha256": "d3e6ac7d8c54453d92f1480f49acc34d44a50080ccaef8cf79bbccb00eff79ee",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-gc-tscwork-2",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork",
+      "1"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 247967744,
+    "wall_s": 9.31,
+    "user_s": 8.91,
+    "sys_s": 0.35,
+    "elapsed_s": 9.458027752116323,
+    "stdout": "typescript 5.8.2 96760\n",
+    "case": "tscwork",
+    "arm": "current0ed-gc",
+    "mode": "plain",
+    "repeat": 2,
+    "binary_sha256": "7b201d21972f1d846f52c0a0ef00e7b11c06cc2b3a080bbef6627b379c1de521",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-base-zodwork-2",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork",
+      "200"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 25571328,
+    "wall_s": 0.14,
+    "user_s": 0.12,
+    "sys_s": 0.01,
+    "elapsed_s": 0.1693411567248404,
+    "stdout": "200\n",
+    "case": "zodwork",
+    "arm": "current0ed-base",
+    "mode": "plain",
+    "repeat": 2,
+    "binary_sha256": "0819c427d837eed8fe82810cc5a7455920a33dac2c51520a0d71a6272d8076cd",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-gc-zodwork-2",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork",
+      "200"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 25165824,
+    "wall_s": 0.14,
+    "user_s": 0.14,
+    "sys_s": 0.0,
+    "elapsed_s": 0.16932062804698944,
+    "stdout": "200\n",
+    "case": "zodwork",
+    "arm": "current0ed-gc",
+    "mode": "plain",
+    "repeat": 2,
+    "binary_sha256": "ac293400554dbdd36340b831233e398f0d3c57fb3ea438007ae12d01e138288f",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-base-00-noop-2",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-00-noop"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 1351680,
+    "wall_s": 0.0,
+    "user_s": 0.0,
+    "sys_s": 0.0,
+    "elapsed_s": 0.17109743924811482,
+    "stdout": "RESULT 0\n",
+    "case": "00-noop",
+    "arm": "current0ed-base",
+    "mode": "plain",
+    "repeat": 2,
+    "binary_sha256": "2e3cb5acfa826bf086b94ae788963d773a7ecc3b37e8359a5ff2390f15cc6796",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-gc-00-noop-2",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-00-noop"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 1351680,
+    "wall_s": 0.0,
+    "user_s": 0.0,
+    "sys_s": 0.0,
+    "elapsed_s": 0.1689997287467122,
+    "stdout": "RESULT 0\n",
+    "case": "00-noop",
+    "arm": "current0ed-gc",
+    "mode": "plain",
+    "repeat": 2,
+    "binary_sha256": "2e3cb5acfa826bf086b94ae788963d773a7ecc3b37e8359a5ff2390f15cc6796",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-base-15-crc32-2",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-15-crc32"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 17502208,
+    "wall_s": 1.25,
+    "user_s": 1.22,
+    "sys_s": 0.0,
+    "elapsed_s": 1.3635862371884286,
+    "stdout": "RESULT 62051195\n",
+    "case": "15-crc32",
+    "arm": "current0ed-base",
+    "mode": "plain",
+    "repeat": 2,
+    "binary_sha256": "35fecea831561415223878a017b28d0b97922c7568a4173c71f955d3f4f3c068",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-plain-current0ed-gc-15-crc32-2",
+    "cmd": [
+      "/usr/bin/time",
+      "-f",
+      "RSS_KIB=%M WALL=%e USER=%U SYS=%S",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-15-crc32"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": 17227776,
+    "wall_s": 1.03,
+    "user_s": 1.02,
+    "sys_s": 0.0,
+    "elapsed_s": 1.0708700842224061,
+    "stdout": "RESULT 62051195\n",
+    "case": "15-crc32",
+    "arm": "current0ed-gc",
+    "mode": "plain",
+    "repeat": 2,
+    "binary_sha256": "843c1d8a1d2b2608b2749b9f45fec31f76e6a4db0a2fdc8674edb3010ae33dab",
+    "correct": true
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-base-12_large_live_set-0",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-12_large_live_set"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 0.350827107205987,
+    "stdout": "probe:12_large_live_set\nchecksum:1678627152\nwalked:700000\nsum:186514128\nkept:10938\nkeptSum:-466842304\n",
+    "case": "12_large_live_set",
+    "arm": "current0ed-base",
+    "mode": "perf",
+    "repeat": 0,
+    "binary_sha256": "81e28405cbeff5e4e37e862c079801566fa478439da731adca88d753067ce04d",
+    "correct": true,
+    "events": {
+      "instructions": 3092689004,
+      "cycles": 1430344426,
+      "minor-faults": 24821,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-gc-12_large_live_set-0",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-12_large_live_set"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 0.3468140191398561,
+    "stdout": "probe:12_large_live_set\nchecksum:1678627152\nwalked:700000\nsum:186514128\nkept:10938\nkeptSum:-466842304\n",
+    "case": "12_large_live_set",
+    "arm": "current0ed-gc",
+    "mode": "perf",
+    "repeat": 0,
+    "binary_sha256": "39e3c0adb7e1bc1ed45fb4f09c6e8e7ca39dc9d77f6b470aaee3f88b563be1ec",
+    "correct": true,
+    "events": {
+      "instructions": 3050036007,
+      "cycles": 1365397228,
+      "minor-faults": 23086,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-base-14_grow_then_churn-0",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-14_grow_then_churn"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 0.5112773207947612,
+    "stdout": "probe:14_grow_then_churn\ncacheSum:2050177040\nchurnSum:815300000\nliveSum:2008997952\n",
+    "case": "14_grow_then_churn",
+    "arm": "current0ed-base",
+    "mode": "perf",
+    "repeat": 0,
+    "binary_sha256": "b0068d78b8be77d8b2effd0cddc6005072678cddb958be2e79c6302b08c69739",
+    "correct": true,
+    "events": {
+      "instructions": 2654283413,
+      "cycles": 1629650853,
+      "minor-faults": 29804,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-gc-14_grow_then_churn-0",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-14_grow_then_churn"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 0.33811829006299376,
+    "stdout": "probe:14_grow_then_churn\ncacheSum:2050177040\nchurnSum:815300000\nliveSum:2008997952\n",
+    "case": "14_grow_then_churn",
+    "arm": "current0ed-gc",
+    "mode": "perf",
+    "repeat": 0,
+    "binary_sha256": "075ebde179f3938416c3dbac40f0fe4e9f045ef75acbe1493b880532353fe0d9",
+    "correct": true,
+    "events": {
+      "instructions": 2607257979,
+      "cycles": 1499443005,
+      "minor-faults": 27836,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-base-23-binary-trees-0",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-23-binary-trees"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 2.901445285882801,
+    "stdout": "RESULT 136664414\n",
+    "case": "23-binary-trees",
+    "arm": "current0ed-base",
+    "mode": "perf",
+    "repeat": 0,
+    "binary_sha256": "db26bdef7668977c539e2dcd405064afe6f7b14411fb3e47fa6e6478cf0254bf",
+    "correct": true,
+    "events": {
+      "instructions": 26557701071,
+      "cycles": 13883852339,
+      "minor-faults": 59418,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-gc-23-binary-trees-0",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-23-binary-trees"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 3.09058551909402,
+    "stdout": "RESULT 136664414\n",
+    "case": "23-binary-trees",
+    "arm": "current0ed-gc",
+    "mode": "perf",
+    "repeat": 0,
+    "binary_sha256": "1ccc21b5f601720563f074202149d55ccd102e74e47f9676464770afd52f853f",
+    "correct": true,
+    "events": {
+      "instructions": 26448839296,
+      "cycles": 14359920514,
+      "minor-faults": 74557,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-base-30-string-build-0",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 1.6907313531264663,
+    "stdout": "RESULT 60444505\n",
+    "case": "30-string-build",
+    "arm": "current0ed-base",
+    "mode": "perf",
+    "repeat": 0,
+    "binary_sha256": "f60aafbf67bcb8d80f1eb9623c112deb325a1eb734b3ed7fc6d35ff5b3677844",
+    "correct": true,
+    "events": {
+      "instructions": 16953381351,
+      "cycles": 7741352845,
+      "minor-faults": 100074,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-gc-30-string-build-0",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 1.6887619933113456,
+    "stdout": "RESULT 60444505\n",
+    "case": "30-string-build",
+    "arm": "current0ed-gc",
+    "mode": "perf",
+    "repeat": 0,
+    "binary_sha256": "66ec4fe512620ce8db1637c3603f6e0203acf533444a2748972ac79eb31fbb52",
+    "correct": true,
+    "events": {
+      "instructions": 17003744121,
+      "cycles": 7413476022,
+      "minor-faults": 110850,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-base-31-json-0",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-31-json"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 2.539591153152287,
+    "stdout": "RESULT 2204940400\n",
+    "case": "31-json",
+    "arm": "current0ed-base",
+    "mode": "perf",
+    "repeat": 0,
+    "binary_sha256": "8fb39433a9487f3f8373a9345b91ac05e2f060ad27b8bcc3592988c343b542c7",
+    "correct": true,
+    "events": {
+      "instructions": 25268609285,
+      "cycles": 11626403761,
+      "minor-faults": 119783,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-gc-31-json-0",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-31-json"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 2.3840042371302843,
+    "stdout": "RESULT 2204940400\n",
+    "case": "31-json",
+    "arm": "current0ed-gc",
+    "mode": "perf",
+    "repeat": 0,
+    "binary_sha256": "f0307de684fa4b438239c77eb708e87f107bbfc35c592ca85f22f8a63c4f8ffc",
+    "correct": true,
+    "events": {
+      "instructions": 25144233851,
+      "cycles": 10923815728,
+      "minor-faults": 122821,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-base-51-pipeline-0",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-51-pipeline"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 1.1795317069627345,
+    "stdout": "RESULT 99180339350\n",
+    "case": "51-pipeline",
+    "arm": "current0ed-base",
+    "mode": "perf",
+    "repeat": 0,
+    "binary_sha256": "d924d1844367030e818215b85af3a227e68a3a12ff5c5a2b135d57211eb66c1e",
+    "correct": true,
+    "events": {
+      "instructions": 11014466873,
+      "cycles": 5135273324,
+      "minor-faults": 79118,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-gc-51-pipeline-0",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-51-pipeline"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 1.0434559886343777,
+    "stdout": "RESULT 99180339350\n",
+    "case": "51-pipeline",
+    "arm": "current0ed-gc",
+    "mode": "perf",
+    "repeat": 0,
+    "binary_sha256": "e5a0b0698bd7683c53c7af162cc03cc43be0bee743c8b09be0fc927a30d5bac1",
+    "correct": true,
+    "events": {
+      "instructions": 10923123394,
+      "cycles": 4847330992,
+      "minor-faults": 74934,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-base-60-ring-churn-0",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-60-ring-churn"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 0.1687743184156716,
+    "stdout": "RESULT 178646019\n",
+    "case": "60-ring-churn",
+    "arm": "current0ed-base",
+    "mode": "perf",
+    "repeat": 0,
+    "binary_sha256": "3c7b83e513bb0bdac5a979affdc543f3af3afa3dd3f19a605ed56c59831a2c05",
+    "correct": true,
+    "events": {
+      "instructions": 667885241,
+      "cycles": 249424267,
+      "minor-faults": 1841,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-gc-60-ring-churn-0",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-60-ring-churn"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 0.16716512106359005,
+    "stdout": "RESULT 178646019\n",
+    "case": "60-ring-churn",
+    "arm": "current0ed-gc",
+    "mode": "perf",
+    "repeat": 0,
+    "binary_sha256": "062f36112298cef8a671e9c0b6fa1a4e5a9136315007b1f3161d965584985436",
+    "correct": true,
+    "events": {
+      "instructions": 667402063,
+      "cycles": 244819246,
+      "minor-faults": 1811,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-base-71-async-worker-0",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-71-async-worker"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 7.541408947203308,
+    "stdout": "RESULT 3119851056\n",
+    "case": "71-async-worker",
+    "arm": "current0ed-base",
+    "mode": "perf",
+    "repeat": 0,
+    "binary_sha256": "8743c3b534127043a57dc03c348ab87745cee85f6c8b111db53b8633aebee2d8",
+    "correct": true,
+    "events": {
+      "instructions": 4356445314,
+      "cycles": 1955896234,
+      "minor-faults": 20021,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-gc-71-async-worker-0",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-71-async-worker"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 7.509223006200045,
+    "stdout": "RESULT 3119851056\n",
+    "case": "71-async-worker",
+    "arm": "current0ed-gc",
+    "mode": "perf",
+    "repeat": 0,
+    "binary_sha256": "10180d7a912227430e9d9ea8427964f7cfe88e4198998b8bbdaa3329672bc88a",
+    "correct": true,
+    "events": {
+      "instructions": 4332600264,
+      "cycles": 1556502446,
+      "minor-faults": 19730,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-base-73-retain-then-release-0",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-73-retain-then-release"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 1.1400670828297734,
+    "stdout": "RESULT 719280537\n",
+    "case": "73-retain-then-release",
+    "arm": "current0ed-base",
+    "mode": "perf",
+    "repeat": 0,
+    "binary_sha256": "f891287a2053b9e7c9c4e7f2e29ace867de2c69504065a636027ee00e22e57a6",
+    "correct": true,
+    "events": {
+      "instructions": 18613124292,
+      "cycles": 5106620290,
+      "minor-faults": 112084,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-gc-73-retain-then-release-0",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-73-retain-then-release"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 1.1396762528456748,
+    "stdout": "RESULT 719280537\n",
+    "case": "73-retain-then-release",
+    "arm": "current0ed-gc",
+    "mode": "perf",
+    "repeat": 0,
+    "binary_sha256": "b8bdda74343524114b6f97f25ce9b6df83634bb259168d649719107b5757b520",
+    "correct": true,
+    "events": {
+      "instructions": 18379862019,
+      "cycles": 4899136288,
+      "minor-faults": 103654,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-base-70-documents-replace-0",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-70-documents",
+      "replace"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 0.9744033478200436,
+    "stdout": "RESULT 719280537\n",
+    "case": "70-documents-replace",
+    "arm": "current0ed-base",
+    "mode": "perf",
+    "repeat": 0,
+    "binary_sha256": "4a4e5f86a494cd0ab3434498686e58793d9fb75476c71a0601f17d6ae7bb9a09",
+    "correct": true,
+    "events": {
+      "instructions": 15382256478,
+      "cycles": 4125008298,
+      "minor-faults": 70670,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-gc-70-documents-replace-0",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-70-documents",
+      "replace"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 0.815635328181088,
+    "stdout": "RESULT 719280537\n",
+    "case": "70-documents-replace",
+    "arm": "current0ed-gc",
+    "mode": "perf",
+    "repeat": 0,
+    "binary_sha256": "d6fb1588158677a5f35f29f113567ee51a37cbd14fb7c748de244fee0966b878",
+    "correct": true,
+    "events": {
+      "instructions": 15225423296,
+      "cycles": 3762758596,
+      "minor-faults": 61902,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-base-70-documents-retain-0",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-70-documents",
+      "retain"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 1.1384665928781033,
+    "stdout": "RESULT 719287512\n",
+    "case": "70-documents-retain",
+    "arm": "current0ed-base",
+    "mode": "perf",
+    "repeat": 0,
+    "binary_sha256": "4a4e5f86a494cd0ab3434498686e58793d9fb75476c71a0601f17d6ae7bb9a09",
+    "correct": true,
+    "events": {
+      "instructions": 19555332448,
+      "cycles": 5254560052,
+      "minor-faults": 124975,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-gc-70-documents-retain-0",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-70-documents",
+      "retain"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 1.1376522709615529,
+    "stdout": "RESULT 719287512\n",
+    "case": "70-documents-retain",
+    "arm": "current0ed-gc",
+    "mode": "perf",
+    "repeat": 0,
+    "binary_sha256": "d6fb1588158677a5f35f29f113567ee51a37cbd14fb7c748de244fee0966b878",
+    "correct": true,
+    "events": {
+      "instructions": 19250042973,
+      "cycles": 5056141538,
+      "minor-faults": 115658,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-base-70-documents-transition-0",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-70-documents",
+      "transition"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 0.9725170438177884,
+    "stdout": "RESULT 719284509\n",
+    "case": "70-documents-transition",
+    "arm": "current0ed-base",
+    "mode": "perf",
+    "repeat": 0,
+    "binary_sha256": "4a4e5f86a494cd0ab3434498686e58793d9fb75476c71a0601f17d6ae7bb9a09",
+    "correct": true,
+    "events": {
+      "instructions": 17494176062,
+      "cycles": 4607534889,
+      "minor-faults": 91334,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-gc-70-documents-transition-0",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-70-documents",
+      "transition"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 0.9750771070830524,
+    "stdout": "RESULT 719284509\n",
+    "case": "70-documents-transition",
+    "arm": "current0ed-gc",
+    "mode": "perf",
+    "repeat": 0,
+    "binary_sha256": "d6fb1588158677a5f35f29f113567ee51a37cbd14fb7c748de244fee0966b878",
+    "correct": true,
+    "events": {
+      "instructions": 17256725483,
+      "cycles": 4347331364,
+      "minor-faults": 81708,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-base-tscwork-0",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork",
+      "1"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 5.523328626994044,
+    "stdout": "typescript 5.8.2 96760\n",
+    "case": "tscwork",
+    "arm": "current0ed-base",
+    "mode": "perf",
+    "repeat": 0,
+    "binary_sha256": "d3e6ac7d8c54453d92f1480f49acc34d44a50080ccaef8cf79bbccb00eff79ee",
+    "correct": true,
+    "events": {
+      "instructions": 62287146595,
+      "cycles": 27311148595,
+      "minor-faults": 102488,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-gc-tscwork-0",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork",
+      "1"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 5.36034984793514,
+    "stdout": "typescript 5.8.2 96760\n",
+    "case": "tscwork",
+    "arm": "current0ed-gc",
+    "mode": "perf",
+    "repeat": 0,
+    "binary_sha256": "7b201d21972f1d846f52c0a0ef00e7b11c06cc2b3a080bbef6627b379c1de521",
+    "correct": true,
+    "events": {
+      "instructions": 60662925846,
+      "cycles": 27064175554,
+      "minor-faults": 145919,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-base-zodwork-0",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork",
+      "200"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 0.1624998338520527,
+    "stdout": "200\n",
+    "case": "zodwork",
+    "arm": "current0ed-base",
+    "mode": "perf",
+    "repeat": 0,
+    "binary_sha256": "0819c427d837eed8fe82810cc5a7455920a33dac2c51520a0d71a6272d8076cd",
+    "correct": true,
+    "events": {
+      "instructions": 938682399,
+      "cycles": 352260600,
+      "minor-faults": 3530,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-gc-zodwork-0",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork",
+      "200"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 0.1671769730746746,
+    "stdout": "200\n",
+    "case": "zodwork",
+    "arm": "current0ed-gc",
+    "mode": "perf",
+    "repeat": 0,
+    "binary_sha256": "ac293400554dbdd36340b831233e398f0d3c57fb3ea438007ae12d01e138288f",
+    "correct": true,
+    "events": {
+      "instructions": 945009564,
+      "cycles": 592364256,
+      "minor-faults": 3475,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-base-00-noop-0",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-00-noop"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 0.1672217370942235,
+    "stdout": "RESULT 0\n",
+    "case": "00-noop",
+    "arm": "current0ed-base",
+    "mode": "perf",
+    "repeat": 0,
+    "binary_sha256": "2e3cb5acfa826bf086b94ae788963d773a7ecc3b37e8359a5ff2390f15cc6796",
+    "correct": true,
+    "events": {
+      "instructions": 756597,
+      "cycles": 1756831,
+      "minor-faults": 54,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-gc-00-noop-0",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-00-noop"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 0.16998995002359152,
+    "stdout": "RESULT 0\n",
+    "case": "00-noop",
+    "arm": "current0ed-gc",
+    "mode": "perf",
+    "repeat": 0,
+    "binary_sha256": "2e3cb5acfa826bf086b94ae788963d773a7ecc3b37e8359a5ff2390f15cc6796",
+    "correct": true,
+    "events": {
+      "instructions": 753964,
+      "cycles": 1843855,
+      "minor-faults": 54,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-base-15-crc32-0",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-15-crc32"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 1.2096134671010077,
+    "stdout": "RESULT 62051195\n",
+    "case": "15-crc32",
+    "arm": "current0ed-base",
+    "mode": "perf",
+    "repeat": 0,
+    "binary_sha256": "35fecea831561415223878a017b28d0b97922c7568a4173c71f955d3f4f3c068",
+    "correct": true,
+    "events": {
+      "instructions": 18257447378,
+      "cycles": 5771485058,
+      "minor-faults": 2732,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-gc-15-crc32-0",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-15-crc32"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 1.1809714259579778,
+    "stdout": "RESULT 62051195\n",
+    "case": "15-crc32",
+    "arm": "current0ed-gc",
+    "mode": "perf",
+    "repeat": 0,
+    "binary_sha256": "843c1d8a1d2b2608b2749b9f45fec31f76e6a4db0a2fdc8674edb3010ae33dab",
+    "correct": true,
+    "events": {
+      "instructions": 18254750014,
+      "cycles": 5103248557,
+      "minor-faults": 2541,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-gc-12_large_live_set-1",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-12_large_live_set"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 0.3434864110313356,
+    "stdout": "probe:12_large_live_set\nchecksum:1678627152\nwalked:700000\nsum:186514128\nkept:10938\nkeptSum:-466842304\n",
+    "case": "12_large_live_set",
+    "arm": "current0ed-gc",
+    "mode": "perf",
+    "repeat": 1,
+    "binary_sha256": "39e3c0adb7e1bc1ed45fb4f09c6e8e7ca39dc9d77f6b470aaee3f88b563be1ec",
+    "correct": true,
+    "events": {
+      "instructions": 3052392000,
+      "cycles": 1420954438,
+      "minor-faults": 23083,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-base-12_large_live_set-1",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-12_large_live_set"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 0.3390507218427956,
+    "stdout": "probe:12_large_live_set\nchecksum:1678627152\nwalked:700000\nsum:186514128\nkept:10938\nkeptSum:-466842304\n",
+    "case": "12_large_live_set",
+    "arm": "current0ed-base",
+    "mode": "perf",
+    "repeat": 1,
+    "binary_sha256": "81e28405cbeff5e4e37e862c079801566fa478439da731adca88d753067ce04d",
+    "correct": true,
+    "events": {
+      "instructions": 3089769218,
+      "cycles": 1479065898,
+      "minor-faults": 24818,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-gc-14_grow_then_churn-1",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-14_grow_then_churn"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 0.33567945286631584,
+    "stdout": "probe:14_grow_then_churn\ncacheSum:2050177040\nchurnSum:815300000\nliveSum:2008997952\n",
+    "case": "14_grow_then_churn",
+    "arm": "current0ed-gc",
+    "mode": "perf",
+    "repeat": 1,
+    "binary_sha256": "075ebde179f3938416c3dbac40f0fe4e9f045ef75acbe1493b880532353fe0d9",
+    "correct": true,
+    "events": {
+      "instructions": 2605694877,
+      "cycles": 1521718344,
+      "minor-faults": 27836,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-base-14_grow_then_churn-1",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-14_grow_then_churn"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 0.5201296620070934,
+    "stdout": "probe:14_grow_then_churn\ncacheSum:2050177040\nchurnSum:815300000\nliveSum:2008997952\n",
+    "case": "14_grow_then_churn",
+    "arm": "current0ed-base",
+    "mode": "perf",
+    "repeat": 1,
+    "binary_sha256": "b0068d78b8be77d8b2effd0cddc6005072678cddb958be2e79c6302b08c69739",
+    "correct": true,
+    "events": {
+      "instructions": 2652316509,
+      "cycles": 1671425444,
+      "minor-faults": 29801,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-gc-23-binary-trees-1",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-23-binary-trees"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 2.904938641935587,
+    "stdout": "RESULT 136664414\n",
+    "case": "23-binary-trees",
+    "arm": "current0ed-gc",
+    "mode": "perf",
+    "repeat": 1,
+    "binary_sha256": "1ccc21b5f601720563f074202149d55ccd102e74e47f9676464770afd52f853f",
+    "correct": true,
+    "events": {
+      "instructions": 26445906030,
+      "cycles": 14142497589,
+      "minor-faults": 74560,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-base-23-binary-trees-1",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-23-binary-trees"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 2.009794886223972,
+    "stdout": "RESULT 136664414\n",
+    "case": "23-binary-trees",
+    "arm": "current0ed-base",
+    "mode": "perf",
+    "repeat": 1,
+    "binary_sha256": "db26bdef7668977c539e2dcd405064afe6f7b14411fb3e47fa6e6478cf0254bf",
+    "correct": true,
+    "events": {
+      "instructions": 26545955546,
+      "cycles": 9662148342,
+      "minor-faults": 59419,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-gc-30-string-build-1",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 1.6718287309631705,
+    "stdout": "RESULT 60444505\n",
+    "case": "30-string-build",
+    "arm": "current0ed-gc",
+    "mode": "perf",
+    "repeat": 1,
+    "binary_sha256": "66ec4fe512620ce8db1637c3603f6e0203acf533444a2748972ac79eb31fbb52",
+    "correct": true,
+    "events": {
+      "instructions": 17001435612,
+      "cycles": 7526623614,
+      "minor-faults": 110848,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-base-30-string-build-1",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 1.6687662587501109,
+    "stdout": "RESULT 60444505\n",
+    "case": "30-string-build",
+    "arm": "current0ed-base",
+    "mode": "perf",
+    "repeat": 1,
+    "binary_sha256": "f60aafbf67bcb8d80f1eb9623c112deb325a1eb734b3ed7fc6d35ff5b3677844",
+    "correct": true,
+    "events": {
+      "instructions": 16944694484,
+      "cycles": 7682687486,
+      "minor-faults": 100074,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-gc-31-json-1",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-31-json"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 2.336746370885521,
+    "stdout": "RESULT 2204940400\n",
+    "case": "31-json",
+    "arm": "current0ed-gc",
+    "mode": "perf",
+    "repeat": 1,
+    "binary_sha256": "f0307de684fa4b438239c77eb708e87f107bbfc35c592ca85f22f8a63c4f8ffc",
+    "correct": true,
+    "events": {
+      "instructions": 25151091482,
+      "cycles": 10790638022,
+      "minor-faults": 124992,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-base-31-json-1",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-31-json"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 2.502843455877155,
+    "stdout": "RESULT 2204940400\n",
+    "case": "31-json",
+    "arm": "current0ed-base",
+    "mode": "perf",
+    "repeat": 1,
+    "binary_sha256": "8fb39433a9487f3f8373a9345b91ac05e2f060ad27b8bcc3592988c343b542c7",
+    "correct": true,
+    "events": {
+      "instructions": 25261645681,
+      "cycles": 11496686279,
+      "minor-faults": 119677,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-gc-51-pipeline-1",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-51-pipeline"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 1.0014938679523766,
+    "stdout": "RESULT 99180339350\n",
+    "case": "51-pipeline",
+    "arm": "current0ed-gc",
+    "mode": "perf",
+    "repeat": 1,
+    "binary_sha256": "e5a0b0698bd7683c53c7af162cc03cc43be0bee743c8b09be0fc927a30d5bac1",
+    "correct": true,
+    "events": {
+      "instructions": 10922092696,
+      "cycles": 4872955643,
+      "minor-faults": 74932,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-base-51-pipeline-1",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-51-pipeline"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 1.166587739251554,
+    "stdout": "RESULT 99180339350\n",
+    "case": "51-pipeline",
+    "arm": "current0ed-base",
+    "mode": "perf",
+    "repeat": 1,
+    "binary_sha256": "d924d1844367030e818215b85af3a227e68a3a12ff5c5a2b135d57211eb66c1e",
+    "correct": true,
+    "events": {
+      "instructions": 11005827057,
+      "cycles": 5095081499,
+      "minor-faults": 79118,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-gc-60-ring-churn-1",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-60-ring-churn"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 0.16662167524918914,
+    "stdout": "RESULT 178646019\n",
+    "case": "60-ring-churn",
+    "arm": "current0ed-gc",
+    "mode": "perf",
+    "repeat": 1,
+    "binary_sha256": "062f36112298cef8a671e9c0b6fa1a4e5a9136315007b1f3161d965584985436",
+    "correct": true,
+    "events": {
+      "instructions": 667269951,
+      "cycles": 250527264,
+      "minor-faults": 1809,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-base-60-ring-churn-1",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-60-ring-churn"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 0.16732302587479353,
+    "stdout": "RESULT 178646019\n",
+    "case": "60-ring-churn",
+    "arm": "current0ed-base",
+    "mode": "perf",
+    "repeat": 1,
+    "binary_sha256": "3c7b83e513bb0bdac5a979affdc543f3af3afa3dd3f19a605ed56c59831a2c05",
+    "correct": true,
+    "events": {
+      "instructions": 667848185,
+      "cycles": 248035985,
+      "minor-faults": 1846,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-gc-71-async-worker-1",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-71-async-worker"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 7.492250666953623,
+    "stdout": "RESULT 3119851056\n",
+    "case": "71-async-worker",
+    "arm": "current0ed-gc",
+    "mode": "perf",
+    "repeat": 1,
+    "binary_sha256": "10180d7a912227430e9d9ea8427964f7cfe88e4198998b8bbdaa3329672bc88a",
+    "correct": true,
+    "events": {
+      "instructions": 4328124566,
+      "cycles": 1936075254,
+      "minor-faults": 19729,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-base-71-async-worker-1",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-71-async-worker"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 7.565977001097053,
+    "stdout": "RESULT 3119851056\n",
+    "case": "71-async-worker",
+    "arm": "current0ed-base",
+    "mode": "perf",
+    "repeat": 1,
+    "binary_sha256": "8743c3b534127043a57dc03c348ab87745cee85f6c8b111db53b8633aebee2d8",
+    "correct": true,
+    "events": {
+      "instructions": 4354724083,
+      "cycles": 1845178511,
+      "minor-faults": 20017,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-gc-73-retain-then-release-1",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-73-retain-then-release"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 1.3216886166483164,
+    "stdout": "RESULT 719280537\n",
+    "case": "73-retain-then-release",
+    "arm": "current0ed-gc",
+    "mode": "perf",
+    "repeat": 1,
+    "binary_sha256": "b8bdda74343524114b6f97f25ce9b6df83634bb259168d649719107b5757b520",
+    "correct": true,
+    "events": {
+      "instructions": 18373535734,
+      "cycles": 6040803842,
+      "minor-faults": 102254,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-base-73-retain-then-release-1",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-73-retain-then-release"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 1.7910363785922527,
+    "stdout": "RESULT 719280537\n",
+    "case": "73-retain-then-release",
+    "arm": "current0ed-base",
+    "mode": "perf",
+    "repeat": 1,
+    "binary_sha256": "f891287a2053b9e7c9c4e7f2e29ace867de2c69504065a636027ee00e22e57a6",
+    "correct": true,
+    "events": {
+      "instructions": 18615400477,
+      "cycles": 8638325068,
+      "minor-faults": 112084,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-gc-70-documents-replace-1",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-70-documents",
+      "replace"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 1.4634962351992726,
+    "stdout": "RESULT 719280537\n",
+    "case": "70-documents-replace",
+    "arm": "current0ed-gc",
+    "mode": "perf",
+    "repeat": 1,
+    "binary_sha256": "d6fb1588158677a5f35f29f113567ee51a37cbd14fb7c748de244fee0966b878",
+    "correct": true,
+    "events": {
+      "instructions": 15240287763,
+      "cycles": 6674699157,
+      "minor-faults": 63208,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-base-70-documents-replace-1",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-70-documents",
+      "replace"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 1.4676600452512503,
+    "stdout": "RESULT 719280537\n",
+    "case": "70-documents-replace",
+    "arm": "current0ed-base",
+    "mode": "perf",
+    "repeat": 1,
+    "binary_sha256": "4a4e5f86a494cd0ab3434498686e58793d9fb75476c71a0601f17d6ae7bb9a09",
+    "correct": true,
+    "events": {
+      "instructions": 15382312769,
+      "cycles": 7018741895,
+      "minor-faults": 70365,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-gc-70-documents-retain-1",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-70-documents",
+      "retain"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 1.6298338901251554,
+    "stdout": "RESULT 719287512\n",
+    "case": "70-documents-retain",
+    "arm": "current0ed-gc",
+    "mode": "perf",
+    "repeat": 1,
+    "binary_sha256": "d6fb1588158677a5f35f29f113567ee51a37cbd14fb7c748de244fee0966b878",
+    "correct": true,
+    "events": {
+      "instructions": 19245833175,
+      "cycles": 7929485159,
+      "minor-faults": 112569,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-base-70-documents-retain-1",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-70-documents",
+      "retain"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 1.7918668114580214,
+    "stdout": "RESULT 719287512\n",
+    "case": "70-documents-retain",
+    "arm": "current0ed-base",
+    "mode": "perf",
+    "repeat": 1,
+    "binary_sha256": "4a4e5f86a494cd0ab3434498686e58793d9fb75476c71a0601f17d6ae7bb9a09",
+    "correct": true,
+    "events": {
+      "instructions": 19559025514,
+      "cycles": 8462644290,
+      "minor-faults": 124997,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-gc-70-documents-transition-1",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-70-documents",
+      "transition"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 1.3002275750041008,
+    "stdout": "RESULT 719284509\n",
+    "case": "70-documents-transition",
+    "arm": "current0ed-gc",
+    "mode": "perf",
+    "repeat": 1,
+    "binary_sha256": "d6fb1588158677a5f35f29f113567ee51a37cbd14fb7c748de244fee0966b878",
+    "correct": true,
+    "events": {
+      "instructions": 17261296590,
+      "cycles": 5643813268,
+      "minor-faults": 81563,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-base-70-documents-transition-1",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-70-documents",
+      "transition"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 0.9771149749867618,
+    "stdout": "RESULT 719284509\n",
+    "case": "70-documents-transition",
+    "arm": "current0ed-base",
+    "mode": "perf",
+    "repeat": 1,
+    "binary_sha256": "4a4e5f86a494cd0ab3434498686e58793d9fb75476c71a0601f17d6ae7bb9a09",
+    "correct": true,
+    "events": {
+      "instructions": 17494920412,
+      "cycles": 4610980184,
+      "minor-faults": 91336,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-gc-tscwork-1",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork",
+      "1"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 5.205521686933935,
+    "stdout": "typescript 5.8.2 96760\n",
+    "case": "tscwork",
+    "arm": "current0ed-gc",
+    "mode": "perf",
+    "repeat": 1,
+    "binary_sha256": "7b201d21972f1d846f52c0a0ef00e7b11c06cc2b3a080bbef6627b379c1de521",
+    "correct": true,
+    "events": {
+      "instructions": 60695028286,
+      "cycles": 26120991543,
+      "minor-faults": 145823,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-base-tscwork-1",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork",
+      "1"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 5.1930972607806325,
+    "stdout": "typescript 5.8.2 96760\n",
+    "case": "tscwork",
+    "arm": "current0ed-base",
+    "mode": "perf",
+    "repeat": 1,
+    "binary_sha256": "d3e6ac7d8c54453d92f1480f49acc34d44a50080ccaef8cf79bbccb00eff79ee",
+    "correct": true,
+    "events": {
+      "instructions": 62295719189,
+      "cycles": 26197231747,
+      "minor-faults": 102443,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-gc-zodwork-1",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork",
+      "200"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 0.1628623311407864,
+    "stdout": "200\n",
+    "case": "zodwork",
+    "arm": "current0ed-gc",
+    "mode": "perf",
+    "repeat": 1,
+    "binary_sha256": "ac293400554dbdd36340b831233e398f0d3c57fb3ea438007ae12d01e138288f",
+    "correct": true,
+    "events": {
+      "instructions": 944888454,
+      "cycles": 360804326,
+      "minor-faults": 3486,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-base-zodwork-1",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork",
+      "200"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 0.16223566001281142,
+    "stdout": "200\n",
+    "case": "zodwork",
+    "arm": "current0ed-base",
+    "mode": "perf",
+    "repeat": 1,
+    "binary_sha256": "0819c427d837eed8fe82810cc5a7455920a33dac2c51520a0d71a6272d8076cd",
+    "correct": true,
+    "events": {
+      "instructions": 938843528,
+      "cycles": 345901595,
+      "minor-faults": 3525,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-gc-00-noop-1",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-00-noop"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 0.16275559226050973,
+    "stdout": "RESULT 0\n",
+    "case": "00-noop",
+    "arm": "current0ed-gc",
+    "mode": "perf",
+    "repeat": 1,
+    "binary_sha256": "2e3cb5acfa826bf086b94ae788963d773a7ecc3b37e8359a5ff2390f15cc6796",
+    "correct": true,
+    "events": {
+      "instructions": 748189,
+      "cycles": 1126427,
+      "minor-faults": 54,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-base-00-noop-1",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-00-noop"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 0.16219045501202345,
+    "stdout": "RESULT 0\n",
+    "case": "00-noop",
+    "arm": "current0ed-base",
+    "mode": "perf",
+    "repeat": 1,
+    "binary_sha256": "2e3cb5acfa826bf086b94ae788963d773a7ecc3b37e8359a5ff2390f15cc6796",
+    "correct": true,
+    "events": {
+      "instructions": 743308,
+      "cycles": 1085123,
+      "minor-faults": 53,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-gc-15-crc32-1",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-15-crc32"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 0.811208114027977,
+    "stdout": "RESULT 62051195\n",
+    "case": "15-crc32",
+    "arm": "current0ed-gc",
+    "mode": "perf",
+    "repeat": 1,
+    "binary_sha256": "843c1d8a1d2b2608b2749b9f45fec31f76e6a4db0a2fdc8674edb3010ae33dab",
+    "correct": true,
+    "events": {
+      "instructions": 18252590399,
+      "cycles": 3218028997,
+      "minor-faults": 2546,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-base-15-crc32-1",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-15-crc32"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 0.8088646759279072,
+    "stdout": "RESULT 62051195\n",
+    "case": "15-crc32",
+    "arm": "current0ed-base",
+    "mode": "perf",
+    "repeat": 1,
+    "binary_sha256": "35fecea831561415223878a017b28d0b97922c7568a4173c71f955d3f4f3c068",
+    "correct": true,
+    "events": {
+      "instructions": 18253498675,
+      "cycles": 3224501904,
+      "minor-faults": 2732,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-base-12_large_live_set-2",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-12_large_live_set"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 0.3239309201017022,
+    "stdout": "probe:12_large_live_set\nchecksum:1678627152\nwalked:700000\nsum:186514128\nkept:10938\nkeptSum:-466842304\n",
+    "case": "12_large_live_set",
+    "arm": "current0ed-base",
+    "mode": "perf",
+    "repeat": 2,
+    "binary_sha256": "81e28405cbeff5e4e37e862c079801566fa478439da731adca88d753067ce04d",
+    "correct": true,
+    "events": {
+      "instructions": 3090252056,
+      "cycles": 848759794,
+      "minor-faults": 24819,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-gc-12_large_live_set-2",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-12_large_live_set"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 0.3240275797434151,
+    "stdout": "probe:12_large_live_set\nchecksum:1678627152\nwalked:700000\nsum:186514128\nkept:10938\nkeptSum:-466842304\n",
+    "case": "12_large_live_set",
+    "arm": "current0ed-gc",
+    "mode": "perf",
+    "repeat": 2,
+    "binary_sha256": "39e3c0adb7e1bc1ed45fb4f09c6e8e7ca39dc9d77f6b470aaee3f88b563be1ec",
+    "correct": true,
+    "events": {
+      "instructions": 3047854332,
+      "cycles": 833377470,
+      "minor-faults": 23084,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-base-14_grow_then_churn-2",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-14_grow_then_churn"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 0.32435437105596066,
+    "stdout": "probe:14_grow_then_churn\ncacheSum:2050177040\nchurnSum:815300000\nliveSum:2008997952\n",
+    "case": "14_grow_then_churn",
+    "arm": "current0ed-base",
+    "mode": "perf",
+    "repeat": 2,
+    "binary_sha256": "b0068d78b8be77d8b2effd0cddc6005072678cddb958be2e79c6302b08c69739",
+    "correct": true,
+    "events": {
+      "instructions": 2650700647,
+      "cycles": 889634624,
+      "minor-faults": 29800,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-gc-14_grow_then_churn-2",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-14_grow_then_churn"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 0.3239965233951807,
+    "stdout": "probe:14_grow_then_churn\ncacheSum:2050177040\nchurnSum:815300000\nliveSum:2008997952\n",
+    "case": "14_grow_then_churn",
+    "arm": "current0ed-gc",
+    "mode": "perf",
+    "repeat": 2,
+    "binary_sha256": "075ebde179f3938416c3dbac40f0fe4e9f045ef75acbe1493b880532353fe0d9",
+    "correct": true,
+    "events": {
+      "instructions": 2606054825,
+      "cycles": 843838998,
+      "minor-faults": 27836,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-base-23-binary-trees-2",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-23-binary-trees"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 1.6198463779874146,
+    "stdout": "RESULT 136664414\n",
+    "case": "23-binary-trees",
+    "arm": "current0ed-base",
+    "mode": "perf",
+    "repeat": 2,
+    "binary_sha256": "db26bdef7668977c539e2dcd405064afe6f7b14411fb3e47fa6e6478cf0254bf",
+    "correct": true,
+    "events": {
+      "instructions": 26541637519,
+      "cycles": 7522472805,
+      "minor-faults": 59419,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-gc-23-binary-trees-2",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-23-binary-trees"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 1.6165290586650372,
+    "stdout": "RESULT 136664414\n",
+    "case": "23-binary-trees",
+    "arm": "current0ed-gc",
+    "mode": "perf",
+    "repeat": 2,
+    "binary_sha256": "1ccc21b5f601720563f074202149d55ccd102e74e47f9676464770afd52f853f",
+    "correct": true,
+    "events": {
+      "instructions": 26431778750,
+      "cycles": 7377424823,
+      "minor-faults": 74559,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-base-30-string-build-2",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-30-string-build"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 0.9729449427686632,
+    "stdout": "RESULT 60444505\n",
+    "case": "30-string-build",
+    "arm": "current0ed-base",
+    "mode": "perf",
+    "repeat": 2,
+    "binary_sha256": "f60aafbf67bcb8d80f1eb9623c112deb325a1eb734b3ed7fc6d35ff5b3677844",
+    "correct": true,
+    "events": {
+      "instructions": 16940248449,
+      "cycles": 4451045131,
+      "minor-faults": 100070,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-gc-30-string-build-2",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-30-string-build"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 0.9733757870271802,
+    "stdout": "RESULT 60444505\n",
+    "case": "30-string-build",
+    "arm": "current0ed-gc",
+    "mode": "perf",
+    "repeat": 2,
+    "binary_sha256": "66ec4fe512620ce8db1637c3603f6e0203acf533444a2748972ac79eb31fbb52",
+    "correct": true,
+    "events": {
+      "instructions": 16994036986,
+      "cycles": 4360524944,
+      "minor-faults": 110850,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-base-31-json-2",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-31-json"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 1.4622527416795492,
+    "stdout": "RESULT 2204940400\n",
+    "case": "31-json",
+    "arm": "current0ed-base",
+    "mode": "perf",
+    "repeat": 2,
+    "binary_sha256": "8fb39433a9487f3f8373a9345b91ac05e2f060ad27b8bcc3592988c343b542c7",
+    "correct": true,
+    "events": {
+      "instructions": 25255375850,
+      "cycles": 6848712105,
+      "minor-faults": 119785,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-gc-31-json-2",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-31-json"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 1.48178645176813,
+    "stdout": "RESULT 2204940400\n",
+    "case": "31-json",
+    "arm": "current0ed-gc",
+    "mode": "perf",
+    "repeat": 2,
+    "binary_sha256": "f0307de684fa4b438239c77eb708e87f107bbfc35c592ca85f22f8a63c4f8ffc",
+    "correct": true,
+    "events": {
+      "instructions": 25132143719,
+      "cycles": 7194061010,
+      "minor-faults": 122822,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-base-51-pipeline-2",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-51-pipeline"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 1.1336087752133608,
+    "stdout": "RESULT 99180339350\n",
+    "case": "51-pipeline",
+    "arm": "current0ed-base",
+    "mode": "perf",
+    "repeat": 2,
+    "binary_sha256": "d924d1844367030e818215b85af3a227e68a3a12ff5c5a2b135d57211eb66c1e",
+    "correct": true,
+    "events": {
+      "instructions": 11008124788,
+      "cycles": 4861591973,
+      "minor-faults": 79112,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-gc-51-pipeline-2",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-51-pipeline"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 0.974192984867841,
+    "stdout": "RESULT 99180339350\n",
+    "case": "51-pipeline",
+    "arm": "current0ed-gc",
+    "mode": "perf",
+    "repeat": 2,
+    "binary_sha256": "e5a0b0698bd7683c53c7af162cc03cc43be0bee743c8b09be0fc927a30d5bac1",
+    "correct": true,
+    "events": {
+      "instructions": 10918449953,
+      "cycles": 4648665284,
+      "minor-faults": 74929,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-base-60-ring-churn-2",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-60-ring-churn"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 0.16275179525837302,
+    "stdout": "RESULT 178646019\n",
+    "case": "60-ring-churn",
+    "arm": "current0ed-base",
+    "mode": "perf",
+    "repeat": 2,
+    "binary_sha256": "3c7b83e513bb0bdac5a979affdc543f3af3afa3dd3f19a605ed56c59831a2c05",
+    "correct": true,
+    "events": {
+      "instructions": 667807801,
+      "cycles": 253414346,
+      "minor-faults": 1843,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-gc-60-ring-churn-2",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-60-ring-churn"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 0.16265856008976698,
+    "stdout": "RESULT 178646019\n",
+    "case": "60-ring-churn",
+    "arm": "current0ed-gc",
+    "mode": "perf",
+    "repeat": 2,
+    "binary_sha256": "062f36112298cef8a671e9c0b6fa1a4e5a9136315007b1f3161d965584985436",
+    "correct": true,
+    "events": {
+      "instructions": 667260692,
+      "cycles": 250072975,
+      "minor-faults": 1811,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-base-71-async-worker-2",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-71-async-worker"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 7.492106313817203,
+    "stdout": "RESULT 3119851056\n",
+    "case": "71-async-worker",
+    "arm": "current0ed-base",
+    "mode": "perf",
+    "repeat": 2,
+    "binary_sha256": "8743c3b534127043a57dc03c348ab87745cee85f6c8b111db53b8633aebee2d8",
+    "correct": true,
+    "events": {
+      "instructions": 4359746201,
+      "cycles": 1760166395,
+      "minor-faults": 20022,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-gc-71-async-worker-2",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-71-async-worker"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 7.424563454929739,
+    "stdout": "RESULT 3119851056\n",
+    "case": "71-async-worker",
+    "arm": "current0ed-gc",
+    "mode": "perf",
+    "repeat": 2,
+    "binary_sha256": "10180d7a912227430e9d9ea8427964f7cfe88e4198998b8bbdaa3329672bc88a",
+    "correct": true,
+    "events": {
+      "instructions": 4330058577,
+      "cycles": 1489319455,
+      "minor-faults": 19728,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-base-73-retain-then-release-2",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-73-retain-then-release"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 1.1349034826271236,
+    "stdout": "RESULT 719280537\n",
+    "case": "73-retain-then-release",
+    "arm": "current0ed-base",
+    "mode": "perf",
+    "repeat": 2,
+    "binary_sha256": "f891287a2053b9e7c9c4e7f2e29ace867de2c69504065a636027ee00e22e57a6",
+    "correct": true,
+    "events": {
+      "instructions": 18600568128,
+      "cycles": 5056600572,
+      "minor-faults": 111904,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-gc-73-retain-then-release-2",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-73-retain-then-release"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 0.9741043481044471,
+    "stdout": "RESULT 719280537\n",
+    "case": "73-retain-then-release",
+    "arm": "current0ed-gc",
+    "mode": "perf",
+    "repeat": 2,
+    "binary_sha256": "b8bdda74343524114b6f97f25ce9b6df83634bb259168d649719107b5757b520",
+    "correct": true,
+    "events": {
+      "instructions": 18384584771,
+      "cycles": 4752948274,
+      "minor-faults": 103654,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-base-70-documents-replace-2",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-70-documents",
+      "replace"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 0.9756663669832051,
+    "stdout": "RESULT 719280537\n",
+    "case": "70-documents-replace",
+    "arm": "current0ed-base",
+    "mode": "perf",
+    "repeat": 2,
+    "binary_sha256": "4a4e5f86a494cd0ab3434498686e58793d9fb75476c71a0601f17d6ae7bb9a09",
+    "correct": true,
+    "events": {
+      "instructions": 15386219419,
+      "cycles": 4260918529,
+      "minor-faults": 71090,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-gc-70-documents-replace-2",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-70-documents",
+      "replace"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 0.8131331419572234,
+    "stdout": "RESULT 719280537\n",
+    "case": "70-documents-replace",
+    "arm": "current0ed-gc",
+    "mode": "perf",
+    "repeat": 2,
+    "binary_sha256": "d6fb1588158677a5f35f29f113567ee51a37cbd14fb7c748de244fee0966b878",
+    "correct": true,
+    "events": {
+      "instructions": 15237730592,
+      "cycles": 3765264931,
+      "minor-faults": 63206,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-base-70-documents-retain-2",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-70-documents",
+      "retain"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 1.1360106021165848,
+    "stdout": "RESULT 719287512\n",
+    "case": "70-documents-retain",
+    "arm": "current0ed-base",
+    "mode": "perf",
+    "repeat": 2,
+    "binary_sha256": "4a4e5f86a494cd0ab3434498686e58793d9fb75476c71a0601f17d6ae7bb9a09",
+    "correct": true,
+    "events": {
+      "instructions": 19553836834,
+      "cycles": 5217402265,
+      "minor-faults": 124966,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-gc-70-documents-retain-2",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-70-documents",
+      "retain"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 1.1366964038461447,
+    "stdout": "RESULT 719287512\n",
+    "case": "70-documents-retain",
+    "arm": "current0ed-gc",
+    "mode": "perf",
+    "repeat": 2,
+    "binary_sha256": "d6fb1588158677a5f35f29f113567ee51a37cbd14fb7c748de244fee0966b878",
+    "correct": true,
+    "events": {
+      "instructions": 19242551690,
+      "cycles": 4935405116,
+      "minor-faults": 114570,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-base-70-documents-transition-2",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-70-documents",
+      "transition"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 0.9750486528500915,
+    "stdout": "RESULT 719284509\n",
+    "case": "70-documents-transition",
+    "arm": "current0ed-base",
+    "mode": "perf",
+    "repeat": 2,
+    "binary_sha256": "4a4e5f86a494cd0ab3434498686e58793d9fb75476c71a0601f17d6ae7bb9a09",
+    "correct": true,
+    "events": {
+      "instructions": 17492234365,
+      "cycles": 4622468813,
+      "minor-faults": 90632,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-gc-70-documents-transition-2",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-70-documents",
+      "transition"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 0.9746564100496471,
+    "stdout": "RESULT 719284509\n",
+    "case": "70-documents-transition",
+    "arm": "current0ed-gc",
+    "mode": "perf",
+    "repeat": 2,
+    "binary_sha256": "d6fb1588158677a5f35f29f113567ee51a37cbd14fb7c748de244fee0966b878",
+    "correct": true,
+    "events": {
+      "instructions": 17251378735,
+      "cycles": 4319173897,
+      "minor-faults": 81502,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-base-tscwork-2",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-tscwork",
+      "1"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 5.355048306751996,
+    "stdout": "typescript 5.8.2 96760\n",
+    "case": "tscwork",
+    "arm": "current0ed-base",
+    "mode": "perf",
+    "repeat": 2,
+    "binary_sha256": "d3e6ac7d8c54453d92f1480f49acc34d44a50080ccaef8cf79bbccb00eff79ee",
+    "correct": true,
+    "events": {
+      "instructions": 62283861129,
+      "cycles": 26817220950,
+      "minor-faults": 102447,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-gc-tscwork-2",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-tscwork",
+      "1"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 5.194682821631432,
+    "stdout": "typescript 5.8.2 96760\n",
+    "case": "tscwork",
+    "arm": "current0ed-gc",
+    "mode": "perf",
+    "repeat": 2,
+    "binary_sha256": "7b201d21972f1d846f52c0a0ef00e7b11c06cc2b3a080bbef6627b379c1de521",
+    "correct": true,
+    "events": {
+      "instructions": 60636575339,
+      "cycles": 25751698242,
+      "minor-faults": 145672,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-base-zodwork-2",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-zodwork",
+      "200"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 0.1630639866925776,
+    "stdout": "200\n",
+    "case": "zodwork",
+    "arm": "current0ed-base",
+    "mode": "perf",
+    "repeat": 2,
+    "binary_sha256": "0819c427d837eed8fe82810cc5a7455920a33dac2c51520a0d71a6272d8076cd",
+    "correct": true,
+    "events": {
+      "instructions": 938772413,
+      "cycles": 352217172,
+      "minor-faults": 3524,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-gc-zodwork-2",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-zodwork",
+      "200"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 0.16223337594419718,
+    "stdout": "200\n",
+    "case": "zodwork",
+    "arm": "current0ed-gc",
+    "mode": "perf",
+    "repeat": 2,
+    "binary_sha256": "ac293400554dbdd36340b831233e398f0d3c57fb3ea438007ae12d01e138288f",
+    "correct": true,
+    "events": {
+      "instructions": 945038365,
+      "cycles": 361044551,
+      "minor-faults": 3505,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-base-00-noop-2",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-00-noop"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 0.16246618004515767,
+    "stdout": "RESULT 0\n",
+    "case": "00-noop",
+    "arm": "current0ed-base",
+    "mode": "perf",
+    "repeat": 2,
+    "binary_sha256": "2e3cb5acfa826bf086b94ae788963d773a7ecc3b37e8359a5ff2390f15cc6796",
+    "correct": true,
+    "events": {
+      "instructions": 755879,
+      "cycles": 1062351,
+      "minor-faults": 54,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-gc-00-noop-2",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-00-noop"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 0.16246041003614664,
+    "stdout": "RESULT 0\n",
+    "case": "00-noop",
+    "arm": "current0ed-gc",
+    "mode": "perf",
+    "repeat": 2,
+    "binary_sha256": "2e3cb5acfa826bf086b94ae788963d773a7ecc3b37e8359a5ff2390f15cc6796",
+    "correct": true,
+    "events": {
+      "instructions": 737178,
+      "cycles": 1062309,
+      "minor-faults": 54,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-base-15-crc32-2",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-base-15-crc32"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 0.8116644769906998,
+    "stdout": "RESULT 62051195\n",
+    "case": "15-crc32",
+    "arm": "current0ed-base",
+    "mode": "perf",
+    "repeat": 2,
+    "binary_sha256": "35fecea831561415223878a017b28d0b97922c7568a4173c71f955d3f4f3c068",
+    "correct": true,
+    "events": {
+      "instructions": 18253410307,
+      "cycles": 3222823519,
+      "minor-faults": 2734,
+      "major-faults": 0
+    }
+  },
+  {
+    "label": "gc-auto-current0ed-qb6-v17r1-partial-perf-current0ed-gc-15-crc32-2",
+    "cmd": [
+      "taskset",
+      "-c",
+      "2",
+      "perf",
+      "stat",
+      "-x,",
+      "-e",
+      "instructions,cycles,minor-faults,major-faults",
+      "/root/rss-header-20261002/qb6-current0ed-build-v14/bin/gc-auto-qb6-current0ed-v14r1-current0ed-gc-15-crc32"
+    ],
+    "env": {
+      "MIMALLOC_ALLOW_THP": "0"
+    },
+    "rc": 0,
+    "reason": null,
+    "peak_rss_bytes": null,
+    "wall_s": null,
+    "user_s": null,
+    "sys_s": null,
+    "elapsed_s": 0.6532539748586714,
+    "stdout": "RESULT 62051195\n",
+    "case": "15-crc32",
+    "arm": "current0ed-gc",
+    "mode": "perf",
+    "repeat": 2,
+    "binary_sha256": "843c1d8a1d2b2608b2749b9f45fec31f76e6a4db0a2fdc8674edb3010ae33dab",
+    "correct": true,
+    "events": {
+      "instructions": 18251650485,
+      "cycles": 3217255349,
+      "minor-faults": 2543,
+      "major-faults": 0
+    }
+  }
+]

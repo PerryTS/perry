@@ -1,0 +1,71 @@
+{
+  "private_head": "d1a45c55d76db104a0e39d7909b16763b661a26e",
+  "base": "2026ecfe6dd9df1a0a8616e3bc5c5561e8e0cf63",
+  "tracked_inputs_verified": 4999,
+  "source_snapshot_scope": "Captured while compilation was running and matched after successful terminal execution; private commit unchanged.",
+  "command": [
+    "cargo",
+    "test",
+    "--locked",
+    "--release",
+    "-p",
+    "perry-runtime",
+    "--lib"
+  ],
+  "terminal_rc": 0,
+  "runtime": {
+    "passed": 4877,
+    "failed": 0,
+    "ignored": 5
+  },
+  "log_sha256": "e621f642fe546d215bb9896b365c2fe03f6da762fd100ea8c34b05b8df33e40d",
+  "filtered_subprocess_summaries": [
+    [
+      "1",
+      "0",
+      "0"
+    ],
+    [
+      "1",
+      "0",
+      "0"
+    ],
+    [
+      "1",
+      "0",
+      "0"
+    ],
+    [
+      "1",
+      "0",
+      "0"
+    ],
+    [
+      "1",
+      "0",
+      "0"
+    ],
+    [
+      "1",
+      "0",
+      "0"
+    ],
+    [
+      "1",
+      "0",
+      "0"
+    ],
+    [
+      "1",
+      "0",
+      "0"
+    ]
+  ],
+  "scope": "Private old-hole payload advice, macOS full runtime. Linux mincore subject not exercised. Repeated advice costs and application benefit unproven; unapplied.",
+  "address_check": {
+    "rc": 0,
+    "raw_log": "old-hole-v34-address-check-r1.log",
+    "inherited_stale_warning": "node_stream_event_emitter baseline1found0",
+    "original_invalid_flag_attempt_preserved": true
+  }
+}

@@ -1,0 +1,60 @@
+{
+  "base": "07e50b14a3d23e8f914193ec4d5a679adbd7c37a",
+  "private_commit": "3fb6cd50ede80fe2cbef031d984f70c9dcb13def",
+  "tracked_inputs": 5011,
+  "private_paths": [
+    "crates/perry-runtime/src/gc/mod.rs",
+    "crates/perry-runtime/src/gc/tests/mod.rs",
+    "crates/perry-runtime/src/gc/tests/minor_lazy_rss.rs",
+    "crates/perry-runtime/src/gc/tenuring.rs",
+    "crates/perry-runtime/src/gc/tests/copying/adaptive_tenuring.rs"
+  ],
+  "commands": [
+    {
+      "name": "build",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--release",
+        "-p",
+        "perry",
+        "-p",
+        "perry-runtime-static",
+        "-p",
+        "perry-stdlib-static"
+      ],
+      "rc": 0,
+      "pid": 2041382,
+      "elapsed_s": 207.88568726088852,
+      "log_sha256": "5f01d34aeb250042b1b11c8189aee5905ac825289aba6502da92f4ef1f799063"
+    },
+    {
+      "name": "runtime-tests",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--release",
+        "-p",
+        "perry-runtime",
+        "--lib"
+      ],
+      "rc": 0,
+      "pid": 2053853,
+      "elapsed_s": 127.52749103587121,
+      "log_sha256": "5d768f49b64f1dbb5a71113547fea8db0b872f9e6c58658664b5d508de1196d3"
+    }
+  ],
+  "products": {
+    "perry": "a90efbb07c3c81daf1402f825504ecbb621e53f7f5bb314c4be0121ba68fe912",
+    "libperry_runtime.a": "7884a73f0f8eb7dd4df87275756aa27963654aa068ce24888365d296ad4fdc54",
+    "libperry_stdlib.a": "55e57ffccec2f330927b484a70c614ebfde928b3d1bfa11eedbd977173cd5b4c"
+  },
+  "runtime": {
+    "passed": 4863,
+    "failed": 0,
+    "ignored": 5
+  },
+  "scope": "Private learned-floor build and full runtime tests, including quiet-cycle debounce, recovery, survivor sizing, and inherited actual copying/pinned fallback tests. Application RSS and instruction benefit remains unproven."
+}

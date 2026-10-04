@@ -1,0 +1,20 @@
+diff --git a/crates/perry-runtime/src/gc/trace.rs b/crates/perry-runtime/src/gc/trace.rs
+index 0f234464a0..749c1be97a 100644
+--- a/crates/perry-runtime/src/gc/trace.rs
++++ b/crates/perry-runtime/src/gc/trace.rs
+@@ -1814,8 +1814,13 @@ pub(super) unsafe fn trace_heap_rewrite_slots(
+     #[cfg(test)]
+     let weak_holder =
+         crate::weakref::is_weak_holder_header(header) && !mark_hoist_sabotage::forgetting_weak();
+-    visit_gc_rewrite_slot_descriptors(header, |descriptor| unsafe {
+-        let mut visit_slot = |slot: *mut u64, layout_kind: Option<HeapChildSlotReadKind>| {
++    // The booleans and header are stable during this object's visit. Capture
++    // their values, rather than borrowing stack words that the shared callback
++    // would load through another pointer on every slot. The worklist remains
++    // a mutable borrow, reborrowed for each descriptor; enumeration is shared.
++    visit_gc_rewrite_slot_descriptors(header, move |descriptor| unsafe {
++        let worklist = &mut *worklist;
++        let mut visit_slot = move |slot: *mut u64, layout_kind: Option<HeapChildSlotReadKind>| {
+             if weak_holder && crate::weakref::is_weak_target_trace_slot(header, slot) {
+                 return;
+             }

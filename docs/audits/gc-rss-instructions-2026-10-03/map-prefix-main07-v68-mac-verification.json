@@ -1,0 +1,37 @@
+{
+  "private_commit": "f27fcd49d8adbb4312b9a90ae5536e4215c9fec3",
+  "control": "8e3013733d",
+  "source_count": 5012,
+  "runtime": {
+    "passed": 4882,
+    "failed": 0,
+    "ignored": 5,
+    "filtered": 0
+  },
+  "isolated_subprocess_tests": 8,
+  "subjects": [
+    "early_native_root_does_not_decode_unrelated_suffix",
+    "unsorted_late_duplicate_offset_keeps_every_native_root",
+    "folded_functions_keep_all_roots_from_both_sections",
+    "equally_near_offsets_preserve_existing_stream_order_tie",
+    "malformed_selected_prefix_still_fails_closed"
+  ],
+  "result": {
+    "command": [
+      "cargo",
+      "+nightly-2026-08-20",
+      "test",
+      "--locked",
+      "--release",
+      "-p",
+      "perry-runtime",
+      "--lib"
+    ],
+    "rc": 0,
+    "pid": 3518,
+    "elapsed_s": 164.06322420900688,
+    "source_manifest_sha256": "826a053b457764ad4b1b5419ccca12171da637121eaac5148fb000bc0ca95342",
+    "raw_log_sha256": "1f80bf4c1ff594a3a04fe39707aed15e8b8eb0537eb87746b05c76ff90ffff4f"
+  },
+  "scope": "Unfiltered Mac runtime and real decoder/root fixtures. Application benefit unproven."
+}

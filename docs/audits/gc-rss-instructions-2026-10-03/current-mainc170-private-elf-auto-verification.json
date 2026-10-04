@@ -1,0 +1,18 @@
+{
+  "complete_cells": 204,
+  "complete_cases": 17,
+  "all_correct": true,
+  "source_binary_products_stdout_rss_counters_summary_verified": true,
+  "original_driver_exit": "1",
+  "source_build_binding_derivation": "Only case normalized to actual source stem; original workload_case preserved. Original builds/runs/logs/receipt unchanged.",
+  "inputs": {
+    "runs": "3eeb9a1fb6dbb70c1cbe0281c160e8e6e6b2989d4ebf55da9bfe9234a5cee01c",
+    "builds": "75579074d13359e4aa2f76de799ceb0c397e45f983308dc63d31408e3a07a2dd",
+    "oracle": "2c7624378552bbed27dc711d3a6f7021dfcdd87e25bf59ac8ae3becd2efce70b",
+    "products": "64b7ab33ebad9129eb20615fc95e43f36e867cacf8f56d67c75ecc50b162df7f",
+    "source-build-bindings": "efe826ba900c7314eb178967409b6ded9c184cc541b66416faf3720a586f908a",
+    "independent-summary": "3d24dd200d0cbd8c0157dc615df1255334dce85b32a5535052e3515625b999c6"
+  },
+  "build_verification_sha256": "2a05a4acfb2980a8587eb548076e3e9762b2c83de2944fedd5332f7cb64b2c32",
+  "limitations": "Three repeats on shared host. Auto-optimize archives differ per workload; full wrapper hashes attest starting products, while workspace input proofs and application hashes bind specialized builds. Production adoption and moving/root checks separate."
+}

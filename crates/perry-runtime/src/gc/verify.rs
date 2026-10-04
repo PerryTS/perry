@@ -642,8 +642,11 @@ impl OldToYoungRememberedRebuildState {
     /// object (`BlockCensus::unmarked_blocks`), whose every object this walk
     /// would reject anyway.
     pub(super) fn new_skipping(require_marked: bool, skip: Option<Vec<bool>>) -> Self {
-        let mut arena_cursor =
-            crate::arena::ArenaObjectCursor::new(crate::arena::ArenaWalkOrder::BlockIndex);
+        // Arena parents on uniformly young or longlived blocks cannot pass
+        // barrier_parent_needs_remembering. Keep every other range, including
+        // blocks retagged old before in-place promotion changes their owner.
+        // Malloc parents retain their separate walk below.
+        let mut arena_cursor = crate::arena::ArenaObjectCursor::new_remembered_parents();
         if let Some(skip) = skip.filter(|_| require_marked) {
             arena_cursor.set_skip_blocks(skip);
         }
@@ -656,6 +659,16 @@ impl OldToYoungRememberedRebuildState {
             objects_scanned: 0,
             done: false,
         }
+    }
+
+    /// Reference implementation for equivalence/visited-work regression tests.
+    #[cfg(test)]
+    pub(super) fn whole_heap_for_test(require_marked: bool) -> Self {
+        let mut state = Self::new(require_marked);
+        state.arena_cursor = Some(crate::arena::ArenaObjectCursor::new(
+            crate::arena::ArenaWalkOrder::BlockIndex,
+        ));
+        state
     }
 
     /// The rebuild of a full whose result is provably empty
@@ -679,7 +692,7 @@ impl OldToYoungRememberedRebuildState {
         }
     }
 
-    /// Number of heap objects this whole-heap rebuild walk has visited. Used
+    /// Number of candidate arena and malloc objects this rebuild has visited. Used
     /// by the GC trace to prove that minors do NOT run this O(all-objects)
     /// walk (#6181): full cycles report the walked object count, minors 0.
     pub(super) fn objects_scanned(&self) -> usize {

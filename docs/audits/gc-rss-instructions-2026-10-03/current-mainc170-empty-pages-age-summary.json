@@ -1,0 +1,212 @@
+[
+  {
+    "arm": "currentc170-base",
+    "observations": 73,
+    "first": {
+      "seq": 0,
+      "spaces": [
+        {
+          "space": "nursery_eden",
+          "empty_noncurrent_blocks": 39,
+          "empty_noncurrent_resident_bytes": 40816640
+        },
+        {
+          "space": "survivor0",
+          "empty_noncurrent_blocks": 0,
+          "empty_noncurrent_resident_bytes": 0
+        },
+        {
+          "space": "survivor1",
+          "empty_noncurrent_blocks": 2,
+          "empty_noncurrent_resident_bytes": 2035712
+        },
+        {
+          "space": "longlived",
+          "empty_noncurrent_blocks": 0,
+          "empty_noncurrent_resident_bytes": 0
+        },
+        {
+          "space": "old",
+          "empty_noncurrent_blocks": 0,
+          "empty_noncurrent_resident_bytes": 0
+        }
+      ]
+    },
+    "last": {
+      "seq": 72,
+      "spaces": [
+        {
+          "space": "nursery_eden",
+          "empty_noncurrent_blocks": 0,
+          "empty_noncurrent_resident_bytes": 0
+        },
+        {
+          "space": "survivor0",
+          "empty_noncurrent_blocks": 0,
+          "empty_noncurrent_resident_bytes": 0
+        },
+        {
+          "space": "survivor1",
+          "empty_noncurrent_blocks": 0,
+          "empty_noncurrent_resident_bytes": 0
+        },
+        {
+          "space": "longlived",
+          "empty_noncurrent_blocks": 0,
+          "empty_noncurrent_resident_bytes": 0
+        },
+        {
+          "space": "old",
+          "empty_noncurrent_blocks": 0,
+          "empty_noncurrent_resident_bytes": 0
+        }
+      ]
+    },
+    "first_empty_noncurrent_eden_ages": [
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1
+    ]
+  },
+  {
+    "arm": "currentc170-gc",
+    "observations": 78,
+    "first": {
+      "seq": 0,
+      "spaces": [
+        {
+          "space": "nursery_eden",
+          "empty_noncurrent_blocks": 39,
+          "empty_noncurrent_resident_bytes": 40816640
+        },
+        {
+          "space": "survivor0",
+          "empty_noncurrent_blocks": 0,
+          "empty_noncurrent_resident_bytes": 0
+        },
+        {
+          "space": "survivor1",
+          "empty_noncurrent_blocks": 2,
+          "empty_noncurrent_resident_bytes": 2035712
+        },
+        {
+          "space": "longlived",
+          "empty_noncurrent_blocks": 0,
+          "empty_noncurrent_resident_bytes": 0
+        },
+        {
+          "space": "old",
+          "empty_noncurrent_blocks": 0,
+          "empty_noncurrent_resident_bytes": 0
+        }
+      ]
+    },
+    "last": {
+      "seq": 77,
+      "spaces": [
+        {
+          "space": "nursery_eden",
+          "empty_noncurrent_blocks": 0,
+          "empty_noncurrent_resident_bytes": 0
+        },
+        {
+          "space": "survivor0",
+          "empty_noncurrent_blocks": 0,
+          "empty_noncurrent_resident_bytes": 0
+        },
+        {
+          "space": "survivor1",
+          "empty_noncurrent_blocks": 0,
+          "empty_noncurrent_resident_bytes": 0
+        },
+        {
+          "space": "longlived",
+          "empty_noncurrent_blocks": 0,
+          "empty_noncurrent_resident_bytes": 0
+        },
+        {
+          "space": "old",
+          "empty_noncurrent_blocks": 0,
+          "empty_noncurrent_resident_bytes": 0
+        }
+      ]
+    },
+    "first_empty_noncurrent_eden_ages": [
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1
+    ]
+  }
+]

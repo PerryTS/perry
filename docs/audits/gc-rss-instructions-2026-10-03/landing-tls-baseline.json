@@ -1,0 +1,11 @@
+{
+  "base": "0a5bb47dc5f10dcfecd8c14fe4b3fc2e7ac4703c",
+  "path": "crates/perry-runtime/src/node_stream_readwrite.rs",
+  "baseline_and_pre_fix_sha256": "3418478becfcf2f9e7245ba8210ab02904b64461ed98e1f5c204804b290a3d2a",
+  "raw_tls_declarations": 2,
+  "fix": "Use crate::perry_thread_local!; preserve both cache declarations and the GC root scanner.",
+  "baseline_checker_failures": [
+    "crates/perry-runtime/src/node_stream_readwrite.rs: 2 raw `thread_local!` declaration(s), none allowed.\n    Use `crate::perry_thread_local!` \u2014 same syntax, same `.with()` at every call site, and the address lands in this thread's hot cache instead of costing a `_tlv_get_addr` call (#7469). If the declaration really is cold, record it:\n      scripts/check_thread_locals.py --update"
+  ],
+  "fixed_checker_failures": []
+}

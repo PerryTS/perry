@@ -1,0 +1,315 @@
+{
+  "base": "07e50b14a3d23e8f914193ec4d5a679adbd7c37a",
+  "runtime": "4f9121c09b642a007e592c1d91cbe86d5d122851",
+  "authored_runtime_paths": [
+    "crates/perry-runtime/src/arena/block.rs",
+    "crates/perry-runtime/src/arena/block/decommit.rs",
+    "crates/perry-runtime/src/arena/block/reuse_window_tests.rs",
+    "crates/perry-runtime/src/arena/mod.rs",
+    "crates/perry-runtime/src/arena/page_meta/compact.rs",
+    "crates/perry-runtime/src/arena/page_meta/compact/tests.rs",
+    "crates/perry-runtime/src/arena/page_meta/maintenance.rs",
+    "crates/perry-runtime/src/arena/page_meta/mod.rs",
+    "crates/perry-runtime/src/arena/page_meta/storage.rs",
+    "crates/perry-runtime/src/arena/page_meta/sweep_tally.rs",
+    "crates/perry-runtime/src/arena/tests.rs",
+    "crates/perry-runtime/src/arena/tests_page_meta_audit.rs",
+    "crates/perry-runtime/src/arena/tests_promoted_runs.rs",
+    "crates/perry-runtime/src/arena/walk.rs",
+    "crates/perry-runtime/src/gc/cycle.rs",
+    "crates/perry-runtime/src/gc/layout_slot_visit.rs",
+    "crates/perry-runtime/src/gc/malloc.rs",
+    "crates/perry-runtime/src/gc/mod.rs",
+    "crates/perry-runtime/src/gc/tests/alloc.rs",
+    "crates/perry-runtime/src/gc/tests/full_rebuild_skip.rs",
+    "crates/perry-runtime/src/gc/verify.rs",
+    "crates/perry-runtime/src/turnloop_pool/tests.rs"
+  ],
+  "private_paths": [
+    "crates/perry-runtime/src/arena/block.rs",
+    "crates/perry-runtime/src/arena/block/reuse_window_tests.rs",
+    "crates/perry-runtime/src/arena/mod.rs",
+    "crates/perry-runtime/src/arena/reset.rs",
+    "crates/perry-runtime/src/gc/cycle.rs",
+    "crates/perry-runtime/src/gc/mod.rs"
+  ],
+  "arms": {
+    "base": {
+      "tracked_inputs": 5003,
+      "products": {
+        "perry": "da873975374a3097827208e41b4ce16d124face4b6d5a959f952c1623f8a4b21",
+        "libperry_runtime.a": "2caa83884b955f29db281c4783caa5ba8787359f6e9233deb180abbaab385a47",
+        "libperry_stdlib.a": "0852d51d676bdcb6115753a355f479175c8d14d39c62cfa8123175541144c3d9"
+      },
+      "commands": [
+        {
+          "name": "build",
+          "command": [
+            "cargo",
+            "build",
+            "--locked",
+            "--release",
+            "-p",
+            "perry",
+            "-p",
+            "perry-runtime-static",
+            "-p",
+            "perry-stdlib-static"
+          ],
+          "rc": 0,
+          "pid": 1441246,
+          "elapsed_s": 227.2817142372951,
+          "log_sha256": "eabbda06eb4808e58899df4a61e369bed6b929d8511eac1cb6dd5f620357a2ce"
+        },
+        {
+          "name": "runtime-tests",
+          "command": [
+            "cargo",
+            "test",
+            "--locked",
+            "--release",
+            "-p",
+            "perry-runtime",
+            "--lib"
+          ],
+          "rc": 0,
+          "pid": 1461499,
+          "elapsed_s": 133.20090837730095,
+          "log_sha256": "567eb2cec7de3a64da5d1dfb84eb3dea5dfa223a56798a9960d7b65cc688e3d7"
+        }
+      ],
+      "runtime": {
+        "passed": 4840,
+        "failed": 0,
+        "ignored": 5
+      },
+      "filtered_subprocess_summaries": [
+        [
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "1",
+          "0",
+          "0"
+        ]
+      ]
+    },
+    "gc": {
+      "tracked_inputs": 5010,
+      "products": {
+        "perry": "3046514c34983716a48dcc6630760644ec51a41c07ce3c29937e04aea9eb1144",
+        "libperry_runtime.a": "219ff303192f92d1fe50e41bf021d9149c249ba893d91858d91286d2f9eba823",
+        "libperry_stdlib.a": "c5414a34a88615f595cda503320375cb999671275b7407fe511f3e4a5ac574c1"
+      },
+      "commands": [
+        {
+          "name": "build",
+          "command": [
+            "cargo",
+            "build",
+            "--locked",
+            "--release",
+            "-p",
+            "perry",
+            "-p",
+            "perry-runtime-static",
+            "-p",
+            "perry-stdlib-static"
+          ],
+          "rc": 0,
+          "pid": 1472008,
+          "elapsed_s": 216.00699242437258,
+          "log_sha256": "d0a9baa398e0da20451c48ceafba4612223cf4f6bd04694acf9fffd5d98c6e05"
+        },
+        {
+          "name": "runtime-tests",
+          "command": [
+            "cargo",
+            "test",
+            "--locked",
+            "--release",
+            "-p",
+            "perry-runtime",
+            "--lib"
+          ],
+          "rc": 0,
+          "pid": 1484899,
+          "elapsed_s": 136.5851921592839,
+          "log_sha256": "55bf2bae0ea3df3800e55cdd6455447288b0026f0c22b1dabf8517c4894158dd"
+        }
+      ],
+      "runtime": {
+        "passed": 4860,
+        "failed": 0,
+        "ignored": 5
+      },
+      "filtered_subprocess_summaries": [
+        [
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "1",
+          "0",
+          "0"
+        ]
+      ]
+    },
+    "entry": {
+      "tracked_inputs": 5010,
+      "products": {
+        "perry": "92cf582387d0b64545e2368f1b225927c5e47eda36e32c2c829036719022a568",
+        "libperry_runtime.a": "f84d26014b4d7c92ac176945fe88a9d63ae553966b83a9acd775d5a96c295477",
+        "libperry_stdlib.a": "da9ab725de2bc2c9885a4ee548af7662d234deab8953ccb8591f3b942f5af74f"
+      },
+      "commands": [
+        {
+          "name": "build",
+          "command": [
+            "cargo",
+            "build",
+            "--locked",
+            "--release",
+            "-p",
+            "perry",
+            "-p",
+            "perry-runtime-static",
+            "-p",
+            "perry-stdlib-static"
+          ],
+          "rc": 0,
+          "pid": 1501493,
+          "elapsed_s": 204.89993662387133,
+          "log_sha256": "741c1859513d85b5c3501ce9a6fe14ac90144ab5298e983d0e3f343c68da00ba"
+        },
+        {
+          "name": "runtime-tests",
+          "command": [
+            "cargo",
+            "test",
+            "--locked",
+            "--release",
+            "-p",
+            "perry-runtime",
+            "--lib"
+          ],
+          "rc": 0,
+          "pid": 1518142,
+          "elapsed_s": 125.76744531514123,
+          "log_sha256": "5f6d5b23eabc7ec8b17483d0c4f64c52748c0b733ebb548f2da31d850a655754"
+        }
+      ],
+      "runtime": {
+        "passed": 4861,
+        "failed": 0,
+        "ignored": 5
+      },
+      "filtered_subprocess_summaries": [
+        [
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "1",
+          "0",
+          "0"
+        ]
+      ]
+    }
+  },
+  "scope": "Fresh main07 source/actual product/full unfiltered runtime verification; application acceptance and private adoption unproven."
+}
