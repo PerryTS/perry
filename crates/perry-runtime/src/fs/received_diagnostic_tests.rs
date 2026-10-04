@@ -110,3 +110,258 @@ fn received_abi_preserves_split_surrogate() {
         55357.0
     );
 }
+
+#[test]
+fn received_native_brands() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let mut values = Vec::new();
+    let mut add = |value, name| values.push((scope.root_nanbox_f64(value), name));
+    add(
+        crate::value::js_nanbox_pointer(crate::buffer::buffer_alloc(1) as i64),
+        "Buffer",
+    );
+    add(
+        crate::value::js_nanbox_pointer(crate::buffer::js_uint8array_alloc(1) as i64),
+        "Uint8Array",
+    );
+    add(
+        crate::value::js_nanbox_pointer(crate::typedarray::js_typed_array_new_empty(
+            crate::typedarray::KIND_INT16 as i32,
+            1,
+        ) as i64),
+        "Int16Array",
+    );
+    let view = crate::buffer::buffer_alloc(1);
+    crate::buffer::mark_as_data_view(view as usize);
+    add(crate::value::js_nanbox_pointer(view as i64), "DataView");
+    let backing = crate::buffer::buffer_alloc(1);
+    crate::buffer::mark_as_array_buffer(backing as usize);
+    add(
+        crate::value::js_nanbox_pointer(backing as i64),
+        "ArrayBuffer",
+    );
+    add(crate::date::js_date_new_from_timestamp(0.0), "Date");
+    add(
+        crate::value::js_nanbox_pointer(crate::array::js_array_alloc(0) as i64),
+        "Array",
+    );
+    add(
+        crate::value::js_nanbox_pointer(crate::object::js_object_alloc(0, 0) as i64),
+        "Object",
+    );
+    for (value, name) in values {
+        check(value.get_nanbox_f64(), &format!("an instance of {name}"));
+    }
+    let bigint = crate::bigint::js_bigint_from_i64(-123);
+    check(
+        crate::value::js_nanbox_bigint(bigint as i64),
+        "type bigint (-123n)",
+    );
+}
+
+extern "C" fn received_function(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+#[test]
+fn received_function_and_constructor_names() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let function = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+        crate::closure::js_closure_alloc(crate::fn_info!(received_function, 0), 0) as i64,
+    ));
+    let name = text("namedReceived");
+    crate::closure::closure_set_dynamic_prop(
+        (function.get_nanbox_u64() & crate::value::POINTER_MASK) as usize,
+        "name",
+        name,
+    );
+    check(function.get_nanbox_f64(), "function namedReceived");
+    let obj = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+        crate::object::js_object_alloc(0, 0) as i64,
+    ));
+    let ctor = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+        crate::object::js_object_alloc(0, 0) as i64,
+    ));
+    for (value, expected) in [
+        (text("Custom"), "Custom"),
+        (text(""), ""),
+        (f64::from_bits(crate::value::TAG_UNDEFINED), "undefined"),
+    ] {
+        set(ctor.get_nanbox_f64(), "name", value);
+        set(obj.get_nanbox_f64(), "constructor", ctor.get_nanbox_f64());
+        check(obj.get_nanbox_f64(), &format!("an instance of {expected}"));
+    }
+    let null_proto = crate::object::js_object_alloc_null_proto(0, 0);
+    check(
+        crate::value::js_nanbox_pointer(null_proto as i64),
+        "[Object: null prototype] {}",
+    );
+}
+
+fn set(value: f64, key: &str, field: f64) {
+    unsafe {
+        crate::object::js_object_set_property_key(value, text(key), field);
+    }
+}
+
+extern "C" fn received_collecting_name(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
+    crate::gc::js_gc_collect();
+    text("CollectedName")
+}
+
+#[test]
+fn received_abi_roots_across_reentrant_name_getter() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let value = {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let obj = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+            crate::object::js_object_alloc(0, 0) as i64,
+        ));
+        let ctor = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+            crate::object::js_object_alloc(0, 0) as i64,
+        ));
+        let descriptor = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+            crate::object::js_object_alloc(0, 0) as i64,
+        ));
+        let getter = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+            crate::closure::js_closure_alloc(crate::fn_info!(received_collecting_name, 0), 0)
+                as i64,
+        ));
+        set(descriptor.get_nanbox_f64(), "get", getter.get_nanbox_f64());
+        let key = scope.root_nanbox_f64(text("name"));
+        crate::object::js_object_define_property(
+            ctor.get_nanbox_f64(),
+            key.get_nanbox_f64(),
+            descriptor.get_nanbox_f64(),
+        );
+        set(obj.get_nanbox_f64(), "constructor", ctor.get_nanbox_f64());
+        obj.get_nanbox_f64()
+    };
+    let mut before = 0;
+    crate::gc::js_gc_stats(&mut before, std::ptr::null_mut(), std::ptr::null_mut());
+    let result = crate::validators::js_runtime_describe_received(value);
+    assert_eq!(read_js_string_pub(result), "an instance of CollectedName");
+    let mut after = 0;
+    crate::gc::js_gc_stats(&mut after, std::ptr::null_mut(), std::ptr::null_mut());
+    assert!(after > before, "the reentrant getter must actually collect");
+}
+
+#[test]
+fn received_symbol_names_reject_implicit_coercion() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let symbol = scope.root_nanbox_f64(unsafe { crate::symbol::js_symbol_new(text("n")) });
+    let function = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+        crate::closure::js_closure_alloc(crate::fn_info!(received_function, 0), 0) as i64,
+    ));
+    crate::closure::closure_set_dynamic_prop(
+        (function.get_nanbox_u64() & crate::value::POINTER_MASK) as usize,
+        "name",
+        symbol.get_nanbox_f64(),
+    );
+    let obj = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+        crate::object::js_object_alloc(0, 0) as i64,
+    ));
+    let ctor = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+        crate::object::js_object_alloc(0, 0) as i64,
+    ));
+    set(ctor.get_nanbox_f64(), "name", symbol.get_nanbox_f64());
+    set(obj.get_nanbox_f64(), "constructor", ctor.get_nanbox_f64());
+    for value in [function, obj] {
+        for abi in [false, true] {
+            let error = crate::exception::catch_js_throw(|| {
+                if abi {
+                    crate::validators::js_runtime_describe_received(value.get_nanbox_f64());
+                } else {
+                    describe_received(value.get_nanbox_f64());
+                }
+            })
+            .expect_err("Symbol name must throw during implicit coercion");
+            let error = scope.root_nanbox_f64(error);
+            assert_eq!(
+                read_js_string_pub(property(error.get_nanbox_f64(), "name")),
+                "TypeError"
+            );
+            assert_eq!(
+                read_js_string_pub(property(error.get_nanbox_f64(), "message")),
+                "Cannot convert a Symbol value to a string"
+            );
+            assert_eq!(
+                property(error.get_nanbox_f64(), "code").to_bits(),
+                crate::value::TAG_UNDEFINED
+            );
+        }
+    }
+    check(symbol.get_nanbox_f64(), "type symbol (Symbol(n))");
+}
+
+#[test]
+fn received_abi_preserves_surrogate_names() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let function = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+        crate::closure::js_closure_alloc(crate::fn_info!(received_function, 0), 0) as i64,
+    ));
+    let obj = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+        crate::object::js_object_alloc(0, 0) as i64,
+    ));
+    let ctor = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+        crate::object::js_object_alloc(0, 0) as i64,
+    ));
+    set(obj.get_nanbox_f64(), "constructor", ctor.get_nanbox_f64());
+    for unit in [0xd800, 0xdc00] {
+        let name = scope.root_string_ptr(crate::string::js_string_from_char_code(unit as f64));
+        let name =
+            name.with_const_ptr(|s: *const StringHeader| crate::value::js_nanbox_string(s as i64));
+        crate::closure::closure_set_dynamic_prop(
+            (function.get_nanbox_u64() & crate::value::POINTER_MASK) as usize,
+            "name",
+            name,
+        );
+        set(ctor.get_nanbox_f64(), "name", name);
+        for (value, prefix) in [(&function, "function "), (&obj, "an instance of ")] {
+            let result = scope.root_nanbox_f64(crate::validators::js_runtime_describe_received(
+                value.get_nanbox_f64(),
+            ));
+            let ptr = crate::value::js_get_string_pointer_unified(result.get_nanbox_f64())
+                as *const StringHeader;
+            assert_eq!(
+                crate::string::js_string_char_code_at(ptr, prefix.len() as i32),
+                unit as f64
+            );
+            assert_eq!(unsafe { (*ptr).utf16_len } as usize, prefix.len() + 1);
+            let error = scope.root_nanbox_f64(build_received_type_error(
+                "Received ",
+                value.get_nanbox_f64(),
+            ));
+            let message = scope.root_nanbox_f64(property(error.get_nanbox_f64(), "message"));
+            let ptr = crate::value::js_get_string_pointer_unified(message.get_nanbox_f64())
+                as *const StringHeader;
+            assert_eq!(
+                crate::string::js_string_char_code_at(ptr, 9 + prefix.len() as i32),
+                unit as f64
+            );
+            assert_eq!(
+                read_js_string_pub(property(error.get_nanbox_f64(), "code")),
+                "ERR_INVALID_ARG_TYPE"
+            );
+        }
+    }
+}
+
+fn property(value: f64, key: &str) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(value);
+    let key = scope.root_nanbox_f64(text(key));
+    unsafe {
+        crate::object::js_object_get_property_key(value.get_nanbox_f64(), key.get_nanbox_f64())
+    }
+}
