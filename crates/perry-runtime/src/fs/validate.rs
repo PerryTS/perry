@@ -230,11 +230,10 @@ pub(crate) fn describe_received_js(value: f64) -> *mut StringHeader {
             let constructor =
                 scope.root_nanbox_f64(received_property(value.get_nanbox_f64(), "constructor"));
             let key = scope.root_nanbox_f64(received_key("name"));
-            if crate::object::js_object_has_property(
-                constructor.get_nanbox_f64(),
-                key.get_nanbox_f64(),
-            )
-            .to_bits()
+            // Node uses `"name" in value.constructor`: the second read may
+            // be primitive, which must throw an uncoded language TypeError.
+            if crate::object::js_in_operator(constructor.get_nanbox_f64(), key.get_nanbox_f64())
+                .to_bits()
                 == crate::value::TAG_TRUE
             {
                 let constructor =

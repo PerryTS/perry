@@ -686,3 +686,163 @@ fn received_uint8_array_inherited_constructor_throw() {
 fn received_uint8_array_inherited_constructor_collect() {
     inherited_view_getter("Uint8Array", true);
 }
+
+fn assert_received_in_error(value: f64, rhs: &str) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(value);
+    for abi in [false, true] {
+        let error = crate::exception::catch_js_throw(|| {
+            if abi {
+                crate::validators::js_runtime_describe_received(value.get_nanbox_f64());
+            } else {
+                validate_function("cb", value.get_nanbox_f64());
+            }
+        })
+        .expect_err("primitive constructor RHS must throw");
+        let error = scope.root_nanbox_f64(error);
+        assert_eq!(
+            read_js_string_pub(property(error.get_nanbox_f64(), "name")),
+            "TypeError"
+        );
+        assert_eq!(
+            property(error.get_nanbox_f64(), "code").to_bits(),
+            crate::value::TAG_UNDEFINED
+        );
+        assert_eq!(
+            read_js_string_pub(property(error.get_nanbox_f64(), "message")),
+            format!("Cannot use 'in' operator to search for 'name' in {rhs}")
+        );
+    }
+}
+
+#[test]
+fn received_primitive_constructor_data() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+        crate::object::js_object_alloc(0, 0) as i64,
+    ));
+    let symbol = scope.root_nanbox_f64(unsafe { crate::symbol::js_symbol_new(text("n")) });
+    let string = scope.root_nanbox_f64(text("ctor"));
+    for (constructor, rhs) in [
+        (1.0, "1"),
+        (string.get_nanbox_f64(), "ctor"),
+        (f64::from_bits(crate::value::TAG_TRUE), "true"),
+        (symbol.get_nanbox_f64(), "Symbol(n)"),
+    ] {
+        set(value.get_nanbox_f64(), "constructor", constructor);
+        assert_received_in_error(value.get_nanbox_f64(), rhs);
+    }
+    for bits in [
+        crate::value::TAG_NULL,
+        crate::value::TAG_UNDEFINED,
+        crate::value::TAG_FALSE,
+    ] {
+        set(value.get_nanbox_f64(), "constructor", f64::from_bits(bits));
+        check(value.get_nanbox_f64(), "[Object]");
+    }
+}
+
+extern "C" fn received_collecting_primitive_constructor(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
+    RECEIVED_CONSTRUCTOR_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    crate::gc::js_gc_collect();
+    1.0
+}
+
+fn primitive_view_getter(name: &str) {
+    with_received_intrinsic_constructor(name, |value, prototype| {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let value = scope.root_nanbox_f64(value);
+        let prototype = scope.root_nanbox_f64(prototype);
+        for own in [true, false] {
+            let target = if own { &value } else { &prototype };
+            install_received_constructor_getter(
+                target.get_nanbox_f64(),
+                crate::fn_info!(received_collecting_primitive_constructor, 0),
+            );
+            // Each public/ABI invocation reads twice, including across collecting getters.
+            RECEIVED_CONSTRUCTOR_CALLS.store(0, std::sync::atomic::Ordering::Relaxed);
+            let mut before = 0;
+            crate::gc::js_gc_stats(&mut before, std::ptr::null_mut(), std::ptr::null_mut());
+            assert_received_in_error(value.get_nanbox_f64(), "1");
+            assert_eq!(
+                RECEIVED_CONSTRUCTOR_CALLS.load(std::sync::atomic::Ordering::Relaxed),
+                4
+            );
+            let mut after = 0;
+            crate::gc::js_gc_stats(&mut after, std::ptr::null_mut(), std::ptr::null_mut());
+            assert!(after >= before + 4, "all constructor reads must collect");
+            if own {
+                let key = scope.root_nanbox_f64(text("constructor"));
+                crate::object::js_object_delete_dynamic_value(
+                    value.get_nanbox_f64(),
+                    key.get_nanbox_f64(),
+                );
+            }
+        }
+    });
+}
+
+#[test]
+fn received_primitive_buffer_constructor_getter() {
+    primitive_view_getter("Buffer");
+}
+#[test]
+fn received_primitive_data_view_constructor_getter() {
+    primitive_view_getter("DataView");
+}
+#[test]
+fn received_primitive_typed_array_constructor_getter() {
+    primitive_view_getter("Int16Array");
+}
+
+extern "C" fn received_second_null_constructor(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
+    let call = RECEIVED_CONSTRUCTOR_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if call % 2 == 0 {
+        1.0
+    } else {
+        f64::from_bits(crate::value::TAG_NULL)
+    }
+}
+
+extern "C" fn received_second_undefined_constructor(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
+    let call = RECEIVED_CONSTRUCTOR_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if call % 2 == 0 {
+        1.0
+    } else {
+        f64::from_bits(crate::value::TAG_UNDEFINED)
+    }
+}
+
+#[test]
+fn received_primitive_constructor_second_nullish_read() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+        crate::object::js_object_alloc(0, 0) as i64,
+    ));
+    for (info, rhs) in [
+        (crate::fn_info!(received_second_null_constructor, 0), "null"),
+        (
+            crate::fn_info!(received_second_undefined_constructor, 0),
+            "undefined",
+        ),
+    ] {
+        install_received_constructor_getter(value.get_nanbox_f64(), info);
+        RECEIVED_CONSTRUCTOR_CALLS.store(0, std::sync::atomic::Ordering::Relaxed);
+        assert_received_in_error(value.get_nanbox_f64(), rhs);
+        assert_eq!(
+            RECEIVED_CONSTRUCTOR_CALLS.load(std::sync::atomic::Ordering::Relaxed),
+            4
+        );
+    }
+}
