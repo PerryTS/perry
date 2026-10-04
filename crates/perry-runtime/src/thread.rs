@@ -1247,6 +1247,9 @@ unsafe fn parallel_map_impl(array_val: f64, closure_val: f64, literal_prepare: i
     // #8546: workers never run module init; they dispatch through the
     // spawning image's class tables.
     let class_image = crate::object::class_image::current_image_handle();
+    // Same image, so the same module initializers: a runtime `require` of a
+    // Deferred module must find its initializer on the worker too.
+    let path_inits = crate::module_require::current_path_init_image();
     // Charter step 5, P4: the worker installs the spawner's codegen ShapeIds
     // (with their reps) before any allocation; see `shapes_worker_seed`.
     let shape_seed = crate::object::shapes::worker_shape_seed();
@@ -1256,10 +1259,12 @@ unsafe fn parallel_map_impl(array_val: f64, closure_val: f64, literal_prepare: i
         for (idx, chunk) in chunks.into_iter().enumerate() {
             let captures_ref = captures_arc.clone();
             let class_image = class_image.clone();
+            let path_inits = path_inits.clone();
             let shape_seed = shape_seed.clone();
 
             let handle = scope.spawn(move || {
                 crate::object::class_image::adopt_image(class_image);
+                crate::module_require::adopt_path_init_image(path_inits);
                 // #6185: own agent id before any allocation or enqueue, so this
                 // worker's drains can't touch the spawner's queued work (and
                 // anything it queues is tagged as its own).
@@ -1524,6 +1529,9 @@ unsafe fn parallel_filter_impl(array_val: f64, closure_val: f64, literal_prepare
         (0..chunks.len()).map(|_| Vec::new()).collect();
 
     let class_image = crate::object::class_image::current_image_handle();
+    // Same image, so the same module initializers: a runtime `require` of a
+    // Deferred module must find its initializer on the worker too.
+    let path_inits = crate::module_require::current_path_init_image();
     // Charter step 5, P4: the worker installs the spawner's codegen ShapeIds
     // (with their reps) before any allocation; see `shapes_worker_seed`.
     let shape_seed = crate::object::shapes::worker_shape_seed();
@@ -1533,6 +1541,7 @@ unsafe fn parallel_filter_impl(array_val: f64, closure_val: f64, literal_prepare
         for (idx, chunk) in chunks.into_iter().enumerate() {
             let captures_ref = captures_arc.clone();
             let class_image = class_image.clone();
+            let path_inits = path_inits.clone();
             let shape_seed = shape_seed.clone();
 
             let handle = scope.spawn(move || {
@@ -1542,6 +1551,7 @@ unsafe fn parallel_filter_impl(array_val: f64, closure_val: f64, literal_prepare
                 // rebuilt closure must be rooted across the per-element
                 // deserialization allocations.
                 crate::object::class_image::adopt_image(class_image);
+                crate::module_require::adopt_path_init_image(path_inits);
                 let worker_agent = crate::agent::enter_worker_agent();
                 crate::gc::ensure_gc_initialized();
                 crate::object::shapes::install_worker_shape_seed(&shape_seed);
@@ -1764,6 +1774,9 @@ unsafe fn spawn_impl(closure_val: f64, literal_prepare: i64) -> *mut crate::prom
     // class metadata (vtables, parents, constructors, …) must be the spawning
     // image's — captured here, adopted first thing on the worker.
     let class_image = crate::object::class_image::current_image_handle();
+    // Same image, so the same module initializers: a runtime `require` of a
+    // Deferred module must find its initializer on the worker too.
+    let path_inits = crate::module_require::current_path_init_image();
     // Charter step 5, P4: the worker installs the spawner's codegen ShapeIds
     // (with their reps) before any allocation; see `shapes_worker_seed`.
     let shape_seed = crate::object::shapes::worker_shape_seed();
@@ -1772,6 +1785,7 @@ unsafe fn spawn_impl(closure_val: f64, literal_prepare: i64) -> *mut crate::prom
     ACTIVE_THREAD_JOBS.fetch_add(1, Ordering::SeqCst);
     std::thread::spawn(move || {
         crate::object::class_image::adopt_image(class_image);
+        crate::module_require::adopt_path_init_image(path_inits);
         // #6185: claim an agent id for this worker BEFORE it can allocate or
         // enqueue anything, so every pointer it puts in a global queue is
         // tagged as its own — and so its own drains skip the spawner's work.
