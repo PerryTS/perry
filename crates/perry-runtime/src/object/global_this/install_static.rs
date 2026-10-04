@@ -518,7 +518,7 @@ pub(crate) fn install_builtin_constructor_statics(
             install_constructor_static(
                 ctor,
                 "from",
-                crate::fn_info!(array_from_thunk, 1; with_declared(1)),
+                crate::fn_info!(array_from_thunk, 3; with_declared(3)),
                 1,
             );
             install_constructor_static(

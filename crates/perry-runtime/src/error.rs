@@ -825,11 +825,18 @@ pub extern "C" fn js_error_new_kind_with_options_from_value(
     value: f64,
     options: f64,
 ) -> *mut ErrorHeader {
+    // `options` is read after the error is allocated, and the allocation (and
+    // the key string / property read inside `apply_cause_from_options`) can
+    // run a moving collection: root both across it.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let options_h = scope.root_nanbox_f64(options);
+    let err = js_error_new_kind_from_value(kind, value);
+    let err_h = scope.root_raw_mut_ptr(err);
     unsafe {
-        let ptr = js_error_new_kind_from_value(kind, value);
-        apply_cause_from_options(ptr, options);
-        ptr
+        let options = options_h.get_nanbox_f64();
+        err_h.with_mut_ptr(|err| apply_cause_from_options(err, options));
     }
+    err_h.with_mut_ptr(|err| err)
 }
 
 /// #2838/#2836: full `new AggregateError(errors, message?, options?)`

@@ -13,11 +13,23 @@ use swc_ecma_ast as ast;
 
 pub(super) fn try_imported_module_dispatch(
     ctx: &mut LoweringContext,
+    call: &ast::CallExpr,
     member: &ast::MemberExpr,
     obj_name: &str,
     args: Vec<Expr>,
 ) -> Result<Result<Expr, Vec<Expr>>> {
     if let Some((module_name, imported_method)) = ctx.lookup_native_module(obj_name) {
+        // `Buffer.concat(...lists)` through the import: the generic native
+        // module call below takes `args` positionally, so a spread operand
+        // reached `Buffer.from` / `concat` as the one argument holding the
+        // whole array. A spread call declines (see `call_has_spread_arg`) and
+        // the generic tail dispatches the real static by name.
+        if module_name.strip_prefix("node:").unwrap_or(module_name) == "buffer"
+            && imported_method == Some("Buffer")
+            && super::super::call_has_spread_arg(call)
+        {
+            return Ok(Err(args));
+        }
         if module_name == "url" && imported_method == Some("URL") {
             if let ast::MemberProp::Ident(method_ident) = &member.prop {
                 let method_name = method_ident.sym.as_ref();

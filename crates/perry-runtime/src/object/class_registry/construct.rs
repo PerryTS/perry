@@ -773,8 +773,29 @@ pub unsafe extern "C-unwind" fn js_new_function_construct(
                 } else {
                     args[0]
                 };
-                let error = crate::error::js_error_new_kind_from_value(kind, message);
+                // `new E(message, options)`: the `{ cause }` option.
+                let error = match args.get(1) {
+                    Some(&options) => crate::error::js_error_new_kind_with_options_from_value(
+                        kind, message, options,
+                    ),
+                    None => crate::error::js_error_new_kind_from_value(kind, message),
+                };
                 return crate::value::js_nanbox_pointer(error as i64);
+            }
+            // `new (rebound AggregateError)(errors, message?, options?)`.
+            "AggregateError" => {
+                let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+                let arg = |i: usize| args.get(i).copied().unwrap_or(undefined);
+                let error = crate::error::js_aggregateerror_new_full(arg(0), arg(1), arg(2));
+                return crate::value::js_nanbox_pointer(error as i64);
+            }
+            // `new (rebound Proxy)(target, handler)`: the constructor a global
+            // value reaches through `Reflect.construct`, `new G.Proxy(...)` and a
+            // spread `new Proxy(...args)`.
+            "Proxy" => {
+                let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+                let arg = |i: usize| args.get(i).copied().unwrap_or(undefined);
+                return crate::proxy::js_proxy_new(arg(0), arg(1));
             }
             // #2889: `new (rebound RegExp)(pattern, flags)`.
             #[cfg(feature = "regex-engine")]

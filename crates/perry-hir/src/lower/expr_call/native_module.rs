@@ -297,6 +297,7 @@ fn receiver_is_node_builtin_module(ctx: &LoweringContext, recv: &ast::Expr) -> b
 /// also cover the bare `crypto` GLOBAL receiver, which is not an import and so
 /// is invisible here). Native CLASS statics (`Buffer.concat(...list)`,
 /// `URL.parse(...)`) are deliberately NOT included — see `is_submodule_export`.
+/// `Buffer`'s statics decline a spread call in their own arms instead.
 pub(super) fn is_node_builtin_module_call(ctx: &LoweringContext, callee: &ast::Expr) -> bool {
     match unwrap_ts_wrappers(callee) {
         // `ns.method(...)` / `ns.sub.method(...)`.
@@ -464,7 +465,7 @@ pub(super) fn try_native_module_methods(
             }
 
             args = match buffer_statics::try_buffer_uint8array_statics(
-                ctx, member, &obj_name, args,
+                ctx, call, member, &obj_name, args,
             )? {
                 Ok(expr) => return Ok(Ok(expr)),
                 Err(rest) => rest,
@@ -626,7 +627,7 @@ pub(super) fn try_native_module_methods(
             }
 
             args = match imported_module_dispatch::try_imported_module_dispatch(
-                ctx, member, &obj_name, args,
+                ctx, call, member, &obj_name, args,
             )? {
                 Ok(expr) => return Ok(Ok(expr)),
                 Err(rest) => rest,
