@@ -66,43 +66,120 @@ fn old_reclaim_runs_precisely_at_a_safepoint() {
 }
 
 #[test]
-fn old_reclaim_alloc_point_still_completes_immediately_and_is_counted() {
+fn old_reclaim_alloc_point_defers_to_the_next_precise_safepoint() {
     let _isolation = GcTestIsolationGuard::new();
     let _pacing = crate::gc::policy::force_moving_gc_pacing();
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     clear_old_reclaim_state();
     reset_scan_fallback_counters();
 
-    // The other direction, and the reason this site is NOT deferred. #5476's
-    // own regression test asserts that a single `gc_check_trigger` call — what
-    // every allocation does — drives the reclaim to completion, because the
-    // workload it was filed for is a compute-only loop that reaches no host
-    // step. Deferring here would turn "RSS climbs unbounded" back on for one
-    // growth quantum. What #7148 changes is only that the cost is now visible.
+    // #11873: an allocation point is not a precise point. Native runtime
+    // frames between the compiled caller and the allocation hold GC values in
+    // Rust locals that nothing roots, so the owed reclaim waits for the next
+    // safepoint instead of running here behind a conservative scan of the
+    // whole native stack.
     let collections_before = gc_collection_count();
     arm_old_reclaim();
     gc_check_trigger();
 
-    assert!(
-        gc_collection_count() > collections_before,
-        "a single gc_check_trigger call must still complete the reclaim (#5476)"
+    assert_eq!(
+        gc_collection_count(),
+        collections_before,
+        "the allocation point must not collect while the deferral has slack"
     );
     assert_eq!(
-        scan_fallback_count(ConservativeScanSite::OldReclaimAllocPoint),
+        automatic_scan_fallback_total(),
+        0,
+        "and must not force the conservative scan"
+    );
+    assert!(
+        GC_SAFEPOINT_PENDING.with(Cell::get),
+        "the poll must be armed, or nothing drains the deferral"
+    );
+    assert!(
+        GC_OLD_RECLAIM_PENDING.with(TriggerInput::get),
+        "the reclaim stays owed until a full runs"
+    );
+
+    // #5476: what a compute-only loop's back edge does. The reclaim completes
+    // there, with precise roots, without any host step.
+    js_gc_loop_safepoint();
+
+    assert!(
+        gc_collection_count() > collections_before,
+        "LIVE SUBJECT: the back-edge poll must run the owed full"
+    );
+    assert_eq!(
+        safepoint_drain_count(SafepointDrainKind::OldReclaim),
         1,
-        "and it is still a conservative-scan collection — counted, not hidden"
+        "and it must be the precise safepoint arm that ran it"
+    );
+    assert_eq!(automatic_scan_fallback_total(), 0);
+    assert!(!GC_OLD_RECLAIM_PENDING.with(TriggerInput::get));
+    assert_eq!(
+        GC_OLD_RECLAIM_DEFER_BASE.with(Cell::get),
+        None,
+        "the finished full retires the deferral"
     );
 
     clear_old_reclaim_state();
 }
 
 #[test]
+fn old_reclaim_alloc_point_collects_once_the_deferral_slack_is_spent() {
+    let _isolation = GcTestIsolationGuard::new();
+    let _pacing = crate::gc::policy::force_moving_gc_pacing();
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    clear_old_reclaim_state();
+    reset_scan_fallback_counters();
+
+    let collections_before = gc_collection_count();
+    arm_old_reclaim();
+    gc_check_trigger();
+    let Some(base) = GC_OLD_RECLAIM_DEFER_BASE.with(Cell::get) else {
+        panic!("precondition: the first allocation point deferred");
+    };
+    assert_eq!(gc_collection_count(), collections_before);
+
+    // No safepoint is reached (a synchronous recursion, one mega-call) while
+    // old pressure grows another band: the allocation point is the valve.
+    let band =
+        gc_old_reclaim_growth_band_bytes(GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(TriggerInput::get));
+    GC_EXTERNAL_SIDE_DRAINED_SINCE_FULL.with(|drained| drained.set(base + band));
+    gc_check_trigger();
+
+    assert!(
+        gc_collection_count() > collections_before,
+        "past the slack the allocation point must collect itself (#5476)"
+    );
+    assert_eq!(
+        scan_fallback_count(ConservativeScanSite::OldReclaimAllocPoint),
+        1,
+        "the valve keeps the scan, and is counted"
+    );
+    assert_eq!(GC_OLD_RECLAIM_DEFER_BASE.with(Cell::get), None);
+
+    crate::gc::set_safepoint_pending(false);
+    clear_old_reclaim_state();
+}
+
+#[test]
+fn old_reclaim_defer_slack_is_one_growth_band_from_the_deferral_point() {
+    assert!(old_reclaim_defer_within_slack(100, None, 10));
+    assert!(old_reclaim_defer_within_slack(109, Some(100), 10));
+    assert!(!old_reclaim_defer_within_slack(110, Some(100), 10));
+    assert!(old_reclaim_defer_within_slack(
+        usize::MAX - 1,
+        Some(usize::MAX - 5),
+        10
+    ));
+}
+
+#[test]
 fn old_reclaim_is_unchanged_when_moving_loop_polls_are_off() {
-    // #7161 proposes flipping `PERRY_GC_MOVING_LOOP_POLLS` OFF as a stopgap for
-    // #7154. The allocation-point arm must not consult that gate at all, so
-    // that the flip can never make this site behave differently — inert, not
-    // unsound. (The precise safepoint path is simply reached less often, which
-    // shows up as a higher census count, not as a correctness change.)
+    // With the polls off nothing drains a deferral (#11873), so the allocation
+    // point must not defer: every reclaim takes the valve, completes in this
+    // one call (#5476), and is counted.
     let _isolation = GcTestIsolationGuard::new();
     let _pacing = crate::gc::policy::force_legacy_gc_pacing();
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
@@ -120,7 +197,7 @@ fn old_reclaim_is_unchanged_when_moving_loop_polls_are_off() {
     assert_eq!(
         scan_fallback_count(ConservativeScanSite::OldReclaimAllocPoint),
         1,
-        "identical behaviour and identical census to the polls-on arm"
+        "the polls-off arm collects behind the counted scan, as before #11873"
     );
 
     clear_old_reclaim_state();

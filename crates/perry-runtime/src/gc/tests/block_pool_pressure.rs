@@ -98,10 +98,13 @@ fn blocked_critical_pressure_keeps_the_full_cycle_and_drain_sticky() {
     );
     assert!(crate::arena::block_pool_bytes_for_test() >= crate::arena::BLOCK_SIZE);
 
+    // #11873: the allocation point arms the next safepoint, which runs the
+    // full cycle.
     gc_check_trigger();
+    js_gc_loop_safepoint();
     assert_eq!(
         crate::arena::block_pool_bytes_for_test(),
         0,
-        "the allocation-point full-cycle backstop must consume the drain"
+        "the deferred full-cycle backstop must consume the drain"
     );
 }

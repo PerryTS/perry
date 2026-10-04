@@ -280,10 +280,13 @@ fn json_deferral_old_pressure_and_explicit_collection_are_not_delayed() {
     }
     let before = gc_total_collection_count();
     GC_OLD_RECLAIM_PENDING.with(|p| p.set(true));
+    // #11873: the allocation point defers the reclaim to the next safepoint;
+    // the JSON deferral must not delay it there either.
     gc_check_trigger();
+    js_gc_loop_safepoint();
     assert!(
         gc_total_collection_count() > before,
-        "old-pressure allocation fallback must run"
+        "old-pressure reclaim must run at the next safepoint"
     );
     unsafe {
         let _ = parse_records();
@@ -319,7 +322,9 @@ fn json_deferral_completion_hook_never_services_post_parse_pressure() {
     gc_bump_json_malloc_trigger_deferred();
     assert_eq!(gc_total_collection_count(), before);
     assert!(GC_SUPPRESSED_TINY_PARSE_COLLECTION_PENDING.with(Cell::get));
+    // #11873: serviced at the next safepoint, which the allocation point arms.
     gc_check_trigger();
+    js_gc_loop_safepoint();
     assert!(
         gc_total_collection_count() > before,
         "debt must remain serviceable"
