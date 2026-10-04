@@ -1710,7 +1710,7 @@ fn the_generic_tower_is_one_leaf_call_two_exits_and_a_bounded_number_of_blocks()
         "pic.miss.call",
         "pget.recv_merge",
         // #10498: the class-accessor arm on the compare's false edge, ahead of
-        // the front: six guards that decline to the front, and the direct
+        // the front: seven guards that decline to the front, and the direct
         // getter call (`verify_accessor_arm` pins the chain).
         "pic.acc.empty",
         "pic.acc.cache",
@@ -1718,6 +1718,7 @@ fn the_generic_tower_is_one_leaf_call_two_exits_and_a_bounded_number_of_blocks()
         "pic.acc.kind",
         "pic.acc.holder",
         "pic.acc.lane",
+        "pic.acc.inline",
         "pic.acc.call",
     ];
     // Labels carry a numeric suffix (`pic.token.6`); strip it for comparison.

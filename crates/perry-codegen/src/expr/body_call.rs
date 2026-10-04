@@ -107,14 +107,22 @@ pub(crate) fn emit_js_body_call_gc_leaf(
     blk.call_indirect_gc_leaf(DOUBLE, code_ptr, &native)
 }
 
-/// Call a compiled class INSTANCE getter through its code address (a site's
-/// class-accessor entry, `perry_abi::PIC_HOLDER_GETTER_WORD`): a method body
-/// `double get(double this)`, the convention the runtime calls the same entry
-/// with (`perry-runtime/src/closure/body_call.rs`, `js_method_body_fn!`).
-/// `code_ptr` is a `ptr`, `this_box` the NaN-boxed receiver as a `double`.
+/// Call a site accessor entry's getter through its code address
+/// (`perry_abi::PIC_HOLDER_GETTER_WORD`) as `double get(double this, i64
+/// pair)`: a compiled class INSTANCE getter, a method body `double get(double
+/// this)` that never reads the over-applied pair (the convention the runtime
+/// calls it with, `perry-runtime/src/closure/body_call.rs`,
+/// `js_method_body_fn!`), or the runtime's closure-getter entry, which calls
+/// the getter closure the pair holds. `code_ptr` is a `ptr`, `this_box` the
+/// NaN-boxed receiver as a `double`, `pair` the entry's pair word (`i64`).
 /// The getter can run any JS: this is a collecting, possibly throwing call.
-pub(crate) fn emit_class_getter_call(blk: &mut LlBlock, code_ptr: &str, this_box: &str) -> String {
-    blk.call_indirect(DOUBLE, code_ptr, &[(DOUBLE, this_box)])
+pub(crate) fn emit_accessor_getter_call(
+    blk: &mut LlBlock,
+    code_ptr: &str,
+    this_box: &str,
+    pair: &str,
+) -> String {
+    blk.call_indirect(DOUBLE, code_ptr, &[(DOUBLE, this_box), (I64, pair)])
 }
 
 /// Call a compiled class INSTANCE setter through its code address (a store
