@@ -1,3 +1,26 @@
+CURRENT07 FULL APPLICATION MATRIX VERIFIED; PRIVATE LAZY RSS IMPLEMENTED
+45/45 fresh builds;306/306 correct measurements across17cases. Independent
+source/product/raw-output/RSS/perf/repetition verification passes;749raw and
+proof files copied locally/rehashed. Production TS RSS -2.029%, instructions
++0.681%, faults +38.758%; retained-doc RSS -12.895%, pipeline -10.795%.
+Production RSS improves15cases/noopflat/Zod+0.181%. All signed instruction
+costs and distributions published; these supersede preceding-main values
+only for main07, not an improvement claim across source versions.
+Original private entry TS RSS -2.306%, instructions -1.459%, faults+3.556%
+vs GC on07; prior2026 +1.979% instructions remains historical. No adoption
+until revised once-advice evaluation and full remaining safety checks.
+Current07 linked wrapper failed before any build: it expected the global
+independent build proof inside the entry product directory. Original rc1/log
+preserved. Separatev42r1 validates all3arms in the real global proof and
+queues same33builds/66executions; moving cells mustcopy/protect. Handle1760792.
+New private d4f491673b defers process RSS sampling until copying declines:
+Linux procfs/Mac task_info calls were unused on every successful copying minor.
+Previous-pause/force capture and thresholds unchanged; fallback samples before
+marking, including after rolled-back attempts. No layout/ABI/campaign edits.
+Paired tests require actual copying/root rewrite withzero queries and pinned
+fallback withone query, positiveRSS andintact root. Mac full suite running;
+isolatedLinux build/fullsuite queued1762987. No measured benefit yet.
+
 RING ATTRIBUTION AND SUPPORT VERIFIERS PREPARED (2026-10-04 01:01Z)
 Ring source is unchanged:256-record bounded live ring,2million escaping
 replacement allocations. Full-runtime GC/originalentry/once diagnosis queued
