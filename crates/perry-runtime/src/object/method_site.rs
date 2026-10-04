@@ -247,28 +247,13 @@ pub fn note_worker_agent() {
     }
 }
 
-/// Why a miss did not prime (diagnostic; `PERRY_METHOD_SITE_STATS` prints it).
-const REFUSALS: [&str; 19] = [
-    "not_object_pointer",
-    "not_ordinary",
-    "dictionary",
-    "own_spill_slot",
-    "own_accessor",
-    "own_not_direct_callable",
-    "inh_class_instance",
-    "inh_proto_not_in_shape",
-    "inh_hop_refused",
-    "inh_not_found",
-    "inh_not_direct_callable",
-    "inh_workers",
-    "dc_not_closure",
-    "dc_special",
-    "dc_rest",
-    "dc_captures_this",
-    "dc_arity_pad",
-    "dc_bound",
-    "site_megamorphic",
-];
+/// Why a miss did not prime (diagnostic; `PERRY_METHOD_SITE_STATS` prints it),
+/// by the index [`refuse`] counts under. One string, see
+/// [`crate::hot_diag::report_name`].
+fn refusal_name(reason: usize) -> &'static str {
+    const NAMES: &str = "not_object_pointer not_ordinary dictionary own_spill_slot own_accessor own_not_direct_callable inh_class_instance inh_proto_not_in_shape inh_hop_refused inh_not_found inh_not_direct_callable inh_workers dc_not_closure dc_special dc_rest dc_captures_this dc_arity_pad dc_bound site_megamorphic";
+    crate::hot_diag::report_name(NAMES, reason)
+}
 per_test_global! {
     static SITE_REFUSED: [AtomicU64; 19] = [const { AtomicU64::new(0) }; 19];
 }
@@ -315,12 +300,25 @@ pub extern "C" fn js_method_site_stats(which: i32) -> f64 {
     }) as f64
 }
 
+/// Is `PERRY_METHOD_SITE_STATS` set? Read once; the reader that settles the
+/// answer installs the exit report. A tri-state byte (0 unread, 1 off, 2 on)
+/// rather than a `OnceLock<bool>`: `OnceLock` initialises through a `dyn`
+/// closure whose vtable is load-time relocations in every program that links
+/// the miss path.
 fn stats_report_enabled() -> bool {
     per_test_global! {
-        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        static ON: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
     }
-    *ON.get_or_init(|| {
-        let on = std::env::var_os("PERRY_METHOD_SITE_STATS").is_some();
+    match ON.load(Ordering::Relaxed) {
+        0 => {}
+        state => return state == 2,
+    }
+    let on = std::env::var_os("PERRY_METHOD_SITE_STATS").is_some();
+    let state = if on { 2 } else { 1 };
+    if ON
+        .compare_exchange(0, state, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+    {
         if on {
             extern "C" fn report() {
                 let (a, b, c) = method_site_stats();
@@ -328,7 +326,7 @@ fn stats_report_enabled() -> bool {
                 for (i, n) in SITE_REFUSED.iter().enumerate() {
                     let n = n.load(Ordering::Relaxed);
                     if n != 0 {
-                        refused.push_str(&format!(" refused.{}={n}", REFUSALS[i]));
+                        refused.push_str(&format!(" refused.{}={n}", refusal_name(i)));
                     }
                 }
                 let (hd, ha, hr) = read_holder::read_holder_stats();
@@ -351,8 +349,8 @@ fn stats_report_enabled() -> bool {
             }
             unsafe { libc::atexit(report) };
         }
-        on
-    })
+    }
+    on
 }
 
 /// The miss entry: prime the site when the facts hold, then dispatch as the
@@ -1344,5 +1342,16 @@ mod constfn_tests {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod report_names_line_up {
+    #[test]
+    fn refusal_names_cover_every_counter() {
+        assert_eq!(super::refusal_name(0), "not_object_pointer");
+        assert_eq!(super::refusal_name(11), "inh_workers");
+        assert_eq!(super::refusal_name(18), "site_megamorphic");
+        assert_eq!(super::refusal_name(19), "?");
     }
 }
