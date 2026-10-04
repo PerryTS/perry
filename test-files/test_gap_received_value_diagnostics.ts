@@ -159,3 +159,49 @@ for (const entry of inheritedViews) {
   }
   callbackError('inherited-' + label + '-restored', view);
 }
+
+// Constructor metadata evaluates the language in operator, not boxed presence.
+const primitiveConstructors: any[] = [
+  ['number', 1], ['string', 'ctor'], ['boolean', true], ['symbol', Symbol('n')],
+  ['null', null], ['undefined', undefined], ['false', false],
+];
+for (const entry of primitiveConstructors) {
+  callbackError('primitive-constructor-' + entry[0], { constructor: entry[1] });
+}
+const primitiveViews: any[] = [
+  ['buffer', Buffer.prototype, Buffer.alloc(1)],
+  ['dataview', DataView.prototype, new DataView(new ArrayBuffer(1))],
+  ['int16array', Int16Array.prototype, new Int16Array(1)],
+];
+for (const entry of primitiveViews) {
+  const label = entry[0];
+  const prototype = entry[1];
+  const view = entry[2];
+  const original = Object.getOwnPropertyDescriptor(prototype, 'constructor');
+  try {
+    for (const own of [true, false]) {
+      const target = own ? view : prototype;
+      let calls = 0;
+      Object.defineProperty(target, 'constructor', {
+        get() { calls++; if (typeof gc === 'function') gc(); return 1; },
+        configurable: true,
+      });
+      callbackError('primitive-' + label + (own ? '-own' : '-prototype'), view);
+      console.log('primitive-' + label + (own ? '-own-calls' : '-prototype-calls'), calls);
+      if (own) delete view.constructor;
+    }
+  } finally {
+    Object.defineProperty(prototype, 'constructor', original!);
+  }
+  callbackError('primitive-' + label + '-restored', view);
+}
+// Truthiness applies to the first read only; the second RHS is checked as-is.
+for (const entry of primitiveConstructors) {
+  let calls = 0;
+  const value: any = {};
+  Object.defineProperty(value, 'constructor', {
+    get() { calls++; return calls === 1 ? 1 : entry[1]; }, configurable: true,
+  });
+  callbackError('primitive-second-' + entry[0], value);
+  console.log('primitive-second-' + entry[0] + '-calls', calls);
+}
