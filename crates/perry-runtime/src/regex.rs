@@ -403,6 +403,20 @@ pub(crate) fn store_last_index_number(re: *mut RegExpHeader, n: usize) {
     }
 }
 
+/// The TypeError message for a write to a non-writable `lastIndex`.
+#[cfg(feature = "regex-engine")]
+pub(crate) const LAST_INDEX_READ_ONLY: &str =
+    "Cannot assign to read only property 'lastIndex' of object";
+
+/// Whether `lastIndex` on this RegExp is writable (the default). A lookup in
+/// the descriptor state; it runs no user code.
+#[cfg(feature = "regex-engine")]
+pub(crate) fn last_index_writable(re: *const RegExpHeader) -> bool {
+    crate::object::get_property_attrs(re as usize, "lastIndex")
+        .map(|a| a.writable())
+        .unwrap_or(true)
+}
+
 /// Spec `Set(R, "lastIndex", n, true)` — the lastIndex updates in
 /// RegExpBuiltinExec (steps 14/18) are performed with the *Throw* flag set.
 /// A user can make `lastIndex` non-writable
@@ -412,11 +426,8 @@ pub(crate) fn store_last_index_number(re: *mut RegExpHeader, n: usize) {
 /// `lastIndex` is writable (the default) this just stores the number.
 #[cfg(feature = "regex-engine")]
 pub(crate) fn set_last_index_throwing(re: *mut RegExpHeader, n: usize) {
-    let writable = crate::object::get_property_attrs(re as usize, "lastIndex")
-        .map(|a| a.writable())
-        .unwrap_or(true);
-    if !writable {
-        let message = b"Cannot assign to read only property 'lastIndex' of object";
+    if !last_index_writable(re) {
+        let message = LAST_INDEX_READ_ONLY.as_bytes();
         let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
         let err = crate::error::js_typeerror_new(msg);
         crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));

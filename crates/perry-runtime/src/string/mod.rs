@@ -306,8 +306,9 @@ pub(crate) const STRING_FLAG_JSON_ESCAPE_FREE: u32 = 1 << 1;
 /// describes one payload, so it must never reach another string:
 /// `init_string_header` strips it from every constructed string, and the
 /// in-place writers (`js_string_append`, `js_string_append_chain`) clear it on
-/// the destination they change. A validated header is already shared
-/// (`js_string_addref`), so it is never itself mutated in place afterwards.
+/// the destination they change. The flag must not be read as "shared": a
+/// search that reads a string in place (`perex_owner::InPlace`) validates it
+/// without marking it shared, so a later in-place append is what clears it.
 pub(crate) const STRING_FLAG_WTF8_VALIDATED: u32 = 1 << 2;
 
 /// A static empty string that can be used as a safe fallback for null pointers.
