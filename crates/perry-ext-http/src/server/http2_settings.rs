@@ -23,6 +23,7 @@ use perry_ffi::{
     ErrorKind, JsValue, StringHeader,
 };
 use serde_json::Value;
+use std::collections::BTreeMap;
 
 // SETTINGS identifiers (RFC 7540 §6.5.2 + RFC 8441).
 const ID_HEADER_TABLE_SIZE: u16 = 0x1;
@@ -145,6 +146,8 @@ pub extern "C" fn js_node_http2_get_unpacked_settings(buf_bits: i64) -> *mut Str
     }
 
     let mut parts: Vec<String> = Vec::new();
+    let mut custom_settings = BTreeMap::new();
+    let mut custom_position = None;
     let mut i = 0;
     while i + 6 <= bytes.len() {
         let id = u16::from_be_bytes([bytes[i], bytes[i + 1]]);
@@ -163,9 +166,25 @@ pub extern "C" fn js_node_http2_get_unpacked_settings(buf_bits: i64) -> *mut Str
             ID_ENABLE_CONNECT_PROTOCOL => {
                 parts.push(format!("\"enableConnectProtocol\":{}", val != 0))
             }
-            _ => {} // Unknown settings are ignored, per the HTTP/2 spec.
+            _ => {
+                // Node exposes unknown IDs, with the container inserted at
+                // the first unknown record and duplicate IDs last-wins.
+                if custom_position.is_none() {
+                    custom_position = Some(parts.len());
+                    parts.push(String::new());
+                }
+                custom_settings.insert(id, val);
+            }
         }
         i += 6;
+    }
+    if let Some(position) = custom_position {
+        // All u16 IDs are JS array-index keys, so enumerate them numerically.
+        let custom_parts: Vec<String> = custom_settings
+            .iter()
+            .map(|(id, val)| format!("\"{id}\":{val}"))
+            .collect();
+        parts[position] = format!("\"customSettings\":{{{}}}", custom_parts.join(","));
     }
     let json = format!("{{{}}}", parts.join(","));
     alloc_string(&json).as_raw()
@@ -293,5 +312,79 @@ fn read_js_string(value: JsValue) -> String {
         let len = header.byte_len as usize;
         let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
         String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn unpack(records: &[(u16, u32)]) -> String {
+        let mut bytes = Vec::new();
+        for &(id, value) in records {
+            push_record(&mut bytes, id, value);
+        }
+        let buffer = alloc_buffer(&bytes);
+        let result =
+            js_node_http2_get_unpacked_settings(JsValue::from_object_ptr(buffer).bits() as i64);
+        read_js_string(JsValue::from_string_ptr(result))
+    }
+
+    #[test]
+    fn unpacked_custom_settings_preserve_wire_position_and_numeric_order() {
+        assert_eq!(
+            unpack(&[
+                (1, 42),
+                (9999, 301),
+                (8, 1),
+                (65535, u32::MAX),
+                (9, 10),
+                (7, 1),
+                (0, 2),
+                (9999, 3),
+                (65535, 0),
+                (6, u32::MAX)
+            ]),
+            concat!(
+                "{\"headerTableSize\":42,",
+                "\"customSettings\":{\"0\":2,\"7\":1,\"9\":10,\"9999\":3,\"65535\":0},",
+                "\"enableConnectProtocol\":true,",
+                "\"maxHeaderSize\":4294967295,\"maxHeaderListSize\":4294967295}"
+            )
+        );
+    }
+
+    #[test]
+    fn unpacked_custom_settings_unknown_only_and_first_record() {
+        assert_eq!(
+            unpack(&[(9999, 301)]),
+            "{\"customSettings\":{\"9999\":301}}"
+        );
+        assert_eq!(
+            unpack(&[(65535, u32::MAX), (1, 42), (7, 0)]),
+            "{\"customSettings\":{\"7\":0,\"65535\":4294967295},\"headerTableSize\":42}"
+        );
+    }
+
+    #[test]
+    fn unpacked_custom_settings_omitted_for_known_records() {
+        assert_eq!(unpack(&[]), "{}");
+        assert_eq!(
+            unpack(&[
+                (1, 4096),
+                (2, 2),
+                (3, u32::MAX),
+                (4, 65535),
+                (5, 1),
+                (6, 42),
+                (8, 2)
+            ]),
+            concat!(
+                "{\"headerTableSize\":4096,\"enablePush\":true,",
+                "\"maxConcurrentStreams\":4294967295,\"initialWindowSize\":65535,",
+                "\"maxFrameSize\":1,\"maxHeaderSize\":42,\"maxHeaderListSize\":42,",
+                "\"enableConnectProtocol\":true}"
+            )
+        );
     }
 }
