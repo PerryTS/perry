@@ -594,16 +594,14 @@ pub(crate) fn function_prototype_fallback_target(ptr: usize, prop: &str) -> Opti
     if matches!(
         prop,
         "prototype" | "name" | "length" | "caller" | "arguments" | "constructor"
-        // Universal Object.prototype method names: every receiver (closures
-        // included) resolves these through a dedicated native dispatch arm,
-        // not a literal field on the walked prototype object. Serving a
-        // generic-lookup result for one of these hijacks that dispatch —
-        // e.g. `m.propertyIsEnumerable` resolved a same-named-but-wrong
-        // value via this fallback, so `m.propertyIsEnumerable("length")`
-        // called the wrong thing (test262 S15.2.4.3_A8 / S15.2.4.4_A8 /
-        // S15.2.4.7_A8 regressions caught after the initial fix).
-        | "toString" | "valueOf" | "hasOwnProperty" | "isPrototypeOf"
-        | "propertyIsEnumerable" | "toLocaleString"
+        // Universal Object.prototype method names resolved through a
+        // dedicated native dispatch arm, not a literal field on the walked
+        // prototype object. Serving a generic-lookup result for one of these
+        // hijacked that dispatch with a same-named-but-wrong value (test262
+        // S15.2.4.3_A8 / S15.2.4.4_A8 / S15.2.4.7_A8). `hasOwnProperty` and
+        // `propertyIsEnumerable` are not listed: %Function.prototype% carries
+        // the real methods for them, so a read returns the method.
+        | "toString" | "valueOf" | "isPrototypeOf" | "toLocaleString"
     ) || crate::object::reified_function_method_name(prop).is_some()
     {
         return None;

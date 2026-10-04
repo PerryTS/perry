@@ -1698,6 +1698,20 @@ pub unsafe extern "C" fn js_class_static_method_call(
     // calling an absent member throws instead of silently returning the class.
     // In particular, this is observable when code deliberately probes a class
     // with an unknown method inside `assert.throws`.
+    // A class inherits `Object.prototype` through `Function.prototype`; with
+    // no static of that name on its chain, these two are the builtins.
+    if matches!(name, "hasOwnProperty" | "propertyIsEnumerable") {
+        let key = if args_len >= 1 && !args_ptr.is_null() {
+            *args_ptr
+        } else {
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        };
+        return if name == "hasOwnProperty" {
+            crate::object::js_object_has_own(receiver, key)
+        } else {
+            crate::object::js_object_property_is_enumerable(receiver, key)
+        };
+    }
     report_dispatch_miss(
         "static-member-call",
         receiver,
