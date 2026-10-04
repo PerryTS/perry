@@ -90,11 +90,12 @@ pub extern "C" fn js_node_http2_get_packed_settings(settings_bits: i64) -> *mut 
         );
     }
     if let Some(v) = map.get("initialWindowSize") {
-        push_record(
-            &mut out,
-            ID_INITIAL_WINDOW_SIZE,
-            require_uint32("initialWindowSize", v),
-        );
+        let size = require_uint32("initialWindowSize", v);
+        // HTTP/2 flow-control windows are limited to 2^31 - 1, not u32::MAX.
+        if size > i32::MAX as u32 {
+            throw_invalid_setting("initialWindowSize", v, ErrorKind::RangeError);
+        }
+        push_record(&mut out, ID_INITIAL_WINDOW_SIZE, size);
     }
     if let Some(v) = map.get("maxFrameSize") {
         push_record(
@@ -328,6 +329,59 @@ mod tests {
         let result =
             js_node_http2_get_unpacked_settings(JsValue::from_object_ptr(buffer).bits() as i64);
         read_js_string(JsValue::from_string_ptr(result))
+    }
+
+    #[test]
+    fn packed_initial_window_size_boundaries() {
+        fn pack(name: &str, value: u32) -> Result<Vec<u8>, f64> {
+            let json = alloc_string(&format!("{{\"{name}\":{value}}}"));
+            // SAFETY: the allocated JSON string is live for the parse call.
+            let settings = unsafe { perry_runtime::json::js_json_parse(json.as_raw().cast()) };
+            perry_runtime::exception::catch_js_throw(|| {
+                let buffer = js_node_http2_get_packed_settings(settings.bits() as i64);
+                value_byte_slice(JsValue::from_object_ptr(buffer))
+                    .expect("packed settings must be a Buffer")
+                    .to_vec()
+            })
+        }
+
+        fn error_field(error: f64, name: &str) -> String {
+            let key = alloc_string(name);
+            let value = perry_runtime::object::js_object_get_field_by_name(
+                error.to_bits() as *const perry_runtime::ObjectHeader,
+                key.as_raw().cast(),
+            );
+            read_js_string(JsValue::from_bits(value.bits()))
+        }
+
+        for value in [0, i32::MAX as u32] {
+            let mut expected = Vec::new();
+            push_record(&mut expected, ID_INITIAL_WINDOW_SIZE, value);
+            assert_eq!(pack("initialWindowSize", value).unwrap(), expected);
+        }
+        for (name, id) in [
+            ("headerTableSize", ID_HEADER_TABLE_SIZE),
+            ("maxConcurrentStreams", ID_MAX_CONCURRENT_STREAMS),
+            ("maxHeaderListSize", ID_MAX_HEADER_LIST_SIZE),
+            ("maxHeaderSize", ID_MAX_HEADER_LIST_SIZE),
+        ] {
+            let mut expected = Vec::new();
+            push_record(&mut expected, id, u32::MAX);
+            assert_eq!(pack(name, u32::MAX).unwrap(), expected, "{name}");
+        }
+        for value in [1_u32 << 31, u32::MAX] {
+            let error = pack("initialWindowSize", value)
+                .expect_err("initialWindowSize must reject values at or above 2^31");
+            assert_eq!(error_field(error, "name"), "RangeError");
+            assert_eq!(
+                error_field(error, "code"),
+                "ERR_HTTP2_INVALID_SETTING_VALUE"
+            );
+            assert_eq!(
+                error_field(error, "message"),
+                format!("Invalid value for setting \"initialWindowSize\": {value}")
+            );
+        }
     }
 
     #[test]
