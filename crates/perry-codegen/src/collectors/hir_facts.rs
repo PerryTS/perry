@@ -1197,27 +1197,20 @@ fn is_fresh_uint8array_length_expr(
         Expr::LocalGet(id) => {
             known_length_locals.contains(id) || lengths.non_object_locals.contains(id)
         }
-        // `new Uint8Array(SIZE * SIZE)` — a fixed arithmetic combination of
-        // literals and known-length locals is exactly as fixed as either leaf
-        // on its own, and this predicate asks only whether the allocation's
-        // SIZE is fixed, never what it is (`length_source_from_expr` resolves
-        // the value later, with a `FnCtx` in hand, and simply records no
-        // constant length when it cannot).
+        // `new Uint8Array(SIZE * SIZE)`, `new Float64Array(rows.length * 7)`:
+        // the constructor's form depends only on whether its argument is an
+        // Object, so any operator whose result is never one proves the length
+        // form, whatever its operands are. This predicate asks only that, never
+        // what the length is (`length_source_from_expr` resolves the value
+        // later, with a `FnCtx` in hand, and records no constant length when
+        // it cannot).
         //
         // Rejecting the product cost the whole buffer-view tier for the
         // receiver: no view means no inline element load, so every read paid a
         // `js_uint8array_index_get_value` call —
         // `benchmarks/suite/bench_int_arithmetic.ts` allocates exactly this way
         // and spent 54 calls per pixel because of it.
-        Expr::Binary { op, left, right }
-            if matches!(
-                op,
-                perry_hir::BinaryOp::Add | perry_hir::BinaryOp::Sub | perry_hir::BinaryOp::Mul
-            ) =>
-        {
-            is_fresh_uint8array_length_expr(left, known_length_locals, lengths)
-                && is_fresh_uint8array_length_expr(right, known_length_locals, lengths)
-        }
+        e if super::spec_abi_sites::operator_result_is_never_object(e) => true,
         _ => is_fresh_uint8array_length_literal(expr),
     }
 }
@@ -2319,6 +2312,53 @@ mod tests {
             &[50],
         );
         assert!(ids.contains(&1) && ids.contains(&2), "{ids:?}");
+    }
+
+    #[test]
+    fn typed_array_of_a_computed_length_owns_its_storage_whatever_the_operands() {
+        // #11810: `new Int32Array(rows.length * 7)`, `-x`, `a < b`, `typeof x`
+        // with `rows`/`x` (local 99) of unknown provenance. Each operator's
+        // result is never an Object, so each is the LENGTH form. The bare
+        // property read and the bare unknown local stay unowned.
+        let rows_length = || Expr::PropertyGet {
+            object: Box::new(Expr::LocalGet(99)),
+            property: "length".to_string(),
+            byte_offset: 0,
+        };
+        let ids = known_ids(vec![
+            const_let(
+                1,
+                int32_new(Expr::Binary {
+                    op: BinaryOp::Mul,
+                    left: Box::new(rows_length()),
+                    right: Box::new(Expr::Integer(7)),
+                }),
+            ),
+            const_let(
+                2,
+                int32_new(Expr::Unary {
+                    op: perry_hir::UnaryOp::Neg,
+                    operand: Box::new(Expr::LocalGet(99)),
+                }),
+            ),
+            const_let(
+                3,
+                int32_new(Expr::Compare {
+                    op: perry_hir::CompareOp::Lt,
+                    left: Box::new(Expr::LocalGet(99)),
+                    right: Box::new(rows_length()),
+                }),
+            ),
+            const_let(4, int32_new(Expr::TypeOf(Box::new(Expr::LocalGet(99))))),
+            const_let(5, int32_new(rows_length())),
+            const_let(6, int32_new(Expr::LocalGet(99))),
+        ]);
+        for id in [1, 2, 3, 4] {
+            assert!(ids.contains(&id), "local {id} not owned: {ids:?}");
+        }
+        for id in [5, 6] {
+            assert!(!ids.contains(&id), "local {id} wrongly owned: {ids:?}");
+        }
     }
 
     /// `collect_type_facts` for one function whose parameter 1 is a
