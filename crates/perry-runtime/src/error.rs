@@ -52,8 +52,8 @@ pub(crate) unsafe fn mark_dom_exception(error: *mut ErrorHeader) {
     (*error).flags &= !ERROR_FLAG_HAS_MESSAGE;
 }
 
-const ERROR_FLAG_HAS_MESSAGE: u32 = 1 << 0;
-const ERROR_FLAG_HAS_CAUSE: u32 = 1 << 1;
+pub(crate) const ERROR_FLAG_HAS_MESSAGE: u32 = 1 << 0;
+pub(crate) const ERROR_FLAG_HAS_CAUSE: u32 = 1 << 1;
 const ERROR_FLAG_HAS_ERRORS: u32 = 1 << 2;
 
 /// Special class IDs for `instanceof` checks (must match perry-codegen/src/expr.rs)
@@ -340,6 +340,29 @@ pub(crate) unsafe fn error_set_cause(error: *mut ErrorHeader, cause: f64) {
         cause.to_bits(),
     );
     (*error).flags |= ERROR_FLAG_HAS_CAUSE;
+}
+
+/// Set the `stack` text, as when a cloned Error arrives from another thread.
+pub(crate) unsafe fn error_set_stack(error: *mut ErrorHeader, stack: *mut StringHeader) {
+    crate::gc::runtime_store_gc_heap_word_slot(
+        error as usize,
+        &(*error).stack as *const _ as usize,
+        stack as u64,
+    );
+}
+
+/// The kind a structured clone gives an Error by its `name`. A name that is
+/// not one of the built-in Error constructors gives a plain Error, as in V8.
+pub(crate) fn error_kind_for_name(name: &[u8]) -> u32 {
+    match name {
+        b"TypeError" => ERROR_KIND_TYPE_ERROR,
+        b"RangeError" => ERROR_KIND_RANGE_ERROR,
+        b"ReferenceError" => ERROR_KIND_REFERENCE_ERROR,
+        b"SyntaxError" => ERROR_KIND_SYNTAX_ERROR,
+        b"EvalError" => ERROR_KIND_EVAL_ERROR,
+        b"URIError" => ERROR_KIND_URI_ERROR,
+        _ => ERROR_KIND_ERROR,
+    }
 }
 
 pub(crate) unsafe fn error_set_errors(

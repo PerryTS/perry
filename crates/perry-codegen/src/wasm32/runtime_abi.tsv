@@ -4289,7 +4289,7 @@ js_worker_threads_message_channel_new	f64
 js_worker_threads_move_message_port_to_context	f64	f64,f64
 js_worker_threads_on	f64	i64,i64
 js_worker_threads_parent_port	f64	
-js_worker_threads_post_message	f64	f64
+js_worker_threads_post_message	f64	f64,f64
 js_worker_threads_post_message_to_thread	f64	f64,f64,f64,f64
 js_worker_threads_process_pending	i32s	
 js_worker_threads_receive_message_on_port	f64	f64
@@ -4307,7 +4307,7 @@ js_worker_threads_worker_new_by_spec	f64	f64,f64
 js_worker_threads_worker_off	f64	i64,f64,i64
 js_worker_threads_worker_on	f64	i64,f64,i64
 js_worker_threads_worker_once	f64	i64,f64,i64
-js_worker_threads_worker_post_message	f64	i64,f64
+js_worker_threads_worker_post_message	f64	i64,f64,f64
 js_worker_threads_worker_ref	f64	i64
 js_worker_threads_worker_reload	f64	i64
 js_worker_threads_worker_remove_event_listener	f64	i64,f64,i64

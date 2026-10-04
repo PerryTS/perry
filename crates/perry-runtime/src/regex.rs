@@ -322,6 +322,15 @@ pub(crate) unsafe fn regex_program_slot(user_ptr: *mut u8) -> Option<*mut u64> {
     Some(std::ptr::addr_of_mut!((*user_ptr.cast::<RegExpHeader>()).perex_program) as *mut u64)
 }
 
+/// The pattern and flags strings a RegExp was made from, for a structured
+/// clone (`new RegExp(source, flags)` makes it again). Allocates nothing.
+pub(crate) unsafe fn regexp_source_and_flags(
+    re: *const RegExpHeader,
+) -> (Option<*const StringHeader>, Option<*const StringHeader>) {
+    let valid = |s: *const StringHeader| is_valid_ptr(s).then_some(s);
+    (valid((*re).pattern_ptr), valid((*re).flags_ptr))
+}
+
 /// Header for heap-allocated RegExp objects
 #[repr(C)]
 pub struct RegExpHeader {

@@ -3,7 +3,7 @@
 //! serialization already does. It carries neither heap edges nor ShapeIds.
 use crate::object::{field_rep, shapes, static_shapes, ObjectHeader};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ConstFnTransferFacts {
     rep: u64,
     infos: Vec<shapes::ConstFnSlotInfo>,

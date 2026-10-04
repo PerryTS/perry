@@ -12,6 +12,7 @@ extern "C" fn broadcast_post_message(
     closure: *const ClosureHeader,
     _this: perry_runtime::closure::JsThis,
     value: f64,
+    transfer: f64,
 ) -> f64 {
     let channel_id = port_id_from_closure(closure);
     let channel_name = BROADCAST_CHANNELS.with(|channels| {
@@ -23,10 +24,7 @@ extern "C" fn broadcast_post_message(
     let Some(channel_name) = channel_name else {
         throw_invalid_state_error("BroadcastChannel is closed");
     };
-    if message_value_is_uncloneable(value, &mut HashSet::new()) {
-        throw_data_clone_error("object could not be cloned.");
-    }
-    let serialized = serialize_message(value);
+    let serialized = clone_message(value, transfer);
     BROADCAST_CHANNELS.with(|channels| {
         for (id, state) in channels.borrow_mut().iter_mut() {
             if *id != channel_id && !state.closed && state.name == channel_name {
@@ -143,7 +141,7 @@ pub extern "C" fn js_worker_threads_broadcast_channel_new(name: f64) -> f64 {
         obj,
         "postMessage",
         port_bound_closure(
-            perry_runtime::fn_info!(broadcast_post_message, 1; with_declared(1)),
+            perry_runtime::fn_info!(broadcast_post_message, 2; with_declared(1)),
             id,
         ),
     );

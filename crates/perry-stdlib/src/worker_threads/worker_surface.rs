@@ -14,11 +14,15 @@ pub(super) fn worker_id_from_receiver(receiver: i64) -> Option<u64> {
 }
 
 #[no_mangle]
-pub extern "C" fn js_worker_threads_worker_post_message(receiver: i64, value: f64) -> f64 {
+pub extern "C" fn js_worker_threads_worker_post_message(
+    receiver: i64,
+    value: f64,
+    transfer: f64,
+) -> f64 {
     let Some(worker_id) = worker_id_from_receiver(receiver) else {
         return js_undefined();
     };
-    let message = unsafe { serialize_nanbox_for_thread(value.to_bits()) };
+    let message = clone_message(value, transfer);
     let sender = WORKERS
         .lock()
         .unwrap()
@@ -199,7 +203,7 @@ pub(super) fn worker_object(
         obj,
         "postMessage",
         closure_value_with_worker_id(
-            perry_runtime::fn_info!(worker_post_message, 1; with_declared(1)),
+            perry_runtime::fn_info!(worker_post_message, 2; with_declared(1)),
             worker_id,
         ),
     );
@@ -334,9 +338,9 @@ extern "C" fn web_worker_post_message(
     _closure: *const ClosureHeader,
     _this: perry_runtime::closure::JsThis,
     value: f64,
-    _transfer: f64,
+    transfer: f64,
 ) -> f64 {
-    js_worker_threads_post_message(value)
+    js_worker_threads_post_message(value, transfer)
 }
 
 extern "C" fn web_worker_add_event_listener(
