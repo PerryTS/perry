@@ -948,12 +948,12 @@ pub(crate) fn lower_class_evaluation_object(ctx: &mut FnCtx<'_>, expr: &Expr) ->
             crate::codegen::fresh_class_templates::template_cell_global(template_cid)
         )
     };
-    // Room for the evaluation's own `length`, `name` and static
-    // methods, its pinned parent, its captured environment and its
-    // prototype object besides its static fields, so the template's
+    // Room for the evaluation's template key, its own `length`, `name`
+    // and static methods, its pinned parent, its captured environment and
+    // its prototype object besides its static fields, so the template's
     // shapes are all inline slots (`class_object_template`).
     let own_member_slots =
-        3 + ctx.classes.get(template).map_or(0, |c| {
+        4 + ctx.classes.get(template).map_or(0, |c| {
             c.static_methods.len()
                 + usize::from(c.extends_expr.is_some() || evaluated_parent.is_some())
         }) + usize::from(!captured_args.is_empty());

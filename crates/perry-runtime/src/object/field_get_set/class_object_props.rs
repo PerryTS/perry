@@ -70,6 +70,11 @@ pub(crate) fn class_evaluation_prototype_class_id(ptr: usize) -> Option<u32> {
 /// but observable method identity and private-name closures belong to the
 /// evaluation, not to that shared template.
 unsafe fn class_evaluation_prototype_value(obj: *const ObjectHeader) -> f64 {
+    // The slot the template's recorded `EvaluationPrototype` transition put
+    // it in, while the object still carries that transition's target shape.
+    if let Some(existing) = super::class_object_template::recorded_evaluation_prototype(obj) {
+        return existing;
+    }
     if let Some(existing) = super::super::class_registry::class_object_own_field_bytes(
         obj,
         CLASS_EVALUATION_PROTOTYPE_KEY,
@@ -142,7 +147,6 @@ unsafe fn class_evaluation_prototype_value(obj: *const ObjectHeader) -> f64 {
             class.with_mut_ptr::<ObjectHeader, _>(|class| {
                 super::class_object_template::class_object_add_internal_for(
                     class,
-                    class_id,
                     super::class_object_template::InternalKey::EvaluationPrototype,
                     proto_value,
                 )
@@ -242,7 +246,6 @@ unsafe fn class_evaluation_prototype_value(obj: *const ObjectHeader) -> f64 {
     class.with_mut_ptr::<ObjectHeader, _>(|class| {
         super::class_object_template::class_object_add_internal_for(
             class,
-            class_id,
             super::class_object_template::InternalKey::EvaluationPrototype,
             proto_value,
         )

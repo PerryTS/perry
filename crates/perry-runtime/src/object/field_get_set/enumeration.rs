@@ -1681,6 +1681,7 @@ pub(crate) fn is_internal_runtime_key_bytes(b: &[u8]) -> bool {
         || b == crate::node_stream::STREAM_CAPTURE_REJECTIONS_KEY
         || b.starts_with(b"__perry_computed_field_key_")
         || b == b"#<perry:class-evaluation-prototype>"
+        || b == super::CLASS_TEMPLATE_KEY
         || b == b"#<perry:private-class-lexical-binding>"
         || b.starts_with(b"#<perry:class-evaluation-method:")
         || b.starts_with(b"#<perry:static-private-method:")

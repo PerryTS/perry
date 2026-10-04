@@ -4120,7 +4120,11 @@ pub(crate) unsafe fn transition_object_shape_prototype(
     } else {
         current.semantic_generation
     };
-    let id = publish_shape_result(shape_descriptor_ensure_with_holes(
+    // The lanes describe the receiver's OWN slots, which a new [[Prototype]]
+    // leaves as they are: carry them (normalized, as a key-add carries the
+    // lanes below it), so a class instance linked to its evaluation's
+    // prototype keeps its class's numeric lanes.
+    let id = publish_shape_result(shape_descriptor_ensure_with_rep(
         current.keys as usize as *mut ArrayHeader,
         current.logical_key_count,
         current.live_inline_slot_count,
@@ -4129,11 +4133,86 @@ pub(crate) unsafe fn transition_object_shape_prototype(
         current.hole_count,
         proto_id,
         receiver_facts_of_current(obj, &current),
+        super::field_rep::normalized_without_special(current.rep),
         None,
     ));
     stamp_object_shape_id_with_carrier_note(obj, id);
     debug_assert_object_shape_parity(obj);
     id
+}
+
+/// [`transition_object_shape_prototype`] whose result the caller already
+/// holds: `obj`, meta-less and still in the shape `linked` was derived from,
+/// moves to `linked`, the shape whose identity `proto_id` names the
+/// prototype `proto_bits`. A per-evaluation class template remembers the
+/// link its instances take (`class_object_template::record_instance_link`),
+/// so the evaluation's next instance moves in one stamp, without a mint.
+///
+/// # Safety
+/// `obj` is a live `ObjectHeader` carrying `linked`'s predecessor; `linked`
+/// is a present record of this agent whose identity is `proto_id`.
+pub(crate) unsafe fn stamp_known_prototype_transition(
+    obj: *mut crate::object::ObjectHeader,
+    linked: u32,
+    proto_id: u64,
+    proto_bits: u64,
+) {
+    // The recorded link already made the identity name this prototype; an
+    // identity names one object for its whole life (a collection rewrites
+    // the word through forwarding), so only an emptied word is refilled.
+    if shapes_prototype::identity_prototype_word(proto_id) != proto_bits {
+        shapes_prototype::write_identity_word(proto_id, proto_bits);
+    }
+    stamp_object_shape_id_with_carrier_note(obj, linked);
+    debug_assert_object_shape_parity(obj);
+}
+
+/// Is `obj` a class object (`ShapeObjectKind::Class`) whose first own key,
+/// in inline slot 0, is `key`? One directory read and one key compare, no
+/// descriptor copy: the question a per-evaluation class object answers for
+/// its template key (`class_object_template::class_object_template_cell`).
+///
+/// # Safety
+/// `obj` is a live `ObjectHeader`.
+pub(crate) unsafe fn class_object_first_key_is(
+    obj: *const crate::object::ObjectHeader,
+    key: &[u8],
+) -> bool {
+    let Some(record) = ShapeSlab::agent_record_present(object_shape_stamp(obj)) else {
+        return false;
+    };
+    let record = &*record;
+    record.object_kind() == ShapeObjectKind::Class
+        && record.logical_key_count > 0
+        && record.live_inline_slot_count > 0
+        && record.hole_count == 0
+        && record.keys != 0
+        && {
+            // The record's keys are its resolved canonical list: read slot 0
+            // of its dense storage directly.
+            let (keys, len) = crate::object::keys_lookup::keys_array_dense_slots_resolved(
+                record.keys as usize as *const ArrayHeader,
+            );
+            len > 0
+                && crate::string::js_string_key_matches_bytes(
+                    crate::value::JSValue::from_bits((*keys).to_bits()),
+                    key,
+                )
+        }
+}
+
+/// Is `linked` the identity an instance of the class whose own identity is
+/// `class_default` (`CLASS | class`) takes when it is linked to a recorded
+/// prototype (`MIXED | class | serial`, a per-evaluation class's prototype)?
+/// Such an instance keeps its class's own keys in its class's slots: only
+/// what it inherits differs.
+pub(crate) fn proto_id_links_class_instance(linked: u64, class_default: u64) -> bool {
+    const TAG: u64 = 3 << PROTO_ID_TAG_SHIFT;
+    class_default & TAG == PROTO_ID_CLASS
+        && linked != PROTO_ID_NULL
+        && linked & TAG == PROTO_ID_MIXED
+        && (linked & !TAG) >> PROTO_ID_MIXED_SERIAL_BITS == class_default & !TAG
+        && linked & ((1 << PROTO_ID_MIXED_SERIAL_BITS) - 1) != 0
 }
 
 /// Re-derive `obj`'s prototype identity after a write the identity is read

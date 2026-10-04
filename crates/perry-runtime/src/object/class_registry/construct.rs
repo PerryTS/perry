@@ -1045,10 +1045,11 @@ pub unsafe extern "C-unwind" fn js_new_function_construct(
             .as_pointer::<ObjectHeader>();
         let class_cid = js_object_get_class_id(obj);
         if class_cid != 0 {
-            let inst = js_object_alloc(
-                class_cid,
-                crate::object::learned_inline_field_count(class_cid),
-            );
+            // The template's own record, named by the class object; an image
+            // static, so it stays put across every allocation below.
+            let cell = unsafe { super::super::field_get_set::class_object_template_cell(obj) };
+            let inst =
+                construct_class_object_instance(class_handle.get_nanbox_f64(), class_cid, cell);
             // #7280: root the instance across the replay — see the long note
             // in `construct_registered_class_ref`. The replay runs a user
             // constructor body, so a bare `*mut ObjectHeader` held across it
@@ -1056,9 +1057,6 @@ pub unsafe extern "C-unwind" fn js_new_function_construct(
             // address. Reproduced by `new C()` where `C = mk()` is a class
             // EXPRESSION value.
             let inst_handle = scope.root_raw_mut_ptr(inst);
-            inst_handle.with_mut_ptr::<ObjectHeader, _>(|inst| {
-                link_class_object_instance_prototype(class_handle.get_nanbox_f64(), inst)
-            });
             // Every evaluation gets a distinct brand despite sharing its
             // class id. Stamp it before replay, where private access may occur.
             inst_handle.with_mut_ptr::<ObjectHeader, _>(|inst| {
@@ -1108,6 +1106,13 @@ pub unsafe extern "C-unwind" fn js_new_function_construct(
                 && ctor_result.to_bits() != current_inst.to_bits()
             {
                 return ctor_result;
+            }
+            // A template recorded without heritage, of a class with no
+            // declared parent, has no builtin in its chain to back.
+            let heritage = cell.is_none_or(|cell| unsafe { cell.has_heritage() })
+                || get_parent_class_id(class_cid).is_some_and(|parent| parent != 0);
+            if !heritage {
+                return current_inst;
             }
             // `class X extends Request/Response {}` constructed via the dynamic
             // (class-expression value) path: the replayed ctor's `super()`
