@@ -469,7 +469,11 @@ pub(crate) fn execute_output(
 /// collecting action.
 #[inline]
 pub(crate) fn regexp(receiver: &RuntimeHandle<'_>) -> *mut RegExpHeader {
-    crate::value::js_nanbox_get_pointer(receiver.get_nanbox_f64()) as *mut RegExpHeader
+    // A RegExp is an object: its NaN-box always carries the pointer tag, so
+    // the address is the payload (debug builds check the tag).
+    crate::value::JSValue::from_bits(receiver.get_nanbox_u64())
+        .as_pointer::<RegExpHeader>()
+        .cast_mut()
 }
 
 /// RegExpBuiltinExec on a RegExp and a string the caller has rooted: the

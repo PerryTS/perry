@@ -1,8 +1,9 @@
 //! A builtin search reads the program cell and the subject string in place
-//! (S6, `perex_owner::InPlace`). Their raw bases are valid only until the next
-//! collecting action, and a long search polls between quanta: every poll must
-//! be followed by a reacquire, or the search reads the old (here: poisoned)
-//! addresses. Dropping the reacquire in `InPlace::after_poll` must fail
+//! (S6, `perex_owner::InPlace`). A long search polls between quanta, and a
+//! poll may move both: every quantum must read both bases through their roots
+//! for that quantum only, or the search reads the old (here: poisoned)
+//! addresses. Keeping a pre-poll address across a poll (the program's
+//! unrooted one, or a cached string base) must fail
 //! `perex_in_place_search_reacquires_bases_a_poll_moved`.
 use super::perex_public::register_host_roots;
 use super::*;

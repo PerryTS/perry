@@ -384,27 +384,24 @@ fn search_error(error: SearchError<PairError<OwnerError, OwnerError>>) -> Engine
 /// A poll may collect, and a collection may move the program cell and the
 /// subject string. Owner-based bindings (`GcProgram`, `HeapSubject`) re-read
 /// their base from a registered root on every view and need nothing here
-/// (`()`). Resources read in place (`perex_owner::InPlace`) hold raw bases,
-/// valid only until the next collecting action: `before_poll` gives them
-/// roots, `after_poll` reloads the bases from those roots. Every poll a search
-/// runs goes through [`poll_with`], so no view follows a poll without both.
-pub(crate) trait Reacquire {
+/// (`()`). Resources read in place (`perex_owner::InPlace`) start unrooted:
+/// `before_poll` gives them roots, and every view after it reads its base
+/// through them. Every poll a search runs goes through [`poll_with`], so none
+/// runs before the hook.
+pub(crate) trait PollRoots {
     fn before_poll(&self) {}
-    fn after_poll(&self) {}
 }
 
-impl Reacquire for () {}
+impl PollRoots for () {}
 
-/// The one way a search polls: around the resources' [`Reacquire`] hooks.
+/// The one way a search polls: after the resources' [`PollRoots`] hook.
 #[inline]
-fn poll_with<H: Reacquire>(
+fn poll_with<H: PollRoots>(
     hooks: &H,
     poll: &mut impl FnMut() -> Result<(), EngineError>,
 ) -> Result<(), EngineError> {
     hooks.before_poll();
-    let result = poll();
-    hooks.after_poll();
-    result
+    poll()
 }
 
 /// Copy a decided match's captures into the caller's slot under `All`.
@@ -534,7 +531,7 @@ pub(crate) fn find_in_place<'mem>(
     begin(quantum, poll)?;
     let scope = RuntimeHandleScope::new();
     // No collecting action from here on except the search's own polls, each
-    // of which reacquires the bases.
+    // of which roots the in-place resources first.
     let re = super::perex_api::regexp(receiver);
     let place = unsafe { InPlace::new(&scope, re, input) }
         .map_err(|e| EngineError::Subject(SubjectError::Resource(e)))?;
@@ -542,23 +539,27 @@ pub(crate) fn find_in_place<'mem>(
         super::perex_api::bind_witnessed(place.words(), place.witness(), budget, |witness| {
             place.record_witness(witness)
         })?;
-    let (utf16_len, validated, identity) = unsafe {
-        let s = place.string();
-        (
+    // Binding the subject neither allocates nor collects, so the header
+    // `with_string_mut` passes stays current through it, and marking it
+    // validated is a flag store into that same header.
+    let (subject, identity) = place.with_string_mut(|s| unsafe {
+        if s.is_null() {
+            return Err(EngineError::Subject(SubjectError::Resource(
+                OwnerError::Missing,
+            )));
+        }
+        let identity = if hint {
+            super::perex_position_hint::identity_of_header(s)
+        } else {
+            None
+        };
+        let subject = super::perex_api::bind_counted(
+            place.bytes(),
             (*s).utf16_len as usize,
             (*s).flags & crate::string::STRING_FLAG_WTF8_VALIDATED != 0,
-            if hint {
-                super::perex_position_hint::identity_of_header(s)
-            } else {
-                None
-            },
-        )
-    };
-    let subject = super::perex_api::bind_counted(place.bytes(), utf16_len, validated, || unsafe {
-        // Every subject reaching a search is a writable heap string (the
-        // owner path marks each one shared by writing its refcount).
-        (*(place.string() as *mut crate::string::StringHeader)).flags |=
-            crate::string::STRING_FLAG_WTF8_VALIDATED;
+            || (*s).flags |= crate::string::STRING_FLAG_WTF8_VALIDATED,
+        )?;
+        Ok((subject, identity))
     })?;
     let near = identity.and_then(super::perex_position_hint::lookup);
     let registers = match place.registers() {
@@ -631,7 +632,7 @@ fn find_near_lent<'mem, R, H>(
 ) -> Result<Lent, EngineError>
 where
     R: Resources<Error = PairError<OwnerError, OwnerError>>,
-    H: Reacquire,
+    H: PollRoots,
 {
     LENT_SCRATCH.with(|cell| {
         let Ok(mut cell) = cell.try_borrow_mut() else {
@@ -754,7 +755,7 @@ where
 
 /// The search every entry above runs once its resources are bound: lent
 /// scratch first, owned buffers when the lent cell cannot serve it. Every poll
-/// it runs goes through `hooks` ([`Reacquire`]).
+/// it runs goes through `hooks` ([`PollRoots`]).
 #[allow(clippy::too_many_arguments)]
 fn search<'mem, R, H>(
     resources: &R,
@@ -771,7 +772,7 @@ fn search<'mem, R, H>(
 ) -> Result<(Option<Span>, Position), EngineError>
 where
     R: Resources<Error = PairError<OwnerError, OwnerError>>,
-    H: Reacquire,
+    H: PollRoots,
 {
     let mut size = ScratchRequirements {
         registers,

@@ -292,144 +292,162 @@ impl ImmutableProgram for GcProgram<'_> {
 /// string's own bytes (S6). Nothing is copied, rooted or marked to start a
 /// search.
 ///
-/// Both bases are raw addresses, valid only until the next collecting action.
-/// A search polls only between quanta (and before it builds owned scratch or
-/// capture slots), and every one of those polls goes through
-/// [`Reacquire`]: `before_poll` roots the program cell and marks the string
-/// shared the first time, `after_poll` reloads both bases from their roots. So
-/// a collection that moves either one during a long search is never read from
-/// its old address. A search decided in its first quantum, which is nearly
-/// every per-call `test`/`exec`, never reaches a poll and roots nothing.
+/// No base is kept across a collecting action. A search polls only between
+/// quanta (and before it builds owned scratch or capture slots), and every
+/// view of the program or the subject happens inside one quantum, which
+/// neither allocates nor collects. Each view reads its base for that view
+/// only, through [`RuntimeHandle::with_const_ptr`]:
+///
+/// - the subject always through `input`'s root;
+/// - the program, until the first poll, at the address read from the RegExp
+///   when the search began (no collecting action has run since, which debug
+///   builds check against the heap generation); [`PollRoots::before_poll`]
+///   replaces that address with a root before the first poll, and every view
+///   after it reads the cell through that root.
+///
+/// A search decided in its first quantum, which is nearly every per-call
+/// `test`/`exec`, never reaches a poll and roots nothing.
 ///
 /// The program is rooted on its own, not re-read through the RegExp, so a
 /// receiver recompiled while the search is paused cannot change the matcher
 /// of the running search (the `GcProgram::from_receiver` rule).
+///
+/// [`PollRoots::before_poll`]: super::perex_runtime::PollRoots::before_poll
 pub(crate) struct InPlace<'s, 'h> {
     scope: &'s RuntimeHandleScope,
-    input: &'h RuntimeHandle<'h>,
-    program: std::cell::Cell<*const ProgramCell>,
-    string: std::cell::Cell<*const StringHeader>,
-    /// The program cell's root, taken at the first poll.
-    pinned: std::cell::Cell<Option<RuntimeHandle<'s>>>,
+    input: RuntimeHandle<'h>,
+    program: std::cell::Cell<ProgramBase<'s>>,
+    /// The heap generation when the search began, so debug builds can prove
+    /// the unrooted program address is only read while it is still current.
+    #[cfg(debug_assertions)]
+    generation: u64,
+}
+
+/// Where [`InPlace`] reads its program cell.
+#[derive(Clone, Copy)]
+enum ProgramBase<'s> {
+    /// The address read from the RegExp when the search began. Current until
+    /// the first poll, which replaces it with [`Self::Rooted`].
+    Unpolled(*const ProgramCell),
+    /// The cell's root, taken before the first poll.
+    Rooted(RuntimeHandle<'s>),
 }
 
 impl<'s, 'h> InPlace<'s, 'h> {
-    /// Read the bases of the current program of the RegExp at `re` and of
-    /// `input`. The caller must run no collecting action between this and the
-    /// search, other than the polls the search routes through [`Reacquire`].
+    /// Take the current program of the RegExp at `re` and `input`. The caller
+    /// must run no collecting action between this and the search, other than
+    /// the polls the search routes through
+    /// [`PollRoots`](super::perex_runtime::PollRoots).
     ///
     /// # Safety
     /// `re` must be the current address of a live RegExpHeader and `input`
-    /// must have been rooted with `root_string_ptr` from a live heap string.
+    /// must have been rooted with `root_string_ptr` from a live, non-null
+    /// heap string.
     /// `scope` must be the innermost live handle scope whenever the search
     /// polls.
     pub(crate) unsafe fn new(
         scope: &'s RuntimeHandleScope,
         re: *const super::RegExpHeader,
-        input: &'h RuntimeHandle<'h>,
+        input: &RuntimeHandle<'h>,
     ) -> Result<Self, OwnerError> {
         let program = unsafe { (*re).perex_program.cast::<ProgramCell>() };
-        let string = input.get_raw_const_ptr::<StringHeader>();
-        if program.is_null() || string.is_null() {
+        if program.is_null() {
             return Err(OwnerError::Missing);
         }
         Ok(Self {
             scope,
-            input,
-            program: std::cell::Cell::new(program),
-            string: std::cell::Cell::new(string),
-            pinned: std::cell::Cell::new(None),
+            input: *input,
+            program: std::cell::Cell::new(ProgramBase::Unpolled(program)),
+            #[cfg(debug_assertions)]
+            generation: crate::gc::heap_generation::heap_generation(),
         })
+    }
+
+    /// Pass the program cell's current address to `f`, which must neither
+    /// collect nor retain it.
+    #[inline(always)]
+    fn with_cell<T>(&self, f: impl FnOnce(*const ProgramCell) -> T) -> T {
+        match self.program.get() {
+            ProgramBase::Unpolled(cell) => {
+                #[cfg(debug_assertions)]
+                debug_assert_eq!(
+                    crate::gc::heap_generation::heap_generation(),
+                    self.generation,
+                    "in-place program read at its unrooted address after the heap changed"
+                );
+                f(cell)
+            }
+            ProgramBase::Rooted(root) => root.with_const_ptr(f),
+        }
+    }
+
+    /// Pass the subject's current header to `f`, which must neither collect
+    /// nor retain it. Every subject reaching a search is a writable heap
+    /// string (the owner path marks each one shared by writing its refcount),
+    /// so `f` may store plain flags into the header.
+    #[inline(always)]
+    pub(crate) fn with_string_mut<T>(&self, f: impl FnOnce(*mut StringHeader) -> T) -> T {
+        self.input
+            .with_const_ptr(|s: *const StringHeader| f(s.cast_mut()))
     }
 
     /// The witness stored beside the program's words, if a binding validated
     /// them before (#10166).
+    #[inline]
     pub(crate) fn witness(&self) -> Option<perex::binding::ProgramWitness> {
-        self.check_current();
-        unsafe { (*self.program.get()).witness }
+        self.with_cell(|cell| unsafe { (*cell).witness })
     }
 
     /// Record what validating this program established; see
     /// [`GcProgram::record_witness`].
+    #[inline]
     pub(crate) fn record_witness(&self, witness: perex::binding::ProgramWitness) {
-        self.check_current();
         #[cfg(debug_assertions)]
         debug_assert_eq!(PROGRAM_VIEWS.with(std::cell::Cell::get), 0);
         // A plain-data store into a pointer-free leaf: no allocation, no barrier.
-        unsafe { (*(self.program.get() as *mut ProgramCell)).witness = Some(witness) };
+        self.with_cell(|cell| unsafe { (*(cell as *mut ProgramCell)).witness = Some(witness) });
     }
 
     /// The register count recorded in the program cell, if any.
+    #[inline]
     pub(crate) fn registers(&self) -> Option<usize> {
-        self.check_current();
-        unsafe { (*self.program.get()).registers }
+        self.with_cell(|cell| unsafe { (*cell).registers })
     }
 
     /// Record the register count of this program's words, read from a view
     /// of a binding of this same cell.
+    #[inline]
     pub(crate) fn record_registers(&self, registers: usize) {
-        self.check_current();
         // A plain-data store into a pointer-free leaf: no allocation, no barrier.
-        unsafe { (*(self.program.get() as *mut ProgramCell)).registers = Some(registers) };
-    }
-
-    /// The string header at the current base. Read it, never keep it.
-    pub(crate) fn string(&self) -> *const StringHeader {
-        self.check_current();
-        self.string.get()
+        self.with_cell(|cell| unsafe { (*(cell as *mut ProgramCell)).registers = Some(registers) });
     }
 
     /// The program's words, for a `BoundProgram`.
+    #[inline]
     pub(crate) fn words(&self) -> CellWords<'_, 's, 'h> {
         CellWords(self)
     }
 
     /// The subject's bytes, for a `BoundSubject`.
+    #[inline]
     pub(crate) fn bytes(&self) -> StringBytes<'_, 's, 'h> {
         StringBytes(self)
     }
-
-    /// Debug builds prove every view reads the current bases: the string's
-    /// against the root it came from, the program's against its own root once
-    /// one exists (before that no poll has run, so nothing can have moved).
-    #[inline]
-    fn check_current(&self) {
-        #[cfg(debug_assertions)]
-        {
-            debug_assert_eq!(
-                self.string.get(),
-                self.input.get_raw_const_ptr::<StringHeader>(),
-                "in-place subject read after a collection without reacquiring its base"
-            );
-            if let Some(root) = self.pinned.get() {
-                debug_assert_eq!(
-                    self.program.get(),
-                    root.get_raw_const_ptr::<ProgramCell>(),
-                    "in-place program read after a collection without reacquiring its base"
-                );
-            }
-        }
-    }
 }
 
-impl super::perex_runtime::Reacquire for InPlace<'_, '_> {
+impl super::perex_runtime::PollRoots for InPlace<'_, '_> {
     fn before_poll(&self) {
-        if self.pinned.get().is_none() {
-            // Rooting pushes a handle slot and never collects.
-            self.pinned
-                .set(Some(self.scope.root_raw_const_ptr(self.program.get())));
+        if let ProgramBase::Unpolled(cell) = self.program.get() {
+            // Rooting pushes a handle slot and never collects. From here on
+            // the unrooted address is gone: every view reads the root.
+            self.program
+                .set(ProgramBase::Rooted(self.scope.root_raw_const_ptr(cell)));
             // The binding now outlives a collecting action, so it takes the
             // sharing rule `HeapSubject::new` takes: no unique-owner append
             // may mutate these bytes until it ends.
-            crate::string::js_string_addref(self.string.get() as *mut StringHeader);
+            self.input
+                .with_mut_ptr::<StringHeader, _>(|s| crate::string::js_string_addref(s));
         }
-    }
-
-    fn after_poll(&self) {
-        if let Some(root) = self.pinned.get() {
-            self.program.set(root.get_raw_const_ptr());
-        }
-        self.string.set(self.input.get_raw_const_ptr());
     }
 }
 
@@ -439,9 +457,9 @@ pub(crate) struct CellWords<'a, 's, 'h>(&'a InPlace<'s, 'h>);
 impl ImmutableProgram for CellWords<'_, '_, '_> {
     type Error = OwnerError;
 
+    #[inline]
     fn with_words<T>(&self, f: impl FnOnce(&[u32]) -> T) -> Result<T, Self::Error> {
-        self.0.check_current();
-        unsafe { cell_words(self.0.program.get(), f) }
+        self.0.with_cell(|cell| unsafe { cell_words(cell, f) })
     }
 }
 
@@ -451,14 +469,15 @@ pub(crate) struct StringBytes<'a, 's, 'h>(&'a InPlace<'s, 'h>);
 impl ImmutableSubject for StringBytes<'_, '_, '_> {
     type Error = OwnerError;
 
+    #[inline]
     fn with_subject<T>(&self, f: impl FnOnce(Subject<'_>) -> T) -> Result<T, Self::Error> {
-        self.0.check_current();
-        let s = self.0.string.get();
-        // The base is current (see `InPlace`), and nothing here collects.
-        let bytes = unsafe {
-            std::slice::from_raw_parts(crate::string::string_data(s), (*s).byte_len as usize)
-        };
-        Ok(f(Subject::Wtf8(bytes)))
+        // `InPlace::new`'s contract seals the root's provenance, and nothing
+        // here collects.
+        Ok(unsafe {
+            self.0
+                .input
+                .with_string_bytes(|bytes| f(Subject::Wtf8(bytes)))
+        })
     }
 }
 
