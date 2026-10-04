@@ -1329,6 +1329,7 @@ js_fs_write_file_sync	Reenters
 js_fs_write_file_sync_options	Reenters
 js_fs_write_string_sync_options	Reenters
 js_fs_write_sync	Reenters
+js_fs_write_sync_args	Reenters
 js_fs_write_sync_options_dispatch	Reenters
 js_fs_writev_callback	Reenters
 js_fs_writev_sync	Reenters

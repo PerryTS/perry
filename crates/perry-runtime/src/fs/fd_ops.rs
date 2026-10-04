@@ -456,12 +456,68 @@ pub(crate) fn write_buffer_sync_result(
     })
 }
 
+/// Whether `value` is a Buffer or Uint8Array: the data form whose third
+/// argument is an offset into it, not a file position.
+fn is_byte_buffer_value(value: f64) -> bool {
+    let bits = value.to_bits();
+    if bits >> 48 != 0x7FFD {
+        return false;
+    }
+    let addr = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
+    crate::buffer::is_registered_buffer(addr) || crate::buffer::is_uint8array_buffer(addr)
+}
+
+/// A number argument as an f64, whether it is a plain double or an int32.
+fn number_arg(value: f64) -> Option<f64> {
+    let jv = crate::value::JSValue::from_bits(value.to_bits());
+    if jv.is_int32() {
+        Some(jv.as_int32() as f64)
+    } else if jv.is_number() {
+        Some(value)
+    } else {
+        None
+    }
+}
+
+/// `fs.writeSync(fd, buffer, offset, length)`, and the four-argument string
+/// form `fs.writeSync(fd, string, position, encoding)`.
+#[no_mangle]
+pub extern "C" fn js_fs_write_sync_args(
+    fd_value: f64,
+    data_value: f64,
+    third: f64,
+    fourth: f64,
+) -> f64 {
+    if let (true, Some(offset)) = (is_byte_buffer_value(data_value), number_arg(third)) {
+        let length = number_arg(fourth)
+            .unwrap_or_else(|| buffer_len_from_value(data_value) as f64 - offset.max(0.0));
+        return js_fs_write_buffer_sync(
+            fd_value,
+            data_value,
+            offset,
+            length,
+            f64::from_bits(crate::value::TAG_NULL),
+        );
+    }
+    js_fs_write_sync_options_dispatch(fd_value, data_value, third)
+}
+
+/// `fs.writeSync(fd, data, third)`: `third` is an options object, a
+/// buffer offset (Buffer data), or a file position (string data).
 #[no_mangle]
 pub extern "C" fn js_fs_write_sync_options_dispatch(
     fd_value: f64,
     data_value: f64,
     options_value: f64,
 ) -> f64 {
+    if is_byte_buffer_value(data_value) && number_arg(options_value).is_some() {
+        return js_fs_write_sync_args(
+            fd_value,
+            data_value,
+            options_value,
+            f64::from_bits(crate::value::TAG_UNDEFINED),
+        );
+    }
     unsafe {
         if options_field_value(options_value, b"offset").is_some()
             || options_field_value(options_value, b"length").is_some()
