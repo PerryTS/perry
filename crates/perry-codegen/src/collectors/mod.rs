@@ -144,8 +144,8 @@ pub(crate) use shadow_slots::{
     collect_declared_shadow_slots_in_stmts, collect_shadow_slot_clear_points,
 };
 pub(crate) use spec_abi_sites::{
-    collect_spec_abi_facts, guarded_number_array_param_eligible, reassigned_locals,
-    reassigned_locals_in_module, rebound_locals, SpecParamRep, SpecTaBinding,
+    callee_demoted_params, collect_spec_abi_facts, guarded_number_array_param_eligible,
+    reassigned_locals, reassigned_locals_in_module, rebound_locals, SpecParamRep, SpecTaBinding,
 };
 pub(crate) use straight_line_stores::count_straight_line_store_sites;
 pub(crate) use this_as_value::{
