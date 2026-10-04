@@ -1820,10 +1820,6 @@ pub unsafe extern "C" fn js_zlib_native_dispatch(
             js_zlib_zstd_decompress(arg(0), arg(1), arg(2));
             undefined
         }
-        #[cfg(feature = "compression-zstd")]
-        "createZstdCompress" => ptr_to_f64(js_zlib_create_zstd_compress(arg(0)) as *const u8),
-        #[cfg(feature = "compression-zstd")]
-        "createZstdDecompress" => ptr_to_f64(js_zlib_create_zstd_decompress(arg(0)) as *const u8),
         _ => undefined,
     }
 }
