@@ -16,6 +16,12 @@ assert (B/(CONTROL_V+'-verification.json')).exists()
 prior_builds=json.loads((B/(CONTROL_V+'-builds.json')).read_text())
 prior_products=json.loads((B/(CONTROL_V+'-products.json')).read_text())
 ARMS={'gc':R/'source-gc','lazy':B/'primary-lazy-rss-main07-v51/source'}
+
+def build_free_bytes():
+    # Root jobs can use reserved blocks; retain the same 12GiB minimum.
+    space=os.statvfs(B)
+    return (space.f_bfree if os.geteuid()==0 else space.f_bavail)*space.f_frsize
+
 CASES=list(bench.CASES)+[(n,B/'extra-sources'/f'{n}.ts',[]) for n in ['00-noop','15-crc32']]
 assert len(CASES)==17
 for a in ARMS:
@@ -60,7 +66,7 @@ def build_arm(arm,tree):
                 assert r.get('reuse_window_symbol_witness'), ('reused binary lacks window witness',arm,src.stem)
             continue
         assert not plain.exists() and not symbols.exists(),(plain,symbols)
-        assert shutil.disk_usage(B).free >= 12*2**30, 'need12GiB free before another auto runtime build; preserve results and reclaim only our reproducible build caches'
+        assert build_free_bytes() >= 12*2**30, 'need12GiB free before another auto runtime build; preserve results and reclaim only our reproducible build caches'
         start=time.monotonic()
         while int(next(s.split()[1] for s in open('/proc/meminfo') if s.startswith('MemAvailable:')))<24*2**20:
             assert time.monotonic()-start<7200,'compile headroom timeout'

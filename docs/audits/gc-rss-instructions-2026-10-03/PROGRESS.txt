@@ -1,3 +1,12 @@
+BUILD HEADROOM ACCOUNTING CORRECTED BEFORE QUEUED DRIVERS STARTED
+Nonroot available space reached0, but filesystem actual free blocks were
+35GiB and alljobs UID0. Queuedv46/v51/v52 retain12GiBminimum usingf_bfree
+forUID0,f_bavailotherwise. All3Python drivers confirmednotstarted; originals
+preserved andbefore/afterhashes recorded. NoGC/source/measurement settings
+changed. Removedonlycompleted V40auto release/build+emptyincremental caches;
+alltop-level archives/stamps retainedandrehashed, source/ELFs/rawlogs kept.
+No foreigndirectories, globalfilesystemsettings orprocesses changed.
+
 PRIVATE LAZY RSS MAC VERIFIED; APPLICATION ACCEPTANCE QUEUED
 Mac4878/0/5/0filtered passes; actual copied/pinned fallback subjects pass.
 5011source hashes unchanged after build; source/log/receipt rehashed.
