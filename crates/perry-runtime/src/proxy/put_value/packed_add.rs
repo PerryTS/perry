@@ -355,57 +355,27 @@ pub(crate) const C_REP_MIGRATE: usize = 27;
 /// another body.
 pub(crate) const C_PRIME_CONSTFN_OTHER_BODY: usize = 28;
 
+/// Counter `i`'s report name. One string, see
+/// [`crate::hot_diag::report_name`].
 #[cfg_attr(test, allow(dead_code))]
-const CENSUS_NAMES: [&str; 48] = [
-    "emit.pic.word_hit",
-    "emit.pic.way_hit",
-    "emit.add.inline_hit",
-    "emit.pic.miss_call",
-    "emit.cfield.shape_proven_store",
-    "emit.cfield.guard_store",
-    "emit.cfield.guard_fallback_call",
-    "emit.cfield.ic_call",
-    "emit.cfield.loop_raw_store",
-    "emit.cfield.setter_call",
-    "emit.cfield.sloppy",
-    "emit.by_name.runtime",
-    "emit.by_name.put_value",
-    "emit.add.layout_forget",
-    "emit.add.way_hit",
-    "emit.15",
-    "rt.add.memo_inline",
-    "rt.add.memo_spill",
-    "rt.full.key_add",
-    "rt.full.other",
-    "rt.prime.published",
-    "rt.prime.intercepted",
-    "rt.full.key_add.class_instance",
-    "rt.full.key_add.spill",
-    "rt.prime.unverified",
-    "rt.rep.validity_bump",
-    "rt.rep.converge",
-    "rt.rep.migrate",
-    "rt.prime.constfn_other_body",
-    "rt.29",
-    "rt.30",
-    "rt.31",
-    "emit.elem.read.fast",
-    "emit.elem.read.hole_arm",
-    "emit.elem.read.cold_arm",
-    "emit.elem.read.fallback_call",
-    "emit.elem.read.other_tier",
-    "emit.elem.store.inbounds",
-    "emit.elem.store.append_inline",
-    "emit.elem.store.guard_miss",
-    "emit.elem.store.fallback_call",
-    "emit.elem.read.versioned_indexed",
-    "emit.elem.store.f64_cold",
-    "emit.43",
-    "emit.44",
-    "emit.45",
-    "emit.46",
-    "emit.47",
-];
+fn census_name(i: usize) -> &'static str {
+    const NAMES: &str =
+        "emit.pic.word_hit emit.pic.way_hit emit.add.inline_hit emit.pic.miss_call \
+     emit.cfield.shape_proven_store emit.cfield.guard_store \
+     emit.cfield.guard_fallback_call emit.cfield.ic_call emit.cfield.loop_raw_store \
+     emit.cfield.setter_call emit.cfield.sloppy emit.by_name.runtime \
+     emit.by_name.put_value emit.add.layout_forget emit.add.way_hit emit.15 \
+     rt.add.memo_inline rt.add.memo_spill rt.full.key_add rt.full.other \
+     rt.prime.published rt.prime.intercepted rt.full.key_add.class_instance \
+     rt.full.key_add.spill rt.prime.unverified rt.rep.validity_bump rt.rep.converge \
+     rt.rep.migrate rt.prime.constfn_other_body rt.29 rt.30 rt.31 \
+     emit.elem.read.fast emit.elem.read.hole_arm emit.elem.read.cold_arm \
+     emit.elem.read.fallback_call emit.elem.read.other_tier emit.elem.store.inbounds \
+     emit.elem.store.append_inline emit.elem.store.guard_miss \
+     emit.elem.store.fallback_call emit.elem.read.versioned_indexed \
+     emit.elem.store.f64_cold emit.43 emit.44 emit.45 emit.46 emit.47";
+    crate::hot_diag::report_name(NAMES, i)
+}
 
 #[inline]
 pub(crate) fn census_enabled() -> bool {
@@ -424,7 +394,7 @@ pub(crate) fn census_enabled() -> bool {
                     for (i, c) in PERRY_STORE_CENSUS.iter().enumerate() {
                         let n = c.load(Ordering::Relaxed);
                         if n != 0 {
-                            line.push_str(&format!(" {}={}", CENSUS_NAMES[i], n));
+                            line.push_str(&format!(" {}={}", census_name(i), n));
                         }
                     }
                     eprintln!("{line}");
@@ -909,3 +879,21 @@ unsafe fn eligible_key(key: *const crate::StringHeader) -> bool {
 #[cfg(test)]
 #[path = "packed_add_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod report_names_line_up {
+    #[test]
+    fn census_names_cover_every_counter() {
+        assert_eq!(super::census_name(0), "emit.pic.word_hit");
+        assert_eq!(
+            super::census_name(super::C_ADD_RT_INLINE),
+            "rt.add.memo_inline"
+        );
+        assert_eq!(
+            super::census_name(super::C_PRIME_CONSTFN_OTHER_BODY),
+            "rt.prime.constfn_other_body"
+        );
+        assert_eq!(super::census_name(47), "emit.47");
+        assert_eq!(super::census_name(48), "?");
+    }
+}

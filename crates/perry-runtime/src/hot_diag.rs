@@ -909,25 +909,48 @@ pub enum IcMissReason {
 
 pub const IC_MISS_REASONS: usize = 17;
 
-const IC_REASON_NAMES: [&str; IC_MISS_REASONS] = [
-    "sso_receiver",
-    "null_args",
-    "proxy",
-    "async_resource",
-    "subclass_elements",
-    "array_length",
-    "closure_prop",
-    "buffer",
-    "typed_array",
-    "small_handle",
-    "non_object_gc_type",
-    "object_irregular",
-    "object_no_keys",
-    "own_inline_primed",
-    "own_overflow_primed",
-    "own_descriptor_fallthrough",
-    "not_own",
-];
+/// Word `i` of a diagnostic's space-separated name list (`"?"` past the end).
+///
+/// The diagnostics keep their report names in one string rather than a
+/// `[&str; N]` (or a string `match`, which LLVM lowers to one): each entry of
+/// a string-slice table is an absolute pointer, a load-time relocation in
+/// every program that links the diagnostic, armed or not. Shared and out of
+/// line so the split is compiled once; only report printing calls it.
+#[cold]
+#[inline(never)]
+pub(crate) fn report_name(names: &'static str, i: usize) -> &'static str {
+    names.split(' ').nth(i).unwrap_or("?")
+}
+
+impl IcMissReason {
+    /// Every reason, in `by_reason` index order.
+    const ALL: [Self; IC_MISS_REASONS] = [
+        Self::SsoReceiver,
+        Self::NullArgs,
+        Self::Proxy,
+        Self::AsyncResource,
+        Self::SubclassElements,
+        Self::ArrayLength,
+        Self::ClosureProp,
+        Self::Buffer,
+        Self::TypedArray,
+        Self::SmallHandle,
+        Self::NonObjectGcType,
+        Self::ObjectIrregular,
+        Self::ObjectNoKeys,
+        Self::OwnInlinePrimed,
+        Self::OwnOverflowPrimed,
+        Self::OwnDescriptorFallthrough,
+        Self::NotOwn,
+    ];
+
+    /// The reason's report name. One string, see
+    /// [`crate::hot_diag::report_name`].
+    fn name(self) -> &'static str {
+        const NAMES: &str = "sso_receiver null_args proxy async_resource subclass_elements array_length closure_prop buffer typed_array small_handle non_object_gc_type object_irregular object_no_keys own_inline_primed own_overflow_primed own_descriptor_fallthrough not_own";
+        report_name(NAMES, self as usize)
+    }
+}
 
 #[derive(Default)]
 struct SiteStat {
@@ -1178,9 +1201,10 @@ impl IcDiag {
             self.hits_in_ways,
             self.sites.len()
         );
-        for (i, name) in IC_REASON_NAMES.iter().enumerate() {
+        for reason in IcMissReason::ALL {
+            let i = reason as usize;
             if self.by_reason[i] != 0 {
-                let _ = write!(out, " {name}={}", self.by_reason[i]);
+                let _ = write!(out, " {}={}", reason.name(), self.by_reason[i]);
             }
         }
         out.push('\n');
@@ -1220,7 +1244,12 @@ impl IcDiag {
                 .collect();
             crate::cold_sort::sort_by(&mut idx, |a, b| s.by_reason[*b].cmp(&s.by_reason[*a]));
             for i in idx.iter().take(3) {
-                let _ = write!(reasons, " {}={}", IC_REASON_NAMES[*i], s.by_reason[*i]);
+                let _ = write!(
+                    reasons,
+                    " {}={}",
+                    IcMissReason::ALL[*i].name(),
+                    s.by_reason[*i]
+                );
             }
             let _ = writeln!(
                 out,
@@ -1697,3 +1726,22 @@ extern "C" fn recv_route_report() {
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
 static KEEP_JS_RECV_ROUTE_NOTE: extern "C" fn(u32) = js_recv_route_note;
+
+#[cfg(test)]
+mod report_names_line_up {
+    use super::*;
+
+    #[test]
+    fn ic_miss_reason_names_follow_the_variants() {
+        let names: Vec<&str> = IcMissReason::ALL.iter().map(|r| r.name()).collect();
+        assert_eq!(names.len(), IC_MISS_REASONS);
+        assert_eq!(IcMissReason::SsoReceiver.name(), "sso_receiver");
+        assert_eq!(IcMissReason::ObjectIrregular.name(), "object_irregular");
+        assert_eq!(IcMissReason::NotOwn.name(), "not_own");
+        for (i, r) in IcMissReason::ALL.iter().enumerate() {
+            assert_eq!(*r as usize, i);
+            assert!(!names[i].is_empty() && names[i] != "?");
+            assert!(!names[..i].contains(&names[i]), "{} twice", names[i]);
+        }
+    }
+}
