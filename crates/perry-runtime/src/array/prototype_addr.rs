@@ -314,18 +314,36 @@ pub(crate) fn array_prototype_addr() -> usize {
 }
 
 pub(crate) fn object_prototype_addr() -> usize {
-    resolve_prototype_addr(OBJECT_PROTO_CACHE)
+    let addr = resolve_prototype_addr(OBJECT_PROTO_CACHE);
+    if addr != 0
+        && crate::object::OBJECT_INTRINSIC_PTR.load(std::sync::atomic::Ordering::Acquire) == 0
+    {
+        let (_, complete) = crate::object::ensure_object_intrinsics();
+        return complete as usize;
+    }
+    addr
 }
 
-/// `%Object.prototype%` if this thread has ALREADY memoized it, else 0 —
-/// never bootstraps. For a caller that may itself be reached from the
+/// Complete `%Object.prototype%` if this thread has ALREADY memoized it, else
+/// 0 — never returns the shape-only sentinel and never bootstraps. For a
+/// caller that may itself be reached from the
 /// bootstrap's `globalThis.Object` read: the inherited-read cache's walk runs
 /// under `js_object_get_field_by_name`, which that bootstrap calls, so asking
 /// [`object_prototype_addr`] from there recurses until the stack overflows.
 /// The memo is primed at the end of `populate_global_this_builtins`, so after
 /// startup this answers exactly what `object_prototype_addr` does.
 pub(crate) fn object_prototype_addr_if_resolved() -> usize {
+    if crate::object::OBJECT_INTRINSIC_PTR.load(std::sync::atomic::Ordering::Acquire) == 0 {
+        return 0;
+    }
     memoized_prototype_addr(&prototype_addrs()[OBJECT_PROTO_CACHE]).unwrap_or(0)
+}
+
+/// Drop the memoized root for the shape-only Object.prototype sentinel before
+/// the complete intrinsic replaces it. Called only under the intrinsic
+/// builder's no-move window.
+pub(crate) fn forget_object_prototype_intrinsic() {
+    prototype_addrs()[OBJECT_PROTO_CACHE].set(usize::MAX);
 }
 
 /// `%Function.prototype%` if this thread has ALREADY memoized it, else 0 —
@@ -373,7 +391,9 @@ pub(crate) fn prime_prototype_addr_cache() {
 /// without the hint a small growth of that caller made LLVM outline it.
 #[inline]
 pub(crate) fn object_prototype_addr_matches(addr: usize) -> bool {
-    addr != 0 && addr == object_prototype_addr()
+    // Identity-only users may compare against the shape sentinel without
+    // making it observable and without materializing method closures.
+    addr != 0 && addr == resolve_prototype_addr(OBJECT_PROTO_CACHE)
 }
 
 /// Test-only handle on the shipped wiring, for the read-only assertion in

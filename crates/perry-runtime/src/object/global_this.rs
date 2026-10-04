@@ -184,7 +184,8 @@ pub(crate) use math_temporal::temporal_ctor_kind_impl;
 pub(crate) use math_temporal::temporal_kind_prototype;
 pub(crate) use math_temporal::{install_math_namespace, temporal_ctor_kind};
 pub(crate) use object_intrinsic::{
-    ensure_object_intrinsics, object_intrinsics_for_realm, object_prototype_intrinsic_bits,
+    ensure_object_intrinsics, ensure_object_prototype_shape, object_intrinsics_for_realm,
+    object_prototype_intrinsic_bits,
 };
 pub(crate) use populate::{
     default_prepare_stack_trace_func_ptr, populate_global_this_builtins,
