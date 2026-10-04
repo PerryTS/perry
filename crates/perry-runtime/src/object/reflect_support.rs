@@ -134,16 +134,15 @@ pub(crate) fn obj_value_has_own_key(value: f64, key: f64) -> bool {
                     return false;
                 }
                 let key_str = scope.root_string_ptr(key_str);
-                let arr = crate::array::clean_arr_ptr(
-                    obj_handle.get_raw_mut_ptr::<super::ObjectHeader>().cast(),
-                );
-                if arr.is_null() {
-                    return false;
-                }
-                return super::has_own_helpers::array_own_key_present(
-                    arr,
-                    key_str.get_raw_const_ptr(),
-                );
+                return obj_handle.with_mut_ptr::<super::ObjectHeader, _>(|obj| {
+                    let arr = crate::array::clean_arr_ptr(obj.cast());
+                    if arr.is_null() {
+                        return false;
+                    }
+                    key_str.with_const_ptr(|key| {
+                        super::has_own_helpers::array_own_key_present(arr, key)
+                    })
+                });
             }
         }
         if crate::closure::is_closure_ptr(obj_addr) {

@@ -376,7 +376,7 @@ pub(crate) unsafe fn define_array_property(
     };
     if !is_array_object(obj) {
         let is_lazy_index = !obj.is_null()
-            && (obj as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000
+            && crate::value::addr_class::is_above_handle_band(obj as usize)
             && (*gc_header_for(obj)).obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
             && super::canonical_array_index(key_name).is_some();
         if !is_lazy_index {
@@ -426,10 +426,9 @@ pub(crate) unsafe fn define_array_property(
         scope.root_string_ptr(crate::string::js_string_from_bytes(b"value".as_ptr(), 5));
     // `ToPropertyDescriptor` field presence is HasProperty (own OR inherited).
     let has_value = super::desc_has_field(current_descriptor(), b"value");
-    let value_field = js_object_get_field_by_name(
-        current_descriptor_ptr() as *const ObjectHeader,
-        value_key.get_raw_const_ptr(),
-    );
+    let value_field = value_key.with_const_ptr(|key| {
+        js_object_get_field_by_name(current_descriptor_ptr() as *const ObjectHeader, key)
+    });
     let value = if has_value {
         f64::from_bits(value_field.bits())
     } else {
@@ -535,15 +534,13 @@ pub(crate) unsafe fn define_array_property(
             }
         }
         if desc_has_get || desc_has_set {
-            let get_field = js_object_get_field_by_name(
-                current_descriptor_ptr() as *const ObjectHeader,
-                get_key.get_raw_const_ptr(),
-            );
+            let get_field = get_key.with_const_ptr(|key| {
+                js_object_get_field_by_name(current_descriptor_ptr() as *const ObjectHeader, key)
+            });
             let get_field = scope.root_nanbox_u64(get_field.bits());
-            let set_field = js_object_get_field_by_name(
-                current_descriptor_ptr() as *const ObjectHeader,
-                set_key.get_raw_const_ptr(),
-            );
+            let set_field = set_key.with_const_ptr(|key| {
+                js_object_get_field_by_name(current_descriptor_ptr() as *const ObjectHeader, key)
+            });
             let set_field = scope.root_nanbox_u64(set_field.bits());
             let prior = super::get_accessor_descriptor(current_arr() as usize, key_name);
             let prior_get = scope.root_nanbox_u64(prior.map(|a| a.get).unwrap_or(0));
