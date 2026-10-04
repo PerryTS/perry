@@ -1,3 +1,21 @@
+NATIVE MAP PREFIX FULL17 VERIFIED / REJECTED FOR ADOPTION
+All 204 fresh executions and all 17 signed distributions independently
+verified, including source/products/text/stamps/raw outputs/counters. All 515
+proof/raw files copied locally and rehashed. Runtime and actual moving checks
+pass, and the decoder fixtures prove skipped suffix work, but application
+benefit is not material: TS instructions -0.0458%, RSS +0.0383%; requests
+instructions +0.7667%; ring RSS +1.7986%. These three-sample differences do
+not prove persistent small regressions. No signed row or sample is excluded.
+The experiment is rejected for adoption and production source remains the
+validated once-advice policy. Native lookup still has possible scan costs to
+audit; no new cache or metadata layout change has been adopted.
+
+Latest-main integration proceeds separately: Mac 4,881/0/5 verified, Linux
+fresh product/full-runtime wrapper 2309624 confirmed live. Current application
+acceptance for that latest-main source remains outstanding; previous main07
+numbers are preserved under their actual source. The eager-oracle grouping
+bug and original guard stops remain preserved and attributed independently.
+
 LATEST-MAIN MAC AND PREFIX MOVING VALIDATION COMPLETE
 Refreshed-main adopted source 0aa483aa91 / base ad0a2617bf: all 5,014 inputs
 and before/after hashes verified. Mac full runtime 4,881 passed, zero failures,

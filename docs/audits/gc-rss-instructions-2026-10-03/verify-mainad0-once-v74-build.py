@@ -8,7 +8,7 @@ assert (E/'complete.exit').read_text().strip()=='0'
 p=load(E/'provenance.json');assert p['base']=='ad0a2617bf0b9708032cf89c86575e9bd69fb074'
 inputs=load(E/'source-inputs.json');control=load(B/'primary-entry-once-main07-v45/export/source-inputs.json')
 assert len(inputs)==5014 and all(sha(R/'source'/n)==h for n,h in inputs.items())
-assert sorted(n for n in inputs if control.get(n)!=inputs[n])==sorted(p['private_paths']) 
+assert sorted(n for n in inputs if control.get(n)!=inputs[n])==sorted(p['private_paths'])
 commands=load(E/'commands.json');assert [c['name'] for c in commands]==['build','runtime-tests']
 for c in commands:
  assert c['rc']==0 and sha(E/(c['name']+'.log'))==c['log_sha256'] and 'Compiling perry-runtime ' in (E/(c['name']+'.log')).read_text()
