@@ -82,9 +82,9 @@ define_class!(
 
     impl PerryDatePicker {
         // The frame is the box that Perry sizes and decorates. With AppKit's
-        // insets, a picker pinned to a width would overhang it by 3pt on the
-        // right and 4pt on the top, and so would its layer border and
-        // background.
+        // insets (3pt right and 4pt top at the regular control size), a
+        // picker pinned to a width would overhang it, and so would its layer
+        // border and background.
         #[unsafe(method(alignmentRectInsets))]
         fn alignment_rect_insets(&self) -> NSEdgeInsets {
             NSEdgeInsets { top: 0.0, left: 0.0, bottom: 0.0, right: 0.0 }
@@ -125,30 +125,42 @@ define_class!(
         // the layout from its last draw, not the rect it tracks in.
         #[unsafe(method(drawWithFrame:inView:))]
         fn draw_with_frame(&self, frame: CGRect, view: &NSView) {
-            let frame = self.cover_margins(frame, view);
+            let frame = cover_margins(frame, view);
             unsafe { msg_send![super(self), drawWithFrame: frame, inView: view] }
+        }
+
+        // The focus ring lays out from the frame it is given, not from the
+        // last draw. With the picker's own frame, it would stop short of the
+        // field by the right inset.
+        #[unsafe(method(drawFocusRingMaskWithFrame:inView:))]
+        fn draw_focus_ring_mask_with_frame(&self, frame: CGRect, view: &NSView) {
+            let frame = cover_margins(frame, view);
+            unsafe { msg_send![super(self), drawFocusRingMaskWithFrame: frame, inView: view] }
+        }
+
+        #[unsafe(method(focusRingMaskBoundsForFrame:inView:))]
+        fn focus_ring_mask_bounds_for_frame(&self, frame: CGRect, view: &NSView) -> CGRect {
+            let frame = cover_margins(frame, view);
+            unsafe { msg_send![super(self), focusRingMaskBoundsForFrame: frame, inView: view] }
         }
     }
 );
 
-impl PerryDatePickerCell {
-    /// `frame` grown by the alignment rect insets that AppKit gives a stock
-    /// picker. The margins are blank, so the cell draws nothing outside
-    /// `frame`.
-    fn cover_margins(&self, frame: CGRect, view: &NSView) -> CGRect {
-        let Some(picker) = view.downcast_ref::<PerryDatePicker>() else {
-            return frame;
-        };
-        let m = picker.stock_alignment_rect_insets();
-        let above = if view.isFlipped() { m.top } else { m.bottom };
-        CGRect::new(
-            CGPoint::new(frame.origin.x - m.left, frame.origin.y - above),
-            CGSize::new(
-                frame.size.width + m.left + m.right,
-                frame.size.height + m.top + m.bottom,
-            ),
-        )
-    }
+/// `frame` grown by the alignment rect insets that AppKit gives a stock
+/// picker. The margins are blank, so the cell draws nothing outside `frame`.
+fn cover_margins(frame: CGRect, view: &NSView) -> CGRect {
+    let Some(picker) = view.downcast_ref::<PerryDatePicker>() else {
+        return frame;
+    };
+    let m = picker.stock_alignment_rect_insets();
+    let origin_side = if view.isFlipped() { m.top } else { m.bottom };
+    CGRect::new(
+        CGPoint::new(frame.origin.x - m.left, frame.origin.y - origin_side),
+        CGSize::new(
+            frame.size.width + m.left + m.right,
+            frame.size.height + m.top + m.bottom,
+        ),
+    )
 }
 
 impl PerryDatePickerTarget {

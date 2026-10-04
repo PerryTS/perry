@@ -1,10 +1,12 @@
 // A DatePicker that matches its stack's width fills that width exactly, so a
 // layer border or background drawn on its frame stays inside the stack
-// (#11966). AppKit gives a stock NSDatePicker alignment rect insets of top 4
-// and right 3, so if the picker kept them, its frame would overhang the stack.
+// (#11966). At the regular control size, AppKit gives a stock NSDatePicker
+// alignment rect insets of top 4 and right 3, so if the picker kept them, its
+// frame would overhang the stack.
 //
-// The picker still draws its field and stepper where a stock picker aligned to
-// the same rect draws them, so the visible control lines up with the column.
+// The picker still draws its field, stepper, and focus ring where a stock
+// picker aligned to the same rect draws them, so the visible control lines up
+// with the column.
 //
 // AppKit must run on the process main thread, so this test has no Rust harness.
 #[cfg(target_os = "macos")]
@@ -13,8 +15,8 @@ fn main() {
     use objc2::runtime::{AnyClass, AnyObject};
     use objc2::{msg_send, MainThreadOnly};
     use objc2_app_kit::{
-        NSAppearance, NSAppearanceCustomization, NSApplication, NSBackingStoreType, NSView,
-        NSWindow, NSWindowStyleMask,
+        NSAppearance, NSAppearanceCustomization, NSApplication, NSBackingStoreType,
+        NSBitmapImageRep, NSView, NSWindow, NSWindowStyleMask,
     };
     use objc2_core_foundation::{CGPoint, CGRect, CGSize};
     use objc2_foundation::{MainThreadMarker, NSString};
@@ -64,11 +66,13 @@ fn main() {
         let column_frame = column_view.frame();
         let name = format!("decorated={decorated}");
         println!("{name}: picker {frame:?} in column {column_frame:?}");
-        let actual = (frame.origin.x, frame.size.width, frame.size.height);
-        let expected = (0.0, 300.0, stock_size.height);
-        if actual != expected {
+        let expected = CGRect::new(
+            CGPoint::new(0.0, 0.0),
+            CGSize::new(300.0, stock_size.height),
+        );
+        if frame != expected {
             failures.push(format!(
-                "{name}: expected (x, width, height) {expected:?}, got {actual:?}"
+                "{name}: expected frame {expected:?}, got {frame:?}"
             ));
         }
         if frame.size.height != column_frame.size.height {
@@ -82,7 +86,7 @@ fn main() {
 
     let perry = widgets::get_widget(widgets::date_picker::create(2026, 1, 0.0)).unwrap();
     let perry_size = perry.intrinsicContentSize();
-    if (perry_size.width, perry_size.height) != (stock_size.width, stock_size.height) {
+    if perry_size != stock_size {
         failures.push(format!(
             "intrinsic size {perry_size:?}, a stock picker's alignment rect is {stock_size:?}"
         ));
@@ -92,17 +96,27 @@ fn main() {
         (300.0, stock_size.height),
         (300.0, 72.0),
     ] {
-        let aligned = CGRect::new(CGPoint::new(20.0, 20.0), CGSize::new(width, height));
-        let drawn = (render(&perry, aligned, mtm), render(&stock, aligned, mtm));
-        let differing = drawn.0.iter().zip(&drawn.1).filter(|(a, b)| a != b).count();
-        println!(
-            "width {width}x{height}: {differing} of {} pixels differ from a stock picker",
-            drawn.0.len()
-        );
-        if drawn.0.len() != drawn.1.len() || differing > 0 {
-            failures.push(format!(
-                "width {width}x{height}: {differing} pixels differ from a stock picker aligned to the same rect"
-            ));
+        for drawing in [Drawing::Control, Drawing::FocusRingMask] {
+            let aligned = CGRect::new(CGPoint::new(20.0, 20.0), CGSize::new(width, height));
+            let drawn = (
+                render(&perry, aligned, drawing, mtm),
+                render(&stock, aligned, drawing, mtm),
+            );
+            let differing = drawn.0.iter().zip(&drawn.1).filter(|(a, b)| a != b).count();
+            println!(
+                "{drawing:?} {width}x{height}: {differing} of {} pixels differ from a stock picker",
+                drawn.0.len()
+            );
+            if drawn.0 != drawn.1 {
+                failures.push(format!(
+                    "{drawing:?} {width}x{height}: {differing} pixels differ from a stock picker aligned to the same rect"
+                ));
+            }
+            if drawn.1.iter().all(|pixel| pixel[3] == 0) {
+                failures.push(format!(
+                    "{drawing:?} {width}x{height}: a stock picker draws nothing, so the check proves nothing"
+                ));
+            }
         }
     }
 
@@ -139,10 +153,11 @@ fn main() {
             ));
         }
     }
-    assert!(
-        stock_changed,
-        "no click changed a stock picker's date, so the click check proves nothing"
-    );
+    if !stock_changed {
+        failures.push(
+            "no click changed a stock picker's date, so the click check proves nothing".to_owned(),
+        );
+    }
 
     assert!(failures.is_empty(), "{}", failures.join("\n"));
     println!("PASS native DatePicker fills the stack width and draws as a stock picker");
@@ -227,9 +242,23 @@ fn main() {
         date
     }
 
-    /// Aligns `picker` to `aligned` in a window and returns the RGBA bytes of
-    /// that rect grown by 8pt on every side, so drawing past the rect counts.
-    fn render(picker: &NSView, aligned: CGRect, mtm: MainThreadMarker) -> Vec<u8> {
+    #[derive(Clone, Copy, Debug)]
+    enum Drawing {
+        /// The window content, picker included, as it displays.
+        Control,
+        /// The mask that AppKit outlines when the picker has keyboard focus.
+        FocusRingMask,
+    }
+
+    /// Aligns `picker` to `aligned` in a window and returns the RGBA pixels of
+    /// `drawing` over that rect grown by 8pt on every side, so drawing past
+    /// the rect counts.
+    fn render(
+        picker: &NSView,
+        aligned: CGRect,
+        drawing: Drawing,
+        mtm: MainThreadMarker,
+    ) -> Vec<[u8; 4]> {
         let window = unsafe {
             NSWindow::initWithContentRect_styleMask_backing_defer(
                 NSWindow::alloc(mtm),
@@ -252,24 +281,57 @@ fn main() {
             CGSize::new(aligned.size.width + 16.0, aligned.size.height + 16.0),
         );
         let bitmap = content.bitmapImageRepForCachingDisplayInRect(rect).unwrap();
-        content.cacheDisplayInRect_toBitmapImageRep(rect, &bitmap);
-        let mut bytes = Vec::new();
+        match drawing {
+            Drawing::Control => content.cacheDisplayInRect_toBitmapImageRep(rect, &bitmap),
+            Drawing::FocusRingMask => draw_focus_ring_mask(picker, rect, &bitmap),
+        }
+        let mut pixels = Vec::new();
         for y in 0..bitmap.pixelsHigh() {
             for x in 0..bitmap.pixelsWide() {
                 let color = bitmap.colorAtX_y(x, y).unwrap();
-                for component in [
-                    color.redComponent(),
-                    color.greenComponent(),
-                    color.blueComponent(),
-                    color.alphaComponent(),
-                ] {
-                    bytes.push((component * 255.0).round() as u8);
-                }
+                pixels.push(
+                    [
+                        color.redComponent(),
+                        color.greenComponent(),
+                        color.blueComponent(),
+                        color.alphaComponent(),
+                    ]
+                    .map(|component| (component * 255.0).round() as u8),
+                );
             }
         }
         picker.removeFromSuperview();
         window.close();
-        bytes
+        pixels
+    }
+
+    /// Draws the focus ring mask of `picker` into `bitmap`, which covers
+    /// `rect` of the picker's superview. The mask is opaque where the ring
+    /// goes and clear everywhere else.
+    fn draw_focus_ring_mask(picker: &NSView, rect: CGRect, bitmap: &NSBitmapImageRep) {
+        use objc2_app_kit::{
+            NSAffineTransformNSAppKitAdditions, NSColor, NSCompositingOperation, NSGraphicsContext,
+            NSRectFillUsingOperation,
+        };
+        use objc2_foundation::NSAffineTransform;
+        let context = NSGraphicsContext::graphicsContextWithBitmapImageRep(bitmap).unwrap();
+        NSGraphicsContext::saveGraphicsState_class();
+        NSGraphicsContext::setCurrentContext(Some(&context));
+        NSColor::clearColor().set();
+        NSRectFillUsingOperation(
+            CGRect::new(CGPoint::new(0.0, 0.0), rect.size),
+            NSCompositingOperation::Copy,
+        );
+        let frame = picker.frame();
+        let to_picker = NSAffineTransform::transform();
+        to_picker.translateXBy_yBy(
+            frame.origin.x - rect.origin.x,
+            frame.origin.y - rect.origin.y,
+        );
+        to_picker.concat();
+        NSColor::blackColor().set();
+        picker.drawFocusRingMask();
+        NSGraphicsContext::restoreGraphicsState_class();
     }
 }
 
