@@ -546,7 +546,12 @@ pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
         }
     };
     unsafe {
-        if !raw_ptr.is_null() && (raw_ptr as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
+        // #11875: the floor is the handle band, not one page. A Proxy held in
+        // a `T[]` binding (`sum(new Proxy(arr, {}))`) arrives as a masked
+        // proxy id in `[PROXY_ID_BAND_START, HANDLE_BAND_MAX)`, which the old
+        // `GC_HEADER_SIZE + 0x1000` floor let through to a header read from
+        // unmapped memory (SIGSEGV). Still a single compare.
+        if crate::value::addr_class::is_above_handle_band(raw_ptr as usize) {
             let gc_header =
                 (raw_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
             if (*gc_header).obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
@@ -632,6 +637,12 @@ pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
 
     let cleaned = clean_arr_ptr(arr);
     if cleaned.is_null() {
+        // #11875: a Proxy held in a `T[]`-annotated binding. Its element read
+        // is the proxy's `[[Get]]` (the `get` trap, else the target), the same
+        // route `js_array_length` takes for its `length`.
+        if let Some(proxy) = array_ptr_as_proxy(arr) {
+            return crate::proxy::js_proxy_get(proxy, index as f64);
+        }
         // #7574: `a[i]` on a `class X extends Array` instance held in a
         // `T[]`-annotated binding. Read the object's indexed property through
         // the spec-generic `Get`, not the `ObjectHeader` words.
