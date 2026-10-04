@@ -1785,6 +1785,79 @@ pub(super) fn emit_string_pool(
         }
     }
 
+    // Completed private contents (#11791, `static_private_class`): minted by
+    // facts under their static ids after every class/prototype registration,
+    // before any instance can reach them.
+    if super::static_shape_ids::has_static_final_shapes() {
+        let defined_classes: HashMap<_, _> = module_classes
+            .iter()
+            .filter_map(|class| class_ids.get(&class.name).map(|cid| (*cid, class)))
+            .collect();
+        for entry in class_keys_init_data {
+            let birth = super::static_shape_ids::class_birth(
+                module_prefix,
+                entry,
+                class_header_image_inits,
+                class_birth_reps,
+                class_ids,
+            );
+            let Some(ordinary) = birth.shape else {
+                continue;
+            };
+            let Some(class) = defined_classes.get(&birth.class_id).copied() else {
+                continue;
+            };
+            let Some(shape) =
+                super::static_private_class::private_final(class, classes, &ordinary, &|name| {
+                    super::static_private_class::element_class_id_in(classes, class_ids, name)
+                })
+            else {
+                continue;
+            };
+            let Some(id) = super::static_shape_ids::static_final_shape_id(&shape) else {
+                continue;
+            };
+            super::static_private_class::emit_final_constants(
+                chunker.module(),
+                module_prefix,
+                &shape,
+                id,
+            );
+            let symbol = super::static_private_class::final_symbol(module_prefix, id);
+            let private_ptr = if shape.private.is_empty() {
+                "null".to_string()
+            } else {
+                format!("@{symbol}_keys")
+            };
+            let brands_ptr = if shape.brands.is_empty() {
+                "null".to_string()
+            } else {
+                format!("@{symbol}_brands")
+            };
+            chunker.roll_if_full();
+            let blk = chunker.current_block();
+            // Registration calls above can collect; load the canonical keys
+            // afresh from their registered root immediately before the mint.
+            let keys = blk.load(I64, &format!("@{}", entry.0));
+            blk.call(
+                I32,
+                "js_object_final_shape_id_for_class_keys_static_private",
+                &[
+                    (I64, &keys),
+                    (I32, &shape.key_count.to_string()),
+                    (I32, &shape.live.to_string()),
+                    (I32, &birth.class_id.to_string()),
+                    (I32, &id.to_string()),
+                    (I64, &shape.rep.to_string()),
+                    (PTR, &private_ptr),
+                    (I32, &shape.private.len().to_string()),
+                    (PTR, &brands_ptr),
+                    (I32, &shape.brands.len().to_string()),
+                ],
+            );
+        }
+    }
+
     for e in &method_entries {
         emit_class_method_entry(&mut chunker, e);
     }

@@ -9,6 +9,8 @@ fn class(keys: &str, count: u32, cid: u32) -> BirthShape {
         typed: None,
         rep: 0,
         constfn: Vec::new(),
+        private: Vec::new(),
+        brands: Vec::new(),
     }
 }
 
@@ -747,6 +749,8 @@ fn a_literal_birth_mints_its_shape_with_the_plain_prototype_on_both_routes() {
         typed: None,
         rep: 0,
         constfn: Vec::new(),
+        private: Vec::new(),
+        brands: Vec::new(),
     };
     let requested = SHAPE_ID_BASE + 7;
     let stat = String::from_utf8(

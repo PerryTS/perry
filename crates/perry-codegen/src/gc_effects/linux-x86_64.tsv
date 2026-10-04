@@ -2115,6 +2115,7 @@ js_object_delete_field_value	Reenters
 js_object_entries	Reenters
 js_object_entries_value	Reenters
 js_object_final_shape_id_for_class_keys_static_constfn	Reenters
+js_object_final_shape_id_for_class_keys_static_private	Reenters
 js_object_finalize_constfn_static	Reenters
 js_object_free	Leaf
 js_object_freeze	Reenters
@@ -2426,6 +2427,8 @@ js_pointer_event_new	Reenters
 js_private_brand_add	Reenters
 js_private_brand_check	Reenters
 js_private_field_add	Reenters
+js_private_field_site_get	Reenters
+js_private_field_site_set	Reenters
 js_private_guard	Reenters
 js_private_guard_site	Reenters
 js_private_lexical_brand_capture	Leaf

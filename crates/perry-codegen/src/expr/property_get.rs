@@ -76,6 +76,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     if let Some(v) = crate::stmt::region_loop::try_lower_bare_get(ctx, expr)? {
         return Ok(v);
     }
+    // #11791: an instance private field read is a shape compare and a slot load.
+    if let Expr::PropertyGet {
+        object, property, ..
+    } = expr
+    {
+        if let Some(site) = super::private_field_site::private_field_site(ctx, object, property, 0)
+        {
+            return super::private_field_site::lower_get(ctx, site, property);
+        }
+    }
     // #7219: reading `.buffer` on a tracked typed-array view HANDS OUT ITS
     // STORAGE, so the local's inline-storage proof stops holding from here on.
     //

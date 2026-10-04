@@ -919,7 +919,20 @@ fn js_structured_clone_inner(value: f64, depth: usize) -> f64 {
                     } else {
                         0
                     };
-                    if key_count > crate::object::object_live_slot_count(src_obj) as usize {
+                    // structuredClone copies own ENUMERABLE properties only: a
+                    // shape with a non-enumerable or private entry (#11791 --
+                    // a private field is an entry, never a property) takes the
+                    // key-by-key path, which skips those entries.
+                    let filtered = key_count != 0
+                        && crate::object::key_attrs::keys_summary_checked(
+                            src_keys,
+                            key_count as u32,
+                        ) & (crate::object::key_attrs::SUMMARY_NON_ENUMERABLE
+                            | crate::object::key_attrs::SUMMARY_PRIVATE)
+                            != 0;
+                    if filtered
+                        || key_count > crate::object::object_live_slot_count(src_obj) as usize
+                    {
                         let memo_index = structured_clone_memo_reserve(value);
                         let scope = crate::gc::RuntimeHandleScope::new();
                         let src_handle = scope.root_raw_const_ptr(src_obj);
@@ -939,6 +952,12 @@ fn js_structured_clone_inner(value: f64, depth: usize) -> f64 {
                                 break;
                             }
                             let key_val = crate::array::js_array_get(keys_now, i as u32);
+                            let entry = crate::object::key_attrs::keys_entry(keys_now, i as u32);
+                            if crate::object::key_attrs::entry_is_private(entry)
+                                || entry & crate::object::key_attrs::ENTRY_NON_ENUMERABLE != 0
+                            {
+                                continue;
+                            }
                             // Own the key bytes before the recursive clone —
                             // it can run a GC cycle.
                             let key_bytes =

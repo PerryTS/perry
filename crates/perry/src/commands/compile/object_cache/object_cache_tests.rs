@@ -903,6 +903,8 @@ fn static_seeds_round_trip_and_an_entry_without_them_misses() {
             typed: None,
             rep: 0b0101,
             constfn: Vec::new(),
+            private: Vec::new(),
+            brands: Vec::new(),
         },
     );
     cache.store_static_seeds(key, &[line.as_str()]);
@@ -934,6 +936,8 @@ fn constfn_body_sidecar_survives_a_warm_cache_hit_without_publishing_it() {
             slot: 0,
             symbol: "perry_closure_m__method$info".to_string(),
         }],
+        private: Vec::new(),
+        brands: Vec::new(),
     };
     let line = perry_codegen::encode_static_seed(0x1000_0044, &shape);
     cache.store_ffi_manifest(key, &[]);

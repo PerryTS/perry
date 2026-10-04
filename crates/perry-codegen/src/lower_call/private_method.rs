@@ -69,6 +69,29 @@ pub(super) fn try_lower_private_method_call(
     let class_id_str = class_id.to_string();
     let name_len_str = field_name.len().to_string();
     let direct_target = private_method_direct_target(ctx, class_name, class_id, field_name);
+    // The declaring class's completed static shape carries its brand.
+    let static_id =
+        crate::codegen::static_private_class::class_static_private_final(ctx, class_name)
+            .map(|(id, _)| id);
+    // #11791: inside the proven-`this` clone of the declaring class, `this` is
+    // exactly that class (the clone's call-site guard matched its class id
+    // and a shape it accepts), so `this.#m()` calls `#m`'s own clone when one
+    // was emitted, as `this.m()` does.
+    let direct_target = direct_target.map(|(symbol, params)| {
+        let proven = matches!(receiver.as_ref(), Expr::This)
+            && ctx
+                .proven_this
+                .as_ref()
+                .is_some_and(|fact| fact.class_name == *class_name)
+            && ctx
+                .pshape_methods
+                .contains_key(&(class_name.clone(), field_name.clone()));
+        if proven {
+            (crate::collectors::pshape_method_name(&symbol), params)
+        } else {
+            (symbol, params)
+        }
+    });
 
     with_rooted_group(ctx, args.len(), |ctx, group| {
         let recv = lower_expr(ctx, receiver)?;
@@ -81,20 +104,21 @@ pub(super) fn try_lower_private_method_call(
         };
         let name_label = emit_string_literal_global(ctx, field_name);
         let guard_site = emit_private_site_cache(ctx, 1);
-        let guarded = emit_private_site_guard(ctx, &recv, class_id, &guard_site, |ctx| {
-            ctx.block().call(
-                DOUBLE,
-                "js_private_method_guard",
-                &[
-                    (DOUBLE, &recv),
-                    (DOUBLE, &brand_owner),
-                    (I32, &class_id_str),
-                    (PTR, &name_label),
-                    (I32, &name_len_str),
-                    (PTR, &guard_site),
-                ],
-            )
-        });
+        let guarded =
+            emit_private_site_guard(ctx, &recv, class_id, &guard_site, static_id, |ctx| {
+                ctx.block().call(
+                    DOUBLE,
+                    "js_private_method_guard",
+                    &[
+                        (DOUBLE, &recv),
+                        (DOUBLE, &brand_owner),
+                        (I32, &class_id_str),
+                        (PTR, &name_label),
+                        (I32, &name_len_str),
+                        (PTR, &guard_site),
+                    ],
+                )
+            });
         // Root the guarded receiver across the arguments, each argument
         // across the ones after it, then re-read everything below the last
         // collection point.

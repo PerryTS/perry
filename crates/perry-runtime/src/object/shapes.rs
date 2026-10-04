@@ -1854,11 +1854,15 @@ fn shape_descriptor_intern_with_special_mode(
         }
     }
     // A static id is adopted only for facts it can name (ordinary band,
-    // generation 0, a birth rep: no deprecated lane) and only if this agent
-    // has no record under it yet.
+    // generation 0, a birth rep: no deprecated lane, brands of class
+    // templates only: a template brand is its class id in every agent, a
+    // fresh evaluation's is not) and only if this agent has no record under
+    // it yet.
     let adopted = requested.filter(|&id| {
         is_static_shape_id(id)
-            && brands.is_empty()
+            && brands
+                .iter()
+                .all(|&b| b & crate::object::field_get_set::PRIVATE_FRESH_EVALUATION_BRAND == 0)
             && !object_kind.is_exotic()
             && semantic_generation == 0
             && !super::field_rep::has_deprecated(rep)

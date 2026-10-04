@@ -77,7 +77,12 @@ pub(crate) fn class_field_global_index(
     // fields — surfaces this as `column.config = 0` for every column
     // builder when read from the importing module.
     fn count_keyable(fields: &[perry_hir::ClassField]) -> u32 {
-        fields.iter().filter(|f| f.key_expr.is_none()).count() as u32
+        // Private fields are not slots of the class layout either: their
+        // entries are claimed at construction, after every packed key (#11791).
+        fields
+            .iter()
+            .filter(|f| f.key_expr.is_none() && !f.is_private)
+            .count() as u32
     }
     fn accessor_in_chain(ctx: &FnCtx<'_>, class_name: &str, property: &str) -> bool {
         let mut current = Some(class_name.to_string());
@@ -128,7 +133,7 @@ pub(crate) fn class_field_global_index(
         for (i, (_, fields)) in chain.iter().enumerate().rev() {
             let mut own_idx = 0u32;
             for f in fields {
-                if f.key_expr.is_some() {
+                if f.key_expr.is_some() || f.is_private {
                     continue;
                 }
                 if f.name == property {
@@ -188,7 +193,7 @@ pub(crate) fn class_field_global_index(
         // packed_keys layout the runtime sees.
         let mut own_idx: u32 = 0;
         for f in &class.fields {
-            if f.key_expr.is_some() {
+            if f.key_expr.is_some() || f.is_private {
                 continue;
             }
             if f.name == property {

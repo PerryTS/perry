@@ -5816,7 +5816,7 @@ pub fn run_with_parse_cache(
         BTreeMap::new();
     for (shape, &id) in &static_shape_ids {
         if let perry_codegen::BirthProto::Class(cid) = shape.proto {
-            if !shape.constfn.is_empty() {
+            if shape.is_completed() {
                 class_final_shapes
                     .entry(cid)
                     .or_default()

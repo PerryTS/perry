@@ -146,6 +146,29 @@ pub(crate) fn constructor_added_key_count(ctx: &FnCtx<'_>, class: &perry_hir::Cl
     constructor_added_key_count_in(class, &|name| ctx.classes.get(name).copied())
 }
 
+/// The private fields construction claims on an instance of `class`: one
+/// entry each, appended after the birth keys (#11791). Like the constructor
+/// key-adds they get in-object slack, so every private field is an inline
+/// slot. Counted over the local chain; an unresolved ancestor contributes
+/// nothing (its fields land in overflow, which stays correct).
+pub(crate) fn private_field_slot_count_in<'c>(
+    class: &'c perry_hir::Class,
+    lookup: &dyn Fn(&str) -> Option<&'c perry_hir::Class>,
+) -> u32 {
+    let mut count = 0u32;
+    let mut current = Some(class);
+    let mut depth = 0;
+    while let Some(c) = current {
+        if c.is_imported_stub() || depth > 32 {
+            break;
+        }
+        count += c.fields.iter().filter(|f| f.is_private).count() as u32;
+        depth += 1;
+        current = c.extends_name.as_deref().and_then(lookup);
+    }
+    count.min(64)
+}
+
 /// [`constructor_added_key_count`] over any class table: module init
 /// (`codegen/mod.rs`) derives the same count from its own table to mint the
 /// wide birth shape the inline allocator stamps.
@@ -331,7 +354,8 @@ fn emit_instance_alloc_inner(
     // keys stay authoritative for enumeration, and a width above the keys
     // count routes the allocation to the outlined entry, which installs an
     // exact descriptor and also honours the learned width.
-    let slack = constructor_added_key_count(ctx, class);
+    let slack = constructor_added_key_count(ctx, class)
+        + private_field_slot_count_in(class, &|name| ctx.classes.get(name).copied());
     if slack > 0 {
         field_count = field_count.max(
             ctx.class_field_counts

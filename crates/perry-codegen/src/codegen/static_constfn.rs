@@ -84,6 +84,8 @@ pub(crate) fn literal_final(
         typed: None,
         rep,
         constfn,
+        private: Vec::new(),
+        brands: Vec::new(),
     })
 }
 

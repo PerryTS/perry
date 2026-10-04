@@ -3149,6 +3149,7 @@ pub(crate) mod number_to_string_inline;
 mod number_to_string_inline_tests;
 mod objects_arrays_lit;
 pub(crate) mod os_uri_dates;
+pub(crate) mod private_field_site;
 pub(crate) mod property_get;
 pub(crate) mod property_set;
 pub(crate) mod proxy_reflect;
