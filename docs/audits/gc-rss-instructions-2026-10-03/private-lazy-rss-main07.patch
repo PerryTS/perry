@@ -1,0 +1,119 @@
+diff --git a/crates/perry-runtime/src/gc/mod.rs b/crates/perry-runtime/src/gc/mod.rs
+index 04887e8e91..d8feb3e9f4 100644
+--- a/crates/perry-runtime/src/gc/mod.rs
++++ b/crates/perry-runtime/src/gc/mod.rs
+@@ -439,7 +439,6 @@ fn gc_collect_minor_with_trigger_inner(
+     let start = Instant::now();
+     crate::arena::old_pages_begin_gc_cycle();
+     let previous_pause_us = gc_last_pause_us();
+-    let current_rss_bytes = crate::process::get_rss_bytes();
+     // Not budgeted, so the low-pause veto does not apply and the policy is
+     // always allowed to run here (#7611 deleted the env veto that used to sit
+     // in this slot). The variable stays rather than being folded away: it is
+@@ -489,6 +488,9 @@ fn gc_collect_minor_with_trigger_inner(
+             trace,
+         };
+     }
++    // Only fallback evacuation consumes RSS. Successful copying minors avoid
++    // the OS query; a declined or rolled-back attempt samples before marking.
++    let current_rss_bytes = minor_fallback_rss_bytes();
+     clear_mark_seeds();
+     // Old-page defrag belongs to the non-copying fallback below. Snapshotting
+     // and sorting all old-page metadata before trying the copying fast path
+@@ -520,7 +522,13 @@ fn gc_collect_minor_with_trigger_inner(
+ }
+ 
+ #[inline]
++fn minor_fallback_rss_bytes() -> u64 {
++    #[cfg(test)]
++    tests::minor_lazy_rss::note_read();
++    crate::process::get_rss_bytes()
++}
+ 
++#[inline]
+ pub fn gen_gc_enabled() -> bool {
+     use std::sync::OnceLock;
+     static CACHED: OnceLock<bool> = OnceLock::new();
+diff --git a/crates/perry-runtime/src/gc/tests/minor_lazy_rss.rs b/crates/perry-runtime/src/gc/tests/minor_lazy_rss.rs
+new file mode 100644
+index 0000000000..5ce7a40ea8
+--- /dev/null
++++ b/crates/perry-runtime/src/gc/tests/minor_lazy_rss.rs
+@@ -0,0 +1,65 @@
++use super::super::*;
++use super::support::*;
++
++thread_local! {
++    static RSS_READS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
++}
++
++pub(crate) fn note_read() {
++    RSS_READS.with(|reads| reads.set(reads.get() + 1));
++}
++
++#[test]
++fn successful_copying_minor_does_not_query_fallback_rss() {
++    std::thread::spawn(|| {
++        let _guard = CopyingNurseryTestGuard::new(1);
++        let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
++        let _diag = GcDiagTestGuard::force_on();
++        let bytes = b"lazy_rss_copied_root";
++        let young = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
++        js_shadow_slot_set(0, string_bits(young as usize));
++        RSS_READS.with(|reads| reads.set(0));
++
++        let trace = collect_minor_trace(GcTriggerKind::Direct);
++        assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
++        assert!(trace.copying_nursery.copied_objects > 0);
++        let survivor = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
++        assert_ne!(survivor, young as usize);
++        unsafe { assert_string_bytes(survivor as *const crate::StringHeader, bytes) };
++        assert_eq!(RSS_READS.with(std::cell::Cell::get), 0);
++    })
++    .join()
++    .unwrap();
++}
++
++#[test]
++fn pinned_minor_fallback_still_samples_rss_and_preserves_root() {
++    std::thread::spawn(|| {
++        let _guard = CopyingNurseryTestGuard::new(1);
++        let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
++        let _diag = GcDiagTestGuard::force_on();
++        let bytes = b"lazy_rss_pinned_root";
++        let young = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
++        js_shadow_slot_set(0, string_bits(young as usize));
++        unsafe { pin_object(header_from_user_ptr(young as *const u8)) };
++        RSS_READS.with(|reads| reads.set(0));
++
++        let trace = collect_minor_trace(GcTriggerKind::Direct);
++        assert_copied_minor_trace(
++            &trace,
++            false,
++            CopiedMinorFallbackReason::PinnedYoungRoot,
++            false,
++        );
++        assert_eq!(RSS_READS.with(std::cell::Cell::get), 1);
++        #[cfg(any(target_os = "linux", target_os = "macos"))]
++        assert!(trace.evacuation_policy.snapshot.rss_bytes > 0);
++        assert_eq!((js_shadow_slot_get(0) & POINTER_MASK) as usize, young as usize);
++        unsafe {
++            assert_string_bytes(young, bytes);
++            unpin_object(header_from_user_ptr(young as *const u8));
++        }
++    })
++    .join()
++    .unwrap();
++}
+diff --git a/crates/perry-runtime/src/gc/tests/mod.rs b/crates/perry-runtime/src/gc/tests/mod.rs
+index e0a6b09de0..60a645e63e 100644
+--- a/crates/perry-runtime/src/gc/tests/mod.rs
++++ b/crates/perry-runtime/src/gc/tests/mod.rs
+@@ -64,6 +64,7 @@ mod leaf_marks;
+ mod map_store;
+ mod mark_slot_hoists;
+ mod minor_fixed_cost;
++pub(super) mod minor_lazy_rss;
+ mod noncollecting_root_lock;
+ mod object_create;
+ mod old_free_intrusive;
