@@ -477,6 +477,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
             property,
             value,
         } => {
+            // #11791: an instance private field write is a shape compare and
+            // a slot store.
+            if let Some(site) =
+                super::private_field_site::private_field_site(ctx, object, property, 1)
+            {
+                return super::private_field_site::lower_set(ctx, site, property, value);
+            }
             if let Expr::LocalGet(id) = object.as_ref() {
                 if ctx.pod_records.get(id).is_some_and(|local| {
                     local

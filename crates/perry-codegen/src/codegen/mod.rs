@@ -255,6 +255,7 @@ mod spec_self_recursion_tests;
 pub(crate) mod static_constfn;
 pub(crate) mod static_constfn_class;
 pub(crate) mod static_fields;
+pub(crate) mod static_private_class;
 mod static_shape_ids;
 pub use static_shape_ids::{
     assign_static_shape_ids, decode_static_seed, encode_static_seed, take_module_static_seeds,
@@ -2419,13 +2420,15 @@ fn compile_module_impl(
             // `lower_call::new_alloc::constructor_added_key_count`): such a
             // class is born with a live bound of keys + slack, minted beside
             // this image by the string pool (`birth_live`, 0 = the key count).
+            // The private fields' entries are key-adds of construction too
+            // (#11791): reserve their inline slots the same way.
             let slack = if imported_stub_names.contains(class_name.as_str()) {
                 0
             } else {
                 class_table.get(class_name).map_or(0, |class| {
-                    crate::lower_call::new_alloc::constructor_added_key_count_in(class, &|name| {
-                        class_table.get(name).copied()
-                    })
+                    let lookup = |name: &str| class_table.get(name).copied();
+                    crate::lower_call::new_alloc::constructor_added_key_count_in(class, &lookup)
+                        + crate::lower_call::new_alloc::private_field_slot_count_in(class, &lookup)
                 })
             };
             let birth_live = if slack > 0 { key_count + slack } else { 0 };
@@ -2514,6 +2517,16 @@ fn compile_module_impl(
                 &module_prefix,
                 &reps,
             ));
+        }
+        if opts.output_type == "executable" {
+            let private_finals = static_private_class::module_private_finals(
+                hir,
+                &module_prefix,
+                births,
+                &class_keys_globals_map,
+                &class_ids,
+            );
+            births.extend(private_finals);
         }
         return Ok(Vec::new());
     }

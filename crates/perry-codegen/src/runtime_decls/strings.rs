@@ -384,6 +384,23 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, DOUBLE, I32, PTR, I32, I32, I32, PTR],
     );
+    // #11791: the misses of the inline private field read and write.
+    module.declare_function(
+        "js_private_field_site_get",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, I32, PTR, I32, PTR, DOUBLE],
+    );
+    module.declare_function(
+        "js_private_field_site_set",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, I32, PTR, I32, PTR, DOUBLE, DOUBLE],
+    );
+    // #11791: a class's completed private shape, minted at module init.
+    module.declare_function(
+        "js_object_final_shape_id_for_class_keys_static_private",
+        I32,
+        &[I64, I32, I32, I32, I32, I64, PTR, I32, PTR, I32],
+    );
     module.declare_function(
         "js_private_method_guard",
         DOUBLE,

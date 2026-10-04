@@ -512,6 +512,77 @@ unsafe fn publish_key_add_rep(
     target
 }
 
+/// A private field's lanes (#11791). Claiming the `ENTRY_PRIVATE` entry is a
+/// key-only append that publishes an all-`Any` rep; the claim is an append
+/// like any key-add, though, so its successor's rep is [`key_add_rep`]'s: the
+/// predecessor's lanes below `slot` carry (no slot moved), and the new lane
+/// is `F64` when the initializer stored a Number into an INLINE slot. This
+/// returns that successor of `obj`'s current shape, with the shape it starts
+/// from and the slot's canonical double bits, or `None` when the current
+/// shape already has that rep (or is a dictionary).
+///
+/// Mints, so it is a collection point: it reads `obj` only before the mint,
+/// and the caller re-reads its root for [`install_private_field_lanes`].
+pub(crate) unsafe fn private_field_lanes_target(
+    obj: *mut ObjectHeader,
+    slot: u32,
+    pred_rep: u64,
+) -> Option<(u32, u32, u64)> {
+    if super::dictionary::is_dictionary(obj) {
+        return None;
+    }
+    let id = object_shape_stamp(obj);
+    let d = shape_descriptor_by_id(id)?;
+    if field_rep::has_deprecated(d.rep) || field_rep::special_lane_slots(d.rep) != 0 {
+        return None;
+    }
+    let inline = slot < d.live_inline_slot_count;
+    let fields_ptr = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64;
+    let value_bits = inline.then(|| *fields_ptr.add(slot as usize));
+    let rep = key_add_rep(pred_rep, slot, value_bits, inline);
+    if rep == d.rep {
+        return None;
+    }
+    let bits = value_bits
+        .and_then(field_rep::f64_slot_bits)
+        .unwrap_or_default();
+    let target = normalized_shape(publish_shape_result(
+        super::shapes::shape_descriptor_intern_with_special(
+            d.keys as usize as *const crate::array::ArrayHeader,
+            d.logical_key_count,
+            d.live_inline_slot_count,
+            d.semantic_generation,
+            d.object_kind,
+            d.hole_count,
+            d.proto_id,
+            d.summary,
+            rep,
+            &[],
+            &d.brands().to_vec(),
+            None,
+        ),
+    ));
+    (target != 0 && target != id).then_some((id, target, bits))
+}
+
+/// Install [`private_field_lanes_target`]'s answer: an `F64` slot's canonical
+/// double first (a non-pointer under the current `Any` lane), then the shape
+/// (DESIGN §3.3 order). A receiver that changed shape in between keeps its
+/// shape.
+pub(crate) unsafe fn install_private_field_lanes(
+    obj: *mut ObjectHeader,
+    slot: u32,
+    (from, target, bits): (u32, u32, u64),
+) {
+    if object_shape_stamp(obj) != from {
+        return;
+    }
+    if slot < REP_SLOTS && slot_rep(shape_rep_by_id(target), slot) == field_rep::REP_F64 {
+        super::slot_store::store_object_field_slot(obj, slot as usize, bits);
+    }
+    stamp_object_shape_id_with_carrier_note(obj, target);
+}
+
 /// Is `slot` of shape `id` an `Any` lane (the store IC words' flag: a
 /// non-`Any` lane is published with the flag that makes the emitted hit
 /// check the value, DESIGN §3.2)?

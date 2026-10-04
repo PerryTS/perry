@@ -337,6 +337,7 @@ pub(crate) use ic_miss::{get_field_ic_dispatch, pic_outlined_mru_hit};
 // The read path's spill flip, shared with the static-key store IC's ways
 // (`proxy/put_value/packed_set.rs`): one encoding for both compact words.
 pub(crate) use ic_miss::PACKED_SPILL_FLIP;
+pub(crate) use ic_miss::PRIVATE_FRESH_EVALUATION_BRAND;
 #[cfg(test)]
 pub(crate) use ic_miss::{
     primitive_proto_method_name_static, test_pending_private_access_owner,

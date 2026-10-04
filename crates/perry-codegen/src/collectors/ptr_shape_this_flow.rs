@@ -313,6 +313,38 @@ impl<'a, 'b> ThisFlowAnalysis<'a, 'b> {
 
     fn expr_this_safe(&mut self, e: &'a Expr, ctx: &(String, String, Vec<u32>)) -> bool {
         match e {
+            // #11791: a private field read or write, a private method call or
+            // a brand check on `this`. Each is checked by its own private site
+            // (the receiver's ShapeId names the element), and none changes
+            // the receiver's public layout: a private field is never added
+            // outside construction (writing an absent one throws), and its
+            // representation lane is its own slot's.
+            Expr::PropertyGet { object, .. } if private_this(object, 0, 0) => true,
+            Expr::PropertySet { object, value, .. } if private_this(object, 0, 1) => {
+                self.expr_this_safe(value, ctx)
+            }
+            Expr::Call { callee, args, .. }
+                if matches!(
+                    callee.as_ref(),
+                    Expr::PropertyGet { object, .. } if private_this(object, 1, 0)
+                ) =>
+            {
+                let Expr::PropertyGet { object, .. } = callee.as_ref() else {
+                    unreachable!()
+                };
+                let Expr::PrivateGuard { field_name, .. } = object.as_ref() else {
+                    unreachable!()
+                };
+                let Some((owner, func)) = self.methods.get(field_name).cloned() else {
+                    return false;
+                };
+                self.internally_invoked.insert(field_name.clone());
+                if !self.function_this_safe(&owner, field_name, func, false) {
+                    return false;
+                }
+                args.iter().all(|a| self.expr_this_safe(a, ctx))
+            }
+            Expr::PrivateBrandCheck { object, .. } if matches!(object.as_ref(), Expr::This) => true,
             Expr::PropertyGet {
                 object, property, ..
             } if matches!(object.as_ref(), Expr::This) => self.fields.contains(property),
@@ -470,6 +502,20 @@ impl<'a, 'b> ThisFlowAnalysis<'a, 'b> {
 
 /// Does the expression mention `this` anywhere (including closure bodies and
 /// `captures_this`)?
+/// `object` is `this` guarded for a private access of `kind` (0 field, 1
+/// method) and `op` (0 read, 1 write).
+fn private_this(object: &Expr, kind: u8, op: u8) -> bool {
+    matches!(
+        object,
+        Expr::PrivateGuard {
+            kind: k,
+            op: o,
+            object,
+            ..
+        } if *k == kind && *o == op && matches!(object.as_ref(), Expr::This)
+    )
+}
+
 fn expr_mentions_this(e: &Expr) -> bool {
     let mut found = false;
     fn visit(e: &Expr, found: &mut bool) {

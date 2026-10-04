@@ -577,6 +577,24 @@ pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
         Expr::PropertyGet {
             object, property, ..
         } => {
+            // #11791: `recv.#x` reads the private field the guard's declaring
+            // class declares (a private name never resolves on a subclass), so
+            // its declared type is the type, exactly as for a public field.
+            if let Expr::PrivateGuard {
+                class_name,
+                field_name,
+                kind: 0,
+                ..
+            } = object.as_ref()
+            {
+                return ctx.classes.get(class_name).and_then(|class| {
+                    class
+                        .fields
+                        .iter()
+                        .find(|f| f.is_private && f.name == *field_name)
+                        .map(|f| f.ty.clone())
+                });
+            }
             if property == "length" && expression_has_numeric_length(ctx, object) {
                 return Some(HirType::Number);
             }

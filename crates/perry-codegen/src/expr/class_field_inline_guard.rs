@@ -238,7 +238,7 @@ pub(crate) fn class_instances_grow_past_layout(ctx: &FnCtx<'_>, class_name: &str
     let grows = |name: &str| {
         ctx.classes.get(name).copied().is_some_and(|class| {
             crate::lower_call::new_alloc::constructor_added_key_count(ctx, class) > 0
-                || class_chain_has_private_instance_elements(ctx, class)
+                || class_completes_off_guarded_shapes(ctx, name, class)
         })
     };
     grows(class_name)
@@ -256,12 +256,26 @@ pub(crate) fn class_instances_carry_private_elements(ctx: &FnCtx<'_>, class_name
         ctx.classes
             .get(name)
             .copied()
-            .is_some_and(|class| class_chain_has_private_instance_elements(ctx, class))
+            .is_some_and(|class| class_completes_off_guarded_shapes(ctx, name, class))
     };
     carries(class_name)
         || ctx.classes.keys().any(|sub| {
             sub != class_name && is_transitive_subclass(ctx, sub, class_name) && carries(sub)
         })
+}
+
+/// Does constructing `class` leave every instance on a shape the class guards
+/// do not accept? Construction that adds a private brand or field moves the
+/// instance off its birth ShapeId; when the class has a static completed
+/// private content (`codegen::static_private_class`), the guards accept the
+/// shape it lands on as a compatible completed id, so it does not.
+fn class_completes_off_guarded_shapes(
+    ctx: &FnCtx<'_>,
+    name: &str,
+    class: &perry_hir::Class,
+) -> bool {
+    class_chain_has_private_instance_elements(ctx, class)
+        && !crate::codegen::static_private_class::class_has_static_private_final(ctx, name)
 }
 
 /// Does constructing `class` add a private brand or a private field, from

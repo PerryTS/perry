@@ -1809,7 +1809,7 @@ fn private_brand_id(class_id: u32, evaluation_id: u64) -> u64 {
 }
 
 /// Marks a brand that names a fresh evaluation rather than a class id.
-const PRIVATE_FRESH_EVALUATION_BRAND: u64 = 1 << 63;
+pub(crate) const PRIVATE_FRESH_EVALUATION_BRAND: u64 = 1 << 63;
 
 /// Is private element `name` (`kind` 0 = field, else a method or accessor,
 /// which the class brand covers) of `declaring_class_id` present on
@@ -1923,6 +1923,9 @@ pub extern "C" fn js_private_field_add(
     };
     // The claim allocates the key (inside its own no-move window); the store
     // re-reads the holder from its handle.
+    let pred_rep = crate::object::shapes::shape_rep_by_id(unsafe {
+        crate::object::shapes::object_shape_stamp(holder)
+    });
     let holder = scope.root_raw_mut_ptr(holder);
     holder.with_mut_ptr::<ObjectHeader, _>(|holder| unsafe {
         crate::object::key_attrs::apply_edits(
@@ -1941,6 +1944,29 @@ pub extern "C" fn js_private_field_add(
                 js_object_set_field_by_name(holder, key, value.get_nanbox_f64())
             })
         });
+        return value.get_nanbox_f64();
+    }
+    // The claim is an append: like any key-add's, its successor carries the
+    // predecessor's lanes, and the initializer's value types the new slot (a
+    // Number in an inline slot is an `F64` lane, which compiled field sites
+    // read and write raw).
+    let slot = holder.with_mut_ptr::<ObjectHeader, _>(|holder| unsafe {
+        let keys = crate::object::object_keys(holder);
+        if keys.is_null() {
+            None
+        } else {
+            crate::object::keys_find_slot_by_bytes(keys.arr(), keys.count(), storage.as_bytes())
+        }
+    });
+    if let Some(slot) = slot {
+        let lanes = holder.with_mut_ptr::<ObjectHeader, _>(|holder| unsafe {
+            crate::object::field_rep_store::private_field_lanes_target(holder, slot, pred_rep)
+        });
+        if let Some(lanes) = lanes {
+            holder.with_mut_ptr::<ObjectHeader, _>(|holder| unsafe {
+                crate::object::field_rep_store::install_private_field_lanes(holder, slot, lanes)
+            });
+        }
     }
     value.get_nanbox_f64()
 }

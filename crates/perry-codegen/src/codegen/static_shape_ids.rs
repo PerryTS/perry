@@ -72,9 +72,22 @@ pub struct BirthShape {
     /// Sorted, unique body symbols for SPECIAL lanes. The current class-birth
     /// collector leaves this empty; post-construction producers populate it.
     pub constfn: Vec<ConstFnBirth>,
+    /// A completed class content (#11791, `static_private_class`): the
+    /// private fields' storage keys, NUL-terminated, appended after `keys` as
+    /// `ENTRY_PRIVATE` entries. Empty for every other content.
+    pub private: Vec<u8>,
+    /// A completed class content's sorted brand list (#11791). Empty for
+    /// every other content.
+    pub brands: Vec<u64>,
 }
 
 impl BirthShape {
+    /// A completed (final) content: ConstFn lanes or private facts. Never an
+    /// allocation's birth.
+    pub fn is_completed(&self) -> bool {
+        !self.constfn.is_empty() || !self.private.is_empty() || !self.brands.is_empty()
+    }
+
     /// A literal content without a typed layout: the runtime seed mints it
     /// from its key names and its birth rep (`js_shape_seed_plain`), the
     /// same facts the literal's own mint names, so the seed and a lazy mint
@@ -143,6 +156,17 @@ impl BirthShape {
                 eat(&[entry.slot]);
                 eat(&(entry.symbol.len() as u32).to_le_bytes());
                 eat(entry.symbol.as_bytes());
+            }
+        }
+        // Completed private facts (#11791); absent everywhere else, so every
+        // other content keeps its hash.
+        if !self.private.is_empty() || !self.brands.is_empty() {
+            eat(&[5]);
+            eat(&(self.private.len() as u64).to_le_bytes());
+            eat(&self.private);
+            eat(&(self.brands.len() as u64).to_le_bytes());
+            for b in &self.brands {
+                eat(&b.to_le_bytes());
             }
         }
         h
@@ -385,6 +409,8 @@ pub(crate) fn class_birth(
         typed: None,
         rep: class_birth_reps.get(global_name).copied().unwrap_or(0),
         constfn: Vec::new(),
+        private: Vec::new(),
+        brands: Vec::new(),
     });
     ClassBirth {
         class_id,
@@ -452,7 +478,7 @@ pub(crate) fn set_module_static_ids(
     MODULE_FINAL_IDS.with(|m| {
         *m.borrow_mut() = assigned
             .iter()
-            .filter(|(shape, _)| !shape.constfn.is_empty())
+            .filter(|(shape, _)| shape.is_completed())
             .cloned()
             .collect()
     });
@@ -478,6 +504,12 @@ pub(crate) fn has_static_final_shapes() -> bool {
 
 pub(crate) fn disable_static_final_shapes() {
     MODULE_FINAL_IDS.with(|m| m.borrow_mut().clear());
+}
+
+/// The birth content of this module's class keys global `keys_global`, when
+/// the driver assigned it a static id.
+pub(crate) fn static_birth_content(keys_global: &str) -> Option<BirthShape> {
+    MODULE_STATIC_IDS.with(|m| m.borrow().get(keys_global).map(|(_, s)| s.clone()))
 }
 
 /// Final ids are requested only after construction, never by allocation guards.
@@ -638,6 +670,8 @@ pub fn decode_static_seed(line: &str) -> Option<(u32, BirthShape)> {
             typed: None,
             rep,
             constfn,
+            private: Vec::new(),
+            brands: Vec::new(),
         },
     ))
 }
@@ -727,6 +761,13 @@ pub(crate) fn compatible_final_shapes(
     let Some(birth) = birth else {
         return Vec::new();
     };
+    // A completed private content (#11791) may add lanes past the birth keys
+    // (its private fields' slots): the birth's slots keep the birth's lanes.
+    let birth_lanes = if birth.key_count >= 32 {
+        u64::MAX
+    } else {
+        (1u64 << (2 * birth.key_count)) - 1
+    };
     let candidates: Vec<(BirthShape, u32)> = MODULE_FINAL_IDS.with(|m| {
         m.borrow()
             .iter()
@@ -735,6 +776,11 @@ pub(crate) fn compatible_final_shapes(
                     .constfn
                     .iter()
                     .fold(shape.rep, |rep, entry| rep & !(3u64 << (2 * entry.slot)));
+                let ordinary_rep = if shape.private.is_empty() {
+                    ordinary_rep
+                } else {
+                    ordinary_rep & birth_lanes
+                };
                 (shape.keys == birth.keys
                     && shape.key_count == birth.key_count
                     && shape.live == birth.live

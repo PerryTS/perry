@@ -155,6 +155,110 @@ pub extern "C" fn js_shape_seed_plain_constfn(
     id
 }
 
+/// Seed the FINAL shape of a class with private elements (#11791) under the
+/// static id `requested`: the class's birth keys (`keys`, `key_count`, the
+/// keys global's canonical list) followed by the private fields' storage keys
+/// (`private_packed`, NUL-terminated names in the order construction claims
+/// them) as `ENTRY_PRIVATE` entries, the birth live bound `live`, the rep
+/// (`F64` lanes of numeric fields, private ones included) and the sorted
+/// brand list `brands`. Construction reaches these facts by its ordinary
+/// transitions (each claim is a canonical keys edge, each brand a brand
+/// transition, each lane the key-add rule), so a completed instance carries
+/// this id. Only facts are minted here; no object is stamped.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn js_object_final_shape_id_for_class_keys_static_private(
+    keys: u64,
+    key_count: u32,
+    live: u32,
+    class_id: u32,
+    requested: u32,
+    rep: u64,
+    private_packed: *const u8,
+    private_len: u32,
+    brands: *const u64,
+    brand_count: u32,
+) -> u32 {
+    if private_packed.is_null() && private_len != 0 || brands.is_null() && brand_count != 0 {
+        return 0;
+    }
+    let names: Vec<Vec<u8>> = if private_len == 0 {
+        Vec::new()
+    } else {
+        // SAFETY: compiler-owned rodata of `private_len` bytes.
+        let bytes = unsafe { std::slice::from_raw_parts(private_packed, private_len as usize) };
+        crate::object::packed_key_names(bytes)
+            .into_iter()
+            .map(|name| name.to_vec())
+            .collect()
+    };
+    let mut brand_list: Vec<u64> = if brand_count == 0 {
+        Vec::new()
+    } else {
+        // SAFETY: compiler-owned rodata of `brand_count` words.
+        unsafe { std::slice::from_raw_parts(brands, brand_count as usize) }.to_vec()
+    };
+    brand_list.sort_unstable();
+    brand_list.dedup();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let proof = super::canonical_keys::SharedLayout::shape_cache_entry();
+    // The receiver's first claim extends the canonical form of its birth list
+    // (`ensure_key_in_keys_array_inner`); so does this.
+    let (mut list_root, mut count) = if names.is_empty() {
+        (
+            scope.root_raw_mut_ptr(keys as usize as *mut ArrayHeader),
+            key_count,
+        )
+    } else {
+        let base = unsafe {
+            super::canonical_keys::canonicalize(
+                &proof,
+                keys as usize as *mut ArrayHeader,
+                key_count,
+            )
+        };
+        (scope.root_raw_mut_ptr(base.as_ptr()), base.len())
+    };
+    for name in &names {
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        let key = scope.root_string_ptr(key);
+        let parent = super::canonical_keys::CanonicalKeys::from_rooted(
+            list_root.get_raw_mut_ptr::<ArrayHeader>(),
+            count,
+        );
+        let next = key.with_const_ptr::<crate::StringHeader, _>(|key| unsafe {
+            super::canonical_keys::extend_key_with_entry(
+                &proof,
+                parent,
+                key,
+                super::key_attrs::PRIVATE_FIELD_ENTRY,
+            )
+        });
+        count = next.len();
+        list_root = scope.root_raw_mut_ptr(next.as_ptr());
+    }
+    let list = list_root.get_raw_mut_ptr::<ArrayHeader>() as *const ArrayHeader;
+    let summary = unsafe { super::key_attrs::keys_summary_checked(list, count) };
+    let id = shapes::publish_shape_result(shapes::shape_descriptor_intern_with_special(
+        list,
+        count,
+        live.max(count),
+        0,
+        shapes::ShapeObjectKind::Ordinary,
+        0,
+        shapes::class_proto_id(class_id),
+        summary,
+        rep,
+        &[],
+        &brand_list,
+        Some(requested).filter(|&id| id != 0),
+    ));
+    // SAFETY: `id` was resolved from this agent's live slab record above.
+    unsafe { shapes::note_external_shape_carrier(shapes::shape_descriptor_by_id(id)) };
+    note_static_request("class-private", requested, id);
+    id
+}
+
 /// Mint final class/literal facts without stamping an object. Class
 /// registration seeds these facts separately from its Any/F64 allocation
 /// shape, after all prototype registrations; `requested == 0` requests a dynamic id.

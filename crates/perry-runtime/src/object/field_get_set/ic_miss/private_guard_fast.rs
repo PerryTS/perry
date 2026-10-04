@@ -353,7 +353,9 @@ unsafe fn private_site_hit(obj: f64, class_id: u32, site: *const u64) -> bool {
     let Some((_, shape_id)) = private_plain_receiver_shape(obj) else {
         return false;
     };
-    u64::from(shape_id) == word
+    // A field site's word also carries the slot (see
+    // [`private_field_site_word`]); the ShapeId is its low half.
+    shape_id == word as u32
 }
 
 /// Publish a proven receiver shape to `site`.
@@ -364,6 +366,195 @@ unsafe fn private_site_publish(class_id: u32, site: *mut u64, proof: PrivateShap
     }
     (*(site as *const std::sync::atomic::AtomicU64))
         .store(u64::from(proof.shape_id), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// A field site word's lane bit: the field's slot is an `F64` lane of the
+/// word's ShapeId, so the compiled store writes a plain finite double there
+/// and takes the miss for anything else. Without it the slot is an `Any`
+/// lane, stored with the write barrier. Codegen mirrors it
+/// (`expr/private_field_site.rs`).
+pub(crate) const PRIVATE_FIELD_SITE_F64: u64 = 1 << 48;
+/// The slot bits of a field site word: `word >> 32 & PRIVATE_FIELD_SITE_SLOT_MASK`.
+pub(crate) const PRIVATE_FIELD_SITE_SLOT_MASK: u64 = 0xFFFF;
+
+/// The word a compiled INSTANCE FIELD site keeps for receivers carrying
+/// `shape_id` (#11791): `ShapeId | slot << 32 | lane bit`, or 0 when the
+/// field is not a plain inline slot of that shape. Every input is a fact of
+/// the ShapeId (the key list with the entry and its position, the live
+/// inline bound, the slot's lane), so the word holds for every receiver the
+/// inline compare admits. A lane that is neither `Any` nor `F64` (deprecated
+/// or ConstFn) publishes nothing; such receivers keep the runtime path.
+unsafe fn private_field_site_word(
+    object: *const ObjectHeader,
+    shape_id: u32,
+    class_id: u32,
+    name: &'static str,
+) -> u64 {
+    if (*object).class_id == NATIVE_MODULE_CLASS_ID
+        || crate::object::dictionary::is_dictionary(object)
+    {
+        return 0;
+    }
+    let Some(d) = crate::object::shapes::shape_descriptor_by_id(shape_id) else {
+        return 0;
+    };
+    if !d.object_kind.is_ordinary_layout() {
+        return 0;
+    }
+    let keys = d.keys_view();
+    if keys.is_null() {
+        return 0;
+    }
+    let storage = private_storage_key_by_id(class_id, 0, name);
+    let Some(slot) =
+        crate::object::keys_find_slot_by_bytes(keys.arr(), keys.count(), storage.as_bytes())
+    else {
+        return 0;
+    };
+    if crate::object::key_attrs::keys_entry(keys.arr(), slot)
+        != crate::object::key_attrs::PRIVATE_FIELD_ENTRY
+        || slot >= d.live_inline_slot_count
+        || u64::from(slot) > PRIVATE_FIELD_SITE_SLOT_MASK
+    {
+        return 0;
+    }
+    let lane = if slot < crate::object::field_rep::REP_SLOTS {
+        crate::object::field_rep::slot_rep(d.rep, slot)
+    } else {
+        crate::object::field_rep::REP_ANY
+    };
+    let lane_bit = match lane {
+        crate::object::field_rep::REP_ANY => 0,
+        crate::object::field_rep::REP_F64 => PRIVATE_FIELD_SITE_F64,
+        _ => return 0,
+    };
+    u64::from(shape_id) | (u64::from(slot) << 32) | lane_bit
+}
+
+/// Publish a proven receiver shape to a FIELD site, with its slot and lane.
+#[inline]
+unsafe fn private_field_site_publish(
+    obj: f64,
+    class_id: u32,
+    site: *mut u64,
+    proof: PrivateShapeProof,
+) {
+    if site.is_null() || private_template_may_be_evaluated(class_id) {
+        return;
+    }
+    let Some((object, shape_id)) = private_plain_receiver_shape(obj) else {
+        return;
+    };
+    if shape_id != proof.shape_id {
+        return;
+    }
+    let word = private_field_site_word(object, shape_id, class_id, proof.name);
+    if word != 0 {
+        (*(site as *const std::sync::atomic::AtomicU64))
+            .store(word, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// The brand check of a compiled INSTANCE FIELD site's miss: prove the
+/// receiver and publish the site word, or run the general guard, which
+/// throws or records the hint the by-name access after it consumes.
+#[inline]
+fn private_field_site_check(
+    obj: f64,
+    brand_owner: f64,
+    declaring_class_id: u32,
+    field_name_ptr: *const u8,
+    field_name_len: u32,
+    op: u32,
+    site: *mut u64,
+) {
+    if declaring_class_id != 0 && !field_name_ptr.is_null() && field_name_len != 0 {
+        let name = unsafe { std::slice::from_raw_parts(field_name_ptr, field_name_len as usize) };
+        if let Some(proof) =
+            private_instance_access_is_proven(obj, brand_owner, declaring_class_id, name, 0)
+        {
+            unsafe { private_field_site_publish(obj, declaring_class_id, site, proof) };
+            return;
+        }
+    }
+    js_private_guard(
+        obj,
+        brand_owner,
+        declaring_class_id,
+        field_name_ptr,
+        field_name_len,
+        0,
+        op,
+    );
+}
+
+/// Miss of a compiled `recv.#x` read whose hit is the inline slot load
+/// (#11791): the brand check, then the by-name read of the field's storage
+/// key `key` (a heap string), which also resolves a fresh evaluation's
+/// storage.
+#[no_mangle]
+pub extern "C" fn js_private_field_site_get(
+    obj: f64,
+    brand_owner: f64,
+    declaring_class_id: u32,
+    field_name_ptr: *const u8,
+    field_name_len: u32,
+    site: *mut u64,
+    key: f64,
+) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj = scope.root_nanbox_f64(obj);
+    let key = scope.root_nanbox_f64(key);
+    private_field_site_check(
+        obj.get_nanbox_f64(),
+        brand_owner,
+        declaring_class_id,
+        field_name_ptr,
+        field_name_len,
+        0,
+        site,
+    );
+    let key_ptr = (key.get_nanbox_f64().to_bits() & crate::value::POINTER_MASK)
+        as *const crate::StringHeader;
+    js_object_get_field_by_name_boxed(obj.get_nanbox_f64(), key_ptr)
+}
+
+/// Miss of a compiled `recv.#x = value` whose hit is the inline slot store
+/// (#11791): the brand check, then the PutValue of the storage key `key`,
+/// which stores into the field (or into a fresh evaluation's storage).
+/// Returns `value`.
+#[no_mangle]
+pub extern "C" fn js_private_field_site_set(
+    obj: f64,
+    brand_owner: f64,
+    declaring_class_id: u32,
+    field_name_ptr: *const u8,
+    field_name_len: u32,
+    site: *mut u64,
+    key: f64,
+    value: f64,
+) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj = scope.root_nanbox_f64(obj);
+    let key = scope.root_nanbox_f64(key);
+    let value = scope.root_nanbox_f64(value);
+    private_field_site_check(
+        obj.get_nanbox_f64(),
+        brand_owner,
+        declaring_class_id,
+        field_name_ptr,
+        field_name_len,
+        1,
+        site,
+    );
+    crate::proxy::js_put_value_set(
+        obj.get_nanbox_f64(),
+        key.get_nanbox_f64(),
+        value.get_nanbox_f64(),
+        obj.get_nanbox_f64(),
+        1,
+    );
+    value.get_nanbox_f64()
 }
 
 /// [`js_private_guard`] for a compiled INSTANCE FIELD access (`kind` 0,
@@ -391,7 +582,7 @@ pub extern "C" fn js_private_guard_site(
             if let Some(proof) =
                 private_instance_access_is_proven(obj, brand_owner, declaring_class_id, name, 0)
             {
-                unsafe { private_site_publish(declaring_class_id, site, proof) };
+                unsafe { private_field_site_publish(obj, declaring_class_id, site, proof) };
                 return obj;
             }
         }
@@ -794,7 +985,7 @@ mod private_guard_fast_tests {
             let live = crate::object::shapes::shape_live_inline_slot_count_by_id(shape_id).unwrap();
             assert!(live < fields.len() as u32, "fixture must spill its last field");
             let other = instance_with(CID, &[], false);
-            for name in [&b"#in"[..], &b"#out"[..]] {
+            for (name, inline) in [(&b"#in"[..], true), (&b"#out"[..], false)] {
                 let mut site = 0u64;
                 assert!(!private_site_hit(obj, CID, &site));
                 let returned = js_private_guard_site(
@@ -808,7 +999,18 @@ mod private_guard_fast_tests {
                     &mut site,
                 );
                 assert_eq!(returned.to_bits(), obj.to_bits());
-                assert_eq!(site, u64::from(shape_id), "a proven access publishes its shape");
+                if !inline {
+                    // A spilled field is no plain inline slot: no word, and
+                    // every access keeps the runtime path (#11791).
+                    assert_eq!(site, 0, "a spilled field publishes no site word");
+                    continue;
+                }
+                assert_eq!(site as u32, shape_id, "a proven access publishes its shape");
+                assert_eq!(
+                    (site >> 32) & PRIVATE_FIELD_SITE_SLOT_MASK,
+                    0,
+                    "and the field's slot"
+                );
                 assert!(private_site_hit(obj, CID, &site));
                 assert!(
                     !private_site_hit(other, CID, &site),

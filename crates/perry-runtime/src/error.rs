@@ -1725,6 +1725,24 @@ pub(crate) fn throw_immutable_write(kind: u32, key: &str) -> ! {
     js_throw_type_error_immutable_write(kind, key.as_ptr(), key.len())
 }
 
+/// A strict write to read-only data property `key` of a frozen `obj`. Node
+/// names a class instance by its class (`'#<Account>'`), every other object
+/// `'#<Object>'`.
+///
+/// # Safety
+/// `obj` is a live ordinary object.
+pub(crate) unsafe fn throw_frozen_write(obj: *const crate::ObjectHeader, key: &str) -> ! {
+    let class_id = crate::object::js_object_get_class_id(obj);
+    if class_id != 0 {
+        if let Some(class_name) = crate::object::class_name_for_id(class_id) {
+            crate::collection_iter::throw_type_error(&format!(
+                "Cannot assign to read only property '{key}' of object '#<{class_name}>'"
+            ));
+        }
+    }
+    throw_immutable_write(0, key)
+}
+
 // #2836/#2838/#2904: keep the codegen-emitted error FFIs alive through the
 // auto-optimize whole-program-bitcode link. These `#[no_mangle]` fns are
 // reachable only from generated `.o`; without `#[used]` anchors the

@@ -817,7 +817,7 @@ pub(crate) fn set_field_by_name_object_tail(
                 let i = i as usize;
                 if is_frozen {
                     let key_str = key_to_str_for_diag(key);
-                    crate::error::throw_immutable_write(0, &key_str);
+                    crate::error::throw_frozen_write(obj, &key_str);
                 }
                 if i < alloc_limit {
                     js_object_set_field(obj, i as u32, JSValue::from_bits(value.to_bits()));
@@ -1011,7 +1011,7 @@ pub(crate) fn set_field_by_name_object_tail(
                 // throws on the write (issue #615 — strict-mode default for TS).
                 if is_frozen {
                     let key_str = key_to_str_for_diag(key);
-                    crate::error::throw_immutable_write(0, &key_str);
+                    crate::error::throw_frozen_write(obj, &key_str);
                 }
                 // Per-property writable check (set by Object.defineProperty / freeze).
                 // Issue #615 — strict-mode throw on read-only assign.
