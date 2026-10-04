@@ -74,7 +74,6 @@ pub(super) struct GcCycleStepResult {
 
 struct TraceWorklistCycleState {
     worklist: Vec<*mut GcHeader>,
-    cursor: usize,
     minor_only: bool,
 }
 
@@ -82,20 +81,14 @@ impl TraceWorklistCycleState {
     fn new(minor_only: bool) -> Self {
         Self {
             worklist: take_mark_seeds(),
-            cursor: 0,
             minor_only,
         }
     }
 
     fn step(&mut self, valid_ptrs: &ValidPointerSet, budget: usize) -> bool {
         self.absorb_mark_seeds();
-        let done = drain_trace_worklist_step(
-            &mut self.worklist,
-            &mut self.cursor,
-            valid_ptrs,
-            self.minor_only,
-            budget,
-        );
+        let (done, _) =
+            drain_trace_worklist_step(&mut self.worklist, valid_ptrs, self.minor_only, budget);
         self.absorb_mark_seeds();
         done && self.worklist.is_empty()
     }
@@ -121,7 +114,6 @@ struct BlockPersistCycleState {
     subphase: BlockPersistSubphase,
     stats: BlockPersistTraceStats,
     worklist: Vec<*mut GcHeader>,
-    worklist_cursor: usize,
     arena_cursor: Option<crate::arena::ArenaObjectCursor>,
     block_has_live: Vec<bool>,
     general_n: usize,
@@ -135,7 +127,6 @@ impl BlockPersistCycleState {
             subphase: BlockPersistSubphase::StartIteration,
             stats: BlockPersistTraceStats::default(),
             worklist: Vec::new(),
-            worklist_cursor: 0,
             arena_cursor: None,
             block_has_live: Vec::new(),
             general_n: 0,
@@ -173,22 +164,14 @@ impl BlockPersistCycleState {
                         self.subphase = BlockPersistSubphase::Done;
                         return true;
                     }
-                    self.worklist_cursor = 0;
                     self.subphase = BlockPersistSubphase::DrainMarkedObjects;
                 }
                 BlockPersistSubphase::DrainMarkedObjects => {
                     if remaining == 0 {
                         return false;
                     }
-                    let before = self.worklist_cursor;
-                    let done = drain_trace_worklist_step(
-                        &mut self.worklist,
-                        &mut self.worklist_cursor,
-                        valid_ptrs,
-                        false,
-                        remaining,
-                    );
-                    let consumed = self.worklist_cursor.saturating_sub(before);
+                    let (done, consumed) =
+                        drain_trace_worklist_step(&mut self.worklist, valid_ptrs, false, remaining);
                     remaining = remaining.saturating_sub(consumed);
                     if !done {
                         return false;

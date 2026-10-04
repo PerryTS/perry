@@ -9,18 +9,16 @@ fn assert_budgeted_frontier(root: usize, objects: &[usize], capacity_limit: usiz
     clear_mark_seeds();
     let mut worklist = vec![unsafe { header_from_user_ptr(root as *const u8) }];
     let mut processed = 0;
-    assert!(!drain_trace_worklist_step(
-        &mut worklist,
-        &mut processed,
-        &valid,
-        false,
-        0
-    ));
+    assert_eq!(
+        drain_trace_worklist_step(&mut worklist, &valid, false, 0),
+        (false, 0)
+    );
     assert_eq!(processed, 0);
     assert_eq!(worklist.len(), 1);
     loop {
         let before = processed;
-        let done = drain_trace_worklist_step(&mut worklist, &mut processed, &valid, false, 7);
+        let (done, consumed) = drain_trace_worklist_step(&mut worklist, &valid, false, 7);
+        processed += consumed;
         assert!(
             processed - before <= 7,
             "each bounded step preserves its budget"

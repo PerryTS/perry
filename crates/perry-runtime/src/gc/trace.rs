@@ -1530,17 +1530,15 @@ pub(super) fn drain_trace_worklist_inner(
     valid_ptrs: &ValidPointerSet,
     minor_only: bool,
 ) {
-    let mut cursor = 0;
-    while !drain_trace_worklist_step(worklist, &mut cursor, valid_ptrs, minor_only, usize::MAX) {}
+    while !drain_trace_worklist_step(worklist, valid_ptrs, minor_only, usize::MAX).0 {}
 }
 
 pub(super) fn drain_trace_worklist_step(
     worklist: &mut Vec<*mut GcHeader>,
-    cursor: &mut usize,
     valid_ptrs: &ValidPointerSet,
     minor_only: bool,
     budget: usize,
-) -> bool {
+) -> (bool, usize) {
     let mut remaining = budget;
     while remaining > 0 {
         let Some(header) = worklist.pop() else {
@@ -1558,13 +1556,12 @@ pub(super) fn drain_trace_worklist_step(
         {
             super::prefetch::prefetch_read(worklist[index] as usize);
         }
-        // This is the cumulative number of processed headers, so budgeted
-        // block-persistence callers retain their work-unit accounting.
-        *cursor += 1;
         trace_one_worklist_header(header, valid_ptrs, worklist, minor_only);
         remaining -= 1;
     }
-    worklist.is_empty()
+    // Return work consumed instead of maintaining a second counter on every
+    // header. Budgeted block persistence still charges exactly the same units.
+    (worklist.is_empty(), budget - remaining)
 }
 
 pub(super) fn trace_one_worklist_header(
