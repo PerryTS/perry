@@ -1,0 +1,320 @@
+{
+  "inputs": {
+    "prior": "gc-auto-lazy-rss-main07-v52",
+    "prior_verification_sha256": "b445fbe43e797af4ee245be4cb1cbc176bccd513a16c18124ae98042f8ca996a",
+    "prior_runs_sha256": "faaadfaf6f0fe153252bca00305cbab4b7ded0e4f0001e90dd8665ffeae9daa3",
+    "prior_builds_sha256": "5f8b79ad8064a4a9a53d090029c24ec442173c6bc3e6479694134f7d6832d6e5",
+    "cases": {
+      "73-retain-then-release": {
+        "source": "/root/rss-header-20261002/sources/73-retain-then-release.ts",
+        "source_sha256": "24d016fddc98adaf677b689f67b3dd648516d0a4d5b318e16a2fcf0604cff5a6",
+        "args": [],
+        "oracle": "RESULT 719280537\n",
+        "binaries": {
+          "gc": {
+            "path": "/root/rss-header-20261002/bin/gc-auto-main07-v40-gc-73-retain-then-release",
+            "sha256": "6b0ffe653a2b69edeaa83d5840b4a112194edc86348277c7b0c1fd0f1194bea5"
+          },
+          "lazy": {
+            "path": "/root/rss-header-20261002/bin/gc-auto-lazy-rss-main07-v52-lazy-73-retain-then-release",
+            "sha256": "6881c3d6705ae40ad193f54a686a6f479aa0fda2ade2a4f661a2c74ed0cdceae"
+          }
+        }
+      },
+      "tscwork": {
+        "source": "/root/rss-header-20261002/sources/real/tscwork.ts",
+        "source_sha256": "0bc65e9930534ac2bde638a5a5c2f280a78e3848223ceff46f8ee97662451a7a",
+        "args": [
+          "1"
+        ],
+        "oracle": "typescript 5.8.2 96760\n",
+        "binaries": {
+          "gc": {
+            "path": "/root/rss-header-20261002/bin/gc-auto-main07-v40-gc-tscwork",
+            "sha256": "f5a80b28c7092385a30f5a3b021f3f6b5afa62cbba5fe0382457643ee4de91ce"
+          },
+          "lazy": {
+            "path": "/root/rss-header-20261002/bin/gc-auto-lazy-rss-main07-v52-lazy-tscwork",
+            "sha256": "5be54c3eea10cc2b2b940f0bbe4e800e665f398f2985a66c71efd0de7c06bc21"
+          }
+        }
+      }
+    },
+    "scope": "Nine fresh perf repetitions per case/arm, exact V52 binaries, no rebuild or GC override."
+  },
+  "runs": 36,
+  "repeats_per_case_arm": 9,
+  "summary": {
+    "73-retain-then-release": {
+      "gc": {
+        "instructions": {
+          "values": [
+            18393367313,
+            18375321196,
+            18381619330,
+            18390462251,
+            18375595474,
+            18374143402,
+            18375606287,
+            18393265039,
+            18397817856
+          ],
+          "min": 18374143402,
+          "median": 18381619330,
+          "max": 18397817856
+        },
+        "cycles": {
+          "values": [
+            4713463186,
+            4735802361,
+            4729139542,
+            4701142987,
+            4658478594,
+            4631080663,
+            4643964003,
+            4695562123,
+            4729586975
+          ],
+          "min": 4631080663,
+          "median": 4701142987,
+          "max": 4735802361
+        },
+        "minor-faults": {
+          "values": [
+            103005,
+            101286,
+            103208,
+            104006,
+            102181,
+            102814,
+            100730,
+            104095,
+            104095
+          ],
+          "min": 100730,
+          "median": 103005,
+          "max": 104095
+        },
+        "major-faults": {
+          "values": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "min": 0,
+          "median": 0,
+          "max": 0
+        }
+      },
+      "lazy": {
+        "instructions": {
+          "values": [
+            18390921672,
+            18254288540,
+            18371500122,
+            18390891400,
+            18385464436,
+            18381493958,
+            18377253790,
+            18385180551,
+            18383711798
+          ],
+          "min": 18254288540,
+          "median": 18383711798,
+          "max": 18390921672
+        },
+        "cycles": {
+          "values": [
+            4698407202,
+            4696596234,
+            4675406129,
+            4714143340,
+            4636059366,
+            4653719339,
+            4631025887,
+            4641546977,
+            4638486976
+          ],
+          "min": 4631025887,
+          "median": 4653719339,
+          "max": 4714143340
+        },
+        "minor-faults": {
+          "values": [
+            104098,
+            100878,
+            100946,
+            104064,
+            102684,
+            102279,
+            101952,
+            102327,
+            102015
+          ],
+          "min": 100878,
+          "median": 102279,
+          "max": 104098
+        },
+        "major-faults": {
+          "values": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "min": 0,
+          "median": 0,
+          "max": 0
+        }
+      },
+      "instruction_percent_vs_gc": 0.01138348021703095
+    },
+    "tscwork": {
+      "gc": {
+        "instructions": {
+          "values": [
+            59462927573,
+            59477510396,
+            59448610688,
+            59455542190,
+            59449636846,
+            59449139398,
+            59457416065,
+            59458853476,
+            59471734952
+          ],
+          "min": 59448610688,
+          "median": 59457416065,
+          "max": 59477510396
+        },
+        "cycles": {
+          "values": [
+            24936257176,
+            24678781128,
+            24214698538,
+            25526251851,
+            22083610932,
+            22097347388,
+            22367330598,
+            22278157138,
+            21807720317
+          ],
+          "min": 21807720317,
+          "median": 22367330598,
+          "max": 25526251851
+        },
+        "minor-faults": {
+          "values": [
+            142630,
+            142314,
+            142622,
+            142625,
+            142623,
+            142644,
+            142979,
+            142642,
+            143047
+          ],
+          "min": 142314,
+          "median": 142630,
+          "max": 143047
+        },
+        "major-faults": {
+          "values": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "min": 0,
+          "median": 0,
+          "max": 0
+        }
+      },
+      "lazy": {
+        "instructions": {
+          "values": [
+            59508343490,
+            59471085687,
+            59468501336,
+            59457235516,
+            59346841176,
+            59451673602,
+            59461779112,
+            59462218422,
+            59469963078
+          ],
+          "min": 59346841176,
+          "median": 59462218422,
+          "max": 59508343490
+        },
+        "cycles": {
+          "values": [
+            25546747564,
+            24507230561,
+            25199177467,
+            25064653381,
+            22489981785,
+            21752675657,
+            21810168853,
+            21976305359,
+            22620737394
+          ],
+          "min": 21752675657,
+          "median": 22620737394,
+          "max": 25546747564
+        },
+        "minor-faults": {
+          "values": [
+            149175,
+            142301,
+            142309,
+            142610,
+            135473,
+            142641,
+            142671,
+            142619,
+            143094
+          ],
+          "min": 135473,
+          "median": 142619,
+          "max": 149175
+        },
+        "major-faults": {
+          "values": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "min": 0,
+          "median": 0,
+          "max": 0
+        }
+      },
+      "instruction_percent_vs_gc": 0.008076968892734016
+    }
+  },
+  "scope": "Fresh exact-binary instruction/fault repeats; original full17 retained. No RSS claim from perf-only repeats."
+}

@@ -1,0 +1,13 @@
+{
+  "base": "07e50b14a3d23e8f914193ec4d5a679adbd7c37a",
+  "control": "8e3013733da37ddc66998ee51b9bd1109a9175ec",
+  "private_commit": "f27fcd49d8adbb4312b9a90ae5536e4215c9fec3",
+  "private_paths": [
+    "crates/perry-runtime/src/gc/roots/stack_maps.rs",
+    "crates/perry-runtime/src/gc/roots/stack_maps_lazy.rs",
+    "crates/perry-runtime/src/gc/roots/stack_maps_prefix_tests.rs"
+  ],
+  "source_count": 5012,
+  "overlay_sha256": "34e5541787d12a5afa6e2af44531f28db49805f05c195db11930e6200d5da147",
+  "scope": "Private map-prefix decoder experiment on adopted once-advice source. No codegen/map format, shape/header/ABI change or cache/table addition; RSS/instruction benefit unproven."
+}
