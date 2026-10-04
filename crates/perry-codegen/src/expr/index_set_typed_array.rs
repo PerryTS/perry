@@ -80,11 +80,17 @@ pub(super) fn lower_inline_dyn_typed_array_set(
     // #5525 kind cache (the only way that tier's fast arm is reachable) goes
     // there on one load and compare, so typed-array stores pay nothing for the
     // Array arm, and an Array pays only that compare for the typed-array one.
+    //
+    // Both tiers decline to ONE runtime block: the complete dynamic `[[Set]]`
+    // behind its admitted-`Uint8Array` byte arm is the same code whichever
+    // tier declined, so the site carries it once.
     let ta_idx = ctx.new_block("dynarr.ta");
     let array_idx = ctx.new_block("dynarr.array");
+    let slow_idx = ctx.new_block("dynarr.slow");
     let done_idx = ctx.new_block("dynarr.done");
     let ta_label = ctx.block_label(ta_idx);
     let array_label = ctx.block_label(array_idx);
+    let slow_label = ctx.block_label(slow_idx);
     let done_label = ctx.block_label(done_idx);
     {
         let blk = ctx.block();
@@ -105,7 +111,7 @@ pub(super) fn lower_inline_dyn_typed_array_set(
         blk.cond_br(&cached_typed_array, &ta_label, &array_label);
     }
     ctx.current_block = ta_idx;
-    let _ = emit_inline_ta_set_then_runtime(ctx, obj_box, idx_d, val_double, strict);
+    emit_inline_ta_set(ctx, obj_box, idx_d, val_double, Some(&slow_label));
     ctx.block().br(&done_label);
 
     ctx.current_block = array_idx;
@@ -119,10 +125,13 @@ pub(super) fn lower_inline_dyn_typed_array_set(
         facts.write_barrier_needed,
         facts.value_is_numeric,
         |ctx| {
-            emit_dyn_index_set_runtime(ctx, obj_box, idx_d, val_double, strict);
+            ctx.block().br(&slow_label);
             Ok(())
         },
     )?;
+    ctx.block().br(&done_label);
+    ctx.current_block = slow_idx;
+    emit_dyn_index_set_runtime(ctx, obj_box, idx_d, val_double, strict);
     ctx.block().br(&done_label);
     ctx.current_block = done_idx;
     Ok(val_double.to_string())
@@ -184,17 +193,57 @@ fn emit_inline_ta_set_then_runtime(
     val_double: &str,
     strict: bool,
 ) -> String {
+    emit_inline_ta_set(ctx, obj_box, idx_d, val_double, None)
+        .expect("a typed-array store without a shared decline emits its own")
+        .emit(ctx, obj_box, idx_d, val_double, strict);
+    val_double.to_string()
+}
+
+/// The decline block [`emit_inline_ta_set`] opened for itself, still to be
+/// filled with the runtime store.
+struct OwnDecline {
+    slow_idx: usize,
+    merge_idx: usize,
+}
+
+impl OwnDecline {
+    fn emit(self, ctx: &mut FnCtx<'_>, obj_box: &str, idx_d: &str, val_double: &str, strict: bool) {
+        // ---- slow: preserve the source function's assignment strictness ----
+        let merge_label = ctx.block_label(self.merge_idx);
+        ctx.current_block = self.slow_idx;
+        emit_dyn_index_set_runtime(ctx, obj_box, idx_d, val_double, strict);
+        ctx.block().br(&merge_label);
+        ctx.current_block = self.merge_idx;
+    }
+}
+
+/// The #5525 guarded inline typed-array store. Every guard miss branches to
+/// `decline`, or, with none given, to a decline block of its own that the
+/// returned [`OwnDecline`] fills. Leaves the current block at the store's
+/// merge (with a shared decline) where the assignment's value is
+/// `val_double` on every path.
+fn emit_inline_ta_set(
+    ctx: &mut FnCtx<'_>,
+    obj_box: &str,
+    idx_d: &str,
+    val_double: &str,
+    decline: Option<&str>,
+) -> Option<OwnDecline> {
     let tag_mask = crate::nanbox::i64_literal(crate::nanbox::TAG_MASK);
     let pointer_tag = crate::nanbox::POINTER_TAG_I64;
     let pointer_mask = crate::nanbox::POINTER_MASK_I64;
 
     let fast_idx = ctx.new_block("tav.set.fast");
     let store_idx = ctx.new_block("tav.set.store");
-    let slow_idx = ctx.new_block("tav.set.slow");
+    let own_slow_idx = decline.is_none().then(|| ctx.new_block("tav.set.slow"));
     let merge_idx = ctx.new_block("tav.set.merge");
     let fast_label = ctx.block_label(fast_idx);
     let store_label = ctx.block_label(store_idx);
-    let slow_label = ctx.block_label(slow_idx);
+    let slow_label = match (own_slow_idx, decline) {
+        (Some(idx), _) => ctx.block_label(idx),
+        (None, Some(label)) => label.to_string(),
+        (None, None) => unreachable!("a decline block is opened when none is given"),
+    };
     let merge_label = ctx.block_label(merge_idx);
 
     // ---- entry: combined cache/kind/range guard -> fast | slow ----
@@ -415,16 +464,14 @@ fn emit_inline_ta_set_then_runtime(
         blk.br(&merge_label);
     }
 
-    // ---- slow: preserve the source function's assignment strictness ----
-    ctx.current_block = slow_idx;
-    emit_dyn_index_set_runtime(ctx, obj_box, idx_d, val_double, strict);
-    ctx.block().br(&merge_label);
-
     // ---- merge: assignment yields the stored value on every path ----
-    ctx.current_block = merge_idx;
     // All paths produce `val_double` as the expression result (matching
     // `js_dyn_index_set`'s `return value`), so no phi is needed.
-    val_double.to_string()
+    ctx.current_block = merge_idx;
+    own_slow_idx.map(|slow_idx| OwnDecline {
+        slow_idx,
+        merge_idx,
+    })
 }
 
 /// Emit one per-kind integer typed-array element store block for

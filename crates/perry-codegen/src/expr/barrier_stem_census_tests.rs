@@ -1148,3 +1148,38 @@ fn identical_labels_in_other_functions_cannot_validate_a_sabotaged_gate() {
         }
     }
 }
+
+/// The untyped store's two tiers (#5525 typed array, #10513 Array) decline to
+/// ONE runtime block: the admitted-`Uint8Array` byte arm and the complete
+/// `[[Set]]` are emitted once per site, not once per declining tier.
+#[test]
+fn the_untyped_store_carries_one_decline_for_both_tiers() {
+    let ir = dynarr_set_ir();
+    let label_defs = |stem: &str| {
+        ir.lines()
+            .filter(|line| {
+                line.strip_prefix(stem)
+                    .and_then(|rest| rest.strip_prefix('.'))
+                    .and_then(|rest| rest.split(':').next())
+                    .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+            })
+            .count()
+    };
+    let sites = label_defs("dynarr.ta");
+    assert!(sites > 0, "the probe must emit the untyped store:\n{ir}");
+    assert_eq!(label_defs("dynarr.slow"), sites, "{ir}");
+    assert_eq!(
+        label_defs("u8d.set.chk"),
+        sites,
+        "one byte arm per site, shared by both tiers:\n{ir}"
+    );
+    assert_eq!(
+        ir.lines()
+            .filter(
+                |line| !line.starts_with("declare") && line.contains("@js_dyn_index_set_strict(")
+            )
+            .count(),
+        sites,
+        "one complete [[Set]] per site:\n{ir}"
+    );
+}
