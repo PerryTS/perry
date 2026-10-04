@@ -53,6 +53,32 @@ pub(crate) fn emit_global_value_installs(ctx: &mut FnCtx<'_>, name: &str) {
     ctx.block().call_void(sym, &[]);
 }
 
+/// A builtin global identifier read as a VALUE (`Object`, `Array`, `Date`
+/// ...): a static read site of the global object for the name's pooled key.
+///
+/// The global object is an ordinary object whose own keys are the builtins,
+/// so the identifier is `globalThis[name]` with a compile-time key: the
+/// generic read site's per-site cache compares the global object's ShapeId
+/// and loads the slot, with the key's atom (its pool handle) for the miss.
+/// It used to call `js_get_global_this_builtin_value(bytes, len)`, which
+/// validated the name's UTF-8, interned it and ran a by-name `[[Get]]` on
+/// every evaluation. Reassigning the global (`globalThis.Object = X`) is a
+/// store to that object, so the next read sees it: the slot is loaded on
+/// every hit, and a key added or deleted changes the ShapeId.
+pub(crate) fn lower_global_builtin_read(ctx: &mut FnCtx<'_>, name: &str) -> Result<String> {
+    let global = Expr::Call {
+        callee: Box::new(Expr::ExternFuncRef {
+            name: "js_get_global_this".to_string(),
+            param_types: Vec::new(),
+            return_type: perry_hir::types::Type::Any,
+        }),
+        args: Vec::new(),
+        type_args: Vec::new(),
+        byte_offset: 0,
+    };
+    super::lower_generic_property_get(ctx, &global, name, 0)
+}
+
 pub(crate) fn lower_globalget_property(ctx: &mut FnCtx<'_>, property: &str) -> Result<String> {
     emit_global_value_installs(ctx, property);
     // `process.env` read as a VALUE (not `process.env.X`) must
@@ -455,14 +481,7 @@ pub(crate) fn lower_globalget_property(ctx: &mut FnCtx<'_>, property: &str) -> R
     // the `.prototype` chained read on the locally-bound
     // alias to throw `Cannot read properties of undefined`.
     if is_global_this_builtin_name(property) {
-        let key_idx = ctx.strings.intern(property);
-        let key_bytes_global = format!("@{}", ctx.strings.entry(key_idx).bytes_global);
-        let key_len = property.len().to_string();
-        return Ok(ctx.block().call(
-            DOUBLE,
-            "js_get_global_this_builtin_value",
-            &[(PTR, &key_bytes_global), (I64, &key_len)],
-        ));
+        return lower_global_builtin_read(ctx, property);
     }
     // Unknown member on a builtin global namespace object
     // (`Reflect.enumerate`, `Math.bogus`, `JSON.bogus`, …): JS
