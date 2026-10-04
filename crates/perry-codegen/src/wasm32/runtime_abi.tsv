@@ -3263,9 +3263,11 @@ js_register_foreach_render_handler	void	ptr
 js_register_foreign_promise_adapter	void	ptr
 js_register_function_name	void	ptr,ptr,i32u
 js_register_function_name_static	void	ptr,ptr,i32u
+js_register_function_names_static	void	ptr,i32u
 js_register_function_prototype_method	i32u	f64,ptr,usize,f64
 js_register_function_source	void	ptr,ptr,i32u,i32s
 js_register_function_source_static	void	ptr,ptr,i32u,i32s
+js_register_function_sources_static	void	ptr,i32u
 js_register_global_fetch_body_init_ptr	void	ptr
 js_register_global_fetch_constructors	void	ptr,ptr,ptr,ptr,ptr,ptr,ptr,ptr,ptr
 js_register_global_fetch_notify_abort	void	ptr

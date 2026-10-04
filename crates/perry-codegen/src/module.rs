@@ -602,9 +602,10 @@ impl LlModule {
     }
 
     /// The module *skeleton*: everything [`to_ir`] emits EXCEPT function
-    /// definitions — header, string constants, globals, declarations (still
-    /// filtered against defined names, which the native path adds via the C
-    /// API), attribute groups and metadata.
+    /// definitions — header, string constants, globals, declarations,
+    /// attribute groups and metadata. Locally-defined functions are emitted
+    /// as declarations so globals with relative function references resolve
+    /// when the skeleton is parsed on its own.
     ///
     /// This is the only text the native construction path
     /// (`PERRY_LLVM_INPROCESS=native`) still parses: a few KB of module
@@ -633,11 +634,8 @@ impl LlModule {
             ir.push('\n');
         }
         ir.push('\n');
-        let defined: HashSet<&str> = self
-            .deduped_function_refs()
-            .iter()
-            .map(|f| f.name.as_str())
-            .collect();
+        let funcs = self.deduped_function_refs();
+        let defined: HashSet<&str> = funcs.iter().map(|f| f.name.as_str()).collect();
         for (name, decl) in &self.declarations {
             if defined.contains(name.as_str()) {
                 continue;
@@ -647,6 +645,10 @@ impl LlModule {
         }
         if crate::codegen::helpers::native_stack_roots_enabled() {
             push_statepoint_declarations(&mut ir);
+        }
+        for f in funcs {
+            ir.push_str(&declare_line_for(f));
+            ir.push('\n');
         }
         ir.push('\n');
         self.push_attrs_and_metadata(&mut ir);

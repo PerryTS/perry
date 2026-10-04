@@ -28,6 +28,15 @@ pub(super) struct SourceRange {
 }
 
 impl SourceRange {
+    pub(super) fn constant_pointer(&self) -> String {
+        let base = format!("@{}", self.global);
+        if self.offset == 0 {
+            base
+        } else {
+            format!("getelementptr (i8, ptr {base}, i64 {})", self.offset)
+        }
+    }
+
     pub(super) fn pointer(&self, block: &mut LlBlock) -> String {
         let base = format!("@{}", self.global);
         if self.offset == 0 {

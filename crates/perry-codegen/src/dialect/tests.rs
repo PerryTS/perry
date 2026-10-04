@@ -24,6 +24,30 @@ fn split_corpus(text: &str) -> (String, Vec<String>) {
             }
         }
     }
+    // Globals can contain relative references to locally-defined functions
+    // (function-metadata descriptor tables do). Once this helper strips the
+    // definitions out of the textual module, preserve their exact signatures
+    // as declarations so the remaining skeleton is still independently
+    // parseable. The reader below upgrades these declarations with bodies.
+    for function in &fns {
+        let header = function.lines().next().expect("captured define header");
+        let parsed = parse_header(header).expect("generated define header parses");
+        let params = parsed
+            .params
+            .iter()
+            .map(|(ty, _)| ty.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let calling_convention = if parsed.preserve_none {
+            format!("{} ", crate::inst::PRESERVE_NONE_CC)
+        } else {
+            String::new()
+        };
+        skeleton.push_str(&format!(
+            "declare {calling_convention}{} @{}({params})\n",
+            parsed.ret_tok, parsed.name
+        ));
+    }
     (skeleton, fns)
 }
 
