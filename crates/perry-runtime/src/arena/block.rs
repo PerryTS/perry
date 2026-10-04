@@ -80,6 +80,12 @@ fn block_size_for(min_size: usize) -> usize {
 // and thread teardown (`Arena::drop`) never pools.
 // ---------------------------------------------------------------------------
 
+/// Only empty, arena-owned payload pages may be advised while mapped.
+pub(super) fn discard_empty_block_pages(block: &ArenaBlock) -> usize {
+    debug_assert_eq!(block.offset, 0);
+    unsafe { decommit::release(block.data, block.size) }
+}
+
 struct PooledBlock {
     data: *mut u8,
     size: usize,
@@ -385,6 +391,7 @@ fn try_alloc_block(min_size: usize, injectable: bool) -> Option<ArenaBlock> {
             dead_cycles: 0,
             old_free_holes: false,
             pinned_summary: false,
+            idle_pages_discarded: false,
         });
     }
     let data = unsafe { alloc(layout) };
@@ -399,6 +406,7 @@ fn try_alloc_block(min_size: usize, injectable: bool) -> Option<ArenaBlock> {
         dead_cycles: 0,
         old_free_holes: false,
         pinned_summary: false,
+        idle_pages_discarded: false,
     })
 }
 
@@ -484,6 +492,10 @@ pub(crate) struct ArenaBlock {
     /// authority: this only says which blocks the walk must visit, so it may
     /// over-approximate and must never under-approximate.
     pub(crate) pinned_summary: bool,
+    /// Empty Eden payload pages were already discarded in this idle interval.
+    /// Reuse is detected at reset, after synchronizing the bump pointer. This
+    /// avoids an extra store in either inline or runtime allocation paths.
+    pub(crate) idle_pages_discarded: bool,
 }
 
 impl ArenaBlock {
@@ -500,6 +512,12 @@ impl ArenaBlock {
 
     #[inline]
     pub(crate) fn clear_object_starts(&mut self) {
+        // Reset callers clear object starts before zeroing a used offset.
+        // An already-empty reset must preserve the advice state; a used block
+        // starts a new idle interval and may have faulted its pages back in.
+        if self.offset != 0 {
+            self.idle_pages_discarded = false;
+        }
         self.object_starts.fill(0);
     }
 
@@ -694,6 +712,7 @@ impl Arena {
                 dead_cycles: 0,
                 old_free_holes: false,
                 pinned_summary: false,
+                idle_pages_discarded: false,
             }],
             current: 0,
             generation,

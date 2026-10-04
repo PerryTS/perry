@@ -578,6 +578,7 @@ pub(crate) fn copying_quarantine_from_spaces_and_flip() -> ArenaResetStats {
                 dead_cycles: 0,
                 old_free_holes: false,
                 pinned_summary: false,
+                idle_pages_discarded: false,
             });
         }
         ensure_usable_current_block(arena);
@@ -1138,6 +1139,7 @@ mod tombstone_tests {
             dead_cycles: 0,
             old_free_holes: false,
             pinned_summary: false,
+            idle_pages_discarded: false,
         }
     }
 
@@ -1175,6 +1177,7 @@ mod tombstone_tests {
                 dead_cycles: 0,
                 old_free_holes: false,
                 pinned_summary: false,
+                idle_pages_discarded: false,
             }],
             current: 0,
             generation: HeapGeneration::Nursery,

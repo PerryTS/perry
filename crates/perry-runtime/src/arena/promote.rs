@@ -395,6 +395,7 @@ fn take_block(block: PromotedBlock) -> Option<ArenaBlock> {
                 dead_cycles: 0,
                 old_free_holes: false,
                 pinned_summary: false,
+                idle_pages_discarded: false,
             },
         ))
     };

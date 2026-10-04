@@ -120,3 +120,6 @@ mod private_evaluation_storage;
 
 mod event_internal_slots;
 mod external_buffer;
+
+#[cfg(target_os = "linux")]
+mod eden_entry_residency;
