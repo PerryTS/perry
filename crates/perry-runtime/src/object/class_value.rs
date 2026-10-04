@@ -998,8 +998,7 @@ pub(crate) fn class_prototype_addr(class_id: u32) -> usize {
     } else if let Some(parent) = super::class_registry::class_parent_closure(class_id) {
         parent
     } else {
-        crate::closure::shape::FUNCTION_PROTOTYPE_PTR.load(std::sync::atomic::Ordering::Acquire)
-            as usize
+        crate::closure::shape::function_prototype_ptr_materialized()
     }
 }
 
@@ -1016,12 +1015,19 @@ pub(crate) fn class_prototype_get(
     receiver: f64,
 ) -> crate::value::JSValue {
     use crate::value::JSValue;
+    // `class_prototype_addr` may build %Function.prototype% (the realm
+    // global), which allocates.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(receiver);
+    let key = scope.root_string_ptr(key);
     let proto = class_prototype_addr(class_id);
     if proto == 0 {
         return JSValue::undefined();
     }
-    let prev = super::field_get_set::accessor_receiver_override_begin(receiver);
-    let value = super::js_object_get_field_by_name(proto as *const super::ObjectHeader, key);
+    let prev = super::field_get_set::accessor_receiver_override_begin(receiver.get_nanbox_f64());
+    let value = key.with_const_ptr::<crate::StringHeader, _>(|key| {
+        super::js_object_get_field_by_name(proto as *const super::ObjectHeader, key)
+    });
     super::field_get_set::accessor_receiver_override_end(prev);
     value
 }
