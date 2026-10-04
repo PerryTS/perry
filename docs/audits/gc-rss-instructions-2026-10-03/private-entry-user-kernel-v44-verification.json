@@ -1,0 +1,332 @@
+{
+  "base": "2026ecfe6dd9df1a0a8616e3bc5c5561e8e0cf63",
+  "cells": 18,
+  "summary": {
+    "tscwork": {
+      "medians": {
+        "gc": {
+          "instructions:u": 58162675264,
+          "instructions:k": 981204316,
+          "cycles:u": 21785408307,
+          "cycles:k": 1333753552,
+          "minor-faults": 148025,
+          "major-faults": 0
+        },
+        "entry": {
+          "instructions:u": 59009616032,
+          "instructions:k": 976467800,
+          "cycles:u": 21269244825,
+          "cycles:k": 1325265664,
+          "minor-faults": 147193,
+          "major-faults": 0
+        }
+      },
+      "entry_vs_gc_percent": {
+        "instructions:u": 1.4561585486839057,
+        "instructions:k": -0.48272474170405477,
+        "cycles:u": -2.369308276100335,
+        "cycles:k": -0.6363910324566513,
+        "minor-faults": -0.5620672183752728,
+        "major-faults": null
+      }
+    },
+    "23-binary-trees": {
+      "medians": {
+        "gc": {
+          "instructions:u": 25960198428,
+          "instructions:k": 474416068,
+          "cycles:u": 6674431509,
+          "cycles:k": 599648665,
+          "minor-faults": 74556,
+          "major-faults": 0
+        },
+        "entry": {
+          "instructions:u": 25971152901,
+          "instructions:k": 478690106,
+          "cycles:u": 6500051858,
+          "cycles:k": 601422048,
+          "minor-faults": 75419,
+          "major-faults": 0
+        }
+      },
+      "entry_vs_gc_percent": {
+        "instructions:u": 0.04219718516551563,
+        "instructions:k": 0.9009049836819605,
+        "cycles:u": -2.6126517406742655,
+        "cycles:k": 0.29573700460086005,
+        "minor-faults": 1.1575191802135398,
+        "major-faults": null
+      }
+    },
+    "72-request-processing": {
+      "medians": {
+        "gc": {
+          "instructions:u": 80647981494,
+          "instructions:k": 116571466,
+          "cycles:u": 34828209013,
+          "cycles:k": 266753001,
+          "minor-faults": 9318,
+          "major-faults": 0
+        },
+        "entry": {
+          "instructions:u": 80296371452,
+          "instructions:k": 112144234,
+          "cycles:u": 35147582207,
+          "cycles:k": 252069595,
+          "minor-faults": 9309,
+          "major-faults": 0
+        }
+      },
+      "entry_vs_gc_percent": {
+        "instructions:u": -0.4359812055880874,
+        "instructions:k": -3.7978693688213494,
+        "cycles:u": 0.9169957429645326,
+        "cycles:k": -5.504495149053634,
+        "minor-faults": -0.09658725048293793,
+        "major-faults": null
+      }
+    }
+  },
+  "event_running_percent": [
+    {
+      "case": "tscwork",
+      "arm": "gc",
+      "repeat": 0,
+      "running_percent": {
+        "instructions:u": 100.0,
+        "instructions:k": 100.0,
+        "cycles:u": 100.0,
+        "cycles:k": 100.0,
+        "minor-faults": 100.0,
+        "major-faults": 100.0
+      }
+    },
+    {
+      "case": "tscwork",
+      "arm": "entry",
+      "repeat": 0,
+      "running_percent": {
+        "instructions:u": 100.0,
+        "instructions:k": 100.0,
+        "cycles:u": 100.0,
+        "cycles:k": 100.0,
+        "minor-faults": 100.0,
+        "major-faults": 100.0
+      }
+    },
+    {
+      "case": "23-binary-trees",
+      "arm": "gc",
+      "repeat": 0,
+      "running_percent": {
+        "instructions:u": 100.0,
+        "instructions:k": 100.0,
+        "cycles:u": 100.0,
+        "cycles:k": 100.0,
+        "minor-faults": 100.0,
+        "major-faults": 100.0
+      }
+    },
+    {
+      "case": "23-binary-trees",
+      "arm": "entry",
+      "repeat": 0,
+      "running_percent": {
+        "instructions:u": 100.0,
+        "instructions:k": 100.0,
+        "cycles:u": 100.0,
+        "cycles:k": 100.0,
+        "minor-faults": 100.0,
+        "major-faults": 100.0
+      }
+    },
+    {
+      "case": "72-request-processing",
+      "arm": "gc",
+      "repeat": 0,
+      "running_percent": {
+        "instructions:u": 100.0,
+        "instructions:k": 100.0,
+        "cycles:u": 100.0,
+        "cycles:k": 100.0,
+        "minor-faults": 100.0,
+        "major-faults": 100.0
+      }
+    },
+    {
+      "case": "72-request-processing",
+      "arm": "entry",
+      "repeat": 0,
+      "running_percent": {
+        "instructions:u": 100.0,
+        "instructions:k": 100.0,
+        "cycles:u": 100.0,
+        "cycles:k": 100.0,
+        "minor-faults": 100.0,
+        "major-faults": 100.0
+      }
+    },
+    {
+      "case": "tscwork",
+      "arm": "entry",
+      "repeat": 1,
+      "running_percent": {
+        "instructions:u": 100.0,
+        "instructions:k": 100.0,
+        "cycles:u": 100.0,
+        "cycles:k": 100.0,
+        "minor-faults": 100.0,
+        "major-faults": 100.0
+      }
+    },
+    {
+      "case": "tscwork",
+      "arm": "gc",
+      "repeat": 1,
+      "running_percent": {
+        "instructions:u": 100.0,
+        "instructions:k": 100.0,
+        "cycles:u": 100.0,
+        "cycles:k": 100.0,
+        "minor-faults": 100.0,
+        "major-faults": 100.0
+      }
+    },
+    {
+      "case": "23-binary-trees",
+      "arm": "entry",
+      "repeat": 1,
+      "running_percent": {
+        "instructions:u": 100.0,
+        "instructions:k": 100.0,
+        "cycles:u": 100.0,
+        "cycles:k": 100.0,
+        "minor-faults": 100.0,
+        "major-faults": 100.0
+      }
+    },
+    {
+      "case": "23-binary-trees",
+      "arm": "gc",
+      "repeat": 1,
+      "running_percent": {
+        "instructions:u": 100.0,
+        "instructions:k": 100.0,
+        "cycles:u": 100.0,
+        "cycles:k": 100.0,
+        "minor-faults": 100.0,
+        "major-faults": 100.0
+      }
+    },
+    {
+      "case": "72-request-processing",
+      "arm": "entry",
+      "repeat": 1,
+      "running_percent": {
+        "instructions:u": 100.0,
+        "instructions:k": 100.0,
+        "cycles:u": 100.0,
+        "cycles:k": 100.0,
+        "minor-faults": 100.0,
+        "major-faults": 100.0
+      }
+    },
+    {
+      "case": "72-request-processing",
+      "arm": "gc",
+      "repeat": 1,
+      "running_percent": {
+        "instructions:u": 100.0,
+        "instructions:k": 100.0,
+        "cycles:u": 100.0,
+        "cycles:k": 100.0,
+        "minor-faults": 100.0,
+        "major-faults": 100.0
+      }
+    },
+    {
+      "case": "tscwork",
+      "arm": "gc",
+      "repeat": 2,
+      "running_percent": {
+        "instructions:u": 100.0,
+        "instructions:k": 100.0,
+        "cycles:u": 100.0,
+        "cycles:k": 100.0,
+        "minor-faults": 100.0,
+        "major-faults": 100.0
+      }
+    },
+    {
+      "case": "tscwork",
+      "arm": "entry",
+      "repeat": 2,
+      "running_percent": {
+        "instructions:u": 100.0,
+        "instructions:k": 100.0,
+        "cycles:u": 100.0,
+        "cycles:k": 100.0,
+        "minor-faults": 100.0,
+        "major-faults": 100.0
+      }
+    },
+    {
+      "case": "23-binary-trees",
+      "arm": "gc",
+      "repeat": 2,
+      "running_percent": {
+        "instructions:u": 100.0,
+        "instructions:k": 100.0,
+        "cycles:u": 100.0,
+        "cycles:k": 100.0,
+        "minor-faults": 100.0,
+        "major-faults": 100.0
+      }
+    },
+    {
+      "case": "23-binary-trees",
+      "arm": "entry",
+      "repeat": 2,
+      "running_percent": {
+        "instructions:u": 100.0,
+        "instructions:k": 100.0,
+        "cycles:u": 100.0,
+        "cycles:k": 100.0,
+        "minor-faults": 100.0,
+        "major-faults": 100.0
+      }
+    },
+    {
+      "case": "72-request-processing",
+      "arm": "gc",
+      "repeat": 2,
+      "running_percent": {
+        "instructions:u": 100.0,
+        "instructions:k": 100.0,
+        "cycles:u": 100.0,
+        "cycles:k": 100.0,
+        "minor-faults": 100.0,
+        "major-faults": 100.0
+      }
+    },
+    {
+      "case": "72-request-processing",
+      "arm": "entry",
+      "repeat": 2,
+      "running_percent": {
+        "instructions:u": 100.0,
+        "instructions:k": 100.0,
+        "cycles:u": 100.0,
+        "cycles:k": 100.0,
+        "minor-faults": 100.0,
+        "major-faults": 100.0
+      }
+    }
+  ],
+  "scope": "Diagnostic user/kernel split on exact previously accepted binaries, untouched defaults. Multiplexing percentages disclosed. Neither a full-matrix acceptance nor proof that repeated advice causes the cost.",
+  "inputs": {
+    "gc-entry-v44-instruction-split-runs.json": "c853ab29a7ffb21d029613d4ae35080bf33b9cf542c57086aa7a2067894d49bd",
+    "gc-entry-v44-instruction-split-scope.json": "4b623bf42d94a3f444fe3568381a41baf56733c549f01d3b3117a74cd6c2c791",
+    "gc-auto-latest2026-v33r1-verification.json": "0c18ee84ceeb18d5da873c24f016b79d05483685535d7862d62300a250f5b930"
+  }
+}
