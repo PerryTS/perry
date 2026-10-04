@@ -1121,6 +1121,15 @@ pub(crate) fn install_noop_proto_methods(proto_obj: *mut ObjectHeader, methods: 
             "isPrototypeOf" => {
                 fn_info!(object_prototype_is_prototype_of_thunk, 1; with_flags(FN_BUILTIN))
             }
+            // A call reads `hasOwnProperty` / `propertyIsEnumerable` off the
+            // receiver like any method, so the copy a builtin prototype
+            // carries must be the real method, never a placeholder.
+            "hasOwnProperty" => {
+                fn_info!(object_prototype_has_own_property_thunk, 1; with_flags(FN_BUILTIN))
+            }
+            "propertyIsEnumerable" => {
+                fn_info!(object_prototype_property_is_enumerable_thunk, 1; with_flags(FN_BUILTIN))
+            }
             // Annex B accessor methods get real thunks (reflective `.call`).
             "__defineGetter__" => {
                 fn_info!(object_prototype_define_getter_thunk, 2; with_flags(FN_BUILTIN))

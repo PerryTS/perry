@@ -988,25 +988,6 @@ pub(crate) unsafe fn js_error_delete_builtin_own_property(error: *mut ErrorHeade
     }
 }
 
-pub(crate) unsafe fn js_error_builtin_own_property_is_enumerable(
-    error: *mut ErrorHeader,
-    key: &str,
-) -> Option<bool> {
-    if error.is_null() {
-        return Some(false);
-    }
-    if crate::node_submodules::error_user_prop(error as usize, key).is_some() {
-        return Some(true);
-    }
-    match key {
-        "message" if ((*error).flags & ERROR_FLAG_HAS_MESSAGE) != 0 => Some(false),
-        "cause" if ((*error).flags & ERROR_FLAG_HAS_CAUSE) != 0 => Some(false),
-        "errors" if ((*error).flags & ERROR_FLAG_HAS_ERRORS) != 0 => Some(false),
-        "stack" => Some(false),
-        _ => None,
-    }
-}
-
 /// Get the stack property of an Error.
 ///
 /// #9486: this is where `.stack` is BUILT. `alloc_error` stores only the

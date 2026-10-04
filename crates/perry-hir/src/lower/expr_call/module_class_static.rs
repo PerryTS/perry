@@ -39,6 +39,12 @@ pub(super) fn try_module_class_static(
                 if let Some((module_name, _)) = ctx.lookup_native_module(&mod_name) {
                     if let ast::MemberProp::Ident(class_ident) = &inner_member.prop {
                         let class_name = class_ident.sym.to_string();
+                        // `Buffer.prototype.m(...)` calls a method of the
+                        // prototype OBJECT; `prototype` is never a module
+                        // class, so this is an ordinary method call.
+                        if class_name == "prototype" {
+                            return Ok(Err(args));
+                        }
                         // The `node:process` namespace exposes stream VALUES,
                         // not classes. Let the stream-call arm below handle
                         // them, including a namespace import named `process`.

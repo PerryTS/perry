@@ -340,18 +340,21 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
         // non-function entirely), never literally the same `func_ptr`.
         if super::super::global_this::is_function_prototype_object_value(obj_value) {
             if let Some(key) = super::super::has_own_helpers::str_from_string_header(key_str) {
-                // `install_noop_proto_methods` (the actual installer Function.
-                // prototype goes through) backs most of `OBJECT_PROTO_METHODS`
-                // with the shared `global_this_builtin_noop_thunk` — only
-                // `isPrototypeOf` and the four Annex B accessor helpers get a
-                // dedicated per-method thunk there. `object_prototype_has_own_
-                // property_thunk` et al. are real thunks too, but they're wired
-                // up only for `Object.prototype` itself (a different install
-                // call site), never for `Function.prototype` — so comparing
-                // against them here would always mismatch and defeat the
-                // still-default check entirely.
+                // The thunk `install_noop_proto_methods` (the installer
+                // Function.prototype goes through) gives each name: the real
+                // `hasOwnProperty` / `propertyIsEnumerable` / `isPrototypeOf`
+                // and Annex B accessor thunks, and the shared
+                // `global_this_builtin_noop_thunk` for the rest.
                 let expected_thunk: Option<*const u8> = match key {
-                    "hasOwnProperty" | "propertyIsEnumerable" | "toLocaleString" | "valueOf" => {
+                    "hasOwnProperty" => Some(
+                        super::super::global_this::object_prototype_has_own_property_thunk
+                            as *const u8,
+                    ),
+                    "propertyIsEnumerable" => Some(
+                        super::super::global_this::object_prototype_property_is_enumerable_thunk
+                            as *const u8,
+                    ),
+                    "toLocaleString" | "valueOf" => {
                         Some(super::super::global_this::global_this_builtin_noop_thunk as *const u8)
                     }
                     "isPrototypeOf" => Some(
