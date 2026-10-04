@@ -1,3 +1,35 @@
+NATIVE MAP LINUX VALIDATED; PRESERVED ACCEPTANCE FAILURES AND RERUNS
+Private f27fcd49d8 Linux full runtime: 4,868 passed, zero failures, five
+ignored. Fresh compiler and both static archives, all 5,012 source inputs,
+commands and logs independently verified; all ten evidence files copied
+locally and rehashed. Shipping source still matches adopted once-advice.
+
+Original V69 stopped at the existing 12 GiB disk headroom guard before any
+fresh candidate compilation or acceptance measurements. Original V70 aborted
+in the unchanged once-advice CONTROL with the extra stack-map crosscheck.
+Both original terminal exits are 1; all 63 original failure/diagnostic evidence
+files are preserved locally and rehashed. No failure is reported as a pass.
+The first failure bundle accidentally included live V69r1 records through a
+prefix wildcard and failed its hash check; it is retained as a rejected bundle.
+The corrected bundle selects exact original-prefix records only.
+
+Read-only reconstruction of the exact control binary explains the V70 abort:
+for owner image address 0xff02b, the first global PC record at that address
+belongs to previous owner 0xfe287. The eager oracle's contiguous-owner slice
+therefore ends immediately and returns empty, despite 72 actual records for
+0xff02b including its exact requested safepoint at +129. The lazy lookup's
+match is exact. This is an existing eager-oracle grouping defect at a shared
+boundary PC, not evidence of a prefix-iterator regression. Diagnostic eager
+mode is unchanged and this separate defect remains to be corrected.
+
+V69r1 wrapper 2248456 runs the full17 comparison after removing only verified
+temporary .text dumps (2,650,349,016 bytes); original/symbol binaries, source,
+archives, stamps and every raw measurement are retained. The headroom guard
+remains 12 GiB. V70r1 wrapper 2248617 queues the previously established
+11-fixture moving/protection checks without the failing auxiliary crosscheck.
+Default normal-auto acceptance has no GC overrides. The prefix experiment
+remains unapplied until all fresh RSS/instruction and moving checks complete.
+
 NATIVE STACK-MAP PREFIX EXPERIMENT AND COMPLETED RESULTS (2026-10-04)
 Production source remains exactly the 5,011 inputs of adopted 8e3013733d.
 Private f27fcd49d8 has three source deltas and 5,012 inputs. It bounds lazy
