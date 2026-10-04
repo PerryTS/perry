@@ -44,6 +44,22 @@
 //! construction ([`is_f64_index_read`]), and a store of a proven double is
 //! one `store double` ([`try_lower_bare_index_set`]) that changes neither
 //! the length, nor the layout, nor anything the collector traces.
+//!
+//! # Typed-array views (decision 69)
+//!
+//! A binding with a PROVEN inline-storage typed-array view (a spec clone's
+//! `TaPtr` parameter, a fresh `new TA(n)` local: kind and data pointer fixed
+//! for its lifetime, its length NOT — `buffer.transfer()` detaches it) is a
+//! VIEW receiver. Its indices are proven by an interval evaluator over the
+//! loop ([`Env::view_end`]): every index of a bare access lies in
+//! `[0, end)`, `end` a constant or `B + c` for a local `B` the loop never
+//! writes. The guard reads the length from the header with a plain load
+//! and checks `end <= length`, once in the preheader and again at every
+//! re-check; nothing else is assumed. A bare access is then today's proven
+//! element access with its bounds proven (`BoundsProof::RegionGuard`): no
+//! length load, no compare, no out-of-bounds arm, and a Number by
+//! construction. Detaching or resizing runs JS, which stales the facts like
+//! any other call, so the next use re-reads the length.
 
 use super::*;
 use crate::inst::LlInst;
@@ -73,6 +89,20 @@ pub(crate) struct ArrayRecv {
     pub(super) aliases: Vec<u32>,
     /// `i64` alloca: the element base, valid while the region's `valid` flag is.
     pub(super) base_slot: String,
+    /// A typed-array VIEW receiver (module doc): what its guard checks.
+    pub(super) view: Option<ViewGuard>,
+}
+
+/// The guard of a view receiver: `end <= length` and `B + c <= length`.
+#[derive(Clone)]
+pub(crate) struct ViewGuard {
+    /// The largest constant end of a bare access (`0`: none).
+    pub(super) end: u32,
+    /// The symbolic end `B + c` of the bare accesses indexed below `B`.
+    pub(super) sym: Option<(u32, i64)>,
+    /// The view's data-pointer slot and the header length's offset from it.
+    pub(super) data_slot: String,
+    pub(super) length_offset: i32,
 }
 
 impl ArrayRecv {
@@ -99,12 +129,163 @@ pub(crate) struct ArrayUse {
     /// fills `[length, capacity)` with holes, and a hole reads `undefined`),
     /// and the loaded value's own shape guard is the proof of what it is.
     pub(super) element: bool,
+    /// A typed-array VIEW receiver (module doc): its bare accesses' ends.
+    pub(super) view: bool,
+    /// View: the largest constant end (`hi + 1`) of a proven index.
+    pub(super) view_end: u32,
+    /// View: the symbolic end `B + c` (one loop-invariant local `B`).
+    pub(super) view_sym: Option<(u32, i64)>,
+    /// View: some proven index uses the loop counter's range, which holds
+    /// only when the guard checked the counter's entry value.
+    pub(super) view_counter: bool,
 }
 
 impl ArrayUse {
     /// The dense raw-f64 facts are required (module doc).
     pub(super) fn dense(&self) -> bool {
-        self.counter || self.store
+        !self.view && (self.counter || self.store)
+    }
+
+    /// View: does the guard of this use prove `end`?
+    pub(super) fn view_covers(&self, end: ViewEnd) -> bool {
+        self.view
+            && match end.end {
+                End::Const(e) => e <= i64::from(self.view_end),
+                End::Sym(b, c) => self.view_sym.is_some_and(|(sb, sc)| sb == b && c <= sc),
+            }
+            && (!end.counter || self.view_counter)
+    }
+}
+
+/// An integer range a view index proof may use: `lo <= v`, and `v <= c`
+/// ([`Hi::Le`]) or `v < B + c` ([`Hi::Lt`], `B` a local the loop never
+/// writes). Every value it describes is an exact integer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Rng {
+    lo: i64,
+    hi: Hi,
+    /// Derived from the loop counter's range.
+    counter: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Hi {
+    Le(i64),
+    Lt(u32, i64),
+}
+
+/// Ranges stay far inside the exact-double integers.
+const RANGE_LIMIT: i64 = 1 << 40;
+
+impl Rng {
+    fn exact(n: i64) -> Option<Rng> {
+        (n.abs() <= RANGE_LIMIT).then_some(Rng {
+            lo: n,
+            hi: Hi::Le(n),
+            counter: false,
+        })
+    }
+
+    fn checked(lo: Option<i64>, hi: Option<Hi>, counter: bool) -> Option<Rng> {
+        let lo = lo.filter(|v| v.abs() <= RANGE_LIMIT)?;
+        let hi = match hi? {
+            Hi::Le(c) if c.abs() <= RANGE_LIMIT && c >= lo => Hi::Le(c),
+            Hi::Lt(b, c) if c.abs() <= RANGE_LIMIT => Hi::Lt(b, c),
+            _ => return None,
+        };
+        Some(Rng { lo, hi, counter })
+    }
+
+    fn add(self, o: Rng) -> Option<Rng> {
+        let hi = match (self.hi, o.hi) {
+            (Hi::Le(a), Hi::Le(b)) => a.checked_add(b).map(Hi::Le),
+            (Hi::Lt(s, a), Hi::Le(b)) | (Hi::Le(b), Hi::Lt(s, a)) => {
+                a.checked_add(b).map(|c| Hi::Lt(s, c))
+            }
+            (Hi::Lt(..), Hi::Lt(..)) => None,
+        };
+        Rng::checked(self.lo.checked_add(o.lo), hi, self.counter || o.counter)
+    }
+
+    /// `self - k`, `k` an exact constant.
+    fn sub_const(self, k: i64) -> Option<Rng> {
+        let hi = match self.hi {
+            Hi::Le(a) => a.checked_sub(k).map(Hi::Le),
+            Hi::Lt(s, a) => a.checked_sub(k).map(|c| Hi::Lt(s, c)),
+        };
+        Rng::checked(self.lo.checked_sub(k), hi, self.counter)
+    }
+
+    /// Both non-negative with constant upper bounds.
+    fn mul(self, o: Rng) -> Option<Rng> {
+        match (self.hi, o.hi) {
+            (Hi::Le(a), Hi::Le(b)) if self.lo >= 0 && o.lo >= 0 => Rng::checked(
+                self.lo.checked_mul(o.lo),
+                a.checked_mul(b).map(Hi::Le),
+                self.counter || o.counter,
+            ),
+            _ => None,
+        }
+    }
+
+    fn as_exact(self) -> Option<i64> {
+        matches!(self.hi, Hi::Le(c) if c == self.lo).then_some(self.lo)
+    }
+}
+
+/// The end of a proven view index: every value lies in `[0, end)`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ViewEnd {
+    pub(super) end: End,
+    pub(super) counter: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum End {
+    /// `v < c`.
+    Const(i64),
+    /// `v < B + c`.
+    Sym(u32, i64),
+}
+
+/// The range of an index expression over `ranges`: integer literals, the
+/// ranged locals, `+`, `-` a constant, `*` of non-negative bounded ranges,
+/// `& mask` and `| 0`. Anything else has no range.
+fn eval_range(e: &Expr, ranges: &HashMap<u32, Rng>) -> Option<Rng> {
+    match e {
+        Expr::Integer(n) => Rng::exact(*n),
+        Expr::Number(n) if n.fract() == 0.0 && n.abs() <= RANGE_LIMIT as f64 => {
+            Rng::exact(*n as i64)
+        }
+        Expr::LocalGet(id) => ranges.get(id).copied(),
+        Expr::Binary { op, left, right } => match op {
+            BinaryOp::Add => eval_range(left, ranges)?.add(eval_range(right, ranges)?),
+            BinaryOp::Sub => {
+                let k = eval_range(right, ranges)?.as_exact()?;
+                eval_range(left, ranges)?.sub_const(k)
+            }
+            BinaryOp::Mul => eval_range(left, ranges)?.mul(eval_range(right, ranges)?),
+            // `ToInt32(x) & m` with a literal `m >= 0` is in `[0, m]` for any `x`.
+            BinaryOp::BitAnd => {
+                let m = static_index_max(e)?;
+                Rng::checked(Some(0), Some(Hi::Le(i64::from(m))), false)
+            }
+            // `x | 0` is `x` when `x` is an int32 already.
+            BinaryOp::BitOr => {
+                let (x, z) = match (left.as_ref(), right.as_ref()) {
+                    (x, Expr::Integer(0)) | (Expr::Integer(0), x) => (x, ()),
+                    _ => return None,
+                };
+                let _ = z;
+                let r = eval_range(x, ranges)?;
+                match r.hi {
+                    Hi::Le(c) if r.lo >= i64::from(i32::MIN) && c <= i64::from(i32::MAX) => Some(r),
+                    _ => None,
+                }
+            }
+            _ => None,
+        },
+        _ => None,
     }
 }
 
@@ -135,6 +316,9 @@ pub(crate) enum Bound {
 pub(crate) struct Env {
     pub(super) counter: Option<Counter>,
     pub(super) aliases: HashMap<u32, u32>,
+    /// View index proofs: the integer ranges of the loop counter, of nested
+    /// counters and of body constants ([`view_ranges`]).
+    pub(super) ranges: HashMap<u32, Rng>,
 }
 
 impl Env {
@@ -148,6 +332,22 @@ impl Env {
             Expr::LocalGet(id) => Some(Recv::Local(self.resolve(*id))),
             _ => None,
         }
+    }
+
+    /// A proven VIEW index: every value it takes in F-body lies in `[0, end)`.
+    pub(super) fn view_end(&self, e: &Expr) -> Option<ViewEnd> {
+        let r = eval_range(e, &self.ranges)?;
+        if r.lo < 0 {
+            return None;
+        }
+        let end = match r.hi {
+            Hi::Le(c) => End::Const(c.checked_add(1).filter(|e| *e <= i64::from(i32::MAX))?),
+            Hi::Lt(b, c) => End::Sym(b, c),
+        };
+        Some(ViewEnd {
+            end,
+            counter: r.counter,
+        })
     }
 
     /// A proven index: `Some(Some(c))` static in `[0, c]`, `Some(None)` the
@@ -368,7 +568,275 @@ pub(super) fn loop_env(
             aliases.insert(*id, *src);
         }
     }
-    Env { counter, aliases }
+    let ranges = view_ranges(ctx, counter, body, &written);
+    Env {
+        counter,
+        aliases,
+        ranges,
+    }
+}
+
+/// Every local any statement of `ss` (nested too) declares, with its count.
+fn declared(ss: &[Stmt], out: &mut HashMap<u32, usize>) {
+    for s in ss {
+        match s {
+            Stmt::Let { id, .. } => *out.entry(*id).or_default() += 1,
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                declared(then_branch, out);
+                if let Some(e) = else_branch {
+                    declared(e, out);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => declared(body, out),
+            Stmt::For { init, body, .. } => {
+                if let Some(i) = init {
+                    declared(std::slice::from_ref(i.as_ref()), out);
+                }
+                declared(body, out);
+            }
+            Stmt::Switch { cases, .. } => {
+                for c in cases {
+                    declared(&c.body, out);
+                }
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                declared(body, out);
+                if let Some(c) = catch {
+                    declared(&c.body, out);
+                }
+                if let Some(f) = finally {
+                    declared(f, out);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Locals some expression of `ss` or `extra` WRITES (`x = v`, `x++`); a
+/// declaration is not a write.
+fn writes(ss: &[Stmt], extra: &[&Expr]) -> HashSet<u32> {
+    fn e_walk(e: &Expr, out: &mut HashSet<u32>) {
+        match e {
+            Expr::LocalSet(x, _) | Expr::Update { id: x, .. } => {
+                out.insert(*x);
+            }
+            _ => {}
+        }
+        perry_hir::walker::walk_expr_children(e, &mut |c| e_walk(c, out));
+    }
+    let mut out = HashSet::new();
+    for s in ss {
+        perry_hir::walker::stmt_any_expr(s, &mut |e| {
+            e_walk(e, &mut out);
+            false
+        });
+    }
+    for e in extra {
+        e_walk(e, &mut out);
+    }
+    out
+}
+
+/// The integer ranges a view index proof may use inside the loop body
+/// (module doc):
+/// - the loop counter: `[0, B - 1]`, or `< B` for a local `B` (the guard
+///   checks the counter's entry value, see [`emit_guard`]);
+/// - the counter of a nested `for (let j = INIT; j < B2; j++)`, declared by
+///   its init and written only by its update, `INIT`'s range starting at
+///   `>= 0`, `B2` a literal or a local the loop never writes: `[lo, B2)`;
+/// - a body local declared once and never written: its initialiser's range.
+///
+/// A local's id is unique in its function and every use of it lies in its
+/// scope, where the range holds.
+fn view_ranges(
+    ctx: &FnCtx<'_>,
+    counter: Option<Counter>,
+    body: &[Stmt],
+    written: &HashSet<u32>,
+) -> HashMap<u32, Rng> {
+    let mut ranges = HashMap::new();
+    if let Some(c) = counter {
+        let hi = match c.bound {
+            Bound::Lit(k) => Hi::Le(k - 1),
+            Bound::Local(b) => Hi::Lt(b, 0),
+        };
+        if let Some(r) = Rng::checked(Some(0), Some(hi), true) {
+            ranges.insert(c.id, r);
+        }
+    }
+    // A local the loop never writes (nor declares) keeps the range the
+    // compiler proves for it at the loop's entry (`int_range_expr`: integer
+    // leaves only, `None` at the first unknown one).
+    {
+        let mut outer: Vec<u32> = Vec::new();
+        for st in body {
+            perry_hir::walker::stmt_any_expr(st, &mut |e| {
+                fn locals(e: &Expr, out: &mut Vec<u32>) {
+                    if let Expr::LocalGet(id) = e {
+                        out.push(*id);
+                    }
+                    perry_hir::walker::walk_expr_children(e, &mut |c| locals(c, out));
+                }
+                locals(e, &mut outer);
+                false
+            });
+        }
+        for id in outer {
+            if written.contains(&id) || ranges.contains_key(&id) || !plain_local(ctx, id) {
+                continue;
+            }
+            if let Some(r) = crate::expr::int_range_expr(ctx, &Expr::LocalGet(id)) {
+                if let Some(r) = Rng::checked(Some(r.min), Some(Hi::Le(r.max)), false) {
+                    ranges.insert(id, r);
+                }
+            }
+        }
+    }
+    let mut decls = HashMap::new();
+    declared(body, &mut decls);
+    let w = writes(body, &[]);
+    let invariant = |b: u32| !written.contains(&b) && plain_local(ctx, b);
+    let ok_local = |id: u32| {
+        decls.get(&id) == Some(&1)
+            && !ctx.boxed_vars.contains(&id)
+            && !ctx.prealloc_boxes.contains(&id)
+            && !ctx.tdz_boxes.contains(&id)
+            && !ctx.closure_captures.contains_key(&id)
+            && !ctx.module_globals.contains_key(&id)
+    };
+    fn walk(
+        ss: &[Stmt],
+        ranges: &mut HashMap<u32, Rng>,
+        w: &HashSet<u32>,
+        ok_local: &dyn Fn(u32) -> bool,
+        invariant: &dyn Fn(u32) -> bool,
+    ) {
+        for s in ss {
+            match s {
+                Stmt::Let {
+                    id, init: Some(e), ..
+                } if ok_local(*id) && !w.contains(id) => {
+                    if let Some(r) = eval_range(e, ranges) {
+                        ranges.insert(*id, r);
+                    }
+                }
+                Stmt::If {
+                    then_branch,
+                    else_branch,
+                    ..
+                } => {
+                    walk(then_branch, ranges, w, ok_local, invariant);
+                    if let Some(e) = else_branch {
+                        walk(e, ranges, w, ok_local, invariant);
+                    }
+                }
+                Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                    walk(body, ranges, w, ok_local, invariant)
+                }
+                Stmt::For {
+                    init,
+                    condition,
+                    update,
+                    body,
+                } => {
+                    let counter = (|| {
+                        let Some(Stmt::Let {
+                            id, init: Some(ie), ..
+                        }) = init.as_deref()
+                        else {
+                            return None;
+                        };
+                        let Some(Expr::Update {
+                            id: u,
+                            op: perry_hir::UpdateOp::Increment,
+                            ..
+                        }) = update
+                        else {
+                            return None;
+                        };
+                        let Some(Expr::Compare {
+                            op: CompareOp::Lt,
+                            left,
+                            right,
+                        }) = condition
+                        else {
+                            return None;
+                        };
+                        if u != id
+                            || !matches!(left.as_ref(), Expr::LocalGet(x) if x == id)
+                            || !ok_local(*id)
+                            || writes(body, &[]).contains(id)
+                        {
+                            return None;
+                        }
+                        let lo = eval_range(ie, ranges)?;
+                        let hi = match right.as_ref() {
+                            Expr::Integer(k) if (0..=i64::from(i32::MAX)).contains(k) => {
+                                Hi::Le(*k - 1)
+                            }
+                            Expr::Number(n)
+                                if n.fract() == 0.0 && (0.0..=f64::from(i32::MAX)).contains(n) =>
+                            {
+                                Hi::Le(*n as i64 - 1)
+                            }
+                            Expr::LocalGet(b) if *b != *id && invariant(*b) => Hi::Lt(*b, 0),
+                            _ => return None,
+                        };
+                        let r = match hi {
+                            // An empty range: the body never runs.
+                            Hi::Le(c) if c < lo.lo => return None,
+                            hi => Rng::checked(Some(lo.lo), Some(hi), lo.counter)?,
+                        };
+                        (r.lo >= 0).then_some((*id, r))
+                    })();
+                    if let Some((id, r)) = counter {
+                        ranges.insert(id, r);
+                    }
+                    walk(body, ranges, w, ok_local, invariant);
+                }
+                Stmt::Switch { cases, .. } => {
+                    for c in cases {
+                        walk(&c.body, ranges, w, ok_local, invariant);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    walk(body, &mut ranges, &w, &ok_local, &invariant);
+    ranges
+}
+
+/// The view of `id` when it can be a VIEW receiver: a proven inline-storage
+/// typed-array view (`expr::proven_view_receiver`), element-indexed, with
+/// its length in the header (no cached length slot), and a local of this
+/// function.
+pub(super) fn view_of(ctx: &FnCtx<'_>, id: u32) -> Option<crate::native_value::BufferViewSlot> {
+    if !view_regions_enabled() || ctx.module_globals.contains_key(&id) {
+        return None;
+    }
+    let (_, view) = crate::expr::proven_view_receiver(ctx, &Expr::LocalGet(id))?;
+    (view.length_slot.is_none()
+        && view.view_byte_offset.unwrap_or(0) == 0
+        && view.element_width_bytes.is_power_of_two())
+    .then_some(view)
+}
+
+/// `PERRY_REGION_VIEWS=0` (compile time): no view receivers (A/B).
+pub(super) fn view_regions_enabled() -> bool {
+    !matches!(
+        std::env::var("PERRY_REGION_VIEWS").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    )
 }
 
 /// `PERRY_REGION_ELEMENTS=0` (compile time): no element-receiver loads (A/B).
@@ -477,13 +945,14 @@ pub(super) fn candidates(
     for s in body {
         perry_hir::walker::stmt_any_expr(s, &mut walk);
     }
-    if uses.is_empty() {
-        return out;
-    }
     let mut extra: Vec<&Expr> = Vec::new();
     extra.extend(cond);
     extra.extend(update);
     let written = assigned(body, &extra);
+    out.extend(view_candidates(ctx, body, env, &written));
+    if uses.is_empty() {
+        return out;
+    }
     let keyed: HashSet<Recv> = accesses(body)
         .into_iter()
         .map(|(r, _, _, _, _)| match r {
@@ -547,6 +1016,220 @@ pub(super) fn candidates(
     out
 }
 
+/// The VIEW receivers of a loop (module doc): bindings with a proven view
+/// the loop never writes, with the ends of their proven-index accesses. An
+/// access whose index has no range, or whose symbolic end names a second
+/// bound, is no bare access (the planner stales the facts there).
+fn view_candidates(
+    ctx: &FnCtx<'_>,
+    body: &[Stmt],
+    env: &Env,
+    written: &HashSet<u32>,
+) -> HashMap<Recv, ArrayUse> {
+    let mut out: HashMap<Recv, ArrayUse> = HashMap::new();
+    if !view_regions_enabled() {
+        return out;
+    }
+    let mut accesses: Vec<(u32, ViewEnd)> = Vec::new();
+    let mut walk = |e: &Expr| -> bool {
+        fn e_walk(e: &Expr, env: &Env, out: &mut Vec<(u32, ViewEnd)>) {
+            let access = match e {
+                Expr::IndexGet { object, index } => Some((object.as_ref(), index.as_ref())),
+                _ => element_store(e).map(|(o, i, _)| (o, i)),
+            };
+            if let Some((Expr::LocalGet(id), index)) = access {
+                if let Some(end) = env.view_end(index) {
+                    out.push((*id, end));
+                }
+            }
+            perry_hir::walker::walk_expr_children(e, &mut |c| e_walk(c, env, out));
+        }
+        e_walk(e, env, &mut accesses);
+        false
+    };
+    for s in body {
+        perry_hir::walker::stmt_any_expr(s, &mut walk);
+    }
+    for (id, end) in accesses {
+        if written.contains(&id) || view_of(ctx, id).is_none() {
+            continue;
+        }
+        let u = out.entry(Recv::Local(id)).or_insert(ArrayUse {
+            view: true,
+            ..ArrayUse::default()
+        });
+        match end.end {
+            End::Const(e) => u.view_end = u.view_end.max(e as u32),
+            End::Sym(b, c) => match u.view_sym {
+                None => u.view_sym = Some((b, c)),
+                Some((sb, sc)) if sb == b => u.view_sym = Some((b, sc.max(c))),
+                Some(_) => continue,
+            },
+        }
+        u.view_counter |= end.counter;
+    }
+    // A view whose length is a compile-time constant covering every
+    // constant end is already proven by the static range proof
+    // (`bounds_for_buffer_access_width`); a guard would add nothing.
+    out.retain(|r, u| {
+        let Recv::Local(id) = r else { return true };
+        let constant = view_of(ctx, *id).and_then(|v| match v.length_source {
+            Some(crate::native_value::LengthSource::Constant(n)) => Some(n),
+            _ => None,
+        });
+        !(u.view_sym.is_none() && constant.is_some_and(|n| i64::from(u.view_end) <= n))
+    });
+    out
+}
+
+/// Does `s` contain an element access of a binding with a view?
+fn has_view_access(ctx: &FnCtx<'_>, s: &Stmt) -> bool {
+    perry_hir::walker::stmt_any_expr(s, &mut |e| {
+        fn walk(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+            let hit = match e {
+                Expr::IndexGet { object, .. } => {
+                    matches!(object.as_ref(), Expr::LocalGet(id) if view_of(ctx, *id).is_some())
+                }
+                _ => element_store(e).is_some_and(
+                    |(o, _, _)| matches!(o, Expr::LocalGet(id) if view_of(ctx, *id).is_some()),
+                ),
+            };
+            let mut found = hit;
+            if !found {
+                perry_hir::walker::walk_expr_children(e, &mut |c| found |= walk(ctx, c));
+            }
+            found
+        }
+        walk(ctx, e)
+    })
+}
+
+/// A view run: the straight-line statements (`let` / expression statements)
+/// at the head of `stmts`, starting with a view access, through the last
+/// one with a bare view access. It is the loop region's view proof without
+/// the loop (an unrolled loop, `perry_transform::unroll_static_loops`, or a
+/// run of accesses of its own): one guard, then F (bare) and G (today's).
+/// Returns the run's plan when it pays.
+pub(super) fn view_run_plan(ctx: &FnCtx<'_>, stmts: &[Stmt]) -> Option<(usize, Plan, Env)> {
+    if !view_regions_enabled() || stmts.is_empty() || !has_view_access(ctx, &stmts[0]) {
+        return None;
+    }
+    let len = stmts
+        .iter()
+        .take_while(|s| matches!(s, Stmt::Let { .. } | Stmt::Expr(_)))
+        .count();
+    if len < 2 {
+        return None;
+    }
+    let mut run = &stmts[..len];
+    let written = assigned(run, &[]);
+    let env = Env {
+        counter: None,
+        aliases: HashMap::new(),
+        ranges: view_ranges(ctx, None, run, &written),
+    };
+    let arrs = view_candidates(ctx, run, &env, &written);
+    if arrs.is_empty() {
+        return None;
+    }
+    let p = plan(
+        ctx,
+        run,
+        HashSet::new(),
+        &HashMap::new(),
+        arrs.clone(),
+        &env,
+        None,
+        None,
+    )?;
+    // Through the last statement with a bare access.
+    let last = run.iter().rposition(|s| {
+        perry_hir::walker::stmt_any_expr(s, &mut |e| {
+            fn any(e: &Expr, bare: &HashSet<usize>) -> bool {
+                let mut f = bare.contains(&(e as *const Expr as usize));
+                if !f {
+                    perry_hir::walker::walk_expr_children(e, &mut |c| f |= any(c, bare));
+                }
+                f
+            }
+            any(e, &p.bare)
+        })
+    })?;
+    if last + 1 < run.len() {
+        run = &run[..last + 1];
+    }
+    let p = if run.len() == len {
+        p
+    } else {
+        plan(
+            ctx,
+            run,
+            HashSet::new(),
+            &HashMap::new(),
+            arrs,
+            &env,
+            None,
+            None,
+        )?
+    };
+    // One guard (a load and a compare per view) pays for itself from a few
+    // checked accesses on.
+    if p.view_index.len() < 4 || !pays(ctx, "view-run", body_nodes(run), p.view_index.len()) {
+        return None;
+    }
+    Some((run.len(), p, env))
+}
+
+/// Is the element access at `index` into `buffer_local_id` a planned-bare
+/// VIEW access of the active region? Its bounds are then proven by the
+/// region's guard (`BoundsProof::RegionGuard`).
+pub(crate) fn view_bounds_proven(ctx: &FnCtx<'_>, buffer_local_id: u32, index: &Expr) -> bool {
+    ctx.region_loop_facts.last().is_some_and(|a| {
+        a.view_index.contains(&(index as *const Expr as usize))
+            && a.arrays
+                .iter()
+                .any(|x| x.view.is_some() && x.recv == Recv::Local(buffer_local_id))
+    })
+}
+
+/// Record a bare VIEW access about to be emitted at the current position,
+/// for [`verify`](super::verify): no JS-capable call may reach it.
+pub(crate) fn note_view_access(ctx: &mut FnCtx<'_>) {
+    let b = ctx.current_block;
+    let i = ctx.func.blocks()[b].insts().len();
+    if let Some(a) = ctx.region_loop_facts.last_mut() {
+        a.emitted.push((b, i));
+    }
+    stat(2, 1);
+}
+
+/// The guard of a view receiver (see [`ViewGuard`]); `counter_ok` is the
+/// counter's entry check.
+fn emit_view_guard(ctx: &mut FnCtx<'_>, v: &ViewGuard, counter_ok: &str) -> Result<String> {
+    let sym = match v.sym {
+        Some((b, c)) => Some((lower_expr(ctx, &Expr::LocalGet(b))?, c)),
+        None => None,
+    };
+    let blk = ctx.block();
+    let data = blk.load(crate::types::PTR, &v.data_slot);
+    let len_ptr = blk.gep(I8, &data, &[(I32, &v.length_offset.to_string())]);
+    // A plain load: the length changes when the buffer is detached.
+    let len = blk.load(I32, &len_ptr);
+    let mut ok = counter_ok.to_string();
+    if v.end > 0 {
+        let c = blk.icmp_ule(I32, &v.end.to_string(), &len);
+        ok = blk.and(I1, &ok, &c);
+    }
+    if let Some((bv, c)) = sym {
+        // `B + c <= length` as doubles: a non-Number `B` is a NaN and fails.
+        let lim = blk.fadd(&bv, &format!("{:?}", c as f64));
+        let lenf = blk.sitofp(I32, &len, DOUBLE);
+        let c = blk.fcmp("ole", &lim, &lenf);
+        ok = blk.and(I1, &ok, &c);
+    }
+    Ok(ok)
+}
+
 /// Does `e` contain a call (`f()`, `o.m()`, `new C()`, a native method call)?
 fn may_call(e: &Expr) -> bool {
     if matches!(
@@ -587,6 +1270,9 @@ pub(super) fn emit_guard(ctx: &mut FnCtx<'_>, a: &ArrayRecv) -> Result<String> {
         let integral = blk.fcmp("oeq", &back, &iv);
         counter_ok = blk.and(I1, &in_range, &integral);
         bound = Some(b);
+    }
+    if let Some(v) = &a.view {
+        return emit_view_guard(ctx, v, &counter_ok);
     }
     let recv_box = lower_recv(ctx, a.recv)?;
     let dense = a.dense.then_some(crate::expr::ArrayRegionDense {
@@ -638,7 +1324,12 @@ pub(crate) fn try_lower_bare_index_get(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<
     let Expr::IndexGet { object, index } = e else {
         return Ok(None);
     };
-    let Some(ar) = a.arrays.iter().find(|x| x.is(object)).cloned() else {
+    let Some(ar) = a
+        .arrays
+        .iter()
+        .find(|x| x.view.is_none() && x.is(object))
+        .cloned()
+    else {
         return Ok(None);
     };
     // The planner proved `index` in range (static, or the guarded counter)
@@ -691,7 +1382,12 @@ pub(crate) fn try_lower_bare_index_set(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<
     let Some((object, index, value)) = element_store(e) else {
         return Ok(None);
     };
-    let Some(ar) = a.arrays.iter().find(|x| x.is(object)).cloned() else {
+    let Some(ar) = a
+        .arrays
+        .iter()
+        .find(|x| x.view.is_none() && x.is(object))
+        .cloned()
+    else {
         return Ok(None);
     };
     if !ar.dense || !ar.store || !crate::type_analysis::expr_produces_canonical_raw_f64(ctx, value)
@@ -734,9 +1430,14 @@ pub(crate) fn is_f64_index_read(ctx: &FnCtx<'_>, e: &Expr) -> bool {
 /// Is `e` a planned-bare element read of the active region? (The number
 /// context's own tiers step aside for it.)
 pub(crate) fn is_bare_index_get(ctx: &FnCtx<'_>, e: &Expr) -> bool {
-    ctx.region_loop_facts
-        .last()
-        .is_some_and(|a| !a.arrays.is_empty() && a.bare.contains(&(e as *const Expr as usize)))
+    let Expr::IndexGet { object, .. } = e else {
+        return false;
+    };
+    // A VIEW access lowers through the typed-array tiers themselves.
+    ctx.region_loop_facts.last().is_some_and(|a| {
+        a.bare.contains(&(e as *const Expr as usize))
+            && a.arrays.iter().any(|x| x.view.is_none() && x.is(object))
+    })
 }
 
 /// The loop poll's arm: a collection may have moved every region array, so
@@ -747,6 +1448,8 @@ pub(crate) fn emit_poll_refresh(ctx: &mut FnCtx<'_>) -> Result<()> {
         .iter()
         .filter_map(|p| p.valid_slot.clone().map(|v| (v, p.arrays.clone())))
         .flat_map(|(v, arrs)| arrs.into_iter().map(move |a| (v.clone(), a)))
+        // A view keeps no base: its storage never moves.
+        .filter(|(_, a)| a.view.is_none())
         .collect();
     for (valid_slot, a) in recipes {
         let go = ctx.new_block("rloop.arr.refresh");
@@ -907,6 +1610,9 @@ pub(crate) fn alias_clone(ctx: &mut FnCtx<'_>, orig: &Expr, clone: &Expr) -> Vec
         if a.trees.contains(&o) && a.trees.insert(c) {
             out.push(c);
         }
+        if a.view_index.contains(&o) && a.view_index.insert(c) {
+            out.push(c);
+        }
         let mut ok: Vec<&Expr> = Vec::new();
         let mut ck: Vec<&Expr> = Vec::new();
         perry_hir::walker::walk_expr_children(orig, &mut |x| ok.push(x));
@@ -931,6 +1637,7 @@ pub(crate) fn unalias_clone(ctx: &mut FnCtx<'_>, added: Vec<usize>) {
         for p in added {
             a.bare.remove(&p);
             a.trees.remove(&p);
+            a.view_index.remove(&p);
         }
     }
 }

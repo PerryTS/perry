@@ -53,6 +53,7 @@ fn active(receivers: Vec<Receiver>, read: Option<&Expr>) -> Active {
         spill: false,
         arrays: Vec::new(),
         emitted_arr: Vec::new(),
+        view_index: HashSet::new(),
         dirty_after: HashSet::new(),
     }
 }
