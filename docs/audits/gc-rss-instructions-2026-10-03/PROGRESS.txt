@@ -1,3 +1,28 @@
+LATEST-MAIN MAC AND PREFIX MOVING VALIDATION COMPLETE
+Refreshed-main adopted source 0aa483aa91 / base ad0a2617bf: all 5,014 inputs
+and before/after hashes verified. Mac full runtime 4,881 passed, zero failures,
+five ignored; eight isolated subprocesses also pass. The separate source
+branch rss-gc-runtime-mainad0-20261004 is published for review. Latest-main
+Linux build wrapper 2309624 queues fresh three-package products and full suite.
+Older application results remain bound to main07, not this new integration.
+
+Private prefix V70r1: all 44 linked executions match Node, and all 22 moving
+executions actually copy and protect retired from-space. All source/product/
+raw-counter bindings independently verified; 165 evidence files copied locally
+and rehashed. Auxiliary eager crosscheck defect remains separately recorded.
+
+Full17 V69r1 completed 12 candidate builds including TS, then stopped at the
+unchanged disk guard; no acceptance measurements ran. Preserve that failure.
+Reclaimed only 5,385,279,136 bytes of temporary section dumps after checking
+each against its recorded .text hash and exact original/symbol binary hashes.
+All source/binaries/archives/stamps/raw measurements remain intact. V69r2
+wrapper 2298744 reuses those 12 immutable candidate products plus the exact
+15 V46 control products, builds the three remaining candidates, and takes
+all 204 fresh measurements. New section dumps are removed after their hashes
+and corresponding binaries are recorded; independent validation regenerates
+them from those preserved binaries. No application is excluded or altered.
+The prefix experiment remains unapplied pending full signed distributions.
+
 REFRESHED MAIN INTEGRATION PREPARED SEPARATELY
 Fetched origin/main ad0a2617bf (24 commits after measured main07). Rebased
 adopted production branch cleanly in owned worktree rss-gc-runtime-mainad0-
