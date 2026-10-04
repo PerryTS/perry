@@ -29,7 +29,7 @@ pub use fast_paths::js_object_set_field_by_name_transition_fast;
 pub(crate) use fast_paths::{
     object_set_field_by_name_transition_chain_proven_value,
     object_set_field_by_name_transition_only_fast_value, try_existing_own_data_overwrite,
-    try_readd_stable_tombstone,
+    try_existing_own_data_overwrite_by_content, try_readd_stable_tombstone,
 };
 #[cfg(test)]
 pub(crate) use fast_paths::{test_reset_transition_fast_hits, test_transition_fast_hits};
