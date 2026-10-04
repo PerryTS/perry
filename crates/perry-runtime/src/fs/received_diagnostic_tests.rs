@@ -365,3 +365,167 @@ fn property(value: f64, key: &str) -> f64 {
         crate::object::js_object_get_property_key(value.get_nanbox_f64(), key.get_nanbox_f64())
     }
 }
+
+// Restore the intrinsic descriptor even when a regression assertion panics.
+fn with_received_typed_array_constructor(test: impl FnOnce(f64, f64)) {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+        crate::typedarray::js_typed_array_new_empty(crate::typedarray::KIND_INT16 as i32, 1) as i64,
+    ));
+    let constructor = scope.root_nanbox_f64(crate::object::js_get_global_this_builtin_value(
+        b"Int16Array".as_ptr(),
+        10,
+    ));
+    let prototype = scope.root_nanbox_f64(property(constructor.get_nanbox_f64(), "prototype"));
+    let key = scope.root_nanbox_f64(text("constructor"));
+    let original = scope.root_nanbox_f64(crate::object::js_object_get_own_property_descriptor(
+        prototype.get_nanbox_f64(),
+        key.get_nanbox_f64(),
+    ));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        test(value.get_nanbox_f64(), prototype.get_nanbox_f64());
+    }));
+    crate::object::js_object_define_property(
+        prototype.get_nanbox_f64(),
+        key.get_nanbox_f64(),
+        original.get_nanbox_f64(),
+    );
+    if let Err(panic) = result {
+        std::panic::resume_unwind(panic);
+    }
+    check(value.get_nanbox_f64(), "an instance of Int16Array");
+}
+
+static RECEIVED_CONSTRUCTOR_CALLS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+extern "C" fn received_patched_constructor(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
+    RECEIVED_CONSTRUCTOR_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let ctor = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+        crate::object::js_object_alloc(0, 0) as i64,
+    ));
+    set(ctor.get_nanbox_f64(), "name", text("PatchedView"));
+    ctor.get_nanbox_f64()
+}
+
+extern "C" fn received_throwing_constructor(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
+    RECEIVED_CONSTRUCTOR_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    crate::exception::js_throw(text("constructor sentinel"));
+}
+
+extern "C" fn received_collecting_constructor(
+    closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    crate::gc::js_gc_collect();
+    received_patched_constructor(closure, this)
+}
+
+fn install_received_constructor_getter(
+    prototype: f64,
+    info: *const crate::closure::JsFunctionInfo,
+) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let prototype = scope.root_nanbox_f64(prototype);
+    let descriptor = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+        crate::object::js_object_alloc(0, 0) as i64,
+    ));
+    let getter = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+        crate::closure::js_closure_alloc(info, 0) as i64,
+    ));
+    set(descriptor.get_nanbox_f64(), "get", getter.get_nanbox_f64());
+    set(
+        descriptor.get_nanbox_f64(),
+        "configurable",
+        f64::from_bits(crate::value::TAG_TRUE),
+    );
+    let key = scope.root_nanbox_f64(text("constructor"));
+    crate::object::js_object_define_property(
+        prototype.get_nanbox_f64(),
+        key.get_nanbox_f64(),
+        descriptor.get_nanbox_f64(),
+    );
+}
+
+#[test]
+fn received_typed_array_inherited_constructor_data() {
+    with_received_typed_array_constructor(|value, prototype| {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let ctor = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+            crate::object::js_object_alloc(0, 0) as i64,
+        ));
+        set(ctor.get_nanbox_f64(), "name", text("PatchedView"));
+        set(prototype, "constructor", ctor.get_nanbox_f64());
+        check(value, "an instance of PatchedView");
+    });
+}
+
+#[test]
+fn received_typed_array_inherited_constructor_getter() {
+    with_received_typed_array_constructor(|value, prototype| {
+        install_received_constructor_getter(
+            prototype,
+            crate::fn_info!(received_patched_constructor, 0),
+        );
+        RECEIVED_CONSTRUCTOR_CALLS.store(0, std::sync::atomic::Ordering::Relaxed);
+        let result = crate::validators::js_runtime_describe_received(value);
+        assert_eq!(read_js_string_pub(result), "an instance of PatchedView");
+        assert_eq!(
+            RECEIVED_CONSTRUCTOR_CALLS.load(std::sync::atomic::Ordering::Relaxed),
+            3
+        );
+    });
+}
+
+#[test]
+fn received_typed_array_inherited_constructor_throw() {
+    with_received_typed_array_constructor(|value, prototype| {
+        install_received_constructor_getter(
+            prototype,
+            crate::fn_info!(received_throwing_constructor, 0),
+        );
+        RECEIVED_CONSTRUCTOR_CALLS.store(0, std::sync::atomic::Ordering::Relaxed);
+        let error = crate::exception::catch_js_throw(|| {
+            crate::validators::js_runtime_describe_received(value);
+        })
+        .expect_err("inherited constructor getter must throw");
+        assert_eq!(read_js_string_pub(error), "constructor sentinel");
+        assert_eq!(
+            RECEIVED_CONSTRUCTOR_CALLS.load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+    });
+}
+
+#[test]
+fn received_typed_array_inherited_constructor_collect() {
+    with_received_typed_array_constructor(|value, prototype| {
+        install_received_constructor_getter(
+            prototype,
+            crate::fn_info!(received_collecting_constructor, 0),
+        );
+        RECEIVED_CONSTRUCTOR_CALLS.store(0, std::sync::atomic::Ordering::Relaxed);
+        let mut before = 0;
+        crate::gc::js_gc_stats(&mut before, std::ptr::null_mut(), std::ptr::null_mut());
+        let result = crate::validators::js_runtime_describe_received(value);
+        assert_eq!(read_js_string_pub(result), "an instance of PatchedView");
+        let mut after = 0;
+        crate::gc::js_gc_stats(&mut after, std::ptr::null_mut(), std::ptr::null_mut());
+        assert!(
+            after >= before + 3,
+            "all three constructor reads must collect"
+        );
+        assert_eq!(
+            RECEIVED_CONSTRUCTOR_CALLS.load(std::sync::atomic::Ordering::Relaxed),
+            3
+        );
+    });
+}

@@ -77,3 +77,28 @@ for (const unit of [0xd800, 0xdc00]) {
       error.message.charCodeAt(start), error.message.length - start);
   }
 }
+
+// Intrinsic brands must not hide inherited constructor data or accessors.
+const originalInt16Constructor = Object.getOwnPropertyDescriptor(Int16Array.prototype, 'constructor');
+const patchedView: any = new Int16Array(1);
+try {
+  Object.defineProperty(Int16Array.prototype, 'constructor', {
+    value: { name: 'PatchedView' }, writable: true, configurable: true,
+  });
+  callbackError('inherited-view-data', patchedView);
+  let calls = 0;
+  Object.defineProperty(Int16Array.prototype, 'constructor', {
+    get() { calls++; return { name: 'PatchedView' }; }, configurable: true,
+  });
+  callbackError('inherited-view-getter', patchedView);
+  console.log('inherited-view-getter-calls', calls);
+  calls = 0;
+  Object.defineProperty(Int16Array.prototype, 'constructor', {
+    get() { calls++; throw new Error('constructor sentinel'); }, configurable: true,
+  });
+  callbackError('inherited-view-throw', patchedView);
+  console.log('inherited-view-throw-calls', calls);
+} finally {
+  Object.defineProperty(Int16Array.prototype, 'constructor', originalInt16Constructor!);
+}
+callbackError('inherited-view-restored', patchedView);
