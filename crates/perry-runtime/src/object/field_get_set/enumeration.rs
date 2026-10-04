@@ -1535,11 +1535,13 @@ fn js_object_keys_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
                 None => j as u32,
             }
         };
-        // Private elements (`#x`) are stored in a class instance's keys_array
-        // but are never enumerable/reflectable properties. Take the filtering
-        // path for class instances (class_id != 0) so they are dropped. Plain
-        // object literals keep class_id 0, so `{"#fff": 1}` stays visible.
-        let hide_private = own_keys_may_hide(obj);
+        // A class instance's runtime-internal keys are hidden by name: take
+        // the filtering path for class instances. A private field (#11791) is
+        // a non-enumerable entry, so the shape's summary already sends its
+        // holder down that path (`has_descriptors`) and the enumerability
+        // check drops it. Plain object literals keep class_id 0, so
+        // `{"#fff": 1}` stays visible.
+        let hide_private = (*obj).class_id != 0;
         let hide_wasi_state = crate::wasi::is_wasi_import_object(obj)
             || crate::wasi::is_wasi_instance(f64::from_bits(
                 crate::value::js_nanbox_pointer(obj as i64).to_bits(),
@@ -1583,7 +1585,7 @@ fn js_object_keys_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
                 Ok(s) => s,
                 Err(_) => continue,
             };
-            if (hide_private && own_key_hidden_bytes(obj, name_bytes))
+            if (hide_private && is_internal_runtime_key_bytes(name_bytes))
                 || (hide_wasi_state && key_str.starts_with("__wasi"))
             {
                 continue;
