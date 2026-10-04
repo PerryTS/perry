@@ -1,5 +1,5 @@
 use super::*;
-use crate::common::{get_handle, register_handle, Handle};
+use crate::common::{drop_handle, get_handle, register_handle, Handle};
 use perry_runtime::{
     js_array_alloc, js_array_push, js_object_alloc_with_shape, js_object_set_field,
     js_string_from_bytes, ArrayHeader, JSValue, ObjectHeader, StringHeader,
@@ -7,6 +7,25 @@ use perry_runtime::{
 use rusqlite::{types::Value as SqliteValue, Connection};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+
+const DATABASE_NOT_OPEN: &str = "The database connection is not open";
+
+#[cold]
+fn throw_database_not_open() -> ! {
+    throw_plain_type(DATABASE_NOT_OPEN)
+}
+
+fn require_database_open(db_handle: Handle) {
+    if get_handle::<SqliteDbHandle>(db_handle).is_none() {
+        throw_database_not_open();
+    }
+}
+
+fn require_statement_database_open(stmt_handle: Handle) {
+    let stmt =
+        get_handle::<SqliteStmtHandle>(stmt_handle).unwrap_or_else(|| throw_database_not_open());
+    require_database_open(stmt.db_handle);
+}
 
 /// new Database(filename) -> Database
 ///
@@ -67,6 +86,8 @@ pub unsafe extern "C" fn js_sqlite_exec(db_handle: Handle, sql_ptr: *const Strin
         None => return 0,
     };
 
+    require_database_open(db_handle);
+
     if let Some(db) = get_handle::<SqliteDbHandle>(db_handle) {
         if let Ok(conn) = db.conn.lock() {
             return if conn.execute_batch(&sql).is_ok() {
@@ -91,6 +112,8 @@ pub unsafe extern "C" fn js_sqlite_prepare(
         Some(s) => s,
         None => return -1,
     };
+
+    require_database_open(db_handle);
 
     // Verify the SQL is valid
     if let Some(db) = get_handle::<SqliteDbHandle>(db_handle) {
@@ -210,6 +233,7 @@ pub unsafe extern "C" fn js_sqlite_stmt_run(
     params_arr: *const ArrayHeader,
 ) -> *mut ObjectHeader {
     let sqlite_params = params_from_array(params_arr);
+    require_statement_database_open(stmt_handle);
 
     if let Some(stmt) = get_handle::<SqliteStmtHandle>(stmt_handle) {
         if let Some(result) = with_sqlite_connection(stmt.db_handle, |conn| {
@@ -251,6 +275,7 @@ pub unsafe extern "C" fn js_sqlite_stmt_get(
     params_arr: *const ArrayHeader,
 ) -> f64 {
     let sqlite_params = params_from_array(params_arr);
+    require_statement_database_open(stmt_handle);
 
     if let Some(stmt) = get_handle::<SqliteStmtHandle>(stmt_handle) {
         let raw = stmt.raw_mode.load(Ordering::Relaxed);
@@ -311,6 +336,7 @@ pub unsafe extern "C" fn js_sqlite_stmt_all(
     params_arr: *const ArrayHeader,
 ) -> *mut ArrayHeader {
     let sqlite_params = params_from_array(params_arr);
+    require_statement_database_open(stmt_handle);
     let result_array = js_array_alloc(0);
 
     if let Some(stmt) = get_handle::<SqliteStmtHandle>(stmt_handle) {
@@ -384,6 +410,8 @@ pub unsafe extern "C" fn js_sqlite_pragma(
         None => return std::ptr::null_mut(),
     };
 
+    require_database_open(db_handle);
+
     let value = string_from_header(value_ptr);
 
     if let Some(db) = get_handle::<SqliteDbHandle>(db_handle) {
@@ -453,6 +481,8 @@ pub unsafe extern "C" fn js_sqlite_transaction(
         js_closure_alloc, js_closure_set_capture_f64, js_closure_set_capture_ptr,
     };
 
+    require_database_open(db_handle);
+
     let wrapper = js_closure_alloc(perry_runtime::fn_info!(sqlite_tx_wrapper, 1), 2);
     js_closure_set_capture_f64(wrapper, 0, db_handle as f64);
     js_closure_set_capture_ptr(wrapper, 1, closure_ptr);
@@ -463,6 +493,7 @@ pub unsafe extern "C" fn js_sqlite_transaction(
 /// Begin a transaction.
 #[no_mangle]
 pub unsafe extern "C" fn js_sqlite_begin_transaction(db_handle: Handle) -> i32 {
+    require_database_open(db_handle);
     if let Some(db) = get_handle::<SqliteDbHandle>(db_handle) {
         if let Ok(conn) = db.conn.lock() {
             return if conn.execute("BEGIN TRANSACTION", []).is_ok() {
@@ -478,6 +509,7 @@ pub unsafe extern "C" fn js_sqlite_begin_transaction(db_handle: Handle) -> i32 {
 /// Commit a transaction.
 #[no_mangle]
 pub unsafe extern "C" fn js_sqlite_commit(db_handle: Handle) -> i32 {
+    require_database_open(db_handle);
     if let Some(db) = get_handle::<SqliteDbHandle>(db_handle) {
         if let Ok(conn) = db.conn.lock() {
             return if conn.execute("COMMIT", []).is_ok() {
@@ -493,6 +525,7 @@ pub unsafe extern "C" fn js_sqlite_commit(db_handle: Handle) -> i32 {
 /// Rollback a transaction.
 #[no_mangle]
 pub unsafe extern "C" fn js_sqlite_rollback(db_handle: Handle) -> i32 {
+    require_database_open(db_handle);
     if let Some(db) = get_handle::<SqliteDbHandle>(db_handle) {
         if let Ok(conn) = db.conn.lock() {
             return if conn.execute("ROLLBACK", []).is_ok() {
@@ -510,9 +543,7 @@ pub unsafe extern "C" fn js_sqlite_rollback(db_handle: Handle) -> i32 {
 /// Close the database connection.
 #[no_mangle]
 pub unsafe extern "C" fn js_sqlite_close(db_handle: Handle) -> i32 {
-    // The connection will be closed when the handle is dropped
-    // For now, we just verify the handle is valid
-    if get_handle::<SqliteDbHandle>(db_handle).is_some() {
+    if drop_handle(db_handle) {
         1
     } else {
         0
@@ -579,6 +610,7 @@ pub unsafe extern "C" fn js_sqlite_is_stmt_handle(handle: Handle) -> i32 {
 /// exposes it, falling back to `null` for computed columns. Refs #3184.
 #[no_mangle]
 pub unsafe extern "C" fn js_sqlite_stmt_columns(stmt_handle: Handle) -> *mut ArrayHeader {
+    require_statement_database_open(stmt_handle);
     let result = js_array_alloc(0);
 
     if let Some(stmt) = get_handle::<SqliteStmtHandle>(stmt_handle) {
