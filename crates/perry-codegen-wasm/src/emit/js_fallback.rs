@@ -338,6 +338,15 @@ impl WasmModuleEmitter {
                             "u64ToF64(TAG_UNDEFINED)".to_string()
                         }
                     }
+                    Expr::ExternFuncRef { name, .. }
+                        if name == perry_hir::tdz_check::TDZ_CHECK_THEN =>
+                    {
+                        // #11826: a module-level TDZ `check_then` yields its value.
+                        args_js
+                            .get(2)
+                            .cloned()
+                            .unwrap_or_else(|| "u64ToF64(TAG_UNDEFINED)".to_string())
+                    }
                     Expr::ExternFuncRef { name, .. } => {
                         if let Some(&func_idx) = self.func_name_map.get(name) {
                             let args_i64: Vec<String> =

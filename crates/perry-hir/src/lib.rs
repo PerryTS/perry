@@ -29,6 +29,7 @@ pub mod native_profile;
 pub mod patched_builtins;
 pub mod solid_jsx;
 pub mod stable_hash;
+pub mod tdz_check;
 pub mod type_alias_resolve;
 pub mod types;
 pub mod walker;

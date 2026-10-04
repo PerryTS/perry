@@ -147,6 +147,8 @@ impl LoweringContext {
             with_env_stack: Vec::new(),
             var_hoisted_ids: HashSet::new(),
             tdz_forward_ids: HashSet::new(),
+            module_lexical_ids: HashSet::new(),
+            class_def_positions: HashMap::new(),
             forward_lexical_names: HashSet::new(),
             forward_lexical_saves: Vec::new(),
             catch_param_scopes: Vec::new(),

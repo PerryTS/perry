@@ -1638,6 +1638,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         &[DOUBLE],
     );
     module.declare_function("js_throw_reference_error_unresolved_get", DOUBLE, &[]);
+    // #11826: module-level TDZ checks (`expr/tdz_module_check.rs`).
+    module.declare_function("js_throw_reference_error_tdz", DOUBLE, &[DOUBLE]);
     // with-statement implicit-global sentinel (HOLE) helpers.
     module.declare_function("js_with_implicit_unset", DOUBLE, &[]);
     module.declare_function("js_with_implicit_read", DOUBLE, &[DOUBLE, DOUBLE]);

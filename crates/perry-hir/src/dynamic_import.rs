@@ -1247,6 +1247,8 @@ pub fn resolve_import_path_with_context<V: Borrow<Expr>>(
     local_literals: &std::collections::HashMap<u32, Vec<String>>,
     visiting: &mut std::collections::HashSet<u32>,
 ) -> Resolution {
+    // A TDZ check on a read adds only a throw (#11826); the path is the read's.
+    let arg = crate::tdz_check::without_checks(arg);
     match arg {
         Expr::String(s) => Resolution::Set(vec![s.clone()]),
         // Web Worker entrypoints are conventionally written as
@@ -1510,7 +1512,7 @@ fn object_registry_values<'a, V: Borrow<Expr>>(
     visiting: &mut std::collections::HashSet<u32>,
     chain_ids: &mut Vec<u32>,
 ) -> Option<Vec<&'a Expr>> {
-    match object {
+    match crate::tdz_check::without_checks(object) {
         Expr::Object(entries) => Some(entries.iter().map(|(_, v)| v).collect()),
         Expr::New {
             class_name, args, ..

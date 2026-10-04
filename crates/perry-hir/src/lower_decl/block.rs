@@ -12,9 +12,11 @@ use super::*;
 mod closure_ident_scan;
 #[cfg(test)]
 mod hoisting_tests;
+mod switch_case_tdz;
 mod var_names;
 
 use closure_ident_scan::{cic_expr, cic_stmt};
+pub(crate) use switch_case_tdz::register_switch_case_tdz_lets;
 pub(crate) use var_names::{
     collect_annexb_block_fn_decl_names, collect_lexical_decl_names,
     collect_var_binding_names_from_pat, collect_var_binding_names_from_stmt,

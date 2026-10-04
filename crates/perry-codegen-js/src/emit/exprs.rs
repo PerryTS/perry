@@ -242,6 +242,31 @@ impl JsEmitter {
             }
 
             // --- Function calls ---
+            // #11826: module-level TDZ checks. Emitted JS declares its own
+            // `let`/`const`, so the engine enforces the dead zone itself.
+            Expr::Call { callee, args, .. }
+                if matches!(callee.as_ref(), Expr::ExternFuncRef { name, .. }
+                    if name == perry_hir::tdz_check::TDZ_CHECK
+                        || name == perry_hir::tdz_check::TDZ_CHECK_THEN
+                        || name == perry_hir::tdz_check::TDZ_THROW) =>
+            {
+                let Expr::ExternFuncRef { name, .. } = callee.as_ref() else { unreachable!() };
+                if name == perry_hir::tdz_check::TDZ_CHECK_THEN {
+                    self.output.push('(');
+                    if let Some(value) = args.get(2) {
+                        self.emit_expr(value);
+                    }
+                    self.output.push(')');
+                } else if name == perry_hir::tdz_check::TDZ_CHECK {
+                    self.output.push_str("(void 0)");
+                } else {
+                    self.output.push_str("(() => { throw new ReferenceError(\"Cannot access '\" + ");
+                    if let Some(binding) = args.first() {
+                        self.emit_expr(binding);
+                    }
+                    self.output.push_str(" + \"' before initialization\"); })()");
+                }
+            }
             Expr::Call { callee, args, .. } => {
                 self.emit_expr(callee);
                 self.output.push('(');

@@ -1882,6 +1882,7 @@ pub(crate) fn lower_stmt(
             let mut saved_class_renames = Vec::new();
             let mut saved_forward_classes = Vec::new();
             let mut tdz_boxes = Vec::new();
+            crate::lower_decl::register_switch_case_tdz_lets(ctx, &switch_stmt.cases);
             for case in &switch_stmt.cases {
                 tdz_boxes.extend(rebind_nested_forward_scope_lets(ctx, &case.cons));
                 saved_class_renames.extend(enter_class_rename_scope(
