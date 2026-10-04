@@ -251,7 +251,8 @@ pub(crate) unsafe fn object_get_to_json(ptr: *const u8) -> Option<f64> {
     if SUPPRESS_NEXT_TO_JSON.with(|c| c.replace(false)) {
         return None;
     }
-    // Only resolve `toJSON` on a genuine plain object / class instance
+    // Proxies resolve through [[Get]] below without a heap-layout probe.
+    // Only resolve other `toJSON` methods on a genuine plain object / class instance
     // (`GC_TYPE_OBJECT`). Map/Set (`GC_TYPE_MAP`/`GC_TYPE_SET`), buffers,
     // typed arrays, errors, regexes etc. have a DIFFERENT heap layout —
     // `js_object_get_field_by_name` would mis-read their internals as an
@@ -260,8 +261,11 @@ pub(crate) unsafe fn object_get_to_json(ptr: *const u8) -> Option<f64> {
     // user-visible `toJSON` anyway, so bail to normal serialization. Mirrors
     // the existing `gc_obj_type == GC_TYPE_OBJECT && !is_registered_buffer`
     // guard the replacer path already applies before calling this helper.
-    if gc_obj_type(ptr) != crate::gc::GC_TYPE_OBJECT
-        || crate::buffer::is_registered_buffer(ptr as usize)
+    let recv = f64::from_bits(make_pointer_bits(ptr));
+    let is_proxy = crate::proxy::js_proxy_is_proxy(recv) != 0;
+    if !is_proxy
+        && (gc_obj_type(ptr) != crate::gc::GC_TYPE_OBJECT
+            || crate::buffer::is_registered_buffer(ptr as usize))
     {
         return None;
     }
@@ -270,13 +274,12 @@ pub(crate) unsafe fn object_get_to_json(ptr: *const u8) -> Option<f64> {
     // `js_object_get_field_by_name` dispatch (whose miss path recursively
     // re-enters itself through the subclass/prototype fallbacks) and all the
     // per-probe allocations below.
-    if to_json_definitely_absent(ptr) {
+    if !is_proxy && to_json_definitely_absent(ptr) {
         return None;
     }
     // `js_object_get_field_by_name` expects a raw (masked) heap pointer for the
     // ordinary-object path; the receiver `this` is the same value NaN-boxed
     // with POINTER_TAG.
-    let recv = f64::from_bits(make_pointer_bits(ptr));
     let scope = crate::gc::RuntimeHandleScope::new();
     let recv_handle = scope.root_nanbox_f64(recv);
 
@@ -294,8 +297,7 @@ pub(crate) unsafe fn object_get_to_json(ptr: *const u8) -> Option<f64> {
     if (method_bits & 0xFFFF_0000_0000_0000) != POINTER_TAG {
         return None;
     }
-    let method_ptr = (method_bits & POINTER_MASK) as usize;
-    if !crate::closure::is_closure_ptr(method_ptr) {
+    if !crate::proxy::is_callable_function(method) {
         return None;
     }
 
@@ -304,7 +306,11 @@ pub(crate) unsafe fn object_get_to_json(ptr: *const u8) -> Option<f64> {
     // `Object.create(proto)` method whose reserved `this` slot was baked to the
     // prototype at construction, this restores the proper receiver (#1982).
     let recv = recv_handle.get_nanbox_f64();
-    let bound = crate::closure::clone_closure_rebind_this(method_bits, recv);
+    let bound = if is_closure_value(method_bits) {
+        crate::closure::clone_closure_rebind_this(method_bits, recv)
+    } else {
+        method_bits
+    };
 
     // Per spec (§25.5.2.2 step 2.b.i), `toJSON(key)` receives the property key
     // of the value being serialized — the empty String at the root, the own key
@@ -389,6 +395,10 @@ pub(crate) unsafe fn array_get_to_json(arr: *const crate::ArrayHeader) -> Option
 /// can't leak the flag onto an unrelated later object/array.
 #[inline]
 pub(crate) unsafe fn arm_to_json_result_guard(result: f64) {
+    if crate::proxy::js_proxy_is_proxy(result) != 0 {
+        SUPPRESS_NEXT_TO_JSON.with(|c| c.set(true));
+        return;
+    }
     if let Some(res_ptr) = extract_pointer(result.to_bits()) {
         let ty = gc_obj_type(res_ptr);
         if (ty == crate::gc::GC_TYPE_OBJECT || ty == crate::gc::GC_TYPE_ARRAY)
@@ -497,6 +507,16 @@ pub(crate) unsafe fn stringify_value(value: f64, type_hint: u32, buf: &mut Strin
     }
 
     if let Some(ptr) = extract_pointer(bits) {
+        if super::stringify_proxy::try_stringify(
+            value,
+            buf,
+            "",
+            0,
+            super::stringify_proxy::Replacer::None,
+            false,
+        ) {
+            return;
+        }
         // #2154 — see stringify_value_depth: skip native handle ids that aren't
         // real heap objects, so JSON.stringify of an object holding e.g. an
         // `http.Agent`, a fetch/zlib/stream handle, or a revocable-Proxy id
@@ -769,6 +789,16 @@ pub(crate) unsafe fn stringify_value_depth(
     }
 
     if let Some(ptr) = extract_pointer(bits) {
+        if super::stringify_proxy::try_stringify(
+            value,
+            buf,
+            "",
+            depth as usize,
+            super::stringify_proxy::Replacer::None,
+            false,
+        ) {
+            return;
+        }
         // #2154 — a POINTER_TAG value can carry a native *handle id* (a small
         // integer like `2`, e.g. an `http.Agent` in an object literal, a fetch/
         // zlib/stream handle, or a revocable-Proxy id) rather than a real heap
@@ -1168,6 +1198,16 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
             // `is_object_pointer` / ArrayHeader-length probes below would deref
             // unmapped memory. Emit "null" before any load (#4904/#1843 — a
             // Proxy element in a Next.js render array crashed exactly here).
+            if super::stringify_proxy::try_stringify(
+                elem,
+                buf,
+                "",
+                (depth + 1) as usize,
+                super::stringify_proxy::Replacer::None,
+                false,
+            ) {
+                continue;
+            }
             if crate::value::addr_class::is_handle_band(elem_ptr as usize) {
                 buf.push_str("null");
                 continue;

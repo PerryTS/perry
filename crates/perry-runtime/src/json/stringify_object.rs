@@ -42,6 +42,9 @@ use std::fmt::Write as FmtWrite;
 /// `GC_TYPE_*` tags, so the `gc_obj_type` match's `_` arm already skips them.
 /// The pending `toJSON` key must already be recorded.
 unsafe fn member_to_json(value: f64) -> Option<f64> {
+    if crate::proxy::js_proxy_is_proxy(value) != 0 {
+        return super::stringify_proxy::to_json(value);
+    }
     let bits = value.to_bits();
     let ptr = extract_pointer(bits)?;
     if crate::value::addr_class::is_handle_band(ptr as usize) {
