@@ -421,6 +421,8 @@ pub(crate) static WORKER_THREADS_IS_MAIN_THREAD_GETTER: AtomicPtr<()> = AtomicPt
 pub(crate) static WORKER_THREADS_PARENT_PORT_GETTER: AtomicPtr<()> = AtomicPtr::new(null_mut());
 pub(crate) static WORKER_THREADS_THREAD_NAME_GETTER: AtomicPtr<()> = AtomicPtr::new(null_mut());
 pub(crate) static WORKER_THREADS_RESOURCE_LIMITS_GETTER: AtomicPtr<()> = AtomicPtr::new(null_mut());
+pub(crate) static WORKER_THREADS_THREAD_ID_GETTER: AtomicPtr<()> = AtomicPtr::new(null_mut());
+static WORKER_THREADS_WORKER_CONSTRUCTOR: AtomicPtr<()> = AtomicPtr::new(null_mut());
 
 #[no_mangle]
 pub extern "C" fn js_register_worker_threads_namespace_getters(
@@ -429,12 +431,58 @@ pub extern "C" fn js_register_worker_threads_namespace_getters(
     parent_port: WorkerThreadsValueGetter,
     thread_name: WorkerThreadsValueGetter,
     resource_limits: WorkerThreadsValueGetter,
+    thread_id: WorkerThreadsValueGetter,
 ) {
     WORKER_THREADS_WORKER_DATA_GETTER.store(worker_data as *mut (), Ordering::Release);
     WORKER_THREADS_IS_MAIN_THREAD_GETTER.store(is_main_thread as *mut (), Ordering::Release);
     WORKER_THREADS_PARENT_PORT_GETTER.store(parent_port as *mut (), Ordering::Release);
     WORKER_THREADS_THREAD_NAME_GETTER.store(thread_name as *mut (), Ordering::Release);
     WORKER_THREADS_RESOURCE_LIMITS_GETTER.store(resource_limits as *mut (), Ordering::Release);
+    WORKER_THREADS_THREAD_ID_GETTER.store(thread_id as *mut (), Ordering::Release);
+}
+
+type WorkerThreadsWorkerConstructor = extern "C" fn(f64, f64) -> f64;
+
+/// perry-stdlib registers its `new Worker(filename, options)` here, so a
+/// `Worker` reached through a namespace value (`getBuiltinModule`, a
+/// `require` result, a stored reference) constructs a real Worker.
+#[no_mangle]
+pub extern "C" fn js_register_worker_threads_worker_constructor(
+    construct: WorkerThreadsWorkerConstructor,
+) {
+    WORKER_THREADS_WORKER_CONSTRUCTOR.store(construct as *mut (), Ordering::Release);
+}
+
+/// `new ns.Worker(filename, options)` where `ns` is the worker_threads
+/// namespace reached as a value (`process.getBuiltinModule`, `require`). The
+/// compiler cannot see such a call site, so the stdlib looks the filename up
+/// in the table of worker entries compiled into the binary.
+///
+/// # Safety
+/// `args_ptr` must point to `args_len` values or be null.
+pub(crate) unsafe fn worker_threads_construct(
+    module: &str,
+    method: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    if module != "worker_threads" || method != "Worker" {
+        return None;
+    }
+    let ptr = WORKER_THREADS_WORKER_CONSTRUCTOR.load(Ordering::Acquire);
+    if ptr.is_null() {
+        return None;
+    }
+    // NOT-A-JS-BODY: a native Rust helper registered by another crate.
+    let construct: WorkerThreadsWorkerConstructor = std::mem::transmute(ptr);
+    let arg = |n: usize| {
+        if !args_ptr.is_null() && args_len > n {
+            *args_ptr.add(n)
+        } else {
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        }
+    };
+    Some(construct(arg(0), arg(1)))
 }
 
 pub(crate) fn call_worker_threads_getter(

@@ -769,6 +769,22 @@ pub fn program_has_worker() -> bool {
     PROGRAM_HAS_WORKER.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Every worker entry compiled into the program, as `(absolute path, module
+/// prefix)`. The entry module's `main` registers each with the runtime's
+/// worker entry table, which any Worker construction the compiler could not
+/// resolve at its call site consults. Set by the driver before module codegen.
+static WORKER_ENTRIES: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
+
+/// Record the program's worker entries. See [`worker_entries`].
+pub fn set_worker_entries(entries: Vec<(String, String)>) {
+    *WORKER_ENTRIES.lock().unwrap() = entries;
+}
+
+/// See [`set_worker_entries`].
+pub fn worker_entries() -> Vec<(String, String)> {
+    WORKER_ENTRIES.lock().unwrap().clone()
+}
+
 /// Whether any module of this program launches a perry/thread agent
 /// (`spawn`, `parallelMap`, `parallelFilter`). Separate from Worker
 /// module evaluation: perry/thread agents share user-module globals but each

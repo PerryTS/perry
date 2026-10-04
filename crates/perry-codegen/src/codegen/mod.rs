@@ -229,7 +229,7 @@ pub(crate) mod helpers;
 // #10399: the driver sets this before any module codegen runs.
 pub use helpers::{
     program_has_thread_agents, program_has_worker, set_program_has_thread_agents,
-    set_program_has_worker,
+    set_program_has_worker, set_worker_entries, worker_entries,
 };
 pub(crate) mod global_transfer;
 mod literal_constructor;

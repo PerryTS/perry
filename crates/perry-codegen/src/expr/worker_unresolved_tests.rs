@@ -1,5 +1,7 @@
-//! #11450: an unresolvable `new Worker(x)` throws, but it is an expression, so
-//! its consumer keeps lowering. Every consumer shape must yield valid IR.
+//! #11450: an unresolvable `new Worker(x)` is an expression, so its consumer
+//! keeps lowering. Every consumer shape must yield valid IR. The site asks the
+//! runtime worker entry table for the file, which throws only if no entry
+//! matches.
 use perry_hir::{types::Type, Expr, Stmt};
 
 fn unresolved_worker() -> Expr {
@@ -54,8 +56,8 @@ fn assert_valid_ir(case: &str, body: Vec<Stmt>) {
     )
     .unwrap();
     assert!(
-        ir.contains("call void @js_throw_error_with_code("),
-        "{case}: the unresolved Worker throw was not emitted"
+        ir.contains("@js_worker_threads_worker_new_by_spec("),
+        "{case}: the unresolved Worker did not fall back to the entry table"
     );
     let llvm = inkwell::context::Context::create();
     let parsed = crate::inprocess::parse_ir_text(&llvm, &ir, case)

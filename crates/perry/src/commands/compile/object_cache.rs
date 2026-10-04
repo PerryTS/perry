@@ -325,6 +325,13 @@ fn compute_object_cache_key_with_env(
             "0"
         },
     );
+    // The entry module's `main` registers every worker entry of the program.
+    if opts.is_entry_module {
+        h.field(
+            "worker_entries",
+            &format!("{:?}", perry_codegen::worker_entries()),
+        );
+    }
     // Both values change objects outside the module containing the launch.
     h.field(
         "thread_literal_tls",

@@ -1,11 +1,12 @@
-//! Runtime selection among the entries discovered by a Worker path helper.
+//! Runtime selection among the entries discovered by a Worker path helper,
+//! and the fallback to the runtime worker entry table.
 use anyhow::{bail, Result};
 use perry_hir::Expr;
 
 use crate::expr::FnCtx;
 use crate::nanbox::{double_literal, POINTER_TAG_TOP16_I64};
 use crate::rooting::with_rooted_group;
-use crate::types::{DOUBLE, I32, I64, PTR, VOID};
+use crate::types::{DOUBLE, I32, I64, VOID};
 
 pub(super) fn lower_candidates(
     ctx: &mut FnCtx<'_>,
@@ -34,7 +35,7 @@ pub(super) fn lower_candidates(
     aliases.sort();
     with_rooted_group(ctx, 2, |ctx, roots| {
         let undefined = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-        let file = roots.lower(ctx, filename, true)?;
+        let file_index = roots.lower(ctx, filename, true)?;
         if ctx.block().is_terminated() {
             return Ok(undefined);
         }
@@ -42,7 +43,7 @@ pub(super) fn lower_candidates(
         if ctx.block().is_terminated() {
             return Ok(undefined);
         }
-        let file = roots.reread(ctx, file)?;
+        let file = roots.reread(ctx, file_index)?;
         // Decode object values through fileURLToPath, which validates URL
         // objects even when an opaque return is selected from a partial set.
         // Encoded and unescaped hrefs compare as filesystem paths.
@@ -131,23 +132,46 @@ pub(super) fn lower_candidates(
             ctx.block().br(&join_label);
             ctx.current_block = next;
         }
-        let message = "worker_threads Worker filename did not match an existing compile-time-resolved worker entry";
-        let message_id = ctx.strings.intern(message);
-        let entry = ctx.strings.entry(message_id);
-        let global = format!("@{}", entry.bytes_global);
-        let len = entry.byte_len.to_string();
-        ctx.block().call_void(
-            "js_throw_error_with_code",
-            &[
-                (PTR, &global),
-                (I64, &len),
-                (PTR, "null"),
-                (I64, "0"),
-                (I32, "0"),
-            ],
+        // No candidate of this site matched: the run-time worker entry table
+        // may still hold the file (or the runtime throws ERR_WORKER_NOT_COMPILED).
+        let file = roots.reread(ctx, file_index)?;
+        let options = roots.reread(ctx, opts)?;
+        let worker = ctx.block().call(
+            DOUBLE,
+            "js_worker_threads_worker_new_by_spec",
+            &[(DOUBLE, &file), (DOUBLE, &options)],
         );
-        ctx.block().unreachable();
+        let join_label = ctx.block_label(join);
+        ctx.block().store(DOUBLE, &worker, &result);
+        ctx.block().br(&join_label);
         ctx.current_block = join;
         Ok(ctx.block().load(DOUBLE, &result))
+    })
+}
+
+/// A Worker whose filename the compiler could not resolve at the call site:
+/// the runtime looks the filename up in the worker entry table.
+pub(super) fn lower_by_spec(
+    ctx: &mut FnCtx<'_>,
+    filename: &Expr,
+    options: Option<&Expr>,
+) -> Result<String> {
+    with_rooted_group(ctx, 2, |ctx, roots| {
+        let undefined = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+        let file = roots.lower(ctx, filename, true)?;
+        if ctx.block().is_terminated() {
+            return Ok(undefined);
+        }
+        let opts = roots.lower(ctx, options.unwrap_or(&Expr::Undefined), true)?;
+        if ctx.block().is_terminated() {
+            return Ok(undefined);
+        }
+        let file = roots.reread(ctx, file)?;
+        let opts = roots.reread(ctx, opts)?;
+        Ok(ctx.block().call(
+            DOUBLE,
+            "js_worker_threads_worker_new_by_spec",
+            &[(DOUBLE, &file), (DOUBLE, &opts)],
+        ))
     })
 }
