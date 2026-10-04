@@ -619,6 +619,9 @@ pub(crate) mod stdlib_pump {
     // idempotent for each function pointer.
     static AUX_TICK_BEGIN_HOOKS: Mutex<Vec<extern "C" fn()>> = Mutex::new(Vec::new());
     static AUX_PUMPS: Mutex<Vec<extern "C" fn() -> i32>> = Mutex::new(Vec::new());
+    /// The pumps among `AUX_PUMPS` that drain only the calling agent's queue,
+    /// so a `worker_threads` worker may run them for its own events.
+    static AUX_AGENT_PUMPS: Mutex<Vec<extern "C" fn() -> i32>> = Mutex::new(Vec::new());
     static AUX_HAS_ACTIVE: Mutex<Vec<extern "C" fn() -> i32>> = Mutex::new(Vec::new());
     /// turnloop P0: `AUX_HAS_ACTIVE.len()`. The registry only grows, so a zero
     /// here is an exact "no extension contributes"; the per-turn keep-alive
@@ -636,6 +639,33 @@ pub(crate) mod stdlib_pump {
                 pumps.push(f);
             }
         }
+    }
+
+    /// Register an auxiliary pump that drains only the calling agent's events
+    /// (its queue is keyed by `agent::current_agent`). The main loop runs it
+    /// like any auxiliary pump; a worker's loop runs it through
+    /// [`js_run_agent_pumps`]. A pump with one process-wide queue must not
+    /// register here: a worker would take the main thread's events.
+    #[no_mangle]
+    pub extern "C" fn js_register_agent_aux_pump(f: extern "C" fn() -> i32) {
+        js_register_aux_pump(f);
+        if let Ok(mut pumps) = AUX_AGENT_PUMPS.lock() {
+            if !pumps.contains(&f) {
+                pumps.push(f);
+            }
+        }
+    }
+
+    /// Run the per-agent auxiliary pumps on this thread: a worker's loop
+    /// calls this to deliver its own extension events (zlib streams, …).
+    #[no_mangle]
+    pub extern "C" fn js_run_agent_pumps() -> i32 {
+        let fns: Vec<extern "C" fn() -> i32> = match AUX_AGENT_PUMPS.lock() {
+            Ok(g) => g.clone(),
+            Err(_) => return 0,
+        };
+        fns.into_iter()
+            .fold(0i32, |count, f| count.saturating_add(f()))
     }
 
     /// Register work that must run once at the beginning of an outer host

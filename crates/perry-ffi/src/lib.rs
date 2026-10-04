@@ -129,7 +129,7 @@ pub use error::{
 };
 
 mod event_pump;
-pub use event_pump::{notify_main_thread, register_aux_event_pump};
+pub use event_pump::{notify_main_thread, register_agent_event_pump, register_aux_event_pump};
 
 mod raw_net;
 pub use raw_net::{

@@ -2730,6 +2730,7 @@ js_region_guard_pack	Reenters
 js_region_guard_prime	Reenters
 js_region_loop_pack	Leaf
 js_region_loop_prime	Leaf
+js_register_agent_aux_pump	Leaf
 js_register_anon_shape_class_id	Reenters
 js_register_aux_has_active	Leaf
 js_register_aux_pump	Leaf
@@ -2884,6 +2885,7 @@ js_response_static_error	Reenters
 js_response_static_json	Reenters
 js_response_static_redirect	Reenters
 js_response_subclass_init	Reenters
+js_run_agent_pumps	Reenters
 js_run_ext_pump	Reenters
 js_run_module_init_catching	Reenters
 js_run_stdlib_pump	Reenters

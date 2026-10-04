@@ -18,14 +18,13 @@
 //! registered after `.write()` still fire and `.pipe()` can forward chunks.
 
 use perry_ffi::{
-    alloc_buffer, alloc_string, gc_register_mutable_root_scanner_named, notify_main_thread,
-    register_aux_event_pump, BufferHeader, ErrorKind, GcRootVisitor, JsClosure, JsValue,
-    RawClosureHeader, StringHeader, TransientRootScope, TransientRootedAddr,
+    alloc_buffer, alloc_string, notify_main_thread, register_agent_event_pump, BufferHeader,
+    ErrorKind, GcRootVisitor, JsClosure, JsValue, RawClosureHeader, StringHeader,
+    TransientRootScope, TransientRootedAddr,
 };
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::c_void;
 use std::io::{Read, Write};
-use std::sync::Mutex;
 
 mod one_shot_callback;
 pub(crate) use one_shot_callback::queue_one_shot_callback;
@@ -102,7 +101,8 @@ extern "C" fn process_pending_aux() -> i32 {
 fn ensure_aux_pump_registered() {
     static REGISTER: std::sync::Once = std::sync::Once::new();
     REGISTER.call_once(|| {
-        register_aux_event_pump(process_pending_aux, js_ext_zlib_has_active_handles);
+        // The queues are per agent (see `statics`), so a worker drains its own.
+        register_agent_event_pump(process_pending_aux, js_ext_zlib_has_active_handles);
     });
 }
 
@@ -554,7 +554,7 @@ enum ZlibEvent {
     OneShotCallback(i64, Result<Vec<u8>, String>, u64),
 }
 
-struct Statics {
+pub(crate) struct Statics {
     streams: HashMap<i64, ZlibStreamState>,
     listeners: HashMap<i64, HashMap<String, Vec<i64>>>,
     pending: VecDeque<ZlibEvent>,
@@ -570,32 +570,11 @@ struct Statics {
     evicted_streams: HashSet<i64>,
 }
 
-fn statics() -> &'static Mutex<Statics> {
-    static S: std::sync::OnceLock<Mutex<Statics>> = std::sync::OnceLock::new();
-    S.get_or_init(|| {
-        Mutex::new(Statics {
-            streams: HashMap::new(),
-            listeners: HashMap::new(),
-            pending: VecDeque::new(),
-            next_id: 0x60000,
-            buffered_output_bytes: 0,
-            evicted_streams: HashSet::new(),
-        })
-    })
-}
+mod agent_state;
+use agent_state::ensure_gc_scanner_registered;
+pub(crate) use agent_state::statics;
 
-static ZLIB_GC_REGISTERED: std::sync::Once = std::sync::Once::new();
-
-/// Register the GC root scanner once. Listener closures live only in the
-/// `listeners` map; without rooting them a GC between `.on()` and the deferred
-/// dispatch would free the closure (same hazard perry-ext-net guards).
-fn ensure_gc_scanner_registered() {
-    ZLIB_GC_REGISTERED.call_once(|| {
-        gc_register_mutable_root_scanner_named("perry-ext-zlib", scan_zlib_roots);
-    });
-}
-
-fn scan_zlib_roots(visitor: &mut GcRootVisitor<'_>) {
+pub(super) fn scan_zlib_roots(visitor: &mut GcRootVisitor<'_>) {
     if let Ok(mut s) = statics().lock() {
         for per_stream in s.listeners.values_mut() {
             for cb_vec in per_stream.values_mut() {
@@ -1471,8 +1450,8 @@ unsafe extern "C" fn zlib_one_shot_dispatch_thunk(data: *mut c_void) -> f64 {
     f64::from_bits(UNDEFINED)
 }
 
-/// Drain queued zlib stream events on the main thread. Wired into perry-stdlib's
-/// `js_stdlib_process_pending` via the external-zlib-pump feature.
+/// Drain the calling agent's queued zlib stream events: the main thread's from
+/// its loop, a worker's from its own pump. Registered as an extension pump.
 #[no_mangle]
 pub unsafe extern "C" fn js_ext_zlib_process_pending() -> i32 {
     // Drain ONE event at a time from the SHARED queue (not a detached snapshot).
