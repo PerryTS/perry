@@ -1,3 +1,19 @@
+LEARNED-FLOOR ACCEPTANCE QUEUED AND OWN CACHE CLEANUP RECORDED
+Linux build wrapper2022343 now owns shared heavy lock and compiles its own
+source/target/export. Full17 comparison2037013 and moving validation2037014
+wait for that exact terminal receipt and source/product proof. Full17 will
+reuse exact15deferred-RSS controls and build15fresh floor candidate sources;
+204fresh measurements,17cases, noGCoverrides. Moving requires22 actual
+copying/protected runs across11fixtures. Harness exports verified before
+execution; derivative verifier paths corrected before use.
+Retain/release repeats2026139 await shared lock,9RSSsamples per arm,
+27total onexactV46binaries. No source/rebuild change or GCknob.
+Removed only completed own V53 FFI/event target after terminal success,
+local8file evidence rehash and /proc reference audit; source/export/raw logs,
+receipts and all queued-build seeds kept. Root-usable free21.26GiB afterward.
+Other agent build directories/processes untouched. PR remainsdraft;
+production5010 source hashes unchanged.
+
 DEFERRED-RSS APPLICATION AND MOVING COMPARISONS VERIFIED
 V52 all204freshmeasurements match Node, 15control/15candidate builds,
 515raw/proof files copiedlocally/rehashed. All signed rows published.
