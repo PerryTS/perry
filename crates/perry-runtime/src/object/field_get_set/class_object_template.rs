@@ -692,11 +692,12 @@ pub(crate) unsafe fn evaluation_method_value(class_id: u32, name: &str, class: f
 /// in the template's final prototype shape, linked to `parent_proto`. `None`
 /// when the template has no recorded prototype shape or that shape names
 /// another [[Prototype]].
-pub(crate) unsafe fn prototype_from_template(
+pub(crate) unsafe fn prototype_from_template<'s>(
+    out: &'s crate::gc::RuntimeHandleScope,
     class: *mut ObjectHeader,
     class_id: u32,
     parent_proto: u64,
-) -> Option<*mut ObjectHeader> {
+) -> Option<crate::gc::RuntimeHandle<'s>> {
     let cell = template_cell_of(class_id)?;
     let (field_count, final_shape, fills, proto_id) = cell.proto_template()?;
     if crate::object::shapes::stable_linked_proto_id(class_id, parent_proto) != Some(proto_id) {
@@ -704,15 +705,16 @@ pub(crate) unsafe fn prototype_from_template(
     }
     #[cfg(test)]
     note_template_hit(true);
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let class = scope.root_raw_mut_ptr(class);
-    let parent = scope.root_heap_word_u64(parent_proto);
-    let proto = scope.root_raw_mut_ptr(crate::object::js_object_alloc(class_id, field_count));
+    // Every handle lives in the caller's scope: the prototype handle is
+    // returned, and a handle cannot outlive the scope that rooted it.
+    let class = out.root_raw_mut_ptr(class);
+    let parent = out.root_heap_word_u64(parent_proto);
+    let proto = out.root_raw_mut_ptr(crate::object::js_object_alloc(class_id, field_count));
     // The links `class_evaluation_prototype_value` makes, written into the
     // prototype's meta record directly: its evaluation (lexical owner) and its
     // [[Prototype]], whose identity the final shape already names.
     let (meta, _) = proto.across_mut::<ObjectHeader, _>(|| {
-        crate::object::object_meta_ensure(proto.get_raw_mut_ptr::<ObjectHeader>())
+        proto.with_mut_ptr::<ObjectHeader, _>(|p| crate::object::object_meta_ensure(p))
     });
     let owner =
         class.with_const_ptr::<ObjectHeader, _>(|c| crate::value::js_nanbox_pointer(c as i64));
@@ -749,7 +751,7 @@ pub(crate) unsafe fn prototype_from_template(
             crate::object::slot_store::store_object_field_slot(proto, slot, bits.to_bits())
         });
     }
-    Some(proto.get_raw_mut_ptr::<ObjectHeader>())
+    Some(proto)
 }
 
 /// After `proto`, the prototype object of class object `class` (template
