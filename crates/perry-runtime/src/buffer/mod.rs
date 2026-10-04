@@ -22,9 +22,9 @@ mod exotic_view;
 mod exotic_view_tests;
 mod from;
 mod header;
-/// #9176: the external-Uint8Array latch must be armed by every inserter.
+/// #10694: the brand is the cell's GC type byte.
 #[cfg(test)]
-mod header_latch_tests;
+mod header_brand_tests;
 mod iter;
 mod mutate;
 mod numeric;
@@ -56,10 +56,7 @@ pub(crate) use access::{cached_u8_read, cached_u8_write};
 #[cfg(test)]
 pub(crate) use header::test_u8_inline_cache_holds;
 pub(crate) use header::{u8_inline_cache_hit, u8_inline_cache_try_prime};
-// `shared_sab` publishes process-global backings that `is_registered_buffer`
-// reports as buffers without them entering `BUFFER_REGISTRY`, so it arms the
-// same monotone latch — before the backing becomes reachable.
-pub(crate) use header::note_buffer_like_registered;
+// #10694: the brand is the cell's GC type byte; see `header`'s module note.
 pub use header::{
     asymmetric_key_meta, buffer_ab_alias, buffer_alloc, buffer_backing_array_buffer,
     buffer_byte_offset, buffer_data, buffer_data_mut, crypto_key_meta, ensure_buffer_ab_alias,
@@ -71,18 +68,12 @@ pub use header::{
     CryptoKeyDeathHookFn,
 };
 pub(crate) use header::{
-    buffer_alloc_foreign, collect_dead_registered_buffers_post_trace,
-    finalize_collected_dead_buffer, is_foreign_backed_buffer,
+    buffer_alloc_foreign, finalize_collected_dead_buffer, is_foreign_backed_buffer,
 };
+pub(crate) use header::{buffer_family_type_owned, header_is_owned};
 // Only the wasm host re-points a foreign wrapper (#9611); see the fn's docs.
 #[cfg(feature = "wasm-host")]
 pub(crate) use header::rebind_foreign_buffer;
-#[cfg(test)]
-pub(crate) use header::{
-    test_buffer_addr_window_bounds, test_buffer_registry_probe_count, test_data_view_registry_len,
-    test_shared_array_buffer_registry_len, test_uint8array_addr_window_bounds,
-    test_uint8array_registry_probe_count,
-};
 
 // ---- Re-exports: ArrayBuffer detach / transfer (ES2024) ----
 // `detach_array_buffer` dereferences the raw address it is given, so it stays
@@ -227,35 +218,30 @@ mod tests {
         assert!(!buf.is_null());
         let addr = buf as usize;
 
-        // Shape a WebCrypto secret CryptoKey: HMAC / SHA-256 / secret.
+        // Shape a WebCrypto secret CryptoKey: HMAC / SHA-256 / secret. Its
+        // brand is the cell's type byte (#10694); the metadata is the
+        // attribute table this finalizer must drop.
         mark_as_uint8array(addr);
         mark_as_crypto_key(addr, 1, 2, 1);
-        mark_as_secret_key(addr);
 
         assert!(crypto_key_meta(addr).is_some(), "meta registered");
-        assert!(is_secret_key(addr), "secret-key flag registered");
-        assert!(is_uint8array_buffer(addr), "uint8array flag registered");
-        assert!(is_registered_buffer(addr), "buffer registered");
+        assert!(
+            is_uint8array_buffer(addr),
+            "a CryptoKey is Uint8Array-backed"
+        );
+        assert!(is_registered_buffer(addr), "buffer brand");
 
-        // Exactly what the sweep subphase runs once the header is proven dead.
+        // Exactly what the sweep's BufferSideTables finalize hook runs for a
+        // dead cell.
         finalize_collected_dead_buffer(addr);
 
+        // The cell itself is still allocated here (the test called the
+        // finalizer directly), so its brand still reads CryptoKey; what must
+        // be gone is the attribute entry a recycled address would inherit.
         assert!(
-            crypto_key_meta(addr).is_none(),
+            !header::test_crypto_key_meta_registered(addr),
             "dead buffer must not keep CryptoKey metadata — a recycled address \
              would answer to instanceof CryptoKey / KeyObject.from()"
-        );
-        assert!(
-            !is_secret_key(addr),
-            "dead buffer must not keep the secret-key flag"
-        );
-        assert!(
-            !is_uint8array_buffer(addr),
-            "dead buffer must not keep the uint8array flag"
-        );
-        assert!(
-            !is_registered_buffer(addr),
-            "dead buffer must not stay registered"
         );
     }
 

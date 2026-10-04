@@ -229,7 +229,8 @@ fn buffer_search_needle_with_encoding(
 
     let raw_ptr = if top16 >= 0x7FF8 {
         (needle_bits & 0x0000_FFFF_FFFF_FFFF) as usize
-    } else if top16 == 0 && needle_bits >= 0x1000 {
+    } else if top16 == 0 && needle_bits >= 0x1000 && super::header_is_owned(needle_bits as usize) {
+        // Raw word: the allocator vouches before the brand read (#10694).
         needle_bits as usize
     } else {
         0
@@ -293,7 +294,8 @@ pub extern "C" fn js_buffer_index_of_enc(
     // Buffer needle (POINTER_TAG-boxed or raw)
     let raw_ptr = if top16 >= 0x7FF8 {
         (needle_bits & 0x0000_FFFF_FFFF_FFFF) as usize
-    } else if top16 == 0 && needle_bits >= 0x1000 {
+    } else if top16 == 0 && needle_bits >= 0x1000 && super::header_is_owned(needle_bits as usize) {
+        // Raw word: the allocator vouches before the brand read (#10694).
         needle_bits as usize
     } else {
         0

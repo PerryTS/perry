@@ -564,13 +564,11 @@ pub(crate) fn clean_arr_ptr(arr: *const ArrayHeader) -> *const ArrayHeader {
         if obj_type != crate::gc::GC_TYPE_ARRAY {
             return std::ptr::null();
         }
-    } else if !crate::buffer::is_registered_buffer(addr)
-        && crate::typedarray::lookup_typed_array_kind(addr).is_none()
-    {
+    } else if !crate::shared_sab::is_shared_sab(addr) {
         // Handles, synthetic pointers, and unrelated allocations must be
-        // rejected before any GcHeader or ArrayHeader dereference. Registered
-        // Buffer/TypedArray receivers intentionally use the compatible
-        // length/capacity prefix and carry no GcHeader.
+        // rejected before any GcHeader or ArrayHeader dereference. Every
+        // Buffer/TypedArray is a tracked allocation (handled above); the one
+        // untracked buffer is a process-global SharedArrayBuffer block.
         return std::ptr::null();
     }
     // Length/capacity sanity: dense arrays have length <= capacity and
@@ -606,7 +604,7 @@ pub(crate) fn clean_arr_ptr(arr: *const ArrayHeader) -> *const ArrayHeader {
             if sparse_array_shape {
                 return cleaned;
             }
-            if crate::buffer::is_registered_buffer(addr)
+            if crate::buffer::buffer_family_type_owned(addr).is_some()
                 || crate::typedarray::lookup_typed_array_kind(addr).is_some()
             {
                 return cleaned;

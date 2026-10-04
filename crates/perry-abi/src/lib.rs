@@ -71,6 +71,12 @@ pub const CLASS_FIRST_EVALUATION_STATE: u64 = 0x7FFE_0000_0000_0001;
 /// `gc::GC_TYPE_CLOSURE`: the GcHeader type byte (at payload - 8) that makes a
 /// cell a function object. The kind is this byte, never a payload magic.
 pub const GC_TYPE_CLOSURE: u8 = 4;
+/// `gc::GC_TYPE_BUFFER` and `gc::GC_TYPE_BUFFER_UINT8ARRAY`: the GcHeader type
+/// bytes of the two BYTE-VIEW buffer brands, a Node `Buffer` and a
+/// `BufferHeader`-backed `Uint8Array` (#10694: a buffer's flavor is its type
+/// byte). Emitted byte-access guards accept exactly these two.
+pub const GC_TYPE_BUFFER: u8 = 10;
+pub const GC_TYPE_BUFFER_UINT8ARRAY: u8 = 26;
 /// `gc::GC_FLAG_FORWARDED` (GcHeader byte 1): an evacuated from-space stub.
 pub const GC_FLAG_FORWARDED: u8 = 0x80;
 /// `gc::GC_HEADER_SIZE`.

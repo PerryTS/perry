@@ -962,7 +962,7 @@ pub(super) unsafe fn dispatch_primitive(
     // `new Float64Array(...)` (and the other typed-array constructors)
     // returns the raw heap pointer bitcast to f64 — no POINTER_TAG —
     // so neither `is_pointer()` nor the handle dispatch above catches
-    // it. Detect via the `TYPED_ARRAY_REGISTRY` side table and route
+    // it. Detect via the typed array's own header and route
     // common methods (`sort`, `at`, `toSorted`, `toReversed`, `with`,
     // `findLast`, `findLastIndex`) to their `js_typed_array_*` runtime
     // helpers. Without this arm `(a: Float64Array).sort()` reached the
@@ -970,7 +970,8 @@ pub(super) unsafe fn dispatch_primitive(
     // bits classify as `is_number()` (top16 outside the tagged range).
     {
         let top16 = raw_bits >> 48;
-        if top16 == 0 && raw_bits >= 0x10000 {
+        // #10694: a raw word must be allocator-owned before the brand read.
+        if top16 == 0 && raw_bits >= 0x10000 && crate::buffer::header_is_owned(raw_bits as usize) {
             let addr = raw_bits as usize;
             if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
                 let ta = addr as *mut crate::typedarray::TypedArrayHeader;

@@ -117,7 +117,8 @@ pub(crate) fn typed_array_to_string_tag_name(value: f64) -> Option<&'static str>
     let jsv = JSValue::from_bits(bits);
     let raw_addr = if jsv.is_pointer() {
         (bits & 0x0000_FFFF_FFFF_FFFF) as usize
-    } else if bits > 0x1000 && (bits >> 48) == 0 {
+    } else if bits > 0x1000 && (bits >> 48) == 0 && crate::buffer::header_is_owned(bits as usize) {
+        // #10694: a raw word must be allocator-owned before the brand read.
         bits as usize
     } else {
         return None;
@@ -185,7 +186,8 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
     }
     let raw_addr = if jsv.is_pointer() {
         (bits & POINTER_MASK) as usize
-    } else if bits > 0x1000 && (bits >> 48) == 0 {
+    } else if bits > 0x1000 && (bits >> 48) == 0 && crate::buffer::header_is_owned(bits as usize) {
+        // #10694: a raw word must be allocator-owned before the brand read.
         bits as usize
     } else {
         0

@@ -838,7 +838,12 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
             // buffer address. Detect this case by looking up the raw bits
             // in the thread-local BUFFER_REGISTRY.
             let raw_bits = value.to_bits();
-            if raw_bits > 0x1000 && (raw_bits >> 48) == 0 {
+            // #10694: a raw word must be allocator-owned before a brand probe
+            // reads its header (a subnormal number has this shape too).
+            if raw_bits > 0x1000
+                && (raw_bits >> 48) == 0
+                && crate::buffer::header_is_owned(raw_bits as usize)
+            {
                 if crate::typedarray::lookup_typed_array_kind(raw_bits as usize).is_some() {
                     let ta = raw_bits as *const crate::typedarray::TypedArrayHeader;
                     return crate::typedarray::format_typed_array(ta);

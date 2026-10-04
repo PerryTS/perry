@@ -457,8 +457,23 @@ unsafe fn secret_to_crypto_key(addr: usize, algorithm_bits: f64) -> f64 {
         "SHA512" => 4,
         _ => 2,
     };
-    crate::buffer::mark_as_crypto_key(addr, algo_id, hash_id, 1);
-    f64::from_bits(JSValue::pointer(addr as *mut u8).bits())
+    // `keyObject.toCryptoKey()` returns a NEW CryptoKey (node: `ko !== ck`),
+    // and the KeyObject keeps being one. A buffer's flavor is its GC type
+    // (#10694), so the key bytes go into a fresh cell carrying the CryptoKey
+    // brand rather than re-branding the KeyObject's own cell.
+    let src = addr as *const crate::buffer::BufferHeader;
+    let len = (*src).length;
+    let out = crate::buffer::buffer_alloc(len);
+    (*out).length = len;
+    if len > 0 {
+        std::ptr::copy_nonoverlapping(
+            crate::buffer::buffer_data(src),
+            crate::buffer::buffer_data_mut(out),
+            len as usize,
+        );
+    }
+    crate::buffer::mark_as_crypto_key(out as usize, algo_id, hash_id, 1);
+    f64::from_bits(JSValue::pointer(out as *mut u8).bits())
 }
 
 pub unsafe fn dispatch_buffer_method(

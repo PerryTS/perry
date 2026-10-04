@@ -33,7 +33,11 @@ fn dataview_receiver_addr(this: crate::closure::JsThis) -> Option<usize> {
     let this_jsv = crate::value::JSValue::from_bits(this_bits);
     let raw = if this_jsv.is_pointer() {
         (this_bits & 0x0000_FFFF_FFFF_FFFF) as usize
-    } else if this_bits >> 48 == 0 && this_bits > 0x10000 {
+    } else if this_bits >> 48 == 0
+        && this_bits > 0x10000
+        && crate::buffer::header_is_owned(this_bits as usize)
+    {
+        // #10694: a raw word must be allocator-owned before the brand read.
         this_bits as usize
     } else {
         return None;

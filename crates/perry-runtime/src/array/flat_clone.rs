@@ -673,8 +673,12 @@ pub extern "C" fn js_array_clone(src: *const ArrayHeader) -> *mut ArrayHeader {
         let bits = src as u64;
         let raw_addr = if (bits >> 48) >= 0x7FF8 {
             (bits & 0x0000_FFFF_FFFF_FFFF) as usize
-        } else {
+        } else if crate::buffer::header_is_owned(bits as usize) {
+            // #10694: a raw word must be allocator-owned before the typed-array
+            // probe reads its header.
             bits as usize
+        } else {
+            0
         };
         if crate::typedarray::lookup_typed_array_kind(raw_addr).is_some() {
             return crate::typedarray::typed_array_to_array(

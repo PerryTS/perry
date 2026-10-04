@@ -12,8 +12,11 @@
 //! any thread can:
 //!   * recognise a raw pointer as a shared backing store (during cross-thread
 //!     serialization, before the missing `GcHeader` would be misread), and
-//!   * re-register it in its own thread-local buffer / SAB tables when the
-//!     value arrives from another agent.
+//!   * keep the backing alive for the life of the process.
+//!
+//! Its brand is in its own `GcHeader` (`GC_TYPE_BUFFER_SHARED_ARRAY_BUFFER`,
+//! #10694), so every thread recognises it as a `SharedArrayBuffer` without
+//! registering it anywhere.
 //!
 //! Because the address is a stable, process-wide heap address, an `Atomics`
 //! slot inside a SAB has the same absolute byte address on every thread — which
@@ -29,20 +32,14 @@ use crate::buffer::BufferHeader;
 // `GC_FLAG_PINNED` is deliberately NOT imported: the #7645 custody gate reads a
 // bare mention of the token as a pin creation, and this module only ever masks
 // with it (in the header-survival test). Spelled in full at those two reads.
-use crate::gc::{GcHeader, GC_FLAG_TENURED, GC_HEADER_SIZE, GC_TYPE_BUFFER};
+use crate::gc::{GcHeader, GC_FLAG_TENURED, GC_HEADER_SIZE, GC_TYPE_BUFFER_SHARED_ARRAY_BUFFER};
 
 /// Set of `BufferHeader` addresses that back a `SharedArrayBuffer`.
 static SHARED_SAB_REGISTRY: OnceLock<Mutex<HashSet<usize>>> = OnceLock::new();
 
-/// Latched true by the first SAB allocation. Mirrors the external-Uint8Array latch
-/// in `buffer::header` and exists for the same reason: `is_shared_sab` sits on
-/// two hot paths that run for *every* pointer-shaped value —
-/// `buffer::is_registered_buffer`'s final fallback (which JSON.stringify runs
-/// per serialized pointer, #6009) and the GC's dead-buffer scan, which probes
-/// every registered buffer on every full trace. Without the latch both take the
-/// registry mutex on each miss. The overwhelming majority of processes never
-/// allocate a `SharedArrayBuffer` at all, so they can answer `false` from a
-/// single relaxed atomic load and never touch the lock.
+/// Latched true by the first SAB allocation, so a process that never allocates
+/// a `SharedArrayBuffer` answers [`is_shared_sab`] from one atomic load without
+/// touching the lock.
 static SHARED_SAB_NONEMPTY: AtomicBool = AtomicBool::new(false);
 
 fn registry() -> &'static Mutex<HashSet<usize>> {
@@ -94,7 +91,7 @@ pub fn alloc_shared_sab(size: u32) -> *mut BufferHeader {
     // BufferHeader both fit within the first `GC_HEADER_SIZE + 8` of them.
     unsafe {
         let header = raw as *mut GcHeader;
-        (*header).obj_type = GC_TYPE_BUFFER;
+        (*header).obj_type = GC_TYPE_BUFFER_SHARED_ARRAY_BUFFER;
         // PINNED + TENURED and NOT `GC_FLAG_ARENA`: this block is a raw,
         // process-global `alloc_zeroed`, not an arena or a gc_malloc cell. The
         // collector recognises a SAB by process-global registry membership
@@ -119,15 +116,10 @@ pub fn alloc_shared_sab(size: u32) -> *mut BufferHeader {
         // `pin_object_non_young_call_sites_are_never_young` carries the case.
         crate::gc::pin_object_non_young(header);
     }
-    // Latch BEFORE the insert, not after. `buffer::is_registered_buffer` and
-    // `buffer::is_shared_array_buffer` both report a SAB backing as a buffer
-    // without it ever entering their thread-local registries, so both latches
-    // must be armed before this address can be found — an arm placed after the
-    // insert leaves a window in which the entry is live and a probe still takes
-    // the idle fast path. (This is the ordering `register_buffer`
-    // already documents; see also `crate::registry_latch`.)
+    // Latch BEFORE the insert, not after, so no window exists in which the
+    // entry is live and `is_shared_sab` still takes the idle fast path (see
+    // `crate::registry_latch`).
     SHARED_SAB_NONEMPTY.store(true, Ordering::Release);
-    crate::buffer::note_buffer_like_registered(buf as usize);
     registry()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -138,12 +130,10 @@ pub fn alloc_shared_sab(size: u32) -> *mut BufferHeader {
     buf
 }
 
-/// True if `addr` is a process-global `SharedArrayBuffer` backing store. Unlike
-/// the thread-local `buffer::is_shared_array_buffer`, this answers correctly on
-/// every thread — used by the cross-thread serializer to recognise a SAB
-/// pointer that has no `GcHeader`, and by the GC's dead-buffer scan to refuse
-/// to treat one as a collectable GC allocation (see
-/// `buffer::header::registered_buffer_is_dead_post_trace`).
+/// True if `addr` is a process-global `SharedArrayBuffer` backing store, as
+/// opposed to a thread-local SharedArrayBuffer copy (`slice`, structuredClone)
+/// that carries the same brand: the cross-thread serializer passes the former
+/// by reference and must deep-copy the latter.
 pub fn is_shared_sab(addr: usize) -> bool {
     if !SHARED_SAB_NONEMPTY.load(Ordering::Acquire) {
         return false;
@@ -152,21 +142,6 @@ pub fn is_shared_sab(addr: usize) -> bool {
         .lock()
         .map(|r| r.contains(&addr))
         .unwrap_or(false)
-}
-
-/// Snapshot the SAB backing set for one GC dead-buffer scan.
-///
-/// The scan tests every registered buffer, and calling [`is_shared_sab`] per
-/// buffer would take the registry mutex once per buffer per full trace. The set
-/// is tiny (a handful of entries even in heavy `Atomics` users) and the GC is
-/// stop-the-world here, so lock it once and hand the scan a plain set. `None` —
-/// the case for nearly every process — means no SAB was ever allocated and the
-/// scan can skip the check entirely without allocating anything.
-pub(crate) fn snapshot_shared_sabs() -> Option<HashSet<usize>> {
-    if !SHARED_SAB_NONEMPTY.load(Ordering::Acquire) {
-        return None;
-    }
-    registry().lock().ok().map(|r| r.clone())
 }
 
 #[cfg(test)]
@@ -208,7 +183,7 @@ mod header_survival_tests {
         // so passing it reads a header's-worth of bytes too far back.
         let header = unsafe { crate::value::addr_class::try_read_gc_header(buf as usize) }
             .expect("the shared SAB block carries a GcHeader");
-        assert_eq!(header.obj_type, GC_TYPE_BUFFER);
+        assert_eq!(header.obj_type, GC_TYPE_BUFFER_SHARED_ARRAY_BUFFER);
         // Masking reads, per the #7645 custody gate: a creation of the flag
         // may only live in `gc/pin.rs`. Both bits set, and nothing else.
         assert_ne!(
@@ -262,36 +237,4 @@ mod header_survival_tests {
             "a collector wrote the process-global SAB header: {snapshot:#018x} -> {after:#018x}"
         );
     }
-}
-
-/// Test-only: pretend `addr` is a process-global SAB backing.
-///
-/// A real backing has no `GcHeader`, so the GC's dead-buffer scan can only
-/// mistake it for a collectable object when the malloc metadata preceding the
-/// block happens to read as a dead `GC_TYPE_BUFFER` header — a coincidence a
-/// test cannot force without writing outside the allocation. Seeding an
-/// ordinary GC buffer (whose real header genuinely says "dead") into this
-/// registry reproduces the same decision deterministically, so the veto in
-/// `buffer::header::registered_buffer_is_dead_post_trace` can be proven rather
-/// than assumed. Callers MUST pair this with [`test_unseed_shared_sab`] — the
-/// registry is process-global and never cleared.
-#[cfg(test)]
-pub(crate) fn test_seed_shared_sab(addr: usize) {
-    // Same arm-before-publish ordering as `alloc_shared_sab`, so a seeded
-    // fixture exercises the real fast/slow-path split rather than a state the
-    // production path never produces.
-    SHARED_SAB_NONEMPTY.store(true, Ordering::Release);
-    crate::buffer::note_buffer_like_registered(addr);
-    registry()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(addr);
-}
-
-#[cfg(test)]
-pub(crate) fn test_unseed_shared_sab(addr: usize) {
-    registry()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .remove(&addr);
 }

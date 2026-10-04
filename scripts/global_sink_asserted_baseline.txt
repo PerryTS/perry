@@ -5,7 +5,6 @@
 crates/perry-runtime/src/alloc_census.rs::FILTER
 crates/perry-runtime/src/arena/quarantine.rs::ON
 crates/perry-runtime/src/array/subclass_elements.rs::ON
-crates/perry-runtime/src/buffer/header.rs::EXTERNAL_UINT8ARRAYS_NONEMPTY
 crates/perry-runtime/src/bun_compat/plugin.rs::LOADER_CALLS
 crates/perry-runtime/src/bun_compat/plugin.rs::SETUP_CALLS
 crates/perry-runtime/src/dgram_reactor.rs::LIVE

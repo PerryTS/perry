@@ -669,8 +669,8 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
             }
             return nanbox_false;
         }
-        // #6148: `Uint8Array` / `Buffer` are backed by a header-less registered
-        // buffer (not `TYPED_ARRAY_REGISTRY`), so the typed-array arm above misses
+        // #6148: `Uint8Array` / `Buffer` are `BufferHeader` cells (a buffer-family
+        // GC type, not `GC_TYPE_TYPED_ARRAY`), so the typed-array arm above misses
         // them. A Buffer is a `Uint8Array`, so `in` consults numeric indices
         // (bounds) and the own/inherited members property-get can resolve.
         // #8149: an `ArrayBuffer` / `SharedArrayBuffer` / `DataView` is a

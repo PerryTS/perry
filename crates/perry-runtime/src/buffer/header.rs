@@ -22,55 +22,119 @@ fn buffer_payload_size(capacity: usize) -> usize {
     std::mem::size_of::<BufferHeader>() + capacity
 }
 
-/// Thread-local registry of buffer pointers for instanceof checks.
-/// Since BufferHeader has the same layout as ArrayHeader (no type_id field),
-/// we track buffer pointers separately to distinguish them from arrays.
-use crate::fast_hash::{new_ptr_hash_map, new_ptr_hash_set, PtrHashMap, PtrHashSet};
-use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, HashSet};
+// # Which flavor a `BufferHeader` cell is (#10694)
+//
+// The brand is the cell's GC type byte: `GC_TYPE_BUFFER` for a Node `Buffer`
+// (what `buffer_alloc` births) and one `GC_TYPE_BUFFER_*` per other flavor
+// (`gc/types.rs`, contiguous block). Every recognizer below is the header
+// load the runtime's other brand probes already do, plus a compare.
+//
+// It used to be membership in ten address-keyed side tables (`BUFFER_REGISTRY`,
+// `UINT8ARRAY_FROM_CTOR`, `ARRAY_BUFFER_REGISTRY`, `SHARED_ARRAY_BUFFER_REGISTRY`,
+// `DATA_VIEW_REGISTRY`, `SECRET_KEY_REGISTRY`, a process-global external
+// Uint8Array set, ...), each behind a latch and an address window. Natively
+// compiled `tsc` paid 79.7M `is_registered_buffer` probes for 9 live buffers,
+// 26.2M of them past the window into a thread-local hash (#10694); stdlib
+// threads had to publish into process-global copies because a thread-local set
+// cannot see a buffer born on another thread; and every table needed a death
+// prune, a thread-exit hook and an ABA argument. The type byte has none of
+// those problems: it is born with the cell, travels with it across threads,
+// and dies with it.
+use crate::fast_hash::{new_ptr_hash_map, PtrHashMap};
+use crate::gc::{
+    is_buffer_family_type, is_uint8array_buffer_type, GcHeader, GC_HEADER_SIZE,
+    GC_TYPE_BUFFER_ARRAY_BUFFER, GC_TYPE_BUFFER_CRYPTO_KEY, GC_TYPE_BUFFER_DATA_VIEW,
+    GC_TYPE_BUFFER_SECRET_KEY, GC_TYPE_BUFFER_SHARED_ARRAY_BUFFER, GC_TYPE_BUFFER_UINT8ARRAY,
+};
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
-static EXTERNAL_UINT8ARRAY_REGISTRY: OnceLock<Mutex<HashSet<usize>>> = OnceLock::new();
-/// Latched by the first external Uint8Array registration.
+/// The buffer-family GC type of the cell at `addr`, or `None` when `addr` is
+/// not a `BufferHeader` cell. One magnitude/alignment check, then the header
+/// load every other brand probe in the runtime does (`try_read_gc_header`'s
+/// contract: `addr` is a GC allocation's user address or non-pointer bits).
+#[inline(always)]
+pub(crate) fn buffer_family_type(addr: usize) -> Option<u8> {
+    let obj_type = unsafe { crate::value::addr_class::try_read_gc_header(addr) }?.obj_type;
+    if !is_buffer_family_type(obj_type) {
+        return None;
+    }
+    // The one POINTER-tagged value with no `GcHeader` is a `Box`-leaked symbol
+    // (`Symbol.for`, the well-knowns): its `addr - 8` is foreign allocator
+    // bytes that can equal any type byte. Every symbol carries `SYMBOL_MAGIC`
+    // in its first word, so a header that claims a buffer is believed unless
+    // that word matches (the #7850 screen); a buffer whose `length` happens to
+    // equal the magic pays one ownership check instead.
+    if unsafe { crate::symbol::may_be_symbol_header(addr as *const u8) } && !header_is_owned(addr) {
+        return None;
+    }
+    Some(obj_type)
+}
+
+/// [`buffer_family_type`] for a word that may not be an address at all, or may
+/// name unmapped memory (a receiver decoded from arbitrary bits, #7531 /
+/// #8067): the allocator proves ownership BEFORE the header is read. The
+/// recognizers above assume what every other header probe in the runtime
+/// assumes — a real cell or bits the magnitude/alignment gate rejects — and a
+/// caller that cannot promise that uses this instead. Not for hot paths.
+pub(crate) fn buffer_family_type_owned(addr: usize) -> Option<u8> {
+    let obj_type = match unsafe { crate::value::addr_class::try_read_tracked_gc_header(addr) } {
+        Some(header) => unsafe { header.as_ref() }.obj_type,
+        None if crate::shared_sab::is_shared_sab(addr) => GC_TYPE_BUFFER_SHARED_ARRAY_BUFFER,
+        None => return None,
+    };
+    is_buffer_family_type(obj_type).then_some(obj_type)
+}
+
+/// Allocator-proven ownership of `addr`'s header: a tracked arena/malloc GC
+/// allocation, or a process-global SharedArrayBuffer block.
+#[cold]
+#[inline(never)]
+pub(crate) fn header_is_owned(addr: usize) -> bool {
+    unsafe { crate::value::addr_class::try_read_tracked_gc_header(addr) }.is_some()
+        || crate::shared_sab::is_shared_sab(addr)
+}
+
+/// Re-stamp the brand of the buffer-family cell at `addr`. A producer allocates
+/// through `buffer_alloc` (a Node `Buffer`) and then says what it made; this is
+/// that statement. Anything that is not already a buffer-family cell is left
+/// alone, so no address can be "registered" into a brand it does not carry.
 ///
-/// Without it `is_uint8array_buffer_slow` took the global mutex on every
-/// thread-local MISS — that is, on every value that is not a Uint8Array —
-/// which is the cost `UINT8ARRAY_EVER_MARKED` was added to avoid and which
-/// came straight back the moment any program marked its first Uint8Array.
-static EXTERNAL_UINT8ARRAYS_NONEMPTY: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+/// Every brand change drops the address from the emitted-code byte admission
+/// cache: only a byte-view brand may sit there (#10515), and the next access
+/// re-admits it if the new brand allows.
+fn set_buffer_brand(addr: usize, brand: u8) -> bool {
+    debug_assert!(is_buffer_family_type(brand));
+    if buffer_family_type(addr).is_none() {
+        return false;
+    }
+    u8_inline_cache_invalidate(addr);
+    // SAFETY: `buffer_family_type` just read this header through the same
+    // magnitude/alignment gate; every flavor shares one GcTypeInfo, so only
+    // the brand changes.
+    unsafe { (*((addr - GC_HEADER_SIZE) as *mut GcHeader)).obj_type = brand };
+    true
+}
+
 static EXTERNAL_CRYPTO_KEY_META_REGISTRY: OnceLock<Mutex<HashMap<usize, CryptoKeyMeta>>> =
     OnceLock::new();
 
-/// Test probe (#11547): is `addr` in each of the two PROCESS-GLOBAL
-/// external registries (`EXTERNAL_UINT8ARRAY_REGISTRY`,
-/// `EXTERNAL_CRYPTO_KEY_META_REGISTRY`)?
+/// Test probe (#11547): is `addr` in the PROCESS-GLOBAL external CryptoKey
+/// metadata registry (`EXTERNAL_CRYPTO_KEY_META_REGISTRY`)?
 ///
-/// Unlike `is_uint8array_buffer` / `crypto_key_meta`, which consult this
-/// thread's registries first, it touches no thread-local, so a thread-exit
-/// range hook may call it from a TLS destructor. Plain locks, no allocation.
+/// Unlike `crypto_key_meta`, which reads the cell's brand and this thread's
+/// table first, it touches neither the cell nor a thread-local, so a
+/// thread-exit range hook may call it from a TLS destructor. Plain lock, no
+/// allocation.
 #[doc(hidden)]
-pub fn external_registries_hold_for_test(addr: usize) -> [bool; 2] {
+pub fn external_registries_hold_for_test(addr: usize) -> bool {
     use std::sync::PoisonError;
-    let in_set = |set: &OnceLock<Mutex<HashSet<usize>>>| {
-        set.get().is_some_and(|s| {
-            s.lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .contains(&addr)
-        })
-    };
-    [
-        in_set(&EXTERNAL_UINT8ARRAY_REGISTRY),
-        EXTERNAL_CRYPTO_KEY_META_REGISTRY.get().is_some_and(|m| {
-            m.lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .contains_key(&addr)
-        }),
-    ]
-}
-
-fn external_uint8arrays() -> &'static Mutex<HashSet<usize>> {
-    crate::once_init::get_or_init(&EXTERNAL_UINT8ARRAY_REGISTRY, || Mutex::new(HashSet::new()))
+    EXTERNAL_CRYPTO_KEY_META_REGISTRY.get().is_some_and(|m| {
+        m.lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .contains_key(&addr)
+    })
 }
 
 fn external_crypto_keys() -> &'static Mutex<HashMap<usize, CryptoKeyMeta>> {
@@ -107,50 +171,13 @@ fn notify_crypto_key_death(addr: usize) {
 
 pub type CryptoKeyMeta = (u8, u8, u8, bool, u32, u32);
 
+// Attributes of a branded cell, keyed by its (non-moving) address. These are
+// not brands: each one is consulted only after the cell's type byte says it can
+// have the attribute, and each entry is dropped by the cell's finalize hook
+// (`finalize_collected_dead_buffer`).
 crate::perry_thread_local! {
-    static BUFFER_REGISTRY: RefCell<PtrHashSet<usize>> = RefCell::new(new_ptr_hash_set());
-
-    /// Smallest and largest address ever inserted into `BUFFER_REGISTRY` on
-    /// this thread, as a conservative filter in front of the hash lookup.
-    ///
-    /// The latch above answers "has anything EVER been registered?", which
-    /// stops being useful the moment a program registers its first buffer —
-    /// after that all ~216 probe sites pay a TLS access, a `RefCell` borrow
-    /// and a hash lookup to ask whether an arbitrary pointer is a buffer, and
-    /// almost every caller is asking about something that is not one.
-    ///
-    /// The range only ever widens and every registration extends it before
-    /// inserting, so an address outside it cannot be in the set: rejecting is
-    /// sound, and accepting merely falls through to the lookup that was
-    /// already there. Thread-local like the registry it guards, so there is
-    /// no ordering to reason about.
-    static BUFFER_ADDR_RANGE: Cell<(usize, usize)> = const { Cell::new((usize::MAX, 0)) };
-    /// Buffers that were specifically created via `new Uint8Array(...)` —
-    /// formatted as `Uint8Array(N) [ a, b, c ]` instead of `<Buffer aa bb cc>`.
-    static UINT8ARRAY_FROM_CTOR: RefCell<PtrHashSet<usize>> = RefCell::new(new_ptr_hash_set());
-
-    /// Address range of `UINT8ARRAY_FROM_CTOR`, on the same terms as
-    /// `BUFFER_ADDR_RANGE`.
-    static UINT8ARRAY_ADDR_RANGE: Cell<(usize, usize)> = const { Cell::new((usize::MAX, 0)) };
-    /// Issue #579: buffers allocated as `new ArrayBuffer(n)` — sources that
-    /// `new Uint8Array(ab)` should ALIAS rather than copy. Survives across
-    /// `mark_as_uint8array` calls so a second view of the same ArrayBuffer
-    /// still aliases (without a separate registry, the first view's mark
-    /// would make the second `js_uint8array_new` call mistake the source
-    /// for a Uint8Array and fall into the spec-mandated COPY branch).
-    static ARRAY_BUFFER_REGISTRY: RefCell<PtrHashSet<usize>> = RefCell::new(new_ptr_hash_set());
-    /// SharedArrayBuffer uses the same BufferHeader storage model as
-    /// ArrayBuffer, but it must remain distinguishable for util.types
-    /// predicates (`isArrayBuffer` is false, `isSharedArrayBuffer` is true).
-    static SHARED_ARRAY_BUFFER_REGISTRY: RefCell<PtrHashSet<usize>> =
-        RefCell::new(new_ptr_hash_set());
-    /// DataView is currently modeled as a view over an existing BufferHeader
-    /// backing store. Track constructor-created views so util.types can
-    /// distinguish the ArrayBufferView predicate from TypedArray predicates.
-    static DATA_VIEW_REGISTRY: RefCell<PtrHashSet<usize>> = RefCell::new(new_ptr_hash_set());
     /// #10873: `ArrayBuffer addr -> maxByteLength` for RESIZABLE buffers.
-    /// Presence IS the `[[ArrayBufferMaxByteLength]]` internal slot. The same
-    /// population and lifetime as the identity sets above: a plain
+    /// Presence IS the `[[ArrayBufferMaxByteLength]]` internal slot. A plain
     /// address-keyed attribute of a non-moving buffer, never dereferenced and
     /// never a root, pruned in `finalize_collected_dead_buffer` (the #6080 ABA
     /// class). The resize logic lives in `buffer::resizable`.
@@ -169,12 +196,8 @@ crate::perry_thread_local! {
     /// the `===` identity check matches Node.
     static BUFFER_AB_ALIAS: RefCell<PtrHashMap<usize, Box<usize>>> =
         RefCell::new(new_ptr_hash_map());
-    /// Buffers returned by `crypto.createSecretKey`. They intentionally keep
-    /// Buffer storage so crypto/HMAC call paths can still read raw key bytes,
-    /// while object property/method dispatch exposes the KeyObject surface.
-    static SECRET_KEY_REGISTRY: RefCell<PtrHashSet<usize>> = RefCell::new(new_ptr_hash_set());
-    /// Buffers that should behave as WebCrypto CryptoKey values. Metadata is
-    /// numeric to keep perry-runtime independent from perry-stdlib enums:
+    /// Metadata of `GC_TYPE_BUFFER_CRYPTO_KEY` cells. Numeric to keep
+    /// perry-runtime independent from perry-stdlib enums:
     /// algo: 1 HMAC, 2 AES-GCM, 3 AES-KW, 4 AES-CBC, 5 AES-CTR, 6 HKDF,
     ///       7 PBKDF2, 8 ECDSA, 9 ECDH, 10 Ed25519, 11 X25519,
     ///       12 RSASSA-PKCS1-v1_5, 13 RSA-OAEP, 14 RSA-PSS,
@@ -192,205 +215,30 @@ crate::perry_thread_local! {
     /// String-backed asymmetric KeyObject surrogates returned by crypto
     /// helpers. They intentionally keep PEM/internal-string storage so the
     /// stdlib crypto routines can parse/read them directly, while runtime
-    /// property dispatch can expose Node's KeyObject metadata surface.
+    /// property dispatch can expose Node's KeyObject metadata surface. A string
+    /// has no buffer brand to carry this; it goes when KeyObject becomes an
+    /// ordinary object (#11919).
     static ASYMMETRIC_KEY_REGISTRY: RefCell<PtrHashMap<usize, (u8, u8)>> =
         RefCell::new(new_ptr_hash_map());
 }
 
-use crate::registry_latch::{RegistryAddrWindow, RegistryLatch};
+use crate::registry_latch::RegistryLatch;
 
-/// Monotone "at least one `Buffer`-shaped allocation exists" latch.
-///
-/// `is_registered_buffer` is one of the two hottest generic-path probes in the
-/// runtime (measured 2.40% of an async service pipeline and 1.9% of a
-/// tree-walking interpreter, neither of which allocates a `Buffer`): it is
-/// reached from `typedarray::is_offheap_sidetable_alloc` — and therefore from
-/// every `Date`/`Temporal` brand check — from `JSON.stringify` for every
-/// pointer value serialized (#6009), from console formatting, from array
-/// indexing and from ~200 other sites. Without the latch each of those pays a
-/// `_tlv_get_addr`, a `RefCell` borrow and a hash probe, plus a call into
-/// `shared_sab::is_shared_sab`.
-///
-/// The latch covers the SAB fallback too, so the idle answer is a single atomic
-/// load rather than one per registry — hence [`note_buffer_like_registered`],
-/// which `shared_sab::alloc_shared_sab` calls before publishing a backing.
-static BUFFER_LIKE_EVER_REGISTERED: RegistryLatch = RegistryLatch::new();
-
-/// Smallest and largest address ever registered as buffer-like, process-wide.
-///
-/// The latch above answers "has ANY buffer ever been registered?", which
-/// `claude-code --help` arms with one of its **10** buffer allocations and then
-/// consults 4,650,058 times — every one of them going out of line to a
-/// thread-local resolution, a `RefCell` borrow and a hash, to answer "no"
-/// 4,650,054 times out of 4,650,058 (uretprobe count, one run). This window
-/// answers the same question about the *address*, from two adjacent static
-/// loads that inline into all ~239 call sites, and removes 98.0% of those
-/// calls — 4,650,058 down to 92,965, with all four genuine "yes" answers
-/// preserved.
-///
-/// It covers every table `is_registered_buffer_slow` consults:
-///   * `BUFFER_REGISTRY` — only `register_buffer` inserts, and it admits first;
-///   * `shared_sab`'s process-global SAB registry — `alloc_shared_sab` calls
-///     [`note_buffer_like_registered`] with the backing address before it
-///     publishes.
-///
-/// Rejecting an address outside the window is therefore sound; see
-/// [`RegistryAddrWindow`] for the ordering rule that makes it so.
-static BUFFER_LIKE_ADDR_WINDOW: RegistryAddrWindow = RegistryAddrWindow::new();
-
-// The set filter that used to sit behind the window was REMOVED on 2026-09-12,
-// measured. Its own adoption note asked the capacity question and answered it
-// from a 400-character reply: 213 cumulative registrations, live_max 201, and
-// `true_positives=53,109 (0.207 % of admits)`, giving a predicted 10.0 %
-// false-positive rate — "the filter rejects about nine of every ten addresses
-// the window admits".
-//
-// Both premises fail on an ordinary command (startup, two real `Read` tool
-// calls, streamed reply). `PERRY_BUFFER_DIAG`, two rows:
-//
-//     probes=31,457,281 admits=26,577,900 (84.49 %) rejected=4,879,381 (15.51 %)
-//     true_positives=23,620,613 (88.873135 % of admits)
-//     registrations=3232 unregistrations=1907 live_max=1618
-//
-//   * The population is 15x larger than assumed — 3,232 cumulative admissions
-//     and 1,618 live against 1,024 bits — so the filter ended every row with
-//     ALL 1,024 BITS SET. It rejected nothing: every rejection in the row above
-//     comes from `BUFFER_LIKE_ADDR_WINDOW` in front of it, at 15.51 %, not the
-//     25.94 % the old note quoted.
-//   * The question's answer is usually YES here. 88.87 % of admitted probes
-//     find a real registered buffer, against 0.207 % on the `--help`-shaped
-//     workload the note measured. A filter cannot remove work the registry
-//     genuinely has to do, so even a correctly sized one could only have taken
-//     the ~2.96 M false positives per row off the slow path.
-//
-// So the structure cost three hash rounds and up to three dependent loads on
-// every one of ~26.6 M admitted probes per run and bought zero rejections.
-// Removing it is worth 2.46 % of minimum command CPU and 3.60 % paired median:
-// six interleaved pairs, one binary, the filter's own env-var arm against the
-// default, 1.22 -> 1.19 s minimum, faster in five pairs and tied in the sixth,
-// peak RSS no worse. The window stays — two static loads that reject 15.51 %
-// for less than the filter's three hashes cost.
-//
-// The general rule, because this is the second owner of this type measured the
-// same night: an occupancy number prices a filter only together with the
-// TRUE-POSITIVE RATE of what it admits. The sibling canonical-handle owner was
-// saturated the same way but resolved only 0.021 % of its admissions, and there
-// the remedy was the opposite one — size the structure to its population.
-
-#[cfg(test)]
-thread_local! {
-/// Test-only count of `is_registered_buffer` calls that got past the address
-/// window and reached the registries. The window is a fast path, and a fast
-/// path nobody can prove ran is not a fast path (same contract as
-/// `typedarray::TEST_TA_REGISTRY_PROBES`, #7765).
-///
-/// Per THREAD, not per process, exactly like `TEST_TA_REGISTRY_PROBES`: the
-/// registry it guards is thread-local and `cargo test` gives each case its own
-/// thread inside one process.
-    static TEST_BUFFER_REGISTRY_PROBES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-}
-
-#[cfg(test)]
-pub(crate) fn test_buffer_registry_probe_count() -> u64 {
-    TEST_BUFFER_REGISTRY_PROBES.with(|c| c.get())
-}
-
-#[cfg(test)]
-pub(crate) fn test_buffer_addr_window_bounds() -> Option<(usize, usize)> {
-    BUFFER_LIKE_ADDR_WINDOW.bounds_for_tests()
-}
-
-/// Arm the `is_registered_buffer` latch from outside this module.
-///
-/// `shared_sab` publishes process-global backings that `is_registered_buffer`
-/// reports as buffers without them ever entering `BUFFER_REGISTRY`, so it must
-/// arm the same latch — and, per the [`crate::registry_latch`] rule, must do so
-/// *before* the backing becomes reachable.
-pub(crate) fn note_buffer_like_registered(addr: usize) {
-    // Widen before arming, and arm before the caller publishes: the probe
-    // checks the latch and then the window, so both must already cover this
-    // address by the time it becomes findable.
-    BUFFER_LIKE_ADDR_WINDOW.admit(addr);
-    BUFFER_LIKE_EVER_REGISTERED.arm();
-}
-
-/// Monotone latches for the remaining address-keyed buffer side tables. Each
-/// probe below sits on a generic path (`util.types` predicates, `.buffer` /
-/// `.byteLength` property reads, KeyObject dispatch, typed-array own-property
-/// resolution) and each is a pure "is this value special?" question that a
-/// program never using the feature should answer for free.
-static ARRAY_BUFFER_EVER_MARKED: RegistryLatch = RegistryLatch::new();
-static SHARED_ARRAY_BUFFER_EVER_MARKED: RegistryLatch = RegistryLatch::new();
-static DATA_VIEW_EVER_MARKED: RegistryLatch = RegistryLatch::new();
-/// #10873: armed by the first resizable ArrayBuffer. Every probe the feature
-/// adds to a shared path answers from this one load in a program without one.
 static RESIZABLE_BUFFER_EVER_MARKED: RegistryLatch = RegistryLatch::new();
-static UINT8ARRAY_EVER_MARKED: RegistryLatch = RegistryLatch::new();
-
-/// Smallest and largest address ever marked as a `new Uint8Array(...)`
-/// backing, process-wide.
-///
-/// `UINT8ARRAY_EVER_MARKED` stops discriminating at the first Uint8Array, and
-/// `typedarray_props::typed_array_owner_kind` asks this question about the
-/// receiver of **every untyped element access** — so on `claude-code --help`
-/// the latch is armed for essentially the whole run and the probe is a
-/// permanent out-of-line call, a `OnceLock` load, a thread-local resolution and
-/// a `RefCell` borrow to say "no".
-///
-/// It covers both tables `is_uint8array_buffer_slow` consults, each of which
-/// has exactly one insert funnel:
-///   * `UINT8ARRAY_FROM_CTOR` — only [`mark_as_uint8array`] inserts;
-///   * the process-global external registry — only
-///     [`register_external_uint8array`] inserts, and both of ITS callers reach
-///     [`mark_as_uint8array`] with the same address anyway.
-///
-/// Both widen before they publish, so an address outside the window is in
-/// neither table and rejecting it is sound. Removal (the GC's dead-buffer
-/// sweep) never narrows the window, which only makes it a weaker filter, never
-/// a wrong one. See [`RegistryAddrWindow`] for the ordering rule.
-static UINT8ARRAY_ADDR_WINDOW: RegistryAddrWindow = RegistryAddrWindow::new();
-
-#[cfg(test)]
-thread_local! {
-/// Test-only count of `is_uint8array_buffer` calls that got past the address
-/// window and reached the registries — the twin of
-/// `TEST_BUFFER_REGISTRY_PROBES`, for the same reason: a fast path nobody can
-/// prove ran is not a fast path.
-    static TEST_UINT8ARRAY_REGISTRY_PROBES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-}
-
-#[cfg(test)]
-pub(crate) fn test_uint8array_registry_probe_count() -> u64 {
-    TEST_UINT8ARRAY_REGISTRY_PROBES.with(|c| c.get())
-}
-
-#[cfg(test)]
-pub(crate) fn test_uint8array_addr_window_bounds() -> Option<(usize, usize)> {
-    UINT8ARRAY_ADDR_WINDOW.bounds_for_tests()
-}
-static SECRET_KEY_EVER_MARKED: RegistryLatch = RegistryLatch::new();
-static CRYPTO_KEY_EVER_MARKED: RegistryLatch = RegistryLatch::new();
 static ASYMMETRIC_KEY_EVER_MARKED: RegistryLatch = RegistryLatch::new();
 static BUFFER_AB_ALIAS_EVER_SET: RegistryLatch = RegistryLatch::new();
 
+/// Brand the buffer at `addr` as an `ArrayBuffer` (issue #579: a source that
+/// `new Uint8Array(ab)` should ALIAS rather than copy).
 pub fn mark_as_array_buffer(addr: usize) {
-    // A non-byte-view brand revokes inline element admission (#10515).
-    u8_inline_cache_invalidate(addr);
-    ARRAY_BUFFER_EVER_MARKED.arm();
-    ARRAY_BUFFER_REGISTRY.with(|r| {
-        r.borrow_mut().insert(addr);
-    });
+    set_buffer_brand(addr, GC_TYPE_BUFFER_ARRAY_BUFFER);
 }
 
 #[inline]
 pub fn is_array_buffer(addr: usize) -> bool {
-    if ARRAY_BUFFER_EVER_MARKED.is_idle() {
-        return false;
-    }
-    ARRAY_BUFFER_REGISTRY.with(|r| r.borrow().contains(&addr))
+    buffer_family_type(addr) == Some(GC_TYPE_BUFFER_ARRAY_BUFFER)
 }
 
-/// Per-buffer state of a resizable ArrayBuffer (#10873). Plain integers.
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct ResizableInfo {
     /// `[[ArrayBufferMaxByteLength]]` — also the payload's reserved capacity.
@@ -445,225 +293,82 @@ pub(crate) fn test_resizable_registry_len() -> usize {
     RESIZABLE_BUFFER_MAX.with(|r| r.borrow().len())
 }
 
+/// Brand the buffer at `addr` as a `SharedArrayBuffer`. (A process-global
+/// `shared_sab` block is stamped at allocation and needs no call.)
 pub fn mark_as_shared_array_buffer(addr: usize) {
-    // A non-byte-view brand revokes inline element admission (#10515).
-    u8_inline_cache_invalidate(addr);
-    SHARED_ARRAY_BUFFER_EVER_MARKED.arm();
-    SHARED_ARRAY_BUFFER_REGISTRY.with(|r| {
-        r.borrow_mut().insert(addr);
-    });
+    set_buffer_brand(addr, GC_TYPE_BUFFER_SHARED_ARRAY_BUFFER);
 }
 
+/// A thread-local or process-global `SharedArrayBuffer` — both carry the brand.
 #[inline]
 pub fn is_shared_array_buffer(addr: usize) -> bool {
-    if SHARED_ARRAY_BUFFER_EVER_MARKED.is_armed()
-        && SHARED_ARRAY_BUFFER_REGISTRY.with(|r| r.borrow().contains(&addr))
-    {
-        return true;
-    }
-    // #4913: a SAB backing is process-global. If this thread received it as a
-    // module-level value (not a serialized `perry/thread` capture, which would
-    // have re-registered it locally) the thread-local set misses, so fall back
-    // to the process-global registry. Slow path only — thread-local hits first.
-    // (`is_shared_sab` carries its own `SHARED_SAB_NONEMPTY` latch, so the
-    // no-SAB process pays one more atomic load and no lock.)
-    crate::shared_sab::is_shared_sab(addr)
+    buffer_family_type(addr) == Some(GC_TYPE_BUFFER_SHARED_ARRAY_BUFFER)
 }
 
 #[inline]
 pub fn is_any_array_buffer(addr: usize) -> bool {
-    is_array_buffer(addr) || is_shared_array_buffer(addr)
+    matches!(
+        buffer_family_type(addr),
+        Some(GC_TYPE_BUFFER_ARRAY_BUFFER | GC_TYPE_BUFFER_SHARED_ARRAY_BUFFER)
+    )
 }
 
+/// Brand the view at `addr` as a `DataView`, so util.types can tell the
+/// ArrayBufferView predicate from the TypedArray ones.
 pub fn mark_as_data_view(addr: usize) {
-    // A non-byte-view brand revokes inline element admission (#10515).
-    u8_inline_cache_invalidate(addr);
-    DATA_VIEW_EVER_MARKED.arm();
-    DATA_VIEW_REGISTRY.with(|r| {
-        r.borrow_mut().insert(addr);
-    });
+    set_buffer_brand(addr, GC_TYPE_BUFFER_DATA_VIEW);
 }
 
 #[inline]
 pub fn is_data_view(addr: usize) -> bool {
-    if DATA_VIEW_EVER_MARKED.is_idle() {
-        return false;
-    }
-    DATA_VIEW_REGISTRY.with(|r| r.borrow().contains(&addr))
+    buffer_family_type(addr) == Some(GC_TYPE_BUFFER_DATA_VIEW)
 }
 
-/// Live entry counts for the two registries the GC buffer sweep prunes (#6337).
-/// Test-only: the leak regression asserts these DRAIN after the owning buffers
-/// are collected, which a per-address `is_*` probe cannot show.
-#[cfg(test)]
-pub(crate) fn test_data_view_registry_len() -> usize {
-    DATA_VIEW_REGISTRY.with(|r| r.borrow().len())
-}
-
-#[cfg(test)]
-pub(crate) fn test_shared_array_buffer_registry_len() -> usize {
-    SHARED_ARRAY_BUFFER_REGISTRY.with(|r| r.borrow().len())
-}
-
-/// Register a buffer pointer in the thread-local registry
+/// A freshly allocated buffer cell at `addr`. The brand is already in its
+/// header (`buffer_alloc` births a Node `Buffer`); this only clears what a
+/// previous occupant of the address could have left in the attribute tables
+/// (belt and suspenders: the finalize hook drops them when a cell dies).
 pub fn register_buffer(ptr: *const BufferHeader) {
-    // A FRESH buffer must not inherit the own properties of a dead one that
-    // happened to sit at the same address (the own-prop table is address-keyed
-    // and buffer storage is recycled). mysql2 measures a packet against a
-    // zero-length Buffer whose write methods it overrode with no-ops, then
-    // allocates the real packet buffer — which lands on the freed mock's
-    // address, and without this the no-ops would carry over and the real packet
-    // would serialize as all zeros (the MySQL server then times out reading it).
     super::own_props::clear_buffer_own_props(ptr as usize);
-    // #9342: same recycled-address rule for the inline-read admission cache —
-    // a fresh buffer must not inherit the dead tenant's inline-read admission
-    // (it may be foreign-backed, or not a Uint8Array at all).
+    // A fresh cell at a reused address must never inherit the previous
+    // occupant's inline-admission entry (#9342).
     u8_inline_cache_invalidate(ptr as usize);
-    // Arm BEFORE the insert: an arm placed afterwards leaves a window in which
-    // this buffer is in the registry while `is_registered_buffer` still takes
-    // the idle fast path and denies it. See `crate::registry_latch`.
-    let addr = ptr as usize;
-    BUFFER_LIKE_ADDR_WINDOW.admit(addr);
-    BUFFER_LIKE_EVER_REGISTERED.arm();
-    BUFFER_ADDR_RANGE.with(|r| {
-        let (lo, hi) = r.get();
-        r.set((lo.min(addr), hi.max(addr)));
-    });
-    BUFFER_REGISTRY.with(|r| r.borrow_mut().insert(addr));
-    if crate::hot_diag::buffer_on() {
-        let live = BUFFER_REGISTRY.with(|r| r.borrow().len());
-        crate::hot_diag::buffer_note_registration(live);
-    }
 }
 
-/// Historical tier boundary, retained for callers that size test fixtures
-/// around it. Since the 2026-07-09 audit fix every buffer allocates through
-/// the GC old arena (see `buffer_alloc`) — there is no slab tier anymore.
+/// Buffers this size or smaller used to come from a bump slab
+/// (`SMALL_BUF_SLAB`) that was never reclaimed. Kept as the size boundary
+/// other modules quote; the slab itself is gone.
 pub const SMALL_BUF_THRESHOLD: u32 = 256;
 
-/// The small-buffer slab allocator is gone (2026-07-09 audit): slab
-/// allocations carried no GcHeader, were never freed, and were invisible to
-/// every GC trigger. Every buffer now has a real header in the old arena.
-/// `addr_class::try_read_gc_header` still consults this probe; no slab
-/// ranges can exist, so it is constant `false`.
+/// Always false: the small-buffer slab no longer exists, so no buffer lives at
+/// a heap-plausible address without a `GcHeader`.
 pub(crate) fn is_small_buf_slab_addr(_addr: usize) -> bool {
     false
 }
 
-/// Check if a pointer is a registered buffer (for instanceof Uint8Array)
+/// Is `addr` a `BufferHeader` cell of any flavor — a Node `Buffer`, a
+/// `Uint8Array`, an `ArrayBuffer`, a `SharedArrayBuffer` (thread-local or
+/// process-global), a `DataView` or a key object? One header load and two
+/// compares; there is no registry behind it.
 #[inline]
 pub fn is_registered_buffer(addr: usize) -> bool {
-    // Nothing buffer-shaped has ever been registered anywhere in this process
-    // ⟹ nothing to find, in one atomic load. `register_buffer` (which
-    // foreign allocation also routes through) and
-    // `shared_sab::alloc_shared_sab` both arm this latch before they publish.
-    if BUFFER_LIKE_EVER_REGISTERED.is_idle() {
-        return false;
-    }
-    // An address outside the registered window cannot be in any of the three
-    // tables the slow path consults, so reject it here — inline, without the
-    // call, the thread-local resolution, the `RefCell` borrow or the hash.
-    // Every writer widens the window before it publishes, which is what makes
-    // rejecting sound; see `BUFFER_LIKE_ADDR_WINDOW`.
-    let admitted = BUFFER_LIKE_ADDR_WINDOW.may_contain(addr);
-    if crate::hot_diag::buffer_on() {
-        crate::hot_diag::buffer_note_probe(addr, admitted, BUFFER_LIKE_ADDR_WINDOW.bounds());
-    }
-    if !admitted {
-        // Machine-check the completeness of the writer set instead of trusting
-        // an enumeration of it. The window is only sound if EVERY route into
-        // the three tables below calls `admit` first; an enumeration of those
-        // routes is a snapshot that a later commit can invalidate silently, and
-        // the failure it would cause is a misclassified pointer, not a slow
-        // path. In debug builds every rejection is therefore re-derived from
-        // the authoritative tables, which turns "someone added a registration
-        // route without admitting" into a panic in the first test that
-        // exercises that route. Compiled out entirely in release.
-        #[cfg(debug_assertions)]
-        {
-            assert!(
-                !is_registered_buffer_slow(addr),
-                "BUFFER_LIKE_ADDR_WINDOW rejected {addr:#x}, but it IS a \
-                 registered buffer. Some registration route reached \
-                 BUFFER_REGISTRY, the external-Uint8Array registry or the \
-                 shared-SAB registry without calling \
-                 `BUFFER_LIKE_ADDR_WINDOW.admit()` (via `register_buffer` or \
-                 `note_buffer_like_registered`) first."
-            );
-        }
-        return false;
-    }
-    #[cfg(test)]
-    TEST_BUFFER_REGISTRY_PROBES.with(|c| c.set(c.get().wrapping_add(1)));
-    let found = is_registered_buffer_slow(addr);
-    if found && crate::hot_diag::buffer_on() {
-        crate::hot_diag::buffer_note_true_positive();
-    }
-    found
+    buffer_family_type(addr).is_some()
 }
 
-/// `PERRY_BUFFER_RANGE_FILTER=0` restores the unconditional hash lookup.
-fn buffer_range_filter_enabled() -> bool {
-    use std::sync::OnceLock;
-    static CACHED: OnceLock<bool> = OnceLock::new();
-    *crate::once_init::get_or_init(&CACHED, || {
-        !matches!(
-            std::env::var("PERRY_BUFFER_RANGE_FILTER").as_deref(),
-            Ok("0") | Ok("off") | Ok("false")
-        )
-    })
-}
-
-/// Out of line so the idle check inlines into its ~200 call sites.
-#[inline(never)]
-fn is_registered_buffer_slow(addr: usize) -> bool {
-    // Outside the registered range ⟹ not in the thread-local set, so skip the
-    // borrow and the hash. The external and shared-SAB registries below keep
-    // their own gates and are unaffected.
-    let (lo, hi) = if buffer_range_filter_enabled() {
-        BUFFER_ADDR_RANGE.with(|r| r.get())
-    } else {
-        (0, usize::MAX)
-    };
-    if addr >= lo && addr <= hi && BUFFER_REGISTRY.with(|r| r.borrow().contains(&addr)) {
-        return true;
-    }
-    // #4913: recognise a process-global SAB backing reached as a module-level
-    // value on a thread that never locally registered it (see
-    // `is_shared_array_buffer`).
-    crate::shared_sab::is_shared_sab(addr)
-}
-
-/// Mark this buffer as one that came from `new Uint8Array(...)` so it
-/// formats as `Uint8Array(N) [ ... ]` rather than `<Buffer ...>`.
+/// Brand the buffer at `addr` as a `Uint8Array` (formatted as
+/// `Uint8Array(N) [ a, b, c ]` instead of `<Buffer aa bb cc>`). A cell that is
+/// already Uint8Array-backed (a plain Uint8Array, a secret `KeyObject`, a
+/// `CryptoKey`) keeps its more specific brand.
 pub fn mark_as_uint8array(addr: usize) {
-    // Widen before arming, and arm before the insert: the probe consults the
-    // latch and then the window, so both must already cover this address by the
-    // time it becomes findable. See `crate::registry_latch`.
-    UINT8ARRAY_ADDR_WINDOW.admit(addr);
-    UINT8ARRAY_EVER_MARKED.arm();
-    UINT8ARRAY_ADDR_RANGE.with(|r| {
-        let (lo, hi) = r.get();
-        r.set((lo.min(addr), hi.max(addr)));
-    });
-    UINT8ARRAY_FROM_CTOR.with(|r| {
-        r.borrow_mut().insert(addr);
-    });
+    if buffer_family_type(addr).is_some_and(is_uint8array_buffer_type) {
+        return;
+    }
+    set_buffer_brand(addr, GC_TYPE_BUFFER_UINT8ARRAY);
 }
 
-/// #11471: thread-exit release for the process-global external-buffer
-/// registries and the `PERRY_U8_INLINE_CACHE` admission cache.
-///
-/// Their only removal sites are the dead-buffer finalizer and
-/// `register_buffer` on a re-issued address; `Arena::drop` runs neither, so a
-/// webcrypto buffer registered on an exiting thread would keep answering
-/// `is_registered_buffer` / `is_uint8array_buffer` / `crypto_key_meta` for
-/// whatever another thread later allocates at that address, and a stale cache
-/// slot would let codegen's inline guard read the new tenant's words as
-/// (length, bytes). Runs from a TLS destructor: process-global locks taken
-/// one at a time, atomics, no thread-locals, no GC. The thread-local
-/// registries die with the thread. perry-stdlib's `CRYPTO_KEY_REGISTRY`
-/// carries its own hook, so `notify_crypto_key_death` is not called here.
+/// Forget process-wide facts about addresses inside arena blocks a dying
+/// thread is giving back (#11463): the emitted-code byte admission cache and
+/// the external CryptoKey metadata, both of which outlive the thread's TLS.
 fn release_external_buffer_registries_in_freed_ranges(
     freed: &crate::arena::thread_exit::FreedRanges,
 ) {
@@ -675,11 +380,6 @@ fn release_external_buffer_registries_in_freed_ranges(
             let _ = slot.compare_exchange(old, 0, Ordering::Relaxed, Ordering::Relaxed);
         }
     }
-    if let Some(set) = EXTERNAL_UINT8ARRAY_REGISTRY.get() {
-        set.lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .retain(|&addr| !freed.contains(addr));
-    }
     if let Some(map) = EXTERNAL_CRYPTO_KEY_META_REGISTRY.get() {
         map.lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -687,8 +387,6 @@ fn release_external_buffer_registries_in_freed_ranges(
     }
 }
 
-/// Register [`release_external_buffer_registries_in_freed_ranges`] before the
-/// first insert into any table it clears.
 fn register_thread_exit_hook() {
     static REGISTER: std::sync::Once = std::sync::Once::new();
     REGISTER.call_once(|| {
@@ -698,55 +396,28 @@ fn register_thread_exit_hook() {
     });
 }
 
+/// Brand a Uint8Array produced by perry-stdlib (which may run off the main
+/// thread). The brand is in the cell, so every thread sees it; nothing is
+/// published anywhere else.
 #[no_mangle]
 pub extern "C" fn js_buffer_mark_as_uint8array_external(addr: usize) {
     mark_as_uint8array(addr);
-    register_external_uint8array(addr);
 }
 
-/// Insert into the process-global external-Uint8Array registry, arming
-/// `EXTERNAL_UINT8ARRAYS_NONEMPTY` first.
-///
-/// Latch BEFORE the insert: a probe
-/// that observed the latch in the insert-but-before-the-store window would
-/// skip the mutex and miss an already-registered address.
-///
-/// Both inserters go through here on purpose. `is_uint8array_buffer_slow`
-/// now consults that global map ONLY when the latch is armed, so a path that
-/// inserts without arming makes the map invisible — the entry is there and
-/// the probe answers "no". That is not hypothetical: this registry is global
-/// precisely so an address registered on one thread is visible from another,
-/// and the thread-local set that would otherwise cover it is not.
-fn register_external_uint8array(addr: usize) {
-    register_thread_exit_hook();
-    // Both of this function's callers also call `mark_as_uint8array(addr)`,
-    // which admits the same address — but that is an enumeration of callers,
-    // and this is the funnel the doc comment above promises is authoritative.
-    // Admitting here too costs two RMWs on a path that runs a handful of times
-    // per process and makes the funnel self-sufficient.
-    UINT8ARRAY_ADDR_WINDOW.admit(addr);
-    UINT8ARRAY_EVER_MARKED.arm();
-    EXTERNAL_UINT8ARRAYS_NONEMPTY.store(true, std::sync::atomic::Ordering::Release);
-    if let Ok(mut r) = external_uint8arrays().lock() {
-        r.insert(addr);
-    }
-}
-
+/// Brand the buffer at `addr` as a secret `KeyObject` (`crypto.createSecretKey`).
+/// It keeps Buffer storage so crypto/HMAC call paths can still read the raw
+/// key bytes, while property/method dispatch exposes the KeyObject surface. A
+/// `CryptoKey` keeps its brand.
 pub fn mark_as_secret_key(addr: usize) {
-    // A non-byte-view brand revokes inline element admission (#10515).
-    u8_inline_cache_invalidate(addr);
-    SECRET_KEY_EVER_MARKED.arm();
-    SECRET_KEY_REGISTRY.with(|r| {
-        r.borrow_mut().insert(addr);
-    });
+    if buffer_family_type(addr) == Some(GC_TYPE_BUFFER_CRYPTO_KEY) {
+        return;
+    }
+    set_buffer_brand(addr, GC_TYPE_BUFFER_SECRET_KEY);
 }
 
 #[inline]
 pub fn is_secret_key(addr: usize) -> bool {
-    if SECRET_KEY_EVER_MARKED.is_idle() {
-        return false;
-    }
-    SECRET_KEY_REGISTRY.with(|r| r.borrow().contains(&addr))
+    buffer_family_type(addr) == Some(GC_TYPE_BUFFER_SECRET_KEY)
 }
 
 pub fn mark_as_crypto_key(addr: usize, algo: u8, hash: u8, kind: u8) {
@@ -770,15 +441,19 @@ pub fn mark_as_crypto_key_with_flags(
     usages: u32,
     bit_length: u32,
 ) {
-    // A non-byte-view brand revokes inline element admission (#10515).
-    u8_inline_cache_invalidate(addr);
-    CRYPTO_KEY_EVER_MARKED.arm();
+    if !set_buffer_brand(addr, GC_TYPE_BUFFER_CRYPTO_KEY) {
+        return;
+    }
     CRYPTO_KEY_META_REGISTRY.with(|r| {
         r.borrow_mut()
             .insert(addr, (algo, hash, kind, extractable, usages, bit_length));
     });
 }
 
+/// Brand a CryptoKey produced by perry-stdlib's WebCrypto, possibly on another
+/// thread. The brand travels with the cell; the metadata also goes to the
+/// process-global table because the creating thread's table is not the
+/// reader's.
 #[no_mangle]
 pub extern "C" fn js_buffer_mark_as_crypto_key_external(
     addr: usize,
@@ -790,22 +465,29 @@ pub extern "C" fn js_buffer_mark_as_crypto_key_external(
     bit_length: u32,
 ) {
     register_thread_exit_hook();
-    register_buffer(addr as *const BufferHeader);
-    mark_as_uint8array(addr);
-    mark_as_crypto_key_with_flags(addr, algo, hash, kind, extractable != 0, usages, bit_length);
-    register_external_uint8array(addr);
+    if !set_buffer_brand(addr, GC_TYPE_BUFFER_CRYPTO_KEY) {
+        return;
+    }
+    let meta = (algo, hash, kind, extractable != 0, usages, bit_length);
+    CRYPTO_KEY_META_REGISTRY.with(|r| {
+        r.borrow_mut().insert(addr, meta);
+    });
     if let Ok(mut r) = external_crypto_keys().lock() {
-        r.insert(
-            addr,
-            (algo, hash, kind, extractable != 0, usages, bit_length),
-        );
+        r.insert(addr, meta);
     }
 }
 
+/// Test probe: does this thread's CryptoKey metadata table hold `addr`,
+/// regardless of the cell's brand?
+#[cfg(test)]
+pub(crate) fn test_crypto_key_meta_registered(addr: usize) -> bool {
+    CRYPTO_KEY_META_REGISTRY.with(|r| r.borrow().contains_key(&addr))
+}
+
+/// The CryptoKey metadata of `addr`, or `None` when `addr` is not a CryptoKey.
+/// The brand decides; the tables are read only for a real CryptoKey.
 pub fn crypto_key_meta(addr: usize) -> Option<CryptoKeyMeta> {
-    // `js_buffer_mark_as_crypto_key_external` arms via
-    // `mark_as_crypto_key_with_flags` before touching either table.
-    if CRYPTO_KEY_EVER_MARKED.is_idle() {
+    if buffer_family_type(addr) != Some(GC_TYPE_BUFFER_CRYPTO_KEY) {
         return None;
     }
     CRYPTO_KEY_META_REGISTRY
@@ -987,61 +669,13 @@ pub(crate) fn u8_inline_cache_try_prime(addr: usize) {
     }
 }
 
+/// Is `addr` Uint8Array-backed storage whose JS value is not a Node
+/// `Buffer` — a plain `Uint8Array`, or a secret `KeyObject`'s / `CryptoKey`'s
+/// key bytes? Reached from `typedarray_props::typed_array_owner_kind` for every
+/// untyped element access: one header load and a compare.
 #[inline]
 pub fn is_uint8array_buffer(addr: usize) -> bool {
-    // Reached from `typedarray_props::typed_array_owner_kind` for every untyped
-    // element access, so the idle case must not take the global mutex: before
-    // the latch this locked `external_uint8arrays()` on EVERY thread-local
-    // miss, i.e. on every non-Uint8Array value, in every process — the one
-    // probe in this family whose miss cost a lock rather than a hash.
-    if UINT8ARRAY_EVER_MARKED.is_idle() {
-        return false;
-    }
-    // An address outside the marked window is in neither table the slow path
-    // consults, so reject it inline — no call, no `OnceLock`, no thread-local
-    // resolution, no `RefCell` borrow. See `UINT8ARRAY_ADDR_WINDOW`.
-    if !UINT8ARRAY_ADDR_WINDOW.may_contain(addr) {
-        // Completeness audit, machine-checked rather than enumerated — see the
-        // twin in `is_registered_buffer` for why. `is_uint8array_buffer_slow`
-        // is the authoritative reader of both tables and mutates nothing, so
-        // calling it here changes no state the next probe would observe.
-        // Compiled out entirely in release.
-        #[cfg(debug_assertions)]
-        {
-            assert!(
-                !is_uint8array_buffer_slow(addr),
-                "UINT8ARRAY_ADDR_WINDOW rejected {addr:#x}, but it IS a marked \
-                 Uint8Array backing. Some route reached UINT8ARRAY_FROM_CTOR or \
-                 the external-Uint8Array registry without calling \
-                 `UINT8ARRAY_ADDR_WINDOW.admit()` (via `mark_as_uint8array` or \
-                 `register_external_uint8array`) first."
-            );
-        }
-        return false;
-    }
-    #[cfg(test)]
-    TEST_UINT8ARRAY_REGISTRY_PROBES.with(|c| c.set(c.get().wrapping_add(1)));
-    is_uint8array_buffer_slow(addr)
-}
-
-#[inline(never)]
-fn is_uint8array_buffer_slow(addr: usize) -> bool {
-    let (lo, hi) = if buffer_range_filter_enabled() {
-        UINT8ARRAY_ADDR_RANGE.with(|r| r.get())
-    } else {
-        (0, usize::MAX)
-    };
-    if addr >= lo && addr <= hi && UINT8ARRAY_FROM_CTOR.with(|r| r.borrow().contains(&addr)) {
-        return true;
-    }
-    // Only reach for the global mutex once something has actually been
-    // registered externally. This is the gate `is_registered_buffer_slow`
-    // already had and this probe did not.
-    EXTERNAL_UINT8ARRAYS_NONEMPTY.load(std::sync::atomic::Ordering::Acquire)
-        && external_uint8arrays()
-            .lock()
-            .map(|r| r.contains(&addr))
-            .unwrap_or(false)
+    buffer_family_type(addr).is_some_and(is_uint8array_buffer_type)
 }
 
 /// Record that `buf`'s `.buffer` property should resolve to `alias` instead of
@@ -1218,13 +852,32 @@ struct ForeignBuffer {
 }
 
 #[cfg(feature = "node-api-host")]
+crate::perry_thread_local! {
+    /// Foreign-backed buffers on this thread that hold a pending Node-API
+    /// finalizer: the native resources shutdown must release. Not a brand (the
+    /// cell's header says it is foreign-backed); an inventory of owed native
+    /// work, entered when a finalizer is attached and left when it runs.
+    static FOREIGN_FINALIZER_OWNERS: RefCell<crate::fast_hash::PtrHashSet<usize>> =
+        RefCell::new(crate::fast_hash::new_ptr_hash_set());
+}
+
+#[cfg(feature = "node-api-host")]
 pub(crate) fn set_foreign_finalizer(
     buffer: *mut BufferHeader,
     finalizer: Option<crate::node_api_host::FinalizerRecord>,
 ) {
     assert!(is_foreign_backed_buffer(buffer as usize));
+    let owed = finalizer.is_some();
     // Native callback/data/module identities are POD, never GC edges.
     unsafe { (*(buffer as *mut ForeignBuffer)).finalizer = finalizer };
+    FOREIGN_FINALIZER_OWNERS.with(|owners| {
+        let mut owners = owners.borrow_mut();
+        if owed {
+            owners.insert(buffer as usize);
+        } else {
+            owners.remove(&(buffer as usize));
+        }
+    });
 }
 
 #[cfg(feature = "node-api-host")]
@@ -1234,18 +887,21 @@ fn enqueue_foreign_finalizer(addr: usize) {
             crate::node_api_host::enqueue_finalizer(finalizer);
         }
     }
+    FOREIGN_FINALIZER_OWNERS.with(|owners| {
+        owners.borrow_mut().remove(&addr);
+    });
 }
 
 /// Node-API shutdown releases live native resources before unloading addons.
-/// The existing allocation inventory enumerates owners; finalizer state itself
-/// lives only in the cell. Taking it also prevents a later sweep running twice.
+/// Finalizer state itself lives only in the cell. Taking it also prevents a
+/// later sweep running it twice.
 #[cfg(feature = "node-api-host")]
 pub(crate) fn enqueue_all_foreign_finalizers() {
-    BUFFER_REGISTRY.with(|buffers| {
-        for &addr in buffers.borrow().iter() {
-            enqueue_foreign_finalizer(addr);
-        }
-    });
+    let owners: Vec<usize> =
+        FOREIGN_FINALIZER_OWNERS.with(|owners| owners.borrow().iter().copied().collect());
+    for addr in owners {
+        enqueue_foreign_finalizer(addr);
+    }
 }
 
 /// Rebind a wasm linear-memory wrapper after memory.grow relocates its bytes.
@@ -1287,101 +943,21 @@ pub(crate) fn is_foreign_backed_buffer(addr: usize) -> bool {
     // SAB is a buffer too, but cannot have this per-heap foreign-data layout.
     unsafe { crate::value::addr_class::try_read_tracked_gc_header(addr) }.is_some_and(|header| {
         let header = unsafe { header.as_ref() };
-        header.obj_type == crate::gc::GC_TYPE_BUFFER
+        is_buffer_family_type(header.obj_type)
             && header._reserved & crate::gc::GC_BUFFER_FOREIGN_DATA != 0
     })
 }
 
-/// Post-trace registry pruning (mirrors the #6010 Map/Set pattern): collect
-/// registered buffers whose header is genuinely dead so the sweep subphase
-/// can drop their side-table state. All buffers are TENURED old-arena
-/// residents, and minor traces never mark the old generation — deadness is
-/// only trustworthy after a FULL trace.
-pub(crate) fn collect_dead_registered_buffers_post_trace(full_trace: bool) -> Vec<usize> {
-    if !full_trace {
-        return Vec::new();
-    }
-    // Lock the process-global SAB registry ONCE for the whole scan rather than
-    // once per registered buffer (see `registered_buffer_is_dead_post_trace`).
-    // `None` — nearly every process — means no SAB was ever allocated.
-    let shared_sabs = crate::shared_sab::snapshot_shared_sabs();
-    BUFFER_REGISTRY.with(|r| {
-        r.borrow()
-            .iter()
-            .copied()
-            .filter(|&addr| unsafe {
-                registered_buffer_is_dead_post_trace(addr, shared_sabs.as_ref())
-            })
-            .collect()
-    })
-}
-
-unsafe fn registered_buffer_is_dead_post_trace(
-    addr: usize,
-    shared_sabs: Option<&std::collections::HashSet<usize>>,
-) -> bool {
-    // Process-global SharedArrayBuffer cells carry real GC_TYPE_BUFFER
-    // headers, but are immortal storage outside this thread's GC heap. They
-    // must never become dead candidates merely because this heap did not
-    // mark them. Snapshot membership once per scan, before inspecting flags.
-    if shared_sabs.is_some_and(|sabs| sabs.contains(&addr)) {
-        return false;
-    }
-    let Some(header) = crate::value::addr_class::try_read_gc_header(addr) else {
-        return false;
-    };
-    if header.obj_type != crate::gc::GC_TYPE_BUFFER {
-        return false;
-    }
-    header.gc_flags
-        & (crate::gc::GC_FLAG_MARKED | crate::gc::GC_FLAG_PINNED | crate::gc::GC_FLAG_FORWARDED)
-        == 0
-}
-
-/// Drop every registry/side-table entry keyed by a dead buffer's address.
-/// Without this, the recycled address inherits buffer identity
-/// (`is_registered_buffer`/`is_array_buffer` misclassify the next tenant —
-/// the #6080 ABA class) and the entries leak forever.
+/// Drop every attribute-table entry keyed by a dead buffer cell's address and
+/// run a foreign-backed buffer's finalizer. The `BufferSideTables` finalize
+/// hook calls this for every buffer-family cell the sweep frees (#10694; it
+/// used to be driven by a post-trace scan of `BUFFER_REGISTRY`). The brand
+/// itself needs no pruning: it is the dead cell's type byte, and the next
+/// tenant of the address writes its own. Without this the attribute entries
+/// would leak and a recycled address would inherit them (the #6080 ABA class).
 pub(crate) fn finalize_collected_dead_buffer(addr: usize) {
     #[cfg(feature = "node-api-host")]
     enqueue_foreign_finalizer(addr);
-    BUFFER_REGISTRY.with(|r| {
-        r.borrow_mut().remove(&addr);
-    });
-    if crate::hot_diag::buffer_on() {
-        crate::hot_diag::buffer_note_unregistration();
-    }
-    ARRAY_BUFFER_REGISTRY.with(|r| {
-        r.borrow_mut().remove(&addr);
-    });
-    // #6337: the two sibling buffer-identity registries were missing from this
-    // list — they had no `.remove`/`.retain` site anywhere in the tree. Like
-    // the three above they are plain address-keyed sets that never rooted the
-    // `BufferHeader`, so a collected view left its entry behind forever:
-    //
-    //  * an unbounded leak — one permanent entry per `DataView` (and per
-    //    SAB-flagged buffer) ever created;
-    //  * the #6080 ABA class this function exists to prevent —
-    //    `arena_reset_empty_blocks` resets a fully-empty block's offset to 0
-    //    while KEEPING its base pointer, so a reset block re-issues the same
-    //    addresses. A recycled address then inherits the dead view's identity:
-    //    `is_data_view`/`is_shared_array_buffer` gate `util.types.isDataView`/
-    //    `isSharedArrayBuffer`, `ArrayBuffer.isView`, the `[object DataView]`
-    //    tag, and the structuredClone/`.slice()` re-marking above — an
-    //    unrelated fresh Buffer landing there would answer to all of them.
-    //
-    // Only GC-heap buffers reach here. A process-global SAB backing is never
-    // freed and is vetoed as a dead candidate in
-    // `registered_buffer_is_dead_post_trace`, so the entries pruned from
-    // SHARED_ARRAY_BUFFER_REGISTRY are the arena-allocated SAB-flagged copies
-    // (`SharedArrayBuffer.prototype.slice`, structuredClone) — the ones that
-    // genuinely die and whose addresses genuinely get recycled.
-    SHARED_ARRAY_BUFFER_REGISTRY.with(|r| {
-        r.borrow_mut().remove(&addr);
-    });
-    DATA_VIEW_REGISTRY.with(|r| {
-        r.borrow_mut().remove(&addr);
-    });
     // #10873: a recycled address must not inherit resizability.
     if RESIZABLE_BUFFER_EVER_MARKED.is_armed() {
         RESIZABLE_BUFFER_MAX.with(|r| {
@@ -1411,20 +987,12 @@ pub(crate) fn finalize_collected_dead_buffer(addr: usize) {
     CRYPTO_KEY_META_REGISTRY.with(|r| {
         r.borrow_mut().remove(&addr);
     });
-    SECRET_KEY_REGISTRY.with(|r| {
-        r.borrow_mut().remove(&addr);
-    });
-    UINT8ARRAY_FROM_CTOR.with(|r| {
-        r.borrow_mut().remove(&addr);
-    });
-    // `js_buffer_mark_as_crypto_key_external` writes both global maps, and
-    // `is_registered_buffer`/`is_uint8array_buffer` consult them, so a dead
-    // external key buffer has to be dropped from every one of them.
-    if let Ok(mut r) = external_uint8arrays().lock() {
-        r.remove(&addr);
-    }
-    if let Ok(mut r) = external_crypto_keys().lock() {
-        r.remove(&addr);
+    // `js_buffer_mark_as_crypto_key_external` also writes the process-global
+    // metadata map.
+    if let Some(keys) = EXTERNAL_CRYPTO_KEY_META_REGISTRY.get() {
+        if let Ok(mut r) = keys.lock() {
+            r.remove(&addr);
+        }
     }
     // perry-stdlib keeps its own `addr -> CryptoKeyMaterial` map (the primary
     // one `lookup_crypto_key` consults; the runtime table above is only its
@@ -1450,8 +1018,8 @@ pub(crate) fn finalize_collected_dead_buffer(addr: usize) {
     super::own_props::clear_buffer_own_props(addr);
     // A BufferHeader-backed Uint8Array keeps ordinary expandos and its
     // non-extensible marker in the TypedArray side tables. Prune those here as
-    // well as in unregister_typed_array: this representation never enters the
-    // typed-array registry, so that unregister path can never see it (#9347).
+    // well as in the typed-array finalizer: this representation is not a
+    // `GC_TYPE_TYPED_ARRAY` cell, so that path never sees it (#9347).
     crate::typedarray_props::typed_array_clear_own_props(addr);
     crate::typedarray_props::typed_array_clear_no_extend(addr);
     super::detach::remove_detached_entry_for_dead_buffer(addr);

@@ -1536,14 +1536,6 @@
    "hook": "invalidate_caches_in_range"
   },
   {
-   "file": "crates/perry-runtime/src/typedarray/mod.rs",
-   "names": [
-    "TYPED_ARRAY_ADDR_WINDOW"
-   ],
-   "verdict": "conservative_filter",
-   "why": "Min/max address ever passed to register_typed_array (widened at typedarray/mod.rs:404); a stale window only answers 'maybe', after which the authoritative per-thread TYPED_ARRAY_REGISTRY (thread-local, :180) decides."
-  },
-  {
    "file": "crates/perry-runtime/src/dgram_reactor.rs",
    "names": [
     "LIVE"
@@ -1974,15 +1966,6 @@
   {
    "file": "crates/perry-runtime/src/buffer/header.rs",
    "names": [
-    "EXTERNAL_UINT8ARRAY_REGISTRY"
-   ],
-   "verdict": "thread_exit_invalidated",
-   "why": "Addresses of externally-marked Uint8Arrays; same removal gap, freed addresses dropped at thread exit.",
-   "hook": "release_external_buffer_registries_in_freed_ranges"
-  },
-  {
-   "file": "crates/perry-runtime/src/buffer/header.rs",
-   "names": [
     "EXTERNAL_CRYPTO_KEY_META_REGISTRY"
    ],
    "verdict": "thread_exit_invalidated",
@@ -1996,22 +1979,6 @@
    ],
    "verdict": "no_heap_address",
    "why": "Stores the extern \"C\" fn pointer installed once by perry-stdlib via js_set_crypto_key_death_hook (header.rs:80); code address."
-  },
-  {
-   "file": "crates/perry-runtime/src/buffer/header.rs",
-   "names": [
-    "BUFFER_LIKE_ADDR_WINDOW"
-   ],
-   "verdict": "conservative_filter",
-   "why": "Monotone lo/hi address window over every buffer-like registration; a stale bound only admits more addresses to the slow path. Authoritative: BUFFER_REGISTRY (thread-local), shared_sab's registry via is_registered_buffer_slow."
-  },
-  {
-   "file": "crates/perry-runtime/src/buffer/header.rs",
-   "names": [
-    "UINT8ARRAY_ADDR_WINDOW"
-   ],
-   "verdict": "conservative_filter",
-   "why": "Monotone lo/hi window over Uint8Array marks; staleness only widens admission. Authoritative: UINT8ARRAY_FROM_CTOR (thread-local) and EXTERNAL_UINT8ARRAY_REGISTRY via is_uint8array_buffer_slow."
   },
   {
    "file": "crates/perry-runtime/src/buffer/header.rs",
@@ -2498,30 +2465,6 @@
    ],
    "verdict": "no_heap_address",
    "why": "OnceLock of Option<Sink> (Sink::Stderr | Sink::File(String)) resolved once from an env var by the enum diagnostic sink getter; Rust-owned config, no addresses."
-  },
-  {
-   "file": "crates/perry-runtime/src/hot_diag.rs",
-   "names": [
-    "BUFFER_SINK"
-   ],
-   "verdict": "no_heap_address",
-   "why": "OnceLock of Option<Sink> (Sink::Stderr | Sink::File(String)) resolved once from an env var by the buffer diagnostic sink getter; Rust-owned config, no addresses."
-  },
-  {
-   "file": "crates/perry-runtime/src/hot_diag.rs",
-   "names": [
-    "BUF_WIN_LO"
-   ],
-   "verdict": "no_heap_address",
-   "why": "Diagnostic-only lower bound of the buffer-registry min/max window, stored by buffer_note_probe (hot_diag.rs:1462) and only ever formatted into the [buffer-diag] stderr dump; it is a number never dereferenced nor used as a lookup key, so staleness can only misreport a statistic."
-  },
-  {
-   "file": "crates/perry-runtime/src/hot_diag.rs",
-   "names": [
-    "BUF_WIN_HI"
-   ],
-   "verdict": "no_heap_address",
-   "why": "Diagnostic-only upper bound of the buffer-registry window, stored by buffer_note_probe (hot_diag.rs:1463) and only printed by buffer_dump; never dereferenced nor used for a lookup."
   },
   {
    "file": "crates/perry-runtime/src/hot_diag.rs",
@@ -3723,14 +3666,6 @@
    "why": "Raw close-request promise address from the calling thread's arena; evicted with the dead transform family.",
    "hook": "release_web_streams_in_freed_ranges",
    "hook_file": "crates/perry-stdlib/src/streams.rs"
-  },
-  {
-   "file": "crates/perry-runtime/src/registry_latch.rs",
-   "names": [
-    "WINDOW"
-   ],
-   "verdict": "no_heap_address",
-   "why": "#[cfg(test)] function-local fixture (concurrent_admits_never_drop_an_address) admitting synthetic integers 0x1_0000+i; never holds a real heap address and does not exist in production. | (second declaration) #[cfg(test)] function-local RegistryAddrWindow fixture (window_admit_is_visible_to_another_thread) admitting the synthetic constant 0x4000; test-only."
   },
   {
    "file": "crates/perry-runtime/src/registry_latch.rs",

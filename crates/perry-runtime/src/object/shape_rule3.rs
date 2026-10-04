@@ -269,6 +269,47 @@ pub(crate) const RULE3_KINDS: &[(u8, &str, &str, Rule3Word)] = &[
         "ScopeSlots",
         "high half of slot 0's NaN-box payload",
         Rule3Word::NotPointerTagged,
+    ), // #10694: a buffer flavor is `GC_TYPE_BUFFER`'s cell under another brand.
+    (
+        gc::GC_TYPE_BUFFER_UINT8ARRAY,
+        "BufferHeader (Uint8Array)",
+        "capacity: u32 (bytes), as `GC_TYPE_BUFFER`",
+        Rule3Word::BoundedBelowRange,
+    ),
+    // #10694: a buffer flavor is `GC_TYPE_BUFFER`'s cell under another brand.
+    (
+        gc::GC_TYPE_BUFFER_ARRAY_BUFFER,
+        "BufferHeader (ArrayBuffer)",
+        "capacity: u32 (bytes), as `GC_TYPE_BUFFER`",
+        Rule3Word::BoundedBelowRange,
+    ),
+    // #10694: a buffer flavor is `GC_TYPE_BUFFER`'s cell under another brand.
+    (
+        gc::GC_TYPE_BUFFER_SHARED_ARRAY_BUFFER,
+        "BufferHeader (SharedArrayBuffer)",
+        "capacity: u32 (bytes), as `GC_TYPE_BUFFER`",
+        Rule3Word::BoundedBelowRange,
+    ),
+    // #10694: a buffer flavor is `GC_TYPE_BUFFER`'s cell under another brand.
+    (
+        gc::GC_TYPE_BUFFER_DATA_VIEW,
+        "BufferHeader (DataView)",
+        "capacity: u32 (bytes), as `GC_TYPE_BUFFER`",
+        Rule3Word::BoundedBelowRange,
+    ),
+    // #10694: a buffer flavor is `GC_TYPE_BUFFER`'s cell under another brand.
+    (
+        gc::GC_TYPE_BUFFER_SECRET_KEY,
+        "BufferHeader (secret KeyObject)",
+        "capacity: u32 (bytes), as `GC_TYPE_BUFFER`",
+        Rule3Word::BoundedBelowRange,
+    ),
+    // #10694: a buffer flavor is `GC_TYPE_BUFFER`'s cell under another brand.
+    (
+        gc::GC_TYPE_BUFFER_CRYPTO_KEY,
+        "BufferHeader (CryptoKey)",
+        "capacity: u32 (bytes), as `GC_TYPE_BUFFER`",
+        Rule3Word::BoundedBelowRange,
     ),
 ];
 

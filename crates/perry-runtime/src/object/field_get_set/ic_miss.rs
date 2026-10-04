@@ -957,15 +957,19 @@ pub(super) fn get_field_ic_miss_impl(
                 }
                 // The generic IC-miss object path below may inspect GC/object
                 // metadata, so mirror js_object_get_field_by_name's
-                // buffer-first dispatch here.
-                if crate::buffer::is_registered_buffer(obj as usize) {
+                // buffer-first dispatch here. One header read rules both
+                // arms out for every other receiver (#10694).
+                let binary_receiver = crate::typedarray::is_offheap_sidetable_alloc(obj as usize);
+                if binary_receiver && crate::buffer::is_registered_buffer(obj as usize) {
                     if diag {
                         ic_diag_note(cache_slot, key, R::Buffer);
                     }
                     let value = js_object_get_field_by_name(obj, key);
                     return f64::from_bits(value.bits());
                 }
-                if crate::typedarray::lookup_typed_array_kind(obj as usize).is_some() {
+                if binary_receiver
+                    && crate::typedarray::lookup_typed_array_kind(obj as usize).is_some()
+                {
                     if diag {
                         ic_diag_note(cache_slot, key, R::TypedArray);
                     }

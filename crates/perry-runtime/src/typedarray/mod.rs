@@ -6,10 +6,10 @@
 //! immutable methods (`toSorted`, `toReversed`, `with`, etc.) materialize
 //! a new TypedArrayHeader of the same kind.
 //!
-//! Pointers are NaN-boxed with POINTER_TAG (0x7FFD) and tracked in
-//! TYPED_ARRAY_REGISTRY for `instanceof` and console.log formatting.
+//! Pointers are NaN-boxed with POINTER_TAG (0x7FFD). A typed array is
+//! recognized by its own header (#10694): a `GC_TYPE_TYPED_ARRAY` or
+//! `GC_TYPE_NATIVE_TYPED_VIEW` cell whose `TypedArrayHeader::kind` is the kind.
 
-use std::cell::RefCell;
 use std::ptr;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -176,8 +176,17 @@ pub struct TypedArrayHeader {
     /// native arena, resolved through `data_ptr`). Byte 10 of the header;
     /// emitted code reads it, so the offset is part of the codegen contract.
     pub storage: u8,
-    pub _pad: [u8; 5],
+    /// [`TA_FLAG_SHARED_BACKING`]; the rest are zero.
+    pub flags: u8,
+    pub _pad: [u8; 4],
 }
+
+/// [`TypedArrayHeader::flags`]: this view's elements live in a
+/// `SharedArrayBuffer`, so `Atomics.wait` may block on it. A fact of the view
+/// set once, when it is bound to its backing (it used to be membership in a
+/// thread-local `TYPED_ARRAY_SHARED_BACKING` set).
+pub const TA_FLAG_SHARED_BACKING: u8 = 0x01;
+const _: () = assert!(std::mem::size_of::<TypedArrayHeader>() == 16);
 
 /// [`TypedArrayHeader::storage`]: the elements follow the header inline.
 pub const TA_STORAGE_INLINE: u8 = 0;
@@ -197,22 +206,13 @@ const _: () = assert!(std::mem::offset_of!(TypedArrayHeader, storage) == TA_STOR
 /// representation decides, not a process-wide count of live views.
 pub const TA_CACHE_EXTERNAL_STORAGE: u64 = 0x80;
 
-crate::perry_thread_local! {
-    /// Address -> kind, so we can detect typed arrays at format/instanceof time.
-    /// PtrHasher (Fibonacci-multiplicative + xorshift): heap pointers don't
-    /// need SipHash. Hot on `is_registered_buffer`-adjacent dispatch paths
-    /// (~1.0% leaf samples on perf-comprehensive).
-    static TYPED_ARRAY_REGISTRY: RefCell<crate::fast_hash::PtrHashMap<usize, u8>> =
-        RefCell::new(crate::fast_hash::new_ptr_hash_map());
-    /// Perry currently materializes typed-array views over ArrayBuffer storage
-    /// as owning TypedArrayHeader values. Track which views came from
-    /// SharedArrayBuffer so Atomics.wait can apply Node's shared-buffer guard.
-    static TYPED_ARRAY_SHARED_BACKING: RefCell<crate::fast_hash::PtrHashSet<usize>> =
-        RefCell::new(crate::fast_hash::new_ptr_hash_set());
-}
-
-/// Process-global, lock-free fast cache in front of the thread-local
-/// `TYPED_ARRAY_REGISTRY` (#5525). A single untyped `arr[i]` element access on
+/// Process-global, lock-free admission cache read by EMITTED code (#5525): a
+/// guarded inline typed-array element access compares one slot against
+/// `(receiver << 8) | expected kind` instead of calling into the runtime. The
+/// runtime itself no longer consults it — `lookup_typed_array_kind` reads the
+/// receiver's header — but keeps it populated (on allocation and on every
+/// positive lookup) and invalidates an address when its typed array dies.
+/// Originally it fronted the thread-local registry (#5525). A single untyped `arr[i]` element access on
 /// a value whose static type was erased (e.g. a typed array reaching a function
 /// through an untyped `Array.<number>` parameter — the shape bcryptjs's
 /// Blowfish core uses for its `P`/`S` boxes) funnels through
@@ -367,9 +367,10 @@ pub(crate) fn invalidate_caches_in_range(start: usize, end: usize) {
     }
 }
 
-/// Cache probe: `None` = miss (consult the registry), `Some(None)` = cached
-/// negative ("not a typed array"), `Some(Some(kind))` = cached typed array.
-#[inline]
+/// Cache probe: `None` = miss, `Some(None)` = a negative entry, `Some(Some(kind))`
+/// = an admitted typed array. Only tests read the cache from Rust; emitted code
+/// reads it directly.
+#[cfg(test)]
 fn ta_kind_cache_get(addr: usize) -> Option<Option<u8>> {
     let entry = PERRY_TA_KIND_CACHE[ta_kind_cache_slot(addr)].load(Ordering::Relaxed);
     if entry != 0 && (entry >> 8) as usize == addr {
@@ -384,90 +385,23 @@ fn ta_kind_cache_get(addr: usize) -> Option<Option<u8>> {
     }
 }
 
-/// Monotone "this process has created at least one typed array" latch.
-///
-/// `lookup_typed_array_kind` is one of the two hottest generic-path probes in
-/// the runtime (measured 2.45% of an async-pipeline program and 3.4% of a
-/// tree-walking interpreter, neither of which constructs a typed array). Even
-/// with the #5525 direct-mapped cache in front of it, a program with no typed
-/// arrays pays a cache probe, a `_tlv_get_addr`, a `RefCell` borrow, a hash and
-/// a negative-entry write-back for every untyped element access and every
-/// generic "is this special?" question. The latch collapses all of that to one
-/// atomic load. See `crate::registry_latch` for the ordering rule.
-static TYPED_ARRAY_EVER_REGISTERED: crate::registry_latch::RegistryLatch =
-    crate::registry_latch::RegistryLatch::new();
-
-/// Smallest and largest address ever entered into `TYPED_ARRAY_REGISTRY`.
-///
-/// The latch above stops discriminating at the first typed array. On
-/// `claude-code --help` there are 42 registrations against 3,566,956 probes —
-/// and every one of those probes answered `None` (uretprobe count, one run:
-/// not a single `Some` in the whole run). Each still paid the
-/// out-of-line call, the direct-mapped cache probe and, on the (usual) cold
-/// miss, a thread-local resolution, a hash **and a negative-entry write-back
-/// that dirties a shared cache line**.
-///
-/// `register_typed_array` is the only writer of `TYPED_ARRAY_REGISTRY` and of
-/// the positive entries in `PERRY_TA_KIND_CACHE`, and it widens this window
-/// before it touches either, so an address outside the window is definitively
-/// not a registered typed array. Unlike a `GcHeader` tag test this never
-/// dereferences the candidate — which matters, because a registered typed array
-/// is not required to have a readable `ptr - GC_HEADER_SIZE` (see the
-/// guard-page fixture in `promise::combinators`).
-static TYPED_ARRAY_ADDR_WINDOW: crate::registry_latch::RegistryAddrWindow =
-    crate::registry_latch::RegistryAddrWindow::new();
-
-/// Test hook: the registered-address window's current bounds.
-#[cfg(test)]
-pub(crate) fn test_typed_array_addr_window_bounds() -> Option<(usize, usize)> {
-    TYPED_ARRAY_ADDR_WINDOW.bounds_for_tests()
-}
-
-#[cfg(test)]
-thread_local! {
-/// Test-only count of probes that got past `TYPED_ARRAY_ADDR_WINDOW` and
-/// reached [`lookup_registered_typed_array_kind`]. `TEST_TA_REGISTRY_PROBES`
-/// counts ENTRIES into `lookup_typed_array_kind` and so cannot see the window
-/// working; this counts the calls the window was added to remove.
-    static TEST_TA_WINDOW_ADMITTED_PROBES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-}
-
-#[cfg(test)]
-pub(crate) fn test_typed_array_window_admitted_probe_count() -> u64 {
-    TEST_TA_WINDOW_ADMITTED_PROBES.with(|c| c.get())
-}
-
+/// Admit a freshly allocated typed array (or native typed view) to the
+/// emitted-code kind cache. Its kind is already in its header; nothing else
+/// records it.
 pub fn register_typed_array(ptr: *const TypedArrayHeader, kind: u8) {
-    // Arm BEFORE either table becomes readable — an arm placed after the stores
-    // would leave a window in which `lookup_typed_array_kind` answers `None` for
-    // this very array. See `crate::registry_latch`. The address window carries
-    // the same obligation and is widened first for the same reason.
-    TYPED_ARRAY_ADDR_WINDOW.admit(ptr as usize);
-    TYPED_ARRAY_EVER_REGISTERED.arm();
-    // Keep the cache authoritative: overwrite any colliding/stale slot so a
-    // freed-then-reused address never reads back its previous kind.
+    debug_assert_eq!(unsafe { (*ptr).kind }, kind);
+    // Overwrite any colliding/stale slot so a freed-then-reused address never
+    // reads back its previous kind.
     ta_kind_cache_store_tag(ptr as usize, unsafe { kind_cache_tag(ptr, kind) });
-    TYPED_ARRAY_REGISTRY.with(|r| {
-        r.borrow_mut().insert(ptr as usize, kind);
-    });
 }
 
-/// Test hook: has any typed array ever been registered in this process?
-#[cfg(test)]
-pub(crate) fn typed_array_registry_ever_used() -> bool {
-    TYPED_ARRAY_EVER_REGISTERED.is_armed()
-}
-
+/// A typed array is going away (its cell was swept, or a native view's
+/// finalizer ran): drop its emitted-code cache admissions and every
+/// address-keyed attribute it may own, before the address can be re-issued.
 pub fn unregister_typed_array(ptr: *const TypedArrayHeader) {
     let owner = ptr as usize;
     ta_kind_cache_invalidate(owner);
     inline_owning_u32_cache_invalidate(owner);
-    TYPED_ARRAY_REGISTRY.with(|r| {
-        r.borrow_mut().remove(&owner);
-    });
-    TYPED_ARRAY_SHARED_BACKING.with(|r| {
-        r.borrow_mut().remove(&owner);
-    });
     crate::typedarray_view::clear_view_meta(owner);
     crate::typedarray_props::typed_array_clear_own_props(owner);
     crate::typedarray_props::typed_array_clear_no_extend(owner);
@@ -481,9 +415,6 @@ thread_local! {
 /// receiver-tag gates that let a `GC_TYPE_ARRAY` receiver skip this probe are
 /// asserted against it, so deleting a gate fails a test even though the ANSWER
 /// stays correct. A fast path nobody can prove ran is not a fast path.
-///
-/// Per THREAD, not per process: the registry is thread-local and `cargo test`
-/// runs each case on its own thread in one process.
     static TEST_TA_REGISTRY_PROBES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
@@ -492,107 +423,81 @@ pub(crate) fn test_typed_array_registry_probe_count() -> u64 {
     TEST_TA_REGISTRY_PROBES.with(|c| c.get())
 }
 
-/// Returns Some(kind) if the (already-stripped) address is a registered
-/// typed array, else None.
+/// `Some(kind)` when the (already-stripped) address is a typed array — a
+/// `GC_TYPE_TYPED_ARRAY` or `GC_TYPE_NATIVE_TYPED_VIEW` cell — else `None`.
+///
+/// One magnitude/alignment check, the header load, a compare and the kind
+/// byte: the cell says what it is (#10694). This used to be a latch, an
+/// address window, a direct-mapped cache, a thread-local resolution and a hash
+/// lookup into `TYPED_ARRAY_REGISTRY`, which duplicated the `kind` the header
+/// already carries (#9347).
 #[inline]
 pub fn lookup_typed_array_kind(addr: usize) -> Option<u8> {
     #[cfg(test)]
     TEST_TA_REGISTRY_PROBES.with(|c| c.set(c.get().wrapping_add(1)));
-    // Nothing has ever been registered ⟹ nothing to find. Checked ahead of the
-    // #5525 cache because it is the only arm that costs neither a cache-slot
-    // load nor a negative-entry write-back: a program with no typed arrays runs
-    // every untyped `arr[i]` through here, and every one of those would
-    // otherwise miss the direct-mapped cache (cold address), resolve the
-    // thread-local registry and then dirty a shared cache line recording the
-    // miss. `register_typed_array` arms the latch before it populates either
-    // table, so an armed==false answer can never be wrong.
-    if TYPED_ARRAY_EVER_REGISTERED.is_idle() {
+    let obj_type = unsafe { crate::value::addr_class::try_read_gc_header(addr) }?.obj_type;
+    if obj_type != crate::gc::GC_TYPE_TYPED_ARRAY
+        && obj_type != crate::gc::GC_TYPE_NATIVE_TYPED_VIEW
+    {
         return None;
     }
-    // Armed says only that SOME typed array exists. An address outside the
-    // registered window is not this one, and rejecting it here keeps the whole
-    // negative answer inline: no call, no cache-slot load, and — the part that
-    // costs the most on a cold address — no negative-entry write-back into the
-    // shared `PERRY_TA_KIND_CACHE`. See `TYPED_ARRAY_ADDR_WINDOW`.
-    if !TYPED_ARRAY_ADDR_WINDOW.may_contain(addr) {
-        // Completeness audit — see the twin in `buffer::header::
-        // is_registered_buffer` for why the writer set is machine-checked
-        // rather than enumerated. Read the registry DIRECTLY rather than
-        // through `lookup_registered_typed_array_kind`: that function writes a
-        // negative entry into `PERRY_TA_KIND_CACHE` on a miss, and an audit
-        // that mutates the state it audits changes what the next probe does.
-        // `TYPED_ARRAY_REGISTRY` is authoritative anyway — every positive cache
-        // entry is derived from it. Compiled out entirely in release.
-        #[cfg(debug_assertions)]
-        {
-            assert!(
-                TYPED_ARRAY_REGISTRY
-                    .with(|r| r.borrow().get(&addr).copied())
-                    .is_none(),
-                "TYPED_ARRAY_ADDR_WINDOW rejected {addr:#x}, but it IS in \
-                 TYPED_ARRAY_REGISTRY. Some route reached the registry without \
-                 calling `TYPED_ARRAY_ADDR_WINDOW.admit()` (via \
-                 `register_typed_array`) first."
-            );
-        }
+    // A `Box`-leaked symbol has no `GcHeader`; see the twin screen in
+    // `buffer::header::buffer_family_type`.
+    if unsafe { crate::symbol::may_be_symbol_header(addr as *const u8) }
+        && !crate::buffer::header_is_owned(addr)
+    {
         return None;
     }
-    #[cfg(test)]
-    TEST_TA_WINDOW_ADMITTED_PROBES.with(|c| c.set(c.get().wrapping_add(1)));
-    lookup_registered_typed_array_kind(addr)
+    let ta = addr as *const TypedArrayHeader;
+    // SAFETY: the header says this is a typed-array cell, whose payload starts
+    // with a `TypedArrayHeader` (a native view's prefix matches it exactly).
+    let kind = unsafe { (*ta).kind };
+    ta_kind_cache_admit(addr, unsafe { kind_cache_tag(ta, kind) });
+    Some(kind)
 }
 
-/// The real lookup, out of line so the idle check above inlines into its ~200
-/// call sites. Measured: with the check behind a call, the surviving self-time
-/// of this function was the CALL, not the work — 2.3% of an async-pipeline
-/// program and 1.8-2.3% of a tree-walking interpreter, in programs that create
-/// no typed array at all.
-#[inline(never)]
-fn lookup_registered_typed_array_kind(addr: usize) -> Option<u8> {
-    // #5525 fast path: the process-global cache resolves the hot,
-    // repeated-same-address lookups without touching the thread-local
-    // registry. A miss (cold address or direct-mapped eviction) falls back to
-    // the registry and re-populates the slot.
-    if let Some(cached) = ta_kind_cache_get(addr) {
-        return cached;
+/// Keep a looked-up typed array admitted to the emitted-code cache: a slot the
+/// emitted guard lost to a colliding address is won back by the next runtime
+/// access, as it was when the runtime itself read through the cache. A load
+/// and a compare when the slot already holds it, so the hot repeat costs no
+/// store to a shared line.
+#[inline]
+fn ta_kind_cache_admit(addr: usize, tag: u64) {
+    let word = ((addr as u64) << 8) | tag;
+    let slot = &PERRY_TA_KIND_CACHE[ta_kind_cache_slot(addr)];
+    if slot.load(Ordering::Relaxed) != word {
+        slot.store(word, Ordering::Relaxed);
     }
-    let kind = TYPED_ARRAY_REGISTRY.with(|r| r.borrow().get(&addr).copied());
-    // Record both outcomes: a typed array (positive) or a confirmed non-typed
-    // address (negative), so repeated plain-array element access stops hitting
-    // the thread-local registry too.
-    // A registered address is a live typed-array header, so its storage byte
-    // is readable.
-    ta_kind_cache_store_tag(
-        addr,
-        kind.map_or(TA_CACHE_NEGATIVE, |k| unsafe {
-            kind_cache_tag(addr as *const TypedArrayHeader, k)
-        }),
-    );
-    kind
 }
 
-/// True for off-GC-heap, header-less allocations — small typed arrays and
-/// `Buffer`s, both raw-`alloc`'d with NO 8-byte `GcHeader` prefix and tracked
-/// only in side tables. The runtime has many type probes of the form
-/// `*(ptr - GC_HEADER_SIZE)` (Promise/Date/Array obj_type checks); each MUST
-/// skip these allocations before that back-read, because reading the
-/// non-existent header crosses outside the block and segfaults when it sits at
-/// the start of a freshly mapped region (#5226). Detection is via the side
-/// tables only — never dereferences `addr`.
+/// True for a typed array or any buffer-family cell. The name is historical:
+/// these used to be raw-`alloc`'d with NO `GcHeader` and tracked only in side
+/// tables, so the runtime's `*(ptr - GC_HEADER_SIZE)` type probes had to skip
+/// them first (#5226). Every one now has a real header carrying its brand
+/// (#10694), so this is one header read; callers keep it for routing.
 #[inline]
 pub fn is_offheap_sidetable_alloc(addr: usize) -> bool {
-    lookup_typed_array_kind(addr).is_some() || crate::buffer::is_registered_buffer(addr)
+    let Some(header) = (unsafe { crate::value::addr_class::try_read_gc_header(addr) }) else {
+        return false;
+    };
+    let obj_type = header.obj_type;
+    let candidate = crate::gc::is_buffer_family_type(obj_type)
+        || obj_type == crate::gc::GC_TYPE_TYPED_ARRAY
+        || obj_type == crate::gc::GC_TYPE_NATIVE_TYPED_VIEW;
+    // The headerless-symbol screen of `buffer::header::buffer_family_type`.
+    candidate
+        && (!unsafe { crate::symbol::may_be_symbol_header(addr as *const u8) }
+            || crate::buffer::header_is_owned(addr))
 }
 
 pub(crate) fn mark_typed_array_shared_backing(ptr: *const TypedArrayHeader) {
-    TYPED_ARRAY_SHARED_BACKING.with(|r| {
-        r.borrow_mut().insert(ptr as usize);
-    });
+    unsafe { (*(ptr as *mut TypedArrayHeader)).flags |= TA_FLAG_SHARED_BACKING };
 }
 
 pub(crate) fn typed_array_has_shared_backing(ptr: *const TypedArrayHeader) -> bool {
     let ptr = clean_ta_ptr(ptr);
-    TYPED_ARRAY_SHARED_BACKING.with(|r| r.borrow().contains(&(ptr as usize)))
+    lookup_typed_array_kind(ptr as usize).is_some()
+        && unsafe { (*ptr).flags } & TA_FLAG_SHARED_BACKING != 0
 }
 
 #[inline]
@@ -1052,16 +957,9 @@ unsafe fn native_memory_copy_dst_bytes(raw: u64) -> (*mut u8, usize) {
 }
 
 unsafe fn native_memory_copy_accepts_buffer(addr: usize) -> bool {
-    if addr < 0x1000
-        || !crate::buffer::is_registered_buffer(addr)
-        || !crate::buffer::is_uint8array_buffer(addr)
-    {
-        return false;
-    }
-    if is_arena_backed_addr(addr) {
-        return arena_payload_has_gc_type(addr, crate::gc::GC_TYPE_BUFFER);
-    }
-    true
+    // The brand is the cell's own type byte (#10694), so a Uint8Array answer
+    // is already a header proof; there is no registry entry to forge.
+    addr >= 0x1000 && crate::buffer::is_uint8array_buffer(addr)
 }
 
 #[inline]
@@ -1100,7 +998,8 @@ pub fn typed_array_alloc(kind: u8, length: u32) -> *mut TypedArrayHeader {
         (*p).kind = kind;
         (*p).elem_size = elem_size as u8;
         (*p).storage = TA_STORAGE_INLINE;
-        (*p)._pad = [0; 5];
+        (*p).flags = 0;
+        (*p)._pad = [0; 4];
         let data = data_ptr_mut(p);
         ptr::write_bytes(data, 0, (capacity as usize) * elem_size);
     }
@@ -1108,40 +1007,10 @@ pub fn typed_array_alloc(kind: u8, length: u32) -> *mut TypedArrayHeader {
     p
 }
 
-/// Post-trace registry pruning (mirrors the #6010 Map/Set pattern and the
-/// buffer variant): registered typed arrays whose header is genuinely dead.
-/// All GC-heap typed arrays are TENURED old-arena residents — deadness is
-/// trustworthy only after a FULL trace. Native-arena views (different
-/// obj_type) are filtered out; their own finalizers unregister them.
-pub(crate) fn collect_dead_registered_typed_arrays_post_trace(full_trace: bool) -> Vec<usize> {
-    if !full_trace {
-        return Vec::new();
-    }
-    TYPED_ARRAY_REGISTRY.with(|r| {
-        r.borrow()
-            .keys()
-            .copied()
-            .filter(|&addr| unsafe { registered_typed_array_is_dead_post_trace(addr) })
-            .collect()
-    })
-}
-
-unsafe fn registered_typed_array_is_dead_post_trace(addr: usize) -> bool {
-    let Some(header) = crate::value::addr_class::try_read_gc_header(addr) else {
-        return false;
-    };
-    if header.obj_type != crate::gc::GC_TYPE_TYPED_ARRAY {
-        return false;
-    }
-    header.gc_flags
-        & (crate::gc::GC_FLAG_MARKED | crate::gc::GC_FLAG_PINNED | crate::gc::GC_FLAG_FORWARDED)
-        == 0
-}
-
-/// Finalize one collected-dead typed array: `unregister_typed_array` clears
-/// the registry entry, the global kind-cache slot, and the own-props /
-/// no-extend side tables — closing both the leak and the address-reuse
-/// (kind-cache ABA) hazard for ordinary typed arrays.
+/// Finalize one collected-dead typed array (the `GC_TYPE_TYPED_ARRAY` finalize
+/// hook): `unregister_typed_array` clears the global kind-cache slots, the view
+/// metadata and the own-props / no-extend side tables — closing both the leak
+/// and the address-reuse (kind-cache ABA) hazard for ordinary typed arrays.
 pub(crate) fn finalize_collected_dead_typed_array(addr: usize) {
     unregister_typed_array(addr as *const TypedArrayHeader);
     crate::buffer::view::remove_entries_for_dead_buffer(addr);
@@ -1473,11 +1342,12 @@ mod tests {
         assert_eq!(inline_u32_addr(boxed), ta as usize);
         assert_eq!(test_typed_array_registry_probe_count(), primed);
 
+        // Unregistering (what the finalizer does at death) must drop the
+        // admission, so the next access re-derives it from the header.
         unregister_typed_array(ta);
-        assert_eq!(inline_u32_addr(boxed), 0);
+        assert!(!inline_owning_u32_cache_get(ta as usize));
+        assert_eq!(inline_u32_addr(boxed), ta as usize);
         assert_eq!(test_typed_array_registry_probe_count(), primed + 1);
-        // Leave the live allocation registered for its eventual finalizer.
-        register_typed_array(ta, KIND_UINT32);
     }
 
     #[test]

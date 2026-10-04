@@ -44,7 +44,9 @@ fn constructor_return_overrides_this(value: f64) -> bool {
     } else {
         0
     };
-    if raw_addr != 0 && crate::buffer::is_registered_buffer(raw_addr) {
+    // `raw_addr` may be arbitrary bits (a top-16-clear number), so the
+    // allocator must vouch for it before its header is read.
+    if raw_addr != 0 && crate::buffer::buffer_family_type_owned(raw_addr).is_some() {
         return true;
     }
     if !jv.is_pointer() {

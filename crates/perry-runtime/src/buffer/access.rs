@@ -46,12 +46,14 @@ fn pointer_addr_from_value(value: f64) -> Option<usize> {
     }
 
     // A few runtime paths pass heap pointers as raw f64 bit patterns. Only
-    // accept those when a dedicated registry can prove the address is binary
-    // data; object/array fallback requires the normal POINTER_TAG form.
+    // accept those when the allocator owns the word and its header says binary
+    // data (#10694: the brand is the type byte); object/array fallback requires
+    // the normal POINTER_TAG form.
     if top16 == 0 {
         let addr = bits as usize;
-        if crate::buffer::is_registered_buffer(addr)
-            || crate::typedarray::lookup_typed_array_kind(addr).is_some()
+        if crate::buffer::header_is_owned(addr)
+            && (crate::buffer::is_registered_buffer(addr)
+                || crate::typedarray::lookup_typed_array_kind(addr).is_some())
         {
             return Some(addr);
         }

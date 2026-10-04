@@ -514,7 +514,7 @@ fn test_gc_type_metadata_covers_all_declared_types() {
             pointer_free: false,
             move_hook_kind: GcMoveHookKind::None,
             rewrite_hook_kind: GcRewriteHookKind::None,
-            finalize_hook_kind: GcFinalizeHookKind::None,
+            finalize_hook_kind: GcFinalizeHookKind::BufferSideTables,
         },
         GcTypeInfo {
             type_id: GC_TYPE_TYPED_ARRAY,
@@ -529,7 +529,7 @@ fn test_gc_type_metadata_covers_all_declared_types() {
             pointer_free: true,
             move_hook_kind: GcMoveHookKind::None,
             rewrite_hook_kind: GcRewriteHookKind::None,
-            finalize_hook_kind: GcFinalizeHookKind::TypedArrayViewMeta,
+            finalize_hook_kind: GcFinalizeHookKind::TypedArraySideTables,
         },
         GcTypeInfo {
             type_id: GC_TYPE_SET,

@@ -685,6 +685,10 @@ pub extern "C" fn js_dyn_index_set_strict(obj: f64, index: f64, value: f64, stri
         && bits < 0x0001_0000_0000_0000
         && (bits & 0x3) == 0
         && bits >= 0x10000
+        // A raw word is also what a subnormal number looks like. The buffer and
+        // typed-array probes below read the cell's header (#10694: the brand
+        // is the type byte), so the allocator must vouch for a raw word first.
+        && crate::buffer::header_is_owned(bits as usize)
     {
         bits as usize
     } else {

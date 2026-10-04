@@ -174,7 +174,8 @@ pub extern "C" fn js_value_to_string_with_encoding(value: f64, enc_tag: i32) -> 
     //   - raw pointer bitcast to f64 → use bits directly (top16 == 0)
     let ptr_addr = if top16 >= 0x7FF8 {
         (bits & 0x0000_FFFF_FFFF_FFFF) as usize
-    } else if top16 == 0 && bits >= 0x1000 {
+    } else if top16 == 0 && bits >= 0x1000 && super::header_is_owned(bits as usize) {
+        // Raw word: the allocator vouches before the brand read (#10694).
         bits as usize
     } else {
         0
@@ -203,7 +204,8 @@ pub extern "C" fn js_value_to_string_with_encoding_or_radix(
     let top16 = bits >> 48;
     let ptr_addr = if top16 >= 0x7FF8 {
         (bits & 0x0000_FFFF_FFFF_FFFF) as usize
-    } else if top16 == 0 && bits >= 0x1000 {
+    } else if top16 == 0 && bits >= 0x1000 && super::header_is_owned(bits as usize) {
+        // Raw word: the allocator vouches before the brand read (#10694).
         bits as usize
     } else {
         0
