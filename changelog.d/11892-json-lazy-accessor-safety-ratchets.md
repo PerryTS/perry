@@ -1,0 +1,1 @@
+- Lazy JSON array accessor paths now use rooted values and consistent handle classification, preserving behavior while satisfying runtime safety checks.
