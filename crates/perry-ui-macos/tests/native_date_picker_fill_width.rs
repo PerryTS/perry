@@ -87,20 +87,21 @@ fn main() {
             "intrinsic size {perry_size:?}, a stock picker's alignment rect is {stock_size:?}"
         ));
     }
-    for width in [stock_size.width, 300.0] {
-        let aligned = CGRect::new(
-            CGPoint::new(20.0, 20.0),
-            CGSize::new(width, stock_size.height),
-        );
+    for (width, height) in [
+        (stock_size.width, stock_size.height),
+        (300.0, stock_size.height),
+        (300.0, 72.0),
+    ] {
+        let aligned = CGRect::new(CGPoint::new(20.0, 20.0), CGSize::new(width, height));
         let drawn = (render(&perry, aligned, mtm), render(&stock, aligned, mtm));
         let differing = drawn.0.iter().zip(&drawn.1).filter(|(a, b)| a != b).count();
         println!(
-            "width {width}: {differing} of {} pixels differ from a stock picker",
+            "width {width}x{height}: {differing} of {} pixels differ from a stock picker",
             drawn.0.len()
         );
         if drawn.0.len() != drawn.1.len() || differing > 0 {
             failures.push(format!(
-                "width {width}: {differing} pixels differ from a stock picker aligned to the same rect"
+                "width {width}x{height}: {differing} pixels differ from a stock picker aligned to the same rect"
             ));
         }
     }
