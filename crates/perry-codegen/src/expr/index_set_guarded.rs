@@ -555,11 +555,13 @@ mod tests {
         .unwrap()
     }
 
-    // Since the unresolved Worker continues in a predecessor-less block
-    // (#11450, dyn_extern_i18n.rs), the store after it is emitted as dead
-    // code rather than skipped; the `is_terminated` guards above stay as the
-    // defense for any other operand that ends its block. Either way the
-    // emitted module must parse and verify.
+    // An unresolved Worker no longer ends its block: it asks the runtime
+    // worker entry table (`js_worker_threads_worker_new_by_spec`), which
+    // throws only if no entry matches (dyn_extern_i18n.rs). The store after it
+    // is therefore live code, reached only if the operand returned; a runtime
+    // throw leaves the call before the store. The `is_terminated` guards above
+    // stay as the defense for any operand that does end its block. Either way
+    // the emitted module must parse and verify.
     #[test]
     fn throwing_operand_store_emits_valid_ir() {
         for (ty, block) in [
@@ -578,7 +580,10 @@ mod tests {
                 },
                 ty,
             );
-            assert!(dead.contains("call void @js_throw_error_with_code("));
+            assert!(
+                dead.contains("@js_worker_threads_worker_new_by_spec("),
+                "{block}: the throwing operand must be lowered before the store"
+            );
             let llvm = inkwell::context::Context::create();
             let parsed = crate::inprocess::parse_ir_text(&llvm, &dead, block)
                 .unwrap_or_else(|e| panic!("{block}: {e:#}\n{dead}"));
