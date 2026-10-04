@@ -40,6 +40,7 @@ pub(super) fn decl_prototype_born_final(class_id: u32, parent_bits: u64) -> Opti
     if members.iter().any(|(name, accessor)| {
         *accessor || name == "constructor" || class_method_entry(class_id, name).is_none()
     }) || has_registered_prototype_methods(class_id)
+        || !class_own_symbol_member_keys(class_id, false).is_empty()
     {
         return None;
     }

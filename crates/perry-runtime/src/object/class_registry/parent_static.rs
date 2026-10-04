@@ -807,6 +807,10 @@ pub unsafe extern "C" fn js_register_class_computed_method(
                 );
             }
         }
+        let proto = super::state::class_decl_prototype_object(class_id);
+        if is_static == 0 && !proto.is_null() {
+            super::state::install_class_decl_prototype_symbol_member(proto, class_id, sym_key);
+        }
         VTABLE_GEN.fetch_add(1, Ordering::Release);
         return;
     }
@@ -930,6 +934,10 @@ pub unsafe extern "C" fn js_register_class_computed_accessor(
                 entry.1 = setter_ptr as usize;
             }
         });
+        let proto = super::state::class_decl_prototype_object(class_id);
+        if is_static == 0 && !proto.is_null() {
+            super::state::install_class_decl_prototype_symbol_member(proto, class_id, sym_key);
+        }
         VTABLE_GEN.fetch_add(1, Ordering::Release);
         return;
     }

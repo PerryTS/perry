@@ -53,17 +53,14 @@ pub(crate) unsafe fn symbol_own_property_descriptor(obj_value: f64, key_value: f
     if sym_key == 0 {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
+    if let Some(cid) = super::class_prototype_ref_id(obj_value) {
+        let proto = super::class_registry::class_decl_prototype_value(cid);
+        return symbol_own_property_descriptor(proto, key_value);
+    }
     // Computed Symbol class members live in the class registries rather than
-    // the generic per-object Symbol table. They are nevertheless own
-    // properties of the constructor/prototype and must reflect as method or
-    // accessor descriptors.
-    let class_owner = if let Some(cid) = super::class_ref_id(obj_value) {
-        Some((cid, super::class_prototype_ref_id(obj_value).is_none()))
-    } else if owner != 0 {
-        super::class_registry::class_id_for_decl_prototype_object(owner).map(|cid| (cid, false))
-    } else {
-        None
-    };
+    // the generic per-object Symbol table for class CONSTRUCTORS. Instance
+    // members above live in the materialized prototype's shape.
+    let class_owner = super::class_ref_id(obj_value).map(|cid| (cid, true));
     if let Some((cid, is_static)) = class_owner {
         let display_name = crate::symbol::symbol_function_name(sym_key);
         if let Some((get, set)) =

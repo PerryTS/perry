@@ -76,7 +76,7 @@ pub unsafe fn dispatch_bound_method(
     // name-based interpretation of the captures below (slots 3/4 are not part
     // of the name layout).
     if method_name_ptr == crate::object::SYMBOL_BOUND_METHOD_NAME.as_ptr() as *const i8 {
-        return dispatch_symbol_bound_method(closure, namespace_obj, args);
+        return dispatch_symbol_bound_method(closure, namespace_obj, this, args);
     }
 
     // Private-method value (`const f = this.#m; f.call(o)`): a `#`-named method
@@ -238,7 +238,8 @@ pub unsafe fn dispatch_bound_method(
 /// Mirrors the direct-call symbol dispatch in `js_native_call_method_value`.
 unsafe fn dispatch_symbol_bound_method(
     closure: *const ClosureHeader,
-    receiver: f64,
+    captured_receiver: f64,
+    this: crate::closure::JsThis,
     args: &[f64],
 ) -> f64 {
     let func_ptr = js_closure_get_capture_ptr(closure, 3) as usize;
@@ -252,6 +253,7 @@ unsafe fn dispatch_symbol_bound_method(
     let param_count = (meta & 0xFFFF_FFFF) as u32;
     let has_rest = (meta >> 32) & 1 == 1;
     let is_static = (meta >> 33) & 1 == 1;
+    let receiver = crate::object::canonical_bound_method_receiver(captured_receiver, this);
     if is_static {
         // The static method runs with the class ref as `this`, exactly like
         // the direct-call path. The one-shot static-`this` override (armed by

@@ -152,9 +152,8 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
             if let Some(class_id) = super::super::class_ref_id(obj_value) {
                 let is_prototype = super::super::class_prototype_ref_id(obj_value).is_some();
                 let present = if is_prototype {
-                    super::super::class_registry::class_has_own_symbol_member(
-                        class_id, sym_key, false,
-                    )
+                    let proto = super::super::class_registry::class_decl_prototype_value(class_id);
+                    crate::symbol::js_object_has_own_symbol(proto, key_value)
                 } else {
                     crate::symbol::class_static_symbol_lookup(class_id, key_value).is_some()
                         || super::super::class_registry::class_has_own_symbol_member(
@@ -162,16 +161,6 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
                         )
                 };
                 return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
-            }
-            let obj_key = crate::symbol::obj_key_from_f64(obj_value);
-            if let Some(class_id) =
-                super::super::class_registry::class_id_for_decl_prototype_object(obj_key)
-            {
-                if super::super::class_registry::class_has_own_symbol_member(
-                    class_id, sym_key, false,
-                ) {
-                    return f64::from_bits(TAG_TRUE);
-                }
             }
             let present = crate::symbol::js_object_has_own_symbol(obj_value, key_value);
             return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });

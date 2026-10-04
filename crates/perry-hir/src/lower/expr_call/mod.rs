@@ -586,6 +586,29 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
                             }
                             return Ok(Expr::SuperMethodCall { method, args });
                         }
+                        // A dynamic computed key still denotes a SuperProperty
+                        // reference. Its lookup starts at the current class's
+                        // home object's prototype, while the call receiver is
+                        // the current `this`. Rewriting it to `this[key]`
+                        // re-selects an override on the derived class (and for
+                        // `super[Symbol.iterator]()` recurses forever).
+                        if let Some(class_name) = ctx.current_class.clone() {
+                            let home = if ctx.current_class_member_is_static {
+                                Expr::ClassRef(class_name)
+                            } else {
+                                Expr::PropertyGet {
+                                    object: Box::new(Expr::ClassRef(class_name)),
+                                    property: "prototype".to_string(),
+                                    byte_offset: 0,
+                                }
+                            };
+                            return Ok(Expr::ObjectSuperMethodCall {
+                                home: Box::new(home),
+                                key: Box::new(lower_expr(ctx, computed.expr.as_ref())?),
+                                receiver: Box::new(Expr::This),
+                                args,
+                            });
+                        }
                     }
                 }
             }
