@@ -769,7 +769,9 @@ pub(super) static GC_TYPE_INFO_BY_ID: [Option<GcTypeInfo>; MALLOC_KIND_BUCKET_CO
         GcRewriteDescriptorKind::Leaf,
         GcLayoutSlotKind::None,
         false,
-        GcExternalBytePolicy::None,
+        // #11919 P0: a Rust payload reports its native bytes through
+        // `gc_note_external_side_alloc` and finalization releases them.
+        GcExternalBytePolicy::SideAllocation,
         GcLargeObjectPolicy::MallocTracked,
         true,
         GcMoveHookKind::None,

@@ -610,43 +610,6 @@ unsafe fn prop_fetch(handle: i64, property_name: &str) -> Option<f64> {
 
 #[cfg(feature = "crypto")]
 unsafe fn prop_crypto(handle: i64, property_name: &str) -> Option<f64> {
-    if matches!(
-        property_name,
-        "update"
-            | "digest"
-            | "copy"
-            | "write"
-            | "end"
-            | "on"
-            | "once"
-            | "addListener"
-            | "pipe"
-            | "setEncoding"
-            | "destroy"
-            | "close"
-    ) && with_handle::<crate::crypto::HashHandle, bool, _>(handle, |_| true).unwrap_or(false)
-    {
-        return Some(crate::crypto::dispatch_hash_property(handle, property_name));
-    }
-
-    if matches!(
-        property_name,
-        "update"
-            | "digest"
-            | "write"
-            | "end"
-            | "on"
-            | "once"
-            | "addListener"
-            | "pipe"
-            | "setEncoding"
-            | "destroy"
-            | "close"
-    ) && with_handle::<crate::crypto::HmacHandle, bool, _>(handle, |_| true).unwrap_or(false)
-    {
-        return Some(crate::crypto::dispatch_hmac_property(handle, property_name));
-    }
-
     if matches!(property_name, "update" | "sign")
         && with_handle::<crate::crypto::SignHandle, bool, _>(handle, |_| true).unwrap_or(false)
     {
@@ -732,21 +695,6 @@ unsafe fn prop_crypto(handle: i64, property_name: &str) -> Option<f64> {
         return Some(crate::crypto::dispatch_x509_property(handle, property_name));
     }
 
-    // Issue #1111: CipherHandle method-as-value reads. Returns a
-    // bound-method closure for `update` / `final` / `getAuthTag` /
-    // `setAuthTag` / `setAAD` / `setAutoPadding` so `c.getAuthTag?.()` doesn't short-circuit
-    // on the optional-chain `c.getAuthTag == null` check. Same disjoint
-    // method-name gate as the method-dispatch arm above.
-    if matches!(
-        property_name,
-        "update" | "final" | "getAuthTag" | "setAuthTag" | "setAAD" | "setAutoPadding"
-    ) && with_handle::<crate::crypto::CipherHandle, bool, _>(handle, |_| true).unwrap_or(false)
-    {
-        return Some(crate::crypto::dispatch_cipher_property(
-            handle,
-            property_name,
-        ));
-    }
     None
 }
 

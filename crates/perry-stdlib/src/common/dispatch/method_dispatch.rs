@@ -469,50 +469,6 @@ unsafe fn arm_node_sqlite(handle: i64, method_name: &str, args: &[f64]) -> Optio
 
 #[cfg(feature = "crypto")]
 unsafe fn arm_crypto(handle: i64, method_name: &str, args: &[f64]) -> Option<f64> {
-    // crypto Hash handle: createHash(...).update(...).digest().
-    // The order vs. net (below) does not matter once method-gated, but we
-    // keep hash before net to avoid changing the priority of in-registry
-    // matches relative to the v0.5.98/#88 ordering.
-    if matches!(
-        method_name,
-        "update"
-            | "digest"
-            | "copy"
-            | "write"
-            | "end"
-            | "on"
-            | "once"
-            | "addListener"
-            | "pipe"
-            | "setEncoding"
-            | "destroy"
-            | "close"
-    ) && with_handle::<crate::crypto::HashHandle, bool, _>(handle, |_| true).unwrap_or(false)
-    {
-        return Some(crate::crypto::dispatch_hash(handle, method_name, &args));
-    }
-
-    // crypto Hmac handle: createHmac(alg, key).update(...).digest(). Routes
-    // the runtime path the codegen falls back to whenever `alg` isn't a
-    // literal `"sha256"`. See #1076 for the silent-empty bug this closes.
-    if matches!(
-        method_name,
-        "update"
-            | "digest"
-            | "write"
-            | "end"
-            | "on"
-            | "once"
-            | "addListener"
-            | "pipe"
-            | "setEncoding"
-            | "destroy"
-            | "close"
-    ) && with_handle::<crate::crypto::HmacHandle, bool, _>(handle, |_| true).unwrap_or(false)
-    {
-        return Some(crate::crypto::dispatch_hmac(handle, method_name, &args));
-    }
-
     if matches!(method_name, "update" | "sign")
         && with_handle::<crate::crypto::SignHandle, bool, _>(handle, |_| true).unwrap_or(false)
     {
@@ -585,19 +541,6 @@ unsafe fn arm_crypto(handle: i64, method_name: &str, args: &[f64]) -> Option<f64
             method_name,
             &args,
         ));
-    }
-
-    // crypto Cipher handle: createCipheriv(...) / createDecipheriv(...)
-    // followed by .update(...).final() / .getAuthTag() / .setAuthTag() —
-    // issue #1075. Method-gated like the Hash handle above so handle id
-    // collisions across registries (net.Socket id=1 vs CipherHandle id=1)
-    // don't accidentally route a socket method here.
-    if matches!(
-        method_name,
-        "update" | "final" | "getAuthTag" | "setAuthTag" | "setAAD" | "setAutoPadding"
-    ) && with_handle::<crate::crypto::CipherHandle, bool, _>(handle, |_| true).unwrap_or(false)
-    {
-        return Some(crate::crypto::dispatch_cipher(handle, method_name, &args));
     }
 
     // crypto Sign/Verify handle: createSign(alg)/createVerify(alg) followed by
@@ -673,7 +616,7 @@ unsafe fn arm_sqlite(handle: i64, method_name: &str, args: &[f64]) -> Option<f64
     // typed receivers; this arm is the runtime fallback for Any-typed
     // class fields the codegen can't statically resolve. Refs #645 /
     // #488 / #643. Method-gated to avoid claiming small handles owned
-    // by other registries (HashHandle, FastifyApp, etc.).
+    // by other registries (SignHandle, FastifyApp, etc.).
     if matches!(method_name, "prepare" | "exec" | "close") && js_sqlite_is_db_handle(handle) != 0 {
         let result = dispatch_sqlite_db(handle, method_name, &args);
         if result.to_bits() != perry_runtime::JSValue::undefined().bits() {
@@ -747,7 +690,7 @@ unsafe fn arm_http_server(handle: i64, method_name: &str, args: &[f64]) -> Optio
     // valid dispatch — the typed-feedback emit site doesn't consult the
     // native_table, and the runtime had no `HttpServer` arm.
     //
-    // Method-gated so a handle id reused by another registry (HashHandle,
+    // Method-gated so a handle id reused by another registry (SignHandle,
     // FastifyApp, …) doesn't misroute. The list mirrors the
     // `class_filter: Some("HttpServer")` rows in http.rs.
     {

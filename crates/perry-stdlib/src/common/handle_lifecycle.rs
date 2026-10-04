@@ -4,7 +4,9 @@
 //! the collector does not own. Two kinds of id are *parked* here:
 //!
 //! * **Reclaimable** payloads (`register_reclaimable_handle`): kinds whose only
-//!   owners are JS values — a `crypto.createHash()` result, a `StringDecoder`.
+//!   owners are JS values — a `crypto.createSign()` result, a `StringDecoder`
+//!   (crypto `Hash`/`Hmac`/`Cipheriv`/`Decipheriv` moved to ordinary objects
+//!   owning a native payload, #11919 P0, and no longer park ids here).
 //!   Nothing ever called `drop_handle` on them, so every one leaked its payload
 //!   and its id: a server hashing once per request exhausted the shared 262k-id
 //!   band after ~200k requests and panicked.

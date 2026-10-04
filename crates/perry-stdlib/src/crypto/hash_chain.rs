@@ -14,8 +14,8 @@
 //! leaves dead bytes in a frame that is unwinding anyway.
 //!
 //! Semantics are the handle path's, by construction: state creation, update
-//! decoding and digest encoding are the same functions `dispatch_hash` /
-//! `dispatch_hmac` call. A second `digest()` or an `update()` after `digest()`
+//! decoding and digest encoding are the same functions the `Hash` /
+//! `Hmac` object methods call. A second `digest()` or an `update()` after `digest()`
 //! still observes the finalized state and throws `ERR_CRYPTO_HASH_FINALIZED`
 //! (an HMAC's second `digest()` returns an empty value), exactly as on a
 //! registered handle.

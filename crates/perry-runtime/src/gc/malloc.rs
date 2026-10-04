@@ -120,7 +120,7 @@ impl MallocState {
     ///   teardown, never mid-program, so this cannot yank live objects out from
     ///   under running code.
     ///
-    /// # Why finalizers are deliberately NOT run here
+    /// # Why finalizers are deliberately NOT run here (except native handles)
     /// The sweep path pairs `dealloc` with `gc_type_finalize_unmarked_payload` /
     /// `layout_clear_for_ptr`, which reach into *other* thread-locals
     /// (`MAP_REGISTRY`, `MAP_INDEX`, `PROMISE_CONTEXTS`, the async-hooks queues,
@@ -151,6 +151,19 @@ impl MallocState {
                 let total_size = (*header).size as usize;
                 if total_size == 0 {
                     continue;
+                }
+                // #11919 P0: the one finalizer that DOES run here. An owned
+                // native-handle resource (a Rust payload's `Box`, a C
+                // resource) lives outside every arena, so skipping it leaks
+                // it at every worker exit. Its finalizer is basic native
+                // cleanup by contract (no thread-locals, no JS), so the TLS
+                // destruction-order hazard above does not apply, and the
+                // teardown variant leaves the pacing counters alone.
+                if (*header).obj_type == GC_TYPE_NATIVE_HANDLE {
+                    crate::native_handle::finalize_native_handle_at_teardown(
+                        (header as *mut u8).add(GC_HEADER_SIZE)
+                            as *mut crate::native_handle::NativeHandleHeader,
+                    );
                 }
                 let layout = Layout::from_size_align(total_size, 8).unwrap();
                 dealloc(header as *mut u8, layout);

@@ -159,7 +159,6 @@ pub extern "C" fn js_stdlib_install_database_sqlite() {
 pub extern "C" fn js_stdlib_install_crypto() {
     install_once!({
         super::dispatch::install_crypto();
-        super::async_bridge::install_crypto_pump();
     });
 }
 

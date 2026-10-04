@@ -1581,6 +1581,9 @@ pub fn scan_object_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
     // and be rewritten when they move — the same contract as the iterator
     // tower above.
     crate::timer::scan_timer_prototype_roots_mut(visitor);
+    // #11919 P0: the native-payload families' prototypes (crypto `Hash`,
+    // `Hmac`, `Cipheriv`, `Decipheriv`, ...). Same contract as the timers'.
+    crate::native_payload::scan_payload_prototype_roots_mut(visitor);
     // #340/#341: the five `perry/tui` prototypes and the three singleton
     // handles (`useApp` / `useStdout` / `useFocusManager`). The singletons are
     // a resource -> object mapping, not just a prototype: `useApp()` must be
