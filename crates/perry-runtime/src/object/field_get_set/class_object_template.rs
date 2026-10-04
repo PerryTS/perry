@@ -279,11 +279,14 @@ pub(crate) unsafe fn class_object_template_cell(obj: *const ObjectHeader) -> Opt
 }
 
 /// Give `obj`, fresh from its allocation and not yet marked a class object,
-/// its template key ([`CLASS_TEMPLATE_KEY`]) as its first own key. Returns
-/// the object, which the key's allocation may have moved.
-unsafe fn add_class_template_key(obj: *mut ObjectHeader, cell: TemplateCell) -> *mut ObjectHeader {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let class = scope.root_raw_mut_ptr(obj);
+/// its template key ([`CLASS_TEMPLATE_KEY`]) as its first own key. The caller
+/// keeps `class` rooted: the key's allocation may move the object, so it is
+/// read back from the handle, never from a pointer held across the call.
+unsafe fn add_class_template_key(
+    scope: &crate::gc::RuntimeHandleScope,
+    class: &crate::gc::RuntimeHandle<'_>,
+    cell: TemplateCell,
+) {
     let key = crate::string::js_string_from_bytes(
         CLASS_TEMPLATE_KEY.as_ptr(),
         CLASS_TEMPLATE_KEY.len() as u32,
@@ -299,7 +302,6 @@ unsafe fn add_class_template_key(obj: *mut ObjectHeader, cell: TemplateCell) -> 
             })
         });
     }
-    class.get_raw_mut_ptr::<ObjectHeader>()
 }
 
 /// An own key the runtime adds to a per-evaluation class object after its
@@ -431,12 +433,15 @@ pub extern "C" fn js_class_evaluation_object(
     let obj = crate::object::js_object_alloc(template_class_id, field_count);
     // Named while still an ordinary object: an own-key add to a class object
     // consults its static accessors, which mints the class value.
-    let obj = match cell {
-        Some(cell) => unsafe { add_class_template_key(obj, cell) },
-        None => obj,
-    };
-    crate::object::class_registry::js_object_mark_class(obj as i64);
-    unsafe {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let class = scope.root_raw_mut_ptr(obj);
+    if let Some(cell) = cell {
+        unsafe { add_class_template_key(&scope, &class, cell) };
+    }
+    class.with_mut_ptr::<ObjectHeader, _>(|obj| {
+        crate::object::class_registry::js_object_mark_class(obj as i64)
+    });
+    class.with_mut_ptr::<ObjectHeader, _>(|obj| unsafe {
         crate::object::parent_static::class_object_define_members(
             obj,
             template_class_id,
@@ -455,7 +460,7 @@ pub extern "C" fn js_class_evaluation_object(
                 }
             },
         ) as i64
-    }
+    })
 }
 
 /// Allocate a class object of template `class_id` directly in the template's
