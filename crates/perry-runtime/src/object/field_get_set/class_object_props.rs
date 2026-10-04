@@ -508,7 +508,7 @@ pub(super) unsafe fn class_object_name_value(
 /// relocation): resolve the `constructor` special key for an instance
 /// receiver. Own `constructor` data field wins; then WeakMap/WeakSet,
 /// the per-evaluation class-object registry (capture-carrying classes),
-/// vtable `constructor` methods, boxed primitives, anon shapes, the
+/// vtable `constructor` methods, boxed primitives, the
 /// function-class table, and the INT32 ClassRef synthesis. `None` means
 /// "not resolved here" — the caller falls through to the generic walk.
 pub(super) unsafe fn instance_constructor_value(
@@ -592,16 +592,11 @@ pub(super) unsafe fn instance_constructor_value(
         let v = js_get_global_this_builtin_value(name.as_ptr(), name.len());
         return Some(JSValue::from_bits(v.to_bits()));
     }
-    // Object-literal instances (`{ x: 1 }`) carry a synthetic
-    // `__AnonShape_*` class id. Spec says their `.constructor`
-    // is the global `Object`, not the synthetic class — so
-    // resolve through the globalThis singleton so the value
-    // matches the bare `Object` identifier (`x.constructor
-    // === Object`, date-fns `constructFrom`, drizzle's
-    // `isPlainObject` duck check).
+    // #11868: an anonymous shape is not a constructor identity. Let the
+    // ordinary lookup read Object.prototype's own property, including edits,
+    // deletion and accessors. The writable global Object binding is unrelated.
     if class_id != 0 && is_anon_shape_class_id(class_id) {
-        let v = js_get_global_this_builtin_value(b"Object".as_ptr(), 6);
-        return Some(JSValue::from_bits(v.to_bits()));
+        return None;
     }
     if let Some(func_value) = super::super::class_registry::function_value_for_class_id(class_id) {
         return Some(JSValue::from_bits(func_value.to_bits()));
@@ -643,26 +638,8 @@ pub(super) unsafe fn instance_constructor_value(
             crate::object::class_value::class_value(class_id).to_bits(),
         ));
     }
-    // class_id == 0 fallback: plain ObjectHeader allocated
-    // without an HIR shape (Object.create(null) hybrids, raw
-    // empty `{}` produced by JSON.parse, etc.). Report
-    // `Object` so duck-type tests don't trip undefined.
-    if class_id == 0 {
-        // #6537 review: an EXPLICIT null-prototype object
-        // (`Object.create(null)` / `js_object_alloc_null_proto`, marked with
-        // `OBJ_FLAG_NULL_PROTO` on the GC header) has NO `constructor` —
-        // fall through (→ undefined) instead of reporting `Object`. The
-        // `Object` report stays for ordinary shapeless objects (raw `{}`
-        // from JSON.parse etc.), which spec-correctly inherit
-        // `Object.prototype.constructor`.
-        if let Some(gc_header) = crate::value::addr_class::try_read_gc_header(obj as usize) {
-            if gc_header._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 {
-                return None;
-            }
-        }
-        let v = js_get_global_this_builtin_value(b"Object".as_ptr(), 6);
-        return Some(JSValue::from_bits(v.to_bits()));
-    }
+    // Ordinary objects without a class id also use the generic walk, which
+    // respects a null prototype instead of synthesizing a constructor.
     None
 }
 
