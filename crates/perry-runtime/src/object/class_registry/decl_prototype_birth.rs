@@ -106,7 +106,7 @@ pub(super) fn decl_prototype_born_final(class_id: u32, parent_bits: u64) -> Opti
     // no meta record to mirror it in. It is fresh and unobserved, so the link
     // is not prototype surgery and invalidates nothing.
     let proto = scope.root_raw_mut_ptr(crate::object::js_object_alloc(class_id, count));
-    if proto.get_raw_mut_ptr::<ObjectHeader>().is_null() {
+    if proto.with_mut_ptr::<ObjectHeader, _>(|p| p.is_null()) {
         return None;
     }
     let parent_bits = parent.get_heap_word_u64();
@@ -119,16 +119,18 @@ pub(super) fn decl_prototype_born_final(class_id: u32, parent_bits: u64) -> Opti
             );
         }
         let proto_id = crate::object::shapes::object_proto_id_for(p, parent_bits);
-        let stamped = crate::object::shapes::stamp_linked_final_shape(
-            p,
-            list.get_raw_mut_ptr::<crate::ArrayHeader>(),
-            count,
-            proto_id,
-            parent_bits,
-            // Slot 0 is `constructor` (a class function object, no lane);
-            // every method slot names its body.
-            |slot| slot != 0,
-        );
+        let stamped = list.with_mut_ptr::<crate::ArrayHeader, _>(|keys| {
+            crate::object::shapes::stamp_linked_final_shape(
+                p,
+                keys,
+                count,
+                proto_id,
+                parent_bits,
+                // Slot 0 is `constructor` (a class function object, no lane);
+                // every method slot names its body.
+                |slot| slot != 0,
+            )
+        });
         if stamped {
             crate::object::descriptor_state::note_attrs_born_with_keys(p as usize);
         }
@@ -140,11 +142,12 @@ pub(super) fn decl_prototype_born_final(class_id: u32, parent_bits: u64) -> Opti
         return None;
     }
     crate::gc::runtime_shade_external_edge(parent_bits);
-    let proto = proto.get_raw_mut_ptr::<ObjectHeader>();
-    super::state::class_decl_prototype_object_root_store(class_id, proto);
+    proto.with_mut_ptr::<ObjectHeader, _>(|p| {
+        super::state::class_decl_prototype_object_root_store(class_id, p)
+    });
     #[cfg(test)]
     BORN_FINAL_BUILDS.with(|n| n.set(n.get() + 1));
-    Some(crate::value::js_nanbox_pointer(proto as i64))
+    Some(proto.with_mut_ptr::<ObjectHeader, _>(|p| crate::value::js_nanbox_pointer(p as i64)))
 }
 
 #[cfg(test)]

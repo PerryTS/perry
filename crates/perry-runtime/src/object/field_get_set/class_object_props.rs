@@ -129,6 +129,7 @@ unsafe fn class_evaluation_prototype_value(obj: *const ObjectHeader) -> f64 {
     if let Some(parent_proto) = &parent_proto {
         if let Some(proto) = class.with_mut_ptr::<ObjectHeader, _>(|class| {
             super::class_object_template::prototype_from_template(
+                &scope,
                 class,
                 class_id,
                 parent_proto.get_heap_word_u64(),
@@ -136,7 +137,6 @@ unsafe fn class_evaluation_prototype_value(obj: *const ObjectHeader) -> f64 {
         }) {
             CLASS_EVALUATION_PROTOTYPES_MATERIALIZED
                 .store(true, std::sync::atomic::Ordering::Relaxed);
-            let proto = scope.root_raw_mut_ptr(proto);
             let proto_value = proto
                 .with_mut_ptr::<ObjectHeader, _>(|p| crate::value::js_nanbox_pointer(p as i64));
             class.with_mut_ptr::<ObjectHeader, _>(|class| {

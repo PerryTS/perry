@@ -108,16 +108,15 @@ fn later_evaluations_are_born_in_the_template_shapes() {
         let shape = |h: &crate::gc::RuntimeHandle<'_>| {
             h.with_mut_ptr::<ObjectHeader, _>(|o| crate::object::shapes::object_shape_id(o))
         };
-        let c = classes
-            .iter()
-            .map(|h| h.get_raw_mut_ptr::<ObjectHeader>())
-            .collect::<Vec<_>>();
-        let p = protos
-            .iter()
-            .map(|h| h.get_raw_mut_ptr::<ObjectHeader>())
-            .collect::<Vec<_>>();
+        let addr =
+            |h: &crate::gc::RuntimeHandle<'_>| h.with_mut_ptr::<ObjectHeader, _>(|o| o as usize);
+        let slot_of = |h: &crate::gc::RuntimeHandle<'_>, key: &[u8]| {
+            h.with_mut_ptr::<ObjectHeader, _>(|o| slot(o, key))
+        };
         assert!(
-            c[0] != c[1] && p[0] != p[1] && p[1] != p[2],
+            addr(&classes[0]) != addr(&classes[1])
+                && addr(&protos[0]) != addr(&protos[1])
+                && addr(&protos[1]) != addr(&protos[2]),
             "one object per evaluation"
         );
         assert_eq!(shape(&classes[0]), shape(&classes[1]));
@@ -125,39 +124,43 @@ fn later_evaluations_are_born_in_the_template_shapes() {
         assert_eq!(shape(&protos[0]), shape(&protos[1]));
         assert_eq!(shape(&protos[1]), shape(&protos[2]));
         for i in 0..3 {
-            let s = slot(c[i], b"s");
-            assert!(
-                static_method_value_runs(s, info, c[i]),
-                "s of evaluation {i} is at home in it"
-            );
-            let m = slot(p[i], b"m");
-            assert!(
-                static_method_value_runs(m, info, c[i]),
-                "m of evaluation {i} is at home in it"
-            );
-            assert_eq!(
-                slot(p[i], b"constructor"),
-                crate::value::js_nanbox_pointer(c[i] as i64).to_bits(),
-                "prototype {i}'s constructor is its class object"
-            );
-            assert_eq!(
-                super::super::class_registry::class_object_own_field_bytes(
-                    c[i],
-                    super::class_object_props::CLASS_EVALUATION_PROTOTYPE_KEY,
-                )
-                .map(f64::to_bits),
-                Some(crate::value::js_nanbox_pointer(p[i] as i64).to_bits()),
-                "class object {i} links its own prototype"
-            );
+            classes[i].with_mut_ptr::<ObjectHeader, _>(|c| {
+                protos[i].with_mut_ptr::<ObjectHeader, _>(|p| {
+                    let s = slot(c, b"s");
+                    assert!(
+                        static_method_value_runs(s, info, c),
+                        "s of evaluation {i} is at home in it"
+                    );
+                    let m = slot(p, b"m");
+                    assert!(
+                        static_method_value_runs(m, info, c),
+                        "m of evaluation {i} is at home in it"
+                    );
+                    assert_eq!(
+                        slot(p, b"constructor"),
+                        crate::value::js_nanbox_pointer(c as i64).to_bits(),
+                        "prototype {i}'s constructor is its class object"
+                    );
+                    assert_eq!(
+                        super::super::class_registry::class_object_own_field_bytes(
+                            c,
+                            super::class_object_props::CLASS_EVALUATION_PROTOTYPE_KEY,
+                        )
+                        .map(f64::to_bits),
+                        Some(crate::value::js_nanbox_pointer(p as i64).to_bits()),
+                        "class object {i} links its own prototype"
+                    );
+                })
+            });
         }
         assert_ne!(
-            slot(c[1], b"s"),
-            slot(c[2], b"s"),
+            slot_of(&classes[1], b"s"),
+            slot_of(&classes[2], b"s"),
             "statics are per evaluation"
         );
         assert_ne!(
-            slot(p[1], b"m"),
-            slot(p[2], b"m"),
+            slot_of(&protos[1], b"m"),
+            slot_of(&protos[2], b"m"),
             "methods are per evaluation"
         );
     }

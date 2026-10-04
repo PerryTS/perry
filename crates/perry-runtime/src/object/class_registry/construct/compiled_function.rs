@@ -124,7 +124,7 @@ unsafe fn birth_record(proto: *const ObjectHeader) -> Option<(u32, u32, u32)> {
 /// it was minted from.
 #[cold]
 #[inline(never)]
-unsafe fn mint_birth_record(func_value: f64, proto: *mut ObjectHeader) -> *mut ObjectHeader {
+unsafe fn mint_birth_record(func_value: f64, proto: *mut ObjectHeader) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let proto_handle = scope.root_raw_mut_ptr(proto);
     let class_id = synthetic_class_id_for_function(func_value);
@@ -146,7 +146,7 @@ unsafe fn mint_birth_record(func_value: f64, proto: *mut ObjectHeader) -> *mut O
     // GC_STORE_AUDIT(POINTER_FREE): a class id and a ShapeId, never a heap
     // reference.
     (*meta).instance_birth = u64::from(class_id) | u64::from(shape_id) << 32;
-    obj.get_raw_mut_ptr::<ObjectHeader>()
+    obj.with_mut_ptr::<ObjectHeader, _>(|o| crate::value::js_nanbox_pointer(o as i64))
 }
 
 /// The class `class_id`'s registered prototype moved from `old` to another
@@ -205,11 +205,12 @@ pub(super) unsafe fn construct_ordinary_compiled_function(
         }
         None => return None,
     };
-    let obj = match birth_record(proto) {
-        Some((class_id, shape_id, slots)) => born_from_record(class_id, shape_id, slots),
+    let instance = match birth_record(proto) {
+        Some((class_id, shape_id, slots)) => {
+            crate::value::js_nanbox_pointer(born_from_record(class_id, shape_id, slots) as i64)
+        }
         None => mint_birth_record(func_handle.get_nanbox_f64(), proto),
     };
-    let instance = crate::value::js_nanbox_pointer(obj as i64);
     Some(run_constructor_body(
         func_handle.get_nanbox_f64(),
         instance,
