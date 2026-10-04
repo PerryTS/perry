@@ -61,9 +61,127 @@ pub extern "C" fn js_object_is(a: f64, b: f64) -> f64 {
     }
 }
 
+/// `Object.hasOwn(o, k)` for an ordinary object `o` and a string `k`,
+/// answered by `o`'s shape: `Some(present)`, or `None` when the shape does not
+/// answer and the generic arms below decide.
+///
+/// The receiver is a POINTER-tagged value above the handle band whose `+4`
+/// word names an ordinary record of this agent (shape rule 3: no other cell
+/// kind holds a ShapeId there, so no header read is needed to know it is a
+/// `GC_TYPE_OBJECT`), and the record answers for its own keys
+/// (`shapes::plain_own_key_present`: no class object, dictionary, tombstone,
+/// accessor, private key, `process.env`, arguments object or module
+/// namespace). The generic arms are then silent for it but for the
+/// per-object facts tested here, each only on the answer it can change:
+///
+/// * the handle, Proxy, symbol-key, coercing-key and string-receiver arms
+///   cannot apply (tags and the handle floor);
+/// * a class id the runtime assigns (`FIRST_RUNTIME_CLASS_ID` and up: the
+///   builtin bands, with boxed primitives, the String wrapper's index keys,
+///   native modules and builtin instances, and the synthetic prototype-object
+///   classes) declines;
+/// * an Array-subclass elements store (its meta record) declines;
+/// * PRESENT: a runtime-internal key of a class instance is no property
+///   (`own_key_hidden_bytes`; every such spelling starts with `_` or `#`),
+///   and `%Function.prototype%`'s installed `Object.prototype` thunks are
+///   not its own (it is runtime-born, so never of kind `Ordinary`);
+/// * ABSENT: a class's declared or evaluated prototype owns its vtable
+///   methods and `constructor` without listing them.
+///
+/// No user code and no allocation, except that the %Function.prototype%
+/// test may resolve that intrinsic's memo once, as the generic arm does; no
+/// receiver word is read after it.
+/// The first class id that is not a codegen-assigned one: the builtin band
+/// `0x7FFF_FF00..=0x7FFF_FFFF`, then the synthetic and `0xFFFF_0000..` bands
+/// above it (`class_registry::prototype_objects`).
+const FIRST_RUNTIME_CLASS_ID: u32 = 0x7FFF_FF00;
+
+///
+/// # Safety
+/// [`shape_may_answer`] holds for `obj_bits` and `key_bits`.
+#[inline(never)]
+unsafe fn ordinary_own_key_present(obj_bits: u64, key_bits: u64) -> Option<bool> {
+    let key = crate::JSValue::from_bits(key_bits);
+    let addr = (obj_bits & crate::value::POINTER_MASK) as usize;
+    let obj = addr as *const ObjectHeader;
+    let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let text = crate::string::js_string_key_bytes(key, &mut sso)?;
+    let (present, kind) = super::super::shapes::plain_own_key_present(
+        super::super::shapes::ordinary_dir_addr(),
+        (*obj).parent_class_id,
+        key_bits,
+        text,
+    )?;
+    let class_id = (*obj).class_id;
+    if class_id >= FIRST_RUNTIME_CLASS_ID
+        || !crate::array::subclass_elements::elements_of(obj).is_null()
+    {
+        return None;
+    }
+    if present {
+        if class_id != 0
+            && matches!(text.first(), Some(b'_' | b'#'))
+            && super::super::field_get_set::is_internal_runtime_key_bytes(text)
+        {
+            return None;
+        }
+        if kind != super::super::shapes::ShapeObjectKind::Ordinary
+            && addr == crate::array::function_prototype_addr()
+        {
+            return None;
+        }
+    } else if class_id != 0
+        && (super::super::class_value::class_decl_prototype_link(class_id) as usize == addr
+            || super::super::field_get_set::class_evaluation_prototype_class_id(addr).is_some())
+    {
+        // `class_registry::class_id_for_decl_prototype_object` without its
+        // header read: the receiver is already known to be an object.
+        return None;
+    }
+    Some(present)
+}
+
 /// Object.hasOwn(obj, key) - check if obj has its own property `key`.
 #[no_mangle]
 pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
+    const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
+    const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
+    let (obj_bits, key_bits) = (obj_value.to_bits(), key_value.to_bits());
+    // SAFETY: both read only a POINTER-tagged receiver above the handle floor
+    // (shape rule 3) and a string key's own bytes.
+    unsafe {
+        if shape_may_answer(obj_bits, key_bits) {
+            if let Some(present) = ordinary_own_key_present(obj_bits, key_bits) {
+                return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
+            }
+        }
+    }
+    object_has_own_generic(obj_value, key_value)
+}
+
+/// The register-only gate in front of [`ordinary_own_key_present`]: a
+/// POINTER-tagged receiver above the handle floor whose `+4` word is in the
+/// ShapeId range, and a string key. Every other receiver (an array, whose
+/// `+4` is its capacity; a handle; a primitive) goes straight to the generic
+/// arms without the shape answer's frame.
+///
+/// # Safety
+/// `obj_bits` is a live value.
+#[inline(always)]
+unsafe fn shape_may_answer(obj_bits: u64, key_bits: u64) -> bool {
+    let key = crate::JSValue::from_bits(key_bits);
+    obj_bits >> 48 == 0x7FFD
+        && (key.is_string() || key.is_short_string())
+        && (obj_bits & crate::value::POINTER_MASK) as usize >= perry_abi::RECEIVER_HANDLE_FLOOR
+        && super::super::shapes::is_shape_id(
+            (*((obj_bits & crate::value::POINTER_MASK) as *const ObjectHeader)).parent_class_id,
+        )
+}
+
+/// [`js_object_has_own`] for every receiver and key the shape does not answer
+/// for. Out of line, like the shape answer, so neither pays the other's frame.
+#[inline(never)]
+fn object_has_own_generic(obj_value: f64, key_value: f64) -> f64 {
     const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
     const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
     unsafe {
@@ -174,7 +292,16 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
         // other. The already-heap-string key, which is what
         // `o.hasOwnProperty("x")` compiles to for names past the SSO bound,
         // keeps the pre-fix path verbatim.
-        let (obj_value, obj_js, key_str) = if crate::builtins::string_coerce_is_inert(key_value) {
+        let key_js = crate::JSValue::from_bits(key_value.to_bits());
+        let (obj_value, obj_js, key_str) = if key_js.is_string() {
+            // A heap string is its own coercion (`js_string_coerce` answers
+            // it with the same pointer), so the call is skipped.
+            (
+                obj_value,
+                obj_js,
+                key_js.as_string_ptr() as *mut crate::StringHeader,
+            )
+        } else if crate::builtins::string_coerce_is_inert(key_value) {
             (
                 obj_value,
                 obj_js,
