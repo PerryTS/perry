@@ -213,8 +213,37 @@ enum WorkerCommand {
     Terminate,
 }
 
+/// The parent's end of a worker's command channel. Every send also wakes the
+/// worker's own loop: while the worker has I/O in flight it blocks in that
+/// loop, not on this channel (see the wait in `js_worker_threads_worker_new`).
+#[derive(Clone)]
+struct WorkerSender {
+    tx: Sender<WorkerCommand>,
+    /// The worker's agent id, published by the worker thread before it runs
+    /// any JS (so before it can have I/O in flight); 0 until then.
+    agent: std::sync::Arc<AtomicU64>,
+}
+
+impl WorkerSender {
+    fn new(tx: Sender<WorkerCommand>) -> Self {
+        Self {
+            tx,
+            agent: std::sync::Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    fn send(&self, command: WorkerCommand) -> Result<(), mpsc::SendError<WorkerCommand>> {
+        self.tx.send(command)?;
+        let agent = self.agent.load(Ordering::Acquire);
+        if agent != 0 {
+            perry_runtime::event_pump::notify_agent_loop(agent);
+        }
+        Ok(())
+    }
+}
+
 struct WorkerRecord {
-    sender: Sender<WorkerCommand>,
+    sender: WorkerSender,
     /// NaN-boxed Worker handle used as the target for property handlers such
     /// as `worker.onmessage = fn`. Kept as a mutable GC root below.
     object_bits: u64,
@@ -392,7 +421,7 @@ pub(crate) mod thread_exit_probe {
             }],
         );
         let mut record = WorkerRecord {
-            sender: tx,
+            sender: WorkerSender::new(tx),
             object_bits,
             listeners,
             alive: false,
@@ -703,11 +732,21 @@ fn pump_worker_microtasks() {
         // this worker's arena. That is what lets `await` of a timer — or of
         // anything a timer ultimately resolves — resume inside a worker.
         ran += perry_runtime::timer::js_await_loop_tick_timers();
+        // This worker's native completions (#11433 tags each with its owner
+        // agent, so this settles only promises in this worker's heap): a
+        // fetch's response lands here once a turn of the worker's own loop
+        // collects it, and nothing else ever settles it.
+        ran += crate::common::async_bridge::js_stdlib_process_pending();
         if ran == 0 {
             break;
         }
     }
 }
+
+/// Upper bound on one park in the worker's own loop while it has I/O in
+/// flight. Completions and sends wake the park early; this only bounds how
+/// stale an unrelated check (a close request) can get.
+const WORKER_IO_PARK_MS: u64 = 1000;
 
 /// How long the worker may block waiting for its next command.
 ///
@@ -1460,6 +1499,8 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
         }
     };
     let (tx, rx) = mpsc::channel::<WorkerCommand>();
+    let sender = WorkerSender::new(tx);
+    let published_agent = sender.agent.clone();
     let worker_obj = worker_object(worker_id, &options_state);
     let resource_scope = perry_runtime::gc::RuntimeHandleScope::new();
     let mut async_resources = [perry_runtime::async_hooks::AsyncResourceIds {
@@ -1487,7 +1528,7 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
         resource_handles[2].get_nanbox_f64().to_bits(),
     ];
     let mut record = WorkerRecord {
-        sender: tx,
+        sender: sender.clone(),
         object_bits: object_value(worker_obj).to_bits(),
         listeners: HashMap::new(),
         alive: false,
@@ -1540,6 +1581,7 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
             // later by `ensure_loop_with` — failing after acceptance instead of
             // taking the fallback path.
             let worker_agent = perry_runtime::agent::enter_worker_agent();
+            published_agent.store(worker_agent, Ordering::Release);
             let previous_env = apply_worker_env(&thread_options.env);
             CURRENT_WORKER_ID.with(|id| id.set(worker_id));
             CURRENT_PARENT_AGENT.with(|agent| agent.set(parent_agent));
@@ -1571,19 +1613,49 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
                     loop {
                         // #10854: a continuation may be waiting on a timer another
                         // thread owns, so bound the wait when anything is pending.
-                        let received = match worker_wait_budget() {
-                            Some(budget) => match rx.recv_timeout(budget) {
-                                Ok(command) => Ok(command),
-                                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                                    pump_worker_microtasks();
-                                    continue;
+                        // A worker with I/O in flight (a fetch, a socket) must turn
+                        // its own loop: only a turn on THIS thread completes that
+                        // I/O, and blocking on the channel instead left every
+                        // fetch in a worker pending forever (OpenCode's TUI server
+                        // timed out fetching models.dev and never finished its
+                        // bootstrap). A send wakes the turn (`WorkerSender::send`),
+                        // and the notification latches, so a message that arrives
+                        // after `try_recv` and before the park is not missed.
+                        let received =
+                            if perry_runtime::event_pump::agent_loop_has_outstanding_work() {
+                                match rx.try_recv() {
+                                    Ok(command) => Ok(command),
+                                    Err(mpsc::TryRecvError::Empty) => {
+                                        let budget_ms = worker_wait_budget()
+                                            .map_or(WORKER_IO_PARK_MS, |budget| {
+                                                budget.as_millis() as u64
+                                            });
+                                        perry_runtime::event_pump::js_loop_turn_bounded(budget_ms);
+                                        pump_worker_microtasks();
+                                        if CURRENT_WORKER_CLOSE_REQUESTED.with(Cell::get) {
+                                            return;
+                                        }
+                                        continue;
+                                    }
+                                    Err(mpsc::TryRecvError::Disconnected) => {
+                                        Err(std::sync::mpsc::RecvError)
+                                    }
                                 }
-                                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                                    Err(std::sync::mpsc::RecvError)
+                            } else {
+                                match worker_wait_budget() {
+                                    Some(budget) => match rx.recv_timeout(budget) {
+                                        Ok(command) => Ok(command),
+                                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                                            pump_worker_microtasks();
+                                            continue;
+                                        }
+                                        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                                            Err(std::sync::mpsc::RecvError)
+                                        }
+                                    },
+                                    None => rx.recv(),
                                 }
-                            },
-                            None => rx.recv(),
-                        };
+                            };
                         match received {
                             Ok(WorkerCommand::Message(message)) => {
                                 deliver_parent_port_message(&message);

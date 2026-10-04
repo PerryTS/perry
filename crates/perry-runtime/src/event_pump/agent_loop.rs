@@ -1105,6 +1105,29 @@ pub fn post_to_agent(
         })
 }
 
+/// Wake the loop `agent`'s owner thread turns, parked or not.
+///
+/// A worker blocks in its own loop while it has I/O in flight, so a message
+/// handed to it over a channel must also reach that loop, or it waits until
+/// the I/O completes. The notification latches: one sent before the owner's
+/// next turn begins makes that turn nonblocking, so a send that races the
+/// owner's "anything queued?" check is never lost. Nothing happens when the
+/// agent has no published loop.
+pub fn notify_agent(agent: AgentId) {
+    let notifier = {
+        let routes = ROUTES.lock().unwrap_or_else(PoisonError::into_inner);
+        routes
+            .iter()
+            .find(|route| route.agent == agent)
+            .and_then(|route| route.notifier.clone())
+    };
+    // Outside the registry lock, like `post_to_agent`. Err means the loop is
+    // closing: there is no waiter left to wake.
+    if let Some(notifier) = notifier {
+        let _ = notifier.notify();
+    }
+}
+
 /// Whether a post to `agent` would reach a loop, asked without building a job.
 ///
 /// A binding has to decide which transport a connection lives on *before* it
