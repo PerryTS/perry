@@ -10,6 +10,31 @@ use crate::ir::*;
 use super::super::{lower_expr, LoweringContext};
 use super::os::user_info_expr_for_call;
 
+/// The first argument of a spread call, after expansion: `xs` in `f(...xs)`
+/// is `[...xs][0]`, an element of the iterated operand and not the operand.
+///
+/// For a built-in that takes one value and ignores the rest (`BigInt`,
+/// `Symbol`). Every operand is still evaluated, in order, by building the
+/// expanded list; an empty list reads `undefined`, as a missing argument does.
+fn first_expanded_arg(call: &ast::CallExpr, args: Vec<Expr>) -> Expr {
+    let elements = call
+        .args
+        .iter()
+        .zip(args)
+        .map(|(source, lowered)| {
+            if source.spread.is_some() {
+                ArrayElement::Spread(lowered)
+            } else {
+                ArrayElement::Expr(lowered)
+            }
+        })
+        .collect();
+    Expr::IndexGet {
+        object: Box::new(Expr::ArraySpread(elements)),
+        index: Box::new(Expr::Integer(0)),
+    }
+}
+
 pub(super) fn try_global_builtins(
     ctx: &mut LoweringContext,
     call: &ast::CallExpr,
@@ -30,8 +55,9 @@ pub(super) fn try_global_builtins(
         }
         match func_name {
             // A spread call declines: see `call_has_spread_arg`. Not `BigInt`
-            // / `Symbol`: called as values they do not yet reach the real
-            // built-in, so the generic tail is no better for them today.
+            // / `Symbol`: called as values they do not reach the real
+            // built-in, so the generic tail is no better for them. Their arms
+            // below take the first element of the expanded argument list.
             "parseInt" | "parseFloat" | "Number" | "String" | "Boolean" | "Object" | "Array"
             | "isNaN" | "isFinite" | "atob" | "btoa" | "encodeURI" | "decodeURI"
             | "encodeURIComponent" | "decodeURIComponent" | "structuredClone"
@@ -66,6 +92,16 @@ pub(super) fn try_global_builtins(
                     // Number() with no args returns 0
                     return Ok(Ok(Expr::Number(0.0)));
                 }
+            }
+            "BigInt" if has_spread => {
+                return Ok(Ok(Expr::BigIntCoerce(Box::new(first_expanded_arg(
+                    call, args,
+                )))));
+            }
+            "Symbol" if has_spread => {
+                return Ok(Ok(Expr::SymbolNew(Some(Box::new(first_expanded_arg(
+                    call, args,
+                ))))));
             }
             "BigInt" => {
                 if !args.is_empty() {

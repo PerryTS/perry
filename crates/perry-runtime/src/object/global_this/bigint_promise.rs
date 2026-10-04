@@ -228,15 +228,20 @@ pub(crate) extern "C" fn array_from_thunk(
     _closure: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,
     value: f64,
+    map_fn: f64,
+    this_arg: f64,
 ) -> f64 {
+    // `Array.from(items, mapFn, thisArg)` read as a value (`const f = Array.from`,
+    // `Reflect.apply`, a spread call) must apply `mapFn`; only the first operand
+    // was declared, so the callback was dropped.
+    //
     // Reflective `Array.from.call(C, items)` / `Array.from.apply(C, [items])`
     // passes `C` as `this`. Run the spec algorithm — when `C IsConstructor`,
     // the result is built via `Construct(C)`. A plain reflective call (no
     // explicit receiver) leaves `this` as undefined / a non-constructor, so
     // the default `%Array%` path is taken.
     let c = this.as_f64();
-    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
-    crate::array::array_from_full(c, value, undefined, undefined)
+    crate::array::array_from_full(c, value, map_fn, this_arg)
 }
 
 pub(crate) extern "C" fn array_of_thunk(

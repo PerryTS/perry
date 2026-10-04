@@ -11,10 +11,17 @@ use swc_ecma_ast as ast;
 
 pub(super) fn try_buffer_uint8array_statics(
     ctx: &LoweringContext,
+    call: &ast::CallExpr,
     member: &ast::MemberExpr,
     obj_name: &str,
     args: Vec<Expr>,
 ) -> Result<Result<Expr, Vec<Expr>>> {
+    // Every arm below reads `args` positionally, so a spread operand would be
+    // taken as the one argument holding the whole array: a spread call
+    // declines (see `call_has_spread_arg`) and reaches the generic tail.
+    if super::super::call_has_spread_arg(call) {
+        return Ok(Err(args));
+    }
     // Check for Buffer static methods. Issue #831: aliased
     // imports of Buffer (`import { Buffer as RuntimeBuffer } from
     // "node:buffer"`) must route through the same dedicated

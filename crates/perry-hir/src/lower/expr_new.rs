@@ -73,6 +73,39 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
         }
     }
 
+    // A built-in constructor with a spread argument (`new Date(...ymd)`,
+    // `new Map(...[entries])`): every per-constructor branch below consumes
+    // its arguments positionally, so the spread operand arrived as ONE
+    // argument holding the whole array (`new Date(...[2020, 0, 2])` was NaN,
+    // `new Set(...[[1]])` was empty). Construct the real global by value so
+    // the spread positions survive, as `new Function(...parts)` does below.
+    // `Function` keeps its own arm: it records the dynamic-eval site. A local
+    // or a user class of the same name never gets here (the generic construct
+    // shape above takes it); an import, a function or a hoisted class of the
+    // same name is tested below.
+    if let (Some(args_ast), ast::Expr::Ident(callee_ident)) =
+        (new_expr.args.as_deref(), callee_expr)
+    {
+        let name = callee_ident.sym.as_ref();
+        if args_ast.iter().any(|a| a.spread.is_some())
+            && name != "Function"
+            && is_reified_global_builtin_constructor(name)
+            && ctx.lookup_native_module(name).is_none()
+            && !global_name_has_user_binding(ctx, name)
+        {
+            let args = lower_new_spread_args(ctx, args_ast)?;
+            return Ok(Expr::NewDynamicSpread {
+                callee: Box::new(Expr::PropertyGet {
+                    byte_offset: 0,
+                    object: Box::new(Expr::GlobalGet(0)),
+                    property: name.to_string(),
+                }),
+                args,
+                byte_offset: new_byte_offset,
+            });
+        }
+    }
+
     if let ast::Expr::Ident(callee_ident) = callee_expr {
         // Bun.Terminal returns an already-built runtime object. Like
         // bun:ffi's explicit-return constructors below, a named import must
