@@ -1,6 +1,15 @@
 //! Readable `read()` consumption helpers, split from node_stream_readwrite.rs.
 use super::*;
 
+/// Test seam marking an allocation inside a window that holds JS values: a
+/// test installs a hook that collects here, standing in for a collection
+/// triggered by that allocation. Compiles to nothing outside tests.
+#[inline(always)]
+pub(super) fn allocation_point() {
+    #[cfg(test)]
+    rooted_gc_tests::at_allocation_point();
+}
+
 pub(super) fn read_stream_with_size_arg(stream: f64, size: f64) -> f64 {
     let size_value = JSValue::from_bits(size.to_bits());
     if size_value.is_undefined() || !size_value.is_number() {
@@ -99,6 +108,7 @@ fn drain_whole_buffer(stream: f64, mut values: Vec<f64>) -> f64 {
     if readable_encoding_tag(stream).is_some() {
         let mut decoded = Vec::with_capacity(values.len());
         for value in values {
+            allocation_point();
             if let Some(value) = super::decode_readable_chunk_for_encoding(stream, value) {
                 decoded.push(value);
             }
@@ -222,6 +232,7 @@ fn read_stream_exact_bytes(stream: f64, requested: usize) -> f64 {
         let rest = &bytes[needed..];
         if !rest.is_empty() {
             remaining_len += rest.len();
+            allocation_point();
             remaining_values.push(buffer_value_from_bytes(rest));
         }
         needed = 0;
@@ -285,3 +296,7 @@ pub(super) fn read_stream_object_mode_chunk(stream: f64) -> f64 {
     }
     chunk
 }
+
+#[cfg(test)]
+#[path = "node_stream_rooted_gc_tests.rs"]
+mod rooted_gc_tests;

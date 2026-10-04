@@ -1338,6 +1338,7 @@ pub(super) fn build_node_stream_compose(args: Vec<f64>) -> f64 {
     }
 
     if compose_first_arg_is_source(args[0]) {
+        allocation_point();
         let source = normalize_compose_source(args[0]);
         return new_composed_duplex(&args[1..], Some(source), true);
     }

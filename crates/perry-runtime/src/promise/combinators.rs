@@ -1740,3 +1740,7 @@ extern "C" fn promise_any_reject_handler(
 #[cfg(test)]
 #[path = "combinators_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "combinators_gc_tests.rs"]
+mod gc_tests;
