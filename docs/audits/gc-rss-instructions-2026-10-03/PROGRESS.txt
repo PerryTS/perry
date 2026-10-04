@@ -1,3 +1,16 @@
+PRIVATE OLD-HOLE APPLICATION PROBE VERIFIED / REJECTED (2026-10-04 00:35Z)
+48/48correct full-runtime measurements,8build records (4exact reused GC
+controls+4fresh candidate builds), allsource/product/raw RSS/instructions
+verified independently. Rawarchive copied locally and rehashed. Base2026ecfe,
+notmain07. Candidate remained private. Signed RSS/instructions/faults%:
+TS +0.201/+0.429/+19.040; Zod +0.589/+0.079/-0.076;
+requests -0.342/+0.291/-0.272; strings -0.073/-0.023/+0.052.
+No material peak-RSS gain to justify the TS instructions/faults increase.
+Do not adopt this old-hole policy; no full17acceptance claim. Meaningful
+Linux mincore/header/link/reuse correctness remains independently proven,
+but cannot establish application benefit. Focus continues on the once-per-
+idle-interval Eden experiment and current07 revalidation.
+
 PRIVATE ONCE-ADVICE IMPLEMENTED; CURRENT07 LINUX VERIFIED (2026-10-04 00:30Z)
 Current07 Linux baseline4840/proposal4860/originalentry4861 pass with0failed,
 5ignored each. 25source/build/product/raw proof files copied locally and
