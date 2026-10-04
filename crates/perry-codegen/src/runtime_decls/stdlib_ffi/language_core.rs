@@ -537,6 +537,12 @@ pub(crate) fn declare_core(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, DOUBLE, DOUBLE],
     );
+    // A static key of a source-ordered literal: CreateDataPropertyOrThrow.
+    module.declare_function(
+        "js_object_literal_define",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
     module.declare_function("js_object_literal_to_property_key", DOUBLE, &[DOUBLE]);
     module.declare_function("js_object_literal_set_prototype", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_to_primitive", DOUBLE, &[DOUBLE, I32]);

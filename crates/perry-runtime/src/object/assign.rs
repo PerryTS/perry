@@ -154,6 +154,7 @@ unsafe fn object_assign_throw_if_symbol_set_rejected(target: *mut ObjectHeader, 
 }
 
 unsafe fn object_assign_set_string_key(
+    define: bool,
     target: *mut ObjectHeader,
     target_is_array: bool,
     key_ptr: *const crate::StringHeader,
@@ -183,6 +184,8 @@ unsafe fn object_assign_set_string_key(
             key_ptr,
             value_f64,
         );
+    } else if define {
+        object_define_string_key(target, key_ptr, value_f64);
     } else {
         // Strict `Set` semantics: reject (throw) a write the ordinary `[[Set]]`
         // would silently drop.
@@ -199,7 +202,204 @@ unsafe fn object_assign_set_string_key(
     }
 }
 
+/// CopyDataProperties' store: `CreateDataPropertyOrThrow(target, key, v)` on
+/// the fresh object of a spread literal. The prototype chain is never asked;
+/// the receiver shape answers the common case (`define_own_data`). When
+/// nothing can intercept a write for the key, `[[Set]]` performs this exact
+/// definition and is the path that teaches the lattice its key-add edge;
+/// otherwise the general definition runs.
+unsafe fn object_define_string_key(
+    target: *mut ObjectHeader,
+    key_ptr: *const crate::StringHeader,
+    value_f64: f64,
+) {
+    let target_value = crate::value::js_nanbox_pointer(target as i64);
+    let key_value = f64::from_bits(JSValue::string_ptr(key_ptr as *mut _).bits());
+    if super::define_own_data::define_own_data_from_shape(target_value, key_value, value_f64)
+        .is_some()
+    {
+        return;
+    }
+    if !super::descriptor_state::plain_data_write_may_intercept(target as usize, 0, key_value) {
+        js_object_set_field_by_name(target, key_ptr, value_f64);
+        return;
+    }
+    if !crate::proxy::create_data_property(target_value, key_value, value_f64) {
+        crate::collection_iter::throw_type_error("Cannot define property on object literal");
+    }
+}
+
+/// Copy a plain source whose SHAPE answers CopyDataProperties' questions:
+/// its key list is the own string keys in order, its attribute summary proves
+/// every one an enumerable data property (no accessor, so `[[Get]]` is the
+/// slot and runs no code), and no per-object descriptor exists. Each value is
+/// then read by its POSITION, and the key word the list holds is handed to the
+/// store as is: no key is spelled, decoded or looked up by name on the source.
+///
+/// `false` (nothing copied) for anything else: a class instance or a
+/// prototype object, a string wrapper, a dictionary, a URL view, an object
+/// with descriptors or non-default attributes.
+///
+/// # Safety
+/// `tgt_h` roots the target object and `src_h` the source object.
+unsafe fn copy_positional_source(
+    define: bool,
+    tgt_h: &crate::gc::RuntimeHandle<'_>,
+    src_h: &crate::gc::RuntimeHandle<'_>,
+    target_is_array: bool,
+) -> bool {
+    let (keys, key_count, hide_private) =
+        match src_h.with_const_ptr::<ObjectHeader, _>(|src| positional_source_plan(src)) {
+            PositionalPlan::Refused => return false,
+            PositionalPlan::NoKeys => return true,
+            PositionalPlan::Keys(keys, count, hide) => (keys, count, hide),
+        };
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let keys_h = scope.root_raw_mut_ptr(keys);
+    for i in 0..key_count {
+        // The previous store may have allocated: every address is re-derived
+        // from its root, and the read allocates nothing.
+        let Some((key_val, value)) = src_h.with_const_ptr::<ObjectHeader, _>(|src| {
+            keys_h.with_const_ptr::<crate::array::ArrayHeader, _>(|keys| {
+                positional_entry(src, keys, key_count, i, hide_private)
+            })
+        }) else {
+            continue;
+        };
+        let iter_scope = crate::gc::RuntimeHandleScope::new();
+        let val_h = iter_scope.root_nanbox_f64(value);
+        let key_f64 = f64::from_bits(key_val.bits());
+        // The definition roots its own operands before it can allocate.
+        if define
+            && !target_is_array
+            && tgt_h.with_mut_ptr::<ObjectHeader, _>(|target| {
+                super::define_own_data::define_own_data_from_shape(
+                    crate::value::js_nanbox_pointer(target as i64),
+                    key_f64,
+                    val_h.get_nanbox_f64(),
+                )
+                .is_some()
+            })
+        {
+            continue;
+        }
+        // The general store wants a heap key; an SSO key is materialized
+        // (an allocation, so the value is read back through its root).
+        let key_ptr =
+            crate::value::js_get_string_pointer_unified(key_f64) as *const crate::StringHeader;
+        if key_ptr.is_null() {
+            continue;
+        }
+        let key_h = iter_scope.root_string_ptr(key_ptr);
+        tgt_h.with_mut_ptr::<ObjectHeader, _>(|t| {
+            key_h.with_const_ptr::<crate::StringHeader, _>(|k| {
+                object_assign_set_string_key(define, t, target_is_array, k, val_h.get_nanbox_f64())
+            })
+        });
+    }
+    true
+}
+
+/// What [`positional_source_plan`] proves about a source.
+enum PositionalPlan {
+    /// Not a source the shape answers for.
+    Refused,
+    /// A plain source with no keys: nothing to copy.
+    NoKeys,
+    /// Its key list, the count to copy, and whether any key can be hidden.
+    Keys(*mut crate::array::ArrayHeader, usize, bool),
+}
+
+/// The checks [`copy_positional_source`] makes once, on the source as it is
+/// before any store. Allocates nothing.
+///
+/// # Safety
+/// `src` is a live heap object.
+unsafe fn positional_source_plan(src: *const ObjectHeader) -> PositionalPlan {
+    let src_raw = src as usize;
+    let Some(header) = crate::value::addr_class::try_read_gc_header(src_raw) else {
+        return PositionalPlan::Refused;
+    };
+    if header._reserved
+        & (crate::gc::OBJ_FLAG_HAS_DESCRIPTORS | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES)
+        != 0
+    {
+        return PositionalPlan::Refused;
+    }
+    let class_id = (*src).class_id;
+    if (class_id != 0 && !super::class_registry::is_anon_shape_class_id(class_id))
+        || !super::object_is_regular(src)
+        || super::dictionary::is_dictionary(src)
+        || super::string_wrapper::length(src_raw).is_some()
+        || (class_id == 0 && crate::url::is_url_object_shape(src as *mut ObjectHeader))
+    {
+        return PositionalPlan::Refused;
+    }
+    let meta = (*src).meta;
+    if !meta.is_null() && (*meta).flags & super::OBJECT_META_FLAG_IS_PROTOTYPE != 0 {
+        return PositionalPlan::Refused;
+    }
+    let Some(shape) = super::shapes::object_shape_descriptor(src) else {
+        return PositionalPlan::Refused;
+    };
+    // A private field is a non-enumerable entry (#11791), so the summary
+    // gate refuses a source carrying one; it is named here all the same.
+    if !shape.object_kind.is_ordinary_layout()
+        || super::key_attrs::object_summary(src)
+            & (super::key_attrs::SUMMARY_ACCESSOR
+                | super::key_attrs::SUMMARY_NON_ENUMERABLE
+                | super::key_attrs::SUMMARY_PRIVATE)
+            != 0
+    {
+        return PositionalPlan::Refused;
+    }
+    let keys = super::object_keys(src);
+    if keys.is_null() {
+        return PositionalPlan::NoKeys;
+    }
+    let key_count =
+        (keys.count() as usize).min(crate::array::keys_array_len_capped_to_capacity(keys.arr()));
+    // The shape answers for every key at once whether any can be hidden
+    // (#11791), as for the general enumeration below; no store into the
+    // target changes the source's shape.
+    let hide_private = crate::object::field_get_set::own_keys_may_hide(src);
+    PositionalPlan::Keys(keys.arr(), key_count, hide_private)
+}
+
+/// The `i`th own string key of a positional source and its value, read by
+/// position (`None` for a key that is not a string or is hidden). Allocates
+/// nothing.
+///
+/// # Safety
+/// `src` is a live heap object and `keys` its key list of at least
+/// `key_count` entries.
+unsafe fn positional_entry(
+    src: *const ObjectHeader,
+    keys: *const crate::array::ArrayHeader,
+    key_count: usize,
+    i: usize,
+    hide_private: bool,
+) -> Option<(crate::JSValue, f64)> {
+    let key_val = crate::object::ObjectKeys::new(keys as *mut _, key_count as u32).get(i as u32);
+    if !key_val.is_any_string()
+        || (hide_private && crate::object::instance_private_key_hidden(src, key_val))
+    {
+        return None;
+    }
+    let live = crate::object::object_live_slot_count(src) as usize;
+    let alloc_limit = std::cmp::max(live, crate::object::INLINE_SLOT_FLOOR);
+    let value = if i < alloc_limit {
+        std::ptr::read(
+            (src as *const u8).add(std::mem::size_of::<ObjectHeader>() + i * 8) as *const f64,
+        )
+    } else {
+        f64::from_bits(super::js_object_get_field(src, i as u32).bits())
+    };
+    Some((key_val, value))
+}
+
 unsafe fn object_assign_string_source(
+    define: bool,
     target: *mut ObjectHeader,
     target_is_array: bool,
     source_f64: f64,
@@ -262,6 +462,7 @@ unsafe fn object_assign_string_source(
         tgt_h.with_mut_ptr::<ObjectHeader, _>(|t| {
             key_h.with_const_ptr::<crate::StringHeader, _>(|k| {
                 object_assign_set_string_key(
+                    define,
                     t,
                     target_is_array,
                     k,
@@ -282,6 +483,7 @@ unsafe fn object_assign_string_source(
 /// `try`/`catch`, which is exactly the abrupt-completion propagation
 /// `Object.assign` requires.
 unsafe fn object_assign_proxy_source(
+    define: bool,
     target: *mut ObjectHeader,
     target_is_array: bool,
     source_f64: f64,
@@ -338,6 +540,7 @@ unsafe fn object_assign_proxy_source(
             if !key_ptr.is_null() {
                 tgt_h.with_mut_ptr::<ObjectHeader, _>(|t| {
                     object_assign_set_string_key(
+                        define,
                         t,
                         target_is_array,
                         key_ptr,
@@ -348,9 +551,11 @@ unsafe fn object_assign_proxy_source(
         } else if key.is_pointer() {
             // Strict `Set` semantics for symbol keys, same as the ordinary path.
             let sym_ptr = (key_f64.to_bits() & crate::value::POINTER_MASK) as usize;
-            tgt_h.with_mut_ptr::<ObjectHeader, _>(|t| {
-                object_assign_throw_if_symbol_set_rejected(t, sym_ptr)
-            });
+            if !define {
+                tgt_h.with_mut_ptr::<ObjectHeader, _>(|t| {
+                    object_assign_throw_if_symbol_set_rejected(t, sym_ptr)
+                });
+            }
             crate::symbol::js_object_set_symbol_property(
                 tgt_h
                     .with_mut_ptr::<ObjectHeader, _>(|t| crate::value::js_nanbox_pointer(t as i64)),
@@ -366,6 +571,22 @@ unsafe fn object_assign_proxy_source(
 /// properties (`Object.assign({}, "ab") -> {0:"a",1:"b"}`).
 #[no_mangle]
 pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) -> f64 {
+    object_assign_one(target_f64, source_f64, false)
+}
+
+/// `{ ...src }` inside a source-ordered object literal: CopyDataProperties
+/// into the literal's own fresh object. The same enumeration of `src` as
+/// `Object.assign`, but every property is DEFINED on the target
+/// (`CreateDataPropertyOrThrow`), never assigned: an `Object.prototype`
+/// accessor or read-only property of the same name neither runs nor rejects.
+#[no_mangle]
+pub unsafe extern "C" fn js_object_literal_spread(target_f64: f64, source_f64: f64) -> f64 {
+    object_assign_one(target_f64, source_f64, true)
+}
+
+/// `Object.assign(target, source)` for one source (`define == false`), or the
+/// spread literal's CopyDataProperties (`define == true`).
+unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f64 {
     let target_f64 = js_object_assign_validate_target(target_f64);
 
     // NOTE: a `process.env` target is handled in `object_assign_set_string_key`
@@ -411,7 +632,7 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
         // through must be the post-collection one.
         let scope = crate::gc::RuntimeHandleScope::new();
         let tgt_h = scope.root_raw_mut_ptr(target);
-        object_assign_string_source(target, target_is_array, source_f64);
+        object_assign_string_source(define, target, target_is_array, source_f64);
         return tgt_h
             .with_mut_ptr::<ObjectHeader, _>(|t| crate::value::js_nanbox_pointer(t as i64));
     }
@@ -428,7 +649,7 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
         // the time the last one returns.
         let scope = crate::gc::RuntimeHandleScope::new();
         let tgt_h = scope.root_raw_mut_ptr(target);
-        object_assign_proxy_source(target, target_is_array, source_f64);
+        object_assign_proxy_source(define, target, target_is_array, source_f64);
         return tgt_h
             .with_mut_ptr::<ObjectHeader, _>(|t| crate::value::js_nanbox_pointer(t as i64));
     }
@@ -479,6 +700,7 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
             let key_ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
             tgt_h.with_mut_ptr::<ObjectHeader, _>(|tgt| {
                 object_assign_set_string_key(
+                    define,
                     tgt,
                     target_is_array,
                     key_ptr,
@@ -528,6 +750,7 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
             let key_ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
             tgt_h.with_mut_ptr::<ObjectHeader, _>(|tgt| {
                 object_assign_set_string_key(
+                    define,
                     tgt,
                     target_is_array,
                     key_ptr,
@@ -570,7 +793,13 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
             }
             let key_ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
             tgt_h.with_mut_ptr::<ObjectHeader, _>(|t| {
-                object_assign_set_string_key(t, target_is_array, key_ptr, value_h.get_nanbox_f64())
+                object_assign_set_string_key(
+                    define,
+                    t,
+                    target_is_array,
+                    key_ptr,
+                    value_h.get_nanbox_f64(),
+                )
             });
         }
         return tgt_h
@@ -589,7 +818,7 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
         let tgt_h = scope.root_raw_mut_ptr(target);
         if super::native_module::copy_native_module_exports(src, |key_ptr, value| {
             tgt_h.with_mut_ptr::<ObjectHeader, _>(|t| {
-                object_assign_set_string_key(t, target_is_array, key_ptr, value)
+                object_assign_set_string_key(define, t, target_is_array, key_ptr, value)
             });
         }) {
             // `copy_native_module_exports` allocates (fresh export closures +
@@ -704,6 +933,7 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
             tgt_h.with_mut_ptr::<ObjectHeader, _>(|t| {
                 key_h.with_const_ptr::<crate::StringHeader, _>(|k| {
                     object_assign_set_string_key(
+                        define,
                         t,
                         target_is_array,
                         k,
@@ -719,10 +949,21 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
             let key_h = iter_scope.root_string_ptr(key_ptr);
             tgt_h.with_mut_ptr::<ObjectHeader, _>(|t| {
                 key_h.with_const_ptr::<crate::StringHeader, _>(|k| {
-                    object_assign_set_string_key(t, target_is_array, k, val_h.get_nanbox_f64())
+                    object_assign_set_string_key(
+                        define,
+                        t,
+                        target_is_array,
+                        k,
+                        val_h.get_nanbox_f64(),
+                    )
                 })
             });
         }
+    } else if source_obj_type == crate::gc::GC_TYPE_OBJECT
+        && copy_positional_source(define, &tgt_h, &src_h, target_is_array)
+    {
+        // Every own string key was an enumerable data property of the
+        // source shape, copied by position (`copy_positional_source`).
     } else if source_obj_type == crate::gc::GC_TYPE_OBJECT {
         let src_keys = if super::string_wrapper::length(src as usize).is_some() {
             let names = src_h.with_const_ptr(|src: *const ObjectHeader| {
@@ -796,7 +1037,13 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
                 let val_h = iter_scope.root_nanbox_f64(field_f64);
                 tgt_h.with_mut_ptr::<ObjectHeader, _>(|t| {
                     key_h.with_const_ptr::<crate::StringHeader, _>(|k| {
-                        object_assign_set_string_key(t, target_is_array, k, val_h.get_nanbox_f64())
+                        object_assign_set_string_key(
+                            define,
+                            t,
+                            target_is_array,
+                            k,
+                            val_h.get_nanbox_f64(),
+                        )
                     })
                 });
             }
@@ -850,9 +1097,11 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
             crate::symbol::js_object_get_symbol_property(source_h.get_nanbox_f64(), sym_f64);
         let value_h = iter_scope.root_nanbox_f64(value_f64);
         // Strict `Set` semantics for symbol-keyed writes too.
-        tgt_h.with_mut_ptr::<ObjectHeader, _>(|t| {
-            object_assign_throw_if_symbol_set_rejected(t, sym_ptr)
-        });
+        if !define {
+            tgt_h.with_mut_ptr::<ObjectHeader, _>(|t| {
+                object_assign_throw_if_symbol_set_rejected(t, sym_ptr)
+            });
+        }
         crate::symbol::js_object_set_symbol_property(
             tgt_h.with_mut_ptr::<ObjectHeader, _>(|t| crate::value::js_nanbox_pointer(t as i64)),
             sym_h.get_nanbox_f64(),
