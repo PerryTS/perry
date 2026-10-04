@@ -92,6 +92,7 @@ use crate::object::ObjectHeader;
 
 pub(crate) mod chain_memo;
 mod function_intrinsic;
+pub(crate) mod own_slot_memo;
 pub(crate) mod read_holder;
 use std::sync::atomic::{AtomicU64, Ordering};
 

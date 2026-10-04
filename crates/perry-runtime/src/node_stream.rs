@@ -65,6 +65,7 @@ pub(crate) use event_emitter::validate_max_listeners;
 // node EventEmitter instance state (EventEmitter.init) and the prototype defaults.
 pub(crate) use event_emitter::{
     init_event_emitter_capture, init_event_emitter_state, install_event_emitter_prototype_state,
+    new_events_object,
 };
 pub use event_emitter::{
     js_node_stream_method_event_names, js_node_stream_method_get_max_listeners,
@@ -561,8 +562,13 @@ pub(crate) unsafe fn emitter_emit_call(
     args_ptr: *const f64,
     argc: usize,
 ) -> Option<f64> {
-    let value =
-        crate::object::native_get::try_data_get_bytes(JSValue::from_bits(recv.to_bits()), b"emit")?;
+    let value = match event_emitter::shape_emit_method(recv) {
+        Some(value) => JSValue::from_bits(value.to_bits()),
+        None => crate::object::native_get::try_data_get_bytes(
+            JSValue::from_bits(recv.to_bits()),
+            b"emit",
+        )?,
+    };
     let bits = value.bits();
     if bits & !crate::value::POINTER_MASK != crate::value::POINTER_TAG {
         return None;

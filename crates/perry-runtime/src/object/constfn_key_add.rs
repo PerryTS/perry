@@ -8,7 +8,8 @@ use super::{field_rep, field_rep_store, shapes, ObjectHeader};
 /// Reuse only an exact current cached body edge whose Any publication shape
 /// is still present. This path never allocates in the GC heap or enters JS:
 /// table lookup, carrier notes, the regular barrier and both stamps are
-/// non-collecting. The current closure is written under Any before SPECIAL.
+/// non-collecting. The current closure is written under Any before SPECIAL:
+/// under the predecessor itself when its lane for the slot is Any already.
 unsafe fn try_cached_constfn_key_add(
     obj: *mut ObjectHeader,
     predecessor: u32,
@@ -34,6 +35,22 @@ unsafe fn try_cached_constfn_key_add(
         || u32::from(d.constfn_infos()[0].slot) != slot
         || field_rep_store::constfn_store_info(bits) != Some(d.constfn_infos()[0].info)
     {
+        return false;
+    }
+    // The predecessor already holds `slot` inline under an Any lane (a
+    // receiver rolled back off this very edge, or one born that wide): it IS
+    // the Any shape the closure is written under, so the target is installed
+    // straight over it with no intermediate publication.
+    if slot < super::object_live_slot_count(obj)
+        && field_rep::slot_rep(shapes::shape_rep_by_id(predecessor), slot) == field_rep::REP_ANY
+    {
+        super::slot_store::store_object_field_slot(obj, slot as usize, bits);
+        if shapes::install_cached_object_shape_transition(obj, predecessor, target, keys) {
+            return true;
+        }
+        // Not installed: the slot is still unnamed under the predecessor;
+        // leave it as it was.
+        super::slot_store::store_object_field_slot(obj, slot as usize, crate::value::TAG_UNDEFINED);
         return false;
     }
     let base_rep = field_rep::with_slot_rep(d.rep, slot, field_rep::REP_ANY);

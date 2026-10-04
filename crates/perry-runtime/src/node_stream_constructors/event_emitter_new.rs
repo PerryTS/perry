@@ -38,7 +38,71 @@ pub fn event_emitter_constructor_value(export: &str) -> f64 {
 pub fn event_emitter_prototype_value(export: &str) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let ctor = scope.root_nanbox_f64(event_emitter_constructor_value(export));
+    if let Some(proto) = own_prototype_by_bag(ctor.get_nanbox_f64()) {
+        return proto;
+    }
     crate::object::js_function_prototype_value_for_read(ctor.get_nanbox_f64())
+}
+
+thread_local! {
+    /// The site memo for a constructor's own `prototype` in its property
+    /// bag (`closure::props`): the bag words on which it is an own plain
+    /// data slot.
+    static BAG_PROTOTYPE_SLOT: crate::object::method_site::own_slot_memo::OwnSlotMemo =
+        const { crate::object::method_site::own_slot_memo::OwnSlotMemo::new() };
+}
+
+/// The constructor's own `prototype` read from its property bag, where a
+/// function's own data properties live (`closure::props::bag_get`), through
+/// the bag's shape. A function's `prototype` is non-configurable, so no
+/// accessor or deletion can stand in front of the bag's value. `None` when
+/// the bag's shape does not answer (the full read then runs).
+fn own_prototype_by_bag(ctor: f64) -> Option<f64> {
+    let value = JSValue::from_bits(ctor.to_bits());
+    if !value.is_pointer() {
+        return None;
+    }
+    let addr = value.as_pointer::<u8>() as usize;
+    // SAFETY: the reader validates the address before it reads anything.
+    let header = unsafe { crate::value::addr_class::try_read_gc_header(addr) }?;
+    if header.obj_type != crate::gc::GC_TYPE_CLOSURE {
+        return None;
+    }
+    // SAFETY: a live closure cell (its header says so).
+    let bag = unsafe { (*(addr as *const crate::closure::ClosureHeader)).props };
+    // SAFETY: as above, for the bag object.
+    let bag_header = unsafe { crate::value::addr_class::try_read_gc_header(bag as usize) }?;
+    if bag_header.obj_type != crate::gc::GC_TYPE_OBJECT
+        || bag_header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+    {
+        return None;
+    }
+    // SAFETY: a live ordinary object; nothing below allocates.
+    unsafe {
+        let slot = match BAG_PROTOTYPE_SLOT.with(|memo| memo.slot(bag)) {
+            Some(slot) => slot,
+            None => {
+                let meta = (*bag).meta;
+                if !meta.is_null() && (*meta).elements != 0 {
+                    return None;
+                }
+                let id = (*bag).parent_class_id;
+                if !crate::object::shapes::is_site_matchable_shape_id(id) {
+                    return None;
+                }
+                let record = crate::object::shapes::shape_record_by_id(id)?;
+                let pos = record.own_data_position_of_value(0, b"prototype")??;
+                BAG_PROTOTYPE_SLOT.with(|memo| memo.prime(bag, pos));
+                pos
+            }
+        };
+        // A wide bag keeps the key in its spill buffer: the read follows the
+        // shape's live inline bound either way.
+        let live = crate::object::shapes::shape_record_by_id((*bag).parent_class_id)?
+            .live_inline_slot_count();
+        let bits = crate::object::object_field_at_with_live(bag, slot, live).bits();
+        (bits != crate::value::TAG_HOLE).then_some(f64::from_bits(bits))
+    }
 }
 
 /// `Object.create(<export>.prototype)`: an ordinary object born on the
@@ -178,6 +242,15 @@ fn own_plain_data(obj: f64, name: &[u8]) -> bool {
     unsafe { crate::object::own_descriptors_skip_key(addr, key) }
 }
 
+thread_local! {
+    /// `new EventEmitter()`'s birth memo: the ShapeId the last full birth
+    /// ended on (the state keys at slots 0..3, linked to the prototype). A
+    /// later birth replays it when the record still names those facts for
+    /// the prototype in hand (`shapes::shape_is_filled_birth`); ShapeIds are
+    /// never reused, so a stale id simply stops replaying.
+    static FINAL_SHAPE: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
 /// An emitter born initialized: the state keys' shape, linked to `proto` as
 /// `Object.create` links, and node's `init` values in its slots
 /// (`this._maxListeners || undefined` reads the prototype's `inherited_max`).
@@ -189,6 +262,41 @@ fn born_emitter(proto: f64, inherited_max: f64) -> f64 {
     } else {
         f64::from_bits(crate::value::TAG_UNDEFINED)
     });
+    let events = scope.root_nanbox_f64(crate::node_stream::new_events_object());
+    let recorded = FINAL_SHAPE.with(std::cell::Cell::get);
+    if recorded != 0 {
+        // One allocation stamped with the recorded final shape, then each
+        // slot through the store funnel; nothing allocates in between.
+        if let Some(obj) =
+            crate::object::object_alloc_filled_birth(recorded, proto.get_nanbox_u64(), 3)
+        {
+            let events = JSValue::from_bits(events.get_nanbox_u64());
+            // SAFETY: a fresh object born with three inline slots, which
+            // nothing has observed yet. A number (`_eventsCount = 0`, whose
+            // bits are valid in an Any or an F64 lane) and an `undefined` in
+            // an Any lane are written as they are; anything else goes
+            // through the store funnel.
+            unsafe {
+                let fields = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
+                let rep = crate::object::shapes::shape_rep_by_id(recorded);
+                let any = |slot| {
+                    crate::object::field_rep::slot_rep(rep, slot)
+                        == crate::object::field_rep::REP_ANY
+                };
+                crate::object::store_object_field_slot(obj, 0, events.bits());
+                // GC_STORE_AUDIT(INIT): non-pointer bits into an unobserved newborn.
+                *fields.add(1) = 0f64.to_bits();
+                let max = max.get_nanbox_u64();
+                if max == crate::value::TAG_UNDEFINED && any(2) {
+                    // GC_STORE_AUDIT(INIT): as above (the slot already holds it).
+                    *fields.add(2) = max;
+                } else {
+                    crate::object::store_object_field_slot(obj, 2, max);
+                }
+            }
+            return crate::value::js_nanbox_pointer(obj as i64);
+        }
+    }
     let instance = scope.root_raw_mut_ptr(crate::object::js_object_alloc_with_shape(
         EMITTER_STATE_SHAPE_ID,
         3,
@@ -201,15 +309,18 @@ fn born_emitter(proto: f64, inherited_max: f64) -> f64 {
             proto.get_nanbox_u64(),
         )
     });
-    let events = scope.root_raw_mut_ptr(crate::object::js_object_alloc_null_proto(0, 0));
-    let events =
-        events.with_mut_ptr::<ObjectHeader, _>(|events| JSValue::pointer(events as *const u8));
+    let events = JSValue::from_bits(events.get_nanbox_u64());
     instance.with_mut_ptr::<ObjectHeader, _>(|obj| {
         crate::object::js_object_set_field(obj, 0, events);
         crate::object::js_object_set_field(obj, 1, JSValue::from_bits(0f64.to_bits()));
         crate::object::js_object_set_field(obj, 2, JSValue::from_bits(max.get_nanbox_u64()));
     });
-    instance.with_mut_ptr::<ObjectHeader, _>(|obj| crate::value::js_nanbox_pointer(obj as i64))
+    instance.with_mut_ptr::<ObjectHeader, _>(|obj| {
+        // SAFETY: the live instance just built.
+        let id = unsafe { crate::object::shapes::object_shape_stamp(obj) };
+        FINAL_SHAPE.with(|cell| cell.set(id));
+        crate::value::js_nanbox_pointer(obj as i64)
+    })
 }
 
 /// `new EventEmitter(opts)`.

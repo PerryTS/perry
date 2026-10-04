@@ -36,6 +36,9 @@ use std::cell::RefCell;
 
 #[path = "shapes_birth_width.rs"]
 mod shapes_birth_width;
+#[path = "shapes_last_key_rollback.rs"]
+mod shapes_last_key_rollback;
+pub(crate) use shapes_last_key_rollback::publish_object_shape_last_key_rollback;
 #[path = "shapes_linked_birth.rs"]
 mod shapes_linked_birth;
 #[path = "shapes_prototype.rs"]
@@ -471,6 +474,96 @@ impl ShapeRecordRef {
                 & crate::object::key_attrs::ENTRY_ACCESSOR
                 != 0;
         (!accessor).then_some(pos)
+    }
+
+    /// The own DATA property named by the string value `key_bits` (whose
+    /// text is `key_bytes`) on an ordinary receiver carrying this shape:
+    /// `Some(Some(slot))` when it is inline slot `slot`, `Some(None)` when the
+    /// shape's own key list does not name it, `None` when the list alone
+    /// cannot answer (a class or dictionary layout, an accessor key, a
+    /// spilled key). Another key's attributes do not matter. An ordinary layout's key position is its slot in every
+    /// generation (a descriptor, prototype or tombstone epoch re-keys the
+    /// shape, not the layout).
+    ///
+    /// Unlike [`Self::inline_slot_of_key`] it answers through tombstones: a
+    /// `TAG_HOLE` entry names no key, and every live key keeps its position as
+    /// its slot. The caller still reads the slot and treats a `TAG_HOLE` value
+    /// as no answer. Identity compares first, then bytes, as for
+    /// [`stored_key_matches`]. Allocation-free, never calls user code.
+    #[inline]
+    pub(crate) unsafe fn own_data_slot_of_value(
+        self,
+        key_bits: u64,
+        key_bytes: &[u8],
+    ) -> Option<Option<u32>> {
+        let live = (*self.0.as_ptr()).live_inline_slot_count;
+        match self.own_data_position_of_value(key_bits, key_bytes)? {
+            Some(pos) if pos >= live => None,
+            found => Some(found),
+        }
+    }
+
+    /// [`Self::own_data_slot_of_value`]'s key POSITION, inline or not: a
+    /// position at or past the live inline count is the key's index in the
+    /// receiver's spill buffer (`object_field_at_with_live` reads either).
+    #[inline]
+    pub(crate) unsafe fn own_data_position_of_value(
+        self,
+        key_bits: u64,
+        key_bytes: &[u8],
+    ) -> Option<Option<u32>> {
+        let r = &*self.0.as_ptr();
+        if !r.object_kind().is_ordinary_layout() {
+            return None;
+        }
+        if r.keys == 0 {
+            return (r.logical_key_count == 0).then_some(None);
+        }
+        let (slots, len) =
+            super::keys_array_dense_slots_resolved(r.keys as usize as *const ArrayHeader);
+        let count = r.logical_key_count as usize;
+        if slots.is_null() || len < count {
+            return None;
+        }
+        // SSO is canonical (length and bytes in the bits), so an SSO entry
+        // names the key exactly when its bits are the key's SSO form.
+        let sso = crate::JSValue::try_short_string(key_bytes).map(|value| value.bits());
+        let pos = (0..count).find(|&i| {
+            let bits = (*slots.add(i)).to_bits();
+            bits == key_bits || stored_bits_name(key_bytes, sso, bits)
+        });
+        match pos {
+            None => Some(None),
+            // An accessor key's slot holds its pair, not a value.
+            Some(i)
+                if r.summary() & crate::object::key_attrs::SUMMARY_ACCESSOR != 0
+                    && crate::object::key_attrs::keys_entry(
+                        r.keys as usize as *mut ArrayHeader,
+                        i as u32,
+                    ) & crate::object::key_attrs::ENTRY_ACCESSOR
+                        != 0 =>
+            {
+                None
+            }
+            Some(i) => Some(Some(i as u32)),
+        }
+    }
+}
+
+/// Does the key-list entry `bits` (a heap or SSO string; anything else, a
+/// tombstone included, names no key) spell `bytes`, whose SSO form (when it
+/// has one) is `sso`?
+#[inline]
+unsafe fn stored_bits_name(bytes: &[u8], sso: Option<u64>, bits: u64) -> bool {
+    match bits >> 48 {
+        0x7FFF => {
+            let sp = (bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::StringHeader;
+            !sp.is_null()
+                && (*sp).byte_len as usize == bytes.len()
+                && bytes_eq(crate::string::string_data(sp), bytes.as_ptr(), bytes.len())
+        }
+        0x7FF9 => sso == Some(bits),
+        _ => false,
     }
 }
 
@@ -4468,6 +4561,65 @@ pub(crate) fn shape_is_keyless_birth(id: u32, proto_id: u64, slots: u32) -> bool
             && (*record).semantic_generation == 0
             && (*record).hole_count == 0
             && (*record).live_inline_slot_count == slots
+    }
+}
+
+/// [`shape_is_keyless_birth`] for a birth that stamps `id` on a fresh object
+/// of kind `kind` in place of publishing its birth descriptor: also the
+/// receiver kind, the default (empty) attribute summary and all-`Any` lanes,
+/// the remaining facts that publication derives from a newborn.
+#[inline]
+pub(crate) fn shape_is_keyless_birth_of(
+    id: u32,
+    proto_id: u64,
+    slots: u32,
+    kind: ShapeObjectKind,
+) -> bool {
+    if !shape_is_keyless_birth(id, proto_id, slots) {
+        return false;
+    }
+    let Some(record) = ShapeSlab::agent_record_present(id) else {
+        return false;
+    };
+    // SAFETY: a present record of this agent, read immediately.
+    unsafe {
+        let r = &*record;
+        r.object_kind() == kind && r.summary() == 0 && r.rep == 0 && r.special_constfn_mask() == 0
+    }
+}
+
+/// Does `id` name a present shape a construction may stamp on a fresh,
+/// unpublished object of kind `kind` and then fill slot by slot through the
+/// store funnel: an ordinary layout of exactly that kind at prototype
+/// identity `proto_id`, whose `count` keys are its `count` live inline
+/// slots, generation 0, no tombstones, default attributes and no special
+/// (ConstFn) lane? That is the construction's recorded FINAL shape (the one
+/// its full sequence of transitions reached). ShapeIds are never reused, so a
+/// present record still names the key list it was recorded with. One
+/// directory read; no descriptor copy.
+#[inline]
+pub(crate) fn shape_is_filled_birth(
+    id: u32,
+    proto_id: u64,
+    count: u32,
+    kind: ShapeObjectKind,
+) -> bool {
+    let Some(record) = ShapeSlab::agent_record_present(id) else {
+        return false;
+    };
+    // SAFETY: a present record of this agent, read immediately.
+    unsafe {
+        let r = &*record;
+        r.proto_id == proto_id
+            && r.object_kind() == kind
+            && kind.is_ordinary_layout()
+            && r.logical_key_count == count
+            && r.live_inline_slot_count == count
+            && r.semantic_generation == 0
+            && r.hole_count == 0
+            && r.summary() == 0
+            && r.special_constfn_mask() == 0
+            && r.keys != 0
     }
 }
 

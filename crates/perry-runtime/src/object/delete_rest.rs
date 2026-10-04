@@ -34,6 +34,9 @@ pub extern "C" fn js_object_delete_field(
     if obj.is_null() || key.is_null() {
         return 1;
     }
+    if let Some(result) = unsafe { super::delete_last_key::try_delete_last_added_field(obj, key) } {
+        return result;
+    }
     if let Some(result) = crate::process::process_env_delete_field(obj, key) {
         return result;
     }
@@ -379,6 +382,10 @@ pub extern "C" fn js_object_delete_field(
             }
         }
 
+        // The last-added key: back to the shape without it (V8's rollback).
+        if i + 1 == key_count && super::delete_last_key::rollback(obj, i as u32) {
+            return 1;
+        }
         // Proper delete: shift remaining keys + values down by one, then
         // shorten keys_array. Pre-fix this just set the value to
         // undefined and left the key in place, so `Object.keys`,
@@ -1094,6 +1101,10 @@ unsafe fn try_delete_stable_sso(obj: *mut ObjectHeader, key: JSValue) -> Option<
 /// Returns 1 if successful, 0 otherwise
 #[no_mangle]
 pub extern "C" fn js_object_delete_dynamic(obj: *mut ObjectHeader, key: f64) -> i32 {
+    if let Some(result) = unsafe { super::delete_last_key::try_delete_last_added_dynamic(obj, key) }
+    {
+        return result;
+    }
     if let Some((_, elements)) = unsafe { crate::array::subclass_elements::backed(obj as usize) } {
         if let Some(elements_key) = crate::array::subclass_elements::key_of_value(key) {
             return unsafe { crate::array::subclass_elements::delete_key(elements, elements_key) };

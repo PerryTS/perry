@@ -59,7 +59,7 @@ pub use alloc::{
     js_object_alloc, js_object_alloc_fast, js_object_alloc_fast_with_parent,
     js_object_alloc_null_proto, js_object_alloc_with_parent, js_object_coerce,
 };
-pub(crate) use alloc_basic::{object_alloc_born, object_alloc_plain};
+pub(crate) use alloc_basic::{object_alloc_born, object_alloc_filled_birth, object_alloc_plain};
 #[allow(unused_imports)]
 pub(crate) use alloc_plain::mark_object_plain_ordinary;
 pub use assign::*;
@@ -110,6 +110,7 @@ mod collection_proto_thunks;
 mod data_view_registry;
 mod dataview_proto_thunks;
 pub(crate) mod date_proto_thunks;
+pub(crate) mod delete_last_key;
 mod delete_rest;
 pub(crate) mod descriptors;
 pub(crate) mod dictionary;
