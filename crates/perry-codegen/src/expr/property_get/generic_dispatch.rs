@@ -960,11 +960,14 @@ pub(crate) fn lower_generic_property_get(
     // #10498: a site whose reads inherit a compiled class getter answers them
     // inline, ahead of the front (`accessor_arm`). 64-bit targets only, as the
     // method site: the entry's words address 8-byte slots behind the header.
+    // Only for a name some compiled class of the program declares as a getter:
+    // no other site can ever take an entry.
     let accessor_entry = match fused_recv.as_ref() {
         Some(f)
             if array_length_arm.is_none()
                 && front_idx.is_some()
-                && accessor_arm_target(ctx.target_triple) =>
+                && accessor_arm_target(ctx.target_triple)
+                && ctx.program_may_declare_getter(property) =>
         {
             Some((ctx.new_block("pic.acc.empty"), f.biased.clone()))
         }

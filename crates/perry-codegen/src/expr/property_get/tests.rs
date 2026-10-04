@@ -1834,13 +1834,12 @@ fn the_generic_slow_read_is_called_only_after_the_front_declines() {
 #[path = "array_length_tests.rs"]
 mod array_length;
 
-/// The #10498 class-setter arm only where a compiled class of the program
-/// declares a setter of the store's name: the runtime admits an entry only for
-/// a declared accessor (`class_chain_has_instance_accessor`), so any other
-/// site's arm is code that can never be taken and work on every miss. The
-/// read site's getter arm is not gated.
+/// The #10498 class-accessor arms only where a compiled class of the program
+/// may declare the accessor: the runtime admits an entry only for a declared
+/// accessor (`class_chain_has_instance_accessor`), so any other site's arm is
+/// code that can never be taken and work on every miss.
 #[test]
-fn class_setter_arms_are_emitted_only_for_declared_setter_names() {
+fn class_accessor_arms_are_emitted_only_for_declared_accessor_names() {
     use crate::ClassAccessorNames;
     fn module_storing(property: &str) -> Module {
         let mut m = module_reading(property);
@@ -1859,23 +1858,29 @@ fn class_setter_arms_are_emitted_only_for_declared_setter_names() {
     };
     let read_arm = "pic.acc.empty";
     let store_arm = "put.pic.acc";
-    // Names not collected (a standalone compile): the store keeps its arm.
+    // Names not collected (a standalone compile): every site keeps its arms.
     let unknown = emit(None);
+    assert!(unknown.contains(read_arm), "{unknown}");
     assert!(unknown.contains(store_arm), "{unknown}");
-    // No class declares a setter `price` (a getter alone does not count).
-    let getter_only = emit(Some(ClassAccessorNames::from_names(
-        ["price".to_string()],
+    // No class declares `price`: neither arm.
+    let other = emit(Some(ClassAccessorNames::from_names(
+        ["total".to_string()],
         ["total".to_string()],
     )));
-    assert!(!getter_only.contains(store_arm), "{getter_only}");
-    assert!(
-        getter_only.contains(read_arm),
-        "the read arm is not gated:\n{getter_only}"
-    );
-    // A declared setter keeps the store arm.
+    assert!(!other.contains(read_arm), "{other}");
+    assert!(!other.contains(store_arm), "{other}");
+    // A getter only: the read arm, not the store arm.
+    let getter = emit(Some(ClassAccessorNames::from_names(
+        ["price".to_string()],
+        Vec::new(),
+    )));
+    assert!(getter.contains(read_arm), "{getter}");
+    assert!(!getter.contains(store_arm), "{getter}");
+    // A setter only: the store arm, not the read arm.
     let setter = emit(Some(ClassAccessorNames::from_names(
         Vec::new(),
         ["price".to_string()],
     )));
+    assert!(!setter.contains(read_arm), "{setter}");
     assert!(setter.contains(store_arm), "{setter}");
 }

@@ -123,12 +123,12 @@ pub fn namespace_member_func_key(namespace: &str, member: &str) -> String {
 /// The property names the program's compiled classes declare as accessors
 /// (`get k()` / `set k(v)`), across every module (#10498).
 ///
-/// A store site's class-setter arm can only ever take an entry for a name some
-/// compiled class declares as a setter: the runtime admits an entry only when
-/// the receiver's class chain declares the accessor
-/// (`class_chain_has_instance_accessor`). A store whose name no class declares
-/// therefore emits no arm; it misses to the runtime as before the arm existed,
-/// which still asks the same entry first. The getters are collected alongside.
+/// A read site's class-getter arm and a store site's class-setter arm can only
+/// ever take an entry for a name some compiled class declares as that kind of
+/// accessor: the runtime admits an entry only when the receiver's class chain
+/// declares the accessor (`class_chain_has_instance_accessor`). A site whose
+/// name no class declares therefore emits no arm; it misses to the runtime as
+/// before the arm existed, which still asks the same entry first.
 #[derive(Debug, Clone, Default)]
 pub struct ClassAccessorNames {
     getters: std::collections::HashSet<String>,
@@ -362,9 +362,9 @@ pub struct CompileOptions {
     pub object_literal_method_candidates:
         std::sync::Arc<std::collections::HashMap<String, Vec<ObjectLiteralMethodCandidate>>>,
     /// The whole program's class accessor names ([`ClassAccessorNames`]),
-    /// which decide where the class-setter arms are emitted. `None` (a
-    /// standalone or test compile that did not collect them) emits the arm
-    /// at every store site.
+    /// which decide where the class-accessor arms are emitted. `None` (a
+    /// standalone or test compile that did not collect them) emits the arms
+    /// at every site.
     pub program_class_accessor_names: Option<std::sync::Arc<ClassAccessorNames>>,
     /// Imported enum member lists, keyed by the local name under which
     /// the enum is visible in this module.

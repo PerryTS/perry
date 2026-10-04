@@ -2680,6 +2680,13 @@ mod inline_cache_name_tests {
 }
 
 impl<'a> FnCtx<'a> {
+    /// May some compiled class of the program declare a getter named `name`?
+    /// Where this is false a read site emits no class-getter arm.
+    pub(crate) fn program_may_declare_getter(&self, name: &str) -> bool {
+        self.program_class_accessor_names
+            .is_none_or(|names| names.may_get(name))
+    }
+
     /// May some compiled class of the program declare a setter named `name`?
     /// Where this is false a store site emits no class-setter arm.
     pub(crate) fn program_may_declare_setter(&self, name: &str) -> bool {
