@@ -489,6 +489,21 @@ pub(crate) static REGEXP_PROTOTYPE_TEST_WALKS: std::sync::atomic::AtomicU64 =
 /// for this.
 #[cfg(feature = "regex-engine")]
 pub(crate) fn regexp_prototype_test_is_canonical(value: f64) -> bool {
+    let hit = regexp_prototype_test_is_canonical_proof(value);
+    if crate::hot_diag::regex_on() {
+        crate::hot_diag::regex_counters(|d| {
+            if hit {
+                d.proto_test_hit += 1;
+            } else {
+                d.proto_test_miss += 1;
+            }
+        });
+    }
+    hit
+}
+
+#[cfg(feature = "regex-engine")]
+fn regexp_prototype_test_is_canonical_proof(value: f64) -> bool {
     let jv_recv = crate::value::JSValue::from_bits(value.to_bits());
     if !jv_recv.is_pointer() {
         return false;
@@ -578,6 +593,16 @@ fn flag_accessors_canonical() -> bool {
     let epoch = super::prop_plan::prop_plan_semantic_epoch();
     let cached = FLAG_ACCESSORS_CANONICAL.with(std::cell::Cell::get);
     if cached.0 == epoch {
+        if crate::hot_diag::regex_on() {
+            crate::hot_diag::regex_counters(|d| {
+                d.flag_accessors_cached += 1;
+                if cached.1 {
+                    d.flag_accessors_canonical_true += 1;
+                } else {
+                    d.flag_accessors_canonical_false += 1;
+                }
+            });
+        }
         return cached.1;
     }
     let proto = REGEXP_PROTOTYPE_TEST_SITE
@@ -598,6 +623,16 @@ fn flag_accessors_canonical() -> bool {
             }
         });
     FLAG_ACCESSORS_CANONICAL.with(|c| c.set((epoch, verdict)));
+    if crate::hot_diag::regex_on() {
+        crate::hot_diag::regex_counters(|d| {
+            d.flag_accessors_recomputed += 1;
+            if verdict {
+                d.flag_accessors_canonical_true += 1;
+            } else {
+                d.flag_accessors_canonical_false += 1;
+            }
+        });
+    }
     verdict
 }
 

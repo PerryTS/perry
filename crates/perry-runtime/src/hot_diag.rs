@@ -278,6 +278,26 @@ pub struct RegexDiag {
     pub site_test_declined_patched_prototype: u64,
     pub site_test_declined_callee_mismatch: u64,
     pub site_test_declined_non_literal: u64,
+    /// `regex_canonical` shape proof (`exec`, then `method`/`split` on top of
+    /// it): admitted vs declined, and how often the proof was recomputed
+    /// because `RegExp.prototype`'s shape stamp moved.
+    pub proof_exec_hit: u64,
+    pub proof_exec_miss: u64,
+    pub proof_exec_refresh: u64,
+    pub proof_method_hit: u64,
+    pub proof_method_miss: u64,
+    pub proof_split_hit: u64,
+    pub proof_split_miss: u64,
+    /// `regexp_prototype_test_is_canonical` (the recorded
+    /// `REGEXP_PROTOTYPE_TEST_SITE` slot compare): admitted vs declined.
+    pub proto_test_hit: u64,
+    pub proto_test_miss: u64,
+    /// `flag_accessors_canonical`: answered from the epoch-keyed cache, or
+    /// recomputed (nine descriptor lookups), and the verdicts of both.
+    pub flag_accessors_cached: u64,
+    pub flag_accessors_recomputed: u64,
+    pub flag_accessors_canonical_true: u64,
+    pub flag_accessors_canonical_false: u64,
     per_pattern: HashMap<usize, PatStat>,
 }
 
@@ -420,6 +440,24 @@ impl RegexDiag {
             self.perex_compiles, self.perex_validations, self.program_identity_hits, self.program_content_hits, self.program_hash_bytes);
         let _ = writeln!(out, "[regex-perex] canonical_execs={} removes={} searches={} scratch_allocs={} scratch_grows={}",
             self.perex_canonical_execs, self.perex_removes, self.perex_searches, self.perex_scratch_allocs, self.perex_scratch_grows);
+        let _ = writeln!(
+            out,
+            "[regex-proofs] exec hit={} miss={} refresh={} method hit={} miss={} split hit={} miss={} \
+             proto_test hit={} miss={} flag_accessors cached={} recomputed={} canonical={} not_canonical={}",
+            self.proof_exec_hit,
+            self.proof_exec_miss,
+            self.proof_exec_refresh,
+            self.proof_method_hit,
+            self.proof_method_miss,
+            self.proof_split_hit,
+            self.proof_split_miss,
+            self.proto_test_hit,
+            self.proto_test_miss,
+            self.flag_accessors_cached,
+            self.flag_accessors_recomputed,
+            self.flag_accessors_canonical_true,
+            self.flag_accessors_canonical_false,
+        );
         let _ = writeln!(
             out,
             "[regex-diag] t={secs:.1}s new={} validated_hit={} site_hit={} pattern_bytes={} \
