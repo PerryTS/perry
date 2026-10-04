@@ -19,8 +19,9 @@
 //! and `ERR_INVALID_ARG_TYPE`.
 
 use perry_ffi::{
-    alloc_buffer, alloc_string, json_stringify, throw_with_code, value_byte_slice, BufferHeader,
-    ErrorKind, JsValue, StringHeader,
+    alloc_buffer, alloc_string, json_stringify, object_field_by_name, throw_with_code,
+    value_byte_slice, BufferHeader, ErrorKind, JsValue, StringHeader, TransientRootScope,
+    TransientRootedNanbox,
 };
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -33,6 +34,10 @@ const ID_INITIAL_WINDOW_SIZE: u16 = 0x4;
 const ID_MAX_FRAME_SIZE: u16 = 0x5;
 const ID_MAX_HEADER_LIST_SIZE: u16 = 0x6;
 const ID_ENABLE_CONNECT_PROTOCOL: u16 = 0x8;
+
+extern "C" {
+    fn js_jsvalue_to_string(value: f64) -> *mut StringHeader;
+}
 
 const U32_MAX: u64 = 0xFFFF_FFFF;
 // maxFrameSize is constrained to [2^14, 2^24 - 1].
@@ -65,14 +70,21 @@ pub extern "C" fn js_node_http2_get_default_settings() -> *mut StringHeader {
 /// throws a `TypeError`, both with code `ERR_HTTP2_INVALID_SETTING_VALUE`.
 #[no_mangle]
 pub extern "C" fn js_node_http2_get_packed_settings(settings_bits: i64) -> *mut BufferHeader {
-    let map = settings_to_map(JsValue::from_bits(settings_bits as u64));
+    // Rooted: the JSON round trip allocates, and nonfinite values are read
+    // back from the object afterwards.
+    let roots = TransientRootScope::enter();
+    let settings = roots.root_nanbox(f64::from_bits(settings_bits as u64));
+    let map = settings_to_map(JsValue::from_bits(settings.get().to_bits()));
     let mut out: Vec<u8> = Vec::new();
 
     if let Some(v) = map.get("headerTableSize") {
         push_record(
             &mut out,
             ID_HEADER_TABLE_SIZE,
-            require_uint32("headerTableSize", v),
+            require_uint32(
+                "headerTableSize",
+                setting_number(&settings, "headerTableSize", v),
+            ),
         );
     }
     if let Some(v) = map.get("enablePush") {
@@ -86,14 +98,18 @@ pub extern "C" fn js_node_http2_get_packed_settings(settings_bits: i64) -> *mut 
         push_record(
             &mut out,
             ID_MAX_CONCURRENT_STREAMS,
-            require_uint32("maxConcurrentStreams", v),
+            require_uint32(
+                "maxConcurrentStreams",
+                setting_number(&settings, "maxConcurrentStreams", v),
+            ),
         );
     }
     if let Some(v) = map.get("initialWindowSize") {
         // HTTP/2 flow-control windows are limited to 2^31 - 1, not u32::MAX.
-        let size = match int_in_range(v, 0, i32::MAX as u64) {
+        let v = setting_number(&settings, "initialWindowSize", v);
+        let size = match int_in_range(&v, 0, i32::MAX as u64) {
             Some(size) => size,
-            None => throw_invalid_setting("initialWindowSize", v, ErrorKind::RangeError),
+            None => throw_invalid_number("initialWindowSize", &v),
         };
         push_record(&mut out, ID_INITIAL_WINDOW_SIZE, size);
     }
@@ -101,7 +117,7 @@ pub extern "C" fn js_node_http2_get_packed_settings(settings_bits: i64) -> *mut 
         push_record(
             &mut out,
             ID_MAX_FRAME_SIZE,
-            require_frame_size("maxFrameSize", v),
+            require_frame_size("maxFrameSize", setting_number(&settings, "maxFrameSize", v)),
         );
     }
     // maxHeaderSize and maxHeaderListSize share identifier 6; when both are
@@ -114,7 +130,11 @@ pub extern "C" fn js_node_http2_get_packed_settings(settings_bits: i64) -> *mut 
         } else {
             "maxHeaderListSize"
         };
-        push_record(&mut out, ID_MAX_HEADER_LIST_SIZE, require_uint32(name, v));
+        push_record(
+            &mut out,
+            ID_MAX_HEADER_LIST_SIZE,
+            require_uint32(name, setting_number(&settings, name, v)),
+        );
     }
     if let Some(v) = map.get("enableConnectProtocol") {
         push_record(
@@ -212,27 +232,75 @@ fn settings_to_map(value: JsValue) -> serde_json::Map<String, Value> {
     }
 }
 
+/// A numeric setting value. JSON erases NaN/±Infinity to `null`, so those
+/// are carried as the raw number read back from the settings object.
+enum SettingNumber<'a> {
+    Json(&'a Value),
+    NonFinite(f64),
+}
+
+fn setting_number<'a>(
+    settings: &TransientRootedNanbox,
+    name: &str,
+    v: &'a Value,
+) -> SettingNumber<'a> {
+    if v.is_null() {
+        let raw = object_field_by_name(JsValue::from_bits(settings.get().to_bits()), name);
+        let n = f64::from_bits(raw.bits());
+        // NaN-boxed tags are NaNs too; only the untagged bands are JS NaN.
+        let is_js_nan = n.is_nan() && (raw.bits() >> 48) & 0x7FFF < 0x7FFA;
+        if !raw.is_int32() && (n.is_infinite() || is_js_nan) {
+            return SettingNumber::NonFinite(n);
+        }
+    }
+    SettingNumber::Json(v)
+}
+
 /// Accept a number whose raw value lies in `[min, max]`, truncated to `u32`
 /// like Node's uint32 packing (`1.5` packs as `1`, `-0.5` is out of range).
-fn int_in_range(v: &Value, min: u64, max: u64) -> Option<u32> {
-    let n = v.as_f64()?;
-    if !n.is_finite() || n < min as f64 || n > max as f64 {
+/// NaN fails neither comparison, so it packs as `0` like in Node.
+fn int_in_range(v: &SettingNumber, min: u64, max: u64) -> Option<u32> {
+    let n = match v {
+        SettingNumber::Json(v) => v.as_f64()?,
+        SettingNumber::NonFinite(n) => *n,
+    };
+    if n < min as f64 || n > max as f64 {
         return None;
     }
     Some(n as u32)
 }
 
-fn require_uint32(name: &str, v: &Value) -> u32 {
-    match int_in_range(v, 0, U32_MAX) {
+fn require_uint32(name: &str, v: SettingNumber) -> u32 {
+    match int_in_range(&v, 0, U32_MAX) {
         Some(u) => u,
-        None => throw_invalid_setting(name, v, ErrorKind::RangeError),
+        None => throw_invalid_number(name, &v),
     }
 }
 
-fn require_frame_size(name: &str, v: &Value) -> u32 {
-    match int_in_range(v, FRAME_MIN, FRAME_MAX) {
+fn require_frame_size(name: &str, v: SettingNumber) -> u32 {
+    match int_in_range(&v, FRAME_MIN, FRAME_MAX) {
         Some(u) => u,
-        None => throw_invalid_setting(name, v, ErrorKind::RangeError),
+        None => throw_invalid_number(name, &v),
+    }
+}
+
+fn throw_invalid_number(name: &str, v: &SettingNumber) -> ! {
+    match v {
+        SettingNumber::Json(v) => throw_invalid_setting(name, v, ErrorKind::RangeError),
+        SettingNumber::NonFinite(n) => {
+            // SAFETY: a plain number needs no rooting; the result is a live string.
+            let text = unsafe { js_jsvalue_to_string(*n) };
+            let msg = format!(
+                "Invalid value for setting \"{}\": {}",
+                name,
+                read_js_string(JsValue::from_string_ptr(text))
+            );
+            throw_with_code(
+                &msg,
+                "ERR_HTTP2_INVALID_SETTING_VALUE",
+                ErrorKind::RangeError,
+            );
+        }
     }
 }
 
@@ -336,6 +404,10 @@ mod tests {
         let json = alloc_string(&format!("{{\"{name}\":{value}}}"));
         // SAFETY: the allocated JSON string is live for the parse call.
         let settings = unsafe { perry_runtime::json::js_json_parse(json.as_raw().cast()) };
+        pack_object(JsValue::from_bits(settings.bits()))
+    }
+
+    fn pack_object(settings: JsValue) -> Result<Vec<u8>, f64> {
         perry_runtime::exception::catch_js_throw(|| {
             let buffer = js_node_http2_get_packed_settings(settings.bits() as i64);
             value_byte_slice(JsValue::from_object_ptr(buffer))
@@ -416,6 +488,40 @@ mod tests {
                 error_field(error, "message"),
                 format!("Invalid value for setting \"{name}\": {value}")
             );
+        }
+    }
+
+    #[test]
+    fn packed_nonfinite_values_pack_nan_as_zero_and_reject_infinity() {
+        // JSON.parse cannot produce NaN/Infinity, so build the object directly.
+        for (name, id) in [
+            ("headerTableSize", ID_HEADER_TABLE_SIZE),
+            ("maxConcurrentStreams", ID_MAX_CONCURRENT_STREAMS),
+            ("initialWindowSize", ID_INITIAL_WINDOW_SIZE),
+            ("maxHeaderListSize", ID_MAX_HEADER_LIST_SIZE),
+        ] {
+            let settings =
+                perry_ffi::alloc_null_proto_object(&[(name, JsValue::from_number(f64::NAN))]);
+            let mut expected = Vec::new();
+            push_record(&mut expected, id, 0);
+            assert_eq!(pack_object(settings).unwrap(), expected, "{name} NaN");
+            for (value, text) in [
+                (f64::INFINITY, "Infinity"),
+                (f64::NEG_INFINITY, "-Infinity"),
+            ] {
+                let settings =
+                    perry_ffi::alloc_null_proto_object(&[(name, JsValue::from_number(value))]);
+                let error = pack_object(settings).expect_err("infinite settings are out of range");
+                assert_eq!(error_field(error, "name"), "RangeError");
+                assert_eq!(
+                    error_field(error, "code"),
+                    "ERR_HTTP2_INVALID_SETTING_VALUE"
+                );
+                assert_eq!(
+                    error_field(error, "message"),
+                    format!("Invalid value for setting \"{name}\": {text}")
+                );
+            }
         }
     }
 
