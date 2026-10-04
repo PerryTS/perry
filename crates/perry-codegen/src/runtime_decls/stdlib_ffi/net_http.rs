@@ -27,7 +27,7 @@ pub(crate) fn declare_net_http(module: &mut LlModule) {
     module.declare_function(
         "js_worker_threads_worker_post_message",
         DOUBLE,
-        &[I64, DOUBLE],
+        &[I64, DOUBLE, DOUBLE],
     );
     module.declare_function("js_worker_threads_worker_on", DOUBLE, &[I64, DOUBLE, I64]);
     module.declare_function("js_worker_threads_worker_once", DOUBLE, &[I64, DOUBLE, I64]);

@@ -2,9 +2,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;
 
 use perry_runtime::string::js_string_from_bytes;
-use perry_runtime::thread::{
-    deserialize_nanbox_on_current_thread, serialize_nanbox_for_thread, SerializedValue,
-};
+use perry_runtime::thread::{deserialize_nanbox_on_current_thread, SerializedValue};
 use perry_runtime::value::JSValue;
 
 use super::{is_undefined, js_bool, WorkerCommand, CURRENT_WORKER_ID, WORKERS};
@@ -44,7 +42,7 @@ impl WorkerMessagingError {
 pub extern "C" fn js_worker_threads_post_message_to_thread(
     thread_id: f64,
     value: f64,
-    _transfer_list: f64,
+    transfer_list: f64,
     timeout: f64,
 ) -> f64 {
     let Some(target_thread_id) = thread_id_from_value(thread_id) else {
@@ -55,7 +53,7 @@ pub extern "C" fn js_worker_threads_post_message_to_thread(
         return rejected_worker_messaging_promise(WorkerMessagingError::SameThread);
     }
 
-    let message = unsafe { serialize_nanbox_for_thread(value.to_bits()) };
+    let message = super::clone_message(value, transfer_list);
     let (ack_tx, ack_rx) = mpsc::channel::<DirectMessageResult>();
     let sender = WORKERS
         .lock()

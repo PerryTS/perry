@@ -12,7 +12,7 @@ pub(super) fn worker_parent_port_object() -> *mut perry_runtime::object::ObjectH
         obj,
         "postMessage",
         closure_value(
-            perry_runtime::fn_info!(worker_parent_port_post_message, 1; with_declared(1)),
+            perry_runtime::fn_info!(worker_parent_port_post_message, 2; with_declared(1)),
         ),
     );
     set_object_field(
@@ -91,8 +91,9 @@ extern "C" fn worker_parent_port_post_message(
     _closure: *const ClosureHeader,
     _this: perry_runtime::closure::JsThis,
     value: f64,
+    transfer: f64,
 ) -> f64 {
-    js_worker_threads_post_message(value)
+    js_worker_threads_post_message(value, transfer)
 }
 
 extern "C" fn worker_parent_port_on(

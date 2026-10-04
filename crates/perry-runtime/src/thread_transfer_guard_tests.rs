@@ -88,17 +88,18 @@ fn transferable_trees_report_no_unsupported() {
 }
 
 #[test]
-fn serialize_map_yields_unsupported_marker() {
-    // The concrete audit case: a real Map value serializes to a named
-    // Unsupported marker instead of Inline(undefined).
+fn serialize_map_crosses_with_its_entries() {
+    // A Map used to be refused (#6185); it now crosses like a structured clone.
     unsafe {
         let map = crate::map::js_map_alloc(4);
+        let map = crate::map::js_map_set(map, 1.0, 2.0);
         let map_bits = POINTER_TAG | (map as u64 & POINTER_MASK);
         let sv = serialize_nanbox_for_thread(map_bits);
         assert!(
-            matches!(sv, SerializedValue::Unsupported("Map")),
-            "a Map must serialize to Unsupported(\"Map\"), got {sv:?}"
+            matches!(&sv, SerializedValue::Map(entries) if entries.len() == 1),
+            "a Map must serialize to its entries, got {sv:?}"
         );
+        assert_eq!(first_unsupported_transfer_type(&sv), None);
     }
 }
 

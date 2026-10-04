@@ -130,7 +130,7 @@ pub(super) const EXTRAS_ROWS: &[NativeModSig] = &[
         method: "postMessage",
         class_filter: Some("Worker"),
         runtime: "js_worker_threads_worker_post_message",
-        args: &[NA_F64],
+        args: &[NA_F64, NA_F64],
         ret: NR_F64,
     },
     NativeModSig {

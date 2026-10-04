@@ -141,9 +141,10 @@
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 
-use crate::bigint::{self, BigIntHeader, BIGINT_LIMBS};
+use crate::bigint::BIGINT_LIMBS;
 use crate::closure::{self, real_capture_count, ClosureHeader};
 use crate::gc;
+#[cfg(test)]
 use crate::value::JSValue;
 
 // NaN-boxing tag constants (from value.rs)
@@ -221,7 +222,7 @@ fn is_truthy_bits(bits: u64) -> bool {
 /// Strings, arrays, objects, closures, and BigInts contain pointers to arena
 /// or malloc memory. These are read from the source thread's memory and stored
 /// as owned Rust data (`Vec<u8>`, `Vec<SerializedValue>`, etc.).
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum SerializedValue {
     /// A raw 64-bit value that needs no pointer fixup.
     /// Covers: f64 numbers, TAG_UNDEFINED, TAG_NULL, TAG_TRUE, TAG_FALSE, INT32_TAG.
@@ -293,6 +294,48 @@ pub enum SerializedValue {
     /// only when a FileHandle can actually exist.
     DetachedFileHandle,
 
+    /// An array slot that holds no value (`[1, , 3]`). Only appears as an
+    /// element of `Array`.
+    Hole,
+
+    /// The same object as the n-th object already written in this value, in
+    /// the order the reader meets them. This keeps shared references and
+    /// cycles (`a.self = a`) as they were.
+    Ref(u32),
+
+    /// An `ArrayBuffer`: a copy of all its bytes. A transferred buffer also
+    /// crosses as a copy; the sender's buffer is detached afterwards.
+    ArrayBuffer(Vec<u8>),
+
+    /// A typed array or `DataView` over `buffer` (an `ArrayBuffer`, a
+    /// `SharedArrayBuffer` or a `Ref` to one). `kind` is a typed array
+    /// `KIND_*` or [`VIEW_KIND_DATA_VIEW`]; `length` counts elements (bytes
+    /// for a DataView). A Node `Buffer` crosses as a `Uint8Array`, as in Node.
+    View {
+        kind: u8,
+        buffer: Box<SerializedValue>,
+        byte_offset: u32,
+        length: u32,
+    },
+
+    /// A `Map`'s entries in insertion order.
+    Map(Vec<(SerializedValue, SerializedValue)>),
+
+    /// A `Set`'s values in insertion order.
+    Set(Vec<SerializedValue>),
+
+    /// An Error. `name` picks the constructor (an unknown name becomes
+    /// `Error`, as in V8). Other own properties, such as `code`, do not cross.
+    Error {
+        name: Vec<u8>,
+        message: Option<Vec<u8>>,
+        stack: Option<Vec<u8>>,
+        cause: Option<Box<SerializedValue>>,
+    },
+
+    /// A RegExp: its source pattern and flags. `lastIndex` starts at 0.
+    RegExp { source: Vec<u8>, flags: Vec<u8> },
+
     /// A `SharedArrayBuffer` crossing a `perry/thread` boundary (#4913).
     /// Carries the process-global backing-store address by reference — NOT a
     /// byte copy — so the receiving agent's views alias the same physical
@@ -301,9 +344,9 @@ pub enum SerializedValue {
     /// stays valid for the life of the process.
     SharedArrayBuffer { addr: usize },
 
-    /// A value whose runtime type cannot cross a `perry/thread` boundary
-    /// (Map, Set, Promise, Error, non-Uint8 TypedArray, Buffer, Symbol,
-    /// Temporal, native handles, unmaterialized lazy JSON arrays, …).
+    /// A value whose runtime type cannot cross a thread boundary (Promise,
+    /// Symbol, Temporal, native handles, a detached ArrayBuffer; for a
+    /// message also a function or an object marked uncloneable).
     ///
     /// The serializer used to lower every one of these to `Inline(TAG_UNDEFINED)`,
     /// so a capture/return of such a value crossed silently as `undefined`
@@ -316,6 +359,10 @@ pub enum SerializedValue {
     Unsupported(&'static str),
 }
 
+/// [`SerializedValue::View`] kind for a `DataView` (typed arrays use their
+/// `KIND_*`).
+pub const VIEW_KIND_DATA_VIEW: u8 = 0xFF;
+
 // Safety: SerializedValue contains no raw pointers to arena memory.
 // `info` in Closure points to a body's static JsFunctionInfo, which is
 // process-global and immutable.
@@ -325,15 +372,15 @@ unsafe impl Sync for SerializedValue {}
 // ============================================================================
 // Serialization: JSValue (NaN-boxed, arena pointers) → SerializedValue
 // ============================================================================
+//
+// The writer is `thread/clone_write.rs`, the reader `thread/clone_read.rs`.
 
-/// Serialize a NaN-boxed JSValue into a thread-safe SerializedValue.
-///
-/// Reads from the current thread's arena to extract pointer-based values
-/// (strings, arrays, objects, closures, BigInts) into owned Rust data.
-///
-/// # Safety
-/// The `bits` must be a valid NaN-boxed JSValue. Pointer-tagged values must
-/// point to valid, live objects in the current thread's arena or malloc heap.
+mod clone_read;
+mod clone_write;
+pub use clone_read::deserialize_nanbox_on_current_thread;
+use clone_write::serialize_capture_for_thread;
+pub use clone_write::{serialize_message, serialize_nanbox_for_thread};
+
 /// Cross-thread codec hook for `fs.promises` FileHandle values (binary
 /// size). The serializer's FileHandle probe and the deserializer's
 /// detached-handle builder live in `crate::fs`; referencing them statically
@@ -372,174 +419,6 @@ fn fs_thread_codec() -> Option<&'static FsThreadCodec> {
     } else {
         // SAFETY: only ever stores `&'static FsThreadCodec`.
         Some(unsafe { &*p })
-    }
-}
-
-pub unsafe fn serialize_nanbox_for_thread(bits: u64) -> SerializedValue {
-    let tag = bits & TAG_MASK;
-
-    // Fast path: values that are just bit patterns (no pointers)
-    match bits {
-        TAG_UNDEFINED | TAG_NULL | TAG_TRUE | TAG_FALSE => {
-            return SerializedValue::Inline(bits);
-        }
-        _ => {}
-    }
-
-    // Int32: just bit pattern, no pointer
-    if tag == INT32_TAG {
-        return SerializedValue::Inline(bits);
-    }
-
-    // String: copy UTF-8 bytes from StringHeader
-    if tag == STRING_TAG {
-        let ptr = (bits & POINTER_MASK) as *const crate::string::StringHeader;
-        if ptr.is_null() || (ptr as usize) < 0x1000 {
-            return SerializedValue::String(Vec::new());
-        }
-        let len = (*ptr).byte_len as usize;
-        let data_ptr = (ptr as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
-        let bytes = std::slice::from_raw_parts(data_ptr, len).to_vec();
-        return SerializedValue::String(bytes);
-    }
-
-    // BigInt: copy limbs
-    if tag == BIGINT_TAG {
-        let ptr = (bits & POINTER_MASK) as *const BigIntHeader;
-        let ptr = bigint::clean_bigint_ptr(ptr);
-        if ptr.is_null() {
-            return SerializedValue::BigInt([0u64; BIGINT_LIMBS]);
-        }
-        return SerializedValue::BigInt((*ptr).limbs);
-    }
-
-    // Pointer: could be array, object, or closure
-    if tag == POINTER_TAG {
-        let raw_ptr = (bits & POINTER_MASK) as *const u8;
-        if raw_ptr.is_null() || (raw_ptr as usize) < 0x1000 {
-            return SerializedValue::Inline(TAG_UNDEFINED);
-        }
-
-        // SharedArrayBuffer is an immortal process-global buffer cell.
-        // Pass it by reference so the receiving agent aliases the same bytes
-        // rather than taking the ordinary per-agent copy path below.
-        if crate::shared_sab::is_shared_sab(raw_ptr as usize) {
-            return SerializedValue::SharedArrayBuffer {
-                addr: raw_ptr as usize,
-            };
-        }
-
-        // Byte views copy their authoritative span through buffer_data, so a
-        // foreign-backed Uint8Array crosses by value exactly as a structured
-        // clone does in node; its native backing is never shared.
-        if crate::buffer::is_uint8array_buffer(raw_ptr as usize) {
-            let buffer = raw_ptr as *const crate::buffer::BufferHeader;
-            let len = (*buffer).length as usize;
-            let data = crate::buffer::buffer_data(buffer);
-            let bytes = if len == 0 {
-                Vec::new()
-            } else {
-                std::slice::from_raw_parts(data, len).to_vec()
-            };
-            return SerializedValue::Uint8Array(bytes);
-        }
-
-        // Check GcHeader to determine type
-        let header = raw_ptr.sub(gc::GC_HEADER_SIZE) as *const gc::GcHeader;
-        let obj_type = (*header).obj_type;
-
-        match obj_type {
-            gc::GC_TYPE_ARRAY => {
-                return serialize_array(raw_ptr as *const crate::array::ArrayHeader);
-            }
-            gc::GC_TYPE_OBJECT => {
-                let value = f64::from_bits(bits);
-                if fs_thread_codec().is_some_and(|codec| (codec.is_filehandle)(value)) {
-                    return SerializedValue::DetachedFileHandle;
-                }
-                // #340/#341: a native-backed builtin (TextEncoder/TextDecoder,
-                // Timeout/Immediate, the six `perry/tui` handle kinds) is an
-                // ORDINARY object now, so the GC kind no longer rejects it the
-                // way kinds 13-16 do below. Refuse it by class id instead —
-                // deep-copying one would hand the other thread a plain `{}`
-                // with no native state, which is exactly the silent shape
-                // #6185 made these surface a named TypeError for. The id range
-                // is owned by `native_class_ids`, so a family joins this guard
-                // by taking the next id rather than by editing this file.
-                let class_id = (*(raw_ptr as *const crate::object::ObjectHeader)).class_id;
-                if let Some(name) = crate::event_target::native_class_name(class_id).or_else(|| {
-                    crate::event_target::state::transfer_family(
-                        raw_ptr as *mut crate::object::ObjectHeader,
-                    )
-                }) {
-                    return SerializedValue::Unsupported(name);
-                }
-                if crate::native_class_ids::is_native_backed_class_id(class_id) {
-                    return SerializedValue::Unsupported("native handle");
-                }
-                return serialize_object(raw_ptr as *const crate::object::ObjectHeader);
-            }
-            gc::GC_TYPE_ERROR if crate::event_target::is_dom_exception_error(raw_ptr.cast()) => {
-                return SerializedValue::Unsupported("DOMException");
-            }
-            gc::GC_TYPE_CLOSURE => {
-                return serialize_closure(raw_ptr as *const ClosureHeader);
-            }
-            gc::GC_TYPE_DATE_CELL => {
-                // #2089: copy the timestamp; the receiving thread re-allocates
-                // a fresh cell (deep-copy, like every other crossed value).
-                return SerializedValue::Date((*(raw_ptr as *const crate::date::DateCell)).ts);
-            }
-            // Everything below is a genuinely non-transferable runtime type.
-            // Previously all of these silently became `undefined` on the far
-            // side (#6185); now they surface a named TypeError at the boundary.
-            other => {
-                return SerializedValue::Unsupported(unsupported_transfer_type_name(other));
-            }
-        }
-    }
-
-    // Regular f64 number (no tag in the NaN-boxing range we use)
-    SerializedValue::Inline(bits)
-}
-
-/// Serialize a single closure capture slot for a thread boundary.
-///
-/// Capture slots differ from array elements / object fields: a slot for a
-/// *boxed* local holds a raw box pointer, not a NaN-boxed value. Every body
-/// local of an `async` function is boxed by the async-to-generator transform,
-/// and any mutable capture is boxed too; codegen stores the box pointer in the
-/// capture slot so reads/writes inside the closure body go through
-/// `js_box_get`/`js_box_set` — and the reconstructed closure on the receiving
-/// thread reads its slots the same way. That box lives in the *spawning*
-/// thread's thread-local, never-freed registry, so it cannot cross verbatim:
-/// crossing the raw pointer left the worker's `js_box_get` reading an
-/// unregistered address (→ `undefined`), so a captured async-fn local array
-/// looked empty (length 0) and a captured scalar looked `undefined` (#6520).
-///
-/// Cross it as a [`SerializedValue::BoxedCapture`]: deep-copy the value the box
-/// *holds* now, and re-box it on the receiving thread (see
-/// [`deserialize_nanbox_on_current_thread`]) so the slot there again holds a
-/// valid, locally-registered box pointer. Non-boxed slots (plain value
-/// captures, the `this`/`new.target` slots) serialize directly.
-///
-/// # Safety
-/// Same contract as [`serialize_nanbox_for_thread`]: pointer-tagged values
-/// must reference live objects in the current thread's arena/heap.
-unsafe fn serialize_capture_for_thread(slot_bits: u64) -> SerializedValue {
-    if let Some(words) = crate::r#box::scope::scope_slot_contents(slot_bits) {
-        return SerializedValue::ScopeCapture(
-            words
-                .into_iter()
-                .map(|bits| serialize_nanbox_for_thread(bits))
-                .collect(),
-        );
-    }
-    match crate::r#box::box_slot_contents_bits(slot_bits) {
-        Some(inner_bits) => {
-            SerializedValue::BoxedCapture(Box::new(serialize_nanbox_for_thread(inner_bits)))
-        }
-        None => serialize_nanbox_for_thread(slot_bits),
     }
 }
 
@@ -589,6 +468,14 @@ pub(crate) fn first_unsupported_transfer_type(sv: &SerializedValue) -> Option<&'
         SerializedValue::ScopeCapture(slots) => {
             slots.iter().find_map(first_unsupported_transfer_type)
         }
+        SerializedValue::Map(entries) => entries.iter().find_map(|(key, value)| {
+            first_unsupported_transfer_type(key).or_else(|| first_unsupported_transfer_type(value))
+        }),
+        SerializedValue::Set(values) => values.iter().find_map(first_unsupported_transfer_type),
+        SerializedValue::Error { cause, .. } => {
+            cause.as_deref().and_then(first_unsupported_transfer_type)
+        }
+        SerializedValue::View { buffer, .. } => first_unsupported_transfer_type(buffer),
         _ => None,
     }
 }
@@ -632,175 +519,6 @@ unsafe fn guard_transferable(values: &[SerializedValue]) {
     }
 }
 
-/// Serialize an ArrayHeader into a SerializedValue::Array.
-unsafe fn serialize_array(arr: *const crate::array::ArrayHeader) -> SerializedValue {
-    // #6518 (forwarding-chain family of #6486): the caller may hold a stale
-    // pre-grow pointer — `js_array_grow` moves the array and leaves a
-    // GC_FLAG_FORWARDED stub at the old address (#233) whose first 8 bytes
-    // (length+capacity) are the forwarding pointer. Raw-dereferencing
-    // `(*arr).length` here read those bytes as the element count and
-    // serialized a garbage-length array across the thread boundary.
-    // `clean_arr_ptr` follows the chain, validates the header, and
-    // materializes lazy arrays.
-    let arr = crate::array::clean_arr_ptr(arr);
-    if arr.is_null() {
-        return SerializedValue::Array(Vec::new());
-    }
-    let len = (*arr).length as usize;
-
-    // Element reads go through `js_array_get_f64`, not a raw pointer walk:
-    // a sparse array (length > capacity, far slots among its named properties)
-    // legally passes `clean_arr_ptr`, so walking `length` raw slots reads
-    // out of bounds (same rule as #6517's from-array constructors). The
-    // accessor resolves far-index slots and reads holes as undefined.
-    let mut elements = Vec::with_capacity(len);
-    for i in 0..len {
-        let elem_bits = crate::array::js_array_get_f64(arr, i as u32).to_bits();
-        elements.push(serialize_nanbox_for_thread(elem_bits));
-    }
-    SerializedValue::Array(elements)
-}
-
-/// Serialize an ObjectHeader into a SerializedValue::Object.
-unsafe fn serialize_object(obj: *const crate::object::ObjectHeader) -> SerializedValue {
-    if obj.is_null() || (obj as usize) < 0x1000 {
-        return SerializedValue::Object {
-            final_constfn: None,
-            class_id: 0,
-            parent_class_id: 0,
-            fields: Vec::new(),
-            keys: None,
-        };
-    }
-
-    let class_id = (*obj).class_id;
-    // #6759 C3c: `ObjectHeader.parent_class_id` is NOT purely inheritance data.
-    // For a plain object (`class_id == 0`) the same word carries the runtime
-    // ShapeId stamp (`shapes::SHAPE_ID_BASE..SHAPE_ID_END`), written lazily by
-    // every resolve path. Replaying that word verbatim on the destination
-    // thread — `deserialize` hands it to `js_object_alloc_with_parent`, which
-    // does `if parent != 0 { register_class(class_id, parent) }` — registers
-    // `class 0 → <a shape id>` in the process-global class-parent registry and
-    // bumps the store-plan epoch, once per deserialized stamped object.
-    //
-    // The authoritative parent edge does not live in the header at all: every
-    // parent-chain walk in the runtime reads `get_parent_class_id(class_id)`
-    // (`object/class_meta_registry.rs`), and each edge is registered from a
-    // compile-time constant — by `js_register_class_parent` in the module-init
-    // prelude for the codegen inline `new C()` path, and by `register_class`
-    // inside every runtime allocator that takes a `parent_class_id` argument.
-    // So read it from the registry, which is both correct for class instances
-    // and immune to the stamp.
-    //
-    // This also removes the LAST consumer of the header word as inheritance
-    // data, which is the blocking dependency for #6759 C3's unification of
-    // class layouts and plain-object shapes into one shape-id space.
-    let parent_class_id = if class_id != 0 {
-        crate::object::get_parent_class_id(class_id).unwrap_or(0)
-    } else {
-        0
-    };
-    let field_count = crate::object::object_live_slot_count(obj) as usize;
-
-    // Tombstoned key slots (#9029, flag-gated deletes) must not cross the
-    // thread boundary: the worker-side rebuild is positional (key i pairs
-    // with field i), so serializing a hole would materialize a phantom
-    // empty-string key on the worker. Skip the PAIR — key slot and value
-    // slot — which keeps the surviving pairs aligned and matches node
-    // (postMessage of an object with deleted keys carries only live keys).
-    let hole_at = |i: usize| -> bool {
-        let keys_arr_view = crate::object::object_keys(obj);
-        let keys_arr = keys_arr_view.arr();
-        if keys_arr.is_null() || i >= keys_arr_view.count() as usize {
-            return false;
-        }
-        let keys_elements =
-            crate::array::array_elements_ptr(keys_arr as *const crate::array::ArrayHeader)
-                as *const f64;
-        (*keys_elements.add(i)).to_bits() == crate::value::TAG_HOLE
-    };
-
-    // Serialize field values
-    let fields_ptr =
-        (obj as *const u8).add(std::mem::size_of::<crate::object::ObjectHeader>()) as *const f64;
-    let mut fields = Vec::with_capacity(field_count);
-    for i in 0..field_count {
-        if hole_at(i) {
-            continue;
-        }
-        // An accessor key's slot holds its accessor pair, never a value
-        // (`accessor_pair.rs`): it crosses as `undefined`, as it always read.
-        let field_bits = if crate::object::key_attrs::key_is_accessor_at(
-            crate::object::object_keys(obj).arr(),
-            i as u32,
-        ) {
-            crate::value::TAG_UNDEFINED
-        } else {
-            (*fields_ptr.add(i)).to_bits()
-        };
-        fields.push(serialize_nanbox_for_thread(field_bits));
-    }
-
-    // Serialize keys array if present (plain objects have keys, class instances don't)
-    let keys = if !crate::object::object_keys(obj).is_null() {
-        let keys_arr_view = crate::object::object_keys(obj);
-        let keys_arr = keys_arr_view.arr();
-        let keys_len = keys_arr_view.count() as usize;
-        let keys_elements =
-            crate::array::array_elements_ptr(keys_arr as *const crate::array::ArrayHeader)
-                as *const f64;
-        let mut key_strings = Vec::with_capacity(keys_len);
-        for i in 0..keys_len {
-            let key_bits = (*keys_elements.add(i)).to_bits();
-            if key_bits == crate::value::TAG_HOLE {
-                // Paired with the `hole_at` skip in the fields loop above.
-                continue;
-            }
-            let mut short = [0; crate::value::SHORT_STRING_MAX_LEN];
-            key_strings.push(
-                crate::string::js_string_key_bytes(JSValue::from_bits(key_bits), &mut short)
-                    .map_or_else(Vec::new, <[u8]>::to_vec),
-            );
-        }
-        Some(key_strings)
-    } else {
-        None
-    };
-
-    SerializedValue::Object {
-        final_constfn: constfn_transfer::snapshot(obj, keys.as_deref(), fields.len()),
-        class_id,
-        parent_class_id,
-        fields,
-        keys,
-    }
-}
-
-/// Serialize a ClosureHeader into a SerializedValue::Closure.
-unsafe fn serialize_closure(closure: *const ClosureHeader) -> SerializedValue {
-    if closure.is_null() || (closure as usize) < 0x1000 {
-        return SerializedValue::Inline(TAG_UNDEFINED);
-    }
-
-    let info = (*closure).info as usize;
-    let capture_count_raw = (*closure).capture_count;
-    let actual_count = real_capture_count(capture_count_raw) as usize;
-
-    let captures_base =
-        (closure as *const u8).add(std::mem::size_of::<ClosureHeader>()) as *const f64;
-    let mut captures = Vec::with_capacity(actual_count);
-    for i in 0..actual_count {
-        let cap_bits = (*captures_base.add(i)).to_bits();
-        captures.push(serialize_capture_for_thread(cap_bits));
-    }
-
-    SerializedValue::Closure {
-        info,
-        capture_count: capture_count_raw,
-        captures,
-    }
-}
-
 // ============================================================================
 // Deserialization: SerializedValue → JSValue (into current thread's arena)
 // ============================================================================
@@ -836,219 +554,6 @@ pub(crate) unsafe fn test_store_thread_object_field(
     bits: u64,
 ) {
     store_thread_object_field(obj, index, bits);
-}
-
-/// Deserialize a SerializedValue into a NaN-boxed JSValue.
-///
-/// Allocates any needed objects (strings, arrays, objects, closures) in the
-/// **current thread's** arena. This is the key safety property: the caller
-/// controls which arena receives the allocations by calling this function
-/// on the appropriate thread.
-///
-/// # Returns
-/// The raw u64 bits of the NaN-boxed JSValue.
-pub unsafe fn deserialize_nanbox_on_current_thread(sv: &SerializedValue) -> u64 {
-    match sv {
-        SerializedValue::Inline(bits) => *bits,
-
-        SerializedValue::String(bytes) => {
-            let str_ptr = crate::string::js_string_from_bytes(
-                if bytes.is_empty() {
-                    ptr::null()
-                } else {
-                    bytes.as_ptr()
-                },
-                bytes.len() as u32,
-            );
-            JSValue::string_ptr(str_ptr).bits()
-        }
-
-        SerializedValue::Array(elements) => {
-            let arr = crate::array::js_array_alloc(elements.len() as u32);
-            let scope = crate::gc::RuntimeHandleScope::new();
-            let arr_handle = scope.root_raw_mut_ptr(arr);
-            for (i, elem) in elements.iter().enumerate() {
-                let bits = deserialize_nanbox_on_current_thread(elem);
-                let arr = arr_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
-                // GC_STORE_AUDIT(BARRIERED): deserialized thread array slot uses the shared array slot-store helper.
-                store_thread_array_slot(arr, i, bits);
-            }
-            let arr = arr_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
-            (*arr).length = elements.len() as u32;
-            JSValue::pointer(arr as *const u8).bits()
-        }
-
-        SerializedValue::Object {
-            final_constfn,
-            class_id,
-            parent_class_id,
-            fields,
-            keys,
-        } => {
-            let obj = crate::object::js_object_alloc_with_parent(
-                *class_id,
-                *parent_class_id,
-                fields.len() as u32,
-            );
-            if *class_id == 0 {
-                // A class-less transferred object is data only: the wire
-                // carries keys and values, never accessors or a prototype
-                // override, exactly like `JSON.parse` output. Marked before
-                // the first stamp so its layout is minted `Ordinary` (the
-                // kind a `{}` literal's static ShapeId names), not
-                // `OrdinaryUnmarked`.
-                // SAFETY: `obj` is the unpublished newborn just allocated.
-                crate::object::shapes::store_kind::premark_plain_ordinary(obj);
-            }
-            let scope = crate::gc::RuntimeHandleScope::new();
-            let obj_handle = scope.root_raw_mut_ptr(obj);
-
-            // Set field values
-            for (i, field) in fields.iter().enumerate() {
-                let bits = deserialize_nanbox_on_current_thread(field);
-                let obj = obj_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
-                // GC_STORE_AUDIT(BARRIERED): deserialized thread object field uses the shared object slot-store helper.
-                store_thread_object_field(obj, i, bits);
-            }
-
-            // Reconstruct keys array if present
-            if let Some(key_strings) = keys {
-                let keys_arr = crate::array::js_array_alloc(key_strings.len() as u32);
-                let keys_handle = scope.root_raw_mut_ptr(keys_arr);
-                for (i, key_bytes) in key_strings.iter().enumerate() {
-                    let str_ptr = crate::string::js_string_from_bytes(
-                        if key_bytes.is_empty() {
-                            ptr::null()
-                        } else {
-                            key_bytes.as_ptr()
-                        },
-                        key_bytes.len() as u32,
-                    );
-                    let key_val = JSValue::string_ptr(str_ptr);
-                    let keys_arr = keys_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
-                    // GC_STORE_AUDIT(BARRIERED): deserialized key array slot uses the shared array slot-store helper.
-                    store_thread_array_slot(keys_arr, i, key_val.bits());
-                }
-                let keys_arr = keys_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
-                (*keys_arr).length = key_strings.len() as u32;
-                let obj = obj_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
-                crate::object::js_object_set_keys(obj, keys_arr);
-            }
-
-            let obj = obj_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
-            let obj = if let (Some(facts), Some(names)) = (final_constfn, keys) {
-                constfn_transfer::restore(obj, *class_id, fields.len(), names, facts)
-            } else {
-                obj
-            };
-            JSValue::pointer(obj as *const u8).bits()
-        }
-
-        SerializedValue::Closure {
-            info,
-            capture_count,
-            captures,
-        } => {
-            let closure = closure::js_closure_alloc(
-                *info as *const crate::closure::JsFunctionInfo,
-                *capture_count,
-            );
-            let scope = crate::gc::RuntimeHandleScope::new();
-            let rooted = scope.root_raw_mut_ptr(closure);
-            for (i, cap) in captures.iter().enumerate() {
-                // Deserializing a capture allocates (and may move the
-                // closure); the store itself does not, so re-read the rooted
-                // address in argument position.
-                let bits = deserialize_nanbox_on_current_thread(cap);
-                rooted.with_mut_ptr(|closure| {
-                    crate::closure::js_closure_set_capture_f64(
-                        closure,
-                        i as u32,
-                        f64::from_bits(bits),
-                    )
-                });
-            }
-            rooted.with_mut_ptr(|closure: *mut u8| JSValue::pointer(closure).bits())
-        }
-
-        SerializedValue::BoxedCapture(inner) => {
-            // Rebuild the cell in this thread's GC arena. The allocator roots
-            // the input across allocation; the closure's capture owns the result.
-            let value_bits = deserialize_nanbox_on_current_thread(inner);
-            let box_ptr = crate::r#box::js_box_alloc_bits(value_bits as i64);
-            box_ptr as u64
-        }
-
-        SerializedValue::ScopeCapture(slots) => {
-            // Deserializing a slot allocates and may move the new object, so
-            // publish each word through the rooted address.
-            let base = crate::r#box::scope::js_scope_alloc(
-                slots.len() as i32,
-                crate::value::TAG_UNDEFINED as i64,
-            ) as usize as *mut u8;
-            let scope = crate::gc::RuntimeHandleScope::new();
-            let rooted = scope.root_raw_mut_ptr(base);
-            for (i, slot) in slots.iter().enumerate() {
-                let bits = deserialize_nanbox_on_current_thread(slot);
-                rooted.with_mut_ptr(|base: *mut u8| unsafe {
-                    crate::r#box::scope::js_scope_set(base as i64, i as i32, bits as i64)
-                });
-            }
-            rooted.with_mut_ptr(|base: *mut u8| base as u64)
-        }
-
-        SerializedValue::BigInt(limbs) => {
-            let ptr = bigint::bigint_alloc_with_limbs(*limbs);
-            // NaN-box with BIGINT_TAG
-            BIGINT_TAG | (ptr as u64 & POINTER_MASK)
-        }
-
-        SerializedValue::Date(ts) => {
-            // #2089: allocate a fresh DateCell in THIS thread's arena.
-            crate::date::alloc_date_cell(*ts).to_bits()
-        }
-
-        SerializedValue::Uint8Array(bytes) => {
-            // Rebuild both halves of Perry's Uint8Array representation: fresh
-            // BufferHeader storage and the constructor-brand side-table entry.
-            let len = u32::try_from(bytes.len()).expect("serialized Uint8Array exceeds u32::MAX");
-            let buffer = crate::buffer::buffer_alloc(len);
-            (*buffer).length = len;
-            if !bytes.is_empty() {
-                ptr::copy_nonoverlapping(
-                    bytes.as_ptr(),
-                    crate::buffer::buffer_data_mut(buffer),
-                    bytes.len(),
-                );
-            }
-            crate::buffer::mark_as_uint8array(buffer as usize);
-            JSValue::pointer(buffer as *const u8).bits()
-        }
-
-        SerializedValue::DetachedFileHandle => match fs_thread_codec() {
-            Some(codec) => (codec.build_detached)().to_bits(),
-            // Unreachable in practice: the variant is only produced by an
-            // armed serializer, and arming is process-global (all agents
-            // share one binary's statics). Defensive `undefined` mirrors the
-            // `Unsupported` fallback below rather than panicking.
-            None => TAG_UNDEFINED,
-        },
-
-        SerializedValue::SharedArrayBuffer { addr } => {
-            // Alias the same process-global backing store (#4913) — no copy.
-            // Its header carries the SharedArrayBuffer brand (#10694), so this
-            // thread's predicates (`is_registered_buffer`,
-            // `is_shared_array_buffer`) and `new Int32Array(sab)` recognise it
-            // without any per-thread registration.
-            JSValue::pointer(*addr as *const u8).bits()
-        }
-
-        // Non-transferable values are rejected at the boundary before we ever
-        // reach deserialization (main-thread throw for captures, promise
-        // rejection for `spawn` returns), so this arm should be unreachable.
-        // Defensive fallback to `undefined` rather than a panic.
-        SerializedValue::Unsupported(_) => TAG_UNDEFINED,
-    }
 }
 
 #[cfg(test)]
