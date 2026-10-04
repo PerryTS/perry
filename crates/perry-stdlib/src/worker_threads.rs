@@ -28,6 +28,7 @@ mod broadcast_channel;
 mod channel_pump;
 mod direct_message;
 mod entry_table;
+mod inbox;
 mod message_port;
 mod parent_port;
 mod thread_values;
@@ -1606,6 +1607,7 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
             CURRENT_WORKER_CLOSE_REQUESTED.with(|closed| closed.set(false));
             worker_surface::install_web_worker_globals();
             push_parent_event(parent_agent, WorkerEvent::Online(worker_id));
+            inbox::install(rx);
 
             let entry: WorkerEntry = unsafe { std::mem::transmute(entry_ptr as usize) };
             let mut exit_code = 0;
@@ -1616,12 +1618,8 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
                         return;
                     }
                     // Keep the worker thread alive to service main→worker messages
-                    // only if it registered a Node-style, EventTarget-style, or
-                    // property-style message consumer.
-                    let has_message_consumer = MESSAGE_CALLBACK.with(|cb| cb.borrow().is_some())
-                        || MESSAGE_EVENT_CALLBACKS.with(|cbs| !cbs.borrow().is_empty())
-                        || worker_surface::web_worker_global_handler("onmessage").is_some();
-                    if !has_message_consumer {
+                    // only if it registered a message consumer.
+                    if !inbox::has_message_consumer() {
                         return;
                     }
                     loop {
@@ -1637,7 +1635,7 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
                         // after `try_recv` and before the park is not missed.
                         let received =
                             if perry_runtime::event_pump::agent_loop_has_outstanding_work() {
-                                match rx.try_recv() {
+                                match inbox::try_recv() {
                                     Ok(command) => Ok(command),
                                     Err(mpsc::TryRecvError::Empty) => {
                                         let budget_ms = worker_wait_budget()
@@ -1657,7 +1655,7 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
                                 }
                             } else {
                                 match worker_wait_budget() {
-                                    Some(budget) => match rx.recv_timeout(budget) {
+                                    Some(budget) => match inbox::recv_timeout(budget) {
                                         Ok(command) => Ok(command),
                                         Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                                             pump_worker_microtasks();
@@ -1667,7 +1665,7 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
                                             Err(std::sync::mpsc::RecvError)
                                         }
                                     },
-                                    None => rx.recv(),
+                                    None => inbox::recv(),
                                 }
                             };
                         match received {
