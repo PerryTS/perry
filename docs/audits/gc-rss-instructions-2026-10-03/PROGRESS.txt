@@ -1,3 +1,14 @@
+REFRESHED MAIN INTEGRATION PREPARED SEPARATELY
+Fetched origin/main ad0a2617bf (24 commits after measured main07). Rebased
+adopted production branch cleanly in owned worktree rss-gc-runtime-mainad0-
+20261004: private integration head 0aa483aa91, 5,014 selected source inputs.
+No prefix/query/floor experiments included. Mac full runtime job is running
+in an isolated target; all source inputs are hashed before and after it.
+Application numbers and comparative claims remain bound to main07 until a
+fresh latest-main application acceptance run proves this rebased source.
+PR production source itself remains the measured main07 draft; no force push
+or relabeling of existing measurements has occurred.
+
 NATIVE MAP LINUX VALIDATED; PRESERVED ACCEPTANCE FAILURES AND RERUNS
 Private f27fcd49d8 Linux full runtime: 4,868 passed, zero failures, five
 ignored. Fresh compiler and both static archives, all 5,012 source inputs,
