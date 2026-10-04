@@ -14,9 +14,10 @@ use crate::ffi::js_string_from_bytes;
 use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Sel};
-use objc2::{define_class, AnyThread, DefinedClass};
-use objc2_app_kit::NSView;
-use objc2_foundation::NSObject;
+use objc2::{define_class, AnyThread, ClassType, DefinedClass};
+use objc2_app_kit::{NSDatePicker, NSDatePickerCell, NSView};
+use objc2_core_foundation::{CGPoint, CGRect, CGSize};
+use objc2_foundation::{NSEdgeInsets, NSObject};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
@@ -74,6 +75,82 @@ define_class!(
     }
 );
 
+define_class!(
+    #[unsafe(super(NSDatePicker))]
+    #[name = "PerryDatePicker"]
+    pub struct PerryDatePicker;
+
+    impl PerryDatePicker {
+        // The frame is the box that Perry sizes and decorates. With AppKit's
+        // insets, a picker pinned to a width would overhang it by 3pt on the
+        // right and 4pt on the top, and so would its layer border and
+        // background.
+        #[unsafe(method(alignmentRectInsets))]
+        fn alignment_rect_insets(&self) -> NSEdgeInsets {
+            NSEdgeInsets { top: 0.0, left: 0.0, bottom: 0.0, right: 0.0 }
+        }
+
+        // AppKit subtracts the view's own insets from the cell's size. The
+        // field and stepper fill only a stock picker's alignment rect, so the
+        // picker hugs that.
+        #[unsafe(method(intrinsicContentSize))]
+        fn intrinsic_content_size(&self) -> CGSize {
+            let size: CGSize = unsafe { msg_send![super(self), intrinsicContentSize] };
+            let m = self.stock_alignment_rect_insets();
+            CGSize::new(size.width - m.left - m.right, size.height - m.top - m.bottom)
+        }
+
+        #[unsafe(method(cellClass))]
+        fn cell_class() -> &'static AnyClass {
+            PerryDatePickerCell::class()
+        }
+    }
+);
+
+impl PerryDatePicker {
+    /// The alignment rect insets that AppKit gives a stock picker.
+    fn stock_alignment_rect_insets(&self) -> NSEdgeInsets {
+        unsafe { msg_send![super(self), alignmentRectInsets] }
+    }
+}
+
+define_class!(
+    #[unsafe(super(NSDatePickerCell))]
+    #[name = "PerryDatePickerCell"]
+    pub struct PerryDatePickerCell;
+
+    impl PerryDatePickerCell {
+        // The field and stepper draw where a stock picker aligned to the same
+        // rect draws them. Clicks follow, because the cell hit-tests against
+        // the layout from its last draw, not the rect it tracks in.
+        #[unsafe(method(drawWithFrame:inView:))]
+        fn draw_with_frame(&self, frame: CGRect, view: &NSView) {
+            let frame = self.cover_margins(frame, view);
+            unsafe { msg_send![super(self), drawWithFrame: frame, inView: view] }
+        }
+    }
+);
+
+impl PerryDatePickerCell {
+    /// `frame` grown by the alignment rect insets that AppKit gives a stock
+    /// picker. The margins are blank, so the cell draws nothing outside
+    /// `frame`.
+    fn cover_margins(&self, frame: CGRect, view: &NSView) -> CGRect {
+        let Some(picker) = view.downcast_ref::<PerryDatePicker>() else {
+            return frame;
+        };
+        let m = picker.stock_alignment_rect_insets();
+        let above = if view.isFlipped() { m.top } else { m.bottom };
+        CGRect::new(
+            CGPoint::new(frame.origin.x - m.left, frame.origin.y - above),
+            CGSize::new(
+                frame.size.width + m.left + m.right,
+                frame.size.height + m.top + m.bottom,
+            ),
+        )
+    }
+}
+
 impl PerryDatePickerTarget {
     fn new() -> Retained<Self> {
         let this = Self::alloc().set_ivars(PerryDatePickerTargetIvars {
@@ -118,8 +195,7 @@ unsafe fn make_date(year: i64, month: i64, day: i64) -> *mut AnyObject {
 /// date field. Elements are limited to year-month-day (no clock face).
 pub fn create(year: i64, month: i64, on_change: f64) -> i64 {
     unsafe {
-        let cls = AnyClass::get(c"NSDatePicker").unwrap();
-        let alloc: *mut AnyObject = msg_send![cls, alloc];
+        let alloc: *mut AnyObject = msg_send![PerryDatePicker::class(), alloc];
         let frame = objc2_core_foundation::CGRect::new(
             objc2_core_foundation::CGPoint::new(0.0, 0.0),
             objc2_core_foundation::CGSize::new(140.0, 24.0),
