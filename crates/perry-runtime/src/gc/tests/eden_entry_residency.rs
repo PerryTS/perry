@@ -79,12 +79,14 @@ fn real_full_collection_gives_eden_a_reuse_interval_then_discards_idle_pages() {
             );
         }
         for root in [live, extra_root] {
-            let string = root.get_raw_const_ptr::<crate::string::StringHeader>();
-            assert_eq!((*string).byte_len, bytes.len() as u32);
-            assert_eq!(
-                std::slice::from_raw_parts(crate::string::string_data(string), bytes.len()),
-                bytes
-            );
+            // The closure only reads the string; nothing here allocates.
+            root.with_const_ptr(|string: *const crate::string::StringHeader| {
+                assert_eq!((*string).byte_len, bytes.len() as u32);
+                assert_eq!(
+                    std::slice::from_raw_parts(crate::string::string_data(string), bytes.len()),
+                    bytes
+                );
+            });
         }
     })
     .join()

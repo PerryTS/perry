@@ -131,7 +131,7 @@
 4 crates/perry-runtime/src/object/object_ops/from_entries.rs
 5 crates/perry-runtime/src/object/object_ops/keys_array.rs
 6 crates/perry-runtime/src/object/polymorphic_index.rs
-3 crates/perry-runtime/src/object/reflect_support.rs
+2 crates/perry-runtime/src/object/reflect_support.rs
 2 crates/perry-runtime/src/object/spill.rs
 2 crates/perry-runtime/src/object/typed_array_define.rs
 3 crates/perry-runtime/src/os.rs

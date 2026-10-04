@@ -290,13 +290,13 @@ mod private_storage_cache_tests {
         });
         let held = scope.root_raw_mut_ptr(crate::object::js_object_alloc(62_641, 0));
         let _ = held;
-        unsafe {
-            let holder = other.get_raw_mut_ptr::<ObjectHeader>();
+        // `apply_edits` suppresses moving collection for its whole body.
+        other.with_mut_ptr(|holder: *mut ObjectHeader| unsafe {
             crate::object::key_attrs::apply_edits(
                 holder,
                 &[crate::object::key_attrs::AttrsEdit::Private(key.as_bytes())],
             );
-        }
+        });
         assert!(key.set_cached(other_receiver(), 11.0));
         assert_eq!(key.get_cached(other_receiver()), Some(11.0));
         let first_shape = key.slot.get().unwrap().0;
