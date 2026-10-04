@@ -217,8 +217,12 @@ fn uint8_clamped_typed_array_store_records_runtime_fallback() {
     );
 }
 
+/// #11810: `const alias = array` over an OWNING typed array is a second name
+/// for the same storage. The alias shares the source's proven view, so its
+/// reads are native, not the runtime helper. (Before #11810 this test pinned
+/// the opposite: the alias demoted both names to `js_typed_array_get`.)
 #[test]
-fn typed_array_alias_read_records_runtime_fallback() {
+fn typed_array_alias_read_keeps_the_proven_view() {
     let body = vec![
         typed_array_let(
             1,
@@ -227,6 +231,55 @@ fn typed_array_alias_read_records_runtime_fallback() {
             perry_hir::TYPED_ARRAY_KIND_UINT16,
             int(8),
         ),
+        Stmt::Let {
+            id: 2,
+            name: "alias".to_string(),
+            ty: Type::Named("Uint16Array".to_string()),
+            mutable: false,
+            init: Some(local(1)),
+        },
+        for_loop(3, int(8), vec![Stmt::Expr(index_get(2, local(3)))]),
+        Stmt::Return(Some(int(0))),
+    ];
+
+    let artifact = compile_artifact_json("artifact_typed_array_alias_view.ts", body);
+    let records = artifact["records"].as_array().unwrap();
+    let alias_reads: Vec<_> = records
+        .iter()
+        .filter(|record| record["expr_kind"] == "TypedArrayGet" && record["local_id"] == 2)
+        .collect();
+    assert!(
+        !alias_reads.is_empty(),
+        "expected a recorded read through the alias:\n{artifact:#}"
+    );
+    for record in alias_reads {
+        assert!(
+            record["consumer"] != "TypedArrayGet.slow_path"
+                && record["access_mode"] != "dynamic_fallback",
+            "an alias of an owning typed array must keep the proven view:\n{record:#}"
+        );
+    }
+}
+
+/// An alias of a view that is no longer proven still falls back: reading
+/// `array.buffer` exposes the storage (another view can now write it), which
+/// invalidates the cached pointer before the alias is bound, so the alias
+/// cannot inherit a proof and its reads take the runtime helper.
+#[test]
+fn alias_of_an_exposed_typed_array_records_runtime_fallback() {
+    let body = vec![
+        typed_array_let(
+            1,
+            "array",
+            "Uint16Array",
+            perry_hir::TYPED_ARRAY_KIND_UINT16,
+            int(8),
+        ),
+        Stmt::Expr(Expr::PropertyGet {
+            byte_offset: 0,
+            object: Box::new(local(1)),
+            property: "buffer".to_string(),
+        }),
         Stmt::Let {
             id: 2,
             name: "alias".to_string(),
@@ -250,7 +303,7 @@ fn typed_array_alias_read_records_runtime_fallback() {
                     && record["access_mode"] == "dynamic_fallback"
                     && !record["fallback_reason"].is_null()
             }),
-        "expected aliased typed-array read to record runtime fallback:\n{artifact:#}"
+        "expected a read through an alias of an exposed typed array to record runtime fallback:\n{artifact:#}"
     );
 }
 
