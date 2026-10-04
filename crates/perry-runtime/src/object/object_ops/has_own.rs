@@ -201,8 +201,29 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
             return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
         }
 
-        if let Some(present) = registered_buffer_index_own_property_present(obj_value, key_str) {
-            return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
+        // The receiver's managed kind, read once from an allocator-owned header.
+        // A tracked `GC_TYPE_OBJECT` header is none of the kinds the probes
+        // below look for: a Buffer is `GC_TYPE_BUFFER` (or foreign memory with
+        // no tracked header), a typed array `GC_TYPE_TYPED_ARRAY` /
+        // `GC_TYPE_NATIVE_TYPED_VIEW`, a function `GC_TYPE_CLOSURE`, and the
+        // exotic expando kinds and `GC_TYPE_ERROR` are their own types. Each of
+        // those probes is a registry or header lookup, and together they were
+        // most of the cost of `o.hasOwnProperty(k)` on a plain object, so an
+        // ordinary heap object goes straight to the object arms. The read
+        // follows every allocating coercion above, and a move never changes a
+        // header's type.
+        let heap_object = obj_js.is_pointer() && {
+            let addr = obj_js.as_pointer::<u8>() as usize;
+            crate::value::addr_class::is_above_handle_band(addr)
+                && crate::value::addr_class::try_read_tracked_gc_header(addr)
+                    .is_some_and(|h| h.as_ref().obj_type == crate::gc::GC_TYPE_OBJECT)
+        };
+
+        if !heap_object {
+            if let Some(present) = registered_buffer_index_own_property_present(obj_value, key_str)
+            {
+                return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
+            }
         }
 
         if let Some(class_id) = super::super::class_ref_id(obj_value) {
@@ -244,7 +265,10 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
             return f64::from_bits(TAG_TRUE);
         }
 
-        if let Some(addr) = crate::typedarray_props::typed_array_addr_from_value(obj_value) {
+        if let Some(addr) = (!heap_object)
+            .then(|| crate::typedarray_props::typed_array_addr_from_value(obj_value))
+            .flatten()
+        {
             let present = crate::typedarray_props::typed_array_has_own_property(
                 addr as *const crate::typedarray::TypedArrayHeader,
                 key_str,
@@ -256,7 +280,7 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
         // (and `prototype` for constructors) plus any user-attached props.
         // Route them here instead of through `extract_obj_ptr`/`own_key_present`,
         // which would read `keys_array` off a closure (out of bounds).
-        if obj_js.is_pointer() {
+        if obj_js.is_pointer() && !heap_object {
             let ptr = obj_js.as_pointer::<u8>() as usize;
             if crate::buffer::is_registered_buffer(ptr) {
                 let present = super::super::has_own_helpers::buffer_own_key_present(
