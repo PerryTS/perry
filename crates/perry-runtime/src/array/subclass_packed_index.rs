@@ -85,7 +85,7 @@ pub extern "C" fn js_packed_arraylike_index_get(
                 }
                 // #10515: an admitted owning byte view answers from the
                 // inline-access cache before the dispatcher's registry probes.
-                if header.obj_type == crate::gc::GC_TYPE_BUFFER {
+                if crate::gc::is_buffer_family_type(header.obj_type) {
                     if let Some(byte) = cached_u8_packed_get(raw as usize, index_u32) {
                         return byte;
                     }

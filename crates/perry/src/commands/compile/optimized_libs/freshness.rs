@@ -155,7 +155,6 @@ pub(crate) const HOT_DIAG_KNOBS: &[&str] = &[
     "PERRY_IC_DIAG",
     "PERRY_LAYOUT_DIAG",
     "PERRY_ENUM_DIAG",
-    "PERRY_BUFFER_DIAG",
     "PERRY_RECEIVER_REPR_DIAG",
 ];
 

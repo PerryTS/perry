@@ -380,7 +380,8 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
             (bits & 0x0000_FFFF_FFFF_FFFF) as usize
         } else {
             let top16 = (bits >> 48) as u16;
-            if top16 == 0 && bits >= 0x1000 {
+            // #10694: a raw word must be allocator-owned before the brand read.
+            if top16 == 0 && bits >= 0x1000 && crate::buffer::header_is_owned(bits as usize) {
                 bits as usize
             } else {
                 0
@@ -629,7 +630,8 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
         let top16 = (bits >> 48) as u16;
         if top16 == 0 && bits >= 0x1000 {
             let addr = bits as usize;
-            if crate::buffer::is_registered_buffer(addr)
+            // #10694: a raw word must be allocator-owned before the brand read.
+            if crate::buffer::buffer_family_type_owned(addr).is_some()
                 || crate::set::is_registered_set(addr)
                 || crate::map::is_registered_map(addr)
                 || crate::typedarray::lookup_typed_array_kind(addr).is_some()
@@ -666,7 +668,8 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
             (bits & 0x0000_FFFF_FFFF_FFFF) as usize
         } else {
             let top16 = (bits >> 48) as u16;
-            if top16 == 0 && bits >= 0x1000 {
+            // #10694: a raw word must be allocator-owned before the brand read.
+            if top16 == 0 && bits >= 0x1000 && crate::buffer::header_is_owned(bits as usize) {
                 bits as usize
             } else {
                 0

@@ -33,10 +33,15 @@ enum TypedArrayOwnerKind {
 
 #[inline]
 fn typed_array_owner_kind(owner: usize) -> Option<TypedArrayOwnerKind> {
-    if lookup_typed_array_kind(owner).is_some() {
-        Some(TypedArrayOwnerKind::TypedArray)
-    } else if crate::buffer::is_uint8array_buffer(owner) {
-        Some(TypedArrayOwnerKind::Uint8ArrayBuffer)
+    // #10694: both owners are recognized by the type byte, so read it once;
+    // the recognizers then run only for a header that already says yes.
+    let obj_type = unsafe { crate::value::addr_class::try_read_gc_header(owner) }?.obj_type;
+    if obj_type == crate::gc::GC_TYPE_TYPED_ARRAY
+        || obj_type == crate::gc::GC_TYPE_NATIVE_TYPED_VIEW
+    {
+        lookup_typed_array_kind(owner).map(|_| TypedArrayOwnerKind::TypedArray)
+    } else if crate::gc::is_uint8array_buffer_type(obj_type) {
+        crate::buffer::is_uint8array_buffer(owner).then_some(TypedArrayOwnerKind::Uint8ArrayBuffer)
     } else {
         None
     }
@@ -150,20 +155,30 @@ pub(crate) fn typed_array_clear_own_props(owner: usize) {
 
 pub(crate) fn typed_array_addr_from_value(value: f64) -> Option<usize> {
     let jsval = crate::value::JSValue::from_bits(value.to_bits());
-    let valid_addr = |addr: usize| {
+    let valid_addr_shape = |addr: usize| {
         (addr > 0x10000 && addr <= crate::value::POINTER_MASK as usize && addr & 0x7 == 0)
             .then_some(addr)
-            .filter(|addr| typed_array_owner_kind(*addr).is_some())
     };
+    let valid_addr =
+        |addr: usize| valid_addr_shape(addr).filter(|addr| typed_array_owner_kind(*addr).is_some());
     if jsval.is_pointer() {
         return valid_addr(jsval.as_pointer::<u8>() as usize);
     }
+    // The two legacy decodings below turn a NUMBER into a candidate address
+    // (its raw bits, or its integer value — a raw Web Streams id is exactly
+    // such a number). The probes read the cell's header (#10694: the brand is
+    // the type byte), so the allocator must vouch for the word first.
+    let owned_addr = |addr: usize| {
+        valid_addr_shape(addr)
+            .filter(|&addr| crate::buffer::header_is_owned(addr))
+            .and_then(valid_addr)
+    };
     let bits = value.to_bits();
-    if let Some(addr) = valid_addr(bits as usize) {
+    if let Some(addr) = owned_addr(bits as usize) {
         return Some(addr);
     }
     if value.is_finite() && value.fract() == 0.0 && value > 0.0 {
-        return valid_addr(value as usize);
+        return owned_addr(value as usize);
     }
     None
 }

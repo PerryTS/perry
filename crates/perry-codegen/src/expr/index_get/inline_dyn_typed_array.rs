@@ -568,7 +568,8 @@ pub(in crate::expr) fn lower_inline_dyn_typed_array_get(
 
     // ---- #10515: an admitted owning byte view (`Uint8Array` / `Buffer`) ----
     //
-    // A `GC_TYPE_BUFFER` receiver whose full address is in
+    // A byte-view receiver (`GC_TYPE_BUFFER` / `GC_TYPE_BUFFER_UINT8ARRAY`,
+    // #10694) whose full address is in
     // `PERRY_U8_INLINE_CACHE` is, by that cache's contract, a live registered
     // byte view with `length` at offset 0 and its bytes inline at `+8` — the
     // same proof `u8_buffer_read.rs` loads on for a `Uint8Array`-typed
@@ -580,7 +581,17 @@ pub(in crate::expr) fn lower_inline_dyn_typed_array_get(
     ctx.current_block = u8_brand_idx;
     {
         let blk = ctx.block();
-        let is_buffer = blk.icmp_eq(I8, &gc_type, "10"); // GC_TYPE_BUFFER
+        let is_node_buffer = blk.icmp_eq(
+            I8,
+            &gc_type,
+            &crate::runtime_abi::GC_TYPE_BUFFER.to_string(),
+        );
+        let is_uint8array = blk.icmp_eq(
+            I8,
+            &gc_type,
+            &crate::runtime_abi::GC_TYPE_BUFFER_UINT8ARRAY.to_string(),
+        );
+        let is_buffer = blk.or(I1, &is_node_buffer, &is_uint8array);
         let admitted = crate::expr::u8_buffer_read::emit_u8_cache_holds(blk, &object_raw);
         let hit = blk.and(I1, &is_buffer, &admitted);
         blk.cond_br(&hit, &u8_bounds_label, &object_miss_label);

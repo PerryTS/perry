@@ -535,7 +535,8 @@ fn rhs_is_object_value(value: f64) -> bool {
     let top16 = bits >> 48;
     if top16 == 0 && bits >= 0x1000 {
         let addr = bits as usize;
-        return crate::buffer::is_registered_buffer(addr)
+        // #10694: a raw word must be allocator-owned before the brand read.
+        return crate::buffer::buffer_family_type_owned(addr).is_some()
             || crate::set::is_registered_set(addr)
             || crate::map::is_registered_map(addr)
             || crate::typedarray::lookup_typed_array_kind(addr).is_some()

@@ -332,8 +332,11 @@ pub(crate) fn object_ref_addr(value: f64) -> usize {
 
 #[cold]
 fn raw_object_ref_addr(addr: usize) -> usize {
-    let owned = crate::buffer::is_registered_buffer(addr)
-        || unsafe { try_read_tracked_gc_header(addr) }.is_some();
+    // Arbitrary bits: only the allocator may vouch for them. Every buffer and
+    // typed array is a tracked allocation except a process-global
+    // SharedArrayBuffer block (#10694: no registry is consulted any more).
+    let owned = unsafe { try_read_tracked_gc_header(addr) }.is_some()
+        || crate::shared_sab::is_shared_sab(addr);
     if owned {
         addr
     } else {

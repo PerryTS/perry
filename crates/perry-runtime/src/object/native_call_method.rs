@@ -991,10 +991,9 @@ unsafe fn gc_pointer_and_type_from_value(value: f64) -> Option<(*const u8, u8)> 
         return None;
     }
     let addr = ptr as usize;
-    if crate::buffer::is_any_array_buffer(addr) {
-        return Some((ptr, crate::gc::GC_TYPE_BUFFER));
-    }
-    if crate::buffer::is_uint8array_buffer(addr) {
+    // Every buffer flavor (#10694: the flavor is the type byte) answers as
+    // `GC_TYPE_BUFFER` here; callers branch on the storage kind, not the brand.
+    if crate::buffer::is_registered_buffer(addr) {
         return Some((ptr, crate::gc::GC_TYPE_BUFFER));
     }
     if crate::typedarray::lookup_typed_array_kind(addr).is_some() {

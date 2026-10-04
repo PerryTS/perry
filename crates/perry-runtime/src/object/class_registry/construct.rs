@@ -1844,7 +1844,9 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
                 let bits = result.to_bits();
                 let addr = if (bits >> 48) == 0x7FFD {
                     (bits & crate::value::POINTER_MASK) as usize
-                } else if (bits >> 48) == 0 && crate::buffer::is_registered_buffer(bits as usize) {
+                } else if (bits >> 48) == 0
+                    && crate::buffer::buffer_family_type_owned(bits as usize).is_some()
+                {
                     // ArrayBuffer and SharedArrayBuffer are represented by a
                     // raw BufferHeader pointer rather than a NaN-boxed object.
                     bits as usize

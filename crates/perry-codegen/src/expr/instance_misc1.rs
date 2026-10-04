@@ -498,7 +498,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "Uint8Array" => 0xFFFF0004u32,
                 "Buffer" => 0xFFFF000Cu32,
                 // Other %TypedArray% kinds (#3148). The runtime resolves the
-                // actual kind via TYPED_ARRAY_REGISTRY + class_id_for_kind in
+                // actual kind from the typed array's header + class_id_for_kind in
                 // instanceof.rs; these reserved ids must match the
                 // CLASS_ID_* constants in perry-runtime/src/typedarray.rs.
                 "Int8Array" => 0xFFFF0030u32,

@@ -101,7 +101,7 @@ alloc-mimalloc = ["dep:mimalloc", "dep:libmimalloc-sys"]
 gc-instruments = []
 
 # Hot-path mutator diagnostics (`hot_diag`, #10572): `PERRY_REGEX_DIAG`,
-# `PERRY_IC_DIAG`, `PERRY_LAYOUT_DIAG`, `PERRY_ENUM_DIAG`, `PERRY_BUFFER_DIAG`,
+# `PERRY_IC_DIAG`, `PERRY_LAYOUT_DIAG`, `PERRY_ENUM_DIAG`,
 # `PERRY_RECEIVER_REPR_DIAG`. Same contract as `gc-instruments`: in `default`
 # so `cargo test` and the full prebuilt archives keep them; the auto-optimize
 # rebuild adds it when one of those knobs (or `PERRY_GC_INSTRUMENTS=1`) is set

@@ -393,33 +393,15 @@ fn uint8_helpers_still_serve_a_uint8_clamped_array() {
 // ran rather than a boxed-f64 slot read.
 // --------------------------------------------------------------------------
 
-/// A receiver whose managed GC header says typed array while the registry
-/// does not know it — the exact disagreement #8116 names. Elements are
-/// written BEFORE the registry entry is dropped, so the payload is a real
-/// per-kind lane store.
+/// The #8116 receiver: a typed array that has left every runtime-side table
+/// (its emitted-code cache admissions dropped). Since #10694 there is no
+/// registry to disagree with — the header is the only source of truth — so
+/// these pin that the helpers read such a receiver from its header alone.
+/// Elements are written first, so the payload is a real per-kind lane store.
 fn header_only_typed_array(kind: u8, values: &[f64]) -> *mut TypedArrayHeader {
     let ta = typed(kind, values);
     unregister_typed_array(ta);
     ta
-}
-
-#[test]
-fn header_only_typed_array_is_the_disagreement_8116_names() {
-    let ta = header_only_typed_array(UINT16, &[1.0, 2.0]);
-    let addr = ta as usize;
-
-    assert!(
-        lookup_typed_array_kind(addr).is_none(),
-        "the registry must MISS, or this fixture is not the #8116 receiver"
-    );
-    assert!(
-        matches!(
-            classify_element_read_receiver(addr as u64),
-            ElementReadReceiver::TypedArray(a) if a == addr
-        ),
-        "the managed header must still WIN — that is the half of the \
-         disagreement `classify_element_read_receiver` documents"
-    );
 }
 
 #[test]

@@ -51,14 +51,9 @@ fn classify_encoding(value: f64) -> TranscodeEnc {
 }
 
 fn raw_addr_from_value(value: f64) -> usize {
-    let bits = value.to_bits();
-    if (bits >> 48) >= 0x7FF8 {
-        (bits & 0x0000_FFFF_FFFF_FFFF) as usize
-    } else if !value.is_nan() && (0x1000..0x0001_0000_0000_0000).contains(&bits) {
-        bits as usize
-    } else {
-        0
-    }
+    // #10694: the brand probes read the cell's header, so only a POINTER
+    // payload or an allocator-owned raw word is an address here.
+    crate::value::addr_class::object_ref_addr(value)
 }
 
 fn describe_source(value: f64) -> String {

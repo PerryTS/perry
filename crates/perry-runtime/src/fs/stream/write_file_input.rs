@@ -64,12 +64,9 @@ fn write_file_chunk_bytes(value: f64, encoding_tag: i32) -> Result<Vec<u8>, f64>
     if crate::buffer::js_buffer_is_buffer(value.to_bits() as i64) == 1 {
         return Ok(bytes_from_buffer_value(value));
     }
-    let bits = value.to_bits();
-    let addr = if (bits >> 48) >= 0x7FF8 {
-        (bits & 0x0000_FFFF_FFFF_FFFF) as usize
-    } else {
-        bits as usize
-    };
+    // #10694: the brand probes read the cell's header, so only a POINTER
+    // payload or an allocator-owned raw word is an address here.
+    let addr = crate::value::addr_class::object_ref_addr(value);
     if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
         let ta = addr as *const crate::typedarray::TypedArrayHeader;
         if let Some(bytes) = unsafe { crate::typedarray::typed_array_bytes(ta) } {

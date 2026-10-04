@@ -156,15 +156,9 @@ pub extern "C" fn js_buffer_is_encoding(value: f64) -> i32 {
 }
 
 fn raw_addr_from_value(value: f64) -> usize {
-    let bits = value.to_bits();
-    let jsval = crate::JSValue::from_bits(bits);
-    if jsval.is_pointer() || jsval.is_string() {
-        (bits & 0x0000_FFFF_FFFF_FFFF) as usize
-    } else if !value.is_nan() && (0x1000..0x0001_0000_0000_0000).contains(&bits) {
-        bits as usize
-    } else {
-        0
-    }
+    // #10694: the brand probes read the cell's header, so only a POINTER
+    // payload or an allocator-owned raw word is an address here.
+    crate::value::addr_class::object_ref_addr(value)
 }
 
 fn native_buffer_from_value(value: f64) -> Option<*const BufferHeader> {
@@ -252,16 +246,7 @@ pub extern "C" fn js_buffer_byte_length_value(value: f64, encoding: f64) -> i32 
     // #2013: reject a non string/Buffer/ArrayBuffer/TypedArray first argument
     // with `ERR_INVALID_ARG_TYPE`, matching Node.
     super::validate::validate_byte_length_arg(value);
-    let bits = value.to_bits();
-    let jsval = crate::JSValue::from_bits(bits);
-
-    let raw_ptr = if jsval.is_pointer() || jsval.is_string() {
-        (bits & 0x0000_FFFF_FFFF_FFFF) as usize
-    } else if !value.is_nan() && (0x1000..0x0001_0000_0000_0000).contains(&bits) {
-        bits as usize
-    } else {
-        0
-    };
+    let raw_ptr = raw_addr_from_value(value);
     if raw_ptr != 0 && is_registered_buffer(raw_ptr) {
         return unsafe { (*(raw_ptr as *const BufferHeader)).length as i32 };
     }

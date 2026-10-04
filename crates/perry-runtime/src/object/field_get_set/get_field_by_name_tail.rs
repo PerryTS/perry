@@ -229,13 +229,41 @@ pub(crate) fn get_field_by_name_object_tail(
         if let Some(val) = closure_dynamic_prop_by_key(obj as usize, key) {
             return JSValue::from_bits(val.to_bits());
         }
-        // Buffers: BufferHeader is allocated via raw `alloc()` (no GcHeader)
-        // and tracked in BUFFER_REGISTRY. Detect first so the GC header check
-        // below doesn't read garbage one word before the BufferHeader.
-        // Route `.length` to `js_buffer_length` (matches the codegen path that
-        // routes through PropertyGet for chained `Buffer.from(...).length`
-        // expressions where the static type isn't recognized as Buffer).
-        if crate::buffer::is_registered_buffer(obj as usize) {
+        // Symbols straddle two storage classes: fresh Symbol() values carry a
+        // GC_TYPE_STRING header, while Symbol.for / well-known / Intl symbols
+        // are Box-leaked and carry no GcHeader at all. Every one does carry
+        // SYMBOL_MAGIC in its own first word, so use that exact-false screen
+        // before the authoritative registry. A plain object now pays one
+        // 4-byte load instead of the process-global symbol Mutex + SipHash.
+        if crate::value::addr_class::is_plausible_heap_addr(obj as usize)
+            && crate::symbol::may_be_symbol_header(obj as *const u8)
+        {
+            if let Some(value) = super::probe_dispatch::symbol_property_if_registered(obj, key) {
+                return value;
+            }
+        }
+
+        // A possible headerless Symbol returned above; every remaining
+        // supported receiver — buffers and typed arrays included, whose brand
+        // is their type byte (#10694) — is classified once by the GcHeader the
+        // rest of this function switches on.
+        if (obj as usize) < crate::gc::GC_HEADER_SIZE + 0x1000
+            || !is_valid_obj_ptr(obj as *const u8)
+        {
+            return JSValue::undefined();
+        }
+        let gc_header =
+            (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        let gc_type = (*gc_header).obj_type;
+
+        // Buffers (every buffer-family flavor, #10694: the brand is this
+        // header's type byte). Route `.length` to `js_buffer_length` (matches
+        // the codegen path that routes through PropertyGet for chained
+        // `Buffer.from(...).length` expressions where the static type isn't
+        // recognized as Buffer).
+        if crate::gc::is_buffer_family_type(gc_type)
+            && crate::buffer::is_registered_buffer(obj as usize)
+        {
             if !key.is_null() {
                 let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
                 let key_len = (*key).byte_len as usize;
@@ -422,16 +450,17 @@ pub(crate) fn get_field_by_name_object_tail(
             }
             return JSValue::undefined();
         }
-        // Typed arrays (Int32Array/Float64Array/...): the `TypedArrayHeader` is
-        // `std::alloc`'d (small) or GC-old-allocated (large), but in both cases
-        // tracked in TYPED_ARRAY_REGISTRY, so detect via the side table before
-        // the GC-header read below (which would read garbage for the small
-        // `std::alloc` case). `.length`, `.byteLength`, `.byteOffset`, and
+        // Typed arrays (Int32Array/Float64Array/...): a `GC_TYPE_TYPED_ARRAY`
+        // cell whose header carries the kind (#10694). `.length`, `.byteLength`, `.byteOffset`, and
         // `.BYTES_PER_ELEMENT` lower as generic PropertyGet for multi-byte
         // numeric-length views whose static type the codegen doesn't recognize;
         // pre-fix, only Uint8Array worked (it's a registered buffer) so
         // multi-byte `.byteLength` returned undefined.
-        if let Some(kind) = crate::typedarray::lookup_typed_array_kind(obj as usize) {
+        if let Some(kind) = (gc_type == crate::gc::GC_TYPE_TYPED_ARRAY
+            || gc_type == crate::gc::GC_TYPE_NATIVE_TYPED_VIEW)
+            .then(|| crate::typedarray::lookup_typed_array_kind(obj as usize))
+            .flatten()
+        {
             if !key.is_null() {
                 let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
                 let key_len = (*key).byte_len as usize;
@@ -482,32 +511,6 @@ pub(crate) fn get_field_by_name_object_tail(
             }
             return JSValue::undefined();
         }
-        // Symbols straddle two storage classes: fresh Symbol() values carry a
-        // GC_TYPE_STRING header, while Symbol.for / well-known / Intl symbols
-        // are Box-leaked and carry no GcHeader at all. Every one does carry
-        // SYMBOL_MAGIC in its own first word, so use that exact-false screen
-        // before the authoritative registry. A plain object now pays one
-        // 4-byte load instead of the process-global symbol Mutex + SipHash.
-        if crate::value::addr_class::is_plausible_heap_addr(obj as usize)
-            && crate::symbol::may_be_symbol_header(obj as *const u8)
-        {
-            if let Some(value) = super::probe_dispatch::symbol_property_if_registered(obj, key) {
-                return value;
-            }
-        }
-
-        // Buffer and TypedArray were the two headerless allocations that had
-        // to be classified first. A possible headerless Symbol returned above;
-        // every remaining supported receiver can now be classified once by
-        // the GcHeader the rest of this function already switches on.
-        if (obj as usize) < crate::gc::GC_HEADER_SIZE + 0x1000
-            || !is_valid_obj_ptr(obj as *const u8)
-        {
-            return JSValue::undefined();
-        }
-        let gc_header =
-            (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        let gc_type = (*gc_header).obj_type;
 
         // Sets are arena_alloc_gc(_, _, GC_TYPE_SET) allocations. Let the
         // header rule every other receiver out before entering SET_REGISTRY;

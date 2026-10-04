@@ -1,9 +1,9 @@
 //! Monotone "has this feature ever been used?" latches for side-table probes.
 //!
-//! The runtime answers "is this value special?" for a large number of exotic
-//! kinds — typed array, `Buffer`, `SharedArrayBuffer` backing, `Symbol`,
-//! `DataView`, `ArrayBuffer`, `Map`, `Set` — by consulting an address-keyed
-//! side table. Those probes sit on *generic* paths (property get/set, element
+//! The runtime answers "is this value special?" for several exotic kinds —
+//! `Symbol`, `Map`, `Set`, class prototypes — by consulting an address-keyed
+//! side table. (Typed arrays and the whole `Buffer` family used to be on this
+//! list; since #10694 their brand is their GC type byte and they need no latch.) Those probes sit on *generic* paths (property get/set, element
 //! access, `typeof`, coercion, `JSON.stringify`, console formatting, GC header
 //! reads), so a program pays for every kind it does not use, on every value it
 //! touches. Each probe costs at minimum a thread-local resolution (on Darwin
@@ -40,9 +40,8 @@
 //! registering thread's program order.** Arming *after* the insert opens a
 //! window in which the feature is live and reachable but the latch still reads
 //! idle, so a concurrent probe takes the fast path and answers `false` for an
-//! address that is genuinely registered. That is not hypothetical: the sibling
-//! latch `buffer::header::EXTERNAL_UINT8ARRAYS_NONEMPTY` carries an inline comment
-//! for precisely this reason, and `register_external_uint8array` latches first.
+//! address that is genuinely registered. That is not hypothetical: #9176 was a
+//! process-global Uint8Array registry whose inserter forgot to arm first.
 //!
 //! With the arm placed first, the argument for a reader on *another* thread is:
 //! a thread can only probe an address it holds, and every route by which an
@@ -50,10 +49,9 @@
 //! synchronising edge (the `SerializedValue` deep-copy queue and the
 //! `PENDING_THREAD_RESULTS` drain are both mutex/channel mediated). The arm
 //! precedes the registration, which precedes the hand-off, so the arm is in the
-//! reader's happens-before past and the reader must observe it. The
-//! thread-local tables (`BUFFER_REGISTRY`, `TYPED_ARRAY_REGISTRY`,
-//! `UINT8ARRAY_FROM_CTOR`) need even less: only the arming thread can find
-//! their entries at all, and a thread always observes its own prior store.
+//! reader's happens-before past and the reader must observe it. A
+//! thread-local table needs even less: only the arming thread can find its
+//! entries at all, and a thread always observes its own prior store.
 //!
 //! `Acquire`/`Release` is therefore stronger than today's routes require —
 //! `Relaxed` would be sound given the hand-off edges above. It costs one
@@ -61,7 +59,7 @@
 //! publishes a heap address through a lock-free path, so the stronger ordering
 //! is what ships.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
 /// A one-way "this feature has been registered at least once" flag.
@@ -113,139 +111,9 @@ impl RegistryLatch {
     }
 }
 
-/// A monotone "smallest and largest address ever registered" window.
-///
-/// [`RegistryLatch`] answers "has this feature EVER been used?". That question
-/// stops discriminating the moment a program registers its first entry — and
-/// for the two hottest probes in the runtime it stops discriminating almost
-/// immediately: a `claude-code --help` run registers **10** buffers and **42**
-/// typed arrays, then probes `is_registered_buffer` 4,650,058 times and
-/// `lookup_typed_array_kind` 3,566,956 times. Counted with uretprobes on that
-/// binary, the buffer probe answered `true` **4** times and the typed-array
-/// probe answered `Some` **zero** times. The latch was armed for every one of
-/// those calls, so all 8.2 M paid the out-of-line call, a thread-local
-/// resolution, a `RefCell` borrow and a hash to say "no".
-///
-/// This window is the same monotone idea applied to the address instead of to
-/// the fact of registration: every registration widens `[lo, hi]` *before* it
-/// publishes, so an address outside the window cannot be in any table the
-/// window covers. Rejecting is therefore sound; accepting merely falls through
-/// to the exact lookup that was already there.
-///
-/// It is strictly stronger than a latch — an unregistered process has the empty
-/// window `[usize::MAX, 0]`, which contains nothing — and it costs two adjacent
-/// static loads and two compares, which inline into the probe's call sites
-/// instead of being paid behind a call.
-///
-/// # The ordering rule (binding, and identical to [`RegistryLatch`]'s)
-///
-/// **[`admit`](Self::admit) must run BEFORE the registry mutation it
-/// advertises.** Widening after the insert opens a window in which an address
-/// is registered but outside the published range, so a concurrent probe would
-/// answer `false` for an address that is genuinely registered.
-///
-/// `lo` and `hi` are separate atomics, so a racing reader can observe a mix of
-/// old and new values. That is harmless: each moves in one direction only, so
-/// once `lo <= a <= hi` holds for an address it holds forever, and a reader
-/// that observes a partially-updated pair observes a window that is only ever
-/// wider than the one it replaced — never narrower.
-///
-/// Cross-thread visibility rests on [`admit`](Self::admit)'s `AcqRel`
-/// read-modify-writes. An RMW reads the latest value in its location's
-/// modification order, so its acquire half joins every earlier widening — by
-/// any thread — into the admitting thread's happens-before graph before that
-/// thread publishes the address. A reader can only ask about an address it has
-/// obtained, which requires the publishing hand-off, and `may_contain`'s
-/// `Acquire` loads complete the chain. This is why `admit` may not skip the
-/// RMW: see its own documentation.
-#[derive(Debug)]
-pub struct RegistryAddrWindow {
-    lo: AtomicUsize,
-    hi: AtomicUsize,
-}
-
-impl Default for RegistryAddrWindow {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl RegistryAddrWindow {
-    /// An empty window: contains no address at all.
-    pub const fn new() -> Self {
-        Self {
-            lo: AtomicUsize::new(usize::MAX),
-            hi: AtomicUsize::new(0),
-        }
-    }
-
-    /// `false` ⟹ `addr` is definitively absent from every table this window
-    /// covers, so the caller can answer "not found" without touching one.
-    ///
-    /// This is the hot side. It is deliberately `inline(always)`: the whole
-    /// point is that the common negative answer costs a couple of loads at the
-    /// call site rather than a call into the registry probe.
-    #[inline(always)]
-    pub fn may_contain(&self, addr: usize) -> bool {
-        addr >= self.lo.load(Ordering::Acquire) && addr <= self.hi.load(Ordering::Acquire)
-    }
-
-    /// Widen the window to include `addr`.
-    ///
-    /// MUST run **before** the guarded table is mutated — see the type docs.
-    ///
-    /// Two unconditional atomic read-modify-writes, deliberately with no
-    /// "already covered?" pre-check in front of them. Registration is rare —
-    /// `claude-code --help` calls this 10 times for buffers and 42 times for
-    /// typed arrays across a 6.9-billion-instruction run — so a fast path here
-    /// buys nothing measurable and costs the one thing this type cannot spend:
-    /// certainty. Two earlier drafts of exactly this function were wrong.
-    ///
-    /// 1. `load` then `store` is a read-modify-write with a hole in it. Two
-    ///    threads registering at once both read the old bound, and the
-    ///    *narrower* of the two stores can land last — dropping the other
-    ///    thread's address out of the window while its entry is live in that
-    ///    thread's registry. `fetch_min`/`fetch_max` are single RMWs, so no
-    ///    update can be lost no matter how the two interleave.
-    ///
-    /// 2. A `Relaxed` "skip if already covered" pre-check reintroduces the same
-    ///    bug one level up, in the memory model rather than in the interleaving.
-    ///    If this thread skips the RMW because it *observed* another thread's
-    ///    widening, it performs no acquire, so that other thread's widening
-    ///    never enters this thread's happens-before graph — and a reader that
-    ///    synchronises only with THIS thread's subsequent publish is not
-    ///    guaranteed to see the bound that actually covers the address. It
-    ///    would answer "not registered" for a registered pointer.
-    ///
-    /// `AcqRel` closes that: an RMW reads the latest value in the location's
-    /// modification order, and the acquire half joins every prior widening into
-    /// this thread's happens-before graph before the caller publishes.
-    #[inline]
-    pub fn admit(&self, addr: usize) {
-        self.lo.fetch_min(addr, Ordering::AcqRel);
-        self.hi.fetch_max(addr, Ordering::AcqRel);
-    }
-
-    /// The live `[lo, hi]` pair, or `None` while the window is still empty.
-    ///
-    /// Diagnostic use: `PERRY_BUFFER_DIAG` reports it, so a window that has
-    /// widened until it covers the heap is visible rather than inferred.
-    pub(crate) fn bounds(&self) -> Option<(usize, usize)> {
-        let lo = self.lo.load(Ordering::Acquire);
-        let hi = self.hi.load(Ordering::Acquire);
-        (lo <= hi).then_some((lo, hi))
-    }
-
-    /// Test hook: the current `[lo, hi]` pair, or `None` while empty.
-    #[cfg(test)]
-    pub(crate) fn bounds_for_tests(&self) -> Option<(usize, usize)> {
-        self.bounds()
-    }
-}
-
 /// A monotone "which addresses have ever been registered?" **set filter** —
-/// a Bloom filter over the registered addresses, for the probes a
-/// [`RegistryAddrWindow`] cannot discriminate.
+/// a Bloom filter over the registered addresses, for the probes a min/max
+/// address window cannot discriminate.
 ///
 /// # Why a second shape was needed
 ///
@@ -316,7 +184,7 @@ impl RegistryAddrWindow {
 /// and re-admitted throughout. The bound to watch is the false-positive rate at
 /// END of run, not the registration count.
 ///
-/// # The ordering rule (binding, and identical to [`RegistryAddrWindow`]'s)
+/// # The ordering rule (binding, and identical to [`RegistryLatch`]'s)
 ///
 /// **[`admit`](Self::admit) must run BEFORE the registry mutation it
 /// advertises.** Setting the bits after the insert opens a window in which an
@@ -909,79 +777,6 @@ mod tests {
     }
 
     #[test]
-    fn empty_window_contains_nothing() {
-        let w = RegistryAddrWindow::new();
-        assert_eq!(w.bounds_for_tests(), None);
-        for addr in [0usize, 1, 0x1000, usize::MAX / 2, usize::MAX] {
-            assert!(
-                !w.may_contain(addr),
-                "an empty window must reject {addr:#x} — it stands in for an idle latch"
-            );
-        }
-    }
-
-    #[test]
-    fn window_only_ever_widens_and_never_rejects_an_admitted_address() {
-        let w = RegistryAddrWindow::new();
-        w.admit(0x3000);
-        assert_eq!(w.bounds_for_tests(), Some((0x3000, 0x3000)));
-        assert!(w.may_contain(0x3000));
-        assert!(!w.may_contain(0x2fff));
-        assert!(!w.may_contain(0x3001));
-
-        w.admit(0x9000);
-        assert_eq!(w.bounds_for_tests(), Some((0x3000, 0x9000)));
-        // Both admitted addresses stay inside, and so does everything between.
-        assert!(w.may_contain(0x3000));
-        assert!(w.may_contain(0x6000));
-        assert!(w.may_contain(0x9000));
-        assert!(!w.may_contain(0x2fff));
-        assert!(!w.may_contain(0x9001));
-
-        // Re-admitting an interior address must not narrow anything.
-        w.admit(0x6000);
-        assert_eq!(w.bounds_for_tests(), Some((0x3000, 0x9000)));
-    }
-
-    /// Concurrent registration must not lose an address. With a load-then-store
-    /// `admit` the two threads' stores race and the narrower bound can land
-    /// last, evicting the other thread's live registration from the window —
-    /// a false negative, which is a misclassification rather than a slowdown.
-    /// `fetch_min`/`fetch_max` make that impossible, so this passes
-    /// deterministically here and fails with high probability on the racy form.
-    #[test]
-    fn concurrent_admits_never_drop_an_address() {
-        const THREADS: usize = 8;
-        const PER_THREAD: usize = 512;
-        static WINDOW: RegistryAddrWindow = RegistryAddrWindow::new();
-        let handles: Vec<_> = (0..THREADS)
-            .map(|t| {
-                std::thread::spawn(move || {
-                    // Interleave the ranges so every thread admits both very
-                    // low and very high addresses, maximising the number of
-                    // genuine bound updates that can race.
-                    for i in 0..PER_THREAD {
-                        WINDOW.admit(0x1_0000 + i * THREADS + t);
-                    }
-                })
-            })
-            .collect();
-        for h in handles {
-            h.join().unwrap();
-        }
-        for t in 0..THREADS {
-            for i in 0..PER_THREAD {
-                let addr = 0x1_0000 + i * THREADS + t;
-                assert!(
-                    WINDOW.may_contain(addr),
-                    "{addr:#x} was admitted but the window lost it: {:?}",
-                    WINDOW.bounds_for_tests()
-                );
-            }
-        }
-    }
-
-    #[test]
     fn empty_filter_contains_nothing() {
         let f: RegistryAddrFilter = RegistryAddrFilter::new();
         assert_eq!(f.bits_set(), 0);
@@ -1075,13 +870,5 @@ mod tests {
             .join()
             .unwrap();
         assert!(FILTER.may_contain(0x9_0000_1000));
-    }
-
-    #[test]
-    fn window_admit_is_visible_to_another_thread() {
-        static WINDOW: RegistryAddrWindow = RegistryAddrWindow::new();
-        assert!(!WINDOW.may_contain(0x4000));
-        std::thread::spawn(|| WINDOW.admit(0x4000)).join().unwrap();
-        assert!(WINDOW.may_contain(0x4000));
     }
 }

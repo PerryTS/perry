@@ -191,7 +191,7 @@ unsafe fn node_label(rec: &NodeRec) -> (u32, String) {
         GC_TYPE_ERROR => (NODE_TYPE_OBJECT, "Error".to_string()),
         GC_TYPE_MAP => (NODE_TYPE_OBJECT, "Map".to_string()),
         GC_TYPE_SET => (NODE_TYPE_OBJECT, "Set".to_string()),
-        GC_TYPE_BUFFER => (NODE_TYPE_NATIVE, "Buffer".to_string()),
+        t if crate::gc::is_buffer_family_type(t) => (NODE_TYPE_NATIVE, "Buffer".to_string()),
         GC_TYPE_TYPED_ARRAY => (NODE_TYPE_NATIVE, "TypedArray".to_string()),
         GC_TYPE_DATE_CELL => (NODE_TYPE_OBJECT, "Date".to_string()),
         GC_TYPE_TEMPORAL => (NODE_TYPE_NATIVE, "Temporal".to_string()),

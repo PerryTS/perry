@@ -557,7 +557,7 @@ fn unsupported_transfer_type_name(obj_type: u8) -> &'static str {
         gc::GC_TYPE_ERROR => "Error",
         gc::GC_TYPE_MAP => "Map",
         gc::GC_TYPE_LAZY_ARRAY => "lazy (unmaterialized) JSON array",
-        gc::GC_TYPE_BUFFER => "Buffer",
+        t if gc::is_buffer_family_type(t) => "Buffer",
         gc::GC_TYPE_TYPED_ARRAY => "TypedArray",
         gc::GC_TYPE_SET => "Set",
         gc::GC_TYPE_NATIVE_ARENA_OWNER
@@ -1036,11 +1036,10 @@ pub unsafe fn deserialize_nanbox_on_current_thread(sv: &SerializedValue) -> u64 
 
         SerializedValue::SharedArrayBuffer { addr } => {
             // Alias the same process-global backing store (#4913) — no copy.
-            // Re-register it in THIS thread's buffer / SAB tables so local
-            // predicates (`is_registered_buffer`, `is_shared_array_buffer`) and
-            // `new Int32Array(sab)` view construction recognise it here too.
-            crate::buffer::register_buffer(*addr as *const crate::buffer::BufferHeader);
-            crate::buffer::mark_as_shared_array_buffer(*addr);
+            // Its header carries the SharedArrayBuffer brand (#10694), so this
+            // thread's predicates (`is_registered_buffer`,
+            // `is_shared_array_buffer`) and `new Int32Array(sab)` recognise it
+            // without any per-thread registration.
             JSValue::pointer(*addr as *const u8).bits()
         }
 

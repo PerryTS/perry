@@ -54,15 +54,9 @@ fn strict_safe_integer(value: f64, message: &str) -> f64 {
 }
 
 fn strict_buffer_from_value(value: f64) -> *const BufferHeader {
-    let bits = value.to_bits();
-    let js_value = JSValue::from_bits(bits);
-    let raw_ptr = if js_value.is_pointer() || js_value.is_string() {
-        (bits & POINTER_MASK) as usize
-    } else if !value.is_nan() && (0x1000..0x0001_0000_0000_0000).contains(&bits) {
-        bits as usize
-    } else {
-        0
-    };
+    // #10694: the probes below read the cell's header, so a raw (top16 == 0)
+    // word must be one the allocator owns; `object_ref_addr` vouches for it.
+    let raw_ptr = crate::value::addr_class::object_ref_addr(value);
     if raw_ptr != 0 && is_registered_buffer(raw_ptr) {
         raw_ptr as *const BufferHeader
     } else {

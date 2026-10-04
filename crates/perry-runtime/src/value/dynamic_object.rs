@@ -164,7 +164,12 @@ pub extern "C" fn js_value_length_f64(value: f64) -> f64 {
     // #1136: use the same canonical platform range for raw-pointer-bitcast
     // values too, so a Buffer/TypedArray pointer handed through as
     // `bitcast i64 → double` resolves to its real length on every target.
-    if top16 == 0 && is_length_heap_addr(bits as usize) {
+    // A raw word is also what a subnormal number looks like, and the probes
+    // below read the cell's header (#10694), so the allocator vouches first.
+    if top16 == 0
+        && is_length_heap_addr(bits as usize)
+        && crate::buffer::header_is_owned(bits as usize)
+    {
         let handle = bits as usize;
         if let Some(value) = unsafe {
             crate::typedarray_props::typed_array_get_property_value_by_name(handle, "length")
@@ -802,15 +807,14 @@ mod length_handle_band_tests {
     #[test]
     fn low_macos_mapping_reaches_both_length_dispatch_paths() {
         struct Mapping {
-            ptr: *mut crate::typedarray::TypedArrayHeader,
+            raw: *mut libc::c_void,
             len: usize,
         }
 
         impl Drop for Mapping {
             fn drop(&mut self) {
-                crate::typedarray::unregister_typed_array(self.ptr);
                 unsafe {
-                    assert_eq!(libc::munmap(self.ptr.cast(), self.len), 0);
+                    assert_eq!(libc::munmap(self.raw, self.len), 0);
                 }
             }
         }
@@ -826,13 +830,33 @@ mod length_handle_band_tests {
                 0,
             );
             assert_ne!(raw, libc::MAP_FAILED);
-            let addr = raw as usize;
+            let _mapping = Mapping { raw, len: page };
+            // A typed array is recognised by its `GcHeader` (#10694), so the
+            // fixture carries one in front of the `TypedArrayHeader`.
+            // GC_STORE_AUDIT(POINTER_FREE): a GcHeader is type/flag/size
+            // numerics, written into this test's own private anonymous mmap
+            // page, not arena-managed memory; no heap edge is created.
+            std::ptr::write(
+                raw.cast::<crate::gc::GcHeader>(),
+                crate::gc::GcHeader {
+                    obj_type: crate::gc::GC_TYPE_TYPED_ARRAY,
+                    gc_flags: 0,
+                    _reserved: 0,
+                    size: (crate::gc::GC_HEADER_SIZE
+                        + std::mem::size_of::<crate::typedarray::TypedArrayHeader>()
+                        + 37) as u32,
+                },
+            );
+            let ptr = raw
+                .cast::<u8>()
+                .add(crate::gc::GC_HEADER_SIZE)
+                .cast::<crate::typedarray::TypedArrayHeader>();
+            let addr = ptr as usize;
             assert!(
                 (addr_class::HANDLE_BAND_MAX..0x200_0000_0000).contains(&addr),
                 "fixture must exercise the macOS address range that the old 2 TiB floor rejected; got {addr:#x}"
             );
 
-            let ptr = raw.cast::<crate::typedarray::TypedArrayHeader>();
             // GC_STORE_AUDIT(POINTER_FREE): TypedArrayHeader is
             // length/capacity/kind/elem_size/_pad numerics with no pointer
             // field, and the destination is this test's own private anonymous
@@ -846,11 +870,10 @@ mod length_handle_band_tests {
                     kind: crate::typedarray::KIND_UINT8,
                     elem_size: 1,
                     storage: crate::typedarray::TA_STORAGE_INLINE,
-                    _pad: [0; 5],
+                    flags: 0,
+                    _pad: [0; 4],
                 },
             );
-            crate::typedarray::register_typed_array(ptr, crate::typedarray::KIND_UINT8);
-            let _mapping = Mapping { ptr, len: page };
 
             assert_eq!(
                 js_value_length_f64(crate::value::js_nanbox_pointer(addr as i64)),

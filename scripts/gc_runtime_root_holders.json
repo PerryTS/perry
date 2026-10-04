@@ -186,19 +186,28 @@
     },
     {
       "file": "crates/perry-runtime/src/buffer/header.rs",
-      "name": "BUFFER_ADDR_RANGE",
-      "count": 1,
-      "classification": "not_a_gc_pointer",
-      "verdict": "not_a_gc_pointer",
-      "why": "Records only the smallest and largest address ever inserted into the sibling thread-local buffer registry, as a conservative min/max filter in front of that registry's hash lookup (#9176). The two usizes are compared (`addr >= lo && addr <= hi`) and never dereferenced, never handed out, and never used to reach an object; a value outside the range is rejected, a value inside falls through to the lookup that was already there. The range only ever widens, so it cannot go stale in the unsafe direction: a bound that no longer matches reality can only admit more addresses to the real lookup, never deny a registered one."
+      "name": "BUFFER_AB_ALIAS",
+      "verdict": "covered_elsewhere",
+      "scanner": "the GC_TYPE_BUFFER rewrite descriptor (gc::layout_slot_visit, GcRewriteDescriptorKind::Buffer) -> buffer::header::visit_ab_alias_slot",
+      "why": "Buffer address -> boxed ArrayBuffer-identity pointer (#1225). The boxed slot IS a heap edge, and it is traced and rewritten as a child edge of its owning buffer cell: every buffer-family flavor shares the Buffer rewrite descriptor, whose visitor calls visit_ab_alias_slot for the owner being traced, so the alias lives exactly as long as the buffer that names it. The key is the owner's own (non-moving) address; the entry is dropped by the BufferSideTables finalize hook when the owner is swept. Read as uncovered only because that visitor is the collector's object trace, not a registered root scanner (#10694 removed the registry scan that used to reach this file)."
     },
     {
       "file": "crates/perry-runtime/src/buffer/header.rs",
-      "name": "UINT8ARRAY_ADDR_RANGE",
-      "count": 1,
-      "classification": "not_a_gc_pointer",
+      "name": "CRYPTO_KEY_META_REGISTRY",
       "verdict": "not_a_gc_pointer",
-      "why": "Records only the smallest and largest address ever inserted into the sibling thread-local buffer registry, as a conservative min/max filter in front of that registry's hash lookup (#9176). The two usizes are compared (`addr >= lo && addr <= hi`) and never dereferenced, never handed out, and never used to reach an object; a value outside the range is rejected, a value inside falls through to the lookup that was already there. The range only ever widens, so it cannot go stale in the unsafe direction: a bound that no longer matches reality can only admit more addresses to the real lookup, never deny a registered one."
+      "why": "Thread-local attribute table of GC_TYPE_BUFFER_CRYPTO_KEY cells: address -> numeric (algo, hash, kind, extractable, usages, bit length). The key is the address of a non-moving buffer cell, used only as a lookup key and never dereferenced through this table; the values are integers. It is consulted only after the cell's own type byte says CryptoKey (#10694), and the BufferSideTables finalize hook drops the entry when the cell is swept, so a recycled address cannot inherit it."
+    },
+    {
+      "file": "crates/perry-runtime/src/buffer/header.rs",
+      "name": "FOREIGN_FINALIZER_OWNERS",
+      "verdict": "not_a_gc_pointer",
+      "why": "node-api-host only: addresses of foreign-backed buffer cells (non-moving, born old) that still owe a Node-API finalizer, so shutdown can release them. Used only as keys to re-find the cell for enqueue_foreign_finalizer; the finalizer record itself lives in the cell. An entry leaves when the finalizer runs, which the BufferSideTables finalize hook does when the cell is swept. Holds no edge the collector must trace: it must NOT keep the buffer alive."
+    },
+    {
+      "file": "crates/perry-runtime/src/buffer/header.rs",
+      "name": "RESIZABLE_BUFFER_MAX",
+      "verdict": "not_a_gc_pointer",
+      "why": "#10873: address of a resizable ArrayBuffer cell -> numeric (maxByteLength, dirty end). The key is a non-moving buffer address used only for lookup, never dereferenced through this table and never a root; the values are integers. The BufferSideTables finalize hook drops the entry when the buffer is swept (the #6080 ABA class)."
     },
     {
       "file": "crates/perry-runtime/src/bun_compat/self_global.rs",
@@ -2955,14 +2964,6 @@
       "name": "ASYMMETRIC_KEY_REGISTRY"
     },
     {
-      "file": "crates/perry-runtime/src/buffer/header.rs",
-      "name": "TEST_BUFFER_REGISTRY_PROBES"
-    },
-    {
-      "file": "crates/perry-runtime/src/buffer/header.rs",
-      "name": "TEST_UINT8ARRAY_REGISTRY_PROBES"
-    },
-    {
       "file": "crates/perry-runtime/src/buffer/view.rs",
       "name": "BACKING_TO_VIEWS"
     },
@@ -4128,18 +4129,6 @@
     {
       "file": "crates/perry-runtime/src/typedarray/mod.rs",
       "name": "TEST_TA_REGISTRY_PROBES"
-    },
-    {
-      "file": "crates/perry-runtime/src/typedarray/mod.rs",
-      "name": "TEST_TA_WINDOW_ADMITTED_PROBES"
-    },
-    {
-      "file": "crates/perry-runtime/src/typedarray/mod.rs",
-      "name": "TYPED_ARRAY_REGISTRY"
-    },
-    {
-      "file": "crates/perry-runtime/src/typedarray/mod.rs",
-      "name": "TYPED_ARRAY_SHARED_BACKING"
     },
     {
       "file": "crates/perry-runtime/src/typedarray_props.rs",

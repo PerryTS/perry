@@ -431,7 +431,10 @@ pub(crate) unsafe fn gc_type_for_ptr(raw: usize) -> Option<u8> {
 
 pub(crate) fn object_ptr_from_value(value: f64) -> Option<*mut ObjectHeader> {
     let raw = raw_ptr_from_value(value);
-    if raw < 0x10000 || crate::buffer::is_registered_buffer(raw) {
+    // `gc_type_for_ptr` proves ownership before it reads the header, and a
+    // buffer's type is not GC_TYPE_OBJECT, so no separate buffer probe (which
+    // would read an unproven header first) is needed.
+    if raw < 0x10000 {
         return None;
     }
     unsafe {

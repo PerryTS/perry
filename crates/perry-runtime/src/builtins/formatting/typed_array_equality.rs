@@ -10,7 +10,9 @@ fn value_pointer_addr(value: f64) -> Option<usize> {
     if jv.is_pointer() {
         return Some(jv.as_pointer::<u8>() as usize);
     }
-    if bits > 0x1000 && (bits >> 48) == 0 {
+    // #10694: a raw word must be allocator-owned before a brand probe reads
+    // its header.
+    if bits > 0x1000 && (bits >> 48) == 0 && crate::buffer::header_is_owned(bits as usize) {
         return Some(bits as usize);
     }
     None

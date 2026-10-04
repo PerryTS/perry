@@ -1266,7 +1266,7 @@ pub(crate) fn lower(
         // for runtime-dispatched arguments (which inspects the NaN-box tag to
         // distinguish a numeric length from a source-array pointer).
         // Result is a normal POINTER_TAG JS value. Element/property fast paths
-        // mask off the tag before consulting TYPED_ARRAY_REGISTRY, and runtime
+        // mask off the tag before reading the typed array's header, and runtime
         // consumers such as Atomics require the value to satisfy is_pointer().
         Expr::TypedArrayNew { kind, arg } => {
             let kind_str = (*kind as i32).to_string();

@@ -90,7 +90,12 @@ pub(crate) unsafe fn registered_buffer_index_own_property_present(
         obj_js.as_pointer::<u8>() as usize
     } else {
         let bits = obj_value.to_bits();
-        if bits != 0 && bits <= 0x0000_FFFF_FFFF_FFFF && bits > 0x10000 {
+        // #10694: a raw word must be allocator-owned before the brand read.
+        if bits != 0
+            && bits <= 0x0000_FFFF_FFFF_FFFF
+            && bits > 0x10000
+            && crate::buffer::header_is_owned(bits as usize)
+        {
             bits as usize
         } else {
             0
@@ -405,7 +410,12 @@ pub(crate) unsafe fn closure_ptr_from_value(value: f64) -> Option<usize> {
         jv.as_pointer::<u8>() as usize
     } else {
         let bits = value.to_bits();
-        if bits != 0 && bits <= 0x0000_FFFF_FFFF_FFFF && bits > 0x10000 {
+        // #10694: a raw word must be allocator-owned before the brand read.
+        if bits != 0
+            && bits <= 0x0000_FFFF_FFFF_FFFF
+            && bits > 0x10000
+            && crate::buffer::header_is_owned(bits as usize)
+        {
             bits as usize
         } else {
             0

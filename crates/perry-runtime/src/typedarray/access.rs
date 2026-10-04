@@ -441,7 +441,9 @@ unsafe fn classify_set_source(source_value: f64, dst_kind: u8) -> Option<SetSour
     let top16 = bits >> 48;
     let addr = if top16 == 0x7FFD {
         (bits & 0x0000_FFFF_FFFF_FFFF) as usize
-    } else if top16 == 0 && bits >= 0x10000 {
+    } else if top16 == 0 && bits >= 0x10000 && crate::buffer::header_is_owned(bits as usize) {
+        // A raw word must be vouched for by the allocator before the probes
+        // below read its header (#10694); a subnormal number has this shape.
         bits as usize
     } else {
         return Some(SetSource::Empty);

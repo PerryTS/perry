@@ -158,12 +158,10 @@ pub(super) unsafe fn canonicalize_bare_gc_receiver(object: f64) -> f64 {
 /// Can any owner answer for `addr` **without dereferencing it**?
 ///
 /// The allocator is the strongest answer (`try_read_tracked_gc_header` proves
-/// arena page membership or an exact malloc-registry hit). The rest are the
-/// address-keyed registries that own allocations carrying no `GcHeader` at all —
-/// a `Symbol.for` symbol, an `ArrayBuffer`/`Uint8Array` backing store, a typed
-/// array. Every one of these is a table lookup behind an idle latch, so a
-/// program that never made one pays a single atomic load; and every one of them
-/// is consulted by `gc_pointer_and_type_from_value` for the same reason.
+/// arena page membership or an exact malloc-registry hit) and covers every
+/// buffer and typed array (#10694: their brand is their header). The rest are
+/// the owners of allocations the allocator does not track: a `Symbol.for`
+/// symbol (no `GcHeader` at all) and a process-global SharedArrayBuffer block.
 ///
 /// Nothing here reads memory at `addr`, which is the whole point: this runs on
 /// words that may not be addresses.
@@ -172,10 +170,7 @@ fn bare_word_has_an_owner(addr: usize) -> bool {
     let allocator_owns = unsafe { crate::value::addr_class::try_read_tracked_gc_header(addr) };
     allocator_owns.is_some()
         || crate::symbol::is_registered_symbol(addr)
-        || crate::buffer::is_registered_buffer(addr)
-        || crate::buffer::is_any_array_buffer(addr)
-        || crate::buffer::is_uint8array_buffer(addr)
-        || crate::typedarray::lookup_typed_array_kind(addr).is_some()
+        || crate::shared_sab::is_shared_sab(addr)
 }
 
 /// True when `object` is still a bare word after

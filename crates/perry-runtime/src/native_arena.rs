@@ -31,7 +31,8 @@ pub struct NativeTypedViewHeader {
     pub elem_size: u8,
     /// Always `TA_STORAGE_EXTERNAL`: the elements live in the arena.
     pub storage: u8,
-    pub _pad: [u8; 5],
+    pub flags: u8,
+    pub _pad: [u8; 4],
 
     pub owner: *mut NativeArenaOwnerHeader,
     pub data: *mut u8,
@@ -340,7 +341,8 @@ pub extern "C" fn js_native_arena_view(
         // The elements live in the arena: the header's own storage byte
         // keeps every inline element path off this view (#10516).
         (*view).storage = typedarray::TA_STORAGE_EXTERNAL;
-        (*view)._pad = [0; 5];
+        (*view).flags = 0;
+        (*view)._pad = [0; 4];
         (*view).owner = owner;
         (*view).data = if byte_length == 0 {
             (*owner).data
@@ -683,61 +685,6 @@ mod tests {
         assert!(catch_runtime_throw(|| {
             crate::typedarray::js_native_memory_copy(view as u64, view as u64);
         }));
-    }
-
-    #[test]
-    fn native_memory_copy_rejects_typed_array_registry_forged_to_old_buffer() {
-        let buf = crate::buffer::buffer_alloc(crate::gc::LARGE_OBJECT_THRESHOLD_BYTES as u32);
-        assert!(crate::arena::pointer_in_old_gen(buf as usize));
-        typedarray::register_typed_array(buf as *const TypedArrayHeader, typedarray::KIND_UINT8);
-
-        assert!(catch_runtime_throw(|| {
-            crate::typedarray::js_native_memory_copy(buf as u64, buf as u64);
-        }));
-
-        typedarray::unregister_typed_array(buf as *const TypedArrayHeader);
-    }
-
-    #[test]
-    fn native_memory_fill_u32_rejects_typed_array_registry_forged_to_old_buffer() {
-        let buf = crate::buffer::buffer_alloc(crate::gc::LARGE_OBJECT_THRESHOLD_BYTES as u32);
-        assert!(crate::arena::pointer_in_old_gen(buf as usize));
-        typedarray::register_typed_array(buf as *const TypedArrayHeader, typedarray::KIND_UINT32);
-
-        assert!(catch_runtime_throw(|| {
-            crate::typedarray::js_native_memory_fill_u32(buf as u64, 1.0);
-        }));
-
-        typedarray::unregister_typed_array(buf as *const TypedArrayHeader);
-    }
-
-    #[test]
-    fn native_memory_copy_rejects_buffer_registry_forged_to_old_non_buffer() {
-        let fake = crate::arena::arena_alloc_gc_old(
-            std::mem::size_of::<crate::buffer::BufferHeader>(),
-            8,
-            crate::gc::GC_TYPE_OBJECT,
-        ) as *mut crate::buffer::BufferHeader;
-        assert!(crate::arena::pointer_in_old_gen(fake as usize));
-        crate::buffer::register_buffer(fake as *const crate::buffer::BufferHeader);
-        crate::buffer::mark_as_uint8array(fake as usize);
-
-        assert!(catch_runtime_throw(|| {
-            crate::typedarray::js_native_memory_copy(fake as u64, fake as u64);
-        }));
-    }
-
-    #[test]
-    fn random_fill_sync_rejects_typed_array_registry_forged_to_old_buffer() {
-        let buf = crate::buffer::buffer_alloc(crate::gc::LARGE_OBJECT_THRESHOLD_BYTES as u32);
-        assert!(crate::arena::pointer_in_old_gen(buf as usize));
-        typedarray::register_typed_array(buf as *const TypedArrayHeader, typedarray::KIND_UINT8);
-
-        assert!(catch_runtime_throw(|| unsafe {
-            let _ = dispatch_random_fill_sync(buf);
-        }));
-
-        typedarray::unregister_typed_array(buf as *const TypedArrayHeader);
     }
 
     #[test]

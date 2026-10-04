@@ -255,14 +255,9 @@ pub extern "C" fn js_zlib_validate_buffer_arg(data_bits: i64) {
     // Buffer / TypedArray / DataView / ArrayBuffer all live behind a heap
     // pointer; recover the raw address (pointer/string-tagged values mask off
     // the tag, a bare small pointer is used as-is) and probe the registries.
-    let bits = value.to_bits();
-    let raw = if jv.is_pointer() || jv.is_string() {
-        (bits & 0x0000_FFFF_FFFF_FFFF) as usize
-    } else if !value.is_nan() && (0x1000..0x0001_0000_0000_0000).contains(&bits) {
-        bits as usize
-    } else {
-        0
-    };
+    // #10694: the probes below read the cell's header, so a raw (top16 == 0)
+    // word must be one the allocator owns; `object_ref_addr` vouches for it.
+    let raw = crate::value::addr_class::object_ref_addr(value);
     if raw >= 0x1000 {
         if crate::typedarray::lookup_typed_array_kind(raw).is_some() {
             return;

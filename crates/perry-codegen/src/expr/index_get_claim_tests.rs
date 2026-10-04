@@ -819,16 +819,22 @@ fn any_typed_dynamic_key_takes_the_numeric_tiers_when_it_is_an_array_index() {
         "only GC_TYPE_OBJECT may reach the ObjectMeta.elements load; everything \
          else goes to the byte-view arm:\n{kind}"
     );
-    // #10515: the byte-view arm admits only a `GC_TYPE_BUFFER` whose address
-    // the admission cache holds; everything else leaves through the exit.
+    // #10515: the byte-view arm admits only a byte-view brand (#10694: a Node
+    // `Buffer`, `GC_TYPE_BUFFER`, or a `Uint8Array`, `GC_TYPE_BUFFER_UINT8ARRAY`)
+    // whose address the admission cache holds; everything else leaves through
+    // the exit.
     let u8_brand = super::class_field_barrier_tests::block_body(&ir, "arrlike.u8.brand.")
         .expect("the byte-view brand guard exists");
     assert!(
-        u8_brand.contains(", 10")
+        u8_brand.contains(&format!(", {}", crate::runtime_abi::GC_TYPE_BUFFER))
+            && u8_brand.contains(&format!(
+                ", {}",
+                crate::runtime_abi::GC_TYPE_BUFFER_UINT8ARRAY
+            ))
             && u8_brand.contains("@PERRY_U8_INLINE_CACHE")
             && u8_brand.contains("arrlike.ic.miss"),
-        "the byte-view arm must test GC_TYPE_BUFFER and the admission cache, \
-         and exit on a miss:\n{u8_brand}"
+        "the byte-view arm must test both byte-view brands and the admission \
+         cache, and exit on a miss:\n{u8_brand}"
     );
     // The elements-backed subclass probe, the lazy-JSON-array probe and the
     // dense-tail family token now live behind that exit rather than at every
