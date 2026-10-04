@@ -364,6 +364,13 @@ pub(crate) fn js_array_set_index_or_string_with_strictness(
     value: f64,
     strict: bool,
 ) -> *mut ArrayHeader {
+    // #11891: a Proxy passed through a `T[]` binding is a masked handle-band
+    // id here, not an ArrayHeader. Route every key kind through its [[Set]]
+    // before key parsing or array-layout work, preserving strict rejection.
+    if let Some(proxy) = array_ptr_as_proxy(arr) {
+        crate::proxy::js_put_value_set(proxy, idx, value, proxy, i32::from(strict));
+        return arr;
+    }
     if !arr.is_null() {
         // Resolve the canonical array-index interpretation of the key (mirrors
         // the numeric branch of `js_array_set_index_or_string`), and guard it.

@@ -2644,6 +2644,17 @@ pub extern "C" fn js_typed_feedback_array_index_set_fallback_boxed(
 ) -> f64 {
     record_fallback_call(site_id);
 
+    // #11891: a Proxy held in a `T[]`-annotated binding reaches this cold
+    // continuation as a pointer-tagged handle-band id. A declared element
+    // type is only a hint, so perform the proxy's [[Set]] before attempting
+    // any heap-object classification. `js_put_value_set` carries the
+    // assignment's Throw flag, including the strict falsy-trap TypeError.
+    if let Some(proxy) = crate::array::array_ptr_as_proxy(receiver.to_bits() as *const ArrayHeader)
+    {
+        crate::proxy::js_put_value_set(proxy, index, value, proxy, strict);
+        return receiver;
+    }
+
     let raw_addr = normalize_raw_object_addr(receiver.to_bits());
     if raw_addr == 0 {
         return receiver;
