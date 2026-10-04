@@ -1,0 +1,31 @@
+{
+  "base": "07e50b14a3d23e8f914193ec4d5a679adbd7c37a",
+  "production_runtime": "4f9121c09b642a007e592c1d91cbe86d5d122851",
+  "private_learned_floor": "3fb6cd50ed",
+  "private_control": "d4f491673b",
+  "tracked_source_counts": {
+    "lazy": 5011,
+    "learned": 5011
+  },
+  "linked_executions": 44,
+  "actual_moving_protected": 22,
+  "cases": [
+    "test_gap_10507_function_constructors",
+    "test_gap_10753_dynamic_key_read",
+    "test_gap_byname_function_reads",
+    "test_gap_byname_inherited_reads",
+    "test_gap_class_accessor_shape_facts",
+    "test_gap_class_expr_fresh_static_blocks_this",
+    "test_gap_gc_11789_closure_call_args",
+    "test_gap_gc_11816_array_callback_element",
+    "test_gap_gc_container_value_rooting",
+    "test_gap_gc_define_properties_key_rooting",
+    "test_gap_gc_store_ic_old_to_young"
+  ],
+  "all_raw_sources_products_oracles_counters_verified": true,
+  "inputs": {
+    "runs": "78a727353267a0e8312fdcbf8e66fe3df851c40ba5f6c48592ed2c79ab14b91d",
+    "products": "9394af83c56f9c305fb41e5d3b28641865bbdc657aad5b678fcccbf55182eb74",
+    "derived-source": "21b8ed18dc85e2ce86f7d10d14f44dd9de2acbd2ca140322e5fa6c139e1c4061"
+  }
+}
