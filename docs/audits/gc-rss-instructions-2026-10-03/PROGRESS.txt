@@ -1,3 +1,17 @@
+LATEST-MAIN LINUX RUNTIME VALIDATED / MOVING ACCEPTANCE QUEUED
+Exact 5,014-input integration 0aa483aa91 on fetched main ad0a2617bf: Linux
+4,867 passed, zero failures, five ignored. Fresh compiler and both static
+archives/commands/raw logs independently verified; all ten evidence files
+copied locally and rehashed. Together with Mac 4,881/0/5 this proves runtime
+integration, not current application RSS/instruction benefit.
+Owned V76r1 wrapper 2344830 runs 11 latest-source fixtures: 22 executions,
+with every moving arm required to copy objects and protect retired from-space.
+The first V76 setup assertion accidentally matched 'once' in the new label,
+so no complete wrapper was created; its failed setup/no-wrapper log is kept.
+No native V76 workload ran. Corrected V76r1 has its own namespace/receipts.
+Fresh full17 application comparison against a matching ad0 baseline remains
+outstanding. No new source/shape/header change adopted from rejected probes.
+
 NATIVE MAP PREFIX FULL17 VERIFIED / REJECTED FOR ADOPTION
 All 204 fresh executions and all 17 signed distributions independently
 verified, including source/products/text/stamps/raw outputs/counters. All 515
