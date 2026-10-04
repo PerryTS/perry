@@ -333,8 +333,8 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
     fn begin(ctx: &'ctx Context, module: &'m Module<'ctx>, header: &str) -> Result<Self> {
         let h = parse_header(header)?;
         let func = Self::declare_from_header(ctx, module, header)?;
-        // The skeleton never declares defined names (`skeleton_ir` filters
-        // them), so a body on the function here means a duplicate define.
+        // The skeleton predeclares defined names so globals can refer to
+        // them; a body on the function here still means a duplicate define.
         if func.count_basic_blocks() > 0 {
             bail!("duplicate define of @{}", h.name);
         }

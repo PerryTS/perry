@@ -296,8 +296,8 @@ pub(super) fn emit_string_pool(
     // Pre-allocate string constants for function-name registration. Same
     // borrow-ordering constraint as the class-name constants below: we
     // must mint the rodata globals BEFORE `init_fn` claims `&mut llmod`.
-    // Each entry becomes one `js_register_function_name_static(<sym>, <str>,
-    // <len>)` call inside the init function. See #1202.
+    // Each entry becomes one relative record in the module's batched function
+    // name descriptor table. See #1202 and #11927.
     let mut user_fn_name_constants: Vec<(String, String, usize)> = Vec::new();
     // Deduplicated by CONTENT (#9486): the same display name is now registered
     // against several symbols — a top-level function's wrapper and its body,
@@ -558,11 +558,6 @@ pub(super) fn emit_string_pool(
     } else {
         "js_register_function_name"
     };
-    let register_source_fn = if strings_outlive_registry {
-        "js_register_function_source_static"
-    } else {
-        "js_register_function_source"
-    };
     let register_class_source_fn = if strings_outlive_registry {
         "js_register_class_source_static"
     } else {
@@ -575,44 +570,81 @@ pub(super) fn emit_string_pool(
     // wrapper's compiled address (`__perry_wrap_<name>`), which is
     // what `js_closure_alloc_singleton` stamps into ClosureHeader.
     // See #1202.
-    for (wrapper_sym, name_const, name_len) in &user_fn_name_constants {
-        chunker.roll_if_full();
-        let blk = chunker.current_block();
-        let wrapper_ref = format!("@{}", wrapper_sym);
-        let name_ref = format!("@{}", name_const);
-        let len_str = name_len.to_string();
-        // `_static` when this image outlives the registry, else the copying
-        // spelling: `@.str.N` is a `private unnamed_addr constant` in this
-        // module's rodata, which satisfies the process-lifetime contract only
-        // for an image nothing unloads (#9188).
-        blk.call_void(
-            register_name_fn,
-            &[(PTR, &wrapper_ref), (PTR, &name_ref), (I32, &len_str)],
+    if strings_outlive_registry {
+        let name_table = super::function_metadata_descriptors::emit_name_table(
+            chunker.module(),
+            module_prefix,
+            user_fn_name_constants
+                .iter()
+                .map(|(wrapper, name, len)| (wrapper.as_str(), name.as_str(), *len)),
         );
+        if let Some(table) = name_table {
+            chunker.roll_if_full();
+            chunker.current_block().call_void(
+                "js_register_function_names_static",
+                &[
+                    (PTR, &format!("@{}", table.global)),
+                    (I32, &table.len.to_string()),
+                ],
+            );
+        }
+    } else {
+        for (wrapper_sym, name_const, name_len) in &user_fn_name_constants {
+            chunker.roll_if_full();
+            chunker.current_block().call_void(
+                register_name_fn,
+                &[
+                    (PTR, &format!("@{wrapper_sym}")),
+                    (PTR, &format!("@{name_const}")),
+                    (I32, &name_len.to_string()),
+                ],
+            );
+        }
     }
 
     // #4101: register each function's retained source text against the same
     // wrapper/closure address `js_closure_alloc_singleton` stamps into the
     // ClosureHeader, so `fn.toString()` resolves the source by func_ptr.
-    for (wrapper_sym, source, is_non_strict_ordinary) in &user_fn_source_constants {
-        chunker.roll_if_full();
-        let blk = chunker.current_block();
-        let wrapper_ref = format!("@{}", wrapper_sym);
-        let source_ref = source.pointer(blk);
-        let len_str = source.byte_len.to_string();
-        // Same spelling choice as the names above (#9188), and the bigger half
-        // of the win: source text is registered for every function the bundle
-        // CONTAINS, to serve a `Function.prototype.toString()` that most
-        // programs never call.
-        blk.call_void(
-            register_source_fn,
-            &[
-                (PTR, &wrapper_ref),
-                (PTR, &source_ref),
-                (I32, &len_str),
-                (I32, if *is_non_strict_ordinary { "1" } else { "0" }),
-            ],
+    if strings_outlive_registry {
+        let source_table = super::function_metadata_descriptors::emit_source_table(
+            chunker.module(),
+            module_prefix,
+            user_fn_source_constants
+                .iter()
+                .map(|(wrapper, source, is_non_strict_ordinary)| {
+                    (
+                        wrapper.as_str(),
+                        source.constant_pointer(),
+                        source.byte_len,
+                        *is_non_strict_ordinary,
+                    )
+                }),
         );
+        if let Some(table) = source_table {
+            chunker.roll_if_full();
+            chunker.current_block().call_void(
+                "js_register_function_sources_static",
+                &[
+                    (PTR, &format!("@{}", table.global)),
+                    (I32, &table.len.to_string()),
+                ],
+            );
+        }
+    } else {
+        for (wrapper_sym, source, is_non_strict_ordinary) in &user_fn_source_constants {
+            chunker.roll_if_full();
+            let blk = chunker.current_block();
+            let source_ref = source.pointer(blk);
+            blk.call_void(
+                "js_register_function_source",
+                &[
+                    (PTR, &format!("@{wrapper_sym}")),
+                    (PTR, &source_ref),
+                    (I32, &source.byte_len.to_string()),
+                    (I32, if *is_non_strict_ordinary { "1" } else { "0" }),
+                ],
+            );
+        }
     }
 
     // #11420: every input to a class's birth [[Prototype]] identity

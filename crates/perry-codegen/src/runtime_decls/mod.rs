@@ -109,6 +109,7 @@ pub fn declare_phase1(module: &mut LlModule) {
     // one for `dylib` / `staticlib`.
     module.declare_function("js_register_function_name_static", VOID, &[PTR, PTR, I32]);
     module.declare_function("js_register_function_name", VOID, &[PTR, PTR, I32]);
+    module.declare_function("js_register_function_names_static", VOID, &[PTR, I32]);
     // #4101: register a user function's original source text (keyed by the
     // same wrapper/closure address as the name) so `fn.toString()` and
     // `Function.prototype.toString.call(fn)` reconstruct the source.
@@ -118,6 +119,7 @@ pub fn declare_phase1(module: &mut LlModule) {
         &[PTR, PTR, I32, I32],
     );
     module.declare_function("js_register_function_source", VOID, &[PTR, PTR, I32, I32]);
+    module.declare_function("js_register_function_sources_static", VOID, &[PTR, I32]);
 
     // Console.
     module.declare_function("js_console_log_dynamic", VOID, &[DOUBLE]);
