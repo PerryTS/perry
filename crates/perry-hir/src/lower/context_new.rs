@@ -72,6 +72,7 @@ impl LoweringContext {
             type_aliases: Vec::new(),
             native_profile_type_aliases: HashMap::new(),
             immutable_locals: HashSet::new(),
+            unrebound_params: HashSet::new(),
             interface_source_keys: std::collections::HashMap::new(),
             interface_object_types: std::collections::HashMap::new(),
             imported_functions: Vec::new(),

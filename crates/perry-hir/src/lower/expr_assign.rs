@@ -1608,11 +1608,22 @@ pub(crate) fn hoist_compound_member_assign(
     // keyed on.
     //
     // A mutable binding keeps its temp: the RHS may assign it
-    // (`o.x += (o = p, 1)` must write the old `o`). So does a base whose
-    // computed key is spilled: the base read then has to stay ahead of the
-    // key's side effects, because reading a `const` in its TDZ throws.
+    // (`o.x += (o = p, 1)` must write the old `o`). So does a `const` base
+    // whose computed key is spilled: the base read then has to stay ahead of
+    // the key's side effects, because reading a `const` in its TDZ throws.
+    //
+    // An unrebound parameter (`lower::unrebound_params`: never assigned,
+    // re-declared or reachable through `arguments` or `eval` anywhere in its
+    // function) is read once for the same reason as a `const`, and it has no
+    // TDZ in the body, so it needs no temp even when the key is spilled:
+    // reading it after the key yields the value read before it, and the read
+    // itself has no effect to reorder.
     let immutable_binding = |ctx: &LoweringContext, e: &Expr| match e {
         Expr::LocalGet(id) if ctx.is_local_immutable(*id) => Some(*id),
+        _ => None,
+    };
+    let unrebound_param = |ctx: &LoweringContext, e: &Expr| match e {
+        Expr::LocalGet(id) if ctx.unrebound_params.contains(id) => Some(*id),
         _ => None,
     };
     let base = lower_expr(ctx, &member.obj)?;
@@ -1620,9 +1631,12 @@ pub(crate) fn hoist_compound_member_assign(
         ast::MemberProp::Computed(c) => Some(lower_expr(ctx, &c.expr)?),
         _ => None,
     };
-    let key_binding = key.as_ref().and_then(|k| immutable_binding(ctx, k));
-    let base_binding =
-        immutable_binding(ctx, &base).filter(|_| key.is_none() || key_binding.is_some());
+    let key_binding = key
+        .as_ref()
+        .and_then(|k| immutable_binding(ctx, k).or_else(|| unrebound_param(ctx, k)));
+    let base_binding = immutable_binding(ctx, &base)
+        .filter(|_| key.is_none() || key_binding.is_some())
+        .or_else(|| unrebound_param(ctx, &base));
     let base_id = match base_binding {
         Some(id) => id,
         None => spill(ctx, &mut stmts, "base", base),

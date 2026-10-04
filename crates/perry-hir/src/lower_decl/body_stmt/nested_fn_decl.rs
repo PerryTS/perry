@@ -170,6 +170,12 @@ pub(super) fn lower_nested_fn_decl(
     // Lower body — see issue #569; hoist nested function-decl
     // statements within this inner fn body to the top so
     // forward refs and sibling captures work end-to-end.
+    crate::lower::unrebound_params::note(
+        ctx,
+        &params,
+        fn_decl.function.params.iter().map(|p| &p.pat),
+        fn_decl.function.body.as_ref(),
+    );
     let mut body = if let Some(ref block) = fn_decl.function.body {
         lower_fn_body_block_stmt(ctx, block)?
     } else {

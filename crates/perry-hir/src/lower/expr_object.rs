@@ -311,6 +311,12 @@ fn lower_method_prop(
         append_synthetic_arguments_param(ctx, &mut params, true, false, true, Vec::new());
     }
 
+    crate::lower::unrebound_params::note(
+        ctx,
+        &params,
+        method.function.params.iter().map(|p| &p.pat),
+        method.function.body.as_ref(),
+    );
     let mut body = if let Some(ref block) = method.function.body {
         lower_fn_body_block_stmt(ctx, block)?
     } else {

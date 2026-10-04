@@ -311,6 +311,12 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
     // statements are pulled to the top of the result so forward references
     // resolve, and a synthetic `Stmt::PreallocateBoxes` is emitted for any
     // sibling/forward captures that need a box pre-allocated.
+    crate::lower::unrebound_params::note(
+        ctx,
+        &params,
+        fn_decl.function.params.iter().map(|p| &p.pat),
+        fn_decl.function.body.as_ref(),
+    );
     let mut body = if let Some(ref block) = fn_decl.function.body {
         lower_fn_body_block_stmt(ctx, block)?
     } else {
