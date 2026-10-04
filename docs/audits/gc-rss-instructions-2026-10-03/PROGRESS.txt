@@ -1,3 +1,39 @@
+LATEST-MAIN MAC FFI/EVENTS VERIFIED / MARK FRONTIER EXPERIMENT
+The 5,014-input adopted integration passes Mac FFI 75 tests, events 15,
+and five doc tests (13 ignored); native Cargo rc=0 and source/log/test
+binaries independently verified. Linux wrapper 2436323 waits for the V79
+application matrix to finish, then runs the same command on an isolated
+source and empty target. Matrix 2405797 has now completed all 30 fresh
+builds and begun its 204 interleaved measurements. Verifier wrapper 2518892
+waits for native completion, then rechecks raw outputs, products and counters.
+No latest-main application result is claimed while those jobs are live.
+
+Private branch rss-gc-mark-frontier-mainad0-20261004 is published for review;
+it is NOT adopted into PR production source. The mark drain currently keeps
+all processed headers in its worklist until tracing finishes. Private V81
+2c3b34ebd5 changes it to pop pending work, preserving mark-before-enqueue,
+cycle termination and the existing per-step budget. Mac 4,883/0/5 passes.
+A 4,096-object cycle and an 8,191-object binary tree with root aliases both
+mark every reachable object using at most 8/32 pointer-capacity respectively.
+V82 2e28c4e899 also removes the per-header cursor update and returns consumed
+work once per step; that exact source independently passes Mac 4,883/0/5.
+Old V81 evidence remains bound to its pinned Git blobs and separate target.
+Copying nursery traversal, collection thresholds, shape/header/ABI facts
+remain unchanged. Application RSS/instruction savings are still unproven.
+Linux fresh product/runtime wrapper 2519380 waits for V80 and V79 verification;
+its 5,015-input source has exactly four changes relative to validated V74.
+Negative-control V86 restores production trace/cycle code exactly in its own
+checkout and runs the two frontier tests: expected native failures must name
+the retained-capacity assertion. That check is running, not yet accepted.
+
+Further server headroom came from offloading only the completed historical
+V51 query experiment's auto target. All 7,659 archive members and 8 hardlinks
+have verified bytes locally; no source/export/program/measurement/seed was
+removed. Archive was streamed directly to the local host to avoid transient
+server disk use. /proc references were checked before removal; local receipt
+and restoration ledger are preserved. Historical checks needing that remote
+auto target require restoring the exact archive first.
+
 LATEST-MAIN MATCHED BASELINE VERIFIED / FULL17 COMPARISON STARTED
 Pinned unmodified ad0a2617bf baseline: 5,006 inputs verified, fresh compiler
 and both static archives, Linux full runtime 4,844 passed / zero failed /

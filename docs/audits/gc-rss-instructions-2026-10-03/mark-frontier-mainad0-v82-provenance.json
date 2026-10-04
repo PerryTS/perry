@@ -1,0 +1,7 @@
+{
+  "base": "ad0a2617bf0b9708032cf89c86575e9bd69fb074",
+  "parent": "0aa483aa91ab901583002ec0174a50884b60ad81",
+  "private_commit": "2e28c4e8998e525da725257b771d898cd0c6f377",
+  "source_count": 5015,
+  "scope": "Private mark pending-frontier experiment. Compared to V81, no per-header cursor bookkeeping; consumed work returned once per step. Copying worklist and all shape/header/ABI/threshold facts unchanged. V81 tests do not validate this new revision."
+}

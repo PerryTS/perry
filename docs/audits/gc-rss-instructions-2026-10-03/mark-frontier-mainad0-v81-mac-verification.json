@@ -1,0 +1,35 @@
+{
+  "base": "ad0a2617bf0b9708032cf89c86575e9bd69fb074",
+  "private_commit": "2c3b34ebd5d0ae63a10ae2b6f9360026fc2a0d20",
+  "source_count": 5015,
+  "runtime": {
+    "passed": 4883,
+    "failed": 0,
+    "ignored": 5
+  },
+  "result": {
+    "command": [
+      "cargo",
+      "+nightly-2026-08-20",
+      "test",
+      "--locked",
+      "--release",
+      "-p",
+      "perry-runtime",
+      "--lib"
+    ],
+    "rc": 0,
+    "pid": 51568,
+    "elapsed_s": 168.03478862484917,
+    "source_manifest_sha256": "8472e319a3c3dbdca55f9615f07145ea5d016258ec5ee553289d9c4ffebd3cf0",
+    "raw_log_sha256": "50dda7ab9d93a54ca5165dd998897a051ba13bdaa3d896a1de1655cf0e075c4f"
+  },
+  "test_binary_hashes": {
+    "/Users/amlug/projects/perry/secret-tests/scratchpad/rss-header-20261002/mark-frontier-mainad0-v81-mac-target/release/build/perry-runtime/e38da219d732ee70/out/perry_runtime-e38da219d732ee70": "24e3875ae4023b43f927fdb7cef8e13542b0872da4ff8a6f18ddf9965c13e32a"
+  },
+  "subjects": [
+    "4096-object cycle: all reachable marked, seven-header step budget, frontier capacity <=8 pointers",
+    "8191-object binary tree with root aliases: all reachable marked, seven-header step budget, frontier capacity <=32 pointers"
+  ],
+  "scope": "Private mark-only pending-frontier experiment, Mac full runtime. No application RSS/instruction result yet; not adopted."
+}
