@@ -683,6 +683,21 @@ pub fn closure_set_dynamic_prop(ptr: usize, prop: &str, value: f64) {
     super::shape::refresh_closure_shape(ptr);
 }
 
+/// A function's first own data properties, defined at once: its bag is born
+/// holding `entries` in one shape (`props::bag_born_with`). False, with
+/// nothing done, when the function already has own properties; the caller
+/// then sets them one at a time ([`closure_set_dynamic_prop`]).
+pub fn closure_define_first_props(ptr: usize, entries: &[(&str, f64)]) -> bool {
+    if ptr == 0 || !is_closure_ptr(ptr) {
+        return false;
+    }
+    if !unsafe { super::props::bag_born_with(ptr, entries) } {
+        return false;
+    }
+    super::shape::refresh_closure_shape(ptr);
+    true
+}
+
 /// Read an OWN dynamic property without any prototype/builtin fallback.
 /// Used by `bind` to honor an `Object.defineProperty(fn, "length", …)`
 /// override before falling back to the registered declared length.

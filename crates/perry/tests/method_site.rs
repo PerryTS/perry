@@ -633,7 +633,8 @@ console.log(run(N), objs[0].m === objs[7].m);
 /// primed body without loading the slot) -> the replaced builtins are not seen.
 #[test]
 fn a_builtin_object_prototype_method_is_served_inline_and_a_replacement_is_seen() {
-    let (stdout, own, inherited, misses) = run(r#"// ONE site per builtin method over plain objects (Object.prototype holds the
+    let (stdout, own, inherited, misses) = run(
+        r#"// ONE site per builtin method over plain objects (Object.prototype holds the
 // method); the builtin is replaced and restored mid-loop, and own methods and
 // null-prototype receivers share the same sites.
 const N = process.argv.length > 99 ? 1 : 6000;
@@ -672,7 +673,8 @@ for (let i = 0; i < 3; i++) {
 console.log(s);
 console.log(out.join(","));
 console.log(bareRes.join(","));
-"#);
+"#,
+    );
     assert_eq!(
         stdout,
         r#"217600

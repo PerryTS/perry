@@ -184,6 +184,7 @@ pub(crate) use install_static::{
     install_reflect_namespace_members, subtle_crypto_decapsulate_bits_thunk,
     subtle_crypto_decapsulate_key_thunk, subtle_crypto_encapsulate_bits_thunk,
     subtle_crypto_encapsulate_key_thunk, url_pattern_exec_thunk, url_pattern_test_thunk,
+    ConstructorStatics,
 };
 #[cfg(feature = "temporal")]
 pub(crate) use math_temporal::install_temporal_namespace;

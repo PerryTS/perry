@@ -132,6 +132,55 @@ pub extern "C" fn js_object_alloc_null_proto(class_id: u32, field_count: u32) ->
     ptr
 }
 
+/// A null-prototype object born holding `entries` as its own data properties,
+/// in order: the shape of the whole list is published once, from
+/// the birth shape, instead of one key-add transition per key, and the object
+/// is born with one inline slot per key, so nothing spills.
+///
+/// The list it publishes is the canonical one ([`canonical_keys::canonicalize`])
+/// that adding the same keys one at a time reaches, so the object's layout is
+/// a fact of its keys, the same as if it had grown them. Only the leaf list is
+/// materialized; no intermediate shape is minted.
+///
+/// # Safety
+/// The caller holds a [`crate::gc::GcSuppressScope`] (every raw pointer here and
+/// in the caller stays valid across the allocations), and the keys of
+/// `entries` are distinct.
+pub(crate) unsafe fn object_alloc_null_proto_with_keys(
+    entries: &[(&str, f64)],
+) -> *mut ObjectHeader {
+    debug_assert!(crate::gc::gc_is_suppressed());
+    let count = entries.len() as u32;
+    let obj = js_object_alloc_null_proto(0, count);
+    if count == 0 {
+        return obj;
+    }
+    // A newborn is never a dictionary receiver: its list is a shared layout.
+    let Some(proof) = canonical_keys::SharedLayout::of_receiver(obj) else {
+        return obj;
+    };
+    let list = crate::array::js_array_alloc_key_list(count, true);
+    let slots = crate::array::array_elements_ptr(list);
+    for (i, (key, _)) in entries.iter().enumerate() {
+        let interned = if key.is_ascii() {
+            crate::string::intern_ascii_literal(key.as_bytes())
+        } else {
+            let s = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+            crate::string::js_string_intern(s, key_content_hash(s))
+        };
+        // GC_STORE_AUDIT(INIT): `list` is a fresh, unpublished key list read
+        // only by `canonicalize` below, under the caller's suppression.
+        *slots.add(i) = JSValue::string_ptr(interned as *mut crate::StringHeader).bits();
+    }
+    (*list).length = count;
+    let canonical = canonical_keys::canonicalize(&proof, list, count);
+    set_object_keys_with_live(obj, canonical.view(), count);
+    for (i, (_, value)) in entries.iter().enumerate() {
+        store_object_field_slot(obj, i, value.to_bits());
+    }
+    obj
+}
+
 /// Allocate a class instance's storage while the caller holds `keys` — a keys
 /// array it received as a raw copy of a root it does not own (a codegen
 /// per-class global, the class memo, the shape cache) — and hand back both the

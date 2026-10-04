@@ -131,7 +131,10 @@ mod tests {
                         name.as_bytes(),
                     )
                     .unwrap_or_else(|| panic!("{name} missing"));
-                    assert!(s < d.live_inline_slot_count, "{name} at slot {s} is not inline");
+                    assert!(
+                        s < d.live_inline_slot_count,
+                        "{name} at slot {s} is not inline"
+                    );
                 }
                 if crate::arena::pointer_in_nursery(proto as usize) {
                     let header = (proto as *const u8).sub(crate::gc::GC_HEADER_SIZE)
