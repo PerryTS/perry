@@ -1,0 +1,421 @@
+{
+  "perry_base": "07e50b14a3d23e8f914193ec4d5a679adbd7c37a",
+  "perry_runtime": "4f9121c09b642a007e592c1d91cbe86d5d122851",
+  "latest_version_check": {
+    "scriptc": {
+      "version": "0.2.2",
+      "integrity": "sha512-DWSTPtyNYQxfrBeip9uvcgdnDRYBcJzwcVMmrFZsYO0sXxzqaA3KLuik543YIuYyatAuMO4BnYRCOgI2ny3g1Q=="
+    },
+    "porffor": {
+      "version": "0.0.0-alpha.15",
+      "integrity": "sha512-F6po1djFXszGo1J11Qvgs5rdtQBK5z74ViAk+CedDbE4gBeYF8SkWcaCXOtqqGq/D6VERmq8fNCKQmts6wf8ug==",
+      "remote_commit": "72d048d73d49e217631ac8a1bc4fa9070d22fbc9"
+    },
+    "hermes": {
+      "remote_commit": "ade4a2b20246340d4309cf62be51f9652dcde279"
+    },
+    "checked_utc": "2026-10-04T00:37:00.134035+00:00"
+  },
+  "rows": [
+    {
+      "case": "00-noop",
+      "source_sha256": "d8659d84d989e811ba79d9e48c3d58f43928ea03c60cb3671a3c634346f36719",
+      "engines": {
+        "perry_base": {
+          "correct": true,
+          "rss_mib": 1.26171875,
+          "rss_mib_values": [
+            1.26171875,
+            1.26171875,
+            1.26171875
+          ],
+          "build_prefix": "gc-auto-main07-v40"
+        },
+        "perry_gc": {
+          "correct": true,
+          "rss_mib": 1.26171875,
+          "rss_mib_values": [
+            1.26171875,
+            1.26171875,
+            1.26171875
+          ],
+          "build_prefix": "gc-auto-main07-v40"
+        },
+        "porffor": {
+          "correct": true,
+          "rss_mib": 1.5390625,
+          "rss_mib_values": [
+            1.5390625,
+            1.5390625,
+            1.5390625
+          ],
+          "build_prefix": "comparators-20261003"
+        },
+        "shermes": {
+          "correct": true,
+          "rss_mib": 9.63671875,
+          "rss_mib_values": [
+            9.44921875,
+            9.63671875,
+            9.67578125
+          ],
+          "build_prefix": "comparators-20261003"
+        },
+        "scriptc": {
+          "correct": true,
+          "rss_mib": 1.65625,
+          "rss_mib_values": [
+            1.55078125,
+            1.66015625,
+            1.65625
+          ],
+          "build_prefix": "comparators-scriptc022-v38"
+        }
+      }
+    },
+    {
+      "case": "15-crc32",
+      "source_sha256": "3e8aa4b2cd91ac4d1ad4b098ec3b89f0c110a98cda5b136189554108d7fe0a12",
+      "engines": {
+        "perry_base": {
+          "correct": true,
+          "rss_mib": 16.328125,
+          "rss_mib_values": [
+            16.3125,
+            16.51171875,
+            16.328125
+          ],
+          "build_prefix": "gc-auto-main07-v40"
+        },
+        "perry_gc": {
+          "correct": true,
+          "rss_mib": 15.71875,
+          "rss_mib_values": [
+            15.58203125,
+            15.82421875,
+            15.71875
+          ],
+          "build_prefix": "gc-auto-main07-v40"
+        },
+        "porffor": {
+          "correct": true,
+          "rss_mib": 10.0625,
+          "rss_mib_values": [
+            10.03125,
+            10.0625,
+            10.06640625
+          ],
+          "build_prefix": "comparators-20261003"
+        },
+        "shermes": {
+          "correct": true,
+          "rss_mib": 17.52734375,
+          "rss_mib_values": [
+            17.48046875,
+            17.52734375,
+            17.6796875
+          ],
+          "build_prefix": "comparators-20261003"
+        },
+        "scriptc": {
+          "correct": true,
+          "rss_mib": 9.66796875,
+          "rss_mib_values": [
+            9.66796875,
+            9.671875,
+            9.66015625
+          ],
+          "build_prefix": "comparators-scriptc022-v38"
+        }
+      }
+    },
+    {
+      "case": "23-binary-trees",
+      "source_sha256": "30832fa254cf0f95843ca02872566d26305105fecf4c2cf3408f8f2a44cac69e",
+      "engines": {
+        "perry_base": {
+          "correct": true,
+          "rss_mib": 178.46484375,
+          "rss_mib_values": [
+            178.49609375,
+            178.4375,
+            178.46484375
+          ],
+          "build_prefix": "gc-auto-main07-v40"
+        },
+        "perry_gc": {
+          "correct": true,
+          "rss_mib": 178.109375,
+          "rss_mib_values": [
+            178.109375,
+            178.0,
+            178.3359375
+          ],
+          "build_prefix": "gc-auto-main07-v40"
+        },
+        "porffor": {
+          "correct": true,
+          "rss_mib": 400.96875,
+          "rss_mib_values": [
+            400.875,
+            400.96875,
+            409.51953125
+          ],
+          "build_prefix": "comparators-20261003"
+        },
+        "shermes": {
+          "correct": true,
+          "rss_mib": 253.09765625,
+          "rss_mib_values": [
+            253.09765625,
+            257.23828125,
+            249.2578125
+          ],
+          "build_prefix": "comparators-20261003"
+        },
+        "scriptc": {
+          "correct": true,
+          "rss_mib": 585.53515625,
+          "rss_mib_values": [
+            585.5390625,
+            585.5078125,
+            585.53515625
+          ],
+          "build_prefix": "comparators-scriptc022-v38"
+        }
+      }
+    },
+    {
+      "case": "30-string-build",
+      "source_sha256": "7411345cc6acaa2de75f803cd89a210bab35bf49db59c8ebbe5a40b83fd224f4",
+      "engines": {
+        "perry_base": {
+          "correct": true,
+          "rss_mib": 214.53125,
+          "rss_mib_values": [
+            214.53125,
+            214.2734375,
+            214.55078125
+          ],
+          "build_prefix": "gc-auto-main07-v40"
+        },
+        "perry_gc": {
+          "correct": true,
+          "rss_mib": 210.6171875,
+          "rss_mib_values": [
+            210.484375,
+            210.6171875,
+            210.90234375
+          ],
+          "build_prefix": "gc-auto-main07-v40"
+        },
+        "porffor": {
+          "correct": true,
+          "rss_mib": 339.26171875,
+          "rss_mib_values": [
+            302.56640625,
+            339.26953125,
+            339.26171875
+          ],
+          "build_prefix": "comparators-20261003"
+        },
+        "shermes": {
+          "correct": true,
+          "rss_mib": 301.94921875,
+          "rss_mib_values": [
+            319.9296875,
+            301.94921875,
+            248.640625
+          ],
+          "build_prefix": "comparators-20261003"
+        },
+        "scriptc": {
+          "correct": true,
+          "rss_mib": 183.1015625,
+          "rss_mib_values": [
+            183.1015625,
+            183.21875,
+            183.0859375
+          ],
+          "build_prefix": "comparators-scriptc022-v38"
+        }
+      }
+    },
+    {
+      "case": "31-json",
+      "source_sha256": "6a7a2d495cff9004089ed69913541e316b45d672bf5583010baf1f2badae07ac",
+      "engines": {
+        "perry_base": {
+          "correct": true,
+          "rss_mib": 159.55078125,
+          "rss_mib_values": [
+            159.44140625,
+            159.55859375,
+            159.55078125
+          ],
+          "build_prefix": "gc-auto-main07-v40"
+        },
+        "perry_gc": {
+          "correct": true,
+          "rss_mib": 153.76171875,
+          "rss_mib_values": [
+            153.52734375,
+            153.76171875,
+            153.8125
+          ],
+          "build_prefix": "gc-auto-main07-v40"
+        },
+        "porffor": {
+          "correct": true,
+          "rss_mib": 166.09765625,
+          "rss_mib_values": [
+            165.671875,
+            166.09765625,
+            166.1171875
+          ],
+          "build_prefix": "comparators-20261003"
+        },
+        "shermes": {
+          "correct": true,
+          "rss_mib": 110.10546875,
+          "rss_mib_values": [
+            110.10546875,
+            110.23828125,
+            109.859375
+          ],
+          "build_prefix": "comparators-20261003"
+        },
+        "scriptc": {
+          "correct": false,
+          "status": "compile_failed",
+          "rc": 1,
+          "rss_mib": null
+        }
+      }
+    },
+    {
+      "case": "51-pipeline",
+      "source_sha256": "4d4882812ded9985f8287b43ef18dab3111976ad2b6c98459072ac844a9e42e9",
+      "engines": {
+        "perry_base": {
+          "correct": true,
+          "rss_mib": 285.2421875,
+          "rss_mib_values": [
+            285.1328125,
+            285.2421875,
+            285.26171875
+          ],
+          "build_prefix": "gc-auto-main07-v40"
+        },
+        "perry_gc": {
+          "correct": true,
+          "rss_mib": 254.44921875,
+          "rss_mib_values": [
+            254.44921875,
+            254.484375,
+            254.08984375
+          ],
+          "build_prefix": "gc-auto-main07-v40"
+        },
+        "porffor": {
+          "correct": true,
+          "rss_mib": 403.37890625,
+          "rss_mib_values": [
+            424.9375,
+            403.37890625,
+            403.2578125
+          ],
+          "build_prefix": "comparators-20261003"
+        },
+        "shermes": {
+          "correct": true,
+          "rss_mib": 386.4921875,
+          "rss_mib_values": [
+            386.80078125,
+            386.4921875,
+            386.46484375
+          ],
+          "build_prefix": "comparators-20261003"
+        },
+        "scriptc": {
+          "correct": true,
+          "rss_mib": 261.29296875,
+          "rss_mib_values": [
+            261.29296875,
+            261.1875,
+            261.3046875
+          ],
+          "build_prefix": "comparators-scriptc022-v38"
+        }
+      }
+    },
+    {
+      "case": "60-ring-churn",
+      "source_sha256": "d3ef92c92f1576973e9d57bba22646eacf3dde96eaa589ae1153de395a0da9dd",
+      "engines": {
+        "perry_base": {
+          "correct": true,
+          "rss_mib": 14.44140625,
+          "rss_mib_values": [
+            14.45703125,
+            14.421875,
+            14.44140625
+          ],
+          "build_prefix": "gc-auto-main07-v40"
+        },
+        "perry_gc": {
+          "correct": true,
+          "rss_mib": 14.38671875,
+          "rss_mib_values": [
+            14.4921875,
+            14.38671875,
+            14.27734375
+          ],
+          "build_prefix": "gc-auto-main07-v40"
+        },
+        "porffor": {
+          "correct": true,
+          "rss_mib": 37.33203125,
+          "rss_mib_values": [
+            37.390625,
+            37.33203125,
+            37.23828125
+          ],
+          "build_prefix": "comparators-20261003"
+        },
+        "shermes": {
+          "correct": true,
+          "rss_mib": 14.27734375,
+          "rss_mib_values": [
+            14.27734375,
+            14.27734375,
+            14.30859375
+          ],
+          "build_prefix": "comparators-20261003"
+        },
+        "scriptc": {
+          "correct": true,
+          "rss_mib": 1.796875,
+          "rss_mib_values": [
+            1.796875,
+            1.8828125,
+            1.796875
+          ],
+          "build_prefix": "comparators-scriptc022-v38"
+        }
+      }
+    }
+  ],
+  "scope": "Seven unchanged standalone workloads on the retained primary measurement host. Measurements were taken at different times, with three plain RSS repetitions each. Perry is the current main07 checkpoint with the production GC proposal. ScriptC JSON compile failure has no RSS rank; real TS/Zod cross-engine equivalence remains unproven.",
+  "inputs": {
+    "gc-auto-main07-v40-verification.json": "bba381e549f62c516c25887685cecc6d38cede9898bf645aa81cb9a8b1c8045a",
+    "gc-auto-main07-v40-runs.json": "93caa4d7c40fc3cd20bc579e43b3a02b26ae214e5e6fd7ef0e32330a310cf752",
+    "gc-auto-main07-v40-builds.json": "8f6e8c2e8fce1064884c0e683327bfc917f78e710ae343a73b2a7efc266a2e23",
+    "comparators-20261003-versions.json": "245481a1d2d41e8ed05163821d9bcf45c6ae0a3e145342538ce3af42a85408af",
+    "comparators-20261003-runs.json": "5f5cc0c09b198e333406f93037c004979f05ab1e2e14a0771271253711d13239",
+    "comparators-20261003-oracle.json": "295f25d4344ccc1fc0fc2377ec136470ff7c7ae6205b33c93d0650492abeea6c",
+    "comparators-scriptc022-v38-verification.json": "a0bda2a632a8dc6800c68a5dda39437881f703073ac3f7f05f5e424da5e6f8b6",
+    "comparators-scriptc022-v38-runs.json": "fd1b821cd3471d7ee0c64fbe03302d3ce39b8963d6fd07fd01a90d1e20c99ed2",
+    "comparators-20261004-v48-version-check.json": "0cefc3f1484e44af49933ae5f60e8b3d4fee96c0adb737369bc4b9f18b95e509"
+  }
+}

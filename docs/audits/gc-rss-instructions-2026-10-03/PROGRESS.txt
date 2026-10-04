@@ -1,3 +1,21 @@
+ONCE-ADVICE LINUX VERIFIED; CURRENT07 ENGINE COMPARISON JOINED
+Once-advice8e301 Linux4863/0/5 passes, actualmincore/reuse/fullGC and48byte
+padding subjects independentlyverified;10raw/proof files copied/rehashed.
+Correctness does not establish application benefit: full17matrix stillqueued.
+Current07 comparatorjoin verified217raw/prooffiles locally. Same7sources,
+matchingstdout, actualbinary/compiler/ref/rawRSS bindings,3plainreps each.
+Perry07GC ring14.39MiB vs ScriptC1.80; strings210.62 vs183.10; JSON153.76
+vsHermes110.11. Allrows main07-comparator-table.md. Comparator officialrefs
+lastchecked00:37Z unchanged; measurements atdifferent times disclosed.
+ScriptC0.2.2 fourreal TS/Zod attempts complete butallstopatimplicit-any
+wrappercheckererror;21raw/prooffiles verified. Native library support remains
+unproven. Configuredprobe1818832 acceptsimplicitany with strictnull retained,
+identicalsourcecopies/depsymlink, default/staticnpm arms, nodynamicengine.
+Current07 LinuxFFI/events queued1811793; independentverifierprepared.
+Lazy-RSS11fixture default/moving checks queued1811794,22freshbuilds/44exec,
+require actualcopy+protectedfromspace onall22movingruns. Source5010/5011.
+Current07 V42r1 has98/99 records atlastpoll; notgreenyet.
+
 BUILD HEADROOM ACCOUNTING CORRECTED BEFORE QUEUED DRIVERS STARTED
 Nonroot available space reached0, but filesystem actual free blocks were
 35GiB and alljobs UID0. Queuedv46/v51/v52 retain12GiBminimum usingf_bfree
