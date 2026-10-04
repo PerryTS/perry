@@ -134,7 +134,7 @@ fn mint(kind: ShapeObjectKind, proto_id: u64) -> u32 {
         0,
         kind,
         proto_id,
-        function_shape_summary(kind),
+        shapes::ReceiverFacts::summary(function_shape_summary(kind)),
     ));
     // A keyless intrinsic shape: rooted for the agent's life, so the
     // post-full-trace prune can never retire an id live closures carry.
@@ -319,7 +319,11 @@ pub(crate) fn refresh_closure_shape(ptr: usize) {
                                 0,
                                 ShapeObjectKind::Function,
                                 proto_id,
-                                function_shape_summary(ShapeObjectKind::Function),
+                                // The bag's brands are the closure's (#11791).
+                                shapes::ReceiverFacts::of_descriptor(
+                                    &d,
+                                    function_shape_summary(ShapeObjectKind::Function),
+                                ),
                             ),
                         );
                         shapes::note_external_shape_carrier(shapes::shape_descriptor_by_id(id));

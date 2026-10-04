@@ -111,6 +111,28 @@ unsafe fn object_own_set(obj: *mut ObjectHeader, key: &str, value: f64) {
     crate::object::js_object_set_field_by_name(obj, key, value);
 }
 
+/// Make the function's own `key` a private element: an `ENTRY_PRIVATE` entry
+/// of its bag, which reflection skips by attribute (#11791). The compiler
+/// calls this where it creates a static private element; nothing infers it
+/// from the key's spelling.
+///
+/// # Safety
+/// `ptr` is a proven, live closure cell.
+pub(crate) unsafe fn bag_claim_private(ptr: usize, key: &[u8]) {
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let bag = bag_of(ptr);
+    if bag.is_null()
+        || !bag_has_own(ptr, key)
+        || crate::object::key_attrs::object_key_is_private(bag, key)
+    {
+        return;
+    }
+    crate::object::key_attrs::apply_edits(
+        bag,
+        &[crate::object::key_attrs::AttrsEdit::Private(key)],
+    );
+}
+
 /// Define/overwrite the function's own data property `key` (plain `[[Set]]`
 /// on the null-prototype bag: no inherited setter can run).
 ///
@@ -228,6 +250,9 @@ pub(crate) unsafe fn bag_accessor_names(ptr: usize) -> Vec<String> {
         let key = JSValue::from_bits(crate::array::js_array_get_f64(arr, i).to_bits());
         let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
         if let Some(bytes) = crate::string::js_string_key_bytes(key, &mut scratch) {
+            if crate::object::field_get_set::own_key_hidden_bytes(bag, bytes) {
+                continue;
+            }
             out.push(String::from_utf8_lossy(bytes).into_owned());
         }
     }
@@ -262,6 +287,9 @@ pub(crate) unsafe fn bag_own_key_names(ptr: usize) -> Vec<String> {
         let key = JSValue::from_bits(crate::array::js_array_get_f64(arr, i).to_bits());
         let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
         if let Some(bytes) = crate::string::js_string_key_bytes(key, &mut scratch) {
+            if crate::object::field_get_set::own_key_hidden_bytes(bag, bytes) {
+                continue;
+            }
             out.push(String::from_utf8_lossy(bytes).into_owned());
         }
     }
@@ -298,6 +326,9 @@ pub(crate) unsafe fn bag_snapshot(ptr: usize) -> Vec<(String, f64)> {
         let Some(bytes) = crate::string::js_string_key_bytes(key, &mut scratch) else {
             continue;
         };
+        if crate::object::field_get_set::own_key_hidden_bytes(bag, bytes) {
+            continue;
+        }
         let name = String::from_utf8_lossy(bytes).into_owned();
         let v = f64::from_bits(value.bits());
         match crate::object::canonical_array_index(&name) {

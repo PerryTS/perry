@@ -229,16 +229,61 @@ pub(crate) fn class_field_arms_cover_every_subclass(
 /// was a receiver with 28 keys against a 5-key birth shape. Such a site
 /// belongs on the generic store IC, whose word learns the shapes the site
 /// actually sees.
+///
+/// A class with instance private elements, its own or an ancestor's, is the
+/// same case (#11791): construction adds the class brand and each private
+/// field to the instance's shape, so no finished instance carries the birth
+/// ShapeId either.
 pub(crate) fn class_instances_grow_past_layout(ctx: &FnCtx<'_>, class_name: &str) -> bool {
     let grows = |name: &str| {
         ctx.classes.get(name).copied().is_some_and(|class| {
             crate::lower_call::new_alloc::constructor_added_key_count(ctx, class) > 0
+                || class_chain_has_private_instance_elements(ctx, class)
         })
     };
     grows(class_name)
         || ctx.classes.keys().any(|sub| {
             sub != class_name && is_transitive_subclass(ctx, sub, class_name) && grows(sub)
         })
+}
+
+/// Do finished instances of `class_name` (or of any subclass) carry a private
+/// brand or a private field (#11791)? Then no finished instance is on the
+/// birth ShapeId the class-field guards compare, even a receiver the compiler
+/// proved to be the class.
+pub(crate) fn class_instances_carry_private_elements(ctx: &FnCtx<'_>, class_name: &str) -> bool {
+    let carries = |name: &str| {
+        ctx.classes
+            .get(name)
+            .copied()
+            .is_some_and(|class| class_chain_has_private_instance_elements(ctx, class))
+    };
+    carries(class_name)
+        || ctx.classes.keys().any(|sub| {
+            sub != class_name && is_transitive_subclass(ctx, sub, class_name) && carries(sub)
+        })
+}
+
+/// Does constructing `class` add a private brand or a private field, from
+/// `class` itself or any class it extends? Cycle- and depth-guarded like
+/// [`is_transitive_subclass`].
+fn class_chain_has_private_instance_elements(ctx: &FnCtx<'_>, class: &perry_hir::Class) -> bool {
+    let mut current = Some(class);
+    let mut depth = 0usize;
+    while let Some(c) = current {
+        if c.has_private_instance_elements() {
+            return true;
+        }
+        depth += 1;
+        if depth > 64 {
+            return false;
+        }
+        current = c
+            .extends_name
+            .as_deref()
+            .and_then(|parent| ctx.classes.get(parent).copied());
+    }
+    false
 }
 
 fn is_transitive_subclass(ctx: &FnCtx<'_>, name: &str, ancestor: &str) -> bool {

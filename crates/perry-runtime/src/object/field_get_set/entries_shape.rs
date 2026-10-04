@@ -167,6 +167,10 @@ pub(super) fn js_object_entries_shape(obj: *const ObjectHeader) -> *mut ArrayHea
         // that. Enumerability is likewise re-evaluated per key in the read phase
         // (an earlier getter can create a descriptor or flip a future key's
         // enumerability), so we deliberately do NOT filter it during the snapshot.
+        // The shape answers for every key at once: an own key is hidden
+        // only when the receiver is a class instance or its shape has a
+        // private entry (#11791), and no key of this snapshot becomes one.
+        let hide_private = own_keys_may_hide(obj);
         let mut snapshot_keys: Vec<Vec<u8>> = Vec::with_capacity(count);
         let mut key_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
         for j in 0..count {
@@ -175,7 +179,7 @@ pub(super) fn js_object_entries_shape(obj: *const ObjectHeader) -> *mut ArrayHea
                 continue;
             }
             let key_val = crate::array::js_array_get(keys, i);
-            if instance_private_key_hidden(obj, key_val) {
+            if hide_private && instance_private_key_hidden(obj, key_val) {
                 continue;
             }
             if let Some(bytes) = crate::string::js_string_key_bytes(key_val, &mut key_buf) {

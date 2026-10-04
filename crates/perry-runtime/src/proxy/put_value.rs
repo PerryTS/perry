@@ -356,9 +356,37 @@ pub extern "C" fn js_put_value_set(
                 "Cannot set property {key_name} of #<{class_name}> which has only a getter"
             ));
         }
+        // Node names a class instance by its class: `#<Account>`.
+        if let Some(class_name) = class_instance_display_name(receiver) {
+            crate::collection_iter::throw_type_error(&format!(
+                "Cannot assign to read only property '{key_name}' of object '#<{class_name}>'"
+            ));
+        }
         crate::error::throw_immutable_write(0, &key_name);
     }
     value_handle.get_nanbox_f64()
+}
+
+/// The class name of a compiled class instance, for error texts; `None` for
+/// every other value.
+fn class_instance_display_name(receiver: f64) -> Option<String> {
+    let recv = crate::JSValue::from_bits(receiver.to_bits());
+    if !recv.is_pointer() {
+        return None;
+    }
+    let object = recv.as_pointer::<crate::ObjectHeader>();
+    // SAFETY: the header is read through the checked reader, and only an
+    // ordinary object is asked for its shape.
+    let is_object = unsafe { crate::value::addr_class::try_read_gc_header(object as usize) }
+        .is_some_and(|header| header.obj_type == crate::gc::GC_TYPE_OBJECT);
+    if !is_object || !unsafe { crate::object::object_is_shaped(object) } {
+        return None;
+    }
+    let class_id = crate::object::js_object_get_class_id(object);
+    if class_id == 0 {
+        return None;
+    }
+    crate::object::class_name_for_id(class_id)
 }
 
 /// For a refused strict write: when the key resolves on `receiver`'s chain to

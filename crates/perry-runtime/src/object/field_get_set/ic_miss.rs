@@ -1720,7 +1720,6 @@ fn private_evaluation_brand(value: f64, declaring_class_id: u32) -> Option<u64> 
     if declaring_class_id == 0 {
         return None;
     }
-    let value = crate::proxy::private_element_receiver(value);
     let value_is_class_object = super::super::class_registry::is_class_object_value(value);
     if value_is_class_object {
         let object = JSValue::from_bits(value.to_bits()).as_pointer::<ObjectHeader>();
@@ -1758,7 +1757,6 @@ fn private_evaluation_brand(value: f64, declaring_class_id: u32) -> Option<u64> 
 /// caller to know the compile-time template id; method dispatch uses it to
 /// establish the callee's lexical private-name environment.
 pub(crate) fn private_evaluation_brand_value(value: f64) -> Option<f64> {
-    let value = crate::proxy::private_element_receiver(value);
     if super::super::class_registry::is_class_object_value(value) {
         return Some(value);
     }
@@ -1780,39 +1778,42 @@ pub(crate) fn private_evaluation_brand_value(value: f64) -> Option<f64> {
 include!("ic_miss/private_member_access.rs");
 include!("ic_miss/private_guard_fast.rs");
 
-#[cfg(test)]
-fn private_field_marker_key(
-    declaring_class_id: u32,
-    field_name_ptr: *const u8,
-    field_name_len: u32,
-) -> Option<std::rc::Rc<PrivateStorageKey>> {
-    private_field_marker_key_for(None, declaring_class_id, field_name_ptr, field_name_len)
-}
-
-fn private_field_marker_key_for(
-    receiver: Option<f64>,
-    declaring_class_id: u32,
-    field_name_ptr: *const u8,
-    field_name_len: u32,
-) -> Option<std::rc::Rc<PrivateStorageKey>> {
-    if field_name_ptr.is_null() || field_name_len == 0 {
+/// The object that holds `value`'s private elements (#11791): `value`
+/// itself when it is a shaped object. A Proxy holds none of its target's
+/// private elements, and a primitive holds none at all.
+///
+/// # Safety
+/// Reads only headers; `value` may be any NaN-boxed value.
+unsafe fn private_element_holder(value: f64) -> Option<*mut ObjectHeader> {
+    let value = JSValue::from_bits(value.to_bits());
+    if !value.is_pointer() {
         return None;
     }
-    let bytes = unsafe { std::slice::from_raw_parts(field_name_ptr, field_name_len as usize) };
-    let name = intern_private_name(bytes)?;
-    Some(private_storage_key(
-        declaring_class_id,
-        receiver,
-        None,
-        name,
-        PrivateStorageKind::Field,
-    ))
+    let object = value.as_pointer::<ObjectHeader>() as *mut ObjectHeader;
+    (crate::value::addr_class::is_plausible_heap_addr(object as usize)
+        && crate::object::object_is_shaped(object))
+    .then_some(object)
 }
 
-fn private_marker_is_present(storage: f64, marker: &PrivateStorageKey) -> bool {
-    marker.get(storage).to_bits() != crate::value::TAG_UNDEFINED
+/// The private brand of class `class_id` in evaluation `evaluation_id`
+/// (#11791): the class id for the shared evaluation, the evaluation's scalar
+/// id (`private_storage_evaluation_id`) with the top bit set for a fresh one,
+/// so the two spaces never meet. Scalars: a brand retains no class object.
+#[inline]
+fn private_brand_id(class_id: u32, evaluation_id: u64) -> u64 {
+    if evaluation_id == 0 {
+        u64::from(class_id)
+    } else {
+        PRIVATE_FRESH_EVALUATION_BRAND | evaluation_id
+    }
 }
 
+/// Marks a brand that names a fresh evaluation rather than a class id.
+const PRIVATE_FRESH_EVALUATION_BRAND: u64 = 1 << 63;
+
+/// Is private element `name` (`kind` 0 = field, else a method or accessor,
+/// which the class brand covers) of `declaring_class_id` present on
+/// `storage`, in the evaluation the access resolves to?
 fn private_instance_element_is_present(
     storage: f64,
     declaring_class_id: u32,
@@ -1820,34 +1821,41 @@ fn private_instance_element_is_present(
     field_name_len: u32,
     kind: u32,
 ) -> bool {
+    if field_name_ptr.is_null() || field_name_len == 0 {
+        return false;
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(field_name_ptr, field_name_len as usize) };
+    let Some(name) = intern_private_name(bytes) else {
+        return false;
+    };
     let scope = crate::gc::RuntimeHandleScope::new();
     let storage = scope.root_nanbox_f64(storage);
-    let marker = if kind == 0 {
-        private_field_marker_key_for(
-            Some(storage.get_nanbox_f64()),
-            declaring_class_id,
-            field_name_ptr,
-            field_name_len,
-        )
-    } else {
-        Some(private_storage_key(
-            declaring_class_id,
-            Some(storage.get_nanbox_f64()),
-            None,
-            "",
-            PrivateStorageKind::Brand,
-        ))
-    };
-    marker.is_some_and(|marker| private_marker_is_present(storage.get_nanbox_f64(), &marker))
+    let evaluation_id =
+        private_storage_evaluation_id(declaring_class_id, Some(storage.get_nanbox_f64()), None);
+    if kind == 0 {
+        return private_storage_key_by_id(declaring_class_id, evaluation_id, name)
+            .is_present(storage.get_nanbox_f64());
+    }
+    let brand = private_brand_id(declaring_class_id, evaluation_id);
+    unsafe { private_element_holder(storage.get_nanbox_f64()) }
+        .is_some_and(|holder| unsafe { crate::object::shapes::object_has_brand(holder, brand) })
 }
 
-/// Install one class's instance-private brand on `obj`.
+/// The name a class takes in its brand-check messages.
+fn private_class_display_name(class_id: u32) -> String {
+    super::super::class_registry::class_name_for_id(class_id)
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "anonymous".to_string())
+}
+
+/// Install one class's instance-private brand on `obj` (#11791): move `obj`
+/// to the shape that also carries the brand.
 ///
-/// A class contributes one brand regardless of how many private fields,
-/// methods, or accessors it declares.  Re-installing that brand on the same
-/// object is the observable error required by PrivateFieldAdd and
-/// PrivateMethodOrAccessorAdd (for example when a base constructor returns an
-/// object that was already initialized by the derived class once).
+/// A class contributes one brand regardless of how many private methods or
+/// accessors it declares. Re-installing that brand on the same object is the
+/// observable error PrivateMethodOrAccessorAdd requires (for example when a
+/// base constructor returns an object that was already initialized by the
+/// derived class once).
 #[no_mangle]
 pub extern "C" fn js_private_brand_add(obj: f64, declaring_class_id: u32) -> f64 {
     if declaring_class_id == 0 {
@@ -1855,42 +1863,29 @@ pub extern "C" fn js_private_brand_add(obj: f64, declaring_class_id: u32) -> f64
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj = scope.root_nanbox_f64(obj);
-    let marker = private_storage_key(
-        declaring_class_id,
-        Some(obj.get_nanbox_f64()),
-        None,
-        "",
-        PrivateStorageKind::Brand,
-    );
-    let storage = crate::proxy::private_element_receiver(obj.get_nanbox_f64());
-    if private_marker_is_present(storage, &marker) {
-        throw_private_type_error("Cannot initialize private elements twice on the same object");
+    // Resolving the evaluation can allocate class metadata; the holder is
+    // derived from the rooted value afterwards.
+    let evaluation_id =
+        private_storage_evaluation_id(declaring_class_id, Some(obj.get_nanbox_f64()), None);
+    let brand = private_brand_id(declaring_class_id, evaluation_id);
+    let Some(holder) = (unsafe { private_element_holder(obj.get_nanbox_f64()) }) else {
+        throw_private_type_error(&format!(
+            "Cannot initialize private methods of class {} on this object",
+            private_class_display_name(declaring_class_id)
+        ));
+    };
+    if !unsafe { crate::object::shapes::transition_object_shape_add_brand(holder, brand) } {
+        throw_private_type_error(&format!(
+            "Cannot initialize private methods of class {} twice on the same object",
+            private_class_display_name(declaring_class_id)
+        ));
     }
-    let value = JSValue::from_bits(storage.to_bits());
-    if !value.is_pointer() {
-        throw_private_type_error("Cannot initialize private elements on a non-object");
-    }
-    let object = value.as_pointer::<ObjectHeader>() as *mut ObjectHeader;
-    if object.is_null() || !crate::value::addr_class::is_plausible_heap_addr(object as usize) {
-        throw_private_type_error("Cannot initialize private elements on a non-object");
-    }
-    // The marker-key allocation can evacuate both the receiver and any live
-    // value. Root first, then derive raw pointers only inside scoped handle
-    // accessors after the allocation.
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let object = scope.root_raw_mut_ptr(object);
-    let key = crate::string::intern_ascii_literal(marker.as_bytes());
-    let key = scope.root_string_ptr(key);
-    object.with_mut_ptr::<ObjectHeader, _>(|object| {
-        key.with_const_ptr::<crate::StringHeader, _>(|key| {
-            js_object_set_field_by_name(object, key, f64::from_bits(crate::value::TAG_TRUE));
-        });
-    });
     obj.get_nanbox_f64()
 }
 
-/// Define an instance private field without going through Proxy [[Set]].  The
-/// corresponding class brand is installed once by `js_private_brand_add`.
+/// Define an instance private field (#11791): claim its qualified name as an
+/// own `ENTRY_PRIVATE` entry and store the value. Never Proxy [[Set]] or
+/// [[DefineOwnProperty]]: a private field is not a property.
 #[no_mangle]
 pub extern "C" fn js_private_field_add(
     obj: f64,
@@ -1912,51 +1907,41 @@ pub extern "C" fn js_private_field_add(
     }
     let field_name_len = unsafe { (*field_key_ptr).byte_len };
     let field_name_ptr = crate::string::string_data(field_key_ptr);
-    let field_name = unsafe {
-        std::str::from_utf8(std::slice::from_raw_parts(
-            field_name_ptr,
-            field_name_len as usize,
-        ))
-    }
-    .unwrap_or_else(|_| throw_private_type_error("Invalid private field name"));
-    let field_name = intern_private_name(field_name.as_bytes())
-        .unwrap_or_else(|| throw_private_type_error("Invalid private field name"));
-    let marker = private_field_marker_key_for(
-        Some(obj.get_nanbox_f64()),
-        declaring_class_id,
-        field_name.as_ptr(),
-        field_name.len() as u32,
-    )
+    let field_name = intern_private_name(unsafe {
+        std::slice::from_raw_parts(field_name_ptr, field_name_len as usize)
+    })
     .unwrap_or_else(|| throw_private_type_error("Invalid private field name"));
-    let storage_name =
-        private_instance_value_name(declaring_class_id, &field_name, obj.get_nanbox_f64(), None);
-    let storage = crate::proxy::private_element_receiver(obj.get_nanbox_f64());
-    if private_marker_is_present(storage, &marker) {
-        throw_private_type_error("Cannot initialize a private field twice on the same object");
+    let storage =
+        private_instance_value_name(declaring_class_id, field_name, obj.get_nanbox_f64(), None);
+    if storage.is_present(obj.get_nanbox_f64()) {
+        throw_private_type_error(&format!(
+            "Cannot initialize {field_name} twice on the same object"
+        ));
     }
-    let receiver = JSValue::from_bits(storage.to_bits());
-    if !receiver.is_pointer() {
-        throw_private_type_error("Cannot initialize a private field on a non-object");
-    }
-    let object = receiver.as_pointer::<ObjectHeader>() as *mut ObjectHeader;
-    if object.is_null() || !crate::value::addr_class::is_plausible_heap_addr(object as usize) {
-        throw_private_type_error("Cannot initialize a private field on a non-object");
-    }
-    let object = scope.root_raw_mut_ptr(object);
-    let storage_key = crate::string::intern_ascii_literal(storage_name.as_bytes());
-    let storage_key = scope.root_string_ptr(storage_key);
-    let marker_key = crate::string::intern_ascii_literal(marker.as_bytes());
-    let marker_key = scope.root_string_ptr(marker_key);
-    object.with_mut_ptr::<ObjectHeader, _>(|object| {
-        storage_key.with_const_ptr::<crate::StringHeader, _>(|storage_key| {
-            js_object_set_field_by_name(object, storage_key, value.get_nanbox_f64());
-        });
+    let Some(holder) = (unsafe { private_element_holder(obj.get_nanbox_f64()) }) else {
+        throw_private_type_error(&format!("Cannot initialize {field_name} on this object"));
+    };
+    // The claim allocates the key (inside its own no-move window); the store
+    // re-reads the holder from its handle.
+    let holder = scope.root_raw_mut_ptr(holder);
+    holder.with_mut_ptr::<ObjectHeader, _>(|holder| unsafe {
+        crate::object::key_attrs::apply_edits(
+            holder,
+            &[crate::object::key_attrs::AttrsEdit::Private(
+                storage.as_bytes(),
+            )],
+        )
     });
-    object.with_mut_ptr::<ObjectHeader, _>(|object| {
-        marker_key.with_const_ptr::<crate::StringHeader, _>(|marker_key| {
-            js_object_set_field_by_name(object, marker_key, f64::from_bits(crate::value::TAG_TRUE));
+    if !storage.set_cached(obj.get_nanbox_f64(), value.get_nanbox_f64()) {
+        // A dictionary holder: its private list carries the entry, and the
+        // generic store overwrites the claimed key in place.
+        let key = scope.root_string_ptr(crate::string::intern_ascii_literal(storage.as_bytes()));
+        holder.with_mut_ptr::<ObjectHeader, _>(|holder| {
+            key.with_const_ptr::<crate::StringHeader, _>(|key| {
+                js_object_set_field_by_name(holder, key, value.get_nanbox_f64())
+            })
         });
-    });
+    }
     value.get_nanbox_f64()
 }
 
@@ -2060,7 +2045,7 @@ fn private_guard_checked(
     let is_write = op & 1 != 0;
     // #10501: settle the common instance access without spelling a marker.
     if !is_static {
-        if let Some(slot) = private_instance_access_is_proven(
+        if let Some(proof) = private_instance_access_is_proven(
             obj,
             brand_owner,
             declaring_class_id,
@@ -2069,7 +2054,7 @@ fn private_guard_checked(
         ) {
             private_guard_record_access(
                 declaring_class_id,
-                slot.name,
+                proof.name,
                 kind,
                 false,
                 is_write,
@@ -2095,9 +2080,15 @@ fn private_guard_checked(
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj_root = scope.root_nanbox_f64(obj);
     let brand_owner_root = scope.root_nanbox_f64(brand_owner);
+    let field_name = interned.unwrap_or("");
     if is_static && crate::proxy::js_proxy_is_proxy(obj) != 0 {
-        throw_private_type_error(
-            "Cannot access private member from an object whose class did not declare it",
+        throw_private_brand_mismatch(
+            obj,
+            declaring_class_id,
+            field_name,
+            kind,
+            is_static,
+            is_write,
         );
     }
     let _owner = PrivateHintBrandScope::new(private_access_owner(brand_owner, declaring_class_id));
@@ -2110,7 +2101,7 @@ fn private_guard_checked(
             super::super::class_ref_id(obj) == Some(declaring_class_id)
         } else {
             private_instance_element_is_present(
-                crate::proxy::private_element_receiver(obj),
+                obj,
                 declaring_class_id,
                 _field_name_ptr,
                 _field_name_len,
@@ -2119,22 +2110,33 @@ fn private_guard_checked(
         }
     });
     if !has_brand {
-        throw_private_type_error(
-            "Cannot access private member from an object whose class did not declare it",
+        throw_private_brand_mismatch(
+            obj,
+            declaring_class_id,
+            field_name,
+            kind,
+            is_static,
+            is_write,
         );
     }
     // Without an evaluation verdict the brand above WAS the element-present
     // check, under this same lexical scope, so repeating it cannot differ.
     if !is_static && evaluation_verdict.is_some() {
-        let storage = crate::proxy::private_element_receiver(obj_root.get_nanbox_f64());
         if !private_instance_element_is_present(
-            storage,
+            obj_root.get_nanbox_f64(),
             declaring_class_id,
             _field_name_ptr,
             _field_name_len,
             kind,
         ) {
-            throw_private_type_error("Cannot access private member before it has been initialized");
+            throw_private_brand_mismatch(
+                obj,
+                declaring_class_id,
+                field_name,
+                kind,
+                false,
+                is_write,
+            );
         }
     }
     let access_owner = private_access_owner(brand_owner_root.get_nanbox_f64(), declaring_class_id);
@@ -2147,11 +2149,67 @@ fn private_guard_checked(
         access_owner,
         record_hints,
     );
-    if is_static {
-        obj_root.get_nanbox_f64()
-    } else {
-        crate::proxy::private_element_receiver(obj_root.get_nanbox_f64())
-    }
+    obj_root.get_nanbox_f64()
+}
+
+/// Throw node's TypeError for a private access whose receiver lacks the
+/// element (#11791): a field names the operation, a method or accessor names
+/// the class the receiver must be an instance of. Diverges.
+fn throw_private_brand_mismatch(
+    receiver: f64,
+    class_id: u32,
+    name: &str,
+    kind: u32,
+    is_static: bool,
+    is_write: bool,
+) -> ! {
+    let nullish = match receiver.to_bits() {
+        crate::value::TAG_NULL => Some("null"),
+        crate::value::TAG_UNDEFINED => Some("undefined"),
+        _ => None,
+    };
+    let message = match (nullish, kind, is_write) {
+        // A field (or a static field) names itself; an instance method or
+        // accessor names its class, as V8 does.
+        (Some(what), 0, false) => format!("Cannot read properties of {what} (reading '{name}')"),
+        (Some(what), 0, true) => format!("Cannot set properties of {what} (setting '{name}')"),
+        (Some(what), _, _) if !is_static => format!(
+            "Cannot read properties of {what} (reading '{}')",
+            private_class_display_name(class_id)
+        ),
+        _ => throw_private_receiver_mismatch(class_id, name, kind, is_static, is_write),
+    };
+    throw_private_type_error(&message)
+}
+
+fn throw_private_receiver_mismatch(
+    class_id: u32,
+    name: &str,
+    kind: u32,
+    is_static: bool,
+    is_write: bool,
+) -> ! {
+    let message = match (kind, is_write) {
+        (0, false) => {
+            format!(
+                "Cannot read private member {name} from an object whose class did not declare it"
+            )
+        }
+        (0, true) => {
+            format!(
+                "Cannot write private member {name} to an object whose class did not declare it"
+            )
+        }
+        _ if is_static => format!(
+            "Receiver must be class {}",
+            private_class_display_name(class_id)
+        ),
+        _ => format!(
+            "Receiver must be an instance of class {}",
+            private_class_display_name(class_id)
+        ),
+    };
+    throw_private_type_error(&message)
 }
 
 #[cfg(test)]

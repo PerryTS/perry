@@ -34,6 +34,11 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // when it is non-zero (descriptors / typed-feedback in use). Defined in
     // perry-runtime as `PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED`.
     module.add_external_global("PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED", I8);
+    // #11791: one bit per private-class template (low 16 bits of the class
+    // id), set once a fresh evaluation of it exists. A compiled private-access
+    // site trusts its cached ShapeId only while its template's bit is clear.
+    // perry-runtime: `ic_miss::private_guard_fast::PERRY_PRIVATE_TEMPLATE_EVALUATED`.
+    module.add_external_global("PERRY_PRIVATE_TEMPLATE_EVALUATED", "[1024 x i64]");
     // Sticky runtime flag (i8, 0 = valid) for class-prototype method guards.
     // Direct-method lowering reads it with acquire ordering before touching a
     // receiver header; prototype mutation stores 1 with release ordering.

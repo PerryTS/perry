@@ -930,7 +930,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                         let route_proven = ctx
                             .ptr_shape_store_fact(object.as_ref())
                             .is_some_and(|fact| fact.class_name == class_name);
-                        if !route_proven
+                        if (!route_proven
+                            || crate::expr::class_field_inline_guard::class_instances_carry_private_elements(
+                                ctx,
+                                &class_name,
+                            ))
                             && crate::expr::class_field_inline_guard::class_instances_grow_past_layout(
                                 ctx,
                                 &class_name,

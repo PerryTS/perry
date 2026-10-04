@@ -287,6 +287,7 @@ pub(crate) use crypto_key::{
 pub(crate) use enumeration::{
     canonical_array_index, ecma_own_key_order, instance_private_key_hidden,
     is_internal_runtime_key, is_internal_runtime_key_bytes, keys_contain_array_index,
+    own_key_hidden_bytes, own_keys_may_hide,
 };
 pub use enumeration::{
     js_for_in_keys_value, js_object_entries, js_object_entries_value, js_object_keys,

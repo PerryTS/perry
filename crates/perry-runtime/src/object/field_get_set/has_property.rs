@@ -76,7 +76,7 @@ fn is_canonical_numeric_index_string(name: &str) -> bool {
 /// handling: `null`/`undefined` render literally, a Symbol as `Symbol(desc)`,
 /// and every other primitive via its natural string coercion. We must special-
 /// case Symbols because `js_jsvalue_to_string` on a Symbol itself throws.
-unsafe fn describe_in_operand(value: f64) -> String {
+pub(super) unsafe fn describe_in_operand(value: f64) -> String {
     let jv = JSValue::from_bits(value.to_bits());
     if jv.is_undefined() {
         return "undefined".to_string();
@@ -142,7 +142,7 @@ fn throw_in_operator_non_object(obj: f64, key: f64) -> ! {
 /// object-like here — a deliberately conservative false-negative that avoids
 /// ever regressing a real stream handle; test262's primitive-RHS cases use
 /// small literals well below that band.
-fn in_rhs_is_object(obj: f64) -> bool {
+pub(super) fn in_rhs_is_object(obj: f64) -> bool {
     let jv = JSValue::from_bits(obj.to_bits());
     if jv.is_pointer() {
         return unsafe { crate::symbol::js_is_symbol(obj) } == 0;
@@ -855,11 +855,11 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
     // genuine private brand check (`#name in obj`) routes through
     // `js_private_brand_check`, not here. Mirrors `js_object_has_own`'s
     // `#`-hiding (gated on `class_id != 0`).
-    if unsafe { (*obj_ptr).class_id != 0 } && key_val.is_any_string() {
+    if unsafe { super::own_keys_may_hide(obj_ptr) } && key_val.is_any_string() {
         let key_ptr =
             crate::value::js_get_string_pointer_unified(key) as *const crate::StringHeader;
         if let Some(k) = unsafe { super::super::has_own_helpers::str_from_string_header(key_ptr) } {
-            if super::is_internal_runtime_key(k) {
+            if unsafe { super::own_key_hidden_bytes(obj_ptr, k.as_bytes()) } {
                 return nanbox_false;
             }
         }
@@ -1039,17 +1039,19 @@ unsafe fn object_string_key_has_property(
         }
     }
 
-    let class_id = (*obj_ptr).class_id;
-    if class_id != 0 {
-        // Compiler/runtime-only private storage keys are invisible to ordinary
-        // [[HasProperty]], while a public computed key such as `"#name"` is a
-        // normal String property.
+    // Private fields (#11791) and runtime-only keys are invisible to ordinary
+    // [[HasProperty]], while a public computed key such as `"#name"` is a
+    // normal String property.
+    if super::own_keys_may_hide(obj_ptr) {
         let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
         if let Some(b) = crate::string::js_string_key_bytes(key_val, &mut sso) {
-            if super::is_internal_runtime_key_bytes(b) {
+            if super::own_key_hidden_bytes(obj_ptr, b) {
                 return nanbox_false;
             }
         }
+    }
+    let class_id = (*obj_ptr).class_id;
+    if class_id != 0 {
         // Native-module namespaces (console, fs, …) expose VIRTUAL keys —
         // dispatch tables, not keys_array entries.
         if class_id == NATIVE_MODULE_CLASS_ID {

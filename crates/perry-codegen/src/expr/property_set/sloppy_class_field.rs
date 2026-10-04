@@ -23,6 +23,14 @@ pub(crate) fn try_lower_sloppy_class_field_store(
     if class_has_computed_runtime_members(ctx, &class_name) {
         return Ok(None);
     }
+    // No finished instance of a class with private elements is on its birth
+    // shape (#11791): the generic store IC serves the shapes it sees.
+    if crate::expr::class_field_inline_guard::class_instances_carry_private_elements(
+        ctx,
+        &class_name,
+    ) {
+        return Ok(None);
+    }
     // A compiled setter owns the name; never store into the slot behind it.
     // (`class_field_global_index` also rejects accessors anywhere in the
     // chain — this is the same check the strict arm makes first, kept so the

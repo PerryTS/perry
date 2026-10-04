@@ -605,11 +605,13 @@ js_class_method_bind_by_id	f64	f64,i64
 js_class_method_entry_enter_home	i64	i32u,i64,i64
 js_class_method_entry_leave	void	i64
 js_class_method_snapshot_bind	f64	f64,ptr,usize
+js_class_object_define_static_private	void	ptr,ptr,f64
 js_class_object_refresh_capture_values	void	f64,i64,f64
 js_class_object_set_ctor_caps	void	i64,f64,ptr
 js_class_prototype_method_value	f64	f64,f64
 js_class_register_capture_values	void	i32u,ptr,usize
 js_class_register_static_field	void	i32u,ptr,usize,f64,ptr
+js_class_register_static_private_field	void	i32u,ptr,usize,f64,ptr
 js_class_register_static_symbol	void	i32u,f64,f64
 js_class_static_call_guard	i32s	i32s,i32s,ptr,i64,i64,ptr
 js_class_static_field_get	f64	i32s,ptr,i64

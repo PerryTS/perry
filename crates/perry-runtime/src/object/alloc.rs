@@ -1091,6 +1091,10 @@ pub unsafe extern "C" fn js_object_copy_own_fields(dst_i64: i64, src_f64: f64) {
     // in OVERFLOW_FIELDS — without iterating to `key_count` and routing
     // slots ≥ alloc_limit through `js_object_get_field`, the copy
     // silently dropped 9th..Nth properties.
+    // The shape answers for every key at once: an own key is hidden
+    // only when the receiver is a class instance or its shape has a
+    // private entry (#11791), and no key of this snapshot becomes one.
+    let hide_private = crate::object::field_get_set::own_keys_may_hide(src);
     for i in 0..key_count {
         let key_val = src_keys.get(i as u32);
         // #1781: SSO-aware copy — pre-fix the `is_string()` here
@@ -1104,7 +1108,7 @@ pub unsafe extern "C" fn js_object_copy_own_fields(dst_i64: i64, src_f64: f64) {
         }
         // Private elements (`#x`) live in a class instance's keys_array but are
         // never copied by object spread / Object.assign.
-        if crate::object::instance_private_key_hidden(src, key_val) {
+        if hide_private && crate::object::instance_private_key_hidden(src, key_val) {
             continue;
         }
         let key_f64 = f64::from_bits(key_val.bits());

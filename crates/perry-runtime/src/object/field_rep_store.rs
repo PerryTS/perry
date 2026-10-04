@@ -185,6 +185,7 @@ unsafe fn converge_key_add(obj: *mut ObjectHeader, id: u32, slot: u32, value_bit
         d.proto_id,
         d.summary,
         field_rep::with_slot_rep(d.rep, slot, other),
+        d.brands(),
     ) else {
         return id;
     };
@@ -501,6 +502,7 @@ unsafe fn publish_key_add_rep(
             d.summary,
             rep,
             infos.as_slice(),
+            &d.brands().to_vec(),
             None,
         ),
     ));
@@ -685,6 +687,7 @@ pub(crate) fn normalized_shape(mut id: u32) -> u32 {
             d.summary,
             rep,
             &infos,
+            &d.brands().to_vec(),
             // A re-intern of a live record's facts under another rep names
             // no static id.
             None,

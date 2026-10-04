@@ -446,6 +446,10 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
         || crate::object::key_attrs::object_summary(ptr as *const crate::ObjectHeader)
             & crate::object::key_attrs::SUMMARY_KEY_BITS
             != 0;
+    // An own key is hidden only on a class instance or a shape with a private
+    // entry (#11791); the shape answers once for the whole walk.
+    let hide_private =
+        crate::object::field_get_set::own_keys_may_hide(ptr as *const crate::ObjectHeader);
     buf.push('{');
     let mut first = true;
     for f in 0..actual_fields {
@@ -465,10 +469,12 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
         }
         // #11232: physical class capture/private slots are not JS properties.
         // Filter before reading the value or invoking getters/replacers.
-        if crate::object::instance_private_key_hidden(
-            obj,
-            JSValue::from_bits((*keys_elements.add(f as usize)).to_bits()),
-        ) {
+        if hide_private
+            && crate::object::instance_private_key_hidden(
+                obj,
+                JSValue::from_bits((*keys_elements.add(f as usize)).to_bits()),
+            )
+        {
             continue;
         }
         // Skip non-enumerable own keys before invoking the replacer.
@@ -1053,6 +1059,10 @@ pub(crate) unsafe fn stringify_object_pretty(
         || crate::object::key_attrs::object_summary(ptr as *const crate::ObjectHeader)
             & crate::object::key_attrs::SUMMARY_KEY_BITS
             != 0;
+    // An own key is hidden only on a class instance or a shape with a private
+    // entry (#11791); the shape answers once for the whole walk.
+    let hide_private =
+        crate::object::field_get_set::own_keys_may_hide(ptr as *const crate::ObjectHeader);
 
     // Collect non-undefined, non-closure fields
     let mut entries: Vec<(String, f64)> = Vec::new();
@@ -1066,10 +1076,12 @@ pub(crate) unsafe fn stringify_object_pretty(
         }
         // #11232: physical class capture/private slots are not JS properties.
         // Filter before reading the value or invoking getters/replacers.
-        if crate::object::instance_private_key_hidden(
-            obj,
-            JSValue::from_bits((*keys_elements.add(f as usize)).to_bits()),
-        ) {
+        if hide_private
+            && crate::object::instance_private_key_hidden(
+                obj,
+                JSValue::from_bits((*keys_elements.add(f as usize)).to_bits()),
+            )
+        {
             continue;
         }
         // Skip non-enumerable own keys (`Object.defineProperty(o, k,
@@ -1267,6 +1279,10 @@ pub(crate) unsafe fn stringify_object_with_array_replacer(
         || crate::object::key_attrs::object_summary(ptr as *const crate::ObjectHeader)
             & crate::object::key_attrs::SUMMARY_KEY_BITS
             != 0;
+    // An own key is hidden only on a class instance or a shape with a private
+    // entry (#11791); the shape answers once for the whole walk.
+    let hide_private =
+        crate::object::field_get_set::own_keys_may_hide(ptr as *const crate::ObjectHeader);
     let mut field_map: Vec<(String, f64)> = Vec::new();
     for f in 0..actual_fields {
         // #9398: tombstoned slot from an O(1) delete — not a key, not
@@ -1278,10 +1294,12 @@ pub(crate) unsafe fn stringify_object_with_array_replacer(
         }
         // #11232: physical class capture/private slots are not JS properties.
         // Filter before reading the value or invoking getters/replacers.
-        if crate::object::instance_private_key_hidden(
-            obj,
-            JSValue::from_bits((*keys_elements.add(f as usize)).to_bits()),
-        ) {
+        if hide_private
+            && crate::object::instance_private_key_hidden(
+                obj,
+                JSValue::from_bits((*keys_elements.add(f as usize)).to_bits()),
+            )
+        {
             continue;
         }
         let mut field_val = if f < alloc_limit {

@@ -275,7 +275,7 @@ fn the_reverse_indices_follow_a_moved_keys_array() {
             descriptor.semantic_generation,
             descriptor.object_kind,
             descriptor.proto_id,
-            0,
+            crate::object::shapes::ReceiverFacts::NONE,
         ),
         Ok(id),
         "#9706: interning the moved facts must answer the existing id, not mint a duplicate"

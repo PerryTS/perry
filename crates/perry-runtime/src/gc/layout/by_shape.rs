@@ -242,7 +242,7 @@ mod tests {
                     d.object_kind,
                     d.hole_count,
                     d.proto_id,
-                    d.summary,
+                    crate::object::shapes::ReceiverFacts::of_descriptor(&d, d.summary),
                     field_rep::with_slot_rep(d.rep, 1, field_rep::REP_F64),
                     None,
                 ),

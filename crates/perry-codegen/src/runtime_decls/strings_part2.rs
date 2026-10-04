@@ -276,6 +276,17 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
         VOID,
         &[I32, PTR, I64, DOUBLE, PTR],
     );
+    // #11791: a static private field's store, claimed as a private element.
+    module.declare_function(
+        "js_class_register_static_private_field",
+        VOID,
+        &[I32, PTR, I64, DOUBLE, PTR],
+    );
+    module.declare_function(
+        "js_class_object_define_static_private",
+        VOID,
+        &[I64, I64, DOUBLE],
+    );
     module.declare_function(
         "js_object_define_property",
         DOUBLE,
