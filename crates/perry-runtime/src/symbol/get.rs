@@ -1029,6 +1029,28 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
             if !ptr.is_null() && crate::object::is_valid_obj_ptr(ptr as *const u8) {
                 let class_id = crate::object::js_object_get_class_id(ptr);
                 if class_id != 0 {
+                    // Computed Symbol ClassBody members are real properties of
+                    // the declared prototype shape. Materialize that shape and
+                    // resolve it before the compiled dispatch registries: an
+                    // absent entry can then mean the configurable property was
+                    // deleted, rather than being silently resurrected here.
+                    if crate::object::class_has_symbol_member_in_chain(class_id, sym_key, false) {
+                        let _ = crate::object::class_decl_prototype_value(class_id);
+                        if let Some(v) = declared_prototype_chain_symbol(
+                            obj_f64,
+                            sym_f64,
+                            class_id,
+                            receiver_f64,
+                        ) {
+                            return v;
+                        }
+                        if let Some(v) =
+                            resolve_explicit_object_prototype_symbol(obj_f64, sym_f64, receiver_f64)
+                        {
+                            return v;
+                        }
+                        return f64::from_bits(TAG_UNDEFINED);
+                    }
                     if let Some(v) = crate::object::class_symbol_getter_value(
                         class_id,
                         sym_key,

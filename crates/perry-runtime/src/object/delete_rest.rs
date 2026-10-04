@@ -882,6 +882,10 @@ pub extern "C" fn js_object_delete_field_value(
 #[no_mangle]
 pub extern "C" fn js_object_delete_dynamic_value(obj_value: f64, key: f64) -> i32 {
     if let Some(class_id) = super::class_prototype_ref_id(obj_value) {
+        if unsafe { crate::symbol::js_is_symbol(key) } != 0 {
+            let proto = super::class_registry::class_decl_prototype_value(class_id);
+            return unsafe { crate::symbol::js_object_delete_symbol_property(proto, key) };
+        }
         return unsafe {
             super::native_module::metadata_key_to_string(key)
                 .map(|name| delete_class_prototype_key(class_id, &name))

@@ -26,17 +26,16 @@ pub unsafe extern "C" fn js_object_get_own_property_symbols(obj_f64: f64) -> i64
         return (arr.to_bits() & POINTER_MASK) as i64;
     }
     if let Some(class_id) = crate::object::class_ref_id(obj_f64) {
-        let mut entries = if crate::object::class_prototype_ref_id(obj_f64).is_some() {
-            crate::object::class_own_symbol_member_keys(class_id, false)
-        } else {
-            let mut keys = crate::object::class_own_symbol_member_keys(class_id, true);
-            for sym_key in class_static_symbol_keys_for_class(class_id) {
-                if !keys.contains(&sym_key) {
-                    keys.push(sym_key);
-                }
+        if crate::object::class_prototype_ref_id(obj_f64).is_some() {
+            let proto = crate::object::class_decl_prototype_value(class_id);
+            return js_object_get_own_property_symbols(proto);
+        }
+        let mut entries = crate::object::class_own_symbol_member_keys(class_id, true);
+        for sym_key in class_static_symbol_keys_for_class(class_id) {
+            if !entries.contains(&sym_key) {
+                entries.push(sym_key);
             }
-            keys
-        };
+        }
         let mut arr = crate::array::js_array_alloc(entries.len() as u32);
         for sym_ptr_usize in entries.drain(..) {
             let boxed = f64::from_bits(POINTER_TAG | (sym_ptr_usize as u64 & POINTER_MASK));
@@ -48,21 +47,7 @@ pub unsafe extern "C" fn js_object_get_own_property_symbols(obj_f64: f64) -> i64
     if obj_key == 0 {
         return crate::array::js_array_alloc(0) as i64;
     }
-    // A declared class prototype is a materialized ObjectHeader, while its
-    // computed Symbol methods/accessors live in the class registry. Seed the
-    // ordinary-object enumeration with those own keys so
-    // `Object.getOwnPropertySymbols(C.prototype)` sees `[sym]() {}` exactly as
-    // direct `C.prototype[sym]` dispatch does. A later assignment to the same
-    // symbol is deduplicated below; class elements precede such assignments in
-    // property-creation order.
-    let mut entries: Vec<(usize, u64)> = crate::object::class_id_for_decl_prototype_object(obj_key)
-        .map(|class_id| {
-            crate::object::class_own_symbol_member_keys(class_id, false)
-                .into_iter()
-                .map(|sym_key| (sym_key, 0))
-                .collect()
-        })
-        .unwrap_or_default();
+    let mut entries: Vec<(usize, u64)> = Vec::new();
 
     let guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
     let stored_entries = guard
