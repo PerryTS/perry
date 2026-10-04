@@ -1,0 +1,16 @@
+{
+  "removed": "/root/rss-header-20261002/primary-once-advice-main07-v65-ffi-events/target",
+  "time_utc": "2026-10-04T03:59:35Z",
+  "terminal_exit": 0,
+  "evidence_files_verified": 8,
+  "process_references": [],
+  "preserved": [
+    "source",
+    "export",
+    "raw logs",
+    "evidence manifest",
+    "R31 seed"
+  ],
+  "free_bytes_before": 10758320128,
+  "free_bytes_after": 14280404992
+}

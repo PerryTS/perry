@@ -1,0 +1,48 @@
+{
+  "base": "07e50b14a3d23e8f914193ec4d5a679adbd7c37a",
+  "production_runtime": "4401b3b981",
+  "source_count": 5011,
+  "suites": [
+    [
+      "15",
+      "0",
+      "0"
+    ],
+    [
+      "75",
+      "0",
+      "0"
+    ],
+    [
+      "0",
+      "0",
+      "0"
+    ],
+    [
+      "5",
+      "0",
+      "13"
+    ]
+  ],
+  "result": {
+    "base": "07e50b14a3d23e8f914193ec4d5a679adbd7c37a",
+    "production_runtime": "4401b3b981",
+    "source_equivalent_to": "8e3013733da37ddc66998ee51b9bd1109a9175ec",
+    "command": [
+      "cargo",
+      "test",
+      "--locked",
+      "--release",
+      "-p",
+      "perry-ffi",
+      "-p",
+      "perry-ext-events"
+    ],
+    "rc": 0,
+    "pid": 2151131,
+    "elapsed_s": 136.57405756926164,
+    "log_sha256": "550e64c3832234b1f0c2c726e6661a08d003709d0fa1ebf376d96d546eb59454",
+    "source_inputs_sha256": "5ef8d2840f6344a606008302f3d93f89373b94f288a155ba148e3f4ccff9c219"
+  },
+  "scope": "Current07 Linux FFI/event and doc tests; complete raw log, source hashes and command independently verified."
+}

@@ -1,3 +1,48 @@
+NATIVE STACK-MAP PREFIX EXPERIMENT AND COMPLETED RESULTS (2026-10-04)
+Production source remains exactly the 5,011 inputs of adopted 8e3013733d.
+Private f27fcd49d8 has three source deltas and 5,012 inputs. It bounds lazy
+record decoding after the last matching root while keeping unsorted offsets,
+late duplicates, folded functions, existing tie behavior and fail-closed
+required prefixes. It adds no cache, side table, map format or ABI change.
+Unfiltered Mac runtime: 4,882 passed, zero failed, five ignored. Linux isolated
+build wrapper 2221063 is running. Full17 wrapper 2226221 and linked/moving
+wrapper 2226284 await its exact terminal receipt, then the shared heavy lock.
+Full17 reuses exact V46 once-advice binaries, builds 15 fresh candidates and
+measures 204 executions. Moving checks use the existing stack-map crosscheck
+oracle alongside actual copying and protected retired from-space. Benefits
+remain unproven and this experiment is NOT in production source.
+
+Exact adopted-source Linux FFI/events completed: 75 + 15 passed, five doc
+passes, 13 doc ignores. All eight local proof/raw-source receipt files rehashed.
+Completed owned V65 target cache removed only after terminal success, local
+proof copy and /proc reference audit; exports, source and evidence preserved.
+
+Deferred RSS query repeat completed: 36 fresh perf executions, nine per
+case/arm. Retain/release median instructions +0.0114%, TypeScript +0.0081%,
+both with overlapping ranges. Earlier +0.60% and +0.043% results are preserved.
+The unused-query proof is valid; a material whole-app gain is not established.
+The query experiment stays unapplied. All 84 local evidence files rehashed.
+
+Learned-floor full17 results are now published below: 204 correct executions,
+all 17 signed distributions preserved; 515 local evidence files rehashed.
+Rejected: ring peak RSS +0.770%, instructions +4.112%; TS RSS +0.148%.
+Runtime/moving correctness did not justify this policy's adoption.
+
+LEARNED LOWER NURSERY FLOOR REJECTED AFTER FULL17 ACCEPTANCE
+All204freshmeasurements/30builds source/products/text/archives/raw counters
+independentlyverified;515evidencefiles copiedlocally/rehashed. Allsignedrows
+published. RingRSS +0.770%, instructions +4.112%; TS RSS +0.148%.
+Lower nursery occupancy didnotproduce required peak-RSS saving, so policy
+isrejected and remainsunapplied. Mac/Linuxfullruntime and44linked/22actual
+movingchecks pass, but correctnessalone doesnotjustify adoption.
+Baseline warm/startup/old-live pressure may limit peak savings; these are
+hypotheses requiring phase/residency attribution, not facts fromthismatrix.
+Once advice staysadopted and all5011source inputs match measured8e301.
+Focused deferred-query instruction repeat2137630 queued,36freshperfexecs,
+9reps percase/arm forTS andretain/release on exactV52binaries. NativeGC
+scanners/layout/index memory is next audit target; no shape-campaign layout
+change or new threshold policy isauthorizedbythis failedfloor experiment.
+
 ADOPTED SOURCE MAC INTEGRATION AND COMPARATOR JOIN VERIFIED
 Exact5011source once-advice Mac FFI75/events15/doc5pass,13ignored.
 Driver failed only its post-test suite-order assertion; nativeCargo rc0,
