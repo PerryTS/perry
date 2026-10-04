@@ -855,11 +855,14 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
     // genuine private brand check (`#name in obj`) routes through
     // `js_private_brand_check`, not here. Mirrors `js_object_has_own`'s
     // `#`-hiding (gated on `class_id != 0`).
-    if unsafe { super::own_keys_may_hide(obj_ptr) } && key_val.is_any_string() {
+    // A private field (#11791) is an entry of the key list, not a property:
+    // the own lookup of every hop (`ordinary_has_property`) reads its entry
+    // where it finds the key.
+    if unsafe { (*obj_ptr).class_id != 0 } && key_val.is_any_string() {
         let key_ptr =
             crate::value::js_get_string_pointer_unified(key) as *const crate::StringHeader;
         if let Some(k) = unsafe { super::super::has_own_helpers::str_from_string_header(key_ptr) } {
-            if unsafe { super::own_key_hidden_bytes(obj_ptr, k.as_bytes()) } {
+            if super::is_internal_runtime_key(k) {
                 return nanbox_false;
             }
         }
@@ -1039,19 +1042,18 @@ unsafe fn object_string_key_has_property(
         }
     }
 
-    // Private fields (#11791) and runtime-only keys are invisible to ordinary
+    // Runtime-only keys of a class instance are invisible to ordinary
     // [[HasProperty]], while a public computed key such as `"#name"` is a
-    // normal String property.
-    if super::own_keys_may_hide(obj_ptr) {
+    // normal String property. A private field (#11791) is not a property
+    // either: `ordinary_has_property` reads its entry where it finds the key.
+    let class_id = (*obj_ptr).class_id;
+    if class_id != 0 {
         let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
         if let Some(b) = crate::string::js_string_key_bytes(key_val, &mut sso) {
-            if super::own_key_hidden_bytes(obj_ptr, b) {
+            if super::is_internal_runtime_key_bytes(b) {
                 return nanbox_false;
             }
         }
-    }
-    let class_id = (*obj_ptr).class_id;
-    if class_id != 0 {
         // Native-module namespaces (console, fs, …) expose VIRTUAL keys —
         // dispatch tables, not keys_array entries.
         if class_id == NATIVE_MODULE_CLASS_ID {
@@ -1183,8 +1185,10 @@ unsafe fn ordinary_has_property(
             // `own_key_present` scan made `k in wideObj` O(N) per MISS, which
             // turned webpack/Babel's re-export loop (`if (k in exports) …` per
             // key) quadratic. Narrow or non-indexable receivers keep the scan.
-            let own = super::super::own_key_present_via_index(cur as *mut ObjectHeader, key)
-                .unwrap_or_else(|| super::super::own_key_present(cur as *mut ObjectHeader, key));
+            let own = super::super::own_property_present_via_index(cur as *mut ObjectHeader, key)
+                .unwrap_or_else(|| {
+                    super::super::own_property_present(cur as *mut ObjectHeader, key)
+                });
             if own {
                 // Own data / overflow key present (value-agnostic: `delete`
                 // removes the key, so a present key — even one holding

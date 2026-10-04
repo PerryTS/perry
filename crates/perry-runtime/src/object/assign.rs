@@ -988,10 +988,11 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
             );
             // Use the public [[Get]] path, not raw field slots, so accessors run
             // and abrupt completions propagate the way Object.assign requires.
-            // The shape answers for every key at once: an own key is hidden
-            // only when the receiver is a class instance or its shape has a
-            // private entry (#11791), and no key of this snapshot becomes one.
-            let hide_private = crate::object::field_get_set::own_keys_may_hide(src);
+            // A class instance's runtime-internal keys are hidden by name. A
+            // private field (#11791) is a non-enumerable entry, so the
+            // enumerability check below drops it with the shape's own
+            // attributes; no other lookup is needed for it.
+            let hide_internal = (*src).class_id != 0;
             for i in 0..key_count {
                 // Re-derive every raw address from its handle at the top of the
                 // iteration: the PREVIOUS iteration's getter may have moved all
@@ -1003,10 +1004,13 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
                 if !key_val.is_any_string() {
                     continue;
                 }
-                // Private elements (`#x`) live in a class instance's keys_array
-                // but are never copied by Object.assign / object spread.
-                if hide_private && crate::object::instance_private_key_hidden(src, key_val) {
-                    continue;
+                if hide_internal {
+                    let mut buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+                    if crate::string::js_string_key_bytes(key_val, &mut buf)
+                        .is_some_and(crate::object::field_get_set::is_internal_runtime_key_bytes)
+                    {
+                        continue;
+                    }
                 }
                 let key_f64 = f64::from_bits(key_val.bits());
                 let key_ptr = crate::value::js_get_string_pointer_unified(key_f64)

@@ -726,6 +726,25 @@ pub(crate) unsafe fn own_key_present_via_index(
     obj: *mut ObjectHeader,
     key: *const crate::StringHeader,
 ) -> Option<bool> {
+    own_key_via_index(obj, key, false)
+}
+
+/// [`own_key_present_via_index`] for a PROPERTY: a key whose entry is a
+/// private field (#11791) is an element of the receiver, not a property, so
+/// it answers `false`. The entry is read at the position the lookup found:
+/// a list without attributes pays one flag test, and no other lookup runs.
+pub(crate) unsafe fn own_property_present_via_index(
+    obj: *mut ObjectHeader,
+    key: *const crate::StringHeader,
+) -> Option<bool> {
+    own_key_via_index(obj, key, true)
+}
+
+unsafe fn own_key_via_index(
+    obj: *mut ObjectHeader,
+    key: *const crate::StringHeader,
+    properties_only: bool,
+) -> Option<bool> {
     if obj.is_null() || key.is_null() {
         return None;
     }
@@ -760,7 +779,9 @@ pub(crate) unsafe fn own_key_present_via_index(
     match super::super::shapes::shape_slot_lookup_verdict(
         keys, name_bytes, key_hash, key_count, true,
     ) {
-        super::super::shapes::KeysIndexVerdict::Found(_) => Some(true),
+        super::super::shapes::KeysIndexVerdict::Found(slot) => {
+            Some(!properties_only || !slot_is_private_entry(keys, slot as u32))
+        }
         super::super::shapes::KeysIndexVerdict::Absent => Some(false),
         // A shortened or otherwise incomplete index cannot prove absence.
         // Preserve the caller's exact fallback instead of turning a stale miss
@@ -773,6 +794,30 @@ pub(crate) unsafe fn own_key_present_via_index(
 pub(crate) unsafe fn own_key_present(
     obj: *mut ObjectHeader,
     key: *const crate::StringHeader,
+) -> bool {
+    own_key_lookup(obj, key, false)
+}
+
+/// [`own_key_present`] for a PROPERTY (see [`own_property_present_via_index`]):
+/// `hasOwnProperty`, `Object.hasOwn` and `in` ask it, so a private field's
+/// entry answers `false` where the lookup finds it.
+pub(crate) unsafe fn own_property_present(
+    obj: *mut ObjectHeader,
+    key: *const crate::StringHeader,
+) -> bool {
+    own_key_lookup(obj, key, true)
+}
+
+/// Is position `slot` of `keys` a private field's entry (#11791)?
+#[inline]
+unsafe fn slot_is_private_entry(keys: *const crate::array::ArrayHeader, slot: u32) -> bool {
+    crate::object::key_attrs::entry_is_private(crate::object::key_attrs::keys_entry(keys, slot))
+}
+
+unsafe fn own_key_lookup(
+    obj: *mut ObjectHeader,
+    key: *const crate::StringHeader,
+    properties_only: bool,
 ) -> bool {
     // Every GC allocation is `align.max(8)`-aligned, so a real object pointer
     // has its low 3 bits clear. Rejecting misaligned `obj` keeps a non-object
@@ -829,5 +874,6 @@ pub(crate) unsafe fn own_key_present(
     // growing destination does not scan every preceding key before appending;
     // stale/incomplete indexes retain the dense-slot correctness fallback.
     // Slots and counts are u32 throughout, so there is no 65,536-key ceiling.
-    super::super::keys_find_slot_by_key_ptr(keys, key_count, key).is_some()
+    super::super::keys_find_slot_by_key_ptr(keys, key_count, key)
+        .is_some_and(|slot| !properties_only || !slot_is_private_entry(keys, slot))
 }
