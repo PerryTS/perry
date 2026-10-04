@@ -4018,6 +4018,14 @@
    "why": "The addresses of read-site `PicCache`s, each allocated by `field_get_set::ic_slot::pic_arena_alloc` from `std::alloc::alloc_zeroed` chunks that are never freed and belong to no thread's arena, so thread exit cannot free or reuse them. Primary-heap holder and hop addresses are written only by the primary agent and traced by its scan_read_holder_roots_mut until the atomic worker-start gate is set. Thereafter no agent reads or scans stale holder words, allowing their objects to collect."
   },
   {
+   "file": "crates/perry-runtime/src/object/method_site/chain_memo.rs",
+   "names": [
+    "CHAIN_MEMOS"
+   ],
+   "verdict": "process_global_allocation",
+   "why": "The addresses of site chain memos (`ChainMemo`), each allocated by `field_get_set::ic_slot::pic_slot_resolve` from the process-lifetime PicArena (`std::alloc::alloc_zeroed` chunks that are never freed and belong to no thread's arena), so thread exit cannot free or reuse them. Primary-heap prototype addresses in a memo are written only by the primary agent and traced by its scan_chain_memo_roots_mut until the atomic worker-start gate is set. Thereafter no agent reads, records or scans a memo, allowing their objects to collect."
+  },
+  {
    "file": "crates/perry-stdlib/src/common/handle_lifecycle.rs",
    "names": [
     "ORPHANS"

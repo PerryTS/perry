@@ -1,4 +1,4 @@
-//! #10724: [`class_vtable_fast_guard`]'s own-key shadowing scan reads the
+//! #10724: [`class_receiver_fast_guard`]'s own-key shadowing scan reads the
 //! receiver's keys through the raw dense slots, never through the JS-facing
 //! element accessor.
 //!
@@ -30,7 +30,7 @@ fn class_instance(class_id: u32, keys: &[&str]) -> f64 {
 }
 
 fn guard(receiver: f64, method: &str) -> Option<(usize, u32)> {
-    unsafe { class_vtable_fast_guard(receiver, method.as_bytes()) }
+    unsafe { class_receiver_fast_guard(receiver, method.as_bytes()) }
 }
 
 #[test]

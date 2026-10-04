@@ -14,7 +14,8 @@ use crate::native_value::LoweredValue;
 use crate::types::{DOUBLE, I1, I32, I64, I8};
 
 use super::direct_method_guard::{
-    emit_direct_method_site_word, emit_inline_direct_method_shape_guard, emit_learned_word_hit,
+    emit_direct_method_site_word, emit_direct_method_site_word_with_memo,
+    emit_inline_direct_method_shape_guard, emit_learned_word_hit,
 };
 
 pub(super) const POINTER_TAG_HI16: &str = "32765"; // 0x7FFD
@@ -1042,7 +1043,7 @@ pub(super) fn emit_guarded_direct_method_call(
             || typed_string_direct_fn.is_some());
     let learned_site: Option<(String, usize)> =
         (inline_single_arm || probe_before_runtime_guard || multi_arm).then(|| {
-            let word = emit_direct_method_site_word(ctx);
+            let word = emit_direct_method_site_word_with_memo(ctx);
             (word, ctx.new_block("method_direct.learned"))
         });
     let learned_label = learned_site.as_ref().map(|(_, idx)| ctx.block_label(*idx));
@@ -1898,11 +1899,15 @@ pub(super) fn emit_guarded_direct_method_call(
             // The learned word is consulted only behind the prototype guard
             // bytes, so while they are set (a prototype member of this
             // method's name was assigned, deleted or redefined) nothing the
-            // runtime could learn would ever be read: the miss edge passes
-            // no site, and the runtime dispatches without proving anything.
+            // runtime could learn would ever be read: the miss edge then
+            // passes the site's address tagged with bit 0, and the runtime
+            // learns nothing. Either way the word is followed by the site's
+            // chain memo slot, from which a receiver the arms decline repeats
+            // its by-name answer instead of walking the prototype chain.
             let blk = ctx.block();
             let prototype_ok = emit_prototype_method_guard_ok(blk, &method_guard_slot_str);
-            let site = blk.select(I1, &prototype_ok, crate::types::PTR, word, "null");
+            let no_learn = blk.gep(I8, word, &[(I64, "1")]);
+            let site = blk.select(I1, &prototype_ok, crate::types::PTR, word, &no_learn);
             ctx.block().call(
                 DOUBLE,
                 "js_native_call_method_by_id_learn",

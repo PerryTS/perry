@@ -7,9 +7,9 @@
 //! read, and the heritage edge recorded by `js_register_class_parent_dynamic`.
 
 use super::super::{
-    class_prototype_object, instance_class_prototype_object, is_class_object_ptr,
-    js_object_mark_class, js_register_class_id, js_register_class_name,
-    js_register_class_parent_dynamic, resolve_proto_chain_field, test_alloc_synthetic_class_id,
+    class_prototype_object, is_class_object_ptr, js_object_mark_class, js_register_class_id,
+    js_register_class_name, js_register_class_parent_dynamic, resolve_proto_chain_field,
+    test_alloc_synthetic_class_id,
 };
 use crate::object::{
     class_prototype_object_root_store, js_object_alloc, js_object_get_field_by_name,
@@ -82,10 +82,6 @@ fn an_instance_reads_the_parent_evaluations_prototype_not_the_parent_constructor
             );
             assert!(is_class_object_ptr(class as *const u8));
         });
-        assert!(
-            instance_class_prototype_object(CHILD).is_null(),
-            "a parent class object is not on an instance's prototype chain"
-        );
 
         let instance = scope.root_raw_mut_ptr(js_object_alloc(CHILD, 0));
         let name = instance.with_const_ptr::<ObjectHeader, _>(|inst| read_string(inst, "name"));
@@ -122,10 +118,7 @@ fn a_synthetic_prototype_that_is_a_class_object_stays_on_the_instance_chain() {
         assert_ne!(synthetic, 0, "the synthetic id range is exhausted");
         class.with_mut_ptr::<ObjectHeader, _>(|class| {
             class_prototype_object_root_store(synthetic, class);
-            assert_eq!(
-                instance_class_prototype_object(synthetic) as usize,
-                class as usize
-            );
+            assert_eq!(class_prototype_object(synthetic) as usize, class as usize);
         });
         let instance = scope.root_raw_mut_ptr(js_object_alloc(synthetic, 0));
         let value =

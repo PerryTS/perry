@@ -228,6 +228,24 @@ pub(crate) unsafe fn call_compiled_closure_this(
     call_closure_body(closure, info, func_ptr, this, args_ptr, args_len)
 }
 
+/// [`call_compiled_closure_this`] for a caller that already holds the
+/// closure's body `info` (a shape's ConstFn lane names it): no info read or
+/// validation of the closure cell.
+///
+/// # Safety
+/// `closure` is a live closure of `info`, a compiled body (`FN_COMPILED_BODY`);
+/// `args_ptr` holds `args_len` values.
+#[inline]
+pub(crate) unsafe fn call_compiled_body_this(
+    closure: *const ClosureHeader,
+    info: &'static crate::closure::JsFunctionInfo,
+    this: crate::closure::JsThis,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    call_closure_body(closure, Some(info), info.code, this, args_ptr, args_len)
+}
+
 /// The arity-padding / rest-bundling tail of a value call, once the callee is
 /// known to be a closure with a body.
 #[inline(always)]
