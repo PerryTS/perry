@@ -1512,6 +1512,24 @@ unsafe fn replay_class_object_constructor_impl(
             );
         });
     }
+    // A receiver allocated by a STATICALLY declared subclass
+    // (`class Sub extends mixin(Base) {}`) carries no evaluation brand: only
+    // the `new <class value>` path stamps one. Running this evaluation's
+    // constructor on it without one left every private field the
+    // constructor declares unreachable, so `this.#x = v` threw "Cannot write
+    // private member #x to an object whose class did not declare it"
+    // (@npmcli/arborist's mixins). Brand it with this evaluation, the most
+    // derived one it has; a receiver already branded by a more-derived
+    // evaluation keeps that brand, whose pinned heritage reaches this one.
+    inst_handle.with_mut_ptr::<ObjectHeader, _>(|inst| {
+        let value = crate::value::js_nanbox_pointer(inst as i64);
+        if super::field_get_set::private_evaluation_brand_value(value).is_none() {
+            super::field_get_set::stamp_private_evaluation_brand(
+                inst,
+                classobj_handle.get_nanbox_f64(),
+            );
+        }
+    });
     // Spec: a derived class with no own `constructor` gets the implicit
     // `constructor(...args) { super(...args) }` — the nearest ancestor's ctor
     // must run with the same argument list. `lookup_class_constructor` holds
