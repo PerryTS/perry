@@ -86,6 +86,128 @@ pub(crate) unsafe fn try_function_shape_method_call(
     super::common_methods::dispatch_function_proto_method(object, which, args_ptr, args_len)
 }
 
+/// The facts [`try_function_shape_method_call`] establishes for
+/// `object.<name>(…)`, as a method site memoizes them: the holder
+/// (`Function.prototype`), the inline slot its shape places `name` at, and the
+/// `JsFunctionInfo` of the intrinsic that slot holds. Run by name, once, when
+/// a site primes.
+///
+/// # Safety
+/// `object` is a live value.
+pub(crate) unsafe fn function_intrinsic_facts(object: f64, name: &[u8]) -> FunctionIntrinsicFacts {
+    match function_intrinsic_facts_inner(object, name) {
+        Ok(facts) => FunctionIntrinsicFacts::Intrinsic(facts.0, facts.1, facts.2),
+        Err(verdict) => verdict,
+    }
+}
+
+/// What [`function_intrinsic_facts`] proves about a call.
+pub(crate) enum FunctionIntrinsicFacts {
+    /// The holder address, the slot index and the intrinsic body info.
+    Intrinsic(usize, u32, u64),
+    /// The receiver inherits from `%Function.prototype%`, but the key is not
+    /// one of its intrinsics there (a fact of the two ShapeIds).
+    NotIntrinsic,
+    /// The receiver is not a function on a described Function shape that
+    /// inherits from `%Function.prototype%` (a fact of its word).
+    Ineligible,
+    /// The realm has not built `%Function.prototype%` yet: nothing is known.
+    NoPrototype,
+}
+
+unsafe fn function_intrinsic_facts_inner(
+    object: f64,
+    name: &[u8],
+) -> Result<(usize, u32, u64), FunctionIntrinsicFacts> {
+    use FunctionIntrinsicFacts::{Ineligible, NoPrototype, NotIntrinsic};
+    let proto =
+        crate::closure::shape::FUNCTION_PROTOTYPE_PTR.load(std::sync::atomic::Ordering::Acquire);
+    if proto == 0 {
+        return Err(NoPrototype);
+    }
+    let bits = object.to_bits();
+    if bits >> 48 != 0x7FFD {
+        return Err(Ineligible);
+    }
+    let addr = (bits & crate::value::POINTER_MASK) as usize;
+    // The tracked header is the proof of a function object (a module-level
+    // function lives outside the young arena, where `is_valid_obj_ptr`
+    // answers no, and is no less a closure for it).
+    if !crate::value::addr_class::is_above_handle_band(addr)
+        || !addr.is_multiple_of(std::mem::align_of::<ClosureHeader>())
+        || !crate::value::addr_class::try_read_gc_header(addr)
+            .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_CLOSURE)
+    {
+        return Err(Ineligible);
+    }
+    let word = *((addr as *const u8).add(crate::closure::CLOSURE_SHAPE_OFFSET) as *const u32);
+    if !crate::object::shapes::is_exotic_shape_id(word)
+        || !crate::closure::is_closure_ptr(addr)
+        || word == crate::closure::shape::function_dictionary_shape()
+        || !crate::closure::shape::function_shape_inherits_from_function_prototype(word, name)
+    {
+        return Err(Ineligible);
+    }
+    let proto = proto as usize as *const crate::object::ObjectHeader;
+    let shape = crate::object::shapes::object_shape_descriptor(proto).ok_or(NotIntrinsic)?;
+    if !shape.object_kind.is_ordinary_layout() || crate::object::dictionary::is_dictionary(proto) {
+        return Err(NotIntrinsic);
+    }
+    let keys = shape.keys as usize as *const crate::array::ArrayHeader;
+    if keys.is_null() {
+        return Err(NotIntrinsic);
+    }
+    let slot = crate::object::keys_find_slot_by_bytes_resolved(keys, shape.logical_key_count, name)
+        .ok_or(NotIntrinsic)?;
+    if crate::object::key_attrs::key_is_accessor_at(keys, slot) {
+        return Err(NotIntrinsic);
+    }
+    // The slot's value (inline or spill, wherever the shape places it) must
+    // be the very value the by-name probe returns.
+    let value = try_data_get_bytes_value(proto, name).ok_or(NotIntrinsic)?;
+    let slot_bits = crate::object::js_object_get_field(proto, slot).bits();
+    if slot_bits != value.bits() || !value.is_pointer() {
+        return Err(NotIntrinsic);
+    }
+    let method = value.as_pointer::<ClosureHeader>();
+    let func = crate::closure::get_valid_func_ptr(method);
+    if crate::object::global_this::function_prototype_intrinsic_of(func).is_none() {
+        return Err(NotIntrinsic);
+    }
+    Ok((proto as usize, slot, (*method).info as u64))
+}
+
+unsafe fn try_data_get_bytes_value(
+    proto: *const crate::object::ObjectHeader,
+    name: &[u8],
+) -> Option<JSValue> {
+    crate::object::native_get::try_data_get_bytes(JSValue::pointer(proto as *mut u8), name)
+}
+
+/// Call the `Function.prototype` intrinsic `method` (a closure whose body is
+/// the bind / call / apply thunk) on the function `object`, exactly as
+/// [`try_function_shape_method_call`] does once it has loaded the slot.
+///
+/// # Safety
+/// `method` is a live closure; `args_ptr` is valid for `args_len` reads.
+pub(crate) unsafe fn call_function_intrinsic(
+    object: f64,
+    method: *const ClosureHeader,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    let func = crate::closure::get_valid_func_ptr(method);
+    let which = crate::object::global_this::function_prototype_intrinsic_of(func)?;
+    super::common_methods::dispatch_function_proto_method(object, which, args_ptr, args_len)
+}
+
+/// Has the realm built `%Function.prototype%`? Until it has, no call on a
+/// function is answered by the shape path, and a site has nothing to learn.
+#[inline]
+pub(crate) fn function_prototype_built() -> bool {
+    crate::closure::shape::FUNCTION_PROTOTYPE_PTR.load(std::sync::atomic::Ordering::Relaxed) != 0
+}
+
 /// `bind`/`call`/`apply` on a FunctionDictionary receiver — one whose
 /// `[[Prototype]]` may be RECORDED (`Object.setPrototypeOf(fn, p)`). The
 /// shape answers nothing, so the key is resolved the ordinary way: an own
