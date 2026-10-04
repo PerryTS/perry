@@ -150,7 +150,24 @@ use barrier_arming::*;
 /// `pin::pin_object`; `scripts/gc_pin_sites.py` enforces that in `lint`.
 mod pin;
 #[cfg(test)]
+pub(crate) use copying_parent_facts::copy_decode_sabotage;
+#[cfg(test)]
+pub(crate) use pin::scan_pinned_object_roots_mut;
+#[cfg(test)]
 pub(crate) use pin::test_reset_young_pin_latch;
+
+/// Test-only: pin the copying minor's promotion age for the guard's life.
+#[cfg(test)]
+pub(crate) fn pin_tenuring_survivals_for_test(survivals: u8) -> impl Drop {
+    tenuring::set_survivals_for_test(survivals)
+}
+
+/// Test-only: is the old-page remembered set holding the page of `slot_addr`?
+#[cfg(test)]
+pub(crate) fn old_slot_page_is_remembered_for_test(slot_addr: usize) -> bool {
+    let page = crate::arena::generation_page_for_addr(slot_addr);
+    barrier::DIRTY_OLD_PAGES.with(|s| s.borrow().contains(&page))
+}
 pub use pin::{
     copied_minor_preflight_skips, copied_minor_preflight_walks, pin_object, pin_object_non_young,
     pin_user_ptr_non_young, unpin_object, unpin_user_ptr,
@@ -1216,8 +1233,6 @@ pub fn gc_init() {
     // capture heap words, so copied-minor must rewrite them after moving
     // captured young values or future cache hits miss on stale addresses.
     reg_scanner!(crate::closure::scan_singleton_closure_roots_mut);
-    // The per-agent class function objects (`object::class_value`).
-    reg_scanner!(crate::object::class_value::scan_class_value_roots_mut);
     reg_scanner!(crate::closure::scan_closure_dynamic_props_roots_mut);
     // #8393: built-in prototype methods carry per-closure identity metadata
     // keyed by their raw heap address. Copying minor GC moves those closures;
