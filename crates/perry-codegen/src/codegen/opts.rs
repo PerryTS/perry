@@ -1290,6 +1290,9 @@ pub(crate) struct CrossModuleCtx {
     pub compiler_private_async_i1_control_locals: std::collections::HashSet<u32>,
     /// Scope context object groups (`crate::scope_env`), module-wide.
     pub scope_map: crate::scope_env::ScopeMap,
+    /// Untyped string accumulators, module-wide
+    /// (`collectors::string_accumulator_locals`).
+    pub string_accumulator_locals: std::collections::HashSet<u32>,
     /// Debug/benchmark switch that forces Buffer/Uint8Array accesses through
     /// the generic helper path.
     pub disable_buffer_fast_path: bool,
