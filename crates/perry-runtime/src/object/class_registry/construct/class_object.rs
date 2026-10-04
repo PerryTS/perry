@@ -1,21 +1,77 @@
-/// Link an instance constructed through a fresh class value to that
-/// evaluation's distinct prototype object. Class-id dispatch alone follows
-/// the shared template and cannot preserve per-evaluation inheritance.
-fn link_class_object_instance_prototype(class_value: f64, instance: *mut ObjectHeader) {
+/// The instance `new` through fresh class value `class_value` (template
+/// `class_cid`) allocates, linked to that evaluation's distinct prototype
+/// object. Class-id dispatch alone follows the shared template and cannot
+/// preserve per-evaluation inheritance.
+///
+/// The instance is born in its class's declared keys, as `new` of the shared
+/// class is (`construct_registered_class_ref`), and moves to that shape's
+/// facts at the prototype's identity. The template remembers the link
+/// (`class_object_template::record_instance_link`), so every later instance
+/// of the same evaluation is born in the linked shape directly.
+fn construct_class_object_instance(
+    class_value: f64,
+    class_cid: u32,
+    cell: Option<super::super::field_get_set::TemplateCell>,
+) -> *mut ObjectHeader {
+    use super::super::field_get_set::TemplateInstance;
+    let template = cell.and_then(|cell| unsafe {
+        super::super::field_get_set::template_instance(cell, class_value, class_cid)
+    });
+    let (inst, width) = match template {
+        Some(TemplateInstance::Linked(inst)) => return inst,
+        Some(TemplateInstance::Birth(inst, width)) => (inst, width),
+        None => allocate_class_instance(class_cid),
+    };
     let scope = crate::gc::RuntimeHandleScope::new();
     let class = scope.root_nanbox_f64(class_value);
-    let instance = scope.root_raw_mut_ptr(instance);
-    let class_obj = crate::value::JSValue::from_bits(class.get_nanbox_f64().to_bits())
-        .as_pointer::<ObjectHeader>();
+    let instance = scope.root_raw_mut_ptr(inst);
+    let class_obj = || {
+        crate::value::JSValue::from_bits(class.get_nanbox_f64().to_bits())
+            .as_pointer::<ObjectHeader>()
+    };
     let prototype =
-        unsafe { super::super::field_get_set::class_object_prototype_value(class_obj) };
+        unsafe { super::super::field_get_set::class_object_prototype_value(class_obj()) };
     let prototype = scope.root_heap_word_u64(prototype.bits());
+    let birth = instance.with_mut_ptr::<ObjectHeader, _>(|instance| unsafe {
+        crate::object::shapes::object_shape_stamp(instance)
+    });
     instance.with_mut_ptr::<ObjectHeader, _>(|instance| {
         super::super::prototype_chain::object_link_class_evaluation_prototype(
             instance as usize,
             prototype.get_heap_word_u64(),
         )
     });
+    instance.with_mut_ptr::<ObjectHeader, _>(|instance| unsafe {
+        super::super::field_get_set::record_instance_link(
+            class_obj(),
+            instance,
+            birth,
+            width,
+            prototype.get_heap_word_u64(),
+        );
+        instance
+    })
+}
+
+/// An instance of class `class_cid` allocated in its declared keys, and its
+/// width; the learned width without keys for a class that registered none.
+fn allocate_class_instance(class_cid: u32) -> (*mut ObjectHeader, u32) {
+    if let Some((keys_array, field_count)) = registered_class_keys_array(class_cid) {
+        // As wide as the class's instances have been learned to grow, so the
+        // keys a constructor adds beyond the declared ones stay inline.
+        let field_count =
+            field_count.max(crate::object::learned_inline_field_count(class_cid));
+        let inst = crate::object::alloc::alloc_class_instance_with_keys(
+            class_cid,
+            0,
+            field_count,
+            keys_array,
+        );
+        (inst, field_count)
+    } else {
+        let field_count = crate::object::learned_inline_field_count(class_cid);
+        (js_object_alloc(class_cid, field_count), field_count)
+    }
 }
 
 /// Object's constructor has special newTarget semantics: when invoked as the

@@ -645,13 +645,23 @@ unsafe fn prime(slot: *mut MethodSiteSlot, recv: f64, name: &[u8], argc: usize) 
         prime_function(slot, addr, name, argc);
         return;
     }
-    let Some(obj) = ordinary_receiver(addr) else {
-        let dict = crate::value::addr_class::try_read_gc_header(addr)
-            .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_OBJECT)
-            && !crate::closure::is_closure_ptr(addr)
-            && super::dictionary::is_dictionary(addr as *const ObjectHeader);
-        refuse(if dict { 2 } else { 1 });
-        return;
+    // A per-evaluation class object (`ClassExprFresh`) serves its OWN keys
+    // only: its static methods are own data properties of it, born in its
+    // template's final shape, but what it inherits follows its pinned
+    // parent, not a [[Prototype]] a holder entry could name.
+    let (obj, own_only) = match ordinary_receiver(addr) {
+        Some(obj) => (obj, false),
+        None => match class_object_receiver(addr) {
+            Some(obj) => (obj, true),
+            None => {
+                let dict = crate::value::addr_class::try_read_gc_header(addr)
+                    .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_OBJECT)
+                    && !crate::closure::is_closure_ptr(addr)
+                    && super::dictionary::is_dictionary(addr as *const ObjectHeader);
+                refuse(if dict { 2 } else { 1 });
+                return;
+            }
+        },
     };
     let Some(shape) = super::shapes::object_shape_descriptor(obj) else {
         refuse(1);
@@ -756,6 +766,10 @@ unsafe fn prime(slot: *mut MethodSiteSlot, recv: f64, name: &[u8], argc: usize) 
         }
         return;
     }
+    if own_only {
+        refuse(1);
+        return;
+    }
     prime_inherited(slot, obj, word, name, argc);
 }
 
@@ -849,6 +863,43 @@ unsafe fn ordinary_receiver(addr: usize) -> Option<*const ObjectHeader> {
     }
     let stamp = super::shapes::object_shape_stamp(obj);
     if !super::shapes::is_shape_id(stamp) {
+        return None;
+    }
+    let meta = (*obj).meta;
+    if !meta.is_null()
+        && ((*meta).elements != 0
+            || (*meta).flags & super::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER != 0)
+    {
+        return None;
+    }
+    Some(obj)
+}
+
+/// A class object an own entry may serve: everything [`ordinary_receiver`]
+/// asks of an ordinary object, on an object whose shape kind is `Class`.
+///
+/// # Safety
+/// `addr` is a plausible object address.
+unsafe fn class_object_receiver(addr: usize) -> Option<*const ObjectHeader> {
+    if !crate::value::addr_class::is_above_handle_band(addr) {
+        return None;
+    }
+    let header = crate::value::addr_class::try_read_gc_header(addr)?;
+    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+        || crate::closure::is_closure_ptr(addr)
+        || !address_is_prime_stable(addr)
+        || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        || header._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0
+        || !super::class_registry::is_class_object_ptr(addr as *const u8)
+    {
+        return None;
+    }
+    // A class object is not `object_is_regular` (its kind is `Class`), but
+    // its own keys live in inline slots exactly as an ordinary object's do.
+    let obj = addr as *const ObjectHeader;
+    if super::dictionary::is_dictionary(obj)
+        || !super::shapes::is_shape_id(super::shapes::object_shape_stamp(obj))
+    {
         return None;
     }
     let meta = (*obj).meta;

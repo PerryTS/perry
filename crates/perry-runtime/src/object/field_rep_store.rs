@@ -262,6 +262,9 @@ pub(crate) fn final_shape_matches_birth(actual: u32, expected: u32) -> bool {
     ) else {
         return false;
     };
+    if a.proto_id != b.proto_id {
+        return linked_shape_matches_birth(&a, &b);
+    }
     let base_rep = a.constfn_infos().iter().fold(a.rep, |rep, i| {
         field_rep::with_slot_rep(rep, i.slot as u32, REP_ANY)
     });
@@ -280,6 +283,30 @@ pub(crate) fn final_shape_matches_birth(actual: u32, expected: u32) -> bool {
         && a.summary == 0
         && b.summary == 0
         && field_rep::identity_with_special(base_rep) == field_rep::identity_with_special(b.rep)
+}
+
+/// An instance of a per-evaluation class (`ClassExprFresh`) carries its
+/// class's birth shape `b` re-linked to its evaluation's prototype: the same
+/// keys, slots, lanes and attributes at a `MIXED` identity of the same class
+/// (`object_link_class_evaluation_prototype`). A class field guard reads and
+/// writes an OWN data slot, which no prototype can shadow, so `a` serves the
+/// guard exactly as `b` does. Any other fact that differs refuses.
+fn linked_shape_matches_birth(
+    a: &super::shapes::ShapeDescriptor,
+    b: &super::shapes::ShapeDescriptor,
+) -> bool {
+    super::shapes::proto_id_links_class_instance(a.proto_id, b.proto_id)
+        && a.object_kind == b.object_kind
+        && a.keys == b.keys
+        && a.logical_key_count == b.logical_key_count
+        && a.live_inline_slot_count == b.live_inline_slot_count
+        && a.semantic_generation == 0
+        && b.semantic_generation == 0
+        && a.hole_count == 0
+        && b.hole_count == 0
+        && a.summary == b.summary
+        && a.special_constfn_mask == b.special_constfn_mask
+        && field_rep::identity_with_special(a.rep) == field_rep::identity_with_special(b.rep)
 }
 
 /// The rep of shape `id` (`Any` for an unknown id).

@@ -1161,9 +1161,9 @@ pub(super) fn emit_string_pool(
         .filter_map(|name| class_ids.get(name).copied())
         .collect();
     // Each per-evaluation template's own record, its template cell
-    // (`fresh_class_templates::template_cell_global`), registered on the
-    // template's vtable entry for the runtime paths that start from one of its
-    // class objects.
+    // (`fresh_class_templates::template_cell_global`). Every class object of
+    // the template names it (its first own key), so the runtime paths that
+    // start from one find it there.
     let mut fresh_cells: Vec<(u32, usize)> = fresh_class_templates
         .iter()
         .filter_map(|name| {
@@ -1181,12 +1181,6 @@ pub(super) fn emit_string_pool(
             "@{global} = internal global [{words} x i64] [i64 {words}{}]",
             ", i64 0".repeat(words - 1)
         ));
-        let blk = chunker.current_block();
-        let cell_i64 = blk.ptrtoint(&format!("@{global}"), I64);
-        blk.call_void(
-            "js_register_class_template_cell",
-            &[(I64, &cid.to_string()), (I64, &cell_i64)],
-        );
     }
     method_triples.sort_unstable();
     let mut method_entries: Vec<StaticMethodEntry> = Vec::new();

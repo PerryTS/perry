@@ -161,8 +161,9 @@ pub(crate) fn object_alloc_born(
 /// The storage `js_object_alloc(class_id, field_count)` allocates (header,
 /// `undefined` slots, pointer-free layout) with NO shape published: its
 /// stamp word is 0. The caller stamps the object's shape before anything
-/// else can allocate: a per-evaluation class object or prototype born
-/// directly in its template's final shape (`class_object_template`).
+/// else can allocate: a per-evaluation class object, prototype or instance
+/// born directly in its template's shape (`class_object_template`).
+#[inline]
 pub(crate) fn object_alloc_unpublished(class_id: u32, field_count: u32) -> *mut ObjectHeader {
     let header_size = std::mem::size_of::<ObjectHeader>();
     let alloc_field_count = std::cmp::max(field_count as usize, crate::object::INLINE_SLOT_FLOOR);
