@@ -33,126 +33,6 @@ pub unsafe extern "C" fn js_object_assign_validate_target(target_f64: f64) -> f6
     js_object_coerce(target_f64)
 }
 
-/// Parse a property name as a canonical array index (ECMA-262 CanonicalNumeric
-/// IndexString restricted to non-negative integers `< 2^32-1`): no leading
-/// zeros, round-trips through `to_string`. Used to recognise the in-range code-
-/// unit indices of a boxed-String `Object.assign` target.
-fn assign_canonical_index(name: &str) -> Option<u32> {
-    if name.is_empty() || (name.len() > 1 && name.as_bytes()[0] == b'0') {
-        return None;
-    }
-    let value = name.parse::<u32>().ok()?;
-    if value == u32::MAX || value.to_string() != name {
-        return None;
-    }
-    Some(value)
-}
-
-/// Spec `Set(to, key, value, true)` inside `Object.assign` uses the strict
-/// receiver, so a write that the ordinary `[[Set]]` would reject throws a
-/// `TypeError`. Perry's `js_object_set_field_by_name` silently no-ops those
-/// cases, so detect them up front: a non-writable existing own data property,
-/// an accessor own property with no setter, or a new property on a
-/// non-extensible target. Throws when the write must fail.
-unsafe fn object_assign_throw_if_set_rejected(
-    target: *mut ObjectHeader,
-    key_ptr: *const crate::StringHeader,
-    name: &str,
-) {
-    if target.is_null() || (target as usize) <= 0x10000 {
-        return;
-    }
-    // A boxed String primitive target — `Object.assign('abc', src)` does
-    // `ToObject('abc')` — exposes its code units as non-writable, non-
-    // configurable own index properties ("0".."len-1"), which aren't stored in
-    // `keys_array`. A strict `Set` to an in-range index must throw, so detect it
-    // before the keys_array-based checks treat the index as a writable new
-    // property (test262 Object/assign/assignment-to-readonly-property-of-target
-    // -must-throw-a-typeerror-exception).
-    if let Some(idx) = assign_canonical_index(name) {
-        let target_f64 = f64::from_bits(JSValue::pointer(target as *mut u8).bits());
-        if crate::builtins::boxed_primitive_to_string_tag(target_f64) == Some("String") {
-            if let Some((_, payload)) = crate::builtins::boxed_primitive_payload(target_f64) {
-                let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-                if let Some((ptr, blen)) =
-                    crate::string::str_bytes_from_jsvalue(payload, &mut scratch)
-                {
-                    let len = if ptr.is_null() {
-                        0
-                    } else {
-                        crate::string::compute_utf16_len(ptr, blen)
-                    };
-                    if idx < len {
-                        throw_object_assign_readonly(name);
-                    }
-                }
-            }
-        }
-    }
-    // Accessor own property: a setter must exist, else the write fails. Check
-    // this BEFORE `own_key_present`: an accessor-only property (`{ set foo(){} }`)
-    // lives in the accessor side table and may have no `keys_array` entry, so
-    // `own_key_present` can report it absent — which on a frozen/non-extensible
-    // target would mis-classify the setter call as a forbidden new-property add
-    // (test262 assign/target-is-frozen-accessor-property-set-succeeds).
-    if let Some(acc) = super::get_accessor_descriptor(target as usize, name) {
-        if acc.set == 0 {
-            throw_object_assign_readonly(name);
-        }
-        return;
-    }
-    let exists = own_key_present(target, key_ptr);
-    if exists {
-        // Data own property: must be writable.
-        if let Some(attrs) = super::get_property_attrs(target as usize, name) {
-            if !attrs.writable() {
-                throw_object_assign_readonly(name);
-            }
-        }
-        return;
-    }
-    // New property: target must be extensible.
-    let gc = gc_header_for(target);
-    if (*gc)._reserved & crate::gc::OBJ_FLAG_NO_EXTEND != 0 {
-        throw_object_assign_readonly(name);
-    }
-}
-
-fn throw_object_assign_readonly(name: &str) -> ! {
-    throw_object_type_error_with_suffix(
-        "Cannot assign to read only property '",
-        &format!("{name}' of object '#<Object>'"),
-    )
-}
-
-/// Strict `Set(to, sym, value, true)` rejection check for a symbol-keyed
-/// `Object.assign` write: a non-writable existing symbol data property, an
-/// accessor symbol property with no setter, or a new symbol property on a
-/// non-extensible target each make the write fail, which under throwing `Set`
-/// semantics is a `TypeError`. The string-keyed counterpart is
-/// `object_assign_throw_if_set_rejected`.
-unsafe fn object_assign_throw_if_symbol_set_rejected(target: *mut ObjectHeader, sym_ptr: usize) {
-    let owner = target as usize;
-    let existing = crate::symbol::symbol_property_root_bits(owner, sym_ptr).is_some()
-        || crate::symbol::symbol_accessor_descriptor_bits(owner, sym_ptr).is_some();
-    if existing {
-        if let Some((_get, set)) = crate::symbol::symbol_accessor_descriptor_bits(owner, sym_ptr) {
-            if set == 0 {
-                throw_object_assign_readonly("Symbol()");
-            }
-        } else if let Some(attrs) = crate::symbol::get_symbol_property_attrs(owner, sym_ptr) {
-            if !attrs.writable() {
-                throw_object_assign_readonly("Symbol()");
-            }
-        }
-    } else {
-        let gc = gc_header_for(target);
-        if (*gc)._reserved & crate::gc::OBJ_FLAG_NO_EXTEND != 0 {
-            throw_object_assign_readonly("Symbol()");
-        }
-    }
-}
-
 unsafe fn object_assign_set_string_key(
     define: bool,
     target: *mut ObjectHeader,
@@ -176,29 +56,21 @@ unsafe fn object_assign_set_string_key(
         crate::process::js_setenv(key_ptr, value_f64);
         return;
     }
-    if target_is_array {
-        // Routes integer-index keys to array element-set (extending length);
-        // non-numeric keys fall back to the object setter.
+    if !define {
+        // Set(to, key, value, true) must walk inherited descriptors and invoke
+        // setters with the target as receiver, including on non-extensible
+        // targets. Use the same strict [[Set]] as property assignment.
+        let target_value = crate::value::js_nanbox_pointer(target as i64);
+        let key_value = f64::from_bits(JSValue::string_ptr(key_ptr as *mut _).bits());
+        crate::proxy::js_put_value_set(target_value, key_value, value_f64, target_value, 1);
+    } else if target_is_array {
         crate::array::js_array_set_string_key(
             target as *mut crate::array::ArrayHeader,
             key_ptr,
             value_f64,
         );
-    } else if define {
-        object_define_string_key(target, key_ptr, value_f64);
     } else {
-        // Strict `Set` semantics: reject (throw) a write the ordinary `[[Set]]`
-        // would silently drop.
-        let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-        if let Some(name_bytes) = crate::string::js_string_key_bytes(
-            crate::value::JSValue::string_ptr(key_ptr as *mut _),
-            &mut sso,
-        ) {
-            if let Ok(name) = std::str::from_utf8(name_bytes) {
-                object_assign_throw_if_set_rejected(target, key_ptr, name);
-            }
-        }
-        js_object_set_field_by_name(target, key_ptr, value_f64);
+        object_define_string_key(target, key_ptr, value_f64);
     }
 }
 
@@ -477,19 +349,21 @@ unsafe fn object_assign_string_source(
     }
 }
 
-/// Copy a Proxy source's own enumerable properties onto `target`, driving the
-/// proxy's `ownKeys` / `getOwnPropertyDescriptor` / `get` traps in spec order.
-/// Any trap that throws longjmps straight past this frame to the caller's
-/// `try`/`catch`, which is exactly the abrupt-completion propagation
-/// `Object.assign` requires.
-unsafe fn object_assign_proxy_source(
+/// Copy own enumerable properties via [[OwnPropertyKeys]], [[GetOwnProperty]]
+/// and [[Get]], in spec order. This handles ordinary and Proxy sources alike;
+/// getters, target setters and traps can change the source between keys.
+unsafe fn object_assign_enumerated_source(
     define: bool,
     target: *mut ObjectHeader,
     target_is_array: bool,
     source_f64: f64,
 ) {
-    // `[[OwnPropertyKeys]]` — fires the ownKeys trap (throw propagates).
-    let keys_arr = crate::proxy::js_proxy_own_keys(source_f64);
+    // Snapshot all own keys before any getter or target setter runs. Recheck
+    // each descriptor below: earlier user code may delete or redefine a key.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let tgt_h = scope.root_raw_mut_ptr(target);
+    let source_h = scope.root_nanbox_f64(source_f64);
+    let keys_arr = crate::proxy::js_reflect_own_keys(source_h.get_nanbox_f64());
     let keys_val = JSValue::from_bits(keys_arr.to_bits());
     if !keys_val.is_pointer() {
         return;
@@ -502,10 +376,7 @@ unsafe fn object_assign_proxy_source(
     // #7200: the widest window in the file. TWO trap invocations per key —
     // `getOwnPropertyDescriptor` and `get` — each arbitrary user code, with the
     // `ownKeys` result array and the target held across both and used after.
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let tgt_h = scope.root_raw_mut_ptr(target);
     let keys_h = scope.root_raw_const_ptr(arr);
-    let source_h = scope.root_nanbox_f64(source_f64);
     for i in 0..n {
         let arr = keys_h.get_raw_const_ptr::<crate::array::ArrayHeader>();
         let source_f64 = source_h.get_nanbox_f64();
@@ -531,7 +402,8 @@ unsafe fn object_assign_proxy_source(
         }
         // `[[Get]]` — fires the get trap.
         let key_f64 = f64::from_bits(key_h.get_nanbox_u64());
-        let value_f64 = crate::proxy::js_proxy_get(source_h.get_nanbox_f64(), key_f64);
+        let source_value = source_h.get_nanbox_f64();
+        let value_f64 = crate::proxy::js_reflect_get(source_value, key_f64, source_value);
         let value_h = iter_scope.root_nanbox_f64(value_f64);
         let key_f64 = f64::from_bits(key_h.get_nanbox_u64());
         if key.is_any_string() {
@@ -549,19 +421,23 @@ unsafe fn object_assign_proxy_source(
                 });
             }
         } else if key.is_pointer() {
-            // Strict `Set` semantics for symbol keys, same as the ordinary path.
-            let sym_ptr = (key_f64.to_bits() & crate::value::POINTER_MASK) as usize;
-            if !define {
-                tgt_h.with_mut_ptr::<ObjectHeader, _>(|t| {
-                    object_assign_throw_if_symbol_set_rejected(t, sym_ptr)
-                });
+            let target_value = tgt_h
+                .with_mut_ptr::<ObjectHeader, _>(|t| crate::value::js_nanbox_pointer(t as i64));
+            if define {
+                crate::symbol::js_object_set_symbol_property(
+                    target_value,
+                    key_f64,
+                    value_h.get_nanbox_f64(),
+                );
+            } else {
+                crate::proxy::js_put_value_set(
+                    target_value,
+                    key_f64,
+                    value_h.get_nanbox_f64(),
+                    target_value,
+                    1,
+                );
             }
-            crate::symbol::js_object_set_symbol_property(
-                tgt_h
-                    .with_mut_ptr::<ObjectHeader, _>(|t| crate::value::js_nanbox_pointer(t as i64)),
-                key_f64,
-                value_h.get_nanbox_f64(),
-            );
         }
     }
 }
@@ -649,7 +525,7 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
         // the time the last one returns.
         let scope = crate::gc::RuntimeHandleScope::new();
         let tgt_h = scope.root_raw_mut_ptr(target);
-        object_assign_proxy_source(define, target, target_is_array, source_f64);
+        object_assign_enumerated_source(define, target, target_is_array, source_f64);
         return tgt_h
             .with_mut_ptr::<ObjectHeader, _>(|t| crate::value::js_nanbox_pointer(t as i64));
     }
@@ -868,6 +744,23 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
     // PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_HEAP_LIMIT=8.
     if source_obj_type == crate::gc::GC_TYPE_REGEXP {
         return target_f64;
+    }
+
+    if !define
+        && matches!(
+            source_obj_type,
+            crate::gc::GC_TYPE_OBJECT | crate::gc::GC_TYPE_ARRAY
+        )
+    {
+        // Assign's [[Set]] can run a setter even for a plain data source, so
+        // neither positional slots nor a prefiltered enumerable-key list stay
+        // valid across stores. The descriptor-driven copy also snapshots the
+        // symbol keys before any string-keyed setter can change the source.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let tgt_h = scope.root_raw_mut_ptr(target);
+        object_assign_enumerated_source(false, target, target_is_array, source_f64);
+        return tgt_h
+            .with_mut_ptr::<ObjectHeader, _>(|t| crate::value::js_nanbox_pointer(t as i64));
     }
 
     // #7200: EVERYTHING BELOW RUNS WITH USER CODE IN THE WINDOW.
@@ -1100,17 +993,23 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
         let value_f64 =
             crate::symbol::js_object_get_symbol_property(source_h.get_nanbox_f64(), sym_f64);
         let value_h = iter_scope.root_nanbox_f64(value_f64);
-        // Strict `Set` semantics for symbol-keyed writes too.
-        if !define {
-            tgt_h.with_mut_ptr::<ObjectHeader, _>(|t| {
-                object_assign_throw_if_symbol_set_rejected(t, sym_ptr)
-            });
+        let target_value =
+            tgt_h.with_mut_ptr::<ObjectHeader, _>(|t| crate::value::js_nanbox_pointer(t as i64));
+        if define {
+            crate::symbol::js_object_set_symbol_property(
+                target_value,
+                sym_h.get_nanbox_f64(),
+                value_h.get_nanbox_f64(),
+            );
+        } else {
+            crate::proxy::js_put_value_set(
+                target_value,
+                sym_h.get_nanbox_f64(),
+                value_h.get_nanbox_f64(),
+                target_value,
+                1,
+            );
         }
-        crate::symbol::js_object_set_symbol_property(
-            tgt_h.with_mut_ptr::<ObjectHeader, _>(|t| crate::value::js_nanbox_pointer(t as i64)),
-            sym_h.get_nanbox_f64(),
-            value_h.get_nanbox_f64(),
-        );
     }
 
     // The target may have moved under any of the getters above; hand the caller
