@@ -664,9 +664,17 @@ impl MallocSweepCycleState {
             self.freed_bytes = self.freed_bytes.saturating_add(total_size as u64);
             layout_clear_for_ptr(user_ptr as usize);
             gc_type_finalize_unmarked_payload(obj_type, user_ptr);
-            let layout = Layout::from_size_align(total_size, 8).unwrap();
-            crate::gc::heap_generation::debug_assert_heap_change_open();
-            dealloc(header as *mut u8, layout);
+            if crate::arena::old_sweep_quarantine_enabled() {
+                crate::arena::retire_swept_object(
+                    header as usize,
+                    total_size,
+                    crate::arena::RetiredKind::Malloc,
+                );
+            } else {
+                let layout = Layout::from_size_align(total_size, 8).unwrap();
+                crate::gc::heap_generation::debug_assert_heap_change_open();
+                dealloc(header as *mut u8, layout);
+            }
             self.remove_tracked_header(header, obj_type, total_size as u64);
         }
     }
@@ -1279,8 +1287,17 @@ impl IncrementalSweepState {
                 if self.arena.step(budget) {
                     self.arena.maybe_print_diag();
                     self.arena.push_live_block_holes();
+                    // `PERRY_GC_PROTECT_OLD_SWEEP`: no block is reset or released,
+                    // so a freed object's bytes are never handed out again.
+                    let keep_all;
+                    let block_has_live = if crate::arena::old_sweep_quarantine_enabled() {
+                        keep_all = vec![true; self.arena.block_has_live().len()];
+                        &keep_all[..]
+                    } else {
+                        self.arena.block_has_live()
+                    };
                     self.cleanup = Some(ArenaSweepCleanupState::new(
-                        self.arena.block_has_live(),
+                        block_has_live,
                         self.arena.block_snapshots(),
                         self.reclaim_dead_old_blocks,
                         self.targeted_old_blocks.as_ref(),

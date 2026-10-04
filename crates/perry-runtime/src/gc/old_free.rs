@@ -220,7 +220,10 @@ pub(crate) fn old_free_bytes_slot_index() -> u32 {
 /// its link is not.
 fn old_free_push(user_ptr: usize, total_size: usize) -> bool {
     crate::gc::heap_generation::debug_assert_heap_change_open();
-    if user_ptr == 0 || total_size < OLD_FREE_MIN_HOLE {
+    if user_ptr == 0
+        || total_size < OLD_FREE_MIN_HOLE
+        || crate::arena::old_sweep_quarantine_enabled()
+    {
         return false;
     }
     OLD_FREE_MAP.with(|m| {
@@ -282,6 +285,21 @@ pub(super) fn old_free_rebuild_from_old_blocks(parse: impl FnMut(usize) -> bool)
         }
         false
     });
+}
+
+/// Stop handing out holes until the sweep that starts now lists them again
+/// (#11842).
+///
+/// A budgeted sweep walks the heap across mutator windows, and an object born
+/// in one of them carries no mark: allocate-black ends where the sweep begins.
+/// A listed hole in a block the walk has not reached yet would place such an
+/// object where the walk is still to look, and the walk would free it while
+/// the program holds it. The sweep's own rebuild ([`old_free_rebuild_from_old_blocks`])
+/// lists every hole again once the walk is done, so this costs only the reuse
+/// during the walk. A sweep that never finishes leaves the list empty until the
+/// next one does; the bytes stay in the heap either way.
+pub(super) fn old_free_forget_until_rebuild() {
+    old_free_clear();
 }
 
 /// Drop every listed hole. The holes stay invalidated in the heap, so the

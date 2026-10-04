@@ -453,6 +453,19 @@ From #7196:
 - `PERRY_GC_PROTECT_FROMSPACE=1` — `mprotect` from-space after evacuation so a
   stale read faults immediately instead of reading plausible garbage.
 - `PERRY_GC_FROMSPACE_SCAN_ABORT` — now actually runs.
+- `PERRY_GC_PROTECT_OLD_SWEEP=1` (or `poison`) — the non-moving sweeps'
+  counterpart (#11842). What a sweep frees is recorded, poisoned with a
+  NaN-boxed pointer to unmapped memory and, for old and malloc objects at `=1`,
+  page-protected; nothing it frees is reused (no hole listed, no block reset or
+  released, no malloc `dealloc`). A fault report names the freed object the
+  fault address or a register points into and which sweep freed it. A run that
+  only passes with it on means some reuse of swept memory is the bug; blocking
+  one reuse path at a time narrows it.
+- `PERRY_GC_BUDGETED_OLD_RECLAIM=1` — old-gen reclaim only ever runs as a
+  budgeted full started at a runtime safepoint (microtask pump, event loop),
+  never synchronously, so an async program's major collections all have
+  mutator windows inside their mark and sweep. The seeded schedule drives
+  minors only; this is the knob for the budgeted full.
 - `PERRY_GC_SCHEDULE_SEED=<u64>` (+ `PERRY_GC_SCHEDULE_RATE`, default `0.05`) —
   collect on a deterministic pseudo-random schedule. At `RATE=1` it collects at
   every safepoint: slow, thorough, maximum pressure. Drop the rate when that is

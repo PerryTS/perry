@@ -19,12 +19,19 @@ mod map_allocations;
 mod page_meta;
 mod pinned;
 pub(crate) use pinned::{collect_pinned_arena_headers, note_pinned_arena_header};
+/// #11842: record, poison and protect what the non-moving sweeps free.
+mod old_sweep_quarantine;
 /// #7742: whole-block in-place promotion of a (near-)fully-live young
 /// generation, in place of object-by-object evacuation.
 mod promote;
 /// #7154 tooling: from-space quarantine + poison + `mprotect` so a stale
 /// pointer faults at the instruction that used it. Default-off.
 mod quarantine;
+pub(crate) use old_sweep_quarantine::{
+    note_sweep_started, old_sweep_quarantine_enabled, retire_swept_object, RetiredKind,
+};
+#[cfg(test)]
+pub(crate) use old_sweep_quarantine::{old_sweep_quarantine_stats, OldSweepProtectionGuard};
 mod reset;
 mod stats;
 /// #11471: thread-exit release of process-global address-keyed tables.

@@ -1513,6 +1513,7 @@ impl GcCycleState {
                 super::promoted_cohort::survival::check_minor_view_at_full_sweep_start();
             }
 
+            crate::arena::note_sweep_started(self.progress_kind.is_budgeted());
             let (do_age_bump, reclaim_dead_old_blocks, targeted_old_blocks, sweep_malloc) =
                 if let Some(minor) = self.minor.as_ref() {
                     let targeted_old_blocks = (minor.evacuation.old_page_moved_bytes > 0)
