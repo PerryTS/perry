@@ -351,10 +351,19 @@ pub(super) fn settle_pipeline_value_with_origin(value: f64) -> Result<PipelineSe
             }
         }
 
-        crate::event_pump::perry_poll();
-        let _ = crate::timer::js_timer_tick();
-        let _ = crate::timer::js_callback_timer_tick();
-        let _ = crate::timer::js_interval_timer_tick();
+        // The steps of a compiled `await` busy-wait (codegen `fs_await.rs`).
+        // This wait often runs inside a microtask (a stream drained from a
+        // job, as every drain in a worker is), and only the await-loop drain
+        // runs jobs when re-entered; `perry_poll`'s drain did not, so a source
+        // whose next value needs one more job (an async generator) never
+        // settled. The await-loop timer tick also fires inside a timer.
+        crate::promise::microtasks::js_promise_run_microtasks_await_loop();
+        crate::stdlib_pump::js_run_stdlib_pump();
+        let _ = crate::timer::js_await_loop_tick_timers();
+        // The steps above may have settled it: check before parking.
+        if crate::promise::js_promise_state(promise) != 0 {
+            continue;
+        }
         if crate::event_pump::perry_has_work() == 0 {
             break;
         }
