@@ -512,9 +512,7 @@ unsafe fn restamp_dictionary_shape(obj: *mut ObjectHeader, live_inline_slot_coun
     let receiver = shapes::ReceiverFacts {
         extra_summary: private_list_summary(obj),
         // The receiver's private brands survive the conversion (#11791).
-        brands: current
-            .as_ref()
-            .map_or_else(Vec::new, |d| d.brands().to_vec()),
+        brands: shapes::BrandList::copy_of(current.as_ref().map_or(&[][..], |d| d.brands())),
     };
     // Charter step 3 (R2): the receiver's store facts, read before the mint.
     let kind = shapes::store_kind::mint_kind(shapes::ShapeObjectKind::Ordinary, obj);

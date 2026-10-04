@@ -203,7 +203,7 @@ impl Word {
     }
 
     /// This position's word: `entry` for `key`, after the cumulative `prev`.
-    #[inline]
+    #[inline(always)]
     unsafe fn after(prev: Word, entry: u8, key: crate::JSValue) -> Word {
         let mut w = Word { entry, ..prev };
         if entry != 0 {

@@ -1000,7 +1000,7 @@ impl ShapeTableInner {
     }
 
     /// Fresh-id twin of [`ShapeTableInner::facts_push_back`]; same argument.
-    #[inline]
+    #[inline(always)]
     fn facts_append_fresh(&mut self, facts: u64, id: u32) {
         self.by_facts.entry(facts).or_default().append_unchecked(id);
     }
@@ -1530,6 +1530,7 @@ pub(crate) fn shape_descriptor_ensure_with_holes(
 /// deprecated lane is refused (and aborts): no birth is born deprecated.
 #[allow(clippy::too_many_arguments)]
 #[cfg_attr(feature = "shape-mint-diag", track_caller)]
+#[inline(always)]
 pub(crate) fn shape_descriptor_ensure_with_rep(
     keys: *const ArrayHeader,
     logical_key_count: u32,
@@ -1568,7 +1569,7 @@ pub(crate) fn shape_descriptor_ensure_with_rep(
         proto_id,
         summary,
         rep,
-        &receiver.brands,
+        receiver.brands.as_slice(),
         requested,
     )
 }
@@ -1822,7 +1823,7 @@ fn shape_descriptor_intern_with_special_mode(
         brands,
     );
     let table = &crate::state::state().shapes;
-    let mut inner = table.inner.borrow_mut();
+    let inner = table.inner.borrow();
     if let Some(ids) = inner.by_facts.get(&facts) {
         let slab = table.slab();
         for &id in ids.as_slice() {
@@ -1853,6 +1854,52 @@ fn shape_descriptor_intern_with_special_mode(
             }
         }
     }
+    drop(inner);
+    shape_descriptor_mint_fresh(
+        facts,
+        keys_id,
+        logical_key_count,
+        live_inline_slot_count,
+        semantic_generation,
+        object_kind,
+        hole_count,
+        proto_id,
+        summary,
+        rep,
+        infos,
+        brands,
+        requested,
+        #[cfg(feature = "shape-mint-diag")]
+        (census_on, census_list_hash, census_file, census_line),
+    )
+}
+
+/// The miss half of [`shape_descriptor_intern_with_special_mode`]: allocate
+/// the id, then publish the record and its accelerators. Out of line, so the
+/// hit path (hash, bucket probe, facts compare) stays small enough to keep its
+/// helpers inline: the identity table answers nearly every intern there.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn shape_descriptor_mint_fresh(
+    facts: u64,
+    keys_id: u64,
+    logical_key_count: u32,
+    live_inline_slot_count: u32,
+    semantic_generation: u64,
+    object_kind: ShapeObjectKind,
+    hole_count: u32,
+    proto_id: u64,
+    summary: u8,
+    rep: u64,
+    infos: &[shapes_store::ConstFnSlotInfo],
+    brands: &[u64],
+    requested: Option<u32>,
+    #[cfg(feature = "shape-mint-diag")] census: (bool, u64, &'static str, u32),
+) -> Result<u32, ShapeDescriptorError> {
+    #[cfg(feature = "shape-mint-diag")]
+    let (census_on, census_list_hash, census_file, census_line) = census;
+    let table = &crate::state::state().shapes;
+    let mut inner = table.inner.borrow_mut();
     // A static id is adopted only for facts it can name (ordinary band,
     // generation 0, a birth rep: no deprecated lane, brands of class
     // templates only: a template brand is its class id in every agent, a
@@ -2004,21 +2051,56 @@ pub(crate) struct ReceiverFacts {
     /// The receiver's private brands (#11791), sorted. A brand is only ever
     /// added, so every shape minted for a receiver carries the brands of the
     /// shape it replaces.
-    pub(crate) brands: Vec<u64>,
+    pub(crate) brands: BrandList,
+}
+
+/// A receiver's private brands, sorted, copied out of its shape record
+/// (#11791). Almost every receiver has none, and then the list is `None`: no
+/// allocation, and nothing to free after the mint.
+pub(crate) struct BrandList(Option<Box<[u64]>>);
+
+impl BrandList {
+    pub(crate) const NONE: BrandList = BrandList(None);
+
+    /// A copy of `brands`, which may borrow a record a mint can retire.
+    #[inline]
+    pub(crate) fn copy_of(brands: &[u64]) -> BrandList {
+        if brands.is_empty() {
+            BrandList::NONE
+        } else {
+            BrandList(Some(brands.into()))
+        }
+    }
+
+    #[inline]
+    pub(crate) fn as_slice(&self) -> &[u64] {
+        self.0.as_deref().unwrap_or(&[])
+    }
+
+    /// Add `brand`, keeping the list sorted. `false` when it is already there.
+    pub(crate) fn insert(&mut self, brand: u64) -> bool {
+        let Err(at) = self.as_slice().binary_search(&brand) else {
+            return false;
+        };
+        let mut brands = self.as_slice().to_vec();
+        brands.insert(at, brand);
+        self.0 = Some(brands.into_boxed_slice());
+        true
+    }
 }
 
 impl ReceiverFacts {
     /// A shape minted for no receiver: an intrinsic, a birth, a seed.
     pub(crate) const NONE: ReceiverFacts = ReceiverFacts {
         extra_summary: 0,
-        brands: Vec::new(),
+        brands: BrandList::NONE,
     };
 
     /// A receiverless mint with an attribute summary its keys do not carry.
     pub(crate) const fn summary(extra_summary: u8) -> ReceiverFacts {
         ReceiverFacts {
             extra_summary,
-            brands: Vec::new(),
+            brands: BrandList::NONE,
         }
     }
 
@@ -2027,7 +2109,7 @@ impl ReceiverFacts {
     pub(crate) fn of_descriptor(d: &ShapeDescriptor, extra_summary: u8) -> ReceiverFacts {
         ReceiverFacts {
             extra_summary,
-            brands: d.brands().to_vec(),
+            brands: BrandList::copy_of(d.brands()),
         }
     }
 }
@@ -2041,7 +2123,11 @@ impl ReceiverFacts {
 pub(crate) unsafe fn receiver_facts(obj: *const crate::object::ObjectHeader) -> ReceiverFacts {
     ReceiverFacts {
         extra_summary: receiver_extra_summary(obj),
-        brands: receiver_brands(obj),
+        brands: if obj.is_null() {
+            BrandList::NONE
+        } else {
+            BrandList::copy_of(shape_brands_by_id(object_shape_stamp(obj)).unwrap_or(&[]))
+        },
     }
 }
 
@@ -2077,7 +2163,7 @@ pub(crate) unsafe fn receiver_facts_of_current(
     );
     ReceiverFacts {
         extra_summary: receiver_extra_summary(obj),
-        brands: current.brands().to_vec(),
+        brands: BrandList::copy_of(current.brands()),
     }
 }
 
@@ -4068,7 +4154,7 @@ pub(crate) unsafe fn transition_object_shape_semantics_keeping_constfn(
         summary,
         rep,
         &infos,
-        &receiver.brands,
+        receiver.brands.as_slice(),
         None,
     ) else {
         return transition_object_shape_semantics(obj);
@@ -4646,10 +4732,9 @@ pub(crate) unsafe fn transition_object_shape_add_brand(
         object_shape_descriptor(obj).expect("shape synchronization must publish a descriptor")
     });
     let mut receiver = receiver_facts_of_current(obj, &current);
-    let Err(at) = receiver.brands.binary_search(&brand) else {
+    if !receiver.brands.insert(brand) {
         return false;
-    };
-    receiver.brands.insert(at, brand);
+    }
     crate::array::clear_array_subclass_named_prefix_token(obj);
     let kind = store_kind::mint_kind(current.object_kind, obj);
     let scope = crate::gc::RuntimeHandleScope::new();

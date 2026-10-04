@@ -271,7 +271,7 @@ impl ShapeRecord {
     }
 
     /// The same record carrying attribute summary `summary`.
-    #[inline]
+    #[inline(always)]
     pub(super) fn with_summary(mut self, summary: u8) -> ShapeRecord {
         self.flags_and_kind = (self.flags_and_kind & !RECORD_SUMMARY_MASK)
             | (u32::from(summary) << RECORD_SUMMARY_SHIFT);
@@ -456,7 +456,7 @@ impl ShapeRecord {
     /// lane absent from `infos` is reserved for optional NoPointer. The old
     /// `with_rep` keeps rejecting `11`, so no legacy mint silently omits the
     /// identity fact. Called only after the interner misses.
-    #[inline]
+    #[inline(always)]
     pub(super) fn with_special_facts(
         mut self,
         rep: u64,
@@ -474,13 +474,7 @@ impl ShapeRecord {
         self.rep = rep;
         self.special_constfn_mask = mask;
         if !infos.is_empty() || !brands.is_empty() {
-            let extras = Box::new(ShapeExtras {
-                constfn_infos: infos.into(),
-                brands: brands.into(),
-                to_nopointer: std::sync::atomic::AtomicU32::new(0),
-                to_any: std::sync::atomic::AtomicU32::new(0),
-            });
-            self.extras = Box::into_raw(extras) as usize as u64;
+            self.extras = new_extras(infos, brands);
         }
         self
     }
@@ -557,7 +551,7 @@ impl ShapeRecord {
 
     /// The same record for a receiver whose [[Prototype]] identity is
     /// `proto_id` (see [`ShapeRecord::proto_id`]).
-    #[inline]
+    #[inline(always)]
     pub(super) fn with_proto_id(mut self, proto_id: u64) -> ShapeRecord {
         self.proto_id = proto_id;
         self
@@ -595,7 +589,7 @@ impl ShapeRecord {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[inline]
+    #[inline(always)]
     pub(super) fn facts_match_proto_with_special(
         &self,
         keys: u64,
@@ -633,7 +627,7 @@ impl ShapeRecord {
     /// Exact-facts identity test (#8067): keys edge, both counts, generation,
     /// kind, tombstones. Liveness bits and the facts-indexed bit are storage
     /// state, never identity.
-    #[inline]
+    #[inline(always)]
     pub(super) fn facts_match(
         &self,
         keys: u64,
@@ -757,6 +751,20 @@ pub(super) fn facts_key_proto(
     )
 }
 
+/// The extension record of a shape with ConstFn slots or private brands, out
+/// of line: almost every mint has neither.
+#[cold]
+#[inline(never)]
+fn new_extras(infos: &[ConstFnSlotInfo], brands: &[u64]) -> u64 {
+    let extras = Box::new(ShapeExtras {
+        constfn_infos: infos.into(),
+        brands: brands.into(),
+        to_nopointer: std::sync::atomic::AtomicU32::new(0),
+        to_any: std::sync::atomic::AtomicU32::new(0),
+    });
+    Box::into_raw(extras) as usize as u64
+}
+
 /// Brand-list identity. Nearly every shape has none, and slice equality calls
 /// `memcmp` even for two empty lists, which the shape intern's hit path paid
 /// on every lookup (#11791).
@@ -769,7 +777,7 @@ pub(crate) fn brand_lists_equal(a: &[u64], b: &[u64]) -> bool {
 /// exact old fold; ConstFn adds a domain-separated ordered body list. Address
 /// values are process-local identities, never serialized as static seed keys.
 #[allow(clippy::too_many_arguments)]
-#[inline]
+#[inline(always)]
 pub(super) fn facts_key_proto_with_special(
     keys: u64,
     logical_key_count: u32,
@@ -820,14 +828,25 @@ pub(super) fn facts_key_proto_with_special(
     // Brands (#11791) are domain-separated the same way; a brandless shape
     // keeps the key it had before brands existed.
     if !brands.is_empty() {
-        h = fold(h, 0x8_4252_4e44);
-        for &brand in brands {
-            h = fold(h, brand);
-        }
+        h = fold_brands(h, brands);
     }
     // Final avalanche: FNV keeps most of its entropy in the high bits and
     // hashbrown's probe sequence starts from the LOW bits.
     h ^ (h >> 32)
+}
+
+/// The brand half of [`facts_key_proto_with_special`], out of line: almost
+/// no shape carries a brand, and the hash runs on every intern.
+#[cold]
+#[inline(never)]
+fn fold_brands(mut h: u64, brands: &[u64]) -> u64 {
+    const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+    let fold = |acc: u64, word: u64| (acc ^ word).wrapping_mul(FNV_PRIME);
+    h = fold(h, 0x8_4252_4e44);
+    for &brand in brands {
+        h = fold(h, brand);
+    }
+    h
 }
 
 /// Records per chunk. Ids are minted far faster than they survive — the
