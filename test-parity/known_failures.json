@@ -1033,5 +1033,11 @@
     "platforms": [
       "linux"
     ]
+  },
+  "test_gap_regexp_observe_known_wrong": {
+    "issue": "11881",
+    "added": "2026-10-04",
+    "category": "bug-open",
+    "reason": "RegExp one-shape S0: six spec-observability rows (typed patched test, flags getter, subclass instanceof, expando, setPrototypeOf, strict delete lastIndex) differ from node; fixed by slices S2/S3/S5 of the one-shape plan, delete this entry when the last row flips."
   }
 }
