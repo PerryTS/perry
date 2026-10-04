@@ -1,3 +1,17 @@
+LAZY RSS LINUX FULL SUITE INDEPENDENTLY VERIFIED
+Private d4f491673b passesLinux4862/0failed/5ignored/0filtered, actualcopied
+zeroquery andpinnedfallbackpositiveRSS subjects bothpass. 5011source inputs,
+3shippingdelta paths,3actualproducts andrawbuild/test receipts/logs independently
+verified;10evidencefiles copiedlocally/rehashed. Mac4878/0/5 alreadyverified.
+No applicationbenefit claimed untilV52full17normal-auto comparison completes.
+Once-adviceV46 is nowactuallycompiling firstprivateauto runtime; wrapper1538199,
+Python1854717, compiler1855685, Cargo1855694 observedlive. Otherheavyjobs
+wait under thesharedlock. No terminal/timeout restart; borrowedflock creator
+PID mustnotbe mistakenforliveowner afterfdinheritance.
+Separatelocal negativecontrol restoresoriginal unconditionalRSSquery in
+onlygc/mod.rs, withidentical pairedtests. Expectedcopiedtest failure will
+prove the gate detects the unnecessaryquery; no productionchange/adoption.
+
 CURRENT07 LINKED EXECUTIONS INDEPENDENTLY VERIFIED
 33freshbuilds/66correctexec across11fixtures and3arms(base/GC/originalentry).
 All33movingruns showactualcopiedobjects andprotectedretiredfromspace.

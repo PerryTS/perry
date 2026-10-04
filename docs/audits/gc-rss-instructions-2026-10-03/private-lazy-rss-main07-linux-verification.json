@@ -1,0 +1,58 @@
+{
+  "base": "07e50b14a3d23e8f914193ec4d5a679adbd7c37a",
+  "private_commit": "d4f491673b1d5930eaaffdd1f03c939754091eb5",
+  "tracked_inputs": 5011,
+  "private_paths": [
+    "crates/perry-runtime/src/gc/mod.rs",
+    "crates/perry-runtime/src/gc/tests/mod.rs",
+    "crates/perry-runtime/src/gc/tests/minor_lazy_rss.rs"
+  ],
+  "commands": [
+    {
+      "name": "build",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--release",
+        "-p",
+        "perry",
+        "-p",
+        "perry-runtime-static",
+        "-p",
+        "perry-stdlib-static"
+      ],
+      "rc": 0,
+      "pid": 1821431,
+      "elapsed_s": 208.7930544419214,
+      "log_sha256": "a7f928fc1933b27464f95cbf2be92eedc422d4ed17eef46ff1176b6161b3be14"
+    },
+    {
+      "name": "runtime-tests",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--release",
+        "-p",
+        "perry-runtime",
+        "--lib"
+      ],
+      "rc": 0,
+      "pid": 1835550,
+      "elapsed_s": 128.23104982217774,
+      "log_sha256": "124ce822504d68a67fcb38c5eac33fff6ca21b4269f3d617cd0616582b95f547"
+    }
+  ],
+  "products": {
+    "perry": "452f4aeb0ef0def407168eebbf060c97fa02e93a9e7b2cda9b5e0f6f9077c78d",
+    "libperry_runtime.a": "583971bb8e00d28d09445c814337fda515d9d86467398f677d671f691ef0a49b",
+    "libperry_stdlib.a": "a54697585a89a6b8ac41fc2123abdca2d90b3f74ce122d1af3da265e1608dff9"
+  },
+  "runtime": {
+    "passed": 4862,
+    "failed": 0,
+    "ignored": 5
+  },
+  "scope": "Private lazy-RSS build and actual copying/pinned fallback tests. Application RSS and instruction benefit remains unproven."
+}
