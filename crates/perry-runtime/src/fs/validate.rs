@@ -224,38 +224,6 @@ pub(crate) fn describe_received_js(value: f64) -> *mut StringHeader {
         return received_name("function ", name.get_nanbox_f64());
     }
     if jv.is_pointer() {
-        use crate::object::view_brand::{view_brand, ViewBrand};
-        let brand = view_brand(value.get_nanbox_f64());
-        let intrinsic = match brand {
-            Some(ViewBrand::NodeBuffer) => Some("Buffer"),
-            Some(ViewBrand::TypedArray(kind)) => Some(crate::typedarray::name_for_kind(kind)),
-            Some(ViewBrand::DataView) => Some("DataView"),
-            _ => None,
-        };
-        // Buffer-backed views' generic constructor path still reports Uint8Array.
-        // Own overrides and custom prototype chains must retain their observable names.
-        if let Some(name) = intrinsic {
-            let key = scope.root_nanbox_f64(received_key("constructor"));
-            let own =
-                crate::object::js_object_has_own(value.get_nanbox_f64(), key.get_nanbox_f64());
-            let addr = crate::value::addr_class::object_ref_addr(value.get_nanbox_f64());
-            let class_instance =
-                unsafe { crate::value::addr_class::try_read_tracked_gc_header(addr) }.is_some_and(
-                    |h| unsafe {
-                        (*h.as_ptr()).obj_type == crate::gc::GC_TYPE_OBJECT
-                            && (*(addr as *const crate::object::ObjectHeader)).class_id != 0
-                    },
-                );
-            // TypedArray's generic path honors per-kind prototype constructor data
-            // and getters, including Node's three observable reads of the latter.
-            if !matches!(brand, Some(ViewBrand::TypedArray(_)))
-                && own.to_bits() != crate::value::TAG_TRUE
-                && !class_instance
-                && crate::object::prototype_chain::object_static_prototype(addr).is_none()
-            {
-                return received_text(&format!("an instance of {name}"));
-            }
-        }
         let constructor =
             scope.root_nanbox_f64(received_property(value.get_nanbox_f64(), "constructor"));
         if crate::value::js_is_truthy(constructor.get_nanbox_f64()) != 0 {
@@ -331,6 +299,39 @@ fn received_property(value: f64, name: &str) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let value = scope.root_nanbox_f64(value);
     let key = scope.root_nanbox_f64(received_key(name));
+    // Buffer-backed Buffer/Uint8Array's generic constructor dispatch hardcodes
+    // a builtin. For diagnostics, read their actual chain with the same rooted
+    // inherited-property walker used by the other views. Own properties win.
+    if name == "constructor" {
+        let addr = crate::value::addr_class::object_ref_addr(value.get_nanbox_f64());
+        let intrinsic = match crate::buffer::buffer_brand(addr) {
+            Some(crate::buffer::BufferBrand::NodeBuffer) => Some("Buffer"),
+            Some(crate::buffer::BufferBrand::Uint8Array) => Some("Uint8Array"),
+            _ => None,
+        };
+        if let Some(intrinsic) = intrinsic {
+            if crate::object::js_object_has_own(value.get_nanbox_f64(), key.get_nanbox_f64())
+                .to_bits()
+                != crate::value::TAG_TRUE
+            {
+                let proto = scope.root_nanbox_f64(
+                    crate::object::prototype_chain::object_static_prototype(addr)
+                        .map(f64::from_bits)
+                        .unwrap_or_else(|| crate::object::builtin_prototype_value(intrinsic)),
+                );
+                let key_ptr = crate::value::js_get_string_pointer_unified(key.get_nanbox_f64());
+                let result =
+                    crate::object::prototype_chain::resolve_inherited_field_from_prototype(
+                        crate::value::addr_class::object_ref_addr(value.get_nanbox_f64()),
+                        proto.get_nanbox_u64(),
+                        key_ptr as *const StringHeader,
+                    )
+                    .unwrap_or_else(JSValue::undefined)
+                    .bits();
+                return f64::from_bits(result);
+            }
+        }
+    }
     unsafe {
         crate::object::js_object_get_property_key(value.get_nanbox_f64(), key.get_nanbox_f64())
     }
