@@ -1,3 +1,39 @@
+DEFERRED-RSS APPLICATION AND MOVING COMPARISONS VERIFIED
+V52 all204freshmeasurements match Node, 15control/15candidate builds,
+515raw/proof files copiedlocally/rehashed. All signed rows published.
+No uniform benefit: retain/release instructions +0.602%, TS +0.043%,
+Zod RSS +0.729%. Most instruction changes tiny; no adoption claim.
+V54 all44linked executions correct, all22movingruns actuallycopy and
+protect retiredfromspace. All165raw/proof files copiedlocally/rehashed.
+Learned-floor private3fb6cd50ed fullMac suite4879/0/5 passed; source5011
+unchanged before/after. First proof misexpected isolated subprocess
+filtered counts; corrected verifier distinguishes full suite and 8 isolated
+subjects. Separate second proof had incorrectrelativepath; no tests rerun.
+Address, test registration, Node pin and file cap checks pass. A redundant
+standalone GC corpus command used a nonexistent name; actual registration
+check already proves104/104 corpus entries, no file/generated corpus change.
+Production5010 inputs remainunchanged.
+
+CURRENT07 ONCE MATRIX, MOVING ROOTS AND FFI/EVENTS VERIFIED
+Once-advice full17: 306 fresh correct measurements. TS RSS -2.159%,
+instructions -1.474%; trees RSS -11.705%. Retain/release RSS +1.338%
+remains unresolved; 27 fresh interleaved RSS runs on identical GC/entry/once
+binaries queued as V58, without rebuilding or changing GC defaults.
+All signed rows/distributions published; no private policy adopted.
+Once linked: 44 correct executions, 22 actually copying/protected runs.
+Linux current07 FFI/events: 15 + 75 tests and 5 doc tests pass, 13 ignored.
+All 165 linked and 8 FFI/event evidence files copied locally and rehashed.
+Configured ScriptC support probe: four unchanged-source native builds fail:
+TS require lacks lowering; Zod static npm fails native any/method-signature
+restrictions. No failed compilation receives an RSS rank. All 22 files verified.
+Ring natural trace: 12 KiB median Eden survivors versus 3 MiB steady
+pre-minor nursery occupancy. Full-runtime diagnostic scope disclosed;
+normal-auto RSS remains separately measured. All 33 trace proof files verified.
+Private learned-floor 3fb6cd50ed implemented, based on deferred RSS query;
+startup/lifetime sizing unchanged, only sustained low-survival nursery floor
+lowered. Mac full suite running; own isolated Linux build 2022343 queued.
+Deferred-RSS full17 V52 running; moving V54 still pending. Production code unchanged.
+
 DEFERRED-RSS NEGATIVE CONTROL VERIFIED
 Detached test-only control restores onlythe original earlyRSSquery location.
 All5011inputs matchprivate d4f491 except gc/mod.rs; pairedtestsourceunchanged.

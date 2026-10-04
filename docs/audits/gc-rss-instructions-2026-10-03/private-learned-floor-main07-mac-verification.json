@@ -1,0 +1,30 @@
+{
+  "private_commit": "3fb6cd50ede80fe2cbef031d984f70c9dcb13def",
+  "parent_private_commit": "d4f491673b1d5930eaaffdd1f03c939754091eb5",
+  "source_count": 5011,
+  "runtime": {
+    "passed": 4879,
+    "failed": 0,
+    "ignored": 5,
+    "filtered": 0
+  },
+  "isolated_subprocess_tests": 8,
+  "result": {
+    "command": [
+      "cargo",
+      "+nightly-2026-08-20",
+      "test",
+      "--locked",
+      "--release",
+      "-p",
+      "perry-runtime",
+      "--lib"
+    ],
+    "rc": 0,
+    "pid": 52398,
+    "elapsed_s": 168.15124241728336,
+    "source_manifest_sha256": "7d64d107554277107c9ee83559f0cebeb089b4ad2cefdcd1672e544f6f54ef83",
+    "raw_log_sha256": "fbab2324d652173b38f0f0107ce6adccfbdd55314bd6338e3ed64102e10ea403"
+  },
+  "scope": "Private learned floor, full unfiltered Mac runtime tests, unchanged source inputs. First proof mistakenly expected subprocess filtered count zero; subprocesses intentionally select one test. Second proof attempt used an incorrect relative artifact path. Application RSS and instructions unproven."
+}
