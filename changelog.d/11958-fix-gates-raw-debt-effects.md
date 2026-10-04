@@ -1,0 +1,1 @@
+Internal: the raw-handle debt ratchet is back under its baseline (871 -> 868) after the fresh-class cost work, and the Linux GC call-effects table and the wasm runtime ABI table are regenerated for the worker_threads symbols main gained.
