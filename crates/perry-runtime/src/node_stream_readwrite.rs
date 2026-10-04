@@ -1968,6 +1968,10 @@ pub(crate) fn js_node_stream_readable_chunks_result(stream: f64) -> Result<Optio
     Ok(Some(out))
 }
 
+#[cfg(test)]
+#[path = "node_stream_pipe_dests_gc_tests.rs"]
+mod pipe_dests_gc_tests;
+
 #[path = "node_stream_readwrite_tables.rs"]
 mod tables;
 pub(super) use tables::{emitter_methods, readable_methods, writable_methods};
