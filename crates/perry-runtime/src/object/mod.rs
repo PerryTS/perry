@@ -5,7 +5,6 @@
 //! - Parent/shape ID (for inheritance and descriptor lookup)
 //! - Metadata pointer (for overflow storage and descriptor overrides)
 //! - Fields array (inline)
-
 use crate::arena::arena_alloc_gc;
 use crate::ArrayHeader;
 use crate::JSValue;
@@ -14,7 +13,6 @@ use std::collections::HashMap;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::RwLock;
-
 /// Minimum number of inline field slots every object is allocated with, even
 /// when it has fewer fields. This is a corruption-critical invariant: allocation,
 /// every field get/set bounds check, and every direct-slot read MUST use the
@@ -47,14 +45,12 @@ use std::sync::RwLock;
 /// all of them), so 2 is chosen as the one that keeps the most inline headroom
 /// for a dynamically-grown `{}` at zero byte cost.
 pub(crate) const INLINE_SLOT_FLOOR: usize = 2;
-
 // Submodules (issue #1103): behavior-preserving split of the former
 // 11.2k-line object.rs. Public re-exports keep FFI symbols stable.
 #[cfg(test)]
 mod test_root_helpers;
 #[cfg(test)]
 pub(crate) use test_root_helpers::*;
-
 pub(crate) mod alloc;
 mod alloc_basic;
 pub(crate) mod alloc_plain;
@@ -400,7 +396,6 @@ pub use this_binding::{
 pub use to_string_tag::js_object_to_string;
 pub(crate) use to_string_tag::typed_array_to_string_tag_name;
 pub(crate) use to_string_tag::web_builtin_to_string_tag;
-
 /// An atomic GC root whose backing slot belongs to the calling Perry agent.
 ///
 /// The public handle stays process-global and contains no heap address. Every
@@ -411,42 +406,35 @@ pub(crate) use to_string_tag::web_builtin_to_string_tag;
 pub(crate) struct RealmAtomicI64 {
     slot: &'static crate::tls_hot::HotKey<AtomicI64>,
 }
-
 impl RealmAtomicI64 {
     // `pub(crate)` so a family that owns its own prototype singletons can
     // declare them in its own module (`timer.rs`) instead of parking them here.
     pub(crate) const fn new(slot: &'static crate::tls_hot::HotKey<AtomicI64>) -> Self {
         Self { slot }
     }
-
     #[inline(always)]
     pub(crate) fn load(&self, ordering: Ordering) -> i64 {
         self.slot.with(|slot| slot.load(ordering))
     }
-
     #[inline(always)]
     pub(crate) fn store(&self, value: i64, ordering: Ordering) {
         self.slot.with(|slot| {
             crate::gc::runtime_store_root_atomic_raw_i64(slot, value, ordering);
         });
     }
-
     #[inline(always)]
     pub(crate) fn with_slot<R>(&self, f: impl FnOnce(&AtomicI64) -> R) -> R {
         self.slot.with(f)
     }
-
     #[cfg(test)]
     pub(crate) fn test_slot_addr(&self) -> usize {
         self.slot.with(|slot| slot as *const AtomicI64 as usize)
     }
 }
-
 /// `u64` twin of [`RealmAtomicI64`] for NaN-boxed root words.
 pub(crate) struct RealmAtomicU64 {
     slot: &'static crate::tls_hot::HotKey<AtomicU64>,
 }
-
 impl RealmAtomicU64 {
     const fn new(slot: &'static crate::tls_hot::HotKey<AtomicU64>) -> Self {
         Self { slot }
