@@ -132,7 +132,7 @@ fn stamp_f64_lane(obj: *mut crate::object::ObjectHeader, slot: u32) -> u32 {
             d.object_kind,
             d.hole_count,
             d.proto_id,
-            d.summary,
+            crate::object::shapes::ReceiverFacts::of_descriptor(&d, d.summary),
             with_slot_rep(REP_ANY, slot, REP_F64),
             None,
         ));

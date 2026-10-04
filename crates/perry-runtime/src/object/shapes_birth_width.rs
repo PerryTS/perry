@@ -125,7 +125,7 @@ pub(crate) fn keyless_birth_width(proto_id: u64) -> u32 {
         0,
         ShapeObjectKind::Ordinary,
         proto_id,
-        0,
+        super::ReceiverFacts::NONE,
     ));
     let table = &crate::state::state().shapes;
     let Some(record) = table.slab().record_ptr(id) else {

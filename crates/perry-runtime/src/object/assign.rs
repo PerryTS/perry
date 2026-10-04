@@ -747,6 +747,10 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
             );
             // Use the public [[Get]] path, not raw field slots, so accessors run
             // and abrupt completions propagate the way Object.assign requires.
+            // The shape answers for every key at once: an own key is hidden
+            // only when the receiver is a class instance or its shape has a
+            // private entry (#11791), and no key of this snapshot becomes one.
+            let hide_private = crate::object::field_get_set::own_keys_may_hide(src);
             for i in 0..key_count {
                 // Re-derive every raw address from its handle at the top of the
                 // iteration: the PREVIOUS iteration's getter may have moved all
@@ -760,7 +764,7 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
                 }
                 // Private elements (`#x`) live in a class instance's keys_array
                 // but are never copied by Object.assign / object spread.
-                if crate::object::instance_private_key_hidden(src, key_val) {
+                if hide_private && crate::object::instance_private_key_hidden(src, key_val) {
                     continue;
                 }
                 let key_f64 = f64::from_bits(key_val.bits());

@@ -84,6 +84,80 @@ pub(crate) fn emit_private_site_cache(ctx: &mut FnCtx<'_>, words: usize) -> Stri
     format!("@{slot_name}")
 }
 
+/// `i1`: no fresh ClassDefinitionEvaluation of private-class template
+/// `class_id` exists yet (its bit in `PERRY_PRIVATE_TEMPLATE_EVALUATED` is
+/// clear), so every private access of the class resolves the template's own
+/// names and brand.
+pub(crate) fn emit_private_template_inert(
+    blk: &mut crate::block::LlBlock,
+    class_id: u32,
+) -> String {
+    let bit = (class_id as usize) & 0xFFFF;
+    let word_offset = (bit / 64 * 8).to_string();
+    let mask = (1u64 << (bit % 64)) as i64;
+    let tpl_ptr = blk.gep(
+        crate::types::I8,
+        "@PERRY_PRIVATE_TEMPLATE_EVALUATED",
+        &[(I64, &word_offset)],
+    );
+    let tpl = blk.load_atomic_monotonic(I64, &tpl_ptr, 8);
+    let tpl_bit = blk.and(I64, &tpl, &mask.to_string());
+    blk.icmp_eq(I64, &tpl_bit, "0")
+}
+
+/// Inline hit of a private-access site word (#11791): the receiver is a real
+/// POINTER-tagged object, its template has no fresh evaluation
+/// (`PERRY_PRIVATE_TEMPLATE_EVALUATED`), and its ShapeId equals the last one
+/// the site proved. The element's presence is a fact of that ShapeId, and a
+/// POINTER-tagged payload's `+4` word equals a live object ShapeId only for an
+/// ordinary object carrying it (the property IC's rule 3), so a hit returns
+/// `obj` unchanged. Anything else runs `miss`, the runtime guard, which is the
+/// only source of a verdict, a throw, or a new site word.
+pub(crate) fn emit_private_site_guard(
+    ctx: &mut FnCtx<'_>,
+    obj: &str,
+    class_id: u32,
+    site: &str,
+    miss: impl FnOnce(&mut FnCtx<'_>) -> String,
+) -> String {
+    let probe_idx = ctx.new_block("psite.shape");
+    let miss_idx = ctx.new_block("psite.miss");
+    let join_idx = ctx.new_block("psite.join");
+    let probe_l = ctx.block_label(probe_idx);
+    let miss_l = ctx.block_label(miss_idx);
+    let join_l = ctx.block_label(join_idx);
+    let blk = ctx.block();
+    let word = blk.load_atomic_monotonic(I64, site, 8);
+    let bits = blk.bitcast_double_to_i64(obj);
+    // `bits - (POINTER_TAG + 0x100000) < 2^48 - 0x100000`: POINTER-tagged and
+    // above the small-handle band, in one compare.
+    let biased = blk.sub(I64, &bits, "9222527611925692416");
+    let in_range = blk.icmp_ult(I64, &biased, "281474975662080");
+    let inert = emit_private_template_inert(blk, class_id);
+    let primed = blk.icmp_ne(I64, &word, "0");
+    let ready = blk.and(crate::types::I1, &in_range, &inert);
+    let ready = blk.and(crate::types::I1, &ready, &primed);
+    blk.cond_br(&ready, &probe_l, &miss_l);
+
+    ctx.current_block = probe_idx;
+    let blk = ctx.block();
+    let shape_addr = blk.add(I64, &biased, "1048580"); // payload + 4
+    let shape_ptr = blk.inttoptr(I64, &shape_addr);
+    let shape = blk.load(crate::types::I32, &shape_ptr);
+    let shape = blk.zext(crate::types::I32, &shape, I64);
+    let hit = blk.icmp_eq(I64, &shape, &word);
+    blk.cond_br(&hit, &join_l, &miss_l);
+
+    ctx.current_block = miss_idx;
+    let slow = miss(ctx);
+    let slow_end = ctx.block_label(ctx.current_block);
+    ctx.block().br(&join_l);
+
+    ctx.current_block = join_idx;
+    ctx.block()
+        .phi(DOUBLE, &[(obj, &probe_l), (&slow, &slow_end)])
+}
+
 pub(crate) fn emit_regexp_site_key(ctx: &mut FnCtx<'_>) -> String {
     let site_id = ctx.ic_site_counter;
     ctx.ic_site_counter += 1;
@@ -1393,20 +1467,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // receiver shape; every other kind keeps the plain guard.
             if *kind == 0 && *op < 2 && class_id != 0 {
                 let site = emit_private_site_cache(ctx, 1);
-                return Ok(ctx.block().call(
-                    DOUBLE,
-                    "js_private_guard_site",
-                    &[
-                        (DOUBLE, &obj),
-                        (DOUBLE, &brand_owner),
-                        (I32, &class_id.to_string()),
-                        (PTR, &key_label),
-                        (I32, &field_name.len().to_string()),
-                        (I32, &kind.to_string()),
-                        (I32, &op.to_string()),
-                        (PTR, &site),
-                    ],
-                ));
+                let (kind, op) = (*kind, *op);
+                return Ok(emit_private_site_guard(ctx, &obj, class_id, &site, |ctx| {
+                    ctx.block().call(
+                        DOUBLE,
+                        "js_private_guard_site",
+                        &[
+                            (DOUBLE, &obj),
+                            (DOUBLE, &brand_owner),
+                            (I32, &class_id.to_string()),
+                            (PTR, &key_label),
+                            (I32, &field_name.len().to_string()),
+                            (I32, &kind.to_string()),
+                            (I32, &op.to_string()),
+                            (PTR, &site),
+                        ],
+                    )
+                }));
             }
             Ok(ctx.block().call(
                 DOUBLE,

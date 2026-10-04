@@ -1539,7 +1539,7 @@ fn js_object_keys_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
         // but are never enumerable/reflectable properties. Take the filtering
         // path for class instances (class_id != 0) so they are dropped. Plain
         // object literals keep class_id 0, so `{"#fff": 1}` stays visible.
-        let hide_private = (*obj).class_id != 0;
+        let hide_private = own_keys_may_hide(obj);
         let hide_wasi_state = crate::wasi::is_wasi_import_object(obj)
             || crate::wasi::is_wasi_instance(f64::from_bits(
                 crate::value::js_nanbox_pointer(obj as i64).to_bits(),
@@ -1583,7 +1583,7 @@ fn js_object_keys_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
                 Ok(s) => s,
                 Err(_) => continue,
             };
-            if (hide_private && is_internal_runtime_key(key_str))
+            if (hide_private && own_key_hidden_bytes(obj, name_bytes))
                 || (hide_wasi_state && key_str.starts_with("__wasi"))
             {
                 continue;
@@ -1603,19 +1603,42 @@ fn js_object_keys_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
 }
 
 /// Get the values of an object as an array
-/// True when `key_val` names compiler/runtime-only private storage on a class
-/// instance. Public String keys such as `"#x"` remain visible.
+/// True when own key `key_val` of `obj` is not a property: a private field
+/// (an `ENTRY_PRIVATE` entry, #11791, on any object a class installed one
+/// on) or one of the runtime's internal keys on a class instance. Public
+/// String keys such as `"#x"` remain visible.
 pub(crate) unsafe fn instance_private_key_hidden(
     obj: *const ObjectHeader,
     key_val: crate::JSValue,
 ) -> bool {
-    if obj.is_null() || (*obj).class_id == 0 {
+    if !own_keys_may_hide(obj) {
         return false;
     }
     let mut buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     crate::string::js_string_key_bytes(key_val, &mut buf)
-        .map(is_internal_runtime_key_bytes)
-        .unwrap_or(false)
+        .is_some_and(|bytes| own_key_hidden_bytes(obj, bytes))
+}
+
+/// Can any own key of `obj` be hidden from reflection
+/// ([`own_key_hidden_bytes`])? One header and one shape-record load: a plain
+/// object no class installed a private field on answers `false`.
+#[inline]
+pub(crate) unsafe fn own_keys_may_hide(obj: *const ObjectHeader) -> bool {
+    !obj.is_null()
+        && ((*obj).class_id != 0
+            || crate::object::key_attrs::object_summary(obj)
+                & crate::object::key_attrs::SUMMARY_PRIVATE
+                != 0)
+}
+
+/// [`instance_private_key_hidden`] for a key held as bytes.
+#[inline]
+pub(crate) unsafe fn own_key_hidden_bytes(obj: *const ObjectHeader, key: &[u8]) -> bool {
+    if obj.is_null() {
+        return false;
+    }
+    crate::object::key_attrs::object_key_is_private(obj, key)
+        || ((*obj).class_id != 0 && is_internal_runtime_key_bytes(key))
 }
 
 /// True for perry's hidden runtime-internal own keys — the
@@ -1657,9 +1680,6 @@ pub(crate) fn is_internal_runtime_key_bytes(b: &[u8]) -> bool {
         || b.starts_with(b"__perry_computed_field_key_")
         || b == b"#<perry:class-evaluation-prototype>"
         || b == b"#<perry:private-class-lexical-binding>"
-        || b.starts_with(b"#<perry:private-brand:")
-        || b.starts_with(b"#<perry:private-field:")
-        || b.starts_with(b"#<perry:private-value:")
         || b.starts_with(b"#<perry:class-evaluation-method:")
         || b.starts_with(b"#<perry:static-private-method:")
 }
@@ -1860,6 +1880,10 @@ fn js_object_values_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
         //     read time, not cached up front: an earlier getter can create a
         //     descriptor or flip a future key's enumerability, so we defer the
         //     `descriptor_marks_non_enumerable` check to the read phase.
+        // The shape answers for every key at once: an own key is hidden
+        // only when the receiver is a class instance or its shape has a
+        // private entry (#11791), and no key of this snapshot becomes one.
+        let hide_private = own_keys_may_hide(obj);
         let mut snapshot_keys: Vec<Vec<u8>> = Vec::with_capacity(count);
         let mut key_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
         for j in 0..count {
@@ -1868,7 +1892,7 @@ fn js_object_values_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
                 continue;
             }
             let key_val = crate::array::js_array_get(keys, i);
-            if instance_private_key_hidden(obj, key_val) {
+            if hide_private && instance_private_key_hidden(obj, key_val) {
                 continue;
             }
             if let Some(bytes) = crate::string::js_string_key_bytes(key_val, &mut key_buf) {

@@ -356,6 +356,21 @@ pub extern "C" fn js_private_brand_check(
     if declaring_class_id == 0 || field_name_ptr.is_null() || field_name_len == 0 {
         return false_value;
     }
+    if !super::has_property::in_rhs_is_object(obj) {
+        // V8 names a field, but a method or accessor by its class.
+        let name = if kind == 0 || is_static != 0 {
+            String::from_utf8_lossy(unsafe {
+                std::slice::from_raw_parts(field_name_ptr, field_name_len as usize)
+            })
+            .into_owned()
+        } else {
+            private_class_display_name(declaring_class_id)
+        };
+        let rhs = unsafe { super::has_property::describe_in_operand(obj) };
+        throw_private_type_error(&format!(
+            "Cannot use 'in' operator to search for '{name}' in {rhs}"
+        ));
+    }
     if is_static != 0 && crate::proxy::js_proxy_is_proxy(obj) != 0 {
         return false_value;
     }
@@ -397,7 +412,7 @@ pub extern "C" fn js_private_brand_check(
                     super::super::class_ref_id(obj) == Some(declaring_class_id)
                 } else {
                     private_instance_element_is_present(
-                        crate::proxy::private_element_receiver(obj),
+                        obj,
                         declaring_class_id,
                         field_name_ptr,
                         field_name_len,
@@ -412,9 +427,8 @@ pub extern "C" fn js_private_brand_check(
 
     // Without an evaluation verdict the brand above WAS this check.
     if is_static == 0 && evaluation_verdict.is_some() {
-        let storage = crate::proxy::private_element_receiver(obj_root.get_nanbox_f64());
         if !private_instance_element_is_present(
-            storage,
+            obj_root.get_nanbox_f64(),
             declaring_class_id,
             field_name_ptr,
             field_name_len,
@@ -621,21 +635,26 @@ mod repeated_evaluation_tests {
     }
 
     #[test]
-    fn repeated_evaluations_use_distinct_private_field_markers() {
+    fn repeated_evaluations_use_distinct_private_names_and_brands() {
         unsafe {
             let a = class_object(62_531);
             let b = class_object(62_531);
             private_lexical_brand_push(a);
-            let first = private_field_marker_key(62_531, b"#v".as_ptr(), 2);
+            let first = private_storage_key(62_531, None, None, "#v");
+            let first_brand =
+                private_brand_id(62_531, private_storage_evaluation_id(62_531, None, None));
             private_lexical_brand_pop();
             private_lexical_brand_push(b);
-            let second = private_field_marker_key(62_531, b"#v".as_ptr(), 2);
+            let second = private_storage_key(62_531, None, None, "#v");
+            let second_brand =
+                private_brand_id(62_531, private_storage_evaluation_id(62_531, None, None));
             private_lexical_brand_pop();
             assert_ne!(
-                first.as_ref().map(|key| key.spelling.as_str()),
-                second.as_ref().map(|key| key.spelling.as_str()),
+                first.spelling, second.spelling,
                 "each evaluation creates a fresh private name"
             );
+            assert_ne!(first_brand, second_brand, "and a brand of its own");
+            assert_ne!(first_brand, u64::from(62_531u32), "neither is the shared class's");
         }
     }
 

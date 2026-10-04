@@ -541,34 +541,6 @@ pub extern "C" fn js_proxy_is_proxy(value: f64) -> i32 {
     }
 }
 
-/// Resolve the backing object used by Perry's private-element storage without
-/// invoking any Proxy trap.  Private names use the object's internal
-/// [[PrivateElements]] list in ECMAScript; they are deliberately not ordinary
-/// `[[Get]]`/`[[Set]]` operations.  Perry's Proxy is a stable registry handle,
-/// so its private storage lives on the backing target and all private-element
-/// entry points consistently resolve through this helper.
-pub(crate) fn private_element_receiver(mut value: f64) -> f64 {
-    for _ in 0..32 {
-        let Some(id) = lookup(value) else {
-            return value;
-        };
-        let (target, revoked) = PROXIES.with(|p| {
-            p.borrow()
-                .get(id as usize)
-                .and_then(|entry| entry.as_ref())
-                .map(|entry| (entry.target, entry.revoked))
-                .unwrap_or((f64::from_bits(TAG_UNDEFINED), false))
-        });
-        if revoked {
-            revoked_return_with_message(
-                "Cannot access a private element on a proxy that has been revoked",
-            );
-        }
-        value = target;
-    }
-    value
-}
-
 /// `IsArray`'s Proxy branch (ECMA-262 §7.2.2). If `value` is a live Proxy,
 /// returns `Some(target)` so the caller can recurse on the target; if the Proxy
 /// has been revoked, throws a `TypeError` (does not return). Returns `None` for

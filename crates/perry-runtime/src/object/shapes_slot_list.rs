@@ -732,7 +732,7 @@ pub(crate) unsafe fn publish_object_shape_holes(
         super::store_kind::mint_kind(current.object_kind, obj),
         hole_count,
         current.proto_id,
-        super::receiver_extra_summary(obj),
+        super::receiver_facts_of_current(obj, &current),
         None,
     ));
     // #9200 THE FIX: stamp through the carrier-note funnel. This publish is
@@ -1203,6 +1203,8 @@ pub(super) fn install_external_shape_id_with_constfn(
             summary,
             rep,
             infos,
+            // An externally named id is a birth or seed content: no brand.
+            &[],
         );
         if matches {
             unsafe { (*existing).set(super::shapes_store::RECORD_FLAG_EXTERNAL_CARRIER, true) };
@@ -1224,7 +1226,7 @@ pub(super) fn install_external_shape_id_with_constfn(
     )
     .with_proto_id(proto_id)
     .with_summary(summary)
-    .with_special_facts(rep, infos);
+    .with_special_facts(rep, infos, &[]);
     record.set(super::shapes_store::RECORD_FLAG_EXTERNAL_CARRIER, true);
     for slot in 0..32 {
         if to_any & (1 << slot) != 0 {

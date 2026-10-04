@@ -77,6 +77,8 @@ pub(crate) unsafe fn stamp_linked_final_shape(
         summary,
         rep,
         &infos,
+        // The receiver's private brands carry over (#11791).
+        birth.brands(),
         None,
     ) else {
         return false;

@@ -1325,7 +1325,7 @@ mod prototype_identity_tests {
             ShapeObjectKind::Ordinary,
             0,
             proto_id,
-            0,
+            crate::object::shapes::ReceiverFacts::NONE,
             None,
         ))
     }
@@ -1539,7 +1539,7 @@ mod field_rep_identity_tests {
             ShapeObjectKind::Ordinary,
             0,
             PROTO,
-            0,
+            crate::object::shapes::ReceiverFacts::NONE,
             rep,
             None,
         ))
@@ -1579,7 +1579,7 @@ mod field_rep_identity_tests {
                 ShapeObjectKind::Ordinary,
                 0,
                 PROTO,
-                0,
+                crate::object::shapes::ReceiverFacts::NONE,
                 rep,
                 None,
             ))
@@ -1612,7 +1612,7 @@ mod field_rep_identity_tests {
             ShapeObjectKind::Ordinary,
             0,
             PROTO,
-            0,
+            crate::object::shapes::ReceiverFacts::NONE,
             None,
         ));
         assert_eq!(explicit, legacy);
@@ -1629,7 +1629,7 @@ mod field_rep_identity_tests {
             ShapeObjectKind::Ordinary,
             0,
             PROTO,
-            0,
+            crate::object::shapes::ReceiverFacts::NONE,
             reserved,
             None,
         )

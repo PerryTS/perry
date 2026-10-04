@@ -331,7 +331,7 @@ fn special_body_identity_uses_record_owned_extension() {
         info: 0x2000,
     }];
     let rep = crate::object::field_rep::with_slot_rep(0, 0, crate::object::field_rep::REP_SPECIAL);
-    let special = old.with_special_facts(rep, &a);
+    let special = old.with_special_facts(rep, &a, &[]);
     assert_eq!(special.special_constfn_mask(), 1);
     assert_eq!(special.constfn_infos(), &a);
     assert_eq!(special.position_bound_raw(), old.position_bound_raw());
@@ -346,7 +346,8 @@ fn special_body_identity_uses_record_owned_extension() {
         0,
         0,
         rep,
-        &a
+        &a,
+        &[]
     ));
     assert!(!special.facts_match_proto_with_special(
         0x40,
@@ -358,13 +359,92 @@ fn special_body_identity_uses_record_owned_extension() {
         0,
         0,
         rep,
-        &b
+        &b,
+        &[]
     ));
-    let hash_a =
-        facts_key_proto_with_special(0x40, 1, 1, 0, ShapeObjectKind::Ordinary, 0, 0, 0, rep, &a);
-    let hash_b =
-        facts_key_proto_with_special(0x40, 1, 1, 0, ShapeObjectKind::Ordinary, 0, 0, 0, rep, &b);
+    let hash_a = facts_key_proto_with_special(
+        0x40,
+        1,
+        1,
+        0,
+        ShapeObjectKind::Ordinary,
+        0,
+        0,
+        0,
+        rep,
+        &a,
+        &[],
+    );
+    let hash_b = facts_key_proto_with_special(
+        0x40,
+        1,
+        1,
+        0,
+        ShapeObjectKind::Ordinary,
+        0,
+        0,
+        0,
+        rep,
+        &b,
+        &[],
+    );
     assert_ne!(hash_a, hash_b);
+    // #11791: brands are identity too, and a brandless list keeps the old key.
+    let branded = ShapeRecord::new(0x40, 1, 1, 0, ShapeObjectKind::Ordinary, 0).with_special_facts(
+        0,
+        &[],
+        &[7, 1 << 63 | 3],
+    );
+    assert_eq!(branded.brands(), &[7, 1 << 63 | 3]);
+    assert!(branded.facts_match_proto_with_special(
+        0x40,
+        1,
+        1,
+        0,
+        ShapeObjectKind::Ordinary,
+        0,
+        0,
+        0,
+        0,
+        &[],
+        &[7, 1 << 63 | 3]
+    ));
+    assert!(!branded.facts_match_proto_with_special(
+        0x40,
+        1,
+        1,
+        0,
+        ShapeObjectKind::Ordinary,
+        0,
+        0,
+        0,
+        0,
+        &[],
+        &[7]
+    ));
+    let key = |brands: &[u64]| {
+        facts_key_proto_with_special(
+            0x40,
+            1,
+            1,
+            0,
+            ShapeObjectKind::Ordinary,
+            0,
+            0,
+            0,
+            0,
+            &[],
+            brands,
+        )
+    };
+    assert_ne!(key(&[7]), key(&[8]));
+    assert_eq!(
+        key(&[]),
+        facts_key_proto(0x40, 1, 1, 0, ShapeObjectKind::Ordinary, 0, 0, 0, 0)
+    );
+    assert!(!brands_are_sorted(&[3, 3]));
+    // SAFETY: this synthetic record is the unique owner of its box.
+    unsafe { branded.release_extras() };
     // SAFETY: this synthetic record is the unique owner of its box.
     unsafe { special.release_extras() };
 }

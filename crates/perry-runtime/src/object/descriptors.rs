@@ -186,6 +186,22 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
             }
         }
 
+        // A private field (#11791) or a runtime-internal key is not a property.
+        if obj_jv.is_pointer() {
+            let object = obj_jv.as_pointer::<super::ObjectHeader>();
+            if super::object_is_shaped(object) && super::field_get_set::own_keys_may_hide(object) {
+                let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+                if crate::string::js_string_key_bytes(
+                    crate::JSValue::from_bits(key_value.to_bits()),
+                    &mut sso,
+                )
+                .is_some_and(|bytes| super::field_get_set::own_key_hidden_bytes(object, bytes))
+                {
+                    return f64::from_bits(crate::value::TAG_UNDEFINED);
+                }
+            }
+        }
+
         // A per-evaluation class object (`ClassExprFresh`, #1772/#1787) is a
         // POINTER-tagged heap object, not a `0x7FFE` class ref, so the
         // `class_ref_id` branch below never fires for it. Its static METHODS
@@ -1425,7 +1441,7 @@ fn js_object_get_own_property_names_shape(obj_value: f64) -> f64 {
         };
         // Drop only compiler/runtime storage keys. A user String key beginning
         // with `#` is still an ordinary reflectable property.
-        let hide_private = (*obj).class_id != 0;
+        let hide_private = super::field_get_set::own_keys_may_hide(obj);
         let hide_wasi_state = crate::wasi::is_wasi_import_object(obj)
             || crate::wasi::is_wasi_instance(f64::from_bits(
                 crate::value::js_nanbox_pointer(obj as i64).to_bits(),
@@ -1450,7 +1466,9 @@ fn js_object_get_own_property_names_shape(obj_value: f64) -> f64 {
                 let Some(bytes) = crate::string::js_string_key_bytes(key_val, &mut sso_buf) else {
                     continue;
                 };
-                if super::field_get_set::is_internal_runtime_key_bytes(bytes) {
+                if super::field_get_set::is_internal_runtime_key_bytes(bytes)
+                    || (hide_private && super::key_attrs::object_key_is_private(obj, bytes))
+                {
                     continue;
                 }
                 if let Ok(name) = std::str::from_utf8(bytes) {
@@ -1502,7 +1520,7 @@ fn js_object_get_own_property_names_shape(obj_value: f64) -> f64 {
             }
             if hide_private || hide_wasi_state {
                 if let Some(b) = crate::string::js_string_key_bytes(key_val, &mut sso_buf) {
-                    if super::field_get_set::is_internal_runtime_key_bytes(b)
+                    if (hide_private && super::field_get_set::own_key_hidden_bytes(obj, b))
                         || (hide_wasi_state && b.starts_with(b"__wasi"))
                     {
                         continue;

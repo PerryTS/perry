@@ -56,7 +56,7 @@ fn with_rep(id: u32, rep: u64) -> u32 {
         d.object_kind,
         d.hole_count,
         d.proto_id,
-        d.summary,
+        crate::object::shapes::ReceiverFacts::of_descriptor(&d, d.summary),
         rep,
         None,
     ))

@@ -47,6 +47,7 @@ unsafe fn try_cached_constfn_key_add(
         d.proto_id,
         d.summary,
         base_rep,
+        d.brands(),
     ) else {
         // A collector may have pruned the uncarried Any intermediate. Re-mint
         // it through the rooted slow path rather than cache a second edge.

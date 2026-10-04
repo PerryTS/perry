@@ -119,7 +119,7 @@ fn unmarked_numeric_read_retains_generation_holes_rep_and_absence_checks() {
                 d.object_kind,
                 holes,
                 d.proto_id,
-                0,
+                crate::object::shapes::ReceiverFacts::NONE,
                 rep,
                 None,
             ))
@@ -282,7 +282,7 @@ fn native_namespace_virtual_value_cannot_publish_a_numeric_own_slot_word() {
             native.object_kind,
             native.hole_count,
             native.proto_id,
-            native.summary,
+            crate::object::shapes::ReceiverFacts::of_descriptor(&native, native.summary),
             rep,
             None,
         ));

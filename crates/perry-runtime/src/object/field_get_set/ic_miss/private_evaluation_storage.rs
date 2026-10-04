@@ -33,13 +33,7 @@ fn private_instance_value_name(
     receiver: f64,
     owner: Option<u64>,
 ) -> std::rc::Rc<PrivateStorageKey> {
-    private_storage_key(
-        class_id,
-        Some(receiver),
-        owner,
-        field_name,
-        PrivateStorageKind::Value,
-    )
+    private_storage_key(class_id, Some(receiver), owner, field_name)
 }
 
 /// The compiler's template key is a request for a lexical private name.
@@ -78,8 +72,7 @@ fn private_evaluation_field_get(
     if !private_template_may_be_evaluated(class_id) {
         let receiver = private_member_receiver(obj);
         let name = intern_private_name(name.as_bytes()).unwrap();
-        return private_storage_key_by_id(class_id, 0, name, PrivateStorageKind::Value)
-            .get_cached(receiver);
+        return private_storage_key_by_id(class_id, 0, name).get_cached(receiver);
     }
     let owner = take_private_field_owner(class_id, name, false);
     let _owner = PrivateHintBrandScope::new(owner);
@@ -109,8 +102,7 @@ fn private_evaluation_field_set(
     if !private_template_may_be_evaluated(class_id) {
         let receiver = private_member_receiver(obj);
         let name = intern_private_name(name.as_bytes()).unwrap();
-        return private_storage_key_by_id(class_id, 0, name, PrivateStorageKind::Value)
-            .set_cached(receiver, value);
+        return private_storage_key_by_id(class_id, 0, name).set_cached(receiver, value);
     }
     let owner = take_private_field_owner(class_id, name, true);
     let _owner = PrivateHintBrandScope::new(owner);
@@ -129,6 +121,13 @@ fn private_evaluation_field_set(
     let name = private_instance_value_name(class_id, &name, receiver.get_nanbox_f64(), owner);
     if name.set_cached(receiver.get_nanbox_f64(), value.get_nanbox_f64()) {
         return true;
+    }
+    if !name.is_present(receiver.get_nanbox_f64()) {
+        // A write never creates a property under a private name.
+        throw_private_type_error(&format!(
+            "Cannot write private member {} to an object whose class did not declare it",
+            name.rsplit(':').next().unwrap_or("").trim_end_matches('>')
+        ));
     }
     let key = crate::string::intern_ascii_literal(name.as_bytes());
     let obj = JSValue::from_bits(receiver.get_nanbox_f64().to_bits()).as_pointer::<ObjectHeader>();

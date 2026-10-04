@@ -923,7 +923,7 @@ mod tests {
                 d.object_kind,
                 d.hole_count,
                 d.proto_id,
-                d.summary,
+                crate::object::shapes::ReceiverFacts::of_descriptor(&d, d.summary),
                 rep,
                 None,
             ));

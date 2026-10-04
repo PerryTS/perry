@@ -163,9 +163,11 @@ unsafe fn armable_own_key_shape(obj: f64, key: f64) -> Option<u32> {
     }
     let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     let key_bytes = crate::string::js_string_key_bytes(key_val, &mut sso)?;
-    // A compiler-private storage key is invisible to [[HasProperty]] even
-    // though it sits in `keys_array`.
-    if super::is_internal_runtime_key_bytes(key_bytes) {
+    // A private field (#11791) or runtime-only key is invisible to
+    // [[HasProperty]] even though it sits in `keys_array`.
+    if super::is_internal_runtime_key_bytes(key_bytes)
+        || crate::object::key_attrs::object_key_is_private(obj_ptr, key_bytes)
+    {
         return None;
     }
     let shape = super::super::shapes::object_shape_stamp(obj_ptr);

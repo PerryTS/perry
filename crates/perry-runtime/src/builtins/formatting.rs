@@ -1215,7 +1215,9 @@ unsafe fn format_object_as_json(
         // `{ __perry_ctor_class_object: … }` in its body where Node prints
         // nothing. `showHidden` deliberately does NOT reveal them: it exposes
         // non-enumerable JS properties, and these are runtime bookkeeping.
-        if crate::object::is_internal_runtime_key(&key_str) {
+        if crate::object::is_internal_runtime_key(&key_str)
+            || crate::object::key_attrs::object_key_is_private(obj_ptr, key_str.as_bytes())
+        {
             continue;
         }
 

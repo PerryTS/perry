@@ -194,9 +194,12 @@ pub(super) unsafe fn dispatch_common(
                     // perry's hidden `__perry_collection_backing__` runtime-internal
                     // field lives in a class instance's keys_array but is never a
                     // reflectable own property — `hasOwnProperty` must report false.
-                    if (*obj_ptr).class_id != 0 {
+                    if crate::object::field_get_set::own_keys_may_hide(obj_ptr) {
                         if let Some(key) = super::has_own_helpers::str_from_string_header(key_str) {
-                            if crate::object::field_get_set::is_internal_runtime_key(key) {
+                            if crate::object::field_get_set::own_key_hidden_bytes(
+                                obj_ptr,
+                                key.as_bytes(),
+                            ) {
                                 return Some(f64::from_bits(JSValue::bool(false).bits()));
                             }
                         }
@@ -377,9 +380,7 @@ pub(super) unsafe fn dispatch_common(
             // perry's hidden `__perry_*` runtime-internal own keys (the
             // `class … extends Map/Set` backing field) live in the instance
             // keys_array but are never observable — report non-enumerable.
-            if (*obj_ptr).class_id != 0
-                && crate::object::field_get_set::is_internal_runtime_key(key_name)
-            {
+            if crate::object::field_get_set::own_key_hidden_bytes(obj_ptr, key_name.as_bytes()) {
                 return Some(f64::from_bits(JSValue::bool(false).bits()));
             }
             if !own_key_present(obj_ptr as *mut ObjectHeader, key_str) {

@@ -591,6 +591,20 @@ pub(super) fn class_is_plain_record(class_id: u32) -> bool {
     class_id == 0 || class_chain_to_json_entry(class_id).plain_record
 }
 
+/// [`class_is_plain_record`] of `obj`'s class, for an object no class
+/// installed a private field on (#11791): a base constructor that returns a
+/// plain object lets a derived class add one to it, and a raw own-field
+/// emitter would print it.
+///
+/// # Safety
+/// `obj` is a live `ObjectHeader`.
+#[inline]
+pub(super) unsafe fn object_is_plain_record(obj: *const crate::ObjectHeader) -> bool {
+    class_is_plain_record((*obj).class_id)
+        && crate::object::key_attrs::object_summary(obj) & crate::object::key_attrs::SUMMARY_PRIVATE
+            == 0
+}
+
 /// A registered anon shape whose class surface is empty — the same proof the
 /// thenable probe uses (`promise::then_probe::class_registry_inert`: no
 /// vtable, no prototype object of either flavour, no parent edge) — plus no
@@ -813,7 +827,7 @@ pub(super) unsafe fn plain_object_member(
     // A recorded prototype (a fact of the shape, or a meta record's word)
     // can carry a `toJSON` of its own: only a default-chained record is plain.
     if !(*obj).meta.is_null()
-        || !class_is_plain_record((*obj).class_id)
+        || !object_is_plain_record(obj)
         || crate::object::shapes::object_prototype_word(obj) != 0
     {
         return None;
