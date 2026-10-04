@@ -919,6 +919,12 @@ impl ArenaResetEmptyBlocksState {
             return;
         }
 
+        // #11842: a budgeted sweep reaches this step after mutator windows, in
+        // which codegen's inline allocator bumped its own copy of the current
+        // block's offset. Store that offset into the block before `current`
+        // moves below, or what it placed there since the last store lies past
+        // the block's recorded fill, and the block's next fill overwrites it.
+        super::sync_inline_arena_state();
         ARENA.with(|arena| unsafe {
             let arena = &mut *arena.get();
             let mut new_current = arena.current;

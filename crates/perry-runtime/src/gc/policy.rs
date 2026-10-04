@@ -3241,6 +3241,7 @@ fn gc_check_trigger_evaluate() {
     if !gc_budgeted_cycle_active()
         && matches!(due(), Some(BudgetedGcTrigger::OldReclaim))
         && !GC_OLD_RECLAIM_IN_PROGRESS.with(Cell::get)
+        && !super::schedule::budgeted_old_reclaim_forced()
     {
         let _reentry = OldReclaimReentryGuard::enter();
         GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(false));
@@ -3853,7 +3854,9 @@ pub(crate) fn gc_safepoint_moving_minor() -> bool {
         // mark-sweep with `SkipDisabled` roots. The alloc-point arm keeps only
         // the bounded slack valve.
         Some(BudgetedGcTrigger::OldReclaim) => {
-            if GC_OLD_RECLAIM_IN_PROGRESS.with(Cell::get) {
+            if GC_OLD_RECLAIM_IN_PROGRESS.with(Cell::get)
+                || super::schedule::budgeted_old_reclaim_forced()
+            {
                 return true;
             }
             let _reentry = OldReclaimReentryGuard::enter();

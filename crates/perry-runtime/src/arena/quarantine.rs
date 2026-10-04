@@ -387,7 +387,7 @@ unsafe fn poison(data: *mut u8, used: usize) {
 
 /// The page-aligned interior of `[base, base + size)`, or `None` when the block
 /// is too small / too badly aligned to contain a whole page.
-fn page_interior(base: usize, size: usize) -> Option<(usize, usize)> {
+pub(super) fn page_interior(base: usize, size: usize) -> Option<(usize, usize)> {
     let page = page_size();
     let start = base.checked_add(page - 1)? & !(page - 1);
     let end = (base.checked_add(size)?) & !(page - 1);
@@ -399,7 +399,7 @@ fn page_interior(base: usize, size: usize) -> Option<(usize, usize)> {
 }
 
 #[cfg(unix)]
-fn mprotect_range(base: usize, len: usize, prot: libc::c_int) -> bool {
+pub(super) fn mprotect_range(base: usize, len: usize, prot: libc::c_int) -> bool {
     // SAFETY: `base`/`len` are page-aligned and describe memory this process
     // owns (an arena block detached from the arena and held by the quarantine).
     unsafe { libc::mprotect(base as *mut libc::c_void, len, prot) == 0 }
@@ -408,7 +408,7 @@ fn mprotect_range(base: usize, len: usize, prot: libc::c_int) -> bool {
 /// Non-Unix: there is no `mprotect`. Reporting failure is what makes the
 /// degradation to poison-only visible in `bytes_protected` rather than silent.
 #[cfg(not(unix))]
-fn mprotect_range(_base: usize, _len: usize, _prot: i32) -> bool {
+pub(super) fn mprotect_range(_base: usize, _len: usize, _prot: i32) -> bool {
     false
 }
 
@@ -893,7 +893,7 @@ extern "C" fn fromspace_fault_handler(
     unix,
     any(target_os = "macos", all(target_os = "linux", target_env = "gnu"))
 ))]
-fn emit_native_backtrace() {
+pub(super) fn emit_native_backtrace() {
     const MAX_FRAMES: usize = 64;
     let mut frames = [std::ptr::null_mut::<libc::c_void>(); MAX_FRAMES];
     // SAFETY: `backtrace`/`backtrace_symbols_fd` are the async-signal-safe pair
@@ -910,7 +910,7 @@ fn emit_native_backtrace() {
     unix,
     not(any(target_os = "macos", all(target_os = "linux", target_env = "gnu")))
 ))]
-fn emit_native_backtrace() {}
+pub(super) fn emit_native_backtrace() {}
 
 /// Name the objects that still HOLD the stale address, not just the frame that
 /// dereferenced it (#8082).

@@ -962,3 +962,7 @@ test_gap_gc_11830_native_str_args
 # #11743: a field receiver and captured method cross allocating arguments.
 # Recursive child pushes observe parent identity after relocation and growth.
 test_gap_11743_class_field_array_push
+
+# #11842: a swept old-gen hole handed out while a budgeted full sweep is
+# still walking; the walk freed the live buffer born there.
+test_gap_gc_11842_sweep_window_hole_reuse

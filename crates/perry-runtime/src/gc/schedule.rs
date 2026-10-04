@@ -273,6 +273,29 @@ fn resolved() -> Option<(u64, u64)> {
     })
 }
 
+/// `PERRY_GC_BUDGETED_OLD_RECLAIM=1` (instrument builds only, #11842): old-gen
+/// reclaim is never collected synchronously at an allocation point or a
+/// precise safepoint. It stays due until a runtime safepoint (the microtask
+/// pump, the event loop) starts it as a budgeted full, so every major
+/// collection of an async program runs incrementally, with mutator windows
+/// inside its mark and its sweep. The seeded schedule above drives minors only;
+/// this is the knob for the budgeted full cycle. A program with no runtime
+/// safepoint never collects its old generation under it.
+#[cfg(not(perry_gc_instruments))]
+#[inline(always)]
+pub(crate) fn budgeted_old_reclaim_forced() -> bool {
+    false
+}
+
+#[cfg(perry_gc_instruments)]
+pub(crate) fn budgeted_old_reclaim_forced() -> bool {
+    use std::sync::OnceLock;
+    static CACHED: OnceLock<bool> = OnceLock::new();
+    *crate::once_init::get_or_init(&CACHED, || {
+        super::env_flag_enabled("PERRY_GC_BUDGETED_OLD_RECLAIM")
+    })
+}
+
 /// Is seeded GC-schedule fuzzing on? One cached-`Option` load, so the default
 /// path pays a predictable-branch check and nothing else.
 pub(crate) fn gc_schedule_enabled() -> bool {
