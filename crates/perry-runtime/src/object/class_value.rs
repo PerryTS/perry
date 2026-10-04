@@ -175,8 +175,10 @@ crate::perry_thread_local! {
     /// This agent's class function objects, indexed by class id: a page
     /// directory (`pages`, `len` pages) whose pages are leaked for the agent's
     /// life. Read without a borrow flag — the hot path is a TLS read, a bounds
-    /// check and two loads. A GC root (rewritten on a move) via
-    /// [`scan_class_value_roots_mut`].
+    /// check and two loads. Not a GC root: a class function object is pinned
+    /// (never moves, always a root of the pinned-object scan) and its edges
+    /// (`props`, the prototype link) are traced child slots like any other
+    /// closure's.
     static CLASS_VALUES: std::cell::Cell<(*mut *mut ClassValuePage, usize)> =
         const { std::cell::Cell::new((std::ptr::null_mut(), 0)) };
 }
@@ -276,9 +278,9 @@ fn class_value_mint(class_id: u32) -> *mut ClosureHeader {
     unsafe {
         // GC_STORE_AUDIT(INIT): fresh class function object; captures 0 and 1
         // are INT32s (class id, evaluation state), capture 2 (the prototype
-        // link) starts `undefined` and the props edge is null — pointer-free.
-        // The link's later pointer is a root slot of the class-value scan,
-        // like `props`.
+        // link) starts `undefined` and the props edge is null. The arena birth
+        // leaves the layout UNKNOWN (never marked pointer-free) so the tracer reads capture 2 once it holds a pointer; that
+        // store goes through the slot barrier.
         (*ptr).capture_count = CLASS_VALUE_CAPTURES as u32;
         (*ptr).shape_id = crate::closure::shape::function_class_shape();
         (*ptr).info = &CLASS_CONSTRUCTOR_INFO;
@@ -293,7 +295,6 @@ fn class_value_mint(class_id: u32) -> *mut ClosureHeader {
             crate::closure::closure_capture_slots_mut(ptr).add(CLASS_EVALUATION_STATE_SLOT),
             crate::value::INT32_TAG,
         );
-        crate::gc::layout_init_pointer_free(ptr as *mut u8);
         // Born old AND pinned: the address is the class's identity for the
         // agent's life (compiled code keeps it in registers and allocas, the
         // metadata and weak tables compare it), so no collector may move it.
@@ -873,11 +874,14 @@ pub(crate) fn class_decl_prototype_link_store(
     let previous = class_decl_prototype_link(class_id);
     let closure = class_value_ptr(class_id);
     let bits = crate::value::POINTER_TAG | (proto as u64 & crate::value::POINTER_MASK);
-    // GC_STORE_AUDIT(ROOT): the class function object is pinned and its link
-    // slot is a root of `scan_class_value_roots_mut`; the root barrier below
-    // shades the new edge for an in-progress incremental mark.
-    unsafe { *prototype_link_slot(closure) = bits };
-    crate::gc::runtime_write_barrier_root_raw_ptr(proto);
+    // GC_STORE_AUDIT(SLOT): the class function object is pinned and old; its
+    // link slot is a traced capture slot, so the slot barrier remembers a
+    // young `proto` for the next minor and shades it for an incremental mark.
+    unsafe {
+        let slot = prototype_link_slot(closure);
+        *slot = bits;
+        crate::gc::runtime_write_barrier_slot(closure as usize, slot as usize, bits);
+    }
     previous
 }
 
@@ -914,49 +918,6 @@ pub(crate) fn class_value(class_id: u32) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_class_value(class_id: i32) -> f64 {
     class_value(class_id as u32)
-}
-
-/// GC root scan for [`CLASS_VALUES`]; registered in `gc::mod`'s runtime
-/// scanner list.
-///
-/// A class function object is PINNED, and marking never queues a pinned
-/// header (`try_mark_*`: "pinned objects are always live"), so no collector
-/// enumerates its child slots from a root. Its one heap edge, the own-property
-/// bag (`props`, the statics), is therefore visited here as a root slot of its
-/// own: a full trace marks and traces the bag (and notes the shape it carries,
-/// which post-trace descriptor retirement reads), and a moving collection
-/// rewrites the edge. A minor also reaches the edge through the remembered set
-/// the `bag_ensure` store barrier dirtied; the second visit of a rewritten
-/// slot sees the forwarded address and is a no-op.
-pub(crate) fn scan_class_value_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    let (pages, len) = CLASS_VALUES.with(std::cell::Cell::get);
-    for i in 0..len {
-        // SAFETY: `pages` holds `len` page pointers (null or a live page).
-        let page = unsafe { *pages.add(i) };
-        if page.is_null() {
-            continue;
-        }
-        // SAFETY: a live leaked page of this agent.
-        for slot in unsafe { (*page).iter_mut() } {
-            if slot.is_null() {
-                continue;
-            }
-            visitor.visit_raw_mut_ptr_slot(slot);
-            // SAFETY: a live class function object of this agent.
-            let props = unsafe { &mut (**slot).props };
-            if !props.is_null() {
-                visitor.visit_raw_mut_ptr_slot(props);
-            }
-            // The prototype link: the class's second heap edge, visited for
-            // the same reason as `props` (a pinned header's slots are never
-            // enumerated by marking).
-            // SAFETY: a live class function object of this agent.
-            let link = unsafe { prototype_link_slot(*slot) };
-            if crate::value::JSValue::from_bits(unsafe { *link }).is_pointer() {
-                visitor.visit_nanbox_u64_slot(unsafe { &mut *link });
-            }
-        }
-    }
 }
 
 /// `C[prop]` for a class function object at `ptr` (routed by
@@ -1523,58 +1484,21 @@ mod tests {
         );
     }
 
-    /// The table is a root: the scan visits every minted class value.
-    #[test]
-    fn class_value_table_is_scanned() {
-        let cid = 0x6B01;
-        register(cid);
-        let ptr = class_value_ptr(cid) as usize;
-        let mut seen = false;
-        scan_class_value_roots_mut(&mut crate::gc::RuntimeRootVisitor::for_copy(
-            &mut |v: f64| {
-                let bits = v.to_bits();
-                if bits as usize == ptr || (bits & crate::value::POINTER_MASK) as usize == ptr {
-                    seen = true;
-                }
-            },
-        ));
-        assert!(seen, "the class-value table must be a GC root");
-    }
-
-    /// #11609: the class function object is pinned, and marking never queues a
-    /// pinned header, so its own-property bag (the statics) is reached only
-    /// because the class-value root scan visits the `props` edge itself.
-    /// Without that, a full trace never visits the bag: the shape the bag
-    /// carries is never noted as carried, post-trace descriptor retirement
-    /// drops it, and every static reads back as absent.
+    /// A class function object is traced like any other pinned object: a full
+    /// collection reaches its own-property bag (the statics) through the
+    /// pinned-object root scan, with no class-value scanner.
     #[test]
     fn a_full_collection_keeps_the_class_statics_bag() {
         let cid = 0x6B02;
         register(cid);
         // A unit-test thread may not have run `gc_init`'s scanner list.
-        crate::gc::gc_register_mutable_root_scanner(scan_class_value_roots_mut);
-        let ptr = class_value_ptr(cid) as usize;
+        crate::gc::gc_register_mutable_root_scanner(crate::gc::scan_pinned_object_roots_mut);
         let text = "static-payload-11609";
         let s = crate::string::js_string_from_bytes(text.as_ptr(), text.len() as u32);
         class_static_set(
             cid,
             "k11609",
             f64::from_bits(crate::value::JSValue::string_ptr(s).bits()),
-        );
-        let mut saw_bag = false;
-        let bag = unsafe { crate::closure::props::bag_of(ptr) } as usize;
-        assert_ne!(bag, 0, "the static installed a bag");
-        scan_class_value_roots_mut(&mut crate::gc::RuntimeRootVisitor::for_copy(
-            &mut |v: f64| {
-                let bits = v.to_bits();
-                if bits as usize == bag || (bits & crate::value::POINTER_MASK) as usize == bag {
-                    saw_bag = true;
-                }
-            },
-        ));
-        assert!(
-            saw_bag,
-            "the root scan must visit the pinned class's bag edge"
         );
         crate::gc::js_gc_collect();
         crate::gc::js_gc_collect();
@@ -1589,6 +1513,135 @@ mod tests {
             .map(|(k, _)| k)
             .collect();
         assert!(keys.iter().any(|k| k == "k11609"), "own keys: {keys:?}");
+    }
+
+    /// The prototype link (capture 2) and the statics bag of an OLD, pinned
+    /// class hold young objects written after its birth: the slot barrier
+    /// remembers them, so a moving minor keeps them alive and rewrites both
+    /// edges. Dropping the barrier in `class_decl_prototype_link_store` makes
+    /// the link read back a stale address.
+    #[test]
+    fn young_values_in_an_old_class_survive_moving_minors() {
+        let _copying_nursery = crate::gc::CopyingNurseryTestGuard::new(0);
+        let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let _force_evacuation = crate::gc::knob_overrides::ForcedEvacuationTestGuard::on();
+        crate::gc::register_runtime_handle_root_scanner_for_tests();
+        let cid = 0x6B04;
+        register(cid);
+        let _ = class_value_ptr(cid);
+        // The class is old and pinned from birth; everything below is young.
+        let proto = crate::object::js_object_alloc(0x6B05, 1);
+        crate::object::js_object_set_field(
+            proto,
+            0,
+            crate::value::JSValue::from_bits(crate::value::INT32_TAG | 4242),
+        );
+        let before = proto as usize;
+        class_decl_prototype_link_store(cid, proto);
+        let text = "young-static-6b04";
+        let s = crate::string::js_string_from_bytes(text.as_ptr(), text.len() as u32);
+        class_static_set(
+            cid,
+            "k6b04",
+            f64::from_bits(crate::value::JSValue::string_ptr(s).bits()),
+        );
+        for _ in 0..3 {
+            let _ = crate::gc::gc_collect_minor();
+        }
+        let linked = class_decl_prototype_link(cid);
+        assert!(!linked.is_null());
+        assert_ne!(
+            linked as usize, before,
+            "forced evacuation must have moved the young prototype"
+        );
+        let field = crate::object::js_object_get_field(linked, 0);
+        assert_eq!(field.bits(), crate::value::INT32_TAG | 4242);
+        let got = class_static_get(cid, "k6b04").expect("the static survives minors");
+        let hdr = crate::value::JSValue::from_bits(got.to_bits()).as_string_ptr();
+        assert!(!hdr.is_null());
+        let bytes = unsafe { crate::string::OwnedStringBytes::copy_from_header(hdr) };
+        assert_eq!(bytes.as_bytes(), text.as_bytes());
+    }
+
+    /// Write once, then survive several minors with NO further writes. With
+    /// the promotion age pinned at 4 the young prototype stays young across
+    /// minors 1..=3, so the class (old, pinned) must stay in the minor scan
+    /// set the whole time: an entry is re-armed by every scan that still finds
+    /// a young referent, not consumed after one minor. Returns false (without
+    /// reading the possibly stale link) the first time the entry is missing.
+    fn write_once_then_minors(cid: u32, sabotage_drop_entry: bool) -> bool {
+        let _copying_nursery = crate::gc::CopyingNurseryTestGuard::new(0);
+        let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let _force_evacuation = crate::gc::knob_overrides::ForcedEvacuationTestGuard::on();
+        let _age = crate::gc::pin_tenuring_survivals_for_test(4);
+        crate::gc::register_runtime_handle_root_scanner_for_tests();
+        register(cid);
+        let closure = class_value_ptr(cid);
+        let proto = crate::object::js_object_alloc(cid + 1, 1);
+        crate::object::js_object_set_field(
+            proto,
+            0,
+            crate::value::JSValue::from_bits(crate::value::INT32_TAG | 777),
+        );
+        class_decl_prototype_link_store(cid, proto);
+        let slot = unsafe { prototype_link_slot(closure) } as usize;
+        assert!(
+            crate::gc::old_slot_page_is_remembered_for_test(slot),
+            "the write must have remembered the class"
+        );
+        let _sabotage = sabotage_drop_entry.then(|| {
+            crate::gc::copy_decode_sabotage::Guard::arm(crate::gc::copy_decode_sabotage::CHILD)
+        });
+        let mut moved_from = proto as usize;
+        for minor in 1..=3 {
+            let _ = crate::gc::gc_collect_minor();
+            // No write since the first store. The referent must still be young
+            // (age < 4), so the entry must still be present.
+            if !crate::gc::old_slot_page_is_remembered_for_test(slot) {
+                return false;
+            }
+            let linked = class_decl_prototype_link(cid);
+            assert!(!linked.is_null());
+            assert!(
+                matches!(
+                    crate::arena::classify_heap_generation(linked as usize),
+                    crate::arena::HeapGeneration::Nursery
+                ),
+                "minor {minor}: the referent must still be young"
+            );
+            assert_ne!(
+                linked as usize, moved_from,
+                "minor {minor}: it must have moved"
+            );
+            moved_from = linked as usize;
+            let field = crate::object::js_object_get_field(linked, 0);
+            assert_eq!(field.bits(), crate::value::INT32_TAG | 777, "minor {minor}");
+        }
+        // The fourth survival promotes it; the value is intact afterwards too.
+        let _ = crate::gc::gc_collect_minor();
+        let linked = class_decl_prototype_link(cid);
+        let field = crate::object::js_object_get_field(linked, 0);
+        assert_eq!(
+            field.bits(),
+            crate::value::INT32_TAG | 777,
+            "after promotion"
+        );
+        true
+    }
+
+    #[test]
+    fn a_class_stays_remembered_while_its_referent_is_young() {
+        assert!(write_once_then_minors(0x6B10, false));
+    }
+
+    /// Sabotage: the scan loses the child, so the entry is dropped after the
+    /// first minor. The run must go red: either the collector's own
+    /// post-cycle coverage check fires (the expected panic) or the witness
+    /// above sees the entry missing and returns false (the `assert!` panic).
+    #[test]
+    #[should_panic]
+    fn dropping_the_entry_after_one_minor_is_caught() {
+        assert!(write_once_then_minors(0x6B20, true));
     }
 
     /// The kind is a shape fact: class function objects carry their own
