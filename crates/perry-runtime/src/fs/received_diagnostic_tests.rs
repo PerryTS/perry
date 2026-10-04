@@ -386,6 +386,16 @@ fn with_received_intrinsic_constructor(name: &str, test: impl FnOnce(f64, f64)) 
             view as i64
         }
         "Buffer" => crate::buffer::buffer_alloc(1) as i64,
+        "ArrayBuffer" | "SharedArrayBuffer" => {
+            let buffer = crate::buffer::buffer_alloc(1);
+            if name == "SharedArrayBuffer" {
+                crate::buffer::mark_as_shared_array_buffer(buffer as usize);
+            } else {
+                crate::buffer::mark_as_array_buffer(buffer as usize);
+            }
+            buffer as i64
+        }
+        "Date" => crate::value::js_nanbox_get_pointer(crate::date::alloc_date_cell(0.0)),
         _ => panic!("unsupported intrinsic test fixture"),
     };
     let value = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(raw));
@@ -845,4 +855,332 @@ fn received_primitive_constructor_second_nullish_read() {
             4
         );
     }
+}
+
+static RECEIVED_TRANSITION_COLLECT: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+static RECEIVED_THIRD_KIND: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+extern "C" fn received_transition_constructor(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
+    let call = RECEIVED_CONSTRUCTOR_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % 3;
+    let kind = RECEIVED_THIRD_KIND.load(std::sync::atomic::Ordering::Relaxed);
+    if RECEIVED_TRANSITION_COLLECT.load(std::sync::atomic::Ordering::Relaxed) {
+        crate::gc::js_gc_collect();
+    }
+    if call == 0 && kind == 10 {
+        return f64::from_bits(crate::value::TAG_FALSE);
+    }
+    if call == 2 {
+        match kind {
+            0 => return f64::from_bits(crate::value::TAG_NULL),
+            1 => return f64::from_bits(crate::value::TAG_UNDEFINED),
+            3 => return 0.0,
+            4 => return f64::from_bits(crate::value::TAG_FALSE),
+            5 => return text(""),
+            _ => {}
+        }
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let ctor = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+        crate::object::js_object_alloc(0, 0) as i64,
+    ));
+    set(
+        ctor.get_nanbox_f64(),
+        "name",
+        text(if call == 2 { "ThirdObject" } else { "Second" }),
+    );
+    ctor.get_nanbox_f64()
+}
+
+fn assert_received_bare_error(value: f64, message: &str) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(value);
+    let error = crate::exception::catch_js_throw(|| {
+        validate_function("cb", value.get_nanbox_f64());
+    })
+    .expect_err("metadata evaluation must throw");
+    let error = scope.root_nanbox_f64(error);
+    assert_eq!(
+        read_js_string_pub(property(error.get_nanbox_f64(), "name")),
+        "TypeError"
+    );
+    assert_eq!(
+        read_js_string_pub(property(error.get_nanbox_f64(), "message")),
+        message
+    );
+    assert_eq!(
+        property(error.get_nanbox_f64(), "code").to_bits(),
+        crate::value::TAG_UNDEFINED
+    );
+}
+
+#[test]
+fn received_third_constructor_nullish_getv() {
+    RECEIVED_TRANSITION_COLLECT.store(false, std::sync::atomic::Ordering::Relaxed);
+    let _lock = crate::gc::global_side_table_test_lock();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+        crate::object::js_object_alloc(0, 0) as i64,
+    ));
+    install_received_constructor_getter(
+        value.get_nanbox_f64(),
+        crate::fn_info!(received_transition_constructor, 0),
+    );
+    for (kind, label) in [(0, "null"), (1, "undefined")] {
+        RECEIVED_THIRD_KIND.store(kind, std::sync::atomic::Ordering::Relaxed);
+        RECEIVED_CONSTRUCTOR_CALLS.store(0, std::sync::atomic::Ordering::Relaxed);
+        assert_received_bare_error(
+            value.get_nanbox_f64(),
+            &format!("Cannot read properties of {label} (reading 'name')"),
+        );
+        assert_eq!(
+            RECEIVED_CONSTRUCTOR_CALLS.load(std::sync::atomic::Ordering::Relaxed),
+            3
+        );
+    }
+    RECEIVED_THIRD_KIND.store(2, std::sync::atomic::Ordering::Relaxed);
+    RECEIVED_CONSTRUCTOR_CALLS.store(0, std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(
+        describe_received(value.get_nanbox_f64()),
+        "an instance of ThirdObject"
+    );
+    assert_eq!(
+        RECEIVED_CONSTRUCTOR_CALLS.load(std::sync::atomic::Ordering::Relaxed),
+        3
+    );
+    RECEIVED_THIRD_KIND.store(10, std::sync::atomic::Ordering::Relaxed);
+    RECEIVED_CONSTRUCTOR_CALLS.store(0, std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(describe_received(value.get_nanbox_f64()), "[Object]");
+    assert_eq!(
+        RECEIVED_CONSTRUCTOR_CALLS.load(std::sync::atomic::Ordering::Relaxed),
+        1
+    );
+}
+
+static RECEIVED_PRIMITIVE_THIS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+extern "C" fn received_primitive_name(
+    _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    let receiver = JSValue::from_bits(this.as_f64().to_bits());
+    let matches = match RECEIVED_THIRD_KIND.load(std::sync::atomic::Ordering::Relaxed) {
+        3 => receiver.is_number() && this.as_f64() == 0.0,
+        4 => receiver.is_bool() && !receiver.as_bool(),
+        5 => receiver.is_any_string() && read_js_string_pub(this.as_f64()).is_empty(),
+        _ => false,
+    };
+    RECEIVED_PRIMITIVE_THIS.store(matches, std::sync::atomic::Ordering::Relaxed);
+    crate::gc::js_gc_collect();
+    text("PrimitiveName")
+}
+
+#[test]
+fn received_third_constructor_primitive_getv() {
+    RECEIVED_TRANSITION_COLLECT.store(true, std::sync::atomic::Ordering::Relaxed);
+    let _lock = crate::gc::global_side_table_test_lock();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+        crate::object::js_object_alloc(0, 0) as i64,
+    ));
+    install_received_constructor_getter(
+        value.get_nanbox_f64(),
+        crate::fn_info!(received_transition_constructor, 0),
+    );
+    for (kind, brand) in [(3, "Number"), (4, "Boolean"), (5, "String")] {
+        let proto = scope.root_nanbox_f64(crate::object::builtin_prototype_value(brand));
+        let key = scope.root_nanbox_f64(text("name"));
+        let original = scope.root_nanbox_f64(crate::object::js_object_get_own_property_descriptor(
+            proto.get_nanbox_f64(),
+            key.get_nanbox_f64(),
+        ));
+        let descriptor = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+            crate::object::js_object_alloc(0, 0) as i64,
+        ));
+        let getter = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+            crate::closure::js_closure_alloc(crate::fn_info!(received_primitive_name, 0), 0) as i64,
+        ));
+        set(descriptor.get_nanbox_f64(), "get", getter.get_nanbox_f64());
+        set(
+            descriptor.get_nanbox_f64(),
+            "configurable",
+            f64::from_bits(crate::value::TAG_TRUE),
+        );
+        crate::object::js_object_define_property(
+            proto.get_nanbox_f64(),
+            key.get_nanbox_f64(),
+            descriptor.get_nanbox_f64(),
+        );
+        RECEIVED_THIRD_KIND.store(kind, std::sync::atomic::Ordering::Relaxed);
+        RECEIVED_CONSTRUCTOR_CALLS.store(0, std::sync::atomic::Ordering::Relaxed);
+        let result = describe_received(value.get_nanbox_f64());
+        if original.get_nanbox_u64() == crate::value::TAG_UNDEFINED {
+            crate::object::js_object_delete_dynamic_value(
+                proto.get_nanbox_f64(),
+                key.get_nanbox_f64(),
+            );
+        } else {
+            crate::object::js_object_define_property(
+                proto.get_nanbox_f64(),
+                key.get_nanbox_f64(),
+                original.get_nanbox_f64(),
+            );
+        }
+        assert_eq!(result, "an instance of PrimitiveName", "{brand}");
+        assert_eq!(
+            RECEIVED_CONSTRUCTOR_CALLS.load(std::sync::atomic::Ordering::Relaxed),
+            3
+        );
+        assert!(
+            RECEIVED_PRIMITIVE_THIS.load(std::sync::atomic::Ordering::Relaxed),
+            "{brand} receiver must be the original primitive"
+        );
+    }
+}
+
+macro_rules! native_constructor_tests {
+    ($data:ident, $getter:ident, $throw:ident, $collect:ident, $brand:literal) => {
+        #[test]
+        fn $data() {
+            inherited_view_data($brand);
+        }
+        #[test]
+        fn $getter() {
+            inherited_view_getter($brand, false);
+        }
+        #[test]
+        fn $throw() {
+            inherited_view_throw($brand);
+        }
+        #[test]
+        fn $collect() {
+            inherited_view_getter($brand, true);
+        }
+    };
+}
+native_constructor_tests!(
+    received_native_ab_data,
+    received_native_ab_getter,
+    received_native_ab_throw,
+    received_native_ab_collect,
+    "ArrayBuffer"
+);
+native_constructor_tests!(
+    received_native_sab_data,
+    received_native_sab_getter,
+    received_native_sab_throw,
+    received_native_sab_collect,
+    "SharedArrayBuffer"
+);
+native_constructor_tests!(
+    received_native_date_data,
+    received_native_date_getter,
+    received_native_date_throw,
+    received_native_date_collect,
+    "Date"
+);
+
+fn native_constructor_absent_fallback(name: &str) {
+    with_received_intrinsic_constructor(name, |value, _| {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let value = scope.root_nanbox_f64(value);
+        set(
+            value.get_nanbox_f64(),
+            "constructor",
+            f64::from_bits(crate::value::TAG_UNDEFINED),
+        );
+        check(
+            value.get_nanbox_f64(),
+            &if name == "Date" {
+                "1970-01-01T00:00:00.000Z".to_string()
+            } else {
+                format!("[{name}]")
+            },
+        );
+        let key = scope.root_nanbox_f64(text("constructor"));
+        crate::object::js_object_delete_dynamic_value(value.get_nanbox_f64(), key.get_nanbox_f64());
+        crate::object::js_object_set_prototype_of(
+            value.get_nanbox_f64(),
+            f64::from_bits(crate::value::TAG_NULL),
+        );
+        check(
+            value.get_nanbox_f64(),
+            &if name == "Date" {
+                "[Date: null prototype] 1970-01-01T00:00:00.000Z".to_string()
+            } else {
+                format!("[{name}: null prototype]")
+            },
+        );
+        let proto = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+            crate::object::js_object_alloc_null_proto(0, 0) as i64,
+        ));
+        crate::object::js_object_set_prototype_of(value.get_nanbox_f64(), proto.get_nanbox_f64());
+        check(
+            value.get_nanbox_f64(),
+            &if name == "Date" {
+                "Date <Complex prototype> 1970-01-01T00:00:00.000Z".to_string()
+            } else {
+                format!("[{name} <Complex prototype>]")
+            },
+        );
+        crate::object::js_object_set_prototype_of(
+            value.get_nanbox_f64(),
+            crate::object::builtin_prototype_value(name),
+        );
+    });
+}
+
+macro_rules! native_fallback_tests {
+    ($test:ident, $brand:literal) => {
+        #[test]
+        fn $test() {
+            native_constructor_absent_fallback($brand);
+        }
+    };
+}
+native_fallback_tests!(received_native_ab_fallback, "ArrayBuffer");
+native_fallback_tests!(received_native_sab_fallback, "SharedArrayBuffer");
+native_fallback_tests!(received_native_date_fallback, "Date");
+native_fallback_tests!(received_native_int16_fallback, "Int16Array");
+native_fallback_tests!(received_native_data_view_fallback, "DataView");
+native_fallback_tests!(received_native_uint8_fallback, "Uint8Array");
+
+#[test]
+fn received_native_null_born_typed_array() {
+    with_received_intrinsic_constructor("Int16Array", |value, _| {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let value = scope.root_nanbox_f64(value);
+        let addr = crate::value::addr_class::object_ref_addr(value.get_nanbox_f64());
+        assert!(crate::object::prototype_chain::object_static_prototype(addr).is_none());
+        let header = unsafe { crate::value::addr_class::try_read_tracked_gc_header(addr) }
+            .expect("fixture needs a tracked arena header");
+        let original = unsafe { (*header.as_ptr())._reserved };
+        unsafe {
+            (*header.as_ptr())._reserved |= crate::gc::OBJ_FLAG_NULL_PROTO;
+        }
+        let result = describe_received(value.get_nanbox_f64());
+        let addr = crate::value::addr_class::object_ref_addr(value.get_nanbox_f64());
+        let header = unsafe { crate::value::addr_class::try_read_tracked_gc_header(addr) }.unwrap();
+        unsafe {
+            (*header.as_ptr())._reserved = original;
+        }
+        assert_eq!(result, "[Int16Array: null prototype]");
+    });
+}
+
+#[test]
+fn received_native_missing_and_undefined_intrinsic_typed_constructor() {
+    with_received_intrinsic_constructor("Int16Array", |value, prototype| {
+        set(
+            prototype,
+            "constructor",
+            f64::from_bits(crate::value::TAG_UNDEFINED),
+        );
+        check(value, "[TypedArray [Int16Array]]");
+        let key = text("constructor");
+        crate::object::js_object_delete_dynamic_value(prototype, key);
+        check(value, "an instance of TypedArray");
+    });
 }
