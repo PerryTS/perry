@@ -1,4 +1,18 @@
-PRIVATE OLD-HOLE APPLICATION PROBE VERIFIED / REJECTED (2026-10-04 00:35Z)
+LATEST COMPARATORS SOURCE-BOUND TO PERRY2026 (2026-10-04 00:47Z)
+Officialrefs rechecked00:37Z: ScriptC0.2.2/Porfforalpha15(main72d048d)/
+StaticHermesstatic_h ade4a2b unchanged. Seven source/output identities,
+Hermes type-erasure, all binary/RSS/raw stdout and proof input hashes checked
+independently. 217evidence files copied locally/rehashed. Perry is2026ecfe,
+NOTmain07; current07auto17builds are live. No cross-engine TS/Zod claims.
+ScriptC0.2.2 realTS/Zod support probe queued1575547 in default and explicit
+static-npm modes, unchanged sources/arguments/dependencies. No dynamic engine
+or source/library stubs; failures have no RSS rank. This is a compiler support
+probe, not a replacement for the pending GC acceptance matrix.
+See latest-main2026-comparator-table.md and -join.json for the full table.
+Small-live ring and strings remain explicit RSS gaps to ScriptC; JSON remains
+a gap to StaticHermes. No absolute minimum or whole-task completion claimed.
+
+PRIVATE OLD-HOLE APPLICATION PROBE VERIFIED / REJECTED (2026-10-04 00:34Z)
 48/48correct full-runtime measurements,8build records (4exact reused GC
 controls+4fresh candidate builds), allsource/product/raw RSS/instructions
 verified independently. Rawarchive copied locally and rehashed. Base2026ecfe,
