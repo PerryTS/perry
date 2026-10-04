@@ -48,6 +48,7 @@ mod stringify_nested_records;
 mod stringify_object;
 mod stringify_primitive_array;
 mod stringify_primitive_object;
+mod stringify_proxy;
 mod stringify_record_output;
 mod stringify_scalars;
 pub(crate) mod stringify_shape_template;
