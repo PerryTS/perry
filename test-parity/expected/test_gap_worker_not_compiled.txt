@@ -1,0 +1,6 @@
+lexical, built at run time -> Error ERR_WORKER_NOT_COMPILED true
+namespace, built at run time -> Error ERR_WORKER_NOT_COMPILED true
+namespace, absolute string -> Error ERR_WORKER_NOT_COMPILED true
+bare relative string -> TypeError ERR_WORKER_PATH true
+not a path -> TypeError ERR_INVALID_ARG_TYPE true
+still running

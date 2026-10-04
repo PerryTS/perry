@@ -1151,7 +1151,9 @@ fn collect_module_one(
                     if matches!(format, OutputFormat::Text) {
                         eprintln!(
                             "  Warning: worker_threads Worker in module {}: {} — \
-                             this Worker will throw if constructed at runtime",
+                             at run time this Worker starts only if its file is a \
+                             worker entry compiled into this binary, otherwise it \
+                             throws ERR_WORKER_NOT_COMPILED",
                             module_name, reason
                         );
                     }

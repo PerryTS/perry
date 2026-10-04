@@ -109,7 +109,9 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
             parent_port: extern "C" fn() -> f64,
             thread_name: extern "C" fn() -> f64,
             resource_limits: extern "C" fn() -> f64,
+            thread_id: extern "C" fn() -> f64,
         );
+        fn js_register_worker_threads_worker_constructor(construct: extern "C" fn(f64, f64) -> f64);
         fn js_register_worker_threads_messaging_constructors(
             message_channel: extern "C" fn() -> f64,
             broadcast_channel: extern "C" fn(f64) -> f64,
@@ -199,6 +201,10 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
         crate::worker_threads::js_worker_threads_parent_port,
         crate::worker_threads::js_worker_threads_thread_name,
         crate::worker_threads::js_worker_threads_resource_limits,
+        crate::worker_threads::js_worker_threads_thread_id,
+    );
+    js_register_worker_threads_worker_constructor(
+        crate::worker_threads::js_worker_threads_worker_new_by_spec,
     );
     js_register_worker_threads_messaging_constructors(
         crate::worker_threads::js_worker_threads_message_channel_new,

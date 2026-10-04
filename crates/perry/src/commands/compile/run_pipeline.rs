@@ -3183,6 +3183,10 @@ pub fn run_with_parse_cache(
     // and reading the `source` + `resolved_path`.
     let mut per_module_dyn_import_targets: HashMap<PathBuf, HashMap<String, String>> =
         HashMap::new();
+    // Every compiled worker entry under its absolute paths (the spelling the
+    // program used and the canonical one). The entry's `main` registers them
+    // with the runtime worker entry table.
+    let mut worker_entries: BTreeSet<(String, String)> = BTreeSet::new();
     for (path, hir_module) in &ctx.native_modules {
         let mut local_map: HashMap<String, String> = HashMap::new();
         let mut worker_paths = HashSet::new();
@@ -3250,11 +3254,13 @@ pub fn run_with_parse_cache(
                 };
                 if let Some(url) = file_url {
                     if let Ok(path) = url.to_file_path() {
-                        local_map
-                            .insert(path.to_string_lossy().into_owned(), target_prefix.clone());
+                        let path = path.to_string_lossy().into_owned();
+                        worker_entries.insert((path.clone(), target_prefix.clone()));
+                        local_map.insert(path, target_prefix.clone());
                     }
                     local_map.insert(url.to_string(), target_prefix.clone());
                 }
+                worker_entries.insert((rp.to_string_lossy().into_owned(), target_prefix.clone()));
             }
             local_map.insert(import.source.clone(), target_prefix);
         }
@@ -3262,6 +3268,7 @@ pub fn run_with_parse_cache(
             per_module_dyn_import_targets.insert(path.clone(), local_map);
         }
     }
+    perry_codegen::set_worker_entries(worker_entries.into_iter().collect());
 
     let total_codegen_modules = ctx.native_modules.len();
     let codegen_modules_started = AtomicUsize::new(0);

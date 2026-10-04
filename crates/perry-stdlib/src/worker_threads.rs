@@ -27,8 +27,10 @@ mod async_shim;
 mod broadcast_channel;
 mod channel_pump;
 mod direct_message;
+mod entry_table;
 mod message_port;
 mod parent_port;
+mod thread_values;
 mod worker_options;
 mod worker_pump;
 mod worker_surface;
@@ -42,6 +44,11 @@ pub use channel_pump::{
 // points, which moved into sibling modules to keep this file under the
 // 2000-line lint cap.
 pub use broadcast_channel::js_worker_threads_broadcast_channel_new;
+pub use entry_table::{js_worker_threads_register_entry, js_worker_threads_worker_new_by_spec};
+pub use thread_values::{
+    js_worker_threads_is_main_thread, js_worker_threads_parent_port,
+    js_worker_threads_resource_limits, js_worker_threads_thread_id, js_worker_threads_thread_name,
+};
 pub use worker_pump::{js_worker_threads_has_pending, js_worker_threads_process_pending};
 
 use message_port::message_port_object;
@@ -1779,38 +1786,6 @@ pub extern "C" fn js_worker_threads_get_worker_data() -> f64 {
     f64::from_bits(bits)
 }
 
-#[no_mangle]
-pub extern "C" fn js_worker_threads_is_main_thread() -> f64 {
-    js_bool(CURRENT_WORKER_ID.with(|id| id.get()) == 0)
-}
-
-/// Get parentPort handle (returns NaN-boxed POINTER_TAG handle)
-#[no_mangle]
-pub extern "C" fn js_worker_threads_parent_port() -> f64 {
-    if CURRENT_WORKER_ID.with(|id| id.get()) != 0 {
-        return object_value(parent_port::worker_parent_port_object());
-    }
-    // On the main thread there is no parent port: Node exposes `parentPort`
-    // as `null` (only a spawned Worker has a MessagePort back to its parent).
-    // Returning a `{}` object here made `if (parentPort)` truthy on the main
-    // thread, diverging from Node.
-    js_null()
-}
-
-#[no_mangle]
-pub extern "C" fn js_worker_threads_thread_name() -> f64 {
-    CURRENT_THREAD_NAME.with(|slot| string_value(&slot.borrow()))
-}
-
-#[no_mangle]
-pub extern "C" fn js_worker_threads_resource_limits() -> f64 {
-    if CURRENT_WORKER_ID.with(|id| id.get()) == 0 {
-        return object_value(empty_object());
-    }
-    CURRENT_RESOURCE_LIMITS
-        .with(|limits| object_value(worker_resource_limits_object(&limits.get())))
-}
-
 /// parentPort.postMessage(data) - JSON-stringify and write to stdout
 #[no_mangle]
 pub extern "C" fn js_worker_threads_post_message(data: f64) -> f64 {
@@ -1985,6 +1960,12 @@ static KEEP_WT_MARK_AS_UNCLONEABLE: extern "C" fn(f64) -> f64 =
     js_worker_threads_mark_as_uncloneable;
 #[used(compiler)]
 static KEEP_WT_WORKER_NEW: extern "C" fn(i64, f64) -> f64 = js_worker_threads_worker_new;
+#[used(compiler)]
+static KEEP_WT_WORKER_NEW_BY_SPEC: extern "C" fn(f64, f64) -> f64 =
+    js_worker_threads_worker_new_by_spec;
+#[used(compiler)]
+static KEEP_WT_REGISTER_ENTRY: unsafe extern "C" fn(*const u8, i64, i64) =
+    js_worker_threads_register_entry;
 #[used(compiler)]
 static KEEP_WT_WORKER_POST_MESSAGE: extern "C" fn(i64, f64) -> f64 =
     js_worker_threads_worker_post_message;

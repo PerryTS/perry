@@ -1,3 +1,4 @@
+use super::super::native_module::worker_threads_construct;
 use super::*;
 use crate::JSValue;
 
@@ -493,6 +494,10 @@ pub unsafe extern "C-unwind" fn js_new_function_construct(
                 let dispatch: crate::value::JsNativeEventsConstructFn = std::mem::transmute(ptr);
                 return dispatch(method.as_ptr(), method.len(), args_ptr, args_len);
             }
+        }
+        // `new ns.Worker(...)` on the worker_threads namespace as a value.
+        if let Some(worker) = worker_threads_construct(&module, &method, args_ptr, args_len) {
+            return worker;
         }
         if module == "zlib" && matches!(method.as_str(), "ZstdCompress" | "ZstdDecompress") {
             let ptr =

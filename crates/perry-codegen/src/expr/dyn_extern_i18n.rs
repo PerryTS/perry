@@ -575,6 +575,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             if !paths.is_empty() && (*partial || paths.len() > 1) {
                 return worker_new::lower_candidates(ctx, paths, filename, options.as_deref());
             }
+            // An empty `paths` list means collect_modules could not resolve
+            // the filename statically (it warned at compile time). The
+            // runtime looks it up in the worker entry table and throws
+            // ERR_WORKER_NOT_COMPILED only if no entry matches. Many real
+            // packages construct such Workers only on cold paths (e.g.
+            // Next.js build-time worker pools), so this must not fail the
+            // compile.
+            if paths.is_empty() {
+                return worker_new::lower_by_spec(ctx, filename, options.as_deref());
+            }
             let _ = lower_expr(ctx, filename)?;
             if ctx.block().is_terminated() {
                 return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
@@ -588,42 +598,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             } else {
                 double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
             };
-            // An empty `paths` list means collect_modules could not resolve
-            // the filename statically (it warned at compile time). Many real
-            // packages construct Workers only on cold paths (e.g. Next.js
-            // build-time worker pools) — throw if one is actually reached at
-            // runtime instead of failing the whole compile.
-            if paths.is_empty() {
-                let msg = "worker_threads Worker filename was not statically \
-                           resolvable at compile time; constructing this Worker \
-                           is unsupported in the compiled binary";
-                let msg_idx = ctx.strings.intern(msg);
-                let msg_entry = ctx.strings.entry(msg_idx);
-                let msg_bytes_global = format!("@{}", msg_entry.bytes_global);
-                let msg_len_str = msg_entry.byte_len.to_string();
-                let blk = ctx.block();
-                blk.call_void(
-                    "js_throw_error_with_code",
-                    &[
-                        (PTR, &msg_bytes_global),
-                        (I64, &msg_len_str),
-                        (PTR, "null"),
-                        (I64, "0"),
-                        (I32, "0"),
-                    ],
-                );
-                blk.unreachable();
-                // #11450: the throw ends control flow, but this is an
-                // EXPRESSION — its consumer (`arr.push(w)`, `o.k = w`,
-                // `m.set(k, w)`, a guarded `arr[i] = w`, ...) keeps lowering
-                // after we return. Left in the terminated block, every
-                // instruction it emits is dropped while the fresh blocks it
-                // opens survive and name those dropped registers: invalid IR.
-                // Continue in a block with no predecessors instead, so the
-                // consumer's code is well-formed and simply dead.
-                ctx.current_block = ctx.new_block("worker.unresolved.after");
-                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-            }
             if paths.len() != 1 {
                 bail!(
                     "worker_threads Worker requires exactly one compile-time-resolved filename, got {}",
