@@ -1,3 +1,18 @@
+REAL COLLECTION/CONTROL AND SCRIPTC022 VERIFIED (2026-10-04 00:07Z)
+Real full-GC subject:private1pass, control deliberatelyfails only second-entry
+residency assertion. Real strings/root handles/two collections; no idle ages
+written. Both5000source inputs match; two test-only deltas each. Original
+v35cursor fixture failure retained. Original verifier misread equality ==
+as assignment by substring; r1uses an assignment regex excluding ==. No
+source/test/output changed to fix that verifier.
+LatestScriptC0.2.2seven-source run independentlyverified. Six correct cases:
+RSSMiB noop1.656/CRC9.668/trees585.535/strings183.102/pipeline261.293/
+ring1.797. JSON compilation stillfails (exit1), preserved without RSS win.
+Both evidence archives copied locally; all raw files rehashed.
+No realTS/Zod cross-engine equivalence or absolute minimum claimed.
+Private policy remains unapplied due defaultTS+1.979%instructions.
+Main07validation and old-hole costs continue in isolated owned jobs.
+
 PRIVATE ENTRY MOVING ACCEPTANCE VERIFIED (2026-10-03 23:56Z)
 44default/moving executions match Node26.5.1on GCcontrol/privateentry;
 all22moving cells copied objects and protected retired from-space.
