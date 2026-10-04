@@ -812,7 +812,9 @@ fn expr_numeric_by_construction_with_region(
         numeric_storage && rec(index)
     };
     match e {
-        Expr::PropertyGet { .. }
+        // A region read the planner proved a Number: an R-bit static-key
+        // read, or a bare typed-array VIEW element read (decision 69).
+        Expr::PropertyGet { .. } | Expr::IndexGet { .. }
             if region_f64_reads
                 .is_some_and(|reads| reads.contains(&(e as *const Expr as usize))) =>
         {

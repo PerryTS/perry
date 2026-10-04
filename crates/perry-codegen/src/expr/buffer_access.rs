@@ -2,8 +2,8 @@ use anyhow::Result;
 use perry_hir::Expr;
 
 use crate::native_value::{
-    BufferAccessFacts, BufferAccessMode, BufferAccessProof, BufferElem, BufferEndian,
-    BufferIndexUnit, ExpectedNativeRep, LoweredValue, MaterializationReason,
+    BoundsProof, BoundsState, BufferAccessFacts, BufferAccessMode, BufferAccessProof, BufferElem,
+    BufferEndian, BufferIndexUnit, ExpectedNativeRep, LoweredValue, MaterializationReason,
 };
 use crate::rooting;
 use crate::types::{DOUBLE, F32, I16, I32, I8, PTR};
@@ -216,6 +216,33 @@ fn lower_value_i32(ctx: &mut FnCtx<'_>, value: &Expr) -> Result<String> {
     Ok(lower_expr_native(ctx, value, crate::native_value::ExpectedNativeRep::I32)?.value)
 }
 
+/// Does a store of `value` into `view` take the native element store (no
+/// runtime call)? The value gate of [`lower_typed_array_store`]; the loop
+/// region planner asks it before it plans a view store bare.
+pub(crate) fn typed_array_store_value_is_native(
+    ctx: &FnCtx<'_>,
+    view: &crate::native_value::BufferViewSlot,
+    value: &Expr,
+) -> bool {
+    if typed_array_set_spec(view).is_none() {
+        return false;
+    }
+    match view.elem {
+        BufferElem::I8
+        | BufferElem::U8
+        | BufferElem::I16
+        | BufferElem::U16
+        | BufferElem::I32
+        | BufferElem::U32 => can_lower_integer_typed_array_store_value(ctx, value),
+        BufferElem::F32 | BufferElem::F64 => crate::codegen::typed_arg_is_guard_candidate(
+            ctx,
+            crate::codegen::TypedParamRep::F64,
+            value,
+        ),
+        _ => true,
+    }
+}
+
 pub(crate) fn can_lower_integer_typed_array_store_value(ctx: &FnCtx<'_>, value: &Expr) -> bool {
     can_lower_expr_as_i32(
         value,
@@ -370,9 +397,30 @@ pub(crate) fn emit_buffer_access_pointer(
     proof: &BufferAccessProof,
     spec: BufferAccessSpec,
 ) -> BufferAccessEmission {
+    // A loop region's view access (decision 69): the region guard proved the
+    // bounds against the length it read. No invariant length load and no
+    // assume here: the length is not invariant (a detach zeroes it), so an
+    // `!invariant.load` must not carry it across the JS a re-check follows.
+    let region_proven = matches!(
+        proof.bounds,
+        BoundsState::Proven {
+            proof: BoundsProof::RegionGuard
+        }
+    );
+    if region_proven {
+        crate::stmt::region_loop::note_view_access(ctx);
+    }
     let blk = ctx.block();
     let data_ptr = blk.load(PTR, &proof.view.data_slot);
-    let len_i32 = if let Some(length_slot) = proof.view.length_slot.as_ref() {
+    let len_i32 = if region_proven {
+        // Only for callers that consume the length; dead otherwise.
+        let header_ptr = blk.gep(
+            I8,
+            &data_ptr,
+            &[(I32, &proof.view.length_offset_from_data.to_string())],
+        );
+        blk.load(I32, &header_ptr)
+    } else if let Some(length_slot) = proof.view.length_slot.as_ref() {
         blk.load(I32, length_slot)
     } else {
         let header_ptr = blk.gep(
@@ -382,7 +430,7 @@ pub(crate) fn emit_buffer_access_pointer(
         );
         blk.load_invariant(I32, &header_ptr)
     };
-    if proof.may_emit_inbounds {
+    if proof.may_emit_inbounds && !region_proven {
         let bounds_width_units = spec.bounds_width_units();
         let in_bounds = if bounds_width_units == 1 {
             blk.icmp_ult(I32, &proof.index.value, &len_i32)
@@ -756,30 +804,12 @@ pub(crate) fn lower_typed_array_store(
     if !view.alias.allows_noalias() || view.scope_idx.is_none() {
         return Ok(None);
     }
+    if !typed_array_store_value_is_native(ctx, &view, value_expr) {
+        return Ok(None);
+    }
     let Some(spec) = typed_array_set_spec(&view) else {
         return Ok(None);
     };
-    if matches!(
-        view.elem,
-        BufferElem::I8
-            | BufferElem::U8
-            | BufferElem::I16
-            | BufferElem::U16
-            | BufferElem::I32
-            | BufferElem::U32
-    ) && !can_lower_integer_typed_array_store_value(ctx, value_expr)
-    {
-        return Ok(None);
-    }
-    if matches!(view.elem, BufferElem::F32 | BufferElem::F64)
-        && !crate::codegen::typed_arg_is_guard_candidate(
-            ctx,
-            crate::codegen::TypedParamRep::F64,
-            value_expr,
-        )
-    {
-        return Ok(None);
-    }
     // `data_slot` is a raw cached pointer. It is stable across a collecting RHS
     // only for fresh inline typed-array storage; ArrayBuffer and native-arena
     // views must fall back before either index or value is evaluated.

@@ -130,7 +130,7 @@ pub(crate) use buffer_access::{
     access_facts_for_spec, can_lower_buffer_access_without_calls,
     can_lower_integer_typed_array_store_value, emit_buffer_access_pointer,
     lower_buffer_access_proof, lower_buffer_load, lower_buffer_store, lower_typed_array_load,
-    lower_typed_array_store, BufferAccessSpec,
+    lower_typed_array_store, typed_array_store_value_is_native, BufferAccessSpec,
 };
 pub(crate) use buffer_views::{
     alias_buffer_view_slot, attach_buffer_view_facts, attach_buffer_view_pointer_state_for_expr,
@@ -176,8 +176,8 @@ pub(crate) use pod_record::{
 };
 pub(crate) use proven_view_access::{
     index_is_exact_i32_shape, is_proven_u32_view_read, local_is_proven_int_store_view,
-    try_lower_proven_view_checked_f64_load, try_lower_proven_view_checked_store,
-    try_lower_proven_view_checked_u32_load,
+    proven_view_receiver, try_lower_proven_view_checked_f64_load,
+    try_lower_proven_view_checked_store, try_lower_proven_view_checked_u32_load,
 };
 pub(crate) use proven_view_guarded::{
     try_lower_proven_view_guarded_load, try_lower_proven_view_guarded_store,
