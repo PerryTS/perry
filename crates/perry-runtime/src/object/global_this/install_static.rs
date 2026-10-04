@@ -546,6 +546,18 @@ pub(crate) fn install_builtin_constructor_statics(
                 }
             }
         }
+        "Map" => install_constructor_static(
+            ctor,
+            "groupBy",
+            crate::fn_info!(map_group_by_thunk, 2; with_declared(2)),
+            2,
+        ),
+        "RegExp" => install_constructor_static(
+            ctor,
+            "escape",
+            crate::fn_info!(regexp_escape_thunk, 1; with_declared(1)),
+            1,
+        ),
         "Date" => {
             // `Date.now` / `Date.parse` / `Date.UTC` as real own data props
             // (thunks live in `date_proto_thunks`). The functional calls are

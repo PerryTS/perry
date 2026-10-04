@@ -372,6 +372,8 @@ pub(crate) fn identify_global_builtin_constructor(func_value: f64) -> Option<&'s
             || func_ptr == global_this_string_thunk as *const u8 as usize
             || func_ptr == global_this_number_thunk as *const u8 as usize
             || func_ptr == global_this_boolean_thunk as *const u8 as usize
+            || func_ptr == global_this_bigint_thunk as *const u8 as usize
+            || func_ptr == global_this_symbol_thunk as *const u8 as usize
             || func_ptr == error_constructor_call_thunk as *const u8 as usize
             || func_ptr == type_error_constructor_call_thunk as *const u8 as usize
             || func_ptr == range_error_constructor_call_thunk as *const u8 as usize
@@ -442,6 +444,10 @@ pub(crate) fn identify_global_builtin_constructor(func_value: f64) -> Option<&'s
                 Some("Number")
             } else if func_ptr == global_this_boolean_thunk as *const u8 as usize {
                 Some("Boolean")
+            } else if func_ptr == global_this_bigint_thunk as *const u8 as usize {
+                Some("BigInt")
+            } else if func_ptr == global_this_symbol_thunk as *const u8 as usize {
+                Some("Symbol")
             } else if func_ptr == global_this_blob_thunk as *const u8 as usize {
                 Some("Blob")
             } else if func_ptr == global_this_file_thunk as *const u8 as usize {

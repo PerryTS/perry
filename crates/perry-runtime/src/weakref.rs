@@ -41,8 +41,12 @@ const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
 const WEAKREF_SHAPE_ID: u32 = 0x7FFF_FE10;
 const FINREG_SHAPE_ID: u32 = 0x7FFF_FE11;
 const FINREG_RECORD_SHAPE_ID: u32 = 0x7FFF_FE14;
-pub const CLASS_ID_WEAKREF: u32 = 0xFFFF_0029;
-pub const CLASS_ID_FINALIZATION_REGISTRY: u32 = 0xFFFF_002A;
+/// Instance ids of `WeakRef` / `FinalizationRegistry`. They double as the ids
+/// `x instanceof WeakRef` compiles to (perry-codegen/src/expr/instance_misc1.rs),
+/// so they must not equal another type's probe id: they used to be 0x29/0x2A,
+/// which are `Request`/`Headers`, and `new WeakRef({}) instanceof Request` held.
+pub const CLASS_ID_WEAKREF: u32 = 0xFFFF_0064;
+pub const CLASS_ID_FINALIZATION_REGISTRY: u32 = 0xFFFF_0065;
 pub const CLASS_ID_FINALIZATION_RECORD: u32 = 0xFFFF_002B;
 /// A single WeakMap/WeakSet entry. Field 0 holds the key — a *weak* slot,
 /// skipped by the GC's strong-edge scanners exactly like a WeakRef target or a

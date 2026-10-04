@@ -414,6 +414,30 @@ pub(crate) extern "C" fn global_this_boolean_thunk(
     f64::from_bits(crate::value::JSValue::bool(b).bits())
 }
 
+/// `BigInt` as a value (`const B = BigInt; B(3)`, `[1, 2].map(BigInt)`,
+/// `Reflect.apply(BigInt, …)`): the call form is the same coercion the bare
+/// `BigInt(x)` lowering (`Expr::BigIntCoerce`) runs. A missing argument arrives
+/// as `undefined`, which the coercion rejects with the spec's TypeError.
+pub(crate) extern "C" fn global_this_bigint_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    value: f64,
+) -> f64 {
+    let ptr = crate::bigint::js_bigint_from_f64(value);
+    crate::value::js_nanbox_bigint(ptr as i64)
+}
+
+/// `Symbol` as a value (`const S = Symbol; S("x")`): the same fresh-symbol
+/// allocation the bare `Symbol(x)` lowering (`Expr::SymbolNew`) runs.
+/// `undefined` (absent or explicit) means no description.
+pub(crate) extern "C" fn global_this_symbol_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    description: f64,
+) -> f64 {
+    unsafe { crate::symbol::js_symbol_new(description) }
+}
+
 pub(crate) extern "C" fn global_this_error_capture_stack_trace_thunk(
     _closure: *const crate::closure::ClosureHeader,
     _this: crate::closure::JsThis,

@@ -146,6 +146,25 @@ pub(crate) extern "C" fn object_group_by_thunk(
     super::super::js_object_group_by(items, callback)
 }
 
+/// `Map.groupBy` read as a value (`const g = Map.groupBy; g(items, cb)`).
+pub(crate) extern "C" fn map_group_by_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    items: f64,
+    callback: f64,
+) -> f64 {
+    super::super::js_map_group_by(items, callback)
+}
+
+/// `RegExp.escape` read as a value (`["a.b"].map(RegExp.escape)`).
+pub(crate) extern "C" fn regexp_escape_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    input: f64,
+) -> f64 {
+    crate::regex::js_regexp_escape(input)
+}
+
 pub(crate) extern "C" fn object_get_prototype_of_thunk(
     _closure: *const crate::closure::ClosureHeader,
     _this: crate::closure::JsThis,

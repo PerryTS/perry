@@ -243,6 +243,8 @@ pub(crate) fn global_builtin_constructor_class_id(name: &str) -> u32 {
         // through the same runtime probe as the compile-time-literal form.
         "WeakMap" => 0xFFFF002C,
         "WeakSet" => 0xFFFF002D,
+        "WeakRef" => crate::weakref::CLASS_ID_WEAKREF,
+        "FinalizationRegistry" => crate::weakref::CLASS_ID_FINALIZATION_REGISTRY,
         "RegExp" => 0xFFFF0021,
         "ArrayBuffer" => 0xFFFF0025,
         "SharedArrayBuffer" => 0xFFFF002E,

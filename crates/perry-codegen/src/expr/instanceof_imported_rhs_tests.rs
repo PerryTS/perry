@@ -151,3 +151,33 @@ fn unresolved_import_rhs_keeps_its_reserved_builtin_id() {
         "nothing resolves this binding to a constructor value:\n{ir}"
     );
 }
+
+/// #11896: `x instanceof WeakRef` / `FinalizationRegistry` had no reserved id,
+/// so the operator folded to `js_instanceof(v, 0)` and answered `false` for a
+/// real instance. The ids named here are the instance ids in
+/// perry-runtime/src/weakref.rs (`CLASS_ID_WEAKREF` / `CLASS_ID_FINALIZATION_REGISTRY`),
+/// which a runtime test pins to the same numbers.
+#[test]
+fn weak_wrapper_constructors_name_their_instance_class_ids() {
+    for (name, id) in [
+        ("WeakRef", 0xFFFF_0064u32),
+        ("FinalizationRegistry", 0xFFFF_0065u32),
+    ] {
+        let ir = compile(
+            &instanceof_imported(name),
+            CompileOptions {
+                emit_ir_only: true,
+                ..Default::default()
+            },
+        );
+        assert!(
+            ir.contains(STATIC_CALL) && ir.contains(&format!("i32 {id}")),
+            "`x instanceof {name}` must test class id {id:#x}, not fold to 0:\n{ir}"
+        );
+        assert_eq!(
+            super::builtin_parent_reserved_class_id(name),
+            Some(id),
+            "`class X extends {name}` must register the same id"
+        );
+    }
+}

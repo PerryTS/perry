@@ -1926,6 +1926,8 @@ unsafe fn set_object_keys_with_live_rep(
 /// #9180: the receiver `[[Set]]` own-key probe, split out to keep `tests.rs`
 /// under the 2000-line cap.
 #[cfg(test)]
+mod builtin_value_tests;
+#[cfg(test)]
 mod keys_front_offset_tests;
 #[cfg(test)]
 mod native_module_namespace_proto_tests;
