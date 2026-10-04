@@ -1865,6 +1865,10 @@ pub(crate) use dispatch::*;
 mod iter_helpers;
 use iter_helpers::*;
 
+#[path = "node_stream_rooted_values.rs"]
+mod rooted_values;
+use rooted_values::*;
+
 #[path = "node_stream_pipeline.rs"]
 mod pipeline;
 use pipeline::*;

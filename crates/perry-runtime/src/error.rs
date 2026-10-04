@@ -658,6 +658,9 @@ pub extern "C" fn js_aggregateerror_new(
     errors: *mut crate::array::ArrayHeader,
     message: *mut StringHeader,
 ) -> *mut ErrorHeader {
+    // Allocating the error can collect: hold the errors array across it.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let errors = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(errors as i64));
     unsafe {
         let ptr = alloc_error(
             ERROR_KIND_AGGREGATE_ERROR,
@@ -665,7 +668,11 @@ pub extern "C" fn js_aggregateerror_new(
             message,
             !message.is_null(),
         );
-        error_set_errors(ptr, errors);
+        error_set_errors(
+            ptr,
+            crate::value::js_nanbox_get_pointer(errors.get_nanbox_f64())
+                as *mut crate::array::ArrayHeader,
+        );
         ptr
     }
 }

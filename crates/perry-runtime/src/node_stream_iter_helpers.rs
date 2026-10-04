@@ -171,11 +171,16 @@ pub(super) extern "C" fn ns_stream_abort_listener(
 /// freshly-built result stream so a downstream consuming helper can
 /// observe an abort or error that happens later in the chain.
 pub(super) fn propagate_stream_state(this: f64, opts: f64, result: f64) {
-    if let Some(err) = readable_hidden_error(this) {
-        set_hidden_value(result, hidden_error_key(), err);
+    // Storing a hidden field can allocate.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let this = scope.root_nanbox_f64(this);
+    let opts = scope.root_nanbox_f64(opts);
+    let result = scope.root_nanbox_f64(result);
+    if let Some(err) = readable_hidden_error(this.get_nanbox_f64()) {
+        set_hidden_value(result.get_nanbox_f64(), hidden_error_key(), err);
     }
-    if let Some(sig) = effective_signal(this, opts) {
-        set_hidden_value(result, hidden_signal_key(), sig);
+    if let Some(sig) = effective_signal(this.get_nanbox_f64(), opts.get_nanbox_f64()) {
+        set_hidden_value(result.get_nanbox_f64(), hidden_signal_key(), sig);
     }
 }
 
@@ -187,6 +192,8 @@ pub(super) fn drain_iter_helper_microtasks() {
     }
 }
 
+/// Run `_read` and the microtasks it queued. Both run user code, so callers
+/// hold `stream` in a handle across this and reread it.
 pub(super) fn prepare_readable_for_iteration(stream: f64) {
     invoke_read_once(stream);
     drain_iter_helper_microtasks();
@@ -276,18 +283,65 @@ pub(super) fn count_arg(value: f64) -> u32 {
     }
 }
 
-/// Append every element of array `arr` to `out`, returning the
-/// possibly-reallocated `out`.
-#[inline]
-pub(super) fn extend_with_array(
-    mut out: *mut crate::array::ArrayHeader,
-    arr: *const crate::array::ArrayHeader,
-) -> *mut crate::array::ArrayHeader {
-    let len = crate::array::js_array_length(arr);
-    for i in 0..len {
-        out = crate::array::js_array_push_f64(out, crate::array::js_array_get_f64(arr, i));
+/// Append every element of the array `arr` to the rooted array `out`. Each
+/// push can grow `out`, so `arr` is held in a handle too.
+fn extend_with_array(out: &crate::gc::RuntimeHandle<'_>, arr: f64) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let arr = scope.root_nanbox_f64(arr);
+    for i in 0..rooted_array_len(&arr) {
+        rooted_array_push(out, rooted_array_at(&arr, i));
     }
-    out
+}
+
+/// The eager core of `map`/`filter`/`flatMap`/`take`/`drop`: run `_read`,
+/// hand `visit` each retained chunk with its index, the chunk count and the
+/// rooted output array, then wrap the output in a new Readable that carries
+/// `this`'s error and signal. `visit` returns whether to continue, or the
+/// error that stops the walk (stored on the result). `_read`, the user
+/// callbacks `visit` runs and every push can collect, so `this`, the chunk
+/// list and the output are held in handles and read after each of them.
+fn eager_chunk_helper(
+    this: f64,
+    opts: f64,
+    stop_on_error: bool,
+    mut visit: impl FnMut(u32, u32, f64, &crate::gc::RuntimeHandle<'_>) -> Result<bool, f64>,
+) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let this = scope.root_nanbox_f64(this);
+    let opts = scope.root_nanbox_f64(opts);
+    prepare_readable_for_iteration(this.get_nanbox_f64());
+    let out = rooted_empty_array(&scope);
+    let mut callback_error = None;
+    let arr = readable_chunks_array(this.get_nanbox_f64());
+    if !arr.is_null() && !(stop_on_error && readable_hidden_error(this.get_nanbox_f64()).is_some())
+    {
+        let chunks = scope.root_nanbox_f64(box_pointer(arr as *const u8));
+        let len = rooted_array_len(&chunks);
+        for i in 0..len {
+            match visit(i, len, rooted_array_at(&chunks, i), &out) {
+                Ok(true) => {}
+                Ok(false) => break,
+                Err(err) => {
+                    callback_error = Some(scope.root_nanbox_f64(err));
+                    break;
+                }
+            }
+        }
+    }
+    let result = scope.root_nanbox_f64(js_node_stream_readable_from(out.get_nanbox_f64()));
+    propagate_stream_state(
+        this.get_nanbox_f64(),
+        opts.get_nanbox_f64(),
+        result.get_nanbox_f64(),
+    );
+    if let Some(err) = callback_error {
+        set_hidden_value(
+            result.get_nanbox_f64(),
+            hidden_error_key(),
+            err.get_nanbox_f64(),
+        );
+    }
+    result.get_nanbox_f64()
 }
 
 pub(super) extern "C" fn ns_iter_to_array(
@@ -314,13 +368,23 @@ pub(super) extern "C" fn ns_iter_to_array(
     // path, which spun the event loop synchronously — re-entering unrelated
     // macrotasks (the React #327 hazard) and returning an empty array for a
     // live (socket/`setImmediate`-fed) source whose data had not buffered yet.
+    // Starting the consumer creates promises (init hooks) and runs the
+    // iterator's first steps: hold `this` and `opts` across it.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let this = scope.root_nanbox_f64(this);
+    let opts = scope.root_nanbox_f64(opts);
     let undefined = f64::from_bits(TAG_UNDEFINED);
-    let result = crate::promise::js_array_from_async(this, undefined, undefined);
+    let result = crate::promise::js_array_from_async(this.get_nanbox_f64(), undefined, undefined);
+    let result = scope.root_nanbox_f64(result);
     // Abort after consumption starts: a signal that fires later rejects the
     // result and cancels the stream (terminating the internal `from_async`
     // iterator), instead of leaving the promise pending forever.
-    register_to_array_abort(this, opts, result);
-    result
+    register_to_array_abort(
+        this.get_nanbox_f64(),
+        opts.get_nanbox_f64(),
+        result.get_nanbox_f64(),
+    );
+    result.get_nanbox_f64()
 }
 
 /// Wire a late-abort listener for `toArray`: on abort, reject `result` and
@@ -329,16 +393,25 @@ fn register_to_array_abort(stream: f64, opts: f64, result: f64) {
     let Some(sig) = effective_signal(stream, opts) else {
         return;
     };
-    let Some(sig_obj) = object_ptr_from_value(sig) else {
+    if object_ptr_from_value(sig).is_none() {
+        return;
+    }
+    // The listener allocation can collect.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let stream = scope.root_nanbox_f64(stream);
+    let result = scope.root_nanbox_f64(result);
+    let sig = scope.root_nanbox_f64(sig);
+    let abort_cl = js_closure_alloc(crate::fn_info!(ns_to_array_abort, 0; with_declared(0)), 2);
+    js_closure_set_capture_ptr(abort_cl, 0, result.get_nanbox_f64().to_bits() as i64);
+    js_closure_set_capture_f64(abort_cl, 1, stream.get_nanbox_f64());
+    let abort_cl = scope.root_nanbox_f64(box_pointer(abort_cl as *const u8));
+    let Some(sig_obj) = object_ptr_from_value(sig.get_nanbox_f64()) else {
         return;
     };
-    let abort_cl = js_closure_alloc(crate::fn_info!(ns_to_array_abort, 0; with_declared(0)), 2);
-    js_closure_set_capture_ptr(abort_cl, 0, result.to_bits() as i64);
-    js_closure_set_capture_f64(abort_cl, 1, stream);
     crate::url::js_abort_signal_add_listener(
         sig_obj,
         literal_string_value(b"abort"),
-        box_pointer(abort_cl as *const u8),
+        abort_cl.get_nanbox_f64(),
     );
 }
 
@@ -352,11 +425,17 @@ pub(super) extern "C" fn ns_to_array_abort(
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    let result = promise_from_capture(closure, 0);
-    let stream = js_closure_get_capture_f64(closure, 1);
-    destroy_stream(stream, abort_error());
+    // Destroying the stream runs its listeners, which can collect.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let closure = scope.root_nanbox_f64(box_pointer(closure as *const u8));
+    let state = || raw_ptr_from_value(closure.get_nanbox_f64()) as *const ClosureHeader;
+    let stream = js_closure_get_capture_f64(state(), 1);
+    let err = abort_error();
+    destroy_stream(stream, err);
+    let err = abort_error();
+    let result = promise_from_capture(state(), 0);
     if !result.is_null() {
-        crate::promise::js_promise_reject(result, abort_error());
+        crate::promise::js_promise_reject(result, err);
     }
     f64::from_bits(TAG_UNDEFINED)
 }
@@ -367,31 +446,17 @@ pub(super) extern "C" fn ns_iter_map(
     mapper: f64,
     opts: f64,
 ) -> f64 {
-    let this = this_value(closure, this);
-    prepare_readable_for_iteration(this);
-    let arr = readable_chunks_array(this);
-    let cb = callback_closure(mapper);
-    let mut out = crate::array::js_array_alloc(0);
-    let mut callback_error = None;
-    if readable_hidden_error(this).is_none() && !arr.is_null() && !cb.is_null() {
-        let len = crate::array::js_array_length(arr);
-        for i in 0..len {
-            let el = crate::array::js_array_get_f64(arr, i);
-            match call_settled_result(cb, el) {
-                Ok(mapped) => out = crate::array::js_array_push_f64(out, mapped),
-                Err(err) => {
-                    callback_error = Some(err);
-                    break;
-                }
-            }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let mapper = scope.root_nanbox_f64(mapper);
+    let run = !callback_closure(mapper.get_nanbox_f64()).is_null();
+    eager_chunk_helper(this_value(closure, this), opts, true, |_, _, el, out| {
+        if !run {
+            return Ok(false);
         }
-    }
-    let result = readable_from_chunks(out);
-    propagate_stream_state(this, opts, result);
-    if let Some(err) = callback_error {
-        set_hidden_value(result, hidden_error_key(), err);
-    }
-    result
+        let mapped = call_settled_result(callback_closure(mapper.get_nanbox_f64()), el)?;
+        rooted_array_push(out, mapped);
+        Ok(true)
+    })
 }
 
 pub(super) extern "C" fn ns_iter_filter(
@@ -400,34 +465,25 @@ pub(super) extern "C" fn ns_iter_filter(
     predicate: f64,
     opts: f64,
 ) -> f64 {
-    let this = this_value(closure, this);
-    prepare_readable_for_iteration(this);
-    let arr = readable_chunks_array(this);
-    let cb = callback_closure(predicate);
-    let mut out = crate::array::js_array_alloc(0);
-    let mut callback_error = None;
-    if readable_hidden_error(this).is_none() && !arr.is_null() && !cb.is_null() {
-        let len = crate::array::js_array_length(arr);
-        for i in 0..len {
-            let el = crate::array::js_array_get_f64(arr, i);
-            match call_settled_result(cb, el) {
-                Ok(value) if crate::value::js_is_truthy(value) != 0 => {
-                    out = crate::array::js_array_push_f64(out, el);
-                }
-                Ok(_) => {}
-                Err(err) => {
-                    callback_error = Some(err);
-                    break;
-                }
-            }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let predicate = scope.root_nanbox_f64(predicate);
+    let run = !callback_closure(predicate.get_nanbox_f64()).is_null();
+    eager_chunk_helper(this_value(closure, this), opts, true, |_, _, el, out| {
+        if !run {
+            return Ok(false);
         }
-    }
-    let result = readable_from_chunks(out);
-    propagate_stream_state(this, opts, result);
-    if let Some(err) = callback_error {
-        set_hidden_value(result, hidden_error_key(), err);
-    }
-    result
+        // The element is pushed after the predicate runs.
+        let step = crate::gc::RuntimeHandleScope::new();
+        let el = step.root_nanbox_f64(el);
+        let keep = call_settled_result(
+            callback_closure(predicate.get_nanbox_f64()),
+            el.get_nanbox_f64(),
+        )?;
+        if crate::value::js_is_truthy(keep) != 0 {
+            rooted_array_push(out, el.get_nanbox_f64());
+        }
+        Ok(true)
+    })
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -491,6 +547,11 @@ fn consume_read_iter_result(iter_result: f64) -> (bool, f64) {
 /// Always routed through a promise so each step runs on a microtask (no
 /// synchronous recursion, no block-drain).
 fn consume_drive_next(iter: f64, on_next: *const ClosureHeader, reject: *const ClosureHeader) {
+    // `next()` is user code and wrapping its result creates a promise; both
+    // can collect, so the two reactions are held in handles.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let on_next = scope.root_nanbox_f64(box_pointer(on_next as *const u8));
+    let reject = scope.root_nanbox_f64(box_pointer(reject as *const u8));
     let next_result = unsafe {
         crate::object::js_native_call_method(
             iter,
@@ -505,7 +566,11 @@ fn consume_drive_next(iter: f64, on_next: *const ClosureHeader, reject: *const C
     } else {
         crate::promise::js_promise_resolved(next_result)
     };
-    crate::promise::js_promise_then(promise, on_next, reject);
+    crate::promise::js_promise_then(
+        promise,
+        raw_ptr_from_value(on_next.get_nanbox_f64()) as *const ClosureHeader,
+        raw_ptr_from_value(reject.get_nanbox_f64()) as *const ClosureHeader,
+    );
 }
 
 /// Close the async iterator driving a consuming helper, releasing the
@@ -533,20 +598,32 @@ fn consume_close_iter(state: *const ClosureHeader) {
     };
 }
 
-fn consume_resolve(state: *const ClosureHeader, value: f64) {
-    consume_close_iter(state);
+/// Close the iterator, then settle the helper's result with `value`.
+/// Closing runs the iterator's `return()` (user code), so `state` and `value`
+/// are held in handles across it.
+fn consume_settle(state: *const ClosureHeader, value: f64, fulfil: bool) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let state = scope.root_nanbox_f64(box_pointer(state as *const u8));
+    let value = scope.root_nanbox_f64(value);
+    consume_close_iter(raw_ptr_from_value(state.get_nanbox_f64()) as *const ClosureHeader);
+    let state = raw_ptr_from_value(state.get_nanbox_f64()) as *const ClosureHeader;
     let result = js_closure_get_capture_ptr(state, SC_RESULT) as *mut crate::promise::Promise;
-    if !result.is_null() {
-        crate::promise::js_promise_resolve(result, value);
+    if result.is_null() {
+        return;
+    }
+    if fulfil {
+        crate::promise::js_promise_resolve(result, value.get_nanbox_f64());
+    } else {
+        crate::promise::js_promise_reject(result, value.get_nanbox_f64());
     }
 }
 
+fn consume_resolve(state: *const ClosureHeader, value: f64) {
+    consume_settle(state, value, true);
+}
+
 fn consume_reject_state(state: *const ClosureHeader, reason: f64) {
-    consume_close_iter(state);
-    let result = js_closure_get_capture_ptr(state, SC_RESULT) as *mut crate::promise::Promise;
-    if !result.is_null() {
-        crate::promise::js_promise_reject(result, reason);
-    }
+    consume_settle(state, reason, false);
 }
 
 fn consume_finalize(state: *const ClosureHeader) {
@@ -554,8 +631,15 @@ fn consume_finalize(state: *const ClosureHeader) {
     if op == CONSUME_OP_REDUCE
         && crate::value::js_is_truthy(js_closure_get_capture_f64(state, SC_HAS_ACC)) == 0
     {
-        // reduce over an empty stream with no initial value rejects.
-        consume_reject_state(state, reduce_missing_initial_error());
+        // reduce over an empty stream with no initial value rejects. Building
+        // the error allocates.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let state = scope.root_nanbox_f64(box_pointer(state as *const u8));
+        let err = reduce_missing_initial_error();
+        consume_reject_state(
+            raw_ptr_from_value(state.get_nanbox_f64()) as *const ClosureHeader,
+            err,
+        );
         return;
     }
     consume_resolve(state, js_closure_get_capture_f64(state, SC_ACC));
@@ -571,6 +655,9 @@ extern "C" fn consume_on_next(
     if state.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
+    // The user callback below can collect; `state` is reread after it.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let state_h = scope.root_nanbox_f64(box_pointer(state as *const u8));
     let (done, value) = consume_read_iter_result(iter_result);
     if done {
         consume_finalize(state);
@@ -607,11 +694,15 @@ extern "C" fn consume_on_next(
         })
     };
 
+    let state = raw_ptr_from_value(state_h.get_nanbox_f64()) as *const ClosureHeader;
     match cb_result {
         Ok(result) => {
             // Await the (possibly-promise) callback result, then continue.
-            let on_cb = js_closure_get_capture_ptr(state, SC_ON_CB) as *const ClosureHeader;
+            // Wrapping the result creates a promise, which can collect.
             let p = crate::promise::js_promise_resolved(result);
+            let state = raw_ptr_from_value(state_h.get_nanbox_f64()) as *const ClosureHeader;
+            let on_cb = js_closure_get_capture_ptr(state, SC_ON_CB) as *const ClosureHeader;
+            let reject = js_closure_get_capture_ptr(state, SC_REJECT) as *const ClosureHeader;
             crate::promise::js_promise_then(p, on_cb, reject);
         }
         Err(err) => {
@@ -709,32 +800,54 @@ fn consume_stream(stream: f64, callback: f64, op: f64, initial: f64, opts: f64) 
         return resolved_promise(acc);
     };
 
+    // Creating the result promise runs `promiseHooks` init hooks, and each
+    // closure allocation can collect: hold every value in a handle.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let stream = scope.root_nanbox_f64(stream);
+    let callback = scope.root_nanbox_f64(callback);
+    let acc = scope.root_nanbox_f64(acc);
+    let opts = scope.root_nanbox_f64(opts);
+    let iter = scope.root_nanbox_f64(iter);
     let result = crate::promise::js_promise_new();
-    let state = js_closure_alloc(crate::fn_info!(consume_on_next, 1; with_declared(1)), 9);
-    let on_cb = js_closure_alloc(crate::fn_info!(consume_on_cb, 1; with_declared(1)), 1);
-    let reject = js_closure_alloc(crate::fn_info!(consume_reject, 1; with_declared(1)), 1);
+    let result = scope.root_nanbox_f64(box_pointer(result as *const u8));
+    let closure = |info, captures| {
+        scope.root_nanbox_f64(box_pointer(js_closure_alloc(info, captures) as *const u8))
+    };
+    let state = closure(crate::fn_info!(consume_on_next, 1; with_declared(1)), 9);
+    let on_cb = closure(crate::fn_info!(consume_on_cb, 1; with_declared(1)), 1);
+    let reject = closure(crate::fn_info!(consume_reject, 1; with_declared(1)), 1);
+    let ptr = |h: &crate::gc::RuntimeHandle<'_>| raw_ptr_from_value(h.get_nanbox_f64());
 
-    js_closure_set_capture_ptr(reject, 0, state as i64);
-    js_closure_set_capture_ptr(on_cb, 0, state as i64);
+    js_closure_set_capture_ptr(ptr(&reject) as *mut ClosureHeader, 0, ptr(&state) as i64);
+    js_closure_set_capture_ptr(ptr(&on_cb) as *mut ClosureHeader, 0, ptr(&state) as i64);
 
-    js_closure_set_capture_ptr(state, SC_RESULT, result as i64);
-    js_closure_set_capture_f64(state, SC_ITER, iter);
-    js_closure_set_capture_f64(state, SC_CB, callback);
-    js_closure_set_capture_f64(state, SC_OP, op);
-    js_closure_set_capture_f64(state, SC_ACC, acc);
-    js_closure_set_capture_ptr(state, SC_REJECT, reject as i64);
-    js_closure_set_capture_ptr(state, SC_ON_CB, on_cb as i64);
-    js_closure_set_capture_f64(state, SC_CUR, f64::from_bits(TAG_UNDEFINED));
-    js_closure_set_capture_f64(state, SC_HAS_ACC, bool_bits(has_initial));
+    let st = ptr(&state) as *mut ClosureHeader;
+    js_closure_set_capture_ptr(st, SC_RESULT, ptr(&result) as i64);
+    js_closure_set_capture_f64(st, SC_ITER, iter.get_nanbox_f64());
+    js_closure_set_capture_f64(st, SC_CB, callback.get_nanbox_f64());
+    js_closure_set_capture_f64(st, SC_OP, op);
+    js_closure_set_capture_f64(st, SC_ACC, acc.get_nanbox_f64());
+    js_closure_set_capture_ptr(st, SC_REJECT, ptr(&reject) as i64);
+    js_closure_set_capture_ptr(st, SC_ON_CB, ptr(&on_cb) as i64);
+    js_closure_set_capture_f64(st, SC_CUR, f64::from_bits(TAG_UNDEFINED));
+    js_closure_set_capture_f64(st, SC_HAS_ACC, bool_bits(has_initial));
 
     // Abort after consumption starts: a per-call (or inherited) signal that
     // fires mid-stream rejects the result and closes the iterator, instead of
     // leaving the promise pending forever. An already-aborted signal was
     // rejected up front (above), so the listener only handles later aborts.
-    register_consume_abort(stream, opts, state);
+    register_consume_abort(
+        stream.get_nanbox_f64(),
+        opts.get_nanbox_f64(),
+        ptr(&state) as *const ClosureHeader,
+    );
 
-    consume_drive_next(iter, state, reject);
-    box_pointer(result as *const u8)
+    consume_drive_next(
+        iter.get_nanbox_f64(),
+        ptr(&state) as *const ClosureHeader,
+        ptr(&reject) as *const ClosureHeader,
+    );
+    result.get_nanbox_f64()
 }
 
 /// Register an abort listener for a consuming helper: when the governing signal
@@ -744,15 +857,27 @@ fn register_consume_abort(stream: f64, opts: f64, state: *const ClosureHeader) {
     let Some(sig) = effective_signal(stream, opts) else {
         return;
     };
-    let Some(sig_obj) = object_ptr_from_value(sig) else {
+    if object_ptr_from_value(sig).is_none() {
+        return;
+    }
+    // The listener allocation can collect.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let state = scope.root_nanbox_f64(box_pointer(state as *const u8));
+    let sig = scope.root_nanbox_f64(sig);
+    let abort_cl = js_closure_alloc(crate::fn_info!(ns_consume_abort, 0; with_declared(0)), 1);
+    js_closure_set_capture_ptr(
+        abort_cl,
+        0,
+        raw_ptr_from_value(state.get_nanbox_f64()) as i64,
+    );
+    let abort_cl = scope.root_nanbox_f64(box_pointer(abort_cl as *const u8));
+    let Some(sig_obj) = object_ptr_from_value(sig.get_nanbox_f64()) else {
         return;
     };
-    let abort_cl = js_closure_alloc(crate::fn_info!(ns_consume_abort, 0; with_declared(0)), 1);
-    js_closure_set_capture_ptr(abort_cl, 0, state as i64);
     crate::url::js_abort_signal_add_listener(
         sig_obj,
         literal_string_value(b"abort"),
-        box_pointer(abort_cl as *const u8),
+        abort_cl.get_nanbox_f64(),
     );
 }
 
@@ -770,7 +895,14 @@ pub(super) extern "C" fn ns_consume_abort(
     if state.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    consume_reject_state(state, abort_error());
+    // Building the error allocates.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let state = scope.root_nanbox_f64(box_pointer(state as *const u8));
+    let err = abort_error();
+    consume_reject_state(
+        raw_ptr_from_value(state.get_nanbox_f64()) as *const ClosureHeader,
+        err,
+    );
     f64::from_bits(TAG_UNDEFINED)
 }
 
@@ -856,50 +988,37 @@ pub(super) extern "C" fn ns_iter_flat_map(
     mapper: f64,
     opts: f64,
 ) -> f64 {
-    let this = this_value(closure, this);
-    prepare_readable_for_iteration(this);
-    let arr = readable_chunks_array(this);
-    let cb = callback_closure(mapper);
-    let mut out = crate::array::js_array_alloc(0);
-    let mut callback_error = None;
-    if readable_hidden_error(this).is_none() && !arr.is_null() && !cb.is_null() {
-        let len = crate::array::js_array_length(arr);
-        for i in 0..len {
-            let el = crate::array::js_array_get_f64(arr, i);
-            let mapped = match call_settled_result(cb, el) {
-                Ok(value) => value,
-                Err(err) => {
-                    callback_error = Some(err);
-                    break;
-                }
-            };
-            // flatMap flattens one level: an array result is spread, a
-            // Readable result contributes its retained chunks, an
-            // async-iterable (e.g. an `async function*` mapper return —
-            // issue #1572) is driven through its `[Symbol.asyncIterator]()`
-            // and its yields flattened in order, anything else is
-            // appended as a single chunk.
-            if is_array_like_value(mapped) {
-                out = extend_with_array(out, raw_ptr_from_value(mapped) as *const _);
-            } else if let Some(inner) = readable_hidden_chunks(mapped) {
-                if is_array_like_value(inner) {
-                    out = extend_with_array(out, raw_ptr_from_value(inner) as *const _);
-                } else {
-                    out = crate::array::js_array_push_f64(out, mapped);
-                }
-            } else if let Some(flat) = flatten_async_iterable_value(mapped) {
-                out = extend_with_array(out, flat as *const _);
-            } else {
-                out = crate::array::js_array_push_f64(out, mapped);
-            }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let mapper = scope.root_nanbox_f64(mapper);
+    let run = !callback_closure(mapper.get_nanbox_f64()).is_null();
+    eager_chunk_helper(this_value(closure, this), opts, true, |_, _, el, out| {
+        if !run {
+            return Ok(false);
         }
-    }
-    let result = readable_from_chunks(out);
-    propagate_stream_state(this, opts, result);
-    if let Some(err) = callback_error {
-        set_hidden_value(result, hidden_error_key(), err);
-    }
-    result
+        let step = crate::gc::RuntimeHandleScope::new();
+        let mapped = call_settled_result(callback_closure(mapper.get_nanbox_f64()), el)?;
+        let mapped = step.root_nanbox_f64(mapped);
+        // flatMap flattens one level: an array result is spread, a
+        // Readable result contributes its retained chunks, an
+        // async-iterable (e.g. an `async function*` mapper return —
+        // issue #1572) is driven through its `[Symbol.asyncIterator]()`
+        // and its yields flattened in order, anything else is
+        // appended as a single chunk.
+        if is_array_like_value(mapped.get_nanbox_f64()) {
+            extend_with_array(out, mapped.get_nanbox_f64());
+        } else if let Some(inner) = readable_hidden_chunks(mapped.get_nanbox_f64()) {
+            if is_array_like_value(inner) {
+                extend_with_array(out, inner);
+            } else {
+                rooted_array_push(out, mapped.get_nanbox_f64());
+            }
+        } else if let Some(flat) = flatten_async_iterable_value(mapped.get_nanbox_f64()) {
+            extend_with_array(out, box_pointer(flat as *const u8));
+        } else {
+            rooted_array_push(out, mapped.get_nanbox_f64());
+        }
+        Ok(true)
+    })
 }
 
 /// Issue #1572 — drive an async-iterable value (an `async function*` mapper
@@ -1242,19 +1361,19 @@ pub(super) extern "C" fn ns_iter_take(
             return result.get_nanbox_f64();
         }
     }
-    prepare_readable_for_iteration(this.get_nanbox_f64());
-    let arr = readable_chunks_array(this.get_nanbox_f64());
-    let mut out = crate::array::js_array_alloc(0);
-    if !arr.is_null() {
-        let len = crate::array::js_array_length(arr);
-        let take = count_arg(count).min(len);
-        for i in 0..take {
-            out = crate::array::js_array_push_f64(out, crate::array::js_array_get_f64(arr, i));
-        }
-    }
-    let result = readable_from_chunks(out);
-    propagate_stream_state(this.get_nanbox_f64(), f64::from_bits(TAG_UNDEFINED), result);
-    result
+    let take = count_arg(count);
+    eager_chunk_helper(
+        this.get_nanbox_f64(),
+        f64::from_bits(TAG_UNDEFINED),
+        false,
+        |i, _, el, out| {
+            if i >= take {
+                return Ok(false);
+            }
+            rooted_array_push(out, el);
+            Ok(true)
+        },
+    )
 }
 
 pub(super) extern "C" fn ns_iter_drop(
@@ -1262,19 +1381,18 @@ pub(super) extern "C" fn ns_iter_drop(
     this: crate::closure::JsThis,
     count: f64,
 ) -> f64 {
-    let this = this_value(closure, this);
-    prepare_readable_for_iteration(this);
-    let arr = readable_chunks_array(this);
-    let mut out = crate::array::js_array_alloc(0);
-    if !arr.is_null() {
-        let len = crate::array::js_array_length(arr);
-        for i in count_arg(count).min(len)..len {
-            out = crate::array::js_array_push_f64(out, crate::array::js_array_get_f64(arr, i));
-        }
-    }
-    let result = readable_from_chunks(out);
-    propagate_stream_state(this, f64::from_bits(TAG_UNDEFINED), result);
-    result
+    let skip = count_arg(count);
+    eager_chunk_helper(
+        this_value(closure, this),
+        f64::from_bits(TAG_UNDEFINED),
+        false,
+        |i, _, el, out| {
+            if i >= skip {
+                rooted_array_push(out, el);
+            }
+            Ok(true)
+        },
+    )
 }
 
 #[cfg(test)]

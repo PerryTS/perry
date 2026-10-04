@@ -91,19 +91,6 @@ pub(super) fn pipeline_args(args: *const crate::array::ArrayHeader) -> Vec<f64> 
     values
 }
 
-pub(super) fn pipeline_array_like_values(value: f64) -> Vec<f64> {
-    if !is_array_like_value(value) {
-        return Vec::new();
-    }
-    let arr = raw_ptr_from_value(value) as *const crate::array::ArrayHeader;
-    let len = crate::array::js_array_length(arr);
-    let mut values = Vec::with_capacity(len as usize);
-    for i in 0..len {
-        values.push(crate::array::js_array_get_f64(arr, i));
-    }
-    values
-}
-
 pub(super) fn is_pipeline_stream(value: f64) -> bool {
     get_hidden_value(value, hidden_readable_flag_key()).is_some()
         || get_hidden_value(value, hidden_writable_flag_key()).is_some()
@@ -172,10 +159,12 @@ pub(super) fn destroy_pipeline_stages(stages: f64, err: f64) {
     if !is_array_like_value(stages) {
         return;
     }
-    let arr = raw_ptr_from_value(stages) as *const crate::array::ArrayHeader;
-    let len = crate::array::js_array_length(arr);
-    for i in 0..len {
-        destroy_stream(crate::array::js_array_get_f64(arr, i), err);
+    // Destroying a stage runs its listeners, which can collect.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let stages = scope.root_nanbox_f64(stages);
+    let err = scope.root_nanbox_f64(err);
+    for i in 0..rooted_array_len(&stages) {
+        destroy_stream(rooted_array_at(&stages, i), err.get_nanbox_f64());
     }
 }
 
@@ -193,78 +182,92 @@ pub(super) fn pipeline_stage_already_complete(stage: f64) -> bool {
         || has_truthy_hidden(stage, hidden_finish_emitted_key())
 }
 
+/// Wire the classic pipeline's completion listeners onto the rooted stage
+/// array `stages`. Each listener allocation and each listener-list growth can
+/// collect, so every stage, the callback and the shared state are read from
+/// handles after it.
 pub(super) fn add_pipeline_callback_listeners(
-    stages: &[f64],
-    callback: f64,
+    stages: &crate::gc::RuntimeHandle<'_>,
+    callback: &crate::gc::RuntimeHandle<'_>,
     options: PipelineOptions,
 ) {
-    let state = new_pipeline_callback_state();
-    let stage_array = pipeline_stage_array(stages);
-    let error_event = literal_string_value(b"error");
-    let close_event = literal_string_value(b"close");
-    for stage in stages {
-        let listener = js_closure_alloc(
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let state = scope.root_nanbox_f64(new_pipeline_callback_state());
+    let error_event = scope.root_nanbox_f64(literal_string_value(b"error"));
+    let close_event = scope.root_nanbox_f64(literal_string_value(b"close"));
+    let signal = options.signal.map(|signal| scope.root_nanbox_f64(signal));
+    let len = rooted_array_len(stages);
+    for i in 0..len {
+        let stage = scope.root_nanbox_f64(rooted_array_at(stages, i));
+        let listener = rooted_closure(
+            &scope,
             crate::fn_info!(pipeline_error_callback, 1; with_declared(1)),
-            3,
+            &[&state, callback, stages],
         );
-        js_closure_set_capture_f64(listener, 0, state);
-        js_closure_set_capture_f64(listener, 1, callback);
-        js_closure_set_capture_f64(listener, 2, stage_array);
-        add_stream_listener_for_event(*stage, error_event, box_pointer(listener as *const u8));
-        if !pipeline_stage_already_complete(*stage) {
-            let close_listener = js_closure_alloc(
+        add_stream_listener_for_event(
+            stage.get_nanbox_f64(),
+            error_event.get_nanbox_f64(),
+            listener.get_nanbox_f64(),
+        );
+        if !pipeline_stage_already_complete(stage.get_nanbox_f64()) {
+            let close_listener = rooted_closure(
+                &scope,
                 crate::fn_info!(pipeline_close_callback, 0; with_declared(0)),
-                4,
+                &[&state, callback, stages, &stage],
             );
-            js_closure_set_capture_f64(close_listener, 0, state);
-            js_closure_set_capture_f64(close_listener, 1, callback);
-            js_closure_set_capture_f64(close_listener, 2, stage_array);
-            js_closure_set_capture_f64(close_listener, 3, *stage);
             add_stream_listener_for_event(
-                *stage,
-                close_event,
-                box_pointer(close_listener as *const u8),
+                stage.get_nanbox_f64(),
+                close_event.get_nanbox_f64(),
+                close_listener.get_nanbox_f64(),
             );
         }
-        if let Some(signal) = options.signal {
-            attach_abort_signal(signal, *stage);
+        if let Some(signal) = &signal {
+            attach_abort_signal(signal.get_nanbox_f64(), stage.get_nanbox_f64());
         }
     }
 
-    let success_stage = if !options.end_final && stages.len() >= 2 {
-        stages[stages.len() - 2]
+    let success_index = if !options.end_final && len >= 2 {
+        len - 2
     } else {
-        stages[stages.len() - 1]
+        len - 1
     };
-    let success_event = if get_hidden_value(success_stage, hidden_writable_flag_key()).is_some()
-        && options.end_final
-    {
-        literal_string_value(b"finish")
-    } else {
-        literal_string_value(b"end")
-    };
-    let success = js_closure_alloc(
+    let success_stage = scope.root_nanbox_f64(rooted_array_at(stages, success_index));
+    let success_event =
+        if get_hidden_value(success_stage.get_nanbox_f64(), hidden_writable_flag_key()).is_some()
+            && options.end_final
+        {
+            literal_string_value(b"finish")
+        } else {
+            literal_string_value(b"end")
+        };
+    let success_event = scope.root_nanbox_f64(success_event);
+    let success = rooted_closure(
+        &scope,
         crate::fn_info!(pipeline_success_callback, 0; with_declared(0)),
-        2,
+        &[&state, callback],
     );
-    js_closure_set_capture_f64(success, 0, state);
-    js_closure_set_capture_f64(success, 1, callback);
     add_stream_listener_for_event(
-        success_stage,
-        success_event,
-        box_pointer(success as *const u8),
+        success_stage.get_nanbox_f64(),
+        success_event.get_nanbox_f64(),
+        success.get_nanbox_f64(),
     );
 }
 
 pub(super) fn wire_pipeline_pair(src: f64, dest: f64, end_dest: bool) {
-    add_pipe_destination(src, dest);
+    // The `'pipe'` and `'resume'` listeners can collect.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let src = scope.root_nanbox_f64(src);
+    let dest = scope.root_nanbox_f64(dest);
+    add_pipe_destination(src.get_nanbox_f64(), dest.get_nanbox_f64());
     if !end_dest {
-        add_pipe_no_end_destination(src, dest);
+        add_pipe_no_end_destination(src.get_nanbox_f64(), dest.get_nanbox_f64());
     }
-    install_pipe_destination_listeners(src, dest);
-    let _ = emit_stream_event(dest, literal_string_value(b"pipe"), &[src]);
-    set_readable_flowing(src, f64::from_bits(TAG_TRUE));
-    let _ = emit_stream_event(src, literal_string_value(b"resume"), &[]);
+    install_pipe_destination_listeners(src.get_nanbox_f64(), dest.get_nanbox_f64());
+    let pipe = literal_string_value(b"pipe");
+    let _ = emit_stream_event(dest.get_nanbox_f64(), pipe, &[src.get_nanbox_f64()]);
+    set_readable_flowing(src.get_nanbox_f64(), f64::from_bits(TAG_TRUE));
+    let resume = literal_string_value(b"resume");
+    let _ = emit_stream_event(src.get_nanbox_f64(), resume, &[]);
 }
 
 pub(super) fn pipeline_stage_has_next(value: f64) -> bool {
@@ -276,11 +279,13 @@ pub(super) fn pipeline_stage_has_next(value: f64) -> bool {
     }
 }
 
-pub(super) fn pipeline_needs_collected_path(stages: &[f64]) -> bool {
-    stages.iter().any(|stage| is_callable_value(*stage))
-        || stages
-            .first()
-            .is_some_and(|stage| !is_pipeline_stream(*stage) && pipeline_stage_has_next(*stage))
+pub(super) fn pipeline_needs_collected_path(stages: &crate::gc::RuntimeHandle<'_>) -> bool {
+    let len = rooted_array_len(stages);
+    (0..len).any(|i| is_callable_value(rooted_array_at(stages, i)))
+        || (len > 0 && {
+            let first = rooted_array_at(stages, 0);
+            !is_pipeline_stream(first) && pipeline_stage_has_next(first)
+        })
 }
 
 pub(super) fn pipeline_empty_chunks() -> f64 {
@@ -288,9 +293,11 @@ pub(super) fn pipeline_empty_chunks() -> f64 {
 }
 
 pub(super) fn pipeline_single_chunk(value: f64) -> f64 {
-    let mut arr = crate::array::js_array_alloc(1);
-    arr = crate::array::js_array_push_f64(arr, value);
-    box_pointer(arr as *const u8)
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(value);
+    let arr = rooted_empty_array(&scope);
+    rooted_array_push(&arr, value.get_nanbox_f64());
+    arr.get_nanbox_f64()
 }
 
 #[derive(Clone, Copy)]
@@ -440,12 +447,6 @@ pub(super) fn collect_pipeline_chunks(value: f64) -> Result<f64, f64> {
     Ok(pipeline_empty_chunks())
 }
 
-pub(super) fn pipeline_chunks_vec(chunks: f64) -> Vec<f64> {
-    let mut values = Vec::new();
-    push_chunk_values(chunks, &mut values, 0);
-    values
-}
-
 pub(super) fn pipeline_iterator_result(value: f64) -> Option<(bool, f64)> {
     let obj = object_ptr_from_value(value)?;
     let done = js_object_get_field_by_name_f64(obj as *const ObjectHeader, hidden_key(b"done"));
@@ -514,40 +515,58 @@ pub(super) fn write_pipeline_chunks_to_stream(
     chunks: f64,
     end_stream: bool,
 ) -> Result<(), f64> {
-    for chunk in pipeline_chunks_vec(chunks) {
+    // Each write runs the stream's `_write`, which can collect: write from a
+    // rooted copy of the chunks to the rooted stream.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let stream = scope.root_nanbox_f64(stream);
+    let chunks = chunk_values_snapshot(&scope, chunks);
+    for i in 0..rooted_array_len(&chunks) {
         let _ = write_writable_chunk(
-            stream,
-            chunk,
+            stream.get_nanbox_f64(),
+            rooted_array_at(&chunks, i),
             f64::from_bits(TAG_UNDEFINED),
             f64::from_bits(TAG_UNDEFINED),
         );
-        if let Some(err) = readable_hidden_error(stream) {
+        if let Some(err) = readable_hidden_error(stream.get_nanbox_f64()) {
             return Err(err);
         }
     }
     if end_stream {
         finish_stream_with_args(
-            stream,
+            stream.get_nanbox_f64(),
             f64::from_bits(TAG_UNDEFINED),
             f64::from_bits(TAG_UNDEFINED),
             f64::from_bits(TAG_UNDEFINED),
         );
     }
-    if let Some(err) = readable_hidden_error(stream) {
+    if let Some(err) = readable_hidden_error(stream.get_nanbox_f64()) {
         Err(err)
     } else {
         Ok(())
     }
 }
 
-pub(super) fn fail_collected_pipeline(stages: &[f64], callback: f64, err: f64) {
-    for stage in stages {
-        if is_pipeline_stream(*stage) {
-            destroy_stream(*stage, err);
+/// Destroy the collected pipeline's stream stages with `err`, then call
+/// `callback(err)`. Destroying a stage runs its listeners, which can collect.
+pub(super) fn fail_collected_pipeline(
+    stages: &crate::gc::RuntimeHandle<'_>,
+    callback: &crate::gc::RuntimeHandle<'_>,
+    err: f64,
+) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let err = scope.root_nanbox_f64(err);
+    for i in 0..rooted_array_len(stages) {
+        let stage = rooted_array_at(stages, i);
+        if is_pipeline_stream(stage) {
+            destroy_stream(stage, err.get_nanbox_f64());
         }
     }
-    if is_callable_value(callback) {
-        call_listener_args(f64::from_bits(TAG_UNDEFINED), callback, &[err]);
+    if is_callable_value(callback.get_nanbox_f64()) {
+        call_listener_args(
+            f64::from_bits(TAG_UNDEFINED),
+            callback.get_nanbox_f64(),
+            &[err.get_nanbox_f64()],
+        );
     }
 }
 
@@ -559,21 +578,20 @@ extern "C" fn collected_pipeline_error_noop(
     f64::from_bits(TAG_UNDEFINED)
 }
 
-fn install_collected_pipeline_error_guards(stages: &[f64]) {
+fn install_collected_pipeline_error_guards(stages: &crate::gc::RuntimeHandle<'_>) {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let stages = scope.root_nanbox_f64_slice(stages);
     let error = scope.root_nanbox_f64(literal_string_value(b"error"));
-    for stage in &stages {
-        if is_pipeline_stream(stage.get_nanbox_f64()) {
-            let listener = js_closure_alloc(
+    for i in 0..rooted_array_len(stages) {
+        if is_pipeline_stream(rooted_array_at(stages, i)) {
+            let listener = rooted_closure(
+                &scope,
                 crate::fn_info!(collected_pipeline_error_noop, 1; with_declared(1)),
-                0,
+                &[],
             );
-            let listener = scope.root_raw_mut_ptr(listener);
             add_stream_listener_for_event(
-                stage.get_nanbox_f64(),
+                rooted_array_at(stages, i),
                 error.get_nanbox_f64(),
-                box_pointer(listener.get_raw_const_ptr()),
+                listener.get_nanbox_f64(),
             );
         }
     }
@@ -589,138 +607,133 @@ pub(super) fn complete_collected_pipeline(callback: f64, value: f64) {
     }
 }
 
-pub(super) fn complete_collected_pipeline_with_value(callback: f64, value: f64) {
-    if is_callable_value(callback) {
-        call_listener_args(
-            f64::from_bits(TAG_UNDEFINED),
-            callback,
-            &[f64::from_bits(TAG_UNDEFINED), value],
-        );
-    }
-}
-
+/// The collected (non-stream) pipeline: function stages, async iterables and
+/// stream stages, run in order on fully collected chunks. Every stage runs
+/// user code that can collect, so the stage list, the callback and the
+/// current chunks are held in handles and reread after each stage.
 pub(super) fn run_collected_pipeline(
-    stages: &[f64],
-    callback: f64,
+    stages: &crate::gc::RuntimeHandle<'_>,
+    callback: &crate::gc::RuntimeHandle<'_>,
     options: PipelineOptions,
 ) -> f64 {
     install_collected_pipeline_error_guards(stages);
-    let last = *stages.last().unwrap_or(&f64::from_bits(TAG_UNDEFINED));
-    let first = stages[0];
-    let mut chunks = if is_callable_value(first) {
-        match call_pipeline_function_stage(first, f64::from_bits(TAG_UNDEFINED)) {
-            Ok(result) => match collect_pipeline_chunks(result.value) {
-                Ok(chunks) => chunks,
-                Err(err) => {
-                    fail_collected_pipeline(stages, callback, err);
-                    return last;
-                }
-            },
-            Err(err) => {
-                fail_collected_pipeline(stages, callback, err);
-                return last;
-            }
-        }
+    let len = rooted_array_len(stages);
+    let last = || rooted_array_at(stages, len - 1);
+    let fail = |err: f64| {
+        fail_collected_pipeline(stages, callback, err);
+        last()
+    };
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let first = rooted_array_at(stages, 0);
+    let first_chunks = if is_callable_value(first) {
+        call_pipeline_function_stage(first, f64::from_bits(TAG_UNDEFINED))
+            .and_then(|result| collect_pipeline_chunks(result.value))
     } else {
-        match collect_pipeline_chunks(first) {
-            Ok(chunks) => chunks,
-            Err(err) => {
-                fail_collected_pipeline(stages, callback, err);
-                return last;
-            }
-        }
+        collect_pipeline_chunks(first)
+    };
+    let chunks = match first_chunks {
+        Ok(chunks) => scope.root_nanbox_f64(chunks),
+        Err(err) => return fail(err),
     };
 
-    for idx in 1..stages.len() {
-        let stage = stages[idx];
-        let is_last = idx + 1 == stages.len();
+    for idx in 1..len {
+        let stage = rooted_array_at(stages, idx);
+        let is_last = idx + 1 == len;
         if is_callable_value(stage) {
-            match call_pipeline_function_stage(stage, chunks) {
+            match call_pipeline_function_stage(stage, chunks.get_nanbox_f64()) {
                 Ok(result) if is_last => {
                     if result.fulfilled_promise {
-                        complete_collected_pipeline_with_value(callback, result.value);
-                        return last;
+                        complete_collected_pipeline(callback.get_nanbox_f64(), result.value);
+                        return last();
                     }
                     if pipeline_stage_has_next(result.value) {
                         if let Err(err) = collect_pipeline_chunks(result.value) {
-                            fail_collected_pipeline(stages, callback, err);
-                            return last;
+                            return fail(err);
                         }
-                        complete_collected_pipeline(callback, f64::from_bits(TAG_UNDEFINED));
+                        complete_collected_pipeline(
+                            callback.get_nanbox_f64(),
+                            f64::from_bits(TAG_UNDEFINED),
+                        );
                     } else {
-                        complete_collected_pipeline(callback, result.value);
+                        complete_collected_pipeline(callback.get_nanbox_f64(), result.value);
                     }
-                    return last;
+                    return last();
                 }
                 Ok(result) => match collect_pipeline_chunks(result.value) {
-                    Ok(next_chunks) => chunks = next_chunks,
-                    Err(err) => {
-                        fail_collected_pipeline(stages, callback, err);
-                        return last;
-                    }
+                    Ok(next_chunks) => chunks.set_nanbox_f64(next_chunks),
+                    Err(err) => return fail(err),
                 },
-                Err(err) => {
-                    fail_collected_pipeline(stages, callback, err);
-                    return last;
-                }
+                Err(err) => return fail(err),
             }
             continue;
         }
 
         if is_pipeline_stream(stage) {
             let end_stream = options.end_final || !is_last;
-            if let Err(err) = write_pipeline_chunks_to_stream(stage, chunks, end_stream) {
-                fail_collected_pipeline(stages, callback, err);
-                return last;
+            if let Err(err) =
+                write_pipeline_chunks_to_stream(stage, chunks.get_nanbox_f64(), end_stream)
+            {
+                return fail(err);
             }
             if is_last {
-                complete_collected_pipeline(callback, f64::from_bits(TAG_UNDEFINED));
-                return last;
+                complete_collected_pipeline(
+                    callback.get_nanbox_f64(),
+                    f64::from_bits(TAG_UNDEFINED),
+                );
+                return last();
             }
-            match collect_pipeline_chunks(stage) {
-                Ok(next_chunks) => chunks = next_chunks,
-                Err(err) => {
-                    fail_collected_pipeline(stages, callback, err);
-                    return last;
-                }
+            match collect_pipeline_chunks(rooted_array_at(stages, idx)) {
+                Ok(next_chunks) => chunks.set_nanbox_f64(next_chunks),
+                Err(err) => return fail(err),
             }
         } else {
             match collect_pipeline_chunks(stage) {
-                Ok(next_chunks) => chunks = next_chunks,
-                Err(err) => {
-                    fail_collected_pipeline(stages, callback, err);
-                    return last;
-                }
+                Ok(next_chunks) => chunks.set_nanbox_f64(next_chunks),
+                Err(err) => return fail(err),
             }
             if is_last {
-                complete_collected_pipeline(callback, f64::from_bits(TAG_UNDEFINED));
-                return last;
+                complete_collected_pipeline(
+                    callback.get_nanbox_f64(),
+                    f64::from_bits(TAG_UNDEFINED),
+                );
+                return last();
             }
         }
     }
 
-    complete_collected_pipeline(callback, f64::from_bits(TAG_UNDEFINED));
-    last
+    complete_collected_pipeline(callback.get_nanbox_f64(), f64::from_bits(TAG_UNDEFINED));
+    last()
 }
 
 pub(super) fn start_pipeline_readable(stream: f64) {
     if get_hidden_value(stream, hidden_readable_flag_key()).is_none() {
         return;
     }
-    set_readable_flowing(stream, f64::from_bits(TAG_TRUE));
-    flush_pending_readable_chunks(stream);
-    invoke_read_once(stream);
-    schedule_readable_from_drain(stream);
-    if stream_hidden_ended(stream) || has_truthy_hidden(stream, hidden_end_emitted_key()) {
-        end_pipe_destinations(stream);
+    // Flushing runs `'data'` listeners and `_read`, both of which can collect.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let stream = scope.root_nanbox_f64(stream);
+    set_readable_flowing(stream.get_nanbox_f64(), f64::from_bits(TAG_TRUE));
+    flush_pending_readable_chunks(stream.get_nanbox_f64());
+    invoke_read_once(stream.get_nanbox_f64());
+    schedule_readable_from_drain(stream.get_nanbox_f64());
+    if stream_hidden_ended(stream.get_nanbox_f64())
+        || has_truthy_hidden(stream.get_nanbox_f64(), hidden_end_emitted_key())
+    {
+        end_pipe_destinations(stream.get_nanbox_f64());
     }
 }
 
-fn compose_stage_values(stages: f64) -> Vec<f64> {
-    if !is_array_like_value(stages) {
-        return Vec::new();
+/// The composed duplex's stage list (a GC array from `pipeline_stage_array`),
+/// rooted in `scope`. Not an array: an empty list.
+fn compose_stage_list<'s>(
+    scope: &'s crate::gc::RuntimeHandleScope,
+    stages: f64,
+) -> crate::gc::RuntimeHandle<'s> {
+    if is_array_like_value(stages) {
+        scope.root_nanbox_f64(stages)
+    } else {
+        rooted_empty_array(scope)
     }
-    pipeline_chunks_vec(stages)
 }
 
 fn compose_source_iterator(value: f64) -> Option<f64> {
@@ -778,12 +791,8 @@ fn compose_empty_chunks() -> f64 {
 }
 
 fn compose_copy_chunks(chunks: f64) -> f64 {
-    let values = pipeline_chunks_vec(chunks);
-    let mut out = crate::array::js_array_alloc(values.len() as u32);
-    for value in values {
-        out = crate::array::js_array_push_f64(out, value);
-    }
-    box_pointer(out as *const u8)
+    let scope = crate::gc::RuntimeHandleScope::new();
+    chunk_values_snapshot(&scope, chunks).get_nanbox_f64()
 }
 
 fn compose_take_stage_output(stage: f64) -> Result<f64, f64> {
@@ -812,13 +821,12 @@ fn compose_process_stream_stage(stage: f64, chunks: f64, end_stage: bool) -> Res
     let chunks = scope.root_nanbox_f64(chunks);
     clear_readable_buffer(stage.get_nanbox_f64());
     clear_pending_readable_chunks(stage.get_nanbox_f64());
-    let values = pipeline_chunks_vec(chunks.get_nanbox_f64());
-    let values = scope.root_nanbox_f64_slice(&values);
-    for chunk in &values {
+    let values = chunk_values_snapshot(&scope, chunks.get_nanbox_f64());
+    for i in 0..rooted_array_len(&values) {
         catch_pipeline_throw(|| {
             write_writable_chunk(
                 stage.get_nanbox_f64(),
-                chunk.get_nanbox_f64(),
+                rooted_array_at(&values, i),
                 f64::from_bits(TAG_UNDEFINED),
                 f64::from_bits(TAG_UNDEFINED),
             )
@@ -851,11 +859,15 @@ fn compose_process_callable_stage(stage: f64, chunks: f64) -> Result<f64, f64> {
         .and_then(|result| collect_pipeline_chunks(result.value))
 }
 
-fn compose_process_stages(stages: &[f64], input: f64, end_stages: bool) -> Result<f64, f64> {
+fn compose_process_stages(
+    stages: &crate::gc::RuntimeHandle<'_>,
+    input: f64,
+    end_stages: bool,
+) -> Result<f64, f64> {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let stages = scope.root_nanbox_f64_slice(stages);
     let chunks = scope.root_nanbox_f64(input);
-    for stage in &stages {
+    for i in 0..rooted_array_len(stages) {
+        let stage = scope.root_nanbox_f64(rooted_array_at(stages, i));
         if is_callable_value(stage.get_nanbox_f64()) {
             chunks.set_nanbox_f64(compose_process_callable_stage(
                 stage.get_nanbox_f64(),
@@ -880,10 +892,9 @@ fn compose_push_output(composite: f64, chunks: f64) -> Result<(), f64> {
     let scope = crate::gc::RuntimeHandleScope::new();
     let composite = scope.root_nanbox_f64(composite);
     let chunks = scope.root_nanbox_f64(chunks);
-    let values = pipeline_chunks_vec(chunks.get_nanbox_f64());
-    let values = scope.root_nanbox_f64_slice(&values);
-    for chunk in &values {
-        let _ = push_chunk(composite.get_nanbox_f64(), chunk.get_nanbox_f64());
+    let values = chunk_values_snapshot(&scope, chunks.get_nanbox_f64());
+    for i in 0..rooted_array_len(&values) {
+        let _ = push_chunk(composite.get_nanbox_f64(), rooted_array_at(&values, i));
         if let Some(err) = readable_hidden_error(composite.get_nanbox_f64()) {
             return Err(err);
         }
@@ -891,31 +902,32 @@ fn compose_push_output(composite: f64, chunks: f64) -> Result<(), f64> {
     Ok(())
 }
 
-fn compose_destroy_stage_list(stages: f64, err: f64) {
-    for stage in compose_stage_values(stages) {
-        if is_pipeline_stream(stage) {
-            destroy_stream(stage, err);
-        }
-    }
-}
-
 fn fail_composed_duplex(composite: f64, source: f64, stages: f64, err: f64) {
     if stream_destroyed(composite) {
         return;
     }
-    if has_truthy_hidden(composite, hidden_key(b"__perryStreamComposePriming")) {
-        set_hidden_value(
-            composite,
-            hidden_key(b"__perryStreamComposePendingError"),
-            err,
-        );
+    // Destroying a stream runs its listeners, which can collect.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let composite = scope.root_nanbox_f64(composite);
+    let source = scope.root_nanbox_f64(source);
+    let err = scope.root_nanbox_f64(err);
+    let priming = hidden_key(b"__perryStreamComposePriming");
+    if has_truthy_hidden(composite.get_nanbox_f64(), priming) {
+        let pending = hidden_key(b"__perryStreamComposePendingError");
+        set_hidden_value(composite.get_nanbox_f64(), pending, err.get_nanbox_f64());
         return;
     }
-    compose_destroy_stage_list(stages, err);
-    if is_pipeline_stream(source) {
-        destroy_stream(source, err);
+    let stages = compose_stage_list(&scope, stages);
+    for i in 0..rooted_array_len(&stages) {
+        let stage = rooted_array_at(&stages, i);
+        if is_pipeline_stream(stage) {
+            destroy_stream(stage, err.get_nanbox_f64());
+        }
     }
-    destroy_stream(composite, err);
+    if is_pipeline_stream(source.get_nanbox_f64()) {
+        destroy_stream(source.get_nanbox_f64(), err.get_nanbox_f64());
+    }
+    destroy_stream(composite.get_nanbox_f64(), err.get_nanbox_f64());
 }
 
 pub(super) extern "C" fn compose_stage_error_callback(
@@ -998,17 +1010,30 @@ pub(super) extern "C" fn compose_duplex_write_callback(
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    let composite = js_closure_get_capture_f64(closure, 0);
-    let stages_value = js_closure_get_capture_f64(closure, 1);
-    let source = js_closure_get_capture_f64(closure, 2);
-    let stages = compose_stage_values(stages_value);
-    let result = compose_process_stages(&stages, pipeline_single_chunk(chunk), false)
-        .and_then(|chunks| compose_push_output(composite, chunks));
+    // The stages run user code that can collect.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let composite = scope.root_nanbox_f64(js_closure_get_capture_f64(closure, 0));
+    let stages = compose_stage_list(&scope, js_closure_get_capture_f64(closure, 1));
+    let source = scope.root_nanbox_f64(js_closure_get_capture_f64(closure, 2));
+    let cb = scope.root_nanbox_f64(cb);
+    let input = pipeline_single_chunk(chunk);
+    let result = compose_process_stages(&stages, input, false)
+        .and_then(|chunks| compose_push_output(composite.get_nanbox_f64(), chunks));
     match result {
-        Ok(()) => call_listener_args(composite, cb, &[]),
+        Ok(()) => call_listener_args(composite.get_nanbox_f64(), cb.get_nanbox_f64(), &[]),
         Err(err) => {
-            fail_composed_duplex(composite, source, stages_value, err);
-            call_listener_args(composite, cb, &[err])
+            let err = scope.root_nanbox_f64(err);
+            fail_composed_duplex(
+                composite.get_nanbox_f64(),
+                source.get_nanbox_f64(),
+                stages.get_nanbox_f64(),
+                err.get_nanbox_f64(),
+            );
+            call_listener_args(
+                composite.get_nanbox_f64(),
+                cb.get_nanbox_f64(),
+                &[err.get_nanbox_f64()],
+            )
         }
     };
     f64::from_bits(TAG_UNDEFINED)
@@ -1022,22 +1047,38 @@ pub(super) extern "C" fn compose_duplex_final_callback(
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    let composite = js_closure_get_capture_f64(closure, 0);
-    let stages_value = js_closure_get_capture_f64(closure, 1);
-    let source = js_closure_get_capture_f64(closure, 2);
-    set_hidden_value(composite, hidden_ended_key(), f64::from_bits(TAG_FALSE));
-    set_visible_readable(composite, true);
-    let stages = compose_stage_values(stages_value);
-    let result = compose_process_stages(&stages, compose_empty_chunks(), true)
-        .and_then(|chunks| compose_push_output(composite, chunks));
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let composite = scope.root_nanbox_f64(js_closure_get_capture_f64(closure, 0));
+    let stages = compose_stage_list(&scope, js_closure_get_capture_f64(closure, 1));
+    let source = scope.root_nanbox_f64(js_closure_get_capture_f64(closure, 2));
+    let cb = scope.root_nanbox_f64(cb);
+    set_hidden_value(
+        composite.get_nanbox_f64(),
+        hidden_ended_key(),
+        f64::from_bits(TAG_FALSE),
+    );
+    set_visible_readable(composite.get_nanbox_f64(), true);
+    let input = compose_empty_chunks();
+    let result = compose_process_stages(&stages, input, true)
+        .and_then(|chunks| compose_push_output(composite.get_nanbox_f64(), chunks));
     match result {
         Ok(()) => {
-            schedule_readable_end(composite);
-            call_listener_args(composite, cb, &[]);
+            schedule_readable_end(composite.get_nanbox_f64());
+            call_listener_args(composite.get_nanbox_f64(), cb.get_nanbox_f64(), &[]);
         }
         Err(err) => {
-            fail_composed_duplex(composite, source, stages_value, err);
-            call_listener_args(composite, cb, &[err]);
+            let err = scope.root_nanbox_f64(err);
+            fail_composed_duplex(
+                composite.get_nanbox_f64(),
+                source.get_nanbox_f64(),
+                stages.get_nanbox_f64(),
+                err.get_nanbox_f64(),
+            );
+            call_listener_args(
+                composite.get_nanbox_f64(),
+                cb.get_nanbox_f64(),
+                &[err.get_nanbox_f64()],
+            );
         }
     }
     f64::from_bits(TAG_UNDEFINED)
@@ -1047,11 +1088,10 @@ fn install_compose_stage_error_listeners(composite: f64, source: f64, stages: f6
     let scope = crate::gc::RuntimeHandleScope::new();
     let composite = scope.root_nanbox_f64(composite);
     let source = scope.root_nanbox_f64(source);
-    let stages = scope.root_nanbox_f64(stages);
-    let stage_values = compose_stage_values(stages.get_nanbox_f64());
-    let stage_values = scope.root_nanbox_f64_slice(&stage_values);
+    let stages = compose_stage_list(&scope, stages);
     let error_event = scope.root_nanbox_f64(literal_string_value(b"error"));
-    for stage in &stage_values {
+    for i in 0..rooted_array_len(&stages) {
+        let stage = scope.root_nanbox_f64(rooted_array_at(&stages, i));
         if !is_pipeline_stream(stage.get_nanbox_f64()) {
             continue;
         }
@@ -1204,14 +1244,9 @@ fn prime_composed_duplex_from_source(composite: f64, source: f64, stages: f64) -
         }
     };
     let chunks = scope.root_nanbox_f64(chunks);
-    let stage_values = compose_stage_values(stages.get_nanbox_f64());
-    let stage_values = scope.root_nanbox_f64_slice(&stage_values);
-    match compose_process_stages(
-        &crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&stage_values),
-        chunks.get_nanbox_f64(),
-        true,
-    )
-    .and_then(|chunks| compose_push_output(composite.get_nanbox_f64(), chunks))
+    let stage_list = compose_stage_list(&scope, stages.get_nanbox_f64());
+    match compose_process_stages(&stage_list, chunks.get_nanbox_f64(), true)
+        .and_then(|chunks| compose_push_output(composite.get_nanbox_f64(), chunks))
     {
         Ok(()) => {
             schedule_readable_end(composite.get_nanbox_f64());
@@ -1325,8 +1360,15 @@ pub(super) fn build_node_stream_compose(args: Vec<f64>) -> f64 {
     if args.is_empty() {
         throw_pipeline_missing_streams();
     }
+    // `Readable.from` below allocates and can run the source's iterator
+    // lookup, so the arguments are rooted before it.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let args = scope.root_nanbox_f64_slice(&args);
+    let refreshed = |handles: &[crate::gc::RuntimeHandle<'_>]| {
+        crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(handles)
+    };
     if args.len() == 1 {
-        let only = args[0];
+        let only = args[0].get_nanbox_f64();
         if is_transform_stream(only) {
             return only;
         }
@@ -1334,16 +1376,17 @@ pub(super) fn build_node_stream_compose(args: Vec<f64>) -> f64 {
             let source = normalize_compose_source(only);
             return new_composed_duplex(&[], Some(source), false);
         }
-        return new_composed_duplex(&args, None, true);
+        return new_composed_duplex(&refreshed(&args), None, true);
     }
 
-    if compose_first_arg_is_source(args[0]) {
+    if compose_first_arg_is_source(args[0].get_nanbox_f64()) {
         allocation_point();
-        let source = normalize_compose_source(args[0]);
-        return new_composed_duplex(&args[1..], Some(source), true);
+        let source = scope.root_nanbox_f64(normalize_compose_source(args[0].get_nanbox_f64()));
+        // `new_composed_duplex` roots the stages before it allocates.
+        return new_composed_duplex(&refreshed(&args[1..]), Some(source.get_nanbox_f64()), true);
     }
 
-    new_composed_duplex(&args, None, true)
+    new_composed_duplex(&refreshed(&args), None, true)
 }
 
 #[cold]
