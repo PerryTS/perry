@@ -143,17 +143,6 @@ external-http-server-pump = ["async-bridge"]
 # perry-ext-http registers its own callbacks. Promise bridge only, as above.
 external-http-client-pump = ["async-bridge"]
 
-# Activated by `optimized_libs::build_optimized_libs` when the well-known
-# flip routes `node:events` to perry-ext-events. Makes
-# `js_stdlib_init_dispatch` register perry-ext-events'
-# `js_event_emitter_new_with_options` as the runtime's events construct
-# dispatcher at startup, so a dynamic `new` on the bound
-# `events.EventEmitter` export value (`require('events')`, default import,
-# aliased ctor) builds a real emitter instead of an empty object. Without
-# this, ext-events only registers its hooks lazily on the first *static*
-# emitter construction. Issue #4995.
-external-events-construct = []
-
 # TLS — the `node:tls` module surface, `tls.createServer()` and TLSSocket.
 # Uses rustls (not native-tls) to avoid OpenSSL on every platform and keep Android
 # cross-compile unblocked; matches the reqwest/mongodb feature flags.

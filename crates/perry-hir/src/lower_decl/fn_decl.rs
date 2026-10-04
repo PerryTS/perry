@@ -177,8 +177,6 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
             let native_info = match type_name.as_str() {
                 "PluginApi" => Some(("perry/plugin", "PluginApi")),
                 "WebSocket" | "WebSocketServer" => Some(("ws", type_name.as_str())),
-                "EventEmitter" => Some(("events", "EventEmitter")),
-                "EventEmitterAsyncResource" => Some(("events", "EventEmitterAsyncResource")),
                 // Web Fetch API: Request / Response / Headers as function
                 // params — same registration the local-init paths get
                 // (destructuring.rs:1457+ for `const r = new Request(…)`).

@@ -1,129 +1,141 @@
-//! Module-level `events.once(...)` helpers and its listener closures.
+//! `events.once(emitter, name[, options])`.
 //!
-//! Moved verbatim from the `events.rs` trunk during the file split.
+//! node's algorithm: a `resolver` added with `emitter.once(name, ...)`, an
+//! `errorListener` added with `emitter.once('error', ...)` (unless the event
+//! is `'error'` itself), and an abort listener on `options.signal`. Whichever
+//! fires first removes the others and settles the promise. Every reference a
+//! listener holds (the promise, the emitter, its partner listeners, the
+//! signal) is a NaN-boxed capture the collector traces and moves.
 
 use super::*;
 
+use perry_runtime::closure::{
+    js_closure_alloc, js_closure_get_capture_f64, js_closure_set_capture_f64,
+};
 use perry_runtime::{
-    js_array_alloc, js_array_length, js_array_push_f64, js_nanbox_get_pointer, js_nanbox_pointer,
-    js_nanbox_string, js_promise_new, js_promise_reject, js_promise_resolve, js_string_from_bytes,
-    ArrayHeader, ClosureHeader, JSValue, ObjectHeader, Promise, StringHeader,
+    js_array_alloc, js_array_push_f64, js_nanbox_get_pointer, js_nanbox_pointer, js_promise_new,
+    js_promise_reject, js_promise_resolve, ClosureHeader, JSValue, ObjectHeader, Promise,
+    StringHeader,
 };
 
-use crate::common::{get_handle_mut, Handle};
+// Capture slots shared by the three emitter-side closures.
+const CAP_PROMISE: u32 = 0;
+const CAP_EMITTER: u32 = 1;
+const CAP_EVENT: u32 = 2;
+const CAP_RESOLVER: u32 = 3;
+const CAP_ERROR_LISTENER: u32 = 4;
+const CAP_SIGNAL: u32 = 5;
+const CAP_ABORT_LISTENER: u32 = 6;
+const CAPTURES: u32 = 7;
 
-unsafe fn remove_stream_or_socket_once_listener(
-    handle: Handle,
-    event_name_ptr: i64,
-    listener: i64,
+fn is_present(value: f64) -> bool {
+    let value = JSValue::from_bits(value.to_bits());
+    !value.is_undefined() && !value.is_null()
+}
+
+/// The closure's captures, rooted before anything allocates (the running
+/// closure itself may move once a collection runs).
+fn rooted_captures<'s>(
+    scope: &'s perry_runtime::gc::RuntimeHandleScope,
+    closure: *const ClosureHeader,
+) -> Vec<perry_runtime::gc::RuntimeHandle<'s>> {
+    let values: Vec<f64> = (0..CAPTURES)
+        .map(|slot| js_closure_get_capture_f64(closure, slot))
+        .collect();
+    scope.root_nanbox_f64_slice(&values)
+}
+
+/// `emitter.removeListener(event, captures[slot])` when that listener exists.
+unsafe fn remove_emitter_listener(
+    captures: &[perry_runtime::gc::RuntimeHandle<'_>],
+    event: f64,
+    slot: u32,
 ) {
-    if matches!(
-        event_helper_target(js_nanbox_pointer(handle)),
-        Some(EventHelperTarget::NetSocket(_))
-    ) {
-        let _ = super::module_helpers::call_net_socket_method(
-            handle,
-            "removeListener",
-            &[
-                js_nanbox_string(event_name_ptr),
-                js_nanbox_pointer(listener),
-            ],
-        );
-    } else {
-        let _ = perry_runtime::node_stream::js_node_stream_method_remove_listener(
-            handle,
-            js_nanbox_string(event_name_ptr),
-            js_nanbox_pointer(listener),
-        );
+    let listener = captures[slot as usize].get_nanbox_f64();
+    if is_present(listener) {
+        let emitter = captures[CAP_EMITTER as usize].get_nanbox_f64();
+        let _ = call_emitter_method(emitter, "removeListener", &[event, listener]);
     }
 }
 
+unsafe fn remove_signal_listener(captures: &[perry_runtime::gc::RuntimeHandle<'_>]) {
+    let signal = captures[CAP_SIGNAL as usize].get_nanbox_f64();
+    let abort_listener = captures[CAP_ABORT_LISTENER as usize].get_nanbox_f64();
+    if is_present(signal) && is_present(abort_listener) {
+        remove_abort_listener(signal, abort_listener);
+    }
+}
+
+fn settle(captures: &[perry_runtime::gc::RuntimeHandle<'_>], value: f64, fulfil: bool) {
+    let promise =
+        js_nanbox_get_pointer(captures[CAP_PROMISE as usize].get_nanbox_f64()) as *mut Promise;
+    if promise.is_null() {
+        return;
+    }
+    if fulfil {
+        js_promise_resolve(promise, value);
+    } else {
+        js_promise_reject(promise, value);
+    }
+}
+
+/// node's `resolver(...args)`.
+extern "C" fn events_once_resolver(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    rest: f64,
+) -> f64 {
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let rest = scope.root_nanbox_f64(rest);
+    let captures = rooted_captures(&scope, closure);
+    unsafe {
+        let error_event = scope.root_nanbox_f64(name_value("error"));
+        remove_emitter_listener(&captures, error_event.get_nanbox_f64(), CAP_ERROR_LISTENER);
+        remove_signal_listener(&captures);
+    }
+    let args = if JSValue::from_bits(rest.get_nanbox_u64()).is_pointer() {
+        rest.get_nanbox_f64()
+    } else {
+        js_nanbox_pointer(js_array_alloc(0) as i64)
+    };
+    settle(&captures, args, true);
+    undefined_value()
+}
+
+/// node's `errorListener(err)`.
+extern "C" fn events_once_error_listener(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    error: f64,
+) -> f64 {
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let error = scope.root_nanbox_f64(error);
+    let captures = rooted_captures(&scope, closure);
+    unsafe {
+        let event = captures[CAP_EVENT as usize].get_nanbox_f64();
+        remove_emitter_listener(&captures, event, CAP_RESOLVER);
+        remove_signal_listener(&captures);
+    }
+    settle(&captures, error.get_nanbox_f64(), false);
+    undefined_value()
+}
+
+/// node's `abortListener()`.
 extern "C" fn events_once_abort_listener(
     closure: *const ClosureHeader,
     _this: perry_runtime::closure::JsThis,
 ) -> f64 {
-    use perry_runtime::closure::js_closure_get_capture_ptr;
-
-    let handle = js_closure_get_capture_ptr(closure, 0) as Handle;
-    let promise = js_closure_get_capture_ptr(closure, 1) as *mut Promise;
-
-    let pending = get_handle_mut::<EventEmitterHandle>(handle)
-        .and_then(|emitter| remove_pending_once_promise(emitter, promise));
-    if let Some(pending) = pending {
-        unsafe {
-            cleanup_pending_abort_listener(&pending);
-            if !pending.promise.is_null() {
-                js_promise_reject(pending.promise, perry_runtime::url::js_abort_error_value());
-            }
-        }
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let captures = rooted_captures(&scope, closure);
+    unsafe {
+        let event = captures[CAP_EVENT as usize].get_nanbox_f64();
+        remove_emitter_listener(&captures, event, CAP_RESOLVER);
+        let error_event = scope.root_nanbox_f64(name_value("error"));
+        remove_emitter_listener(&captures, error_event.get_nanbox_f64(), CAP_ERROR_LISTENER);
     }
-
+    let error = scope.root_nanbox_f64(perry_runtime::url::js_abort_error_value());
+    settle(&captures, error.get_nanbox_f64(), false);
     undefined_value()
-}
-
-extern "C" fn events_once_stream_resolve_listener(
-    closure: *const ClosureHeader,
-    _this: perry_runtime::closure::JsThis,
-    rest: f64,
-) -> f64 {
-    use perry_runtime::closure::js_closure_get_capture_ptr;
-
-    let promise = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
-    let handle = js_closure_get_capture_ptr(closure, 1) as Handle;
-    let error_listener = js_closure_get_capture_ptr(closure, 2);
-    let error_event_ptr = js_closure_get_capture_ptr(closure, 3);
-    if promise.is_null() {
-        return undefined_value();
-    }
-    if handle != 0 && error_listener != 0 && error_event_ptr != 0 {
-        unsafe {
-            remove_stream_or_socket_once_listener(handle, error_event_ptr, error_listener);
-        }
-    }
-    js_promise_resolve(promise, rest_array_or_empty(rest));
-    undefined_value()
-}
-
-extern "C" fn events_once_stream_reject_listener(
-    closure: *const ClosureHeader,
-    _this: perry_runtime::closure::JsThis,
-    rest: f64,
-) -> f64 {
-    use perry_runtime::closure::js_closure_get_capture_ptr;
-
-    let promise = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
-    let handle = js_closure_get_capture_ptr(closure, 1) as Handle;
-    let event_name_ptr = js_closure_get_capture_ptr(closure, 2);
-    let resolve_listener = js_closure_get_capture_ptr(closure, 3);
-    if handle != 0 && event_name_ptr != 0 && resolve_listener != 0 {
-        unsafe {
-            remove_stream_or_socket_once_listener(handle, event_name_ptr, resolve_listener);
-        }
-    }
-    if !promise.is_null() {
-        js_promise_reject(promise, first_rest_arg_or_undefined(rest));
-    }
-    undefined_value()
-}
-
-fn rest_array_or_empty(rest: f64) -> f64 {
-    if JSValue::from_bits(rest.to_bits()).is_pointer() {
-        rest
-    } else {
-        js_nanbox_pointer(js_array_alloc(0) as i64)
-    }
-}
-
-fn first_rest_arg_or_undefined(rest: f64) -> f64 {
-    if !JSValue::from_bits(rest.to_bits()).is_pointer() {
-        return undefined_value();
-    }
-    let arr = js_nanbox_get_pointer(rest) as *const ArrayHeader;
-    if arr.is_null() || js_array_length(arr) == 0 {
-        undefined_value()
-    } else {
-        perry_runtime::array::js_array_get_f64(arr, 0)
-    }
 }
 
 extern "C" fn events_once_event_target_listener(
@@ -153,22 +165,16 @@ extern "C" fn events_once_event_target_listener(
     undefined_value()
 }
 
-/// `events.once(emitter, eventName[, options])` — returns a Promise that resolves
-/// to an array of the args fired by the next `emit(eventName, ...)`.
-///
-/// Node returns the *full* args array (e.g. `emit('x', 1, 2)` resolves
-/// to `[1, 2]`). Perry's emit FFI today is single-arg, so the resolved
-/// array is single-element. That's enough for the parity probe in
-/// issue #850; multi-arg parity is a follow-up.
+/// `events.once(emitter, eventName[, options])` — a Promise for the array of
+/// arguments the next `emit(eventName, ...)` passes.
 #[no_mangle]
 pub unsafe extern "C" fn js_events_once(
     target_value: f64,
     event_name_ptr: *const StringHeader,
     options: f64,
 ) -> *mut Promise {
-    use perry_runtime::closure::{js_closure_alloc, js_closure_set_capture_ptr};
+    use perry_runtime::closure::js_closure_set_capture_ptr;
 
-    ensure_gc_scanner_registered();
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
     let target_value = scope.root_nanbox_f64(target_value);
     let event_name_handle = scope.root_string_ptr(event_name_ptr);
@@ -186,9 +192,8 @@ pub unsafe extern "C" fn js_events_once(
             return promise.get_raw_mut_ptr();
         }
     };
-    let event_name = match string_from_header(event_name_handle.get_raw_const_ptr()) {
-        Some(name) => name,
-        None => return promise.get_raw_mut_ptr(),
+    let Some(event_name) = string_from_header(event_name_handle.get_raw_const_ptr()) else {
+        return promise.get_raw_mut_ptr();
     };
     let signal = match options_signal_result(options.get_nanbox_f64()) {
         Ok(signal) => signal,
@@ -206,43 +211,7 @@ pub unsafe extern "C" fn js_events_once(
         js_promise_reject(promise.get_raw_mut_ptr(), error);
         return promise.get_raw_mut_ptr();
     }
-    if let EventHelperTarget::EventEmitter(handle) = target {
-        let mut pending = PendingOnce {
-            promise: promise.get_raw_mut_ptr(),
-            signal: undefined_value(),
-            abort_listener: 0,
-        };
-        if let Some(signal) = &signal {
-            if object_ptr_from_value(signal.get_nanbox_f64()).is_some() {
-                let abort_listener =
-                    js_closure_alloc(perry_runtime::fn_info!(events_once_abort_listener, 0), 2);
-                let abort_listener = scope.root_raw_mut_ptr(abort_listener);
-                js_closure_set_capture_ptr(abort_listener.get_raw_mut_ptr(), 0, handle);
-                js_closure_set_capture_ptr(
-                    abort_listener.get_raw_mut_ptr(),
-                    1,
-                    promise.get_raw_mut_ptr::<Promise>() as i64,
-                );
-                let abort_event = scope.root_nanbox_f64(abort_event_value());
-                perry_runtime::url::js_abort_signal_add_listener(
-                    object_ptr_from_value(signal.get_nanbox_f64()).unwrap_or(std::ptr::null_mut()),
-                    abort_event.get_nanbox_f64(),
-                    js_nanbox_pointer(abort_listener.get_raw_mut_ptr::<ClosureHeader>() as i64),
-                );
-                pending.signal = signal.get_nanbox_f64();
-                pending.abort_listener = abort_listener.get_raw_mut_ptr::<ClosureHeader>() as i64;
-            }
-        }
-        let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) else {
-            return promise.get_raw_mut_ptr();
-        };
-        emitter
-            .pending_once_promises
-            .entry(event_name)
-            .or_default()
-            .push(pending);
-        return promise.get_raw_mut_ptr();
-    }
+
     if let EventHelperTarget::EventTarget(_) = target {
         let listener = js_closure_alloc(
             perry_runtime::fn_info!(events_once_event_target_listener, 1),
@@ -269,136 +238,90 @@ pub unsafe extern "C" fn js_events_once(
         );
         return promise.get_raw_mut_ptr();
     }
-    if let EventHelperTarget::NetSocket(handle) = target {
-        let listens_for_error = event_name == "error";
-        let listener = js_closure_alloc(
-            perry_runtime::fn_info!(events_once_stream_resolve_listener, 1; with_rest(0)),
-            4,
-        );
-        let listener = scope.root_raw_mut_ptr(listener);
-        js_closure_set_capture_ptr(
-            listener.get_raw_mut_ptr(),
-            0,
-            promise.get_raw_mut_ptr::<Promise>() as i64,
-        );
-        js_closure_set_capture_ptr(listener.get_raw_mut_ptr(), 1, handle);
-        js_closure_set_capture_ptr(listener.get_raw_mut_ptr(), 2, 0);
-        js_closure_set_capture_ptr(listener.get_raw_mut_ptr(), 3, 0);
-        if !listens_for_error {
-            let error_event_ptr = js_string_from_bytes(b"error".as_ptr(), 5);
-            let error_event = scope.root_string_ptr(error_event_ptr);
-            let reject_listener = js_closure_alloc(
-                perry_runtime::fn_info!(events_once_stream_reject_listener, 1; with_rest(0)),
-                4,
-            );
-            let reject_listener = scope.root_raw_mut_ptr(reject_listener);
-            js_closure_set_capture_ptr(
-                reject_listener.get_raw_mut_ptr(),
-                0,
-                promise.get_raw_mut_ptr::<Promise>() as i64,
-            );
-            js_closure_set_capture_ptr(reject_listener.get_raw_mut_ptr(), 1, handle);
-            js_closure_set_capture_ptr(
-                reject_listener.get_raw_mut_ptr(),
-                2,
-                event_name_handle.get_raw_const_ptr::<StringHeader>() as i64,
-            );
-            js_closure_set_capture_ptr(
-                reject_listener.get_raw_mut_ptr(),
-                3,
-                listener.get_raw_mut_ptr::<ClosureHeader>() as i64,
-            );
-            js_closure_set_capture_ptr(
-                listener.get_raw_mut_ptr(),
-                2,
-                reject_listener.get_raw_mut_ptr::<ClosureHeader>() as i64,
-            );
-            js_closure_set_capture_ptr(
-                listener.get_raw_mut_ptr(),
-                3,
-                error_event.get_raw_const_ptr::<StringHeader>() as i64,
-            );
-            let _ = super::module_helpers::call_net_socket_method(
-                handle,
-                "once",
-                &[
-                    js_nanbox_string(error_event.get_raw_const_ptr::<StringHeader>() as i64),
-                    js_nanbox_pointer(reject_listener.get_raw_mut_ptr::<ClosureHeader>() as i64),
-                ],
-            );
+
+    // An emitter: all three closures first, then their shared captures.
+    let event = scope.root_nanbox_f64(event_value(event_name_handle.get_raw_const_ptr()));
+    let resolver = scope.root_raw_mut_ptr(js_closure_alloc(
+        perry_runtime::fn_info!(events_once_resolver, 1; with_rest(0)),
+        CAPTURES,
+    ));
+    let listens_for_error = event_name == "error";
+    let error_listener = (!listens_for_error).then(|| {
+        scope.root_raw_mut_ptr(js_closure_alloc(
+            perry_runtime::fn_info!(events_once_error_listener, 1),
+            CAPTURES,
+        ))
+    });
+    let abort_listener = signal.as_ref().map(|_| {
+        scope.root_raw_mut_ptr(js_closure_alloc(
+            perry_runtime::fn_info!(events_once_abort_listener, 0),
+            CAPTURES,
+        ))
+    });
+    let boxed = |closure: &perry_runtime::gc::RuntimeHandle<'_>| {
+        js_nanbox_pointer(closure.get_raw_mut_ptr::<ClosureHeader>() as i64)
+    };
+    let mut closures = vec![&resolver];
+    closures.extend(error_listener.iter());
+    closures.extend(abort_listener.iter());
+    for closure in &closures {
+        let slots = [
+            (
+                CAP_PROMISE,
+                js_nanbox_pointer(promise.get_raw_mut_ptr::<Promise>() as i64),
+            ),
+            (CAP_EMITTER, target_value.get_nanbox_f64()),
+            (CAP_EVENT, event.get_nanbox_f64()),
+            (CAP_RESOLVER, boxed(&resolver)),
+            (
+                CAP_ERROR_LISTENER,
+                error_listener
+                    .as_ref()
+                    .map(boxed)
+                    .unwrap_or_else(undefined_value),
+            ),
+            (
+                CAP_SIGNAL,
+                signal
+                    .as_ref()
+                    .map(|signal| signal.get_nanbox_f64())
+                    .unwrap_or_else(undefined_value),
+            ),
+            (
+                CAP_ABORT_LISTENER,
+                abort_listener
+                    .as_ref()
+                    .map(boxed)
+                    .unwrap_or_else(undefined_value),
+            ),
+        ];
+        for (slot, value) in slots {
+            js_closure_set_capture_f64(closure.get_raw_mut_ptr(), slot, value);
         }
-        let _ = super::module_helpers::call_net_socket_method(
-            handle,
-            "once",
-            &[
-                js_nanbox_string(event_name_handle.get_raw_const_ptr::<StringHeader>() as i64),
-                js_nanbox_pointer(listener.get_raw_mut_ptr::<ClosureHeader>() as i64),
-            ],
-        );
-        return promise.get_raw_mut_ptr();
     }
-    if let EventHelperTarget::Stream(handle) = target {
-        let listener = js_closure_alloc(
-            perry_runtime::fn_info!(events_once_stream_resolve_listener, 1; with_rest(0)),
-            4,
+
+    let _ = call_emitter_method(
+        target_value.get_nanbox_f64(),
+        "once",
+        &[event.get_nanbox_f64(), boxed(&resolver)],
+    );
+    if let Some(error_listener) = &error_listener {
+        let error_event = scope.root_nanbox_f64(name_value("error"));
+        let _ = call_emitter_method(
+            target_value.get_nanbox_f64(),
+            "once",
+            &[error_event.get_nanbox_f64(), boxed(error_listener)],
         );
-        let listener = scope.root_raw_mut_ptr(listener);
-        js_closure_set_capture_ptr(
-            listener.get_raw_mut_ptr(),
-            0,
-            promise.get_raw_mut_ptr::<Promise>() as i64,
-        );
-        js_closure_set_capture_ptr(listener.get_raw_mut_ptr(), 1, handle);
-        js_closure_set_capture_ptr(listener.get_raw_mut_ptr(), 2, 0);
-        js_closure_set_capture_ptr(listener.get_raw_mut_ptr(), 3, 0);
-        if event_name != "error" {
-            let error_event_name = b"error";
-            let error_event_ptr =
-                js_string_from_bytes(error_event_name.as_ptr(), error_event_name.len() as u32);
-            let error_event = scope.root_string_ptr(error_event_ptr);
-            let reject_listener = js_closure_alloc(
-                perry_runtime::fn_info!(events_once_stream_reject_listener, 1; with_rest(0)),
-                4,
-            );
-            let reject_listener = scope.root_raw_mut_ptr(reject_listener);
-            js_closure_set_capture_ptr(
-                reject_listener.get_raw_mut_ptr(),
-                0,
-                promise.get_raw_mut_ptr::<Promise>() as i64,
-            );
-            js_closure_set_capture_ptr(reject_listener.get_raw_mut_ptr(), 1, handle);
-            js_closure_set_capture_ptr(
-                reject_listener.get_raw_mut_ptr(),
-                2,
-                event_name_handle.get_raw_const_ptr::<StringHeader>() as i64,
-            );
-            js_closure_set_capture_ptr(
-                reject_listener.get_raw_mut_ptr(),
-                3,
-                listener.get_raw_mut_ptr::<ClosureHeader>() as i64,
-            );
-            js_closure_set_capture_ptr(
-                listener.get_raw_mut_ptr(),
-                2,
-                reject_listener.get_raw_mut_ptr::<ClosureHeader>() as i64,
-            );
-            js_closure_set_capture_ptr(
-                listener.get_raw_mut_ptr(),
-                3,
-                error_event.get_raw_const_ptr::<StringHeader>() as i64,
-            );
-            let _ = perry_runtime::node_stream::js_node_stream_method_once(
-                handle,
-                js_nanbox_string(error_event.get_raw_const_ptr::<StringHeader>() as i64),
-                js_nanbox_pointer(reject_listener.get_raw_mut_ptr::<ClosureHeader>() as i64),
+    }
+    if let (Some(signal), Some(abort_listener)) = (&signal, &abort_listener) {
+        let abort_event = scope.root_nanbox_f64(abort_event_value());
+        if let Some(signal_ptr) = object_ptr_from_value(signal.get_nanbox_f64()) {
+            perry_runtime::url::js_abort_signal_add_listener(
+                signal_ptr,
+                abort_event.get_nanbox_f64(),
+                boxed(abort_listener),
             );
         }
-        let _ = perry_runtime::node_stream::js_node_stream_method_once(
-            handle,
-            js_nanbox_string(event_name_handle.get_raw_const_ptr::<StringHeader>() as i64),
-            js_nanbox_pointer(listener.get_raw_mut_ptr::<ClosureHeader>() as i64),
-        );
-        return promise.get_raw_mut_ptr();
     }
     promise.get_raw_mut_ptr()
 }

@@ -21,6 +21,15 @@ pub(crate) fn test_collect_native_export_after_alloc() {
     TEST_COLLECT_NATIVE_EXPORT_AFTER_ALLOC.with(|armed| armed.set(true));
 }
 
+/// The bound export already minted under its exact cache key
+/// (`"<module>\0<property>"`, canonical names only), without minting one or
+/// formatting a key: `None` when it has not been minted yet.
+pub(crate) fn minted_native_callable_export(canonical_key: &str) -> Option<f64> {
+    NATIVE_CALLABLE_EXPORTS
+        .with(|c| c.borrow().get(canonical_key).copied())
+        .map(f64::from_bits)
+}
+
 pub fn bound_native_callable_export_value(module_name: &str, property_name: &str) -> f64 {
     // Bound-native closures carry (module, method) metadata that the
     // generic property/call paths resolve through the vtable — and they

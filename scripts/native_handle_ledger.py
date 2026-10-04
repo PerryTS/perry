@@ -106,7 +106,6 @@ NON_HANDLE_CLASS_PATHS = (
 # Slabs/vectors used as id-indexed tables, plus an opaque state bundle.  These
 # are real L1 tables but cannot be inferred from a HashMap-shaped declaration.
 EXTRA_TABLES: dict[tuple[str, str], int] = {
-    ("crates/perry-ext-events/src/registry.rs", "EVENT_EMITTERS"): 1,
     ("crates/perry-ffi/src/handle.rs", "INDEXED_IDS"): 1,
     ("crates/perry-runtime/src/proxy.rs", "PROXIES"): 1,
     # Custom key wrappers whose fields contain NaN-box/heap-address bits.
@@ -147,7 +146,6 @@ PRODUCER_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("crates/perry-runtime/src/proxy.rs", re.compile(r"\breserve_proxy_id\s*\(")),
     # Proxy.revocable is a second producer surface which delegates to new.
     ("crates/perry-runtime/src/proxy.rs", re.compile(r"(?m)^\s*let proxy = js_proxy_new\s*\(")),
-    ("crates/perry-ext-events/src/registry.rs", re.compile(r"\.begin_registration\s*\(")),
     ("crates/perry-stdlib/src/container/types.rs", re.compile(r"NEXT_HANDLE_ID\.fetch_add\s*\(")),
     ("crates/perry-ext-pdf/src/lib.rs", re.compile(r"\bnext_handle\s*\(")),
     ("crates/perry-ext-parcel-watcher/src/lib.rs", re.compile(r"NEXT_ID\.fetch_add\s*\(")),

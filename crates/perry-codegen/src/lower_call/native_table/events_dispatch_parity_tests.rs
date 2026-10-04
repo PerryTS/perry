@@ -41,11 +41,9 @@ const ROUTED_TO_STDLIB_BRIDGE: &[&str] = &[
 /// the "cannot be invoked without 'new'" TypeError.
 const ANSWERED_BY_RUNTIME: &[&str] = &["init", "EventEmitterAsyncResource"];
 
-/// Deliberately unrouted: `events.EventEmitter` is a CONSTRUCTOR. `new`-ing it
-/// dynamically goes through `JS_NATIVE_EVENTS_CONSTRUCT`, a separate pointer;
-/// calling it as a plain function through the dynamic path is not supported and
-/// is not what the row serves.
-const NOT_A_DYNAMIC_MODULE_CALL: &[&str] = &["EventEmitter"];
+/// Deliberately unrouted module rows (none today: `events.EventEmitter` is a
+/// constructor the runtime builds directly, and has no row, #10508).
+const NOT_A_DYNAMIC_MODULE_CALL: &[&str] = &[];
 
 fn module_level_events_methods() -> Vec<&'static str> {
     let mut names: Vec<&'static str> = NET_EVENTS_ROWS

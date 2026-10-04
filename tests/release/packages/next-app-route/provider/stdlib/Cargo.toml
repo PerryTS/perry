@@ -17,7 +17,7 @@ perry-stdlib-core = { package = "perry-stdlib", path = "../../../../../../crates
   "scheduler",
   "ids",
   "html-parser",
-  "external-events-construct",
+  "bundled-events",
   "external-http-server-pump",
   "external-net-pump",
   # The external socket wrapper references the stdlib TLS preflight hook even
@@ -26,7 +26,6 @@ perry-stdlib-core = { package = "perry-stdlib", path = "../../../../../../crates
   "external-ws-pump",
   "external-zlib-pump",
 ] }
-perry-ext-events = { path = "../../../../../../crates/perry-ext-events" }
 perry-ext-http = { path = "../../../../../../crates/perry-ext-http" }
 perry-ext-net = { path = "../../../../../../crates/perry-ext-net" }
 perry-ext-zlib = { path = "../../../../../../crates/perry-ext-zlib" }

@@ -351,7 +351,6 @@ fn native_instance_for_new_ident(
         // legitimate `import { Pool } from "pg"` flow is caught by the general
         // lookup above. (Issue #536.)
         match class_name {
-            "EventEmitter" | "EventEmitterAsyncResource" => Some("events".to_string()),
             "AsyncLocalStorage" => Some("async_hooks".to_string()),
             "AsyncResource" => Some("async_hooks".to_string()),
             // #2875: explicit-resource-management stacks. Registering the

@@ -24,7 +24,7 @@
     ]
   },
   "baseline": {
-    "workspace_members": 70,
+    "workspace_members": 69,
     "default_dependency_closure": [
       "perry",
       "perry-abi",
@@ -80,7 +80,7 @@
     ],
     "decision_counts": {
       "externalize": 11,
-      "keep": 54,
+      "keep": 53,
       "merge": 1,
       "remove": 1,
       "review": 3
@@ -196,11 +196,6 @@
       "category": "binding",
       "decision": "externalize",
       "migration": "compile-source"
-    },
-    "perry-ext-events": {
-      "category": "binding",
-      "decision": "keep",
-      "migration": "core-runtime"
     },
     "perry-ext-http": {
       "category": "binding",

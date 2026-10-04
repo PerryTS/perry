@@ -173,14 +173,10 @@ pub(crate) type JsNativeTlsDispatchFn =
 /// http2. Stays null when the http ext crate isn't linked. (#2533, #10428)
 pub(crate) type JsNativeHttpDispatchFn =
     unsafe extern "C" fn(*const u8, usize, *const u8, usize, *const f64, usize) -> f64;
-/// node:events class-constructor dispatcher (registered by perry-stdlib under
-/// `bundled-events`, or by perry-ext-events). Lets `new` on a bound
-/// `events.EventEmitter` / `events.EventEmitterAsyncResource` export value —
-/// reached via `require('events')`, a default import, or a namespace property
-/// read — construct a real emitter instead of falling through to the generic
-/// empty-object path. Takes (class_name_ptr, class_name_len, args_ptr,
-/// args_len) and returns the NaN-boxed instance. Stays null when no events
-/// impl is linked. (#4995)
+/// A dynamic-`new` dispatcher for a bound native constructor export value
+/// (`async_hooks.AsyncLocalStorage` / `AsyncResource`). Takes
+/// (class_name_ptr, class_name_len, args_ptr, args_len) and returns the
+/// NaN-boxed instance.
 pub(crate) type JsNativeEventsConstructFn =
     unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64;
 
@@ -205,10 +201,8 @@ pub static JS_NATIVE_SQLITE_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::n
 pub static JS_NATIVE_DOMAIN_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 pub static JS_NATIVE_TLS_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 pub static JS_NATIVE_HTTP_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
-pub static JS_NATIVE_EVENTS_CONSTRUCT: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 // Module-level `events.*` helpers (`listenerCount`, `once`, `on`,
-// `getEventListeners`, `get`/`setMaxListeners`, `addAbortListener`). Distinct
-// from JS_NATIVE_EVENTS_CONSTRUCT above, which only serves `new`.
+// `getEventListeners`, `get`/`setMaxListeners`, `addAbortListener`).
 pub static JS_NATIVE_EVENTS_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 // Dynamic `new <bound async_hooks ctor>()` (e.g. `new maybeGlobalAsyncLocalStorage()`
 // where the value came from `globalThis.AsyncLocalStorage = AsyncLocalStorage`).

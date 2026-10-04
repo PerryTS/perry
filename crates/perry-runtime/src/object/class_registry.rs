@@ -18,29 +18,19 @@
 //! `pub use class_registry::*` glob in `object/mod.rs`). Pure relocation.
 
 pub use super::class_handles::{
-    event_emitter_async_resource_dispatch, event_emitter_async_resource_handle_probe,
-    event_emitter_get_domain, event_emitter_handle_probe, event_emitter_method_dispatch,
-    event_emitter_on, event_emitter_property_dispatch, event_emitter_set_domain,
     fetch_handle_kind_probe, handle_method_dispatch, handle_own_property_names_dispatch,
     handle_property_dispatch, handle_property_set_dispatch, handle_prototype_dispatch,
-    http_agent_handle_probe, js_register_event_emitter_async_resource_dispatch,
-    js_register_event_emitter_async_resource_handle_probe, js_register_event_emitter_get_domain,
-    js_register_event_emitter_handle_probe, js_register_event_emitter_method_dispatch,
-    js_register_event_emitter_on, js_register_event_emitter_property_dispatch,
-    js_register_event_emitter_set_domain, js_register_fetch_handle_kind_probe,
+    http_agent_handle_probe, js_register_fetch_handle_kind_probe,
     js_register_handle_method_dispatch, js_register_handle_own_property_names_dispatch,
     js_register_handle_property_dispatch, js_register_handle_property_set_dispatch,
     js_register_handle_prototype_dispatch, js_register_http_agent_handle_probe,
     js_register_net_socket_handle_probe, js_register_stream_expando_set,
     js_register_stream_handle_kind_probe, js_register_stream_handle_probe,
     js_register_tls_handle_kind_probe, net_socket_handle_probe, stream_expando_set,
-    stream_handle_kind_probe, stream_handle_probe, tls_handle_kind_probe,
-    EventEmitterAsyncResourceDispatchFn, EventEmitterAsyncResourceHandleProbeFn,
-    EventEmitterGetDomainFn, EventEmitterHandleProbeFn, EventEmitterOnFn, EventEmitterSetDomainFn,
-    FetchHandleKindProbeFn, HandleMethodDispatchFn, HandleOwnPropertyNamesDispatchFn,
-    HandlePropertyDispatchFn, HandlePropertySetDispatchFn, HandlePrototypeDispatchFn,
-    HttpAgentHandleProbeFn, NetSocketHandleProbeFn, StreamHandleKindProbeFn, StreamHandleProbeFn,
-    TlsHandleKindProbeFn,
+    stream_handle_kind_probe, stream_handle_probe, tls_handle_kind_probe, FetchHandleKindProbeFn,
+    HandleMethodDispatchFn, HandleOwnPropertyNamesDispatchFn, HandlePropertyDispatchFn,
+    HandlePropertySetDispatchFn, HandlePrototypeDispatchFn, HttpAgentHandleProbeFn,
+    NetSocketHandleProbeFn, StreamHandleKindProbeFn, StreamHandleProbeFn, TlsHandleKindProbeFn,
 };
 use super::*;
 
@@ -177,8 +167,9 @@ pub use prototype_methods::{
 pub(crate) use construct::{
     bound_function_target_value, extends_target_must_throw, is_callable_function_value,
     js_value_is_constructor, lookup_own_prototype_method, lookup_prototype_method,
-    nm_ctor_child_process, nm_ctor_cluster, nm_ctor_fs, nm_ctor_readline, nm_ctor_repl,
-    nm_ctor_stream, nm_ctor_tls, nm_ctor_tty, nm_ctor_vm, nm_ctor_wasi, promise_parent_in_chain,
+    nm_ctor_child_process, nm_ctor_cluster, nm_ctor_events, nm_ctor_fs, nm_ctor_readline,
+    nm_ctor_repl, nm_ctor_stream, nm_ctor_tls, nm_ctor_tty, nm_ctor_vm, nm_ctor_wasi,
+    promise_parent_in_chain,
 };
 pub use construct::{
     js_ctor_return_override, js_new_function_construct, js_new_function_construct_apply,

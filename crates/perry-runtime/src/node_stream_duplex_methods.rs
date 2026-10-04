@@ -42,7 +42,7 @@ pub(super) fn duplex_methods() -> [(&'static str, StubFn); 44] {
         ),
         (
             "listenerCount",
-            crate::fn_info!(ns_listener_count, 1; with_declared(1)),
+            crate::fn_info!(ns_listener_count, 2; with_declared(2)),
         ),
         (
             "listeners",

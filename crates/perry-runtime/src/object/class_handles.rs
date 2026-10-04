@@ -96,16 +96,6 @@ pub type StreamHandleKindProbeFn = unsafe extern "C" fn(id: usize) -> u8;
 /// the bare handle fails the `instanceof` and the guard is skipped.
 pub type FetchHandleKindProbeFn = unsafe extern "C" fn(id: usize) -> u8;
 
-/// Probe for stdlib `events.EventEmitter` handles. The handles are returned as
-/// pointer-tagged small integers, so runtime `instanceof` cannot inspect them
-/// as heap objects.
-pub type EventEmitterHandleProbeFn = unsafe extern "C" fn(handle: i64) -> bool;
-pub type EventEmitterAsyncResourceHandleProbeFn = unsafe extern "C" fn(handle: i64) -> bool;
-pub type EventEmitterAsyncResourceDispatchFn =
-    unsafe extern "C" fn(handle: i64, operation: u32) -> f64;
-pub type EventEmitterGetDomainFn = unsafe extern "C" fn(handle: i64) -> i64;
-pub type EventEmitterSetDomainFn = unsafe extern "C" fn(handle: i64, domain: i64) -> i32;
-
 /// Probe for stdlib `net.Socket` handles. Socket instances are represented as
 /// pointer-tagged small integer handles, not heap objects with class ids.
 pub type NetSocketHandleProbeFn = unsafe extern "C" fn(handle: i64) -> bool;
@@ -123,11 +113,6 @@ pub type TlsHandleKindProbeFn = unsafe extern "C" fn(handle: i64) -> u8;
 /// so `server.close()` (handle 1) is not swallowed by `clearTimeout(1)` when a
 /// timer with the colliding id also happens to be alive.
 pub type FfiHandleExistsProbeFn = unsafe extern "C" fn(handle: i64) -> bool;
-
-/// Narrow registration hook for runtime code that needs to attach an
-/// EventEmitter listener without routing through the generic handle dispatcher.
-pub type EventEmitterOnFn =
-    unsafe extern "C" fn(handle: i64, event_bits: i64, callback: i64) -> i64;
 
 // Dispatch tables are written once at startup (by `js_register_handle_*_dispatch`)
 // and read from many threads thereafter (perry/thread workers run user code that
@@ -152,19 +137,10 @@ static STREAM_HANDLE_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static STREAM_EXPANDO_SET_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static STREAM_HANDLE_KIND_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static FETCH_HANDLE_KIND_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
-static EVENT_EMITTER_HANDLE_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
-static EVENT_EMITTER_ASYNC_RESOURCE_HANDLE_PROBE_PTR: AtomicPtr<()> =
-    AtomicPtr::new(ptr::null_mut());
-static EVENT_EMITTER_ASYNC_RESOURCE_DISPATCH_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
-static EVENT_EMITTER_GET_DOMAIN_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
-static EVENT_EMITTER_SET_DOMAIN_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static NET_SOCKET_HANDLE_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static HTTP_AGENT_HANDLE_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static TLS_HANDLE_KIND_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static FFI_HANDLE_EXISTS_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
-static EVENT_EMITTER_ON_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
-static EVENT_EMITTER_METHOD_DISPATCH_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
-static EVENT_EMITTER_PROPERTY_DISPATCH_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 
@@ -536,86 +512,6 @@ pub unsafe extern "C" fn js_register_fetch_handle_kind_probe(f: FetchHandleKindP
 }
 
 #[inline]
-pub fn event_emitter_handle_probe() -> Option<EventEmitterHandleProbeFn> {
-    let p = EVENT_EMITTER_HANDLE_PROBE_PTR.load(Ordering::Acquire);
-    if p.is_null() {
-        None
-    } else {
-        Some(unsafe { std::mem::transmute::<*mut (), EventEmitterHandleProbeFn>(p) })
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn js_register_event_emitter_handle_probe(f: EventEmitterHandleProbeFn) {
-    EVENT_EMITTER_HANDLE_PROBE_PTR.store(f as *mut (), Ordering::Release);
-}
-
-#[inline]
-pub fn event_emitter_async_resource_handle_probe() -> Option<EventEmitterAsyncResourceHandleProbeFn>
-{
-    let p = EVENT_EMITTER_ASYNC_RESOURCE_HANDLE_PROBE_PTR.load(Ordering::Acquire);
-    if p.is_null() {
-        None
-    } else {
-        Some(unsafe { std::mem::transmute::<*mut (), EventEmitterAsyncResourceHandleProbeFn>(p) })
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn js_register_event_emitter_async_resource_handle_probe(
-    f: EventEmitterAsyncResourceHandleProbeFn,
-) {
-    EVENT_EMITTER_ASYNC_RESOURCE_HANDLE_PROBE_PTR.store(f as *mut (), Ordering::Release);
-}
-
-#[inline]
-pub fn event_emitter_async_resource_dispatch() -> Option<EventEmitterAsyncResourceDispatchFn> {
-    let p = EVENT_EMITTER_ASYNC_RESOURCE_DISPATCH_PTR.load(Ordering::Acquire);
-    if p.is_null() {
-        None
-    } else {
-        Some(unsafe { std::mem::transmute::<*mut (), EventEmitterAsyncResourceDispatchFn>(p) })
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn js_register_event_emitter_async_resource_dispatch(
-    f: EventEmitterAsyncResourceDispatchFn,
-) {
-    EVENT_EMITTER_ASYNC_RESOURCE_DISPATCH_PTR.store(f as *mut (), Ordering::Release);
-}
-
-#[inline]
-pub fn event_emitter_get_domain() -> Option<EventEmitterGetDomainFn> {
-    let p = EVENT_EMITTER_GET_DOMAIN_PTR.load(Ordering::Acquire);
-    if p.is_null() {
-        None
-    } else {
-        Some(unsafe { std::mem::transmute::<*mut (), EventEmitterGetDomainFn>(p) })
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn js_register_event_emitter_get_domain(f: EventEmitterGetDomainFn) {
-    EVENT_EMITTER_GET_DOMAIN_PTR.store(f as *mut (), Ordering::Release);
-}
-
-#[inline]
-pub fn event_emitter_set_domain() -> Option<EventEmitterSetDomainFn> {
-    let p = EVENT_EMITTER_SET_DOMAIN_PTR.load(Ordering::Acquire);
-    if p.is_null() {
-        None
-    } else {
-        Some(unsafe { std::mem::transmute::<*mut (), EventEmitterSetDomainFn>(p) })
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn js_register_event_emitter_set_domain(f: EventEmitterSetDomainFn) {
-    EVENT_EMITTER_SET_DOMAIN_PTR.store(f as *mut (), Ordering::Release);
-}
-
-#[inline]
 pub fn net_socket_handle_probe() -> Option<NetSocketHandleProbeFn> {
     let p = NET_SOCKET_HANDLE_PROBE_PTR.load(Ordering::Acquire);
     if p.is_null() {
@@ -701,63 +597,6 @@ pub unsafe extern "C" fn js_register_ffi_handle_exists_probe(f: FfiHandleExistsP
 #[no_mangle]
 pub extern "C" fn js_is_registered_ffi_handle(handle: i64) -> i32 {
     ffi_handle_exists(handle) as i32
-}
-
-#[inline]
-pub fn event_emitter_on() -> Option<EventEmitterOnFn> {
-    let p = EVENT_EMITTER_ON_PTR.load(Ordering::Acquire);
-    if p.is_null() {
-        None
-    } else {
-        Some(unsafe { std::mem::transmute::<*mut (), EventEmitterOnFn>(p) })
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn js_register_event_emitter_on(f: EventEmitterOnFn) {
-    EVENT_EMITTER_ON_PTR.store(f as *mut (), Ordering::Release);
-}
-
-/// #11270: the EventEmitter implementation's own method dispatcher, for
-/// receivers codegen could not type (`arr[i].on(...)`, `new ns.EventEmitter()`).
-/// perry-stdlib's handle dispatcher consults it before its own name mapping,
-/// whose `extern "C"` calls bind to perry-stdlib's in-crate `bundled-events`
-/// copies — an empty registry whenever perry-ext-events is the linked
-/// implementation. Same contract as the handle-dispatch extensions: return 1
-/// and write `out` when the handle is the implementation's own, 0 otherwise.
-#[inline]
-pub fn event_emitter_method_dispatch() -> Option<HandleMethodDispatchExtensionFn> {
-    let p = EVENT_EMITTER_METHOD_DISPATCH_PTR.load(Ordering::Acquire);
-    if p.is_null() {
-        None
-    } else {
-        Some(unsafe { std::mem::transmute::<*mut (), HandleMethodDispatchExtensionFn>(p) })
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn js_register_event_emitter_method_dispatch(
-    f: HandleMethodDispatchExtensionFn,
-) {
-    EVENT_EMITTER_METHOD_DISPATCH_PTR.store(f as *mut (), Ordering::Release);
-}
-
-/// Property-read (method-value) counterpart of `event_emitter_method_dispatch`.
-#[inline]
-pub fn event_emitter_property_dispatch() -> Option<HandlePropertyDispatchExtensionFn> {
-    let p = EVENT_EMITTER_PROPERTY_DISPATCH_PTR.load(Ordering::Acquire);
-    if p.is_null() {
-        None
-    } else {
-        Some(unsafe { std::mem::transmute::<*mut (), HandlePropertyDispatchExtensionFn>(p) })
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn js_register_event_emitter_property_dispatch(
-    f: HandlePropertyDispatchExtensionFn,
-) {
-    EVENT_EMITTER_PROPERTY_DISPATCH_PTR.store(f as *mut (), Ordering::Release);
 }
 
 /// Register a function to handle property access on handle-based objects.

@@ -72,6 +72,15 @@ pub(crate) struct NmEeOps {
     /// prototype of the bound `events.EventEmitter` export. No-op for every
     /// other function value.
     pub ee_prototype_install: unsafe fn(f64, *mut ObjectHeader),
+    /// The inline slots to give the synthetic prototype of the bound
+    /// `events.EventEmitter` / `EventEmitterAsyncResource` export (its
+    /// methods then sit in inline slots, which a method-call site memo can
+    /// address); 0 for every other function value.
+    pub ee_prototype_inline_slots: unsafe fn(f64) -> u32,
+    /// `recv.emit(...args)` (an ordinary receiver, the call's arguments) when
+    /// `recv`'s shapes resolve `emit` to the emitter's own `emit` body:
+    /// `None`, having done nothing, for any other `emit`.
+    pub emit_call: unsafe fn(f64, *const f64, usize) -> Option<f64>,
     /// Dynamic `super()` for `class X extends <runtime EventEmitter export>`:
     /// installs the EE methods on the fresh instance. `None` when the callee
     /// is not the bound events export (fall through to normal call dispatch).

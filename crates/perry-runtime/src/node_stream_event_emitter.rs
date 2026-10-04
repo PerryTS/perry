@@ -91,10 +91,33 @@ fn stream_max_listeners(stream: f64) -> f64 {
     // node: `_maxListeners === undefined ? defaultMaxListeners : _maxListeners`.
     let max = get_named(stream, MAX_LISTENERS_KEY);
     if is_undefined(max) {
-        DEFAULT_MAX_LISTENERS
+        default_max_listeners()
     } else {
         max
     }
+}
+
+/// `EventEmitter.defaultMaxListeners`, which a program may reassign. Until
+/// the `EventEmitter` export exists nothing can have reassigned it, so a
+/// stream-only program reads the default without minting it.
+fn default_max_listeners() -> f64 {
+    let Some(ctor) =
+        crate::object::native_module::minted_native_callable_export("events\0EventEmitter")
+    else {
+        return DEFAULT_MAX_LISTENERS;
+    };
+    let jsval = JSValue::from_bits(ctor.to_bits());
+    if jsval.is_pointer() {
+        let value = crate::closure::closure_get_dynamic_prop(
+            jsval.as_pointer::<u8>() as usize,
+            "defaultMaxListeners",
+        );
+        let number = number_of(value);
+        if !number.is_nan() {
+            return number;
+        }
+    }
+    DEFAULT_MAX_LISTENERS
 }
 
 pub(super) extern "C" fn ns_on2(
@@ -245,12 +268,30 @@ pub extern "C" fn js_node_stream_method_remove_all_listeners(
     stream
 }
 
+/// node's `listenerCount(type, listener)`: with a listener, only the stored
+/// entries that are it (or a once wrapper of it) count.
 pub(super) extern "C" fn ns_listener_count(
     closure: *const ClosureHeader,
     this: crate::closure::JsThis,
     event: f64,
+    listener: f64,
 ) -> f64 {
-    stream_listener_count_for_event(super::this_value(closure, this), event) as f64
+    let stream = super::this_value(closure, this);
+    let listener_value = JSValue::from_bits(listener.to_bits());
+    if listener_value.is_undefined() || listener_value.is_null() {
+        return stream_listener_count_for_event(stream, event) as f64;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let stored = stored_listeners(stream, event);
+    let stored = scope.root_nanbox_f64_slice(&stored);
+    let wanted = listener.to_bits();
+    stored
+        .iter()
+        .filter(|handle| {
+            let entry = handle.get_nanbox_f64();
+            entry.to_bits() == wanted || unwrap_listener(entry).to_bits() == wanted
+        })
+        .count() as f64
 }
 
 #[no_mangle]
@@ -344,13 +385,105 @@ fn is_undefined(value: f64) -> bool {
     value.to_bits() == super::TAG_UNDEFINED
 }
 
-/// `target[key]`: the full [[Get]] (prototype chain, accessors, proxies).
+/// The bytes of a string value (heap or inline), handed to `f`; `None` for
+/// any other value (a symbol, a number to be coerced).
+fn with_string_bytes<R>(key: f64, f: impl FnOnce(&[u8]) -> R) -> Option<R> {
+    let value = JSValue::from_bits(key.to_bits());
+    if value.is_string() {
+        let ptr = value.as_string_ptr();
+        if ptr.is_null() {
+            return None;
+        }
+        // SAFETY: a string value's pointer names a live string header whose
+        // payload follows it.
+        let bytes = unsafe {
+            std::slice::from_raw_parts(crate::string::string_data(ptr), (*ptr).byte_len as usize)
+        };
+        return Some(f(bytes));
+    }
+    if value.is_short_string() {
+        let mut buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        let n = value.short_string_to_buf(&mut buf);
+        return Some(f(&buf[..n]));
+    }
+    None
+}
+
+/// `target[name]` answered by the shapes: an ordinary data property on the
+/// chain, or a definite miss at a null `[[Prototype]]`. `None` when the
+/// shapes cannot answer (an accessor, an exotic receiver, a native
+/// prototype), and the caller takes the full `[[Get]]`. Reads no meta and
+/// allocates nothing.
+fn shape_get(target: f64, name: &[u8]) -> Option<f64> {
+    let value = JSValue::from_bits(target.to_bits());
+    if !value.is_pointer() {
+        return None;
+    }
+    // SAFETY: the lookup validates the address (arena membership, header)
+    // before it reads anything.
+    unsafe { crate::object::native_get::try_data_lookup_bytes(value, name) }
+        .map(|found| found.map_or_else(undefined_value, |v| f64::from_bits(v.bits())))
+}
+
+/// `target[key] = value` for a key `target` already owns as plain writable
+/// data: one key-list probe and a barriered slot store. `false` sends the
+/// caller to the full `[[Set]]`.
+fn shape_set_existing(target: f64, name: &[u8], value: f64) -> bool {
+    let jsval = JSValue::from_bits(target.to_bits());
+    if !jsval.is_pointer() {
+        return false;
+    }
+    let addr = jsval.as_pointer::<u8>() as usize;
+    if !crate::value::addr_class::is_above_handle_band(addr) {
+        return false;
+    }
+    // SAFETY: an address above the handle band; the reader validates it.
+    let Some(header) = (unsafe { crate::value::addr_class::try_read_gc_header(addr) }) else {
+        return false;
+    };
+    // The overwrite consults the key's VALUE only to vet an own descriptor;
+    // an object with none never reaches that check.
+    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+        || header._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS != 0
+    {
+        return false;
+    }
+    // SAFETY: a live ordinary object (checked above); the overwrite does not
+    // allocate in the GC heap.
+    unsafe {
+        crate::object::try_existing_own_data_overwrite_by_content(
+            addr as *mut crate::object::ObjectHeader,
+            undefined_value(),
+            name,
+            value,
+        )
+    }
+}
+
+/// `target[key]`: the full [[Get]] (prototype chain, accessors, proxies),
+/// after the shapes had their say.
 fn get_key(target: f64, key: f64) -> f64 {
+    if let Some(Some(found)) = with_string_bytes(key, |bytes| shape_get(target, bytes)) {
+        return found;
+    }
     unsafe { crate::object::js_object_get_property_key(target, key) }
 }
 
-/// `target[key] = value`: the full [[Set]].
+/// `target[key] = value`: the full [[Set]], after the shapes had their say.
 fn set_key(target: f64, key: f64, value: f64) {
+    if with_string_bytes(key, |bytes| shape_set_existing(target, bytes, value)) == Some(true) {
+        return;
+    }
+    // A key deleted by `off` and re-added by the next `on` refills its
+    // tombstoned slot on the same shape (the lane a computed `[[Set]]` miss
+    // takes first); anything else is the ordinary `[[Set]]`.
+    let target_value = JSValue::from_bits(target.to_bits());
+    if target_value.is_pointer() {
+        let obj = target_value.as_pointer::<crate::object::ObjectHeader>() as *mut _;
+        if crate::object::try_readd_stable_tombstone(obj, key, value).is_some() {
+            return;
+        }
+    }
     unsafe {
         crate::object::js_object_set_property_key(target, key, value);
     }
@@ -363,21 +496,175 @@ fn name_key(name: &[u8]) -> f64 {
 }
 
 fn get_named(target: f64, name: &[u8]) -> f64 {
+    // An emitter's state keys are its own: the receiver's own key list
+    // answers them for a subclass instance too, which the chain lookup
+    // below refuses (so it is not tried for one).
+    match own_data_lookup(target, name) {
+        Some(Some(own)) => return own,
+        Some(None) if declared_class_instance(target) => {
+            if let Some(found) = chain_own_lookup(target, name) {
+                return found;
+            }
+        }
+        _ => {
+            if let Some(found) = shape_get(target, name) {
+                return found;
+            }
+        }
+    }
     let scope = crate::gc::RuntimeHandleScope::new();
     let target = scope.root_nanbox_f64(target);
     let key = name_key(name);
-    get_key(target.get_nanbox_f64(), key)
+    unsafe { crate::object::js_object_get_property_key(target.get_nanbox_f64(), key) }
 }
 
 fn set_named(target: f64, name: &[u8], value: f64) {
+    // An own data key is overwritten in place; an absent one is an add,
+    // which only the full `[[Set]]` may make (the chain may intercept it).
+    if shape_set_existing(target, name, value) {
+        return;
+    }
     let scope = crate::gc::RuntimeHandleScope::new();
     let target = scope.root_nanbox_f64(target);
     let value = scope.root_nanbox_f64(value);
     let key = name_key(name);
-    set_key(target.get_nanbox_f64(), key, value.get_nanbox_f64());
+    unsafe {
+        crate::object::js_object_set_property_key(
+            target.get_nanbox_f64(),
+            key,
+            value.get_nanbox_f64(),
+        );
+    }
+}
+
+/// `target[name]` for a key `target` lacks, walking its `[[Prototype]]`s
+/// and asking each one's own key list (`a class X extends EventEmitter`
+/// instance's `_maxListeners` lives on `EventEmitter.prototype`). `None`
+/// when some hop cannot answer by its shape (the full `[[Get]]` then runs).
+fn chain_own_lookup(target: f64, name: &[u8]) -> Option<f64> {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let mut hop = scope.root_nanbox_f64(target);
+    for _ in 0..16 {
+        let proto = crate::object::js_object_get_prototype_of(hop.get_nanbox_f64());
+        let proto_value = JSValue::from_bits(proto.to_bits());
+        if proto_value.is_null() {
+            return Some(undefined_value());
+        }
+        if !proto_value.is_pointer() {
+            return None;
+        }
+        match own_data_lookup(proto, name)? {
+            Some(found) => return Some(found),
+            None => hop = scope.root_nanbox_f64(proto),
+        }
+    }
+    None
+}
+
+/// An instance of a declared (compiled) class: its chain is the class
+/// registry's, which the shape-chain lookup does not walk.
+fn declared_class_instance(target: f64) -> bool {
+    let jsval = JSValue::from_bits(target.to_bits());
+    if !jsval.is_pointer() {
+        return false;
+    }
+    // SAFETY: only called after `own_data_lookup` validated the receiver as
+    // a live ordinary object.
+    let class_id = unsafe { (*jsval.as_pointer::<crate::object::ObjectHeader>()).class_id };
+    class_id != 0
+        && class_id < crate::object::SYNTHETIC_CLASS_ID_BASE
+        && !crate::object::is_anon_shape_class_id(class_id)
+}
+
+/// `target`'s OWN data property `name`, from its shape's key list alone (any
+/// class): `Some(Some(v))` present, `Some(None)` absent, `None` when the
+/// shape cannot answer (an exotic or dictionary receiver, a possible own
+/// accessor for the key).
+fn own_data_lookup(target: f64, name: &[u8]) -> Option<Option<f64>> {
+    own_data_slot(target, name).map(|own| {
+        own.map(|(obj, slot, live)| {
+            // SAFETY: `own_data_slot` resolved `slot` from `obj`'s shape.
+            let value =
+                unsafe { crate::object::field_get_set::object_field_at_with_live(obj, slot, live) };
+            f64::from_bits(value.bits())
+        })
+    })
+}
+
+/// [`own_data_lookup`]'s slot: the object, the key's slot and the shape's
+/// live inline bound.
+fn own_data_slot(
+    target: f64,
+    name: &[u8],
+) -> Option<Option<(*const crate::object::ObjectHeader, u32, u32)>> {
+    let jsval = JSValue::from_bits(target.to_bits());
+    if !jsval.is_pointer() {
+        return None;
+    }
+    let addr = jsval.as_pointer::<u8>() as usize;
+    if !crate::value::addr_class::is_plausible_heap_addr(addr)
+        || crate::arena::classify_heap_generation(addr) == crate::arena::HeapGeneration::Unknown
+    {
+        return None;
+    }
+    unsafe {
+        let header = crate::value::addr_class::try_read_gc_header_known_plausible(addr)?;
+        if header.obj_type != crate::gc::GC_TYPE_OBJECT
+            || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        {
+            return None;
+        }
+        let obj = addr as *const crate::object::ObjectHeader;
+        // A descriptor for THIS key (an attribute or an accessor) is the
+        // descriptor tables' to answer; other keys' descriptors do not matter.
+        if header._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS != 0
+            && !(crate::object::key_attrs::attrs_live_in_keys(addr)
+                && crate::object::key_attrs::object_key_entry(obj, name) == 0)
+        {
+            return None;
+        }
+        let meta = (*obj).meta;
+        let accessor_bit = 1u64 << (crate::object::key_bytes_hash(name.as_ptr(), name.len()) & 63);
+        if !meta.is_null()
+            && ((*meta).elements != 0 || (*meta).accessor_key_bits & accessor_bit != 0)
+        {
+            return None;
+        }
+        if crate::object::dictionary::is_dictionary(obj) {
+            return None;
+        }
+        let shape = crate::object::shapes::object_shape_descriptor(obj)?;
+        if !shape.object_kind.is_ordinary_layout() {
+            return None;
+        }
+        let keys = shape.keys as usize as *const crate::array::ArrayHeader;
+        if keys.is_null() {
+            return (shape.logical_key_count == 0).then_some(None);
+        }
+        let Some(slot) =
+            crate::object::keys_find_slot_by_bytes_resolved(keys, shape.logical_key_count, name)
+        else {
+            return Some(None);
+        };
+        Some(Some((obj, slot, shape.live_inline_slot_count)))
+    }
 }
 
 fn is_object_value(value: f64) -> bool {
+    let jsval = JSValue::from_bits(value.to_bits());
+    if !jsval.is_pointer() {
+        return false;
+    }
+    let addr = jsval.as_pointer::<u8>() as usize;
+    // An arena cell carries its GC header; anything else (a headerless
+    // buffer, a handle) takes the classifying probe.
+    if crate::value::addr_class::is_plausible_heap_addr(addr)
+        && crate::arena::classify_heap_generation(addr) != crate::arena::HeapGeneration::Unknown
+    {
+        // SAFETY: plausible and arena-owned, so the header is readable.
+        return unsafe { crate::value::addr_class::try_read_gc_header_known_plausible(addr) }
+            .is_some_and(|header| header.obj_type == crate::gc::GC_TYPE_OBJECT);
+    }
     super::object_ptr_from_value(value).is_some()
 }
 
@@ -398,7 +685,7 @@ fn number_of(value: f64) -> f64 {
 
 /// `{ __proto__: null }`, node's empty `_events`.
 fn new_events_object() -> f64 {
-    crate::object::js_object_create(f64::from_bits(crate::value::TAG_NULL))
+    crate::value::js_nanbox_pointer(crate::object::js_object_alloc_null_proto(0, 0) as i64)
 }
 
 fn reset_events(target: f64) {
@@ -410,11 +697,36 @@ fn reset_events(target: f64) {
 }
 
 fn adjust_events_count(target: f64, delta: f64) -> f64 {
+    // An own plain `_eventsCount` (every emitter's): read and write its slot.
+    if let Some(Some((obj, slot, live))) = own_data_slot(target, EVENTS_COUNT_KEY) {
+        if slot < live && !own_slot_frozen(obj) {
+            // SAFETY: `own_data_slot` proved `slot` the key's own inline data
+            // slot below the shape's live bound; nothing below allocates.
+            let count = unsafe {
+                let current =
+                    crate::object::field_get_set::object_field_at_with_live(obj, slot, live);
+                number_of(f64::from_bits(current.bits())) + delta
+            };
+            crate::object::js_object_set_field(
+                obj as *mut crate::object::ObjectHeader,
+                slot,
+                JSValue::from_bits(count.to_bits()),
+            );
+            return count;
+        }
+    }
     let scope = crate::gc::RuntimeHandleScope::new();
     let target = scope.root_nanbox_f64(target);
     let count = number_of(get_named(target.get_nanbox_f64(), EVENTS_COUNT_KEY)) + delta;
     set_named(target.get_nanbox_f64(), EVENTS_COUNT_KEY, count);
     count
+}
+
+/// A frozen or sealed-and-non-writable receiver refuses a slot overwrite.
+fn own_slot_frozen(obj: *const crate::object::ObjectHeader) -> bool {
+    // SAFETY: a live object `own_data_slot` validated.
+    unsafe { crate::value::addr_class::try_read_gc_header(obj as usize) }
+        .is_none_or(|header| header._reserved & crate::gc::OBJ_FLAG_FROZEN != 0)
 }
 
 /// The receiver's `_events` when it is an object.
@@ -437,9 +749,14 @@ pub(crate) fn init_event_emitter_state(target: f64) {
     // ObjectGetPrototypeOf(this)._events`. Without an own `_events` the read
     // IS the prototype's, so both arms hold and the (slow, inherited) reads
     // are skipped; only an own `_events` needs comparing.
-    let has_own = crate::object::js_object_has_own(target.get_nanbox_f64(), name_key(EVENTS_KEY))
-        .to_bits()
-        == super::TAG_TRUE;
+    let has_own = match own_data_lookup(target.get_nanbox_f64(), EVENTS_KEY) {
+        Some(own) => own.is_some(),
+        None => {
+            crate::object::js_object_has_own(target.get_nanbox_f64(), name_key(EVENTS_KEY))
+                .to_bits()
+                == super::TAG_TRUE
+        }
+    };
     let reset = !has_own || {
         let events = scope.root_nanbox_f64(get_named(target.get_nanbox_f64(), EVENTS_KEY));
         is_undefined(events.get_nanbox_f64()) || {
@@ -504,11 +821,12 @@ fn unwrap_listener(listener: f64) -> f64 {
     if !is_callable_value(listener) {
         return listener;
     }
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let listener = scope.root_nanbox_f64(listener);
-    let inner = get_named(listener.get_nanbox_f64(), b"listener");
+    // A function's own `listener` (a once wrapper's original); reading it
+    // allocates nothing.
+    let inner =
+        crate::closure::closure_get_dynamic_prop(super::raw_ptr_from_value(listener), "listener");
     if is_undefined(inner) || inner.to_bits() == crate::value::TAG_NULL {
-        listener.get_nanbox_f64()
+        listener
     } else {
         inner
     }
@@ -596,7 +914,7 @@ fn add_stream_listener_for_event_with_options(
     prepend: bool,
 ) {
     if !is_callable_value(cb) {
-        throw_invalid_listener_type();
+        throw_invalid_listener_type(cb);
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let target = scope.root_nanbox_f64(stream);
@@ -657,13 +975,19 @@ fn add_stream_listener_for_event_with_options(
         } else {
             crate::array::js_array_push_f64(arr, stored.get_nanbox_f64())
         };
-        if grown as usize != arr as usize {
+        let grown = scope.root_nanbox_f64(super::box_pointer(grown as *const u8));
+        if grown.get_nanbox_u64() != existing.get_nanbox_u64() {
             set_key(
                 events.get_nanbox_f64(),
                 event.get_nanbox_f64(),
-                super::box_pointer(grown as *const u8),
+                grown.get_nanbox_f64(),
             );
         }
+        check_listener_limit(
+            target.get_nanbox_f64(),
+            event.get_nanbox_f64(),
+            grown.get_nanbox_f64(),
+        );
     } else {
         let mut pair = crate::array::js_array_alloc(2);
         let (first, second) = if prepend {
@@ -673,10 +997,16 @@ fn add_stream_listener_for_event_with_options(
         };
         pair = crate::array::js_array_push_f64(pair, first);
         pair = crate::array::js_array_push_f64(pair, second);
+        let pair = scope.root_nanbox_f64(super::box_pointer(pair as *const u8));
         set_key(
             events.get_nanbox_f64(),
             event.get_nanbox_f64(),
-            super::box_pointer(pair as *const u8),
+            pair.get_nanbox_f64(),
+        );
+        check_listener_limit(
+            target.get_nanbox_f64(),
+            event.get_nanbox_f64(),
+            pair.get_nanbox_f64(),
         );
     }
 
@@ -687,8 +1017,110 @@ fn add_stream_listener_for_event_with_options(
     }
 }
 
+/// node's `_addListener` leak check: a listener list that outgrows the
+/// emitter's maximum (`getMaxListeners()`, 0 = unlimited) warns once, through
+/// `process.emitWarning`, with a `MaxListenersExceededWarning` naming the
+/// emitter, the event and the count. The list's `warned` flag is node's.
+fn check_listener_limit(target: f64, event: f64, list: f64) {
+    let len = if is_array_value(list) {
+        crate::array::js_array_length(super::raw_ptr_from_value(list) as *const _) as f64
+    } else {
+        return;
+    };
+    let max = stream_max_listeners(target);
+    if !(max > 0.0) || len <= max {
+        return;
+    }
+    if crate::value::js_is_truthy(get_named(list, b"warned")) != 0 {
+        return;
+    }
+    warn_listener_limit(target, event, list, len, max);
+}
+
 #[cold]
-fn throw_invalid_listener_type() -> ! {
+#[inline(never)]
+fn warn_listener_limit(target: f64, event: f64, list: f64, len: f64, max: f64) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let target = scope.root_nanbox_f64(target);
+    let event = scope.root_nanbox_f64(event);
+    let list = scope.root_nanbox_f64(list);
+    set_named(list.get_nanbox_f64(), b"warned", bool_value(true));
+    let type_name = value_text(event.get_nanbox_f64());
+    // node: `inspect(target, { depth: -1 })`, e.g. `[EventEmitter]`.
+    let options = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+        crate::object::js_object_alloc(0, 1) as i64,
+    ));
+    set_named(options.get_nanbox_f64(), b"depth", -1.0);
+    let shown = value_text(crate::builtins::js_util_inspect(
+        target.get_nanbox_f64(),
+        options.get_nanbox_f64(),
+    ));
+    let text = format!(
+        "Possible EventEmitter memory leak detected. {} {type_name} listeners added to {shown}. MaxListeners is {}. Use emitter.setMaxListeners() to increase limit",
+        len as u64,
+        format_max_listeners_received(max)
+    );
+    let message = crate::string::js_string_from_bytes(text.as_ptr(), text.len() as u32);
+    let warning = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+        crate::error::js_error_new_with_message(message) as i64,
+    ));
+    let name = b"MaxListenersExceededWarning";
+    let name = scope.root_nanbox_f64(f64::from_bits(
+        JSValue::string_ptr(crate::string::js_string_from_bytes(
+            name.as_ptr(),
+            name.len() as u32,
+        ))
+        .bits(),
+    ));
+    set_named(warning.get_nanbox_f64(), b"name", name.get_nanbox_f64());
+    set_named(
+        warning.get_nanbox_f64(),
+        b"emitter",
+        target.get_nanbox_f64(),
+    );
+    set_named(warning.get_nanbox_f64(), b"type", event.get_nanbox_f64());
+    set_named(warning.get_nanbox_f64(), b"count", len);
+    // node: `process.emitWarning(w)` with the Error itself, which the
+    // 'warning' listeners receive as is.
+    crate::process::schedule_warning(
+        warning.get_nanbox_f64(),
+        "MaxListenersExceededWarning",
+        "",
+        &text,
+        "",
+    );
+}
+
+/// `String(value)` as Rust text (a symbol renders as `Symbol(desc)`).
+fn value_text(value: f64) -> String {
+    let text = if unsafe { crate::symbol::js_is_symbol(value) } != 0 {
+        unsafe { crate::symbol::js_symbol_to_string(value) as *const crate::string::StringHeader }
+    } else {
+        crate::value::js_jsvalue_to_string(value) as *const crate::string::StringHeader
+    };
+    if text.is_null() {
+        return String::new();
+    }
+    let value = f64::from_bits(JSValue::string_ptr(text as *mut _).bits());
+    with_string_bytes(value, |bytes| String::from_utf8_lossy(bytes).into_owned())
+        .unwrap_or_default()
+}
+
+/// node's `checkListener`: `TypeError [ERR_INVALID_ARG_TYPE]: The "listener"
+/// argument must be of type function. Received …`.
+#[cold]
+fn throw_invalid_listener_type(listener: f64) -> ! {
+    const NAME: &[u8] = b"listener";
+    // SAFETY: a static ASCII name; the validator throws for a non-function.
+    unsafe {
+        crate::fs::validate::js_validate_event_listener(
+            listener.to_bits() as i64,
+            NAME.as_ptr(),
+            NAME.len() as u32,
+        );
+    }
+    // The validator accepted a value `is_callable_value` refused: still not
+    // a listener this emitter can call.
     let msg = b"The \"listener\" argument must be of type function";
     let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
     crate::node_submodules::register_error_code(s, "ERR_INVALID_ARG_TYPE");
@@ -715,7 +1147,7 @@ fn emit_remove_listener_if_watched(target: f64, events: f64, event: f64, listene
 /// node's `removeListener(type, listener)`. True when a listener was removed.
 pub(super) fn remove_stream_listener_for_event(stream: f64, event: f64, cb: f64) -> bool {
     if !is_callable_value(cb) {
-        throw_invalid_listener_type();
+        throw_invalid_listener_type(cb);
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let target = scope.root_nanbox_f64(stream);
@@ -1170,11 +1602,11 @@ pub(super) fn emit_stream_event(stream: f64, event: f64, args: &[f64]) -> f64 {
         None => {}
     }
     if unhandled_error {
-        let err = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles)
-            .first()
-            .copied()
-            .unwrap_or_else(undefined_value);
-        crate::exception::js_throw(err);
+        let live = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
+        if emit_unhandled_error_to_domain(stream_h.get_nanbox_f64(), live.first().copied()) {
+            return f64::from_bits(super::TAG_FALSE);
+        }
+        crate::os::os_process_emitter::throw_unhandled_error_event(&live);
     }
 
     let Some(events) = events_of(stream_h.get_nanbox_f64()) else {
@@ -1227,6 +1659,55 @@ pub(super) fn emit_stream_event(stream: f64, event: f64, args: &[f64]) -> f64 {
         }
     }
     f64::from_bits(super::TAG_TRUE)
+}
+
+/// node's `domain` module: an emitter bound to a domain (`domain.add(ee)`, an
+/// own `domain` property) hands an unhandled `'error'` to that domain instead
+/// of throwing: `er.domainEmitter = this`, `er.domain = domain`,
+/// `er.domainThrown = false`, then `domain.emit('error', er)`.
+fn emit_unhandled_error_to_domain(target: f64, error: Option<f64>) -> bool {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let target = scope.root_nanbox_f64(target);
+    let domain = get_named(target.get_nanbox_f64(), b"domain");
+    let domain_value = JSValue::from_bits(domain.to_bits());
+    if domain_value.is_undefined() || domain_value.is_null() || !domain_value.is_pointer() {
+        return false;
+    }
+    let domain = scope.root_nanbox_f64(domain);
+    let error = scope.root_nanbox_f64(error.unwrap_or_else(undefined_value));
+    // `typeof er === 'object'`: an Error or any other object takes the notes.
+    if JSValue::from_bits(error.get_nanbox_u64()).is_pointer()
+        && unsafe { crate::symbol::js_is_symbol(error.get_nanbox_f64()) } == 0
+    {
+        for name in [&b"domainEmitter"[..], b"domain", b"domainThrown"] {
+            let key = scope.root_nanbox_f64(name_key(name));
+            // Read after the key's allocation: the handles track any move.
+            let value = match name {
+                b"domainEmitter" => target.get_nanbox_f64(),
+                b"domain" => domain.get_nanbox_f64(),
+                _ => bool_value(false),
+            };
+            unsafe {
+                crate::object::js_object_set_property_key(
+                    error.get_nanbox_f64(),
+                    key.get_nanbox_f64(),
+                    value,
+                );
+            }
+        }
+    }
+    let args = [name_key(b"error"), error.get_nanbox_f64()];
+    let method = b"emit";
+    unsafe {
+        crate::object::js_native_call_method(
+            domain.get_nanbox_f64(),
+            method.as_ptr() as *const i8,
+            method.len(),
+            args.as_ptr(),
+            args.len(),
+        );
+    }
+    true
 }
 
 fn error_monitor_event() -> f64 {

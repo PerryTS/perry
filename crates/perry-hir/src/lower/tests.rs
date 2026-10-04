@@ -805,16 +805,9 @@ fn test_lower_rejects_deep_logical_chain() {
 #[test]
 fn test_native_instance_index_shadowing_and_truncation() {
     let mut ctx = make_ctx();
-    // Outer binding `e` -> events/EventEmitter.
-    ctx.register_native_instance(
-        "e".to_string(),
-        "events".to_string(),
-        "EventEmitter".to_string(),
-    );
-    assert_eq!(
-        ctx.lookup_native_instance("e"),
-        Some(("events", "EventEmitter"))
-    );
+    // Outer binding `e` -> net/Socket.
+    ctx.register_native_instance("e".to_string(), "net".to_string(), "Socket".to_string());
+    assert_eq!(ctx.lookup_native_instance("e"), Some(("net", "Socket")));
 
     // Enter an inner scope: shadow `e` with a different native type.
     let mark = ctx.native_instances.len();
@@ -831,10 +824,7 @@ fn test_native_instance_index_shadowing_and_truncation() {
 
     // Pop the inner scope: the outer binding must be restored.
     ctx.truncate_native_instances(mark);
-    assert_eq!(
-        ctx.lookup_native_instance("e"),
-        Some(("events", "EventEmitter"))
-    );
+    assert_eq!(ctx.lookup_native_instance("e"), Some(("net", "Socket")));
 
     // Pop the outer binding too: no entry remains.
     ctx.truncate_native_instances(0);
@@ -885,7 +875,7 @@ fn perf_registry_lookup_is_flat_in_k() {
                 vec![format!("f{i}")],
                 vec![format!("s{i}")],
             );
-            ctx.register_native_instance(format!("ni{i}"), "events".into(), "EventEmitter".into());
+            ctx.register_native_instance(format!("ni{i}"), "net".into(), "Socket".into());
             ctx.register_native_module(format!("nm{i}"), "fs".into(), None);
         }
         // The hot case the bug targets: the receiver is NOT in the registry, so

@@ -682,46 +682,6 @@
   {
    "file": "crates/perry-runtime/src/object/class_handles.rs",
    "names": [
-    "EVENT_EMITTER_HANDLE_PROBE_PTR"
-   ],
-   "verdict": "no_heap_address",
-   "why": "AtomicPtr holding a single extern \"C\" probe/dispatch function pointer, written only by its js_register_* entry point (`EVENT_EMITTER_HANDLE_PROBE_PTR.store(f as *mut ())`, class_handles.rs:550); code address."
-  },
-  {
-   "file": "crates/perry-runtime/src/object/class_handles.rs",
-   "names": [
-    "EVENT_EMITTER_ASYNC_RESOURCE_HANDLE_PROBE_PTR"
-   ],
-   "verdict": "no_heap_address",
-   "why": "AtomicPtr holding a single extern \"C\" probe/dispatch function pointer, written only by its js_register_* entry point (`EVENT_EMITTER_ASYNC_RESOURCE_HANDLE_PROBE_PTR.store(f as *mut ())`, class_handles.rs:568); code address."
-  },
-  {
-   "file": "crates/perry-runtime/src/object/class_handles.rs",
-   "names": [
-    "EVENT_EMITTER_ASYNC_RESOURCE_DISPATCH_PTR"
-   ],
-   "verdict": "no_heap_address",
-   "why": "AtomicPtr holding a single extern \"C\" probe/dispatch function pointer, written only by its js_register_* entry point (`EVENT_EMITTER_ASYNC_RESOURCE_DISPATCH_PTR.store(f as *mut ())`, class_handles.rs:585); code address."
-  },
-  {
-   "file": "crates/perry-runtime/src/object/class_handles.rs",
-   "names": [
-    "EVENT_EMITTER_GET_DOMAIN_PTR"
-   ],
-   "verdict": "no_heap_address",
-   "why": "AtomicPtr holding a single extern \"C\" probe/dispatch function pointer, written only by its js_register_* entry point (`EVENT_EMITTER_GET_DOMAIN_PTR.store(f as *mut ())`, class_handles.rs:600); code address."
-  },
-  {
-   "file": "crates/perry-runtime/src/object/class_handles.rs",
-   "names": [
-    "EVENT_EMITTER_SET_DOMAIN_PTR"
-   ],
-   "verdict": "no_heap_address",
-   "why": "AtomicPtr holding a single extern \"C\" probe/dispatch function pointer, written only by its js_register_* entry point (`EVENT_EMITTER_SET_DOMAIN_PTR.store(f as *mut ())`, class_handles.rs:615); code address."
-  },
-  {
-   "file": "crates/perry-runtime/src/object/class_handles.rs",
-   "names": [
     "NET_SOCKET_HANDLE_PROBE_PTR"
    ],
    "verdict": "no_heap_address",
@@ -750,30 +710,6 @@
    ],
    "verdict": "no_heap_address",
    "why": "AtomicPtr holding a single extern \"C\" probe/dispatch function pointer, written only by its js_register_* entry point (`FFI_HANDLE_EXISTS_PROBE_PTR.store(f as *mut ())`, class_handles.rs:695); code address."
-  },
-  {
-   "file": "crates/perry-runtime/src/object/class_handles.rs",
-   "names": [
-    "EVENT_EMITTER_ON_PTR"
-   ],
-   "verdict": "no_heap_address",
-   "why": "AtomicPtr holding a single extern \"C\" probe/dispatch function pointer, written only by its js_register_* entry point (`EVENT_EMITTER_ON_PTR.store(f as *mut ())`, class_handles.rs:718); code address."
-  },
-  {
-   "file": "crates/perry-runtime/src/object/class_handles.rs",
-   "names": [
-    "EVENT_EMITTER_METHOD_DISPATCH_PTR"
-   ],
-   "verdict": "no_heap_address",
-   "why": "AtomicPtr holding a single extern \"C\" probe/dispatch function pointer, written only by its js_register_* entry point (`EVENT_EMITTER_METHOD_DISPATCH_PTR.store(f as *mut ())`, class_handles.rs:742); code address."
-  },
-  {
-   "file": "crates/perry-runtime/src/object/class_handles.rs",
-   "names": [
-    "EVENT_EMITTER_PROPERTY_DISPATCH_PTR"
-   ],
-   "verdict": "no_heap_address",
-   "why": "AtomicPtr holding a single extern \"C\" probe/dispatch function pointer, written only by its js_register_* entry point (`EVENT_EMITTER_PROPERTY_DISPATCH_PTR.store(f as *mut ())`, class_handles.rs:760); code address."
   },
   {
    "file": "crates/perry-runtime/src/geisterhand_registry.rs",
@@ -1299,14 +1235,6 @@
    ],
    "verdict": "no_heap_address",
    "why": "Stores the node:http dispatch fn registered by perry-stdlib; every store in the tree is `func as *mut ()` (or null), so it is a code address, never a heap value."
-  },
-  {
-   "file": "crates/perry-runtime/src/value/tags.rs",
-   "names": [
-    "JS_NATIVE_EVENTS_CONSTRUCT"
-   ],
-   "verdict": "no_heap_address",
-   "why": "Stores the events `new` constructor fn (JsNativeEventsConstructFn) registered by the events impl; every store in the tree is `func as *mut ()` (or null), so it is a code address, never a heap value."
   },
   {
    "file": "crates/perry-runtime/src/value/tags.rs",

@@ -5154,14 +5154,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "perry-ext-events"
-version = "0.5.1657"
-dependencies = [
- "perry-ffi",
- "perry-runtime",
-]
-
-[[package]]
 name = "perry-ext-http"
 version = "0.5.1657"
 dependencies = [

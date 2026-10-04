@@ -121,11 +121,11 @@ pub(crate) fn is_native_dispatch_member(module: &str, class: &str, prop: &str) -
                 prop == "readyState"
             }
         }
-        // events / net instances dispatch their EventEmitter / socket methods
-        // and getters through the class_filter table. These modules expose no
-        // user own-property surface in the bundle walls, so keep dispatching
-        // for any member to preserve existing behaviour.
-        "events" | "net" => true,
+        // net instances dispatch their socket methods and getters through the
+        // class_filter table. The module exposes no user own-property surface
+        // in the bundle walls, so keep dispatching for any member to preserve
+        // existing behaviour.
+        "net" => true,
         // readline Interface stores its public `line` and `terminal` state
         // behind a compact native handle. Bare reads must invoke the FFI
         // getters; methods still travel through the call-expression path.

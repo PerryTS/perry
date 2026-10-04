@@ -94,7 +94,7 @@ pub(crate) fn run_feature_installer() {
 pub extern "C" fn js_stdlib_install_compiled() {
     #[cfg(feature = "bundled-streams")]
     js_stdlib_install_bundled_streams();
-    #[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]
+    #[cfg(feature = "bundled-events")]
     js_stdlib_install_events();
     #[cfg(feature = "bundled-nodemailer")]
     js_stdlib_install_bundled_nodemailer();
@@ -130,7 +130,7 @@ pub extern "C" fn js_stdlib_install_bundled_streams() {
     });
 }
 
-#[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]
+#[cfg(feature = "bundled-events")]
 #[no_mangle]
 pub extern "C" fn js_stdlib_install_events() {
     install_once!({

@@ -309,117 +309,13 @@ pub(super) unsafe fn install_fetch_registrations() {
     }
 }
 
-#[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]
+#[cfg(feature = "bundled-events")]
 pub(super) unsafe fn install_events_registrations() {
-    extern "C" {
-        fn js_register_event_emitter_handle_probe(f: unsafe extern "C" fn(i64) -> bool);
-        fn js_register_event_emitter_async_resource_handle_probe(
-            f: unsafe extern "C" fn(i64) -> bool,
-        );
-        fn js_register_event_emitter_async_resource_dispatch(
-            f: unsafe extern "C" fn(i64, u32) -> f64,
-        );
-        fn js_register_event_emitter_on(f: EventEmitterOn);
-    }
-    // Probe / `on` hook / constructor all route through the shared
-    // `extern "C"` events surface declared above dispatch_event_emitter_method
-    // (#4995): the linker resolves them to whichever EventEmitter impl is in
-    // the binary (perry-stdlib `bundled-events` or perry-ext-events under the
-    // well-known flip), so the registry these consult is always the one the
-    // constructors used. Registered eagerly at startup — perry-ext-events
-    // alone only registers its hooks lazily on the first *static* emitter
-    // construction, which a dynamic-first program (signal-exit's
-    // `new (require('events'))()`) never performs.
-    #[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]
-    unsafe extern "C" fn event_emitter_probe(handle: i64) -> bool {
-        js_event_emitter_is_handle(handle)
-    }
-    #[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]
-    js_register_event_emitter_handle_probe(event_emitter_probe);
-    #[cfg(feature = "bundled-events")]
-    unsafe extern "C" fn event_emitter_async_resource_probe(handle: i64) -> bool {
-        crate::events::is_event_emitter_async_resource_handle(handle)
-    }
-    #[cfg(feature = "bundled-events")]
-    js_register_event_emitter_async_resource_handle_probe(event_emitter_async_resource_probe);
-    #[cfg(feature = "bundled-events")]
-    unsafe extern "C" fn event_emitter_async_resource_dispatch(handle: i64, operation: u32) -> f64 {
-        match operation {
-            0 => crate::events::js_event_emitter_async_resource_async_id(handle),
-            1 => crate::events::js_event_emitter_async_resource_trigger_async_id(handle),
-            2 => crate::events::js_event_emitter_async_resource_async_resource(handle),
-            3 => crate::events::js_event_emitter_async_resource_emit_destroy(handle),
-            _ => TAG_UNDEFINED_F64,
-        }
-    }
-    #[cfg(feature = "bundled-events")]
-    js_register_event_emitter_async_resource_dispatch(event_emitter_async_resource_dispatch);
-    #[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]
-    unsafe extern "C" fn event_emitter_on_hook(
-        handle: i64,
-        event_bits: i64,
-        listener_bits: i64,
-    ) -> i64 {
-        js_event_emitter_on(handle, event_bits, listener_bits)
-    }
-    #[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]
-    js_register_event_emitter_on(event_emitter_on_hook);
-    // #4995: serve dynamic `new` on the bound `events.EventEmitter` /
-    // `events.EventEmitterAsyncResource` export values (`require('events')`,
-    // default import, namespace property read) with the same constructors the
-    // named-import codegen path calls. Without this the runtime's
-    // `js_new_function_construct` fell through to the generic empty-object
-    // path and the instance had no `.on`/`.emit`/`.setMaxListeners`.
-    // EventEmitterAsyncResource exists only in the bundled impl.
-    #[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]
-    unsafe extern "C" fn events_native_construct(
-        class_name_ptr: *const u8,
-        class_name_len: usize,
-        args_ptr: *const f64,
-        args_len: usize,
-    ) -> f64 {
-        let class_name = std::slice::from_raw_parts(class_name_ptr, class_name_len);
-        let options = if !args_ptr.is_null() && args_len > 0 {
-            *args_ptr
-        } else {
-            TAG_UNDEFINED_F64
-        };
-        let handle = match class_name {
-            b"EventEmitter" => js_event_emitter_new_with_options(options),
-            #[cfg(feature = "bundled-events")]
-            b"EventEmitterAsyncResource" => {
-                crate::events::js_event_emitter_async_resource_new(options)
-            }
-            _ => return TAG_UNDEFINED_F64,
-        };
-        perry_runtime::js_nanbox_pointer(handle)
-    }
-    #[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]
-    perry_runtime::js_set_native_events_construct(events_native_construct);
     // Module-level `events.*` helpers reached indirectly (captured value,
     // type-erased receiver, spread call) — see `js_events_native_dispatch`.
-    //
-    // #7764: gated to match `pub mod events`, which is `bundled-events`. #7745
-    // added this line ungated, so `--no-default-features` — the configuration
-    // the auto-optimize relink builds with — stopped compiling, and every
-    // `perry` compile that triggers auto-optimize silently fell back to the
-    // prebuilt archives. The neighbouring registrations are gated the same way
-    // (`database-sqlite` on the next line), which is what makes this an
-    // omission rather than a decision.
-    #[cfg(feature = "bundled-events")]
+    // An emitter itself is an ordinary object whose methods live on
+    // `EventEmitter.prototype` (#10508), so there is nothing else to register.
     perry_runtime::js_set_native_events_dispatch(crate::events::js_events_native_dispatch);
-    #[cfg(all(feature = "external-events-construct", not(feature = "bundled-events")))]
-    {
-        extern "C" {
-            fn js_events_native_dispatch(
-                method: *const u8,
-                method_len: usize,
-                args: *const f64,
-                args_len: usize,
-            ) -> f64;
-        }
-        perry_runtime::js_set_native_events_dispatch(js_events_native_dispatch);
-    }
 }
 
 #[cfg(feature = "external-http-client-pump")]

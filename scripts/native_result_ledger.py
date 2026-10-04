@@ -132,8 +132,12 @@ LEDGER = Path("scripts/native_result_ledger.tsv")
 # noop provider remains used by other methods, so retain it and classify both
 # new providers as NR_HANDLE_ID. writableCorked returns NR_F64 and is not part
 # of this pointer-kind ledger.
-EXPECTED_ROWS = 277
-EXPECTED_PROVIDERS = 248
+# -13 rows / -11 providers (#10508): an EventEmitter is an ordinary object, so
+# the events instance-method rows and the EventEmitterHandle providers they
+# resolved to are deleted with the handle path. 277 -> 264 rows, 248 -> 237
+# providers, as the script reports on the resolved tree.
+EXPECTED_ROWS = 264
+EXPECTED_PROVIDERS = 237
 KINDS = {
     "NR_GCPTR",
     "NR_NULLABLE_GCPTR",

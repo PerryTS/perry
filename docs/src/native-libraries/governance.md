@@ -104,7 +104,6 @@ from `well_known_bindings.toml`. Regenerate this table with
 | `perry-ext-better-sqlite3` | `better-sqlite3` | External integration | Move to an external native package | Bundled; migration pending |
 | `perry-ext-cheerio` | `cheerio` | Source package | Compile the upstream package source | Bundled; migration pending |
 | `perry-ext-ethers` | `ethers` | Source package | Compile the upstream package source | Bundled; migration pending |
-| `perry-ext-events` | `events` | Runtime API | Keep near core; consolidate when practical | Bundled; retained |
 | `perry-ext-http` | `http`<br>`http2`<br>`https` | Runtime API | Keep near core; consolidate when practical | Bundled; retained |
 | `perry-ext-net` | `net` | Runtime API | Keep near core; consolidate when practical | Bundled; retained |
 | `perry-ext-nodemailer` | `nodemailer` | Source package | Compile the upstream package source | Bundled; migration pending |

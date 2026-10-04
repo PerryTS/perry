@@ -40,7 +40,11 @@ pub(crate) fn ensure_function_prototype_object(
 
     let scope = crate::gc::RuntimeHandleScope::new();
     let func_handle = scope.root_nanbox_f64(func_value);
-    let proto = js_object_alloc(0, 0);
+    let inline_slots = match super::super::nm_ee_ops() {
+        Some(ops) => unsafe { (ops.ee_prototype_inline_slots)(func_handle.get_nanbox_f64()) },
+        None => 0,
+    };
+    let proto = js_object_alloc(0, inline_slots);
     if proto.is_null() {
         return proto;
     }
@@ -1224,6 +1228,27 @@ pub(crate) fn function_value_for_class_id(class_id: u32) -> Option<f64> {
     })
 }
 
+/// `EventEmitter.prototype` holds `constructor`, node's three instance-state
+/// defaults and fifteen methods; `EventEmitterAsyncResource.prototype` holds
+/// `constructor` and five own members. Room for those plus slack keeps every
+/// one an inline slot, so a method call's site memo can name it.
+const EVENT_EMITTER_PROTOTYPE_INLINE_SLOTS: u32 = 24;
+const EVENT_EMITTER_ASYNC_RESOURCE_PROTOTYPE_INLINE_SLOTS: u32 = 8;
+
+/// See `NmEeOps::ee_prototype_inline_slots`.
+pub(crate) unsafe fn nm_ee_prototype_inline_slots(func_value: f64) -> u32 {
+    match super::super::native_module::bound_native_callable_module_and_method(func_value) {
+        Some((module, method)) if module.trim_start_matches("node:") == "events" => {
+            match method.as_str() {
+                "EventEmitter" => EVENT_EMITTER_PROTOTYPE_INLINE_SLOTS,
+                "EventEmitterAsyncResource" => EVENT_EMITTER_ASYNC_RESOURCE_PROTOTYPE_INLINE_SLOTS,
+                _ => 0,
+            }
+        }
+        _ => 0,
+    }
+}
+
 /// #5477: when `func_value` is the bound `events.EventEmitter` /
 /// `EventEmitterAsyncResource` export, its synthetic prototype must carry the
 /// EventEmitter methods (the `Object.setPrototypeOf(x, EventEmitter.prototype)`
@@ -1247,12 +1272,29 @@ pub(crate) unsafe fn nm_ee_prototype_install(
                 "EventEmitter" | "EventEmitterAsyncResource"
             )
         {
-            proto.with_mut_ptr::<crate::object::ObjectHeader, _>(|proto| {
-                crate::node_stream::install_event_emitter_prototype(proto);
-                if method == "EventEmitterAsyncResource" {
-                    crate::node_stream::install_event_emitter_async_resource_prototype(proto);
+            if method == "EventEmitterAsyncResource" {
+                // node: `class EventEmitterAsyncResource extends EventEmitter`,
+                // so its prototype inherits the emitter methods from the one
+                // shared `EventEmitter.prototype` and adds only its own.
+                let parent = scope.root_nanbox_f64(
+                    crate::node_stream::event_emitter_prototype_value("EventEmitter"),
+                );
+                if crate::value::JSValue::from_bits(parent.get_nanbox_u64()).is_pointer() {
+                    proto.with_mut_ptr::<crate::object::ObjectHeader, _>(|proto| {
+                        super::super::prototype_chain::object_set_static_prototype(
+                            proto as usize,
+                            parent.get_nanbox_u64(),
+                        )
+                    });
                 }
-            });
+                proto.with_mut_ptr::<crate::object::ObjectHeader, _>(|proto| {
+                    crate::node_stream::install_event_emitter_async_resource_prototype(proto)
+                });
+            } else {
+                proto.with_mut_ptr::<crate::object::ObjectHeader, _>(|proto| {
+                    crate::node_stream::install_event_emitter_prototype(proto)
+                });
+            }
         }
     }
 }

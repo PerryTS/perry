@@ -614,9 +614,9 @@ pub fn handle_exists(handle: Handle) -> bool {
 /// invoking `f(&value)` for each.
 ///
 /// Used by GC root scanners that need to keep user closures alive
-/// — e.g. `EventEmitter` listeners stored inside an
-/// `EventEmitterHandle`. Without this, a malloc-triggered GC
-/// between `.on(...)` and `.emit(...)` would sweep the closure
+/// — e.g. listener closures stored inside a registered handle's
+/// payload. Without this, a malloc-triggered GC between
+/// `.on(...)` and the dispatch would sweep the closure
 /// (issue #35 pattern in perry-stdlib).
 ///
 /// Pair with [`gc_register_root_scanner`] to wire the scanner into

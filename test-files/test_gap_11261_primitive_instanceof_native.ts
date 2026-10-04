@@ -2,10 +2,11 @@
 // behind `instanceof EventEmitter` (and net.Socket, AsyncLocalStorage, …)
 // resolved their operand as a registry handle id, and that resolution also
 // accepted a plain positive integral NUMBER. So any number equal to a live
-// emitter's handle id was an "emitter". Which ids are live depends on how
-// `node:events` is linked: the perry-stdlib-bundled emitter mints ids from 1,
-// the perry-ext-events wrapper from 0x38000 — so this sweeps the whole handle
-// band [1, 0x40000) instead of guessing one id.
+// emitter's handle id was an "emitter". Which ids were live depended on how
+// `node:events` was linked (the perry-stdlib-bundled emitter minted ids from
+// 1, the perry-ext-events wrapper from 0x38000), so this sweeps the whole
+// handle band [1, 0x40000) instead of guessing one id. Emitters are ordinary
+// objects now (#10508), and no number may be one.
 //
 // OrdinaryHasInstance step 3: a primitive is never `instanceof` anything
 // (unless a user `Symbol.hasInstance` says otherwise — covered at the end).

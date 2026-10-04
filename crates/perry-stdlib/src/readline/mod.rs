@@ -246,8 +246,7 @@ thread_local! {
 // `js_readline_process_pending` then dispatches through the stale pointer and
 // reads forwarding bytes → "value is not a function". Registering a mutable
 // root scanner makes the moving collector REWRITE these slots (and mark them),
-// matching the EventEmitter listener scanner (stdlib:events) and net.Socket
-// (issue #35). Runs at a GC safepoint on the main thread; the dispatch path
+// matching the net.Socket listener scanner (issue #35). Runs at a GC safepoint on the main thread; the dispatch path
 // clones each list and drops the lock before invoking callbacks, so no lock or
 // borrow is ever held across an allocation that could re-enter this scanner.
 // ---------------------------------------------------------------------------

@@ -21,7 +21,7 @@ export function prepareRequireRuntime(root) {
   }
   const packages = [
     'perry-runtime', 'perry-stdlib', 'perry-runtime-static', 'perry-stdlib-static',
-    'perry-ext-events', 'perry-ext-http', 'perry-ext-net',
+    'perry-ext-http', 'perry-ext-net',
     'perry-ext-typescript', 'perry-ext-ws', 'perry-ext-zlib',
   ];
   const args = ['build', '--locked', '--profile', profile,

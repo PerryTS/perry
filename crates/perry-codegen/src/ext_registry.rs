@@ -567,52 +567,6 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
     ("js_url_revoke_object_url",                    OwnerKind::Stdlib { feature: Some("http-client") }),
     ("js_buffer_resolve_object_url",                OwnerKind::Stdlib { feature: Some("http-client") }),
 
-    // ── #5140: EventEmitter without a source-level `import "events"` ──
-    // `new EventEmitter()` / `.on` / `.emit` / … lower to these
-    // `js_event_emitter_*` helpers purely off the class NAME being
-    // `EventEmitter` (`lower_call/builtin.rs` + the events native-table
-    // rows), regardless of which package the binding came from. The
-    // canonical implementations live in `perry-ext-events` (the
-    // `[bindings.events]` well-known crate); `import "events"` flips that
-    // wrapper onto the link line via `ctx.native_module_imports`. But a
-    // program that gets `EventEmitter` from a *different* package — e.g.
-    // `import EventEmitter from "eventemitter3"` under
-    // `perry.compilePackages` — never inserts `"events"` into the import
-    // set, so the wrapper stays off the link line and the build fails with
-    // `Undefined symbols: _js_event_emitter_new_with_options` (and the
-    // `_on` / `_emit` / `_remove_all_listeners` companions). Tagging the
-    // emitted symbols here makes the well-known flip fire off codegen
-    // provenance instead of imports — same mechanism as the #846 / #3954
-    // http/net rows above. Flipping `"events"` also activates perry-stdlib's
-    // `external-events-construct` feature (see optimized_libs.rs), which the
-    // default-import dynamic-`new` path relies on (#4995).
-    //
-    // EventEmitterAsyncResource lives alongside the external EventEmitter so
-    // optimized node:events builds retain one coherent handle registry.
-    ("js_event_emitter_new",                        OwnerKind::WellKnown("events")),
-    ("js_event_emitter_new_with_options",           OwnerKind::WellKnown("events")),
-    ("js_event_emitter_async_resource_new",         OwnerKind::WellKnown("events")),
-    ("js_event_emitter_async_resource_call",        OwnerKind::WellKnown("events")),
-    ("js_event_emitter_async_resource_subclass_init", OwnerKind::WellKnown("events")),
-    ("js_event_emitter_async_resource_async_id",    OwnerKind::WellKnown("events")),
-    ("js_event_emitter_async_resource_trigger_async_id", OwnerKind::WellKnown("events")),
-    ("js_event_emitter_async_resource_async_resource", OwnerKind::WellKnown("events")),
-    ("js_event_emitter_async_resource_emit_destroy", OwnerKind::WellKnown("events")),
-    ("js_event_emitter_on",                         OwnerKind::WellKnown("events")),
-    ("js_event_emitter_once",                       OwnerKind::WellKnown("events")),
-    ("js_event_emitter_prepend_listener",           OwnerKind::WellKnown("events")),
-    ("js_event_emitter_prepend_once_listener",      OwnerKind::WellKnown("events")),
-    ("js_event_emitter_emit",                       OwnerKind::WellKnown("events")),
-    ("js_event_emitter_emit0",                      OwnerKind::WellKnown("events")),
-    ("js_event_emitter_remove_listener",            OwnerKind::WellKnown("events")),
-    ("js_event_emitter_remove_all_listeners",       OwnerKind::WellKnown("events")),
-    ("js_event_emitter_listener_count",             OwnerKind::WellKnown("events")),
-    ("js_event_emitter_listeners",                  OwnerKind::WellKnown("events")),
-    ("js_event_emitter_raw_listeners",              OwnerKind::WellKnown("events")),
-    ("js_event_emitter_event_names",                OwnerKind::WellKnown("events")),
-    ("js_event_emitter_set_max_listeners",          OwnerKind::WellKnown("events")),
-    ("js_event_emitter_get_max_listeners",          OwnerKind::WellKnown("events")),
-    ("js_event_emitter_domain_value",               OwnerKind::WellKnown("events")),
     ("js_ext_net_socket_write3",                    OwnerKind::WellKnown("net")),
     ("js_ext_net_socket_end3",                      OwnerKind::WellKnown("net")),
 
@@ -624,7 +578,7 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
 /// The per-symbol [`FFI_REGISTRY`] above is exhaustive but hand-maintained: it
 /// only routes the exact symbols someone remembered to add. That is fine for
 /// bindings whose symbol names DON'T map cleanly to the binding key
-/// (`js_node_http_*` → `http`, `js_event_emitter_*` → `events`), but it silently
+/// (`js_node_http_*` → `http`), but it silently
 /// loses whole families whose symbols DO follow the convention. A program whose
 /// codegen lowers to a family symbol that is in NEITHER the exact table nor any
 /// import set (e.g. an AOT-compiled `perry.compilePackages` member) would never
@@ -1191,42 +1145,6 @@ mod tests {
             }),
             "replaying the captured marker must reproduce the crypto flip, got {got:?}"
         );
-    }
-
-    /// #5140 regression: `new EventEmitter()` / `.on` / `.emit` /
-    /// `.removeAllListeners` lower to `js_event_emitter_*` helpers off the
-    /// class name alone, so a program that imports `EventEmitter` from a
-    /// non-`events` package (`import EventEmitter from "eventemitter3"`)
-    /// emits these symbols without ever inserting `"events"` into the import
-    /// set. Each must route to `WellKnown("events")` so the well-known flip
-    /// pulls `perry-ext-events` onto the link line; before the fix the build
-    /// failed with `Undefined symbols: _js_event_emitter_new_with_options`.
-    #[test]
-    fn emitted_event_emitter_symbols_route_to_events() {
-        let _guard = ProviderTestGuard::new();
-        for symbol in [
-            "js_event_emitter_new",
-            "js_event_emitter_new_with_options",
-            "js_event_emitter_on",
-            "js_event_emitter_once",
-            "js_event_emitter_prepend_listener",
-            "js_event_emitter_prepend_once_listener",
-            "js_event_emitter_emit",
-            "js_event_emitter_emit0",
-            "js_event_emitter_remove_listener",
-            "js_event_emitter_remove_all_listeners",
-            "js_event_emitter_listener_count",
-            "js_event_emitter_listeners",
-            "js_event_emitter_raw_listeners",
-            "js_event_emitter_event_names",
-            "js_event_emitter_set_max_listeners",
-            "js_event_emitter_get_max_listeners",
-            "js_event_emitter_domain_value",
-            "js_event_emitter_async_resource_call",
-            "js_event_emitter_async_resource_subclass_init",
-        ] {
-            assert_symbol_routes_to(symbol, OwnerKind::WellKnown("events"));
-        }
     }
 
     /// #2013 regression: net validation fixtures emit provider-only

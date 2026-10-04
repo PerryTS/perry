@@ -10,7 +10,6 @@ use crate::common::feature_hooks::{Hook, MethodArm, RawMethodArm};
 static RAW_EXTERNAL_ZLIB: Hook<RawMethodArm> = Hook::empty();
 static RAW_EXTERNAL_HTTP_CLIENT: Hook<RawMethodArm> = Hook::empty();
 static ARM_STREAMS: Hook<MethodArm> = Hook::empty();
-static ARM_EVENTS: Hook<MethodArm> = Hook::empty();
 static ARM_NODEMAILER: Hook<MethodArm> = Hook::empty();
 static ARM_NODE_SQLITE: Hook<MethodArm> = Hook::empty();
 static ARM_CRYPTO: Hook<MethodArm> = Hook::empty();
@@ -289,8 +288,6 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     // Dispatchers below gate on registry membership plus method vocabulary
     // because native handle id spaces are not unified (#91).
 
-    try_arm!(ARM_EVENTS, handle, method_name, &args);
-
     if let Some(value) = dispatch_async_local_storage_method(handle, method_name, &args) {
         return value;
     }
@@ -348,14 +345,6 @@ unsafe fn arm_streams(handle: i64, method_name: &str, args: &[f64]) -> Option<f6
     // .getReader()`, `const r = rs.getReader(); r.read()`, …).
     if let Some(v) = crate::streams::dispatch_stream_method(handle as f64, method_name, &args) {
         return Some(v);
-    }
-    None
-}
-
-#[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]
-unsafe fn arm_events(handle: i64, method_name: &str, args: &[f64]) -> Option<f64> {
-    if let Some(value) = dispatch_event_emitter_method(handle, method_name, &args) {
-        return Some(value);
     }
     None
 }
@@ -1123,10 +1112,6 @@ unsafe fn arm_fetch(handle: i64, method_name: &str, args: &[f64]) -> Option<f64>
 #[cfg(feature = "bundled-streams")]
 pub(super) fn install_streams() {
     ARM_STREAMS.set(arm_streams);
-}
-#[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]
-pub(super) fn install_events() {
-    ARM_EVENTS.set(arm_events);
 }
 #[cfg(feature = "bundled-nodemailer")]
 pub(super) fn install_nodemailer() {

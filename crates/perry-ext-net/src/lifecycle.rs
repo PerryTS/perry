@@ -1,8 +1,7 @@
 //! Issue #2131 — `net.Socket` / `net.Server` lifecycle + EventEmitter
 //! surface beyond what #1852 shipped. Split into its own module to
 //! keep `lib.rs` under the 2000-line file-size gate. The functions
-//! here mirror the EventEmitter shape exposed by
-//! `perry-ext-events`, but operate on the existing
+//! here mirror node's EventEmitter surface, but operate on the existing
 //! `statics::listeners()` map keyed by net handle id (socket OR
 //! server — they share the namespace via the monotonic `next_id()`).
 //!

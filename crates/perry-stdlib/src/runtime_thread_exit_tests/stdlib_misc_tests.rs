@@ -177,31 +177,3 @@ fn thread_exit_releases_the_threads_stdin_listeners() {
         );
     }
 }
-
-#[cfg(feature = "bundled-events")]
-#[test]
-fn thread_exit_retires_the_threads_event_emitter_payloads() {
-    use perry_runtime::JSValue;
-    let (handle, listeners_while_alive) = std::thread::spawn(|| unsafe {
-        let name = "__perry_11471_emitter_probe";
-        let event = perry_runtime::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        let event_bits = JSValue::string_ptr(event).bits() as i64;
-        let handle = crate::events::js_event_emitter_new();
-        let listener_bits =
-            perry_runtime::value::js_nanbox_pointer(closure_here()).to_bits() as i64;
-        crate::events::js_event_emitter_on(handle, event_bits, listener_bits);
-        let all = JSValue::undefined().bits() as i64;
-        let count = crate::events::js_event_emitter_listener_count(handle, event_bits, all);
-        (handle, count)
-    })
-    .join()
-    .unwrap();
-    assert_eq!(
-        listeners_while_alive, 1.0,
-        "the emitter must hold the listener while its thread lives"
-    );
-    assert!(
-        !crate::common::handle_exists(handle),
-        "a dead thread's EventEmitter payload (listener closure) outlived its heap"
-    );
-}
