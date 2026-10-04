@@ -1,0 +1,23 @@
+{
+  "complete": false,
+  "full_suite_cases": 17,
+  "measured_cases": 16,
+  "excluded_cases": [
+    "72-request-processing"
+  ],
+  "failed_builds": [
+    {
+      "arm": "current0ed-base",
+      "source": "/root/rss-gc-build-20261003/export-current0ed-v14/sources/72-request-processing.ts",
+      "rc": 1,
+      "reason": null
+    },
+    {
+      "arm": "current0ed-gc",
+      "source": "/root/rss-gc-build-20261003/export-current0ed-v14/sources/72-request-processing.ts",
+      "rc": 1,
+      "reason": null
+    }
+  ],
+  "criterion": "Partial diagnostic matrix only. Pristine baseline and GC candidate both fail LLVM parsing for request-processing; no partial linking and no full-suite acceptance."
+}

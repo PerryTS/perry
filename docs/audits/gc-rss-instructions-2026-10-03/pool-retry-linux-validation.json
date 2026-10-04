@@ -1,0 +1,90 @@
+{
+  "scope": "Repaired pool v3r1 on frozen earlier production base, not consolidated latest-main acceptance",
+  "logs": {
+    "tests": {
+      "log": "gc-runtime-pool-v3r1-linux-tests.log",
+      "sha256": "34fd393b228e0a381dc2afddfaca6d0ea960f37a334001db8ca0ca7694432e29",
+      "counts": [
+        4818,
+        0,
+        5
+      ],
+      "passed_new_tests": [
+        "only_complete_owned_pages_are_eligible",
+        "kernel_releases_interior_pages_without_touching_either_neighbor"
+      ]
+    },
+    "ffi": {
+      "log": "gc-runtime-pool-v3r1-linux-ffi.log",
+      "sha256": "5fd2d8a4c2b48c0d796e7cd649e4ecc474ed2ec2d444f63474eb2650cd0a39cc",
+      "counts": [
+        75,
+        0,
+        0
+      ]
+    },
+    "events": {
+      "log": "gc-runtime-pool-v3r1-linux-events.log",
+      "sha256": "99807203ee6de424d99b8749dc36fcdce614bc3fd121afc6fdeda0b35b93ac1f",
+      "counts": [
+        15,
+        0,
+        0
+      ]
+    }
+  },
+  "source_refresh_sha256": "2014015ae446232a6c0f51eb64f071caac21db9a76f48bdeab037fafde0b8fa9",
+  "production_archive_verified": true,
+  "linked_run_log_sha256": "3f084db64ba71b571d75503f81bdec1373be537b58db75a09faac4c1cd22ef67",
+  "linked_observations": [
+    {
+      "case": "test_gap_gc_container_value_rooting",
+      "mode": "default",
+      "binary_sha256": "ef3f5d156e4e69e0fa62bbc6a754acc5637495cc01245da845b5251ae77cb104",
+      "stdout": "objectGroupBy ok\nmapGroupBy ok\n",
+      "correct": true
+    },
+    {
+      "case": "test_gap_gc_container_value_rooting",
+      "mode": "moving",
+      "binary_sha256": "ef3f5d156e4e69e0fa62bbc6a754acc5637495cc01245da845b5251ae77cb104",
+      "stdout": "objectGroupBy ok\nmapGroupBy ok\n",
+      "correct": true,
+      "copied_objects": 12442,
+      "protected": true
+    },
+    {
+      "case": "test_gap_gc_define_properties_key_rooting",
+      "mode": "default",
+      "binary_sha256": "bd558eb14367df4e47b4cfe0d20487e88af4404b6e7b9b897913f4919e1f5f9c",
+      "stdout": "defineProperties ok\n",
+      "correct": true
+    },
+    {
+      "case": "test_gap_gc_define_properties_key_rooting",
+      "mode": "moving",
+      "binary_sha256": "bd558eb14367df4e47b4cfe0d20487e88af4404b6e7b9b897913f4919e1f5f9c",
+      "stdout": "defineProperties ok\n",
+      "correct": true,
+      "copied_objects": 5689,
+      "protected": true
+    },
+    {
+      "case": "test_gap_gc_store_ic_old_to_young",
+      "mode": "default",
+      "binary_sha256": "91b8348be28b5d116bb1f2e162fa7ecc77f6ce205a512005f1551df91cff8879",
+      "stdout": "checks 360 sum 11746840\n",
+      "correct": true
+    },
+    {
+      "case": "test_gap_gc_store_ic_old_to_young",
+      "mode": "moving",
+      "binary_sha256": "91b8348be28b5d116bb1f2e162fa7ecc77f6ce205a512005f1551df91cff8879",
+      "stdout": "checks 360 sum 11746840\n",
+      "correct": true,
+      "copied_objects": 63625,
+      "protected": true
+    }
+  ],
+  "application_rss_instruction_acceptance": "pending"
+}

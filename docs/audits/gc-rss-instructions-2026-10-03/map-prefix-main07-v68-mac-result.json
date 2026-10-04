@@ -1,0 +1,17 @@
+{
+  "command": [
+    "cargo",
+    "+nightly-2026-08-20",
+    "test",
+    "--locked",
+    "--release",
+    "-p",
+    "perry-runtime",
+    "--lib"
+  ],
+  "rc": 0,
+  "pid": 3518,
+  "elapsed_s": 164.06322420900688,
+  "source_manifest_sha256": "826a053b457764ad4b1b5419ccca12171da637121eaac5148fb000bc0ca95342",
+  "raw_log_sha256": "1f80bf4c1ff594a3a04fe39707aed15e8b8eb0537eb87746b05c76ff90ffff4f"
+}

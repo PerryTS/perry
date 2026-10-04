@@ -1,0 +1,13 @@
+{
+  "base": "e532bf3d0efce80ef699aa67b4834967050cf5ef",
+  "head": "c8f42db07606a2471784a66d66a0f079841416e8",
+  "scripts": {
+    "gc-runtime-currente532-v12-run.sh": "ab0c249e5a7fc912c261dd53cb35132c74dea4d41115bc6cd4fe13461c389cbd",
+    "gc-runtime-currente532-v12-build.sh": "fc2c488bee6bffdd32ef1e6c434c4b14ebd58fc1b37142507ef4edb1518b00d0",
+    "gc-runtime-currente532-v12-linked.py": "b3a8d4df664220929ced202f6378976011d6a124ef22ba2f5b7ec571097bce5d",
+    "gc-runtime-currente532-v12-auto-matrix.py": "78c4f37e4dd753ff234e90c000b6a65f180866b04956791e2b35356426d694e6",
+    "gc-runtime-currente532-v12-noauto.py": "565109489dc4c4fecbec1f184f70e78088381af6bec338fcefa03b3edb47e025"
+  },
+  "queued": false,
+  "scope": "Prepared for execution only after v6 pool-policy measurements support the window, or revised if they reject it. Coherent fresh compilers and static wrappers, whole-workspace refresh, Linux runtime/FFI/events, 40 linked default/moving runs, 24 no-auto and 204 normal-auto cells. Compile guard is 1800 seconds, revised after the frozen v6 TypeScript build exceeded 600 seconds. Requires successful v6r1 auto receipt."
+}

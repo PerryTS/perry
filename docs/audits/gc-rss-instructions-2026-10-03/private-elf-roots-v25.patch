@@ -1,0 +1,19 @@
+diff --git a/crates/perry-runtime/src/gc/roots/runtime_handles.rs b/crates/perry-runtime/src/gc/roots/runtime_handles.rs
+index 15859d964d..7ff91507d6 100644
+--- a/crates/perry-runtime/src/gc/roots/runtime_handles.rs
++++ b/crates/perry-runtime/src/gc/roots/runtime_handles.rs
+@@ -81,8 +81,12 @@ fn runtime_handle_stack() -> StackRef {
+ /// `js_object_get_field_by_name`'s prologue. Keeping this arm opaque to the
+ /// inliner is what lets the FAST (published) arm above stay `#[inline(always)]`
+ /// without dragging the raw TLS call along with it at every call site.
+-#[inline(never)]
+-#[cold]
++// ELF x86-64 resolves this non-dropping TLS metadata at a fixed offset. The
++// opaque fallback protects Darwin from hoisting a TLV resolver call; Linux
++// GNU has no resolver call to protect and uses this arm on every scope.
++#[cfg_attr(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"), inline(always))]
++#[cfg_attr(not(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu")), inline(never))]
++#[cfg_attr(not(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu")), cold)]
+ #[cfg(not(any(target_os = "android", target_env = "ohos")))]
+ fn runtime_handle_stack_cold() -> StackRef {
+     RUNTIME_HANDLE_STACK.with(|stack| {

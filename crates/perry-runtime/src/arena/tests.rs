@@ -1495,6 +1495,11 @@ fn deferred_registration_flush_sites() {
              Kept flush-free so the sweep path pays nothing",
         ),
         (
+            "old_page_account_swept_tally",
+            "the batched equivalent of old_page_account_swept_object; same \
+             flush-free sweep writer obligation and reader-side flush",
+        ),
+        (
             "old_page_account_promoted_object",
             "as old_page_account_swept_object — per-object, same argument",
         ),
@@ -1565,20 +1570,7 @@ fn deferred_registration_flush_sites() {
         ),
     ];
 
-    // `page_meta` is a directory since the #9853 page-class table pushed it past
-    // the file cap. Read EVERY part: scanning only `mod.rs` would silently drop
-    // the functions that moved into `page_class.rs` from this audit, leaving a
-    // green test that covers less than it did before the split.
-    let page_meta_dir =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/arena/page_meta");
-    let mut src = String::new();
-    for part in ["mod.rs", "page_class.rs", "tests.rs"] {
-        src.push_str(
-            &std::fs::read_to_string(page_meta_dir.join(part))
-                .unwrap_or_else(|e| panic!("page_meta/{part} must be readable: {e:?}")),
-        );
-        src.push('\n');
-    }
+    let src = super::tests_page_meta_audit::source();
 
     // Split into function bodies by tracking `fn <name>` headers at any indent.
     let mut current: Option<String> = None;
@@ -1587,6 +1579,10 @@ fn deferred_registration_flush_sites() {
         let trimmed = line.trim_start();
         if let Some(rest) = trimmed
             .strip_prefix("pub(crate) fn ")
+            .or_else(|| trimmed.strip_prefix("pub(super) fn "))
+            .or_else(|| trimmed.strip_prefix("pub(crate) unsafe fn "))
+            .or_else(|| trimmed.strip_prefix("pub(super) unsafe fn "))
+            .or_else(|| trimmed.strip_prefix("unsafe fn "))
             .or_else(|| trimmed.strip_prefix("pub fn "))
             .or_else(|| trimmed.strip_prefix("fn "))
         {

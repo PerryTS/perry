@@ -1,0 +1,43 @@
+{
+  "executions": 40,
+  "default": 20,
+  "moving": 20,
+  "cases": 10,
+  "all_correct": true,
+  "all_moving_copied_and_protected": true,
+  "copied_objects": {
+    "currente532-base/test_gap_gc_container_value_rooting": 12442,
+    "currente532-gc/test_gap_gc_container_value_rooting": 12442,
+    "currente532-base/test_gap_gc_define_properties_key_rooting": 5689,
+    "currente532-gc/test_gap_gc_define_properties_key_rooting": 5689,
+    "currente532-base/test_gap_gc_store_ic_old_to_young": 63625,
+    "currente532-gc/test_gap_gc_store_ic_old_to_young": 63625,
+    "currente532-base/test_gap_class_accessor_shape_facts": 7788,
+    "currente532-gc/test_gap_class_accessor_shape_facts": 7788,
+    "currente532-base/test_gap_10753_dynamic_key_read": 15290,
+    "currente532-gc/test_gap_10753_dynamic_key_read": 15290,
+    "currente532-base/test_gap_10507_function_constructors": 8783,
+    "currente532-gc/test_gap_10507_function_constructors": 8783,
+    "currente532-base/test_gap_gc_11789_closure_call_args": 899,
+    "currente532-gc/test_gap_gc_11789_closure_call_args": 899,
+    "currente532-base/test_gap_class_expr_fresh_static_blocks_this": 7651,
+    "currente532-gc/test_gap_class_expr_fresh_static_blocks_this": 7651,
+    "currente532-base/test_gap_byname_function_reads": 7922,
+    "currente532-gc/test_gap_byname_function_reads": 7922,
+    "currente532-base/test_gap_byname_inherited_reads": 15694,
+    "currente532-gc/test_gap_byname_inherited_reads": 15694
+  },
+  "manifest_sha256": "963fcd01228c6d86f5d2fa92fb67b3e63b509fe8b02581bf96d0ab510ed782e3",
+  "derived_source": {
+    "original_source_sha256": "4fdd474d413311824938248e53dc64aa5a82d33568ac4cf8e2b0362ce7d65c5b",
+    "derived_source_sha256": "0415e6b2fc06d14811546100ed73f517b8baf9bae73854e77dc90d4408e4d1f9",
+    "scope": "Three explicit collections between fresh class creation and subsequent static reads. Original campaign fixture remains unchanged. Node output must match original."
+  },
+  "reuse": "28 successful executions from r3 retained with original manifest/executable bindings; 12 executions fresh in r4.",
+  "preserved_failures": {
+    "v1": "Dynamic-key run correct but zero copying/protection; rejected as moving coverage.",
+    "v2": "Every-poll function-constructor stress exceeded 300-second guard on pristine baseline; preserved as timeout, not an application performance or correctness verdict.",
+    "v3": "Fresh-class-static run correct but zero copying/protection; replaced with derived explicit-collection fixture."
+  },
+  "scope": "Current e532 default and genuinely moving linked correctness. Derived class-static source inserts three collections before later reads; Node output is checked against both original and derived source. No RSS/performance claim."
+}

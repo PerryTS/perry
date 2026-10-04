@@ -1,0 +1,19 @@
+{
+  "base": "f6c873d99622d1bb751f198cfbd6cf3475251935",
+  "prior": "pool-v3 plus queue fixture fix",
+  "scope": "full mark and retained-parent rebuild instantiate the same descriptor visitor; no collection or enumeration change",
+  "files": {
+    "crates/perry-runtime/src/arena/walk.rs": "140f556601614921992d5d8fdd3b427d06ff4366145cc26fe5a12686eb167682",
+    "crates/perry-runtime/src/gc/layout_slot_visit.rs": "b6b8669ae0c7fd61ceecd3790af0bafd10dbce401f50254b54df8526b3249cb1",
+    "crates/perry-runtime/src/gc/malloc.rs": "2eec963d62c7af5d7a21ce00d1cc98bb2f34b6daf84afd5a310937c99d215233",
+    "crates/perry-runtime/src/gc/tests/alloc.rs": "b1aecc30fdfffd7f9336d0f7b7a08168deed189c8d47c2b5f0051459ce084edf",
+    "crates/perry-runtime/src/gc/tests/full_rebuild_skip.rs": "665bbb157c621dd5dd1b80913de079c7ed3b5cac02aa67909a4f548da99bf078",
+    "crates/perry-runtime/src/gc/verify.rs": "a2469bca4e1e1e199d4dfe2bd3722ccecb8ebeb4a2b5d2bab0a4d805ca67962a",
+    "crates/perry-runtime/src/arena/block.rs": "9311ddd5ad773f44d16fa3970c8d75570e1d45efdfd13874dc6c34ee4b80a7b3",
+    "crates/perry-runtime/src/arena/block/decommit.rs": "373112473c98732dd1e9e5b513de2f994f70ca7e0d19416ea3401d4e53062fa3",
+    "crates/perry-runtime/src/turnloop_pool/tests.rs": "5e78833ca5151d13a25b39303fd9d4af3adac66c7dd523ec62e6dc31f6a6ccfc",
+    "crates/perry-runtime/src/gc/trace.rs": "238b62d934ec5b533f6d82bc4853a3072c513db5896f143613c2030036bc30f3"
+  },
+  "validation": "macOS full runtime: 4835 passed, 0 failed, 5 ignored; Linux/app A/B queued",
+  "macos_log_sha256": "35c47b3f83cc91a566c7921dfd47559fbb8c059825ed0d9ae1a6c5333d425f73"
+}

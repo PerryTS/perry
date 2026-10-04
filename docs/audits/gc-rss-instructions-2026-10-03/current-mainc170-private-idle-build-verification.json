@@ -1,0 +1,101 @@
+{
+  "private_commit": "3843fcb54a",
+  "base": "c17090892e2a749bb4a3f2a0022e0f8274f0320c",
+  "tracked_inputs": 4994,
+  "differences": [
+    "crates/perry-runtime/src/arena/block.rs",
+    "crates/perry-runtime/src/arena/reset.rs"
+  ],
+  "actual_products": {
+    "perry": "cd02cfdd8caae514ffd697760f8c631b14296436a8df425302b7665396a89848",
+    "libperry_runtime.a": "04fc46377afb2ba032d99a0bc4a712223c1b30f35a31aeb266a2e0dc839a35cb",
+    "libperry_stdlib.a": "ace9db1b227a187ef6596584da0b8b539d999619c86b15a9b439175b244b86ea"
+  },
+  "linux_runtime": {
+    "passed": 4856,
+    "failed": 0,
+    "ignored": 5
+  },
+  "commands": [
+    {
+      "name": "build",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--release",
+        "-p",
+        "perry",
+        "-p",
+        "perry-runtime-static",
+        "-p",
+        "perry-stdlib-static"
+      ],
+      "rc": 0,
+      "pid": 417670,
+      "elapsed_s": 164.2636849428527,
+      "log_sha256": "9070eda146055fbeb3bebecb4a950fca55dd1037cd48f1f4fa9b1f629398de5e"
+    },
+    {
+      "name": "runtime-tests",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--release",
+        "-p",
+        "perry-runtime",
+        "--lib"
+      ],
+      "rc": 0,
+      "pid": 433219,
+      "elapsed_s": 143.06551535008475,
+      "log_sha256": "83e9bf719b7aea8483f31f446feba6832fb7cd5502156433c95b7dd792534c97"
+    }
+  ],
+  "input_manifest_sha256": "241a981b89b7539b87ab7d80761f88f55f47bda0eb84ecf35ac9f9dfe54eff8c",
+  "filtered_subprocess_test_summaries": [
+    [
+      "1",
+      "0",
+      "0"
+    ],
+    [
+      "1",
+      "0",
+      "0"
+    ],
+    [
+      "1",
+      "0",
+      "0"
+    ],
+    [
+      "1",
+      "0",
+      "0"
+    ],
+    [
+      "1",
+      "0",
+      "0"
+    ],
+    [
+      "1",
+      "0",
+      "0"
+    ],
+    [
+      "1",
+      "0",
+      "0"
+    ],
+    [
+      "1",
+      "0",
+      "0"
+    ]
+  ],
+  "original_verifier_failure": "Rejected extra filtered subprocess summaries despite the full suite passing; raw logs unchanged.",
+  "scope": "Private two-file overlay on unchanged GC proposal; builds/tests only, application benefit unproven."
+}

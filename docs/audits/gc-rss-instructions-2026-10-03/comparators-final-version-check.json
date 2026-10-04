@@ -1,0 +1,16 @@
+{
+  "checked_utc": "2026-10-03T17:36:41.727406+00:00",
+  "scriptc": {
+    "version": "0.2.1",
+    "integrity": "sha512-w8LPduUYUipy+kqqDX+tYh8N7LNpEnfFQnEnJ/cNPqxvp2XHe+Vwih/U8+kJf+IECorNcgY8YMembCX26o1SrQ=="
+  },
+  "porffor": {
+    "version": "0.0.0-alpha.15",
+    "integrity": "sha512-F6po1djFXszGo1J11Qvgs5rdtQBK5z74ViAk+CedDbE4gBeYF8SkWcaCXOtqqGq/D6VERmq8fNCKQmts6wf8ug==",
+    "remote_commit": "72d048d73d49e217631ac8a1bc4fa9070d22fbc9"
+  },
+  "hermes": {
+    "remote_commit": "ade4a2b20246340d4309cf62be51f9652dcde279"
+  },
+  "all_measured_versions_still_latest_at_check": true
+}

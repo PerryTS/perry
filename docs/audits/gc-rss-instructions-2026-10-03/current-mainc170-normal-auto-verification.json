@@ -1,0 +1,14 @@
+{
+  "complete_cells": 204,
+  "measured_cases": 17,
+  "excluded_cases": [],
+  "source_binary_stdout_rss_counter_and_summary_verified": true,
+  "inputs": {
+    "runs": "5ce1ec3406d67c9c38e1e5b1d83a31e49d301da7380b5dd3fdc07e15eab6ba42",
+    "builds": "cdaa1ceac86095bbeb1ed6414a6960894011bc57fed83bb0db2701861fe3f7e5",
+    "oracle": "2c7624378552bbed27dc711d3a6f7021dfcdd87e25bf59ac8ae3becd2efce70b",
+    "summary": "35119a36dcfc5723b17dc0df3bec747bb4c5f44dd5f1c1f7e160ee32e0da8c4b"
+  },
+  "build_proof_sha256": "ebe14ff418ab5075da879ff8bc72afc1a196b418855d079bb2d879aa791e64b0",
+  "limitations": "Three repetitions on shared original host. Signed costs retained; passing correctness does not imply every cost improves."
+}

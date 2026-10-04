@@ -1,0 +1,86 @@
+{
+  "base": "07e50b14a3d23e8f914193ec4d5a679adbd7c37a",
+  "production_runtime": "4f9121c09b642a007e592c1d91cbe86d5d122851",
+  "tracked_inputs": 5010,
+  "source_manifest_sha256": "20c72d93b8a257c97fb0dea77c7213f8aaee399016078e59b780319a6dce5d7d",
+  "runtime": {
+    "passed": 4876,
+    "failed": 0,
+    "ignored": 5
+  },
+  "raw_log_sha256": "5635dcc2a21a5da86b6079763d07c4b4ea5c6527b13645f2d6dc01bd38bbf5be",
+  "toolchain": "rustc 1.100.0-nightly (f7d782a3b 2026-08-19)",
+  "command": [
+    "cargo",
+    "+nightly-2026-08-20",
+    "test",
+    "--locked",
+    "--release",
+    "-p",
+    "perry-runtime",
+    "--lib"
+  ],
+  "working_directory": "/Users/amlug/projects/perry/rss-gc-runtime-latest2026-20261003",
+  "filtered_subprocess_summaries": [
+    [
+      "1",
+      "0",
+      "0"
+    ],
+    [
+      "1",
+      "0",
+      "0"
+    ],
+    [
+      "1",
+      "0",
+      "0"
+    ],
+    [
+      "1",
+      "0",
+      "0"
+    ],
+    [
+      "1",
+      "0",
+      "0"
+    ],
+    [
+      "1",
+      "0",
+      "0"
+    ],
+    [
+      "1",
+      "0",
+      "0"
+    ],
+    [
+      "1",
+      "0",
+      "0"
+    ]
+  ],
+  "preserved_wrong_toolchain_attempt": {
+    "rc": 101,
+    "log_sha256": "bc0da839b23a364566619260159212749f002bf492090ca3eb4e4249d3ab013d",
+    "reason": "Manifest path did not select repository toolchain from secret-tests cwd; stable rejected nightly features."
+  },
+  "required_checks": {
+    "main07-v39-address-check.log": {
+      "rc": 0,
+      "log_sha256": "f79bc4bce3f42e7476c00a2ed84243a81ea0721042d834382c171d30fb0884e5"
+    },
+    "main07-v39-file-size-check.log": {
+      "rc": 0,
+      "log_sha256": "b0f283074d97912a169a14da638801e20dedc4981a521e2ef90e4028bdcdf8cd"
+    },
+    "main07-v39-test-registration.log": {
+      "rc": 0,
+      "log_sha256": "9a1170b4cc9045bd54517572a00f0d3639b65f47e6bf7b83c6069b5f803762d8"
+    }
+  },
+  "scope": "Current rebased production on main07. Seven new prototype/root-scanner subjects present and passing; all declared source inputs verified before and after test."
+}

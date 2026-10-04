@@ -1,0 +1,11 @@
+{
+  "time_utc": "2026-10-04T05:25:26Z",
+  "archive": "/Users/amlug/projects/perry/secret-tests/scratchpad/rss-header-20261002/rejected-auto-products-v78.tar.gz",
+  "archive_bytes": 1842598221,
+  "archive_sha256": "d31a55248ebff66b0fd6e544f3be2b20e8eaa2ecc2ced040b3a1671ee77ba3f3",
+  "manifest_sha256": "0ab8c676293ba3814c7c3e43fc40a49185ba8e3a7e09beaf68ad06a5550496cf",
+  "verified_files": 15318,
+  "verified_hardlinks": 16,
+  "all_members_sizes_and_hashes_verified": true,
+  "method": "Streaming verification without extraction; TAR hardlinks bind to separately hashed regular members."
+}

@@ -1,0 +1,36 @@
+{
+  "natural_boundaries": 151,
+  "source": "Verified c170 full-runtime baseline and production proposal binaries, unchanged workloads.",
+  "files": {
+    "gc-currentc170-empty-arena-pages-v29/currentc170-gc.disassembly.txt": "d66966860b06da247126f2ca9623d1588eed2dd2438abed89ff303257f41d631",
+    "gc-currentc170-empty-arena-pages-v29/gc-currentc170-empty-arena-pages-v29-currentc170-gc-tscwork.jsonl": "efdd1dd3bfc06be4a04087bdffea5018a5825ca143a5f22dd4908c66ef1b2fc1",
+    "gc-currentc170-empty-arena-pages-v29/empty-pages-observer.py": "06498aa21c7d2d92e7cf7bb5b0f80820ef3766979c3e236807ccd65f97dfdfbc",
+    "gc-currentc170-empty-arena-pages-v29/gc-currentc170-empty-arena-pages-v29-currentc170-gc-tscwork.app.out": "f5ab100c8088ecc3ac2aef63d6053e9a06eda3745869eb0ab1470a6f0c584ec1",
+    "gc-currentc170-empty-arena-pages-v29/gc-currentc170-empty-arena-pages-v29-currentc170-gc-tscwork.observer.py": "eac6c6faa1759e4fc12557b018b46a3e4c063cb88aa1a234e9b53cd789c8315d",
+    "gc-currentc170-empty-arena-pages-v29/gc-currentc170-empty-arena-pages-v29-currentc170-gc-tscwork.app.err": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "gc-currentc170-empty-arena-pages-v29/currentc170-gc.pages.jsonl": "1a10bfe811e6ebf81c2e0c8f2e58d27994c85fcbe886dced613e699d64e1af50",
+    "gc-currentc170-empty-arena-pages-v29/shipping-access-proof.json": "47c5e538055030d0ff0e82c71e98a95072821fbb793bdae1882fd1e12375837b",
+    "gc-currentc170-empty-arena-pages-v29/currentc170-base.disassembly.txt": "bbc55aee4da5945a9b80bc03e66c93c6ff9f976a14aa9a8db73f77c9f350cc0f",
+    "gc-currentc170-empty-arena-pages-v29/gc-currentc170-empty-arena-pages-v29-currentc170-base-tscwork.jsonl": "52b2aad0472920bf6c453530326b4e3d5dcf44ac45fef767be5c0f3fbd46e071",
+    "gc-currentc170-empty-arena-pages-v29/gc-currentc170-empty-arena-pages-v29-currentc170-base-tscwork.boundaries.jsonl": "ac3f7162bbec2d529d55428836508afab8965f7a03fc8980e0effb45306857ff",
+    "gc-currentc170-empty-arena-pages-v29/gc-currentc170-empty-arena-pages-v29-currentc170-base-tscwork.gdb": "211f3f5c411e08e0726472c35522015b909e595720ca551c615d50850b51c35b",
+    "gc-currentc170-empty-arena-pages-v29/independent-summary.json": "f69a9c6a56662f5f113907b4bb3772c7dfd4b2323217c0a58c9f1c49b276a5f0",
+    "gc-currentc170-empty-arena-pages-v29/gc-currentc170-empty-arena-pages-v29-currentc170-base-tscwork.observer.py": "3e3540c4a72f857e45f0864bec6e694272ca3ec971c010391dd69eabd6563eed",
+    "gc-currentc170-empty-arena-pages-v29/currentc170-base.pages.jsonl": "2849684faf26bea78a3cc9357d4b895c85e9fbbcc15dc236f6cea845fee97af8",
+    "gc-currentc170-empty-arena-pages-v29/gc-currentc170-empty-arena-pages-v29-currentc170-gc-tscwork.gdb": "6dd944cb7f245c60b5aa85625e07d6844c02ebed867d4fc0a2978f3ea18c9555",
+    "gc-currentc170-empty-arena-pages-v29/gc-currentc170-empty-arena-pages-v29-currentc170-base-tscwork.app.out": "f5ab100c8088ecc3ac2aef63d6053e9a06eda3745869eb0ab1470a6f0c584ec1",
+    "gc-currentc170-empty-arena-pages-v29/summary.json": "7cef4942d87b808ac59b2d081d61b5defed766e69d271d05d04f22baa188571e",
+    "gc-currentc170-empty-arena-pages-v29/gc-currentc170-empty-arena-pages-v29-currentc170-gc-tscwork.boundaries.jsonl": "edaceebdee712b0221721e845c9c2cf76f761c6f93ad3fbba073edade775c26f",
+    "gc-currentc170-empty-arena-pages-v29/gc-currentc170-empty-arena-pages-v29-currentc170-base-tscwork.app.err": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "gc-currentc170-empty-arena-pages-v29-runs.json": "fc8fc660a1d80cd30d626ab62c1b4bcdada88a960f0ea89d68ba71cd00651b4a",
+    "gc-currentc170-empty-arena-pages-v29-driver.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "gc-currentc170-empty-arena-pages-v29-driver.log": "0f06f95be71f43909caeaff700d50ea953b7156d369b259a6ff544c8ed8ee34b",
+    "gc-currentc170-empty-arena-pages-v29.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+  },
+  "limitations": [
+    "Pagemap residency flags read while the inferior is stopped; no block payload is read or changed.",
+    "Debugger and existing census perturb memory/timing. Not peak acceptance.",
+    "Offset-zero plus non-current establishes logically free backing, not immediate safe/advisable reclamation or its performance effect.",
+    "No reset/reuse age was captured. Reuse history must be assessed before a reclamation policy is adopted."
+  ]
+}

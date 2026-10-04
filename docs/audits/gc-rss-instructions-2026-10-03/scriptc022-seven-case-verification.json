@@ -1,0 +1,73 @@
+{
+  "version": {
+    "version": "0.2.2",
+    "compiler_sha256": "0a6fa935db35765ddad58d8481c00c776d510671dafe7bdbfb98c4ad685c378e",
+    "lock_sha256": "5e46b87db6dfdc1f9daed9653e51460314fec24810cea24a3f03329525b36547"
+  },
+  "complete_build_cases": 7,
+  "summary": [
+    {
+      "case": "00-noop",
+      "engine": "scriptc",
+      "version": "0.2.2",
+      "correct": true,
+      "status": "correct",
+      "rss_mib": 1.65625
+    },
+    {
+      "case": "15-crc32",
+      "engine": "scriptc",
+      "version": "0.2.2",
+      "correct": true,
+      "status": "correct",
+      "rss_mib": 9.66796875
+    },
+    {
+      "case": "23-binary-trees",
+      "engine": "scriptc",
+      "version": "0.2.2",
+      "correct": true,
+      "status": "correct",
+      "rss_mib": 585.53515625
+    },
+    {
+      "case": "30-string-build",
+      "engine": "scriptc",
+      "version": "0.2.2",
+      "correct": true,
+      "status": "correct",
+      "rss_mib": 183.1015625
+    },
+    {
+      "case": "31-json",
+      "engine": "scriptc",
+      "version": "0.2.2",
+      "correct": false,
+      "status": "compile_failed",
+      "rc": 1,
+      "reason": null
+    },
+    {
+      "case": "51-pipeline",
+      "engine": "scriptc",
+      "version": "0.2.2",
+      "correct": true,
+      "status": "correct",
+      "rss_mib": 261.29296875
+    },
+    {
+      "case": "60-ring-churn",
+      "engine": "scriptc",
+      "version": "0.2.2",
+      "correct": true,
+      "status": "correct",
+      "rss_mib": 1.796875
+    }
+  ],
+  "scope": "Seven unchanged standalone sources; compile/execution failures retained without winning RSS. Real TypeScript/Zod cross-engine equivalence is not established.",
+  "inputs": {
+    "runs": "fd1b821cd3471d7ee0c64fbe03302d3ce39b8963d6fd07fd01a90d1e20c99ed2",
+    "oracle": "295f25d4344ccc1fc0fc2377ec136470ff7c7ae6205b33c93d0650492abeea6c",
+    "version": "42582bbae19e4332877706f6ef1c71c3b59f8761b6b5ca6ce6302ecf9f55fadc"
+  }
+}

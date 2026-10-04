@@ -1,0 +1,74 @@
+{
+  "version": "0.2.2",
+  "summary": [
+    {
+      "case": "tscwork",
+      "variant": "default",
+      "status": "compile_failed",
+      "rc": 1,
+      "reason": null,
+      "rss_mib": null
+    },
+    {
+      "case": "tscwork",
+      "variant": "static-npm",
+      "status": "compile_failed",
+      "rc": 1,
+      "reason": null,
+      "rss_mib": null
+    },
+    {
+      "case": "zodwork",
+      "variant": "default",
+      "status": "compile_failed",
+      "rc": 1,
+      "reason": null,
+      "rss_mib": null
+    },
+    {
+      "case": "zodwork",
+      "variant": "static-npm",
+      "status": "compile_failed",
+      "rc": 1,
+      "reason": null,
+      "rss_mib": null
+    }
+  ],
+  "provenance": {
+    "compiler": {
+      "version": "0.2.2",
+      "compiler_sha256": "0a6fa935db35765ddad58d8481c00c776d510671dafe7bdbfb98c4ad685c378e",
+      "lock_sha256": "5e46b87db6dfdc1f9daed9653e51460314fec24810cea24a3f03329525b36547"
+    },
+    "source_verification_sha256": "a0bda2a632a8dc6800c68a5dda39437881f703073ac3f7f05f5e424da5e6f8b6",
+    "dependency_package_lock_sha256": "485a1ee62660a5c5a3aaf77db07e7d6def82f0f9bb3a211e114e779fe292daa4",
+    "scope": "Two unchanged real applications, default and explicit static npm mode. No dynamic engine or source/library stubs. Unsupported builds or incorrect outputs receive no RSS rank. This support probe is separate from GC acceptance."
+  },
+  "configuration": {
+    "config": {
+      "compilerOptions": {
+        "strict": true,
+        "noImplicitAny": false
+      }
+    },
+    "config_sha256": "af6ce8af90854b0f1d6fd2d3973dedf553f56f7b19a132bf5de21cc13eab08e6",
+    "dependency_directory": "/root/rss-layout-20261002/sources/real/node_modules",
+    "source_originals": {
+      "tscwork": {
+        "original": "/root/rss-header-20261002/sources/real/tscwork.ts",
+        "sha256": "0bc65e9930534ac2bde638a5a5c2f280a78e3848223ceff46f8ee97662451a7a"
+      },
+      "zodwork": {
+        "original": "/root/rss-header-20261002/sources/real/zodwork.ts",
+        "sha256": "4d3cad6a9a8bafe4a8a9a44f9035f8e5aed3bc0fa3ee8b45c252e91bf0225a7a"
+      }
+    }
+  },
+  "scope": "Unchanged real TS/Zod programs, default and native static-npm modes. Native support/correctness probe; no unsupported/incorrect run has a winning RSS. Passing support would not replace the pending GC full17 comparison.",
+  "inputs": {
+    "runs": "0e78f9457a9c89dce3f380878f32a66b5ac366a6220a84e4e5a3a80c58148789",
+    "oracle": "47ad24ad2ed8d511e78425d368050fbf72066b01dc289223f37bb55e3e3fd560",
+    "provenance": "77adcbf2599ab471bcd3644f5e474c4012cb3e2a3768118f9e403d321cdf219d",
+    "configuration": "29792190ca105760eadd4cc0abcbaac550dd468bf23cbc9d051917fe7cdf22ac"
+  }
+}

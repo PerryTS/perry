@@ -1,0 +1,66 @@
+{
+  "private_head": "6e311851fa6a6e0c981b7e2f2c34d3bdc5d3d2f9",
+  "base": "2026ecfe6dd9df1a0a8616e3bc5c5561e8e0cf63",
+  "tracked_inputs_verified": 5000,
+  "source_snapshot_scope": "Captured while compilation was running and matched after successful terminal execution; private commit unchanged, no edits after launch.",
+  "command": [
+    "cargo",
+    "test",
+    "--locked",
+    "--release",
+    "-p",
+    "perry-runtime",
+    "--lib"
+  ],
+  "terminal_rc": 0,
+  "runtime": {
+    "passed": 4877,
+    "failed": 0,
+    "ignored": 5
+  },
+  "log_sha256": "bbb46f03825c2d8f08459daf137e1a5f399a7f093eaa7f87f44bfaa4f756bfac",
+  "filtered_subprocess_summaries": [
+    [
+      "1",
+      "0",
+      "0"
+    ],
+    [
+      "1",
+      "0",
+      "0"
+    ],
+    [
+      "1",
+      "0",
+      "0"
+    ],
+    [
+      "1",
+      "0",
+      "0"
+    ],
+    [
+      "1",
+      "0",
+      "0"
+    ],
+    [
+      "1",
+      "0",
+      "0"
+    ],
+    [
+      "1",
+      "0",
+      "0"
+    ],
+    [
+      "1",
+      "0",
+      "0"
+    ]
+  ],
+  "toolchain": "rustc 1.100.0-nightly (f7d782a3b 2026-08-19)\nbinary: rustc\ncommit-hash: f7d782a3be46d6bb4b9792fe69a61db389ba1769\ncommit-date: 2026-08-19\nhost: aarch64-apple-darwin\nrelease: 1.100.0-nightly\nLLVM version: 23.1.0\n",
+  "scope": "Private collection-entry advice probe, macOS full runtime. Linux residency subject is cfg(linux) and not exercised here. No application benefit or production adoption claimed."
+}

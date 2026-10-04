@@ -1,0 +1,8 @@
+{
+  "base": "ad0a2617bf0b9708032cf89c86575e9bd69fb074",
+  "private_commit": "0aa483aa91ab901583002ec0174a50884b60ad81",
+  "production_control": "9e2bca371a",
+  "source_count": 5014,
+  "source_changes_vs_main07": 143,
+  "scope": "Exact adopted GC/once-advice changes rebased cleanly on refreshed main. Prefix/query/floor experiments excluded. Previous main07 application results remain historical, not proof for this rebase. Initial input-selection assertion caught an audit-only .rs snippet; corrected by excluding docs/audits, exactly matching previous authoritative source set. No native tests ran in the failed setup attempt."
+}

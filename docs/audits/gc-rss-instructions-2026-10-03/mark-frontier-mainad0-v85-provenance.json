@@ -1,0 +1,14 @@
+{
+  "base": "ad0a2617bf0b9708032cf89c86575e9bd69fb074",
+  "parent": "0aa483aa91ab901583002ec0174a50884b60ad81",
+  "private_commit": "2e28c4e8998e525da725257b771d898cd0c6f377",
+  "private_paths": [
+    "crates/perry-runtime/src/gc/cycle.rs",
+    "crates/perry-runtime/src/gc/tests/mark_frontier.rs",
+    "crates/perry-runtime/src/gc/tests/mod.rs",
+    "crates/perry-runtime/src/gc/trace.rs"
+  ],
+  "deleted_paths": [],
+  "overlay_sha256": "accb4d69c1953e43c48119fdbc37b75abf9e2f4cd1d0174de54de65c8823ccd2",
+  "scope": "Private pending mark-frontier plus consumed-work return. Parent is the fresh mainad0 adopted GC integration. No copying traversal, threshold, shape/header/ABI change."
+}

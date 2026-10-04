@@ -1,0 +1,28 @@
+{
+  "base": "ad0a2617bf0b9708032cf89c86575e9bd69fb074",
+  "production_integration": "0aa483aa91ab901583002ec0174a50884b60ad81",
+  "tracked_source_counts": {
+    "gc": 5014
+  },
+  "linked_executions": 22,
+  "actual_moving_protected": 11,
+  "cases": [
+    "test_gap_10507_function_constructors",
+    "test_gap_10753_dynamic_key_read",
+    "test_gap_byname_function_reads",
+    "test_gap_byname_inherited_reads",
+    "test_gap_class_accessor_shape_facts",
+    "test_gap_class_expr_fresh_static_blocks_this",
+    "test_gap_gc_11789_closure_call_args",
+    "test_gap_gc_11816_array_callback_element",
+    "test_gap_gc_container_value_rooting",
+    "test_gap_gc_define_properties_key_rooting",
+    "test_gap_gc_store_ic_old_to_young"
+  ],
+  "all_raw_sources_products_oracles_counters_verified": true,
+  "inputs": {
+    "runs": "eca2b506e8a77550154503d76a301818052dacec87cd671b8700b304084c4679",
+    "products": "cdaf3398168ddf264e70d9477f1cfb98c3427ee8c5e5bcd18123055ee36aa03c",
+    "derived-source": "21b8ed18dc85e2ce86f7d10d14f44dd9de2acbd2ca140322e5fa6c139e1c4061"
+  }
+}

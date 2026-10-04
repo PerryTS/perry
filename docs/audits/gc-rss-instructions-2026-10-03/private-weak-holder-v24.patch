@@ -1,0 +1,30 @@
+diff --git a/crates/perry-runtime/src/gc/verify.rs b/crates/perry-runtime/src/gc/verify.rs
+index d5edf872c0..868d785e78 100644
+--- a/crates/perry-runtime/src/gc/verify.rs
++++ b/crates/perry-runtime/src/gc/verify.rs
+@@ -331,8 +331,11 @@ pub(super) unsafe fn remember_evacuated_old_copy_young_slots(
+     if crate::gc::gc_object_yields_no_child_slots(header) {
+         return;
+     }
++    // The callback only records slots; it cannot change the parent's class.
++    // Match the mark walk: ordinary parents need no per-slot weak-brand read.
++    let weak_holder = crate::weakref::is_weak_holder_header(header);
+     visit_gc_rewrite_slots(header, |slot| unsafe {
+-        if crate::weakref::is_weak_target_trace_slot(header, slot.slot) {
++        if weak_holder && crate::weakref::is_weak_target_trace_slot(header, slot.slot) {
+             return;
+         }
+         slot.record_layout_read();
+@@ -571,8 +574,11 @@ unsafe fn remember_retained_old_to_young_slots(
+     if !barrier_parent_needs_remembering(user_ptr as usize, true) {
+         return;
+     }
++    // The callback only records slots; it cannot change the parent's class.
++    // Match the mark walk: ordinary parents need no per-slot weak-brand read.
++    let weak_holder = crate::weakref::is_weak_holder_header(header);
+     visit_gc_rewrite_slots(header, |slot| unsafe {
+-        if crate::weakref::is_weak_target_trace_slot(header, slot.slot) {
++        if weak_holder && crate::weakref::is_weak_target_trace_slot(header, slot.slot) {
+             return;
+         }
+         slot.record_layout_read();

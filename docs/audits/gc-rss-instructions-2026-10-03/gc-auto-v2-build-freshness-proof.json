@@ -1,0 +1,62 @@
+{
+  "scope": "Compiled constructor contains new generation filter in each candidate, absent from baseline; new_remembered_parents itself was inlined and had no standalone symbol",
+  "observations": [
+    {
+      "case": "tscwork",
+      "arm": "mainrefresh-base",
+      "binary_sha256": "e163d123525cb095120c7d9196f1573c76eb340228e9060f86b558f218157ebf",
+      "constructor_bytes": 820,
+      "filter_generation_calls": [],
+      "disassembly_sha256": "076e7c4e0ba685530e79550af0b8d6c2e0115ae9f1a4d0863386f25c44628be9"
+    },
+    {
+      "case": "tscwork",
+      "arm": "gc-runtime-scan-main",
+      "binary_sha256": "bc9acf5d21f386d73ae0187649b215747996cc8589ebfa82924779fd744bb461",
+      "constructor_bytes": 1093,
+      "filter_generation_calls": [
+        "5c5a20b:\te8 10 40 02 00       \tcall   5c7e220 <perry_runtime::arena::page_meta::uniform_heap_generation>",
+        "5c5a3ad:\te8 6e 3e 02 00       \tcall   5c7e220 <perry_runtime::arena::page_meta::uniform_heap_generation>"
+      ],
+      "disassembly_sha256": "cf3e062005085eb73b554427d6f5c8090152d94e20fb8b389396b6ecbaf208d2"
+    },
+    {
+      "case": "zodwork",
+      "arm": "mainrefresh-base",
+      "binary_sha256": "ef64401e2f16465c06836f8d8b18932ccb3ef2e99d9f2c99c043691c6882d7c5",
+      "constructor_bytes": 820,
+      "filter_generation_calls": [],
+      "disassembly_sha256": "9efc71e98cd0072562ab340bb9c1bb04de9dccd2f52c15a9f294e01748410197"
+    },
+    {
+      "case": "zodwork",
+      "arm": "gc-runtime-scan-main",
+      "binary_sha256": "a8df33a0a0dd15840af3e7aa15b3cd19ffe0a5340a43c6c46bcda43795bd9a6b",
+      "constructor_bytes": 1093,
+      "filter_generation_calls": [
+        "56981b:\te8 d0 58 02 00       \tcall   58f0f0 <perry_runtime::arena::page_meta::uniform_heap_generation>",
+        "5699bd:\te8 2e 57 02 00       \tcall   58f0f0 <perry_runtime::arena::page_meta::uniform_heap_generation>"
+      ],
+      "disassembly_sha256": "471dd93bb2dfee1dd31df963a41bb275839501d42e2a2fcc04a3b9ee121716ba"
+    },
+    {
+      "case": "30-string-build",
+      "arm": "mainrefresh-base",
+      "binary_sha256": "0714c16c8e769a26e6105ae9d206ea35706f1ab5b7b01c4d477841984be8278a",
+      "constructor_bytes": 820,
+      "filter_generation_calls": [],
+      "disassembly_sha256": "3fd81661794e30da4a5855f8dcda193185815f604c85df1991ea94acad92c2a1"
+    },
+    {
+      "case": "30-string-build",
+      "arm": "gc-runtime-scan-main",
+      "binary_sha256": "12f7af1650ef75cb0ab431b73770c8cc6f2bc8cd10978e9403b83aeb32dc0eec",
+      "constructor_bytes": 1093,
+      "filter_generation_calls": [
+        "4a50db:\te8 70 88 03 00       \tcall   4dd950 <perry_runtime::arena::page_meta::uniform_heap_generation>",
+        "4a527d:\te8 ce 86 03 00       \tcall   4dd950 <perry_runtime::arena::page_meta::uniform_heap_generation>"
+      ],
+      "disassembly_sha256": "2a01d122bd9f9889132160a71fff7e35dad068fb9a3804820e5db79dc3603f49"
+    }
+  ]
+}

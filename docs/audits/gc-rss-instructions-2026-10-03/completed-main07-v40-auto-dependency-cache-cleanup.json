@@ -1,0 +1,102 @@
+{
+  "scope": "Only completed V40 auto-runtime dependency caches; top-level archives/stamps/source/binaries/raw evidence retained and rehashed",
+  "removed": [
+    {
+      "path": "/root/rss-header-20261002/primary-main07-v39/source-base/target/perry-auto-c54e8ddf04cb004d/release/build",
+      "apparent_bytes": 568961565
+    },
+    {
+      "path": "/root/rss-header-20261002/primary-main07-v39/source-base/target/perry-auto-c54e8ddf04cb004d/release/incremental",
+      "apparent_bytes": 0
+    },
+    {
+      "path": "/root/rss-header-20261002/primary-main07-v39/source-base/target/perry-auto-2ab62a7097be71c1/release/build",
+      "apparent_bytes": 962021104
+    },
+    {
+      "path": "/root/rss-header-20261002/primary-main07-v39/source-base/target/perry-auto-2ab62a7097be71c1/release/incremental",
+      "apparent_bytes": 0
+    },
+    {
+      "path": "/root/rss-header-20261002/primary-main07-v39/source-base/target/perry-auto-281410b3841e3fa1/release/build",
+      "apparent_bytes": 757848136
+    },
+    {
+      "path": "/root/rss-header-20261002/primary-main07-v39/source-base/target/perry-auto-281410b3841e3fa1/release/incremental",
+      "apparent_bytes": 0
+    },
+    {
+      "path": "/root/rss-header-20261002/primary-main07-v39/source-base/target/perry-auto-7780ff4430753bae/release/build",
+      "apparent_bytes": 553480873
+    },
+    {
+      "path": "/root/rss-header-20261002/primary-main07-v39/source-base/target/perry-auto-7780ff4430753bae/release/incremental",
+      "apparent_bytes": 0
+    },
+    {
+      "path": "/root/rss-header-20261002/primary-main07-v39/source-gc/target/perry-auto-c54e8ddf04cb004d/release/build",
+      "apparent_bytes": 568663071
+    },
+    {
+      "path": "/root/rss-header-20261002/primary-main07-v39/source-gc/target/perry-auto-c54e8ddf04cb004d/release/incremental",
+      "apparent_bytes": 0
+    },
+    {
+      "path": "/root/rss-header-20261002/primary-main07-v39/source-gc/target/perry-auto-2ab62a7097be71c1/release/build",
+      "apparent_bytes": 961157842
+    },
+    {
+      "path": "/root/rss-header-20261002/primary-main07-v39/source-gc/target/perry-auto-2ab62a7097be71c1/release/incremental",
+      "apparent_bytes": 0
+    },
+    {
+      "path": "/root/rss-header-20261002/primary-main07-v39/source-gc/target/perry-auto-281410b3841e3fa1/release/build",
+      "apparent_bytes": 757007570
+    },
+    {
+      "path": "/root/rss-header-20261002/primary-main07-v39/source-gc/target/perry-auto-281410b3841e3fa1/release/incremental",
+      "apparent_bytes": 0
+    },
+    {
+      "path": "/root/rss-header-20261002/primary-main07-v39/source-gc/target/perry-auto-7780ff4430753bae/release/build",
+      "apparent_bytes": 554061986
+    },
+    {
+      "path": "/root/rss-header-20261002/primary-main07-v39/source-gc/target/perry-auto-7780ff4430753bae/release/incremental",
+      "apparent_bytes": 0
+    },
+    {
+      "path": "/root/rss-header-20261002/primary-main07-v39/source-entry/target/perry-auto-c54e8ddf04cb004d/release/build",
+      "apparent_bytes": 569083457
+    },
+    {
+      "path": "/root/rss-header-20261002/primary-main07-v39/source-entry/target/perry-auto-c54e8ddf04cb004d/release/incremental",
+      "apparent_bytes": 0
+    },
+    {
+      "path": "/root/rss-header-20261002/primary-main07-v39/source-entry/target/perry-auto-2ab62a7097be71c1/release/build",
+      "apparent_bytes": 961734526
+    },
+    {
+      "path": "/root/rss-header-20261002/primary-main07-v39/source-entry/target/perry-auto-2ab62a7097be71c1/release/incremental",
+      "apparent_bytes": 0
+    },
+    {
+      "path": "/root/rss-header-20261002/primary-main07-v39/source-entry/target/perry-auto-281410b3841e3fa1/release/build",
+      "apparent_bytes": 757477516
+    },
+    {
+      "path": "/root/rss-header-20261002/primary-main07-v39/source-entry/target/perry-auto-281410b3841e3fa1/release/incremental",
+      "apparent_bytes": 0
+    },
+    {
+      "path": "/root/rss-header-20261002/primary-main07-v39/source-entry/target/perry-auto-7780ff4430753bae/release/build",
+      "apparent_bytes": 554351378
+    },
+    {
+      "path": "/root/rss-header-20261002/primary-main07-v39/source-entry/target/perry-auto-7780ff4430753bae/release/incremental",
+      "apparent_bytes": 0
+    }
+  ],
+  "free_bytes": 0
+}

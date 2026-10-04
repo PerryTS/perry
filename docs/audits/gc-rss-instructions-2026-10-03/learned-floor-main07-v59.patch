@@ -1,0 +1,250 @@
+diff --git a/crates/perry-runtime/src/gc/tenuring.rs b/crates/perry-runtime/src/gc/tenuring.rs
+index bffb2f2431..4b10d1b641 100644
+--- a/crates/perry-runtime/src/gc/tenuring.rs
++++ b/crates/perry-runtime/src/gc/tenuring.rs
+@@ -192,49 +192,25 @@ pub(super) const OCCUPANCY_MIN_SURVIVALS: u8 = 2;
+ /// before it is raised (by one step).
+ const RAISE_DEBOUNCE_CYCLES: u8 = 2;
+ 
+-/// `NURSERY_CAP_SCALE` counts quarters of the base cap: this value is ×1.
+-const NURSERY_CAP_SCALE_UNIT: u8 = 4;
+-
+-/// Floor of the survival-driven nursery ladder: a quarter of the base cap,
+-/// 16 MB / 4 = 4 MB. Every thread starts here and returns here while its
+-/// minors find little alive (#11549).
+-///
+-/// # Why the floor is below the base
+-///
+-/// The base cap was the size every low-survival program ran its young
+-/// generation at, and on those programs a 16 MB Eden is 12 MB of garbage kept
+-/// resident between minors for nothing: a minor there copies almost nothing,
+-/// so its cost is its fixed cost, and #11634 cut that to ~100k instructions.
+-/// At that price collecting 4× as often is cheaper than it was to collect at
+-/// 16 MB before the cut, and it lowers peak RSS on every such program.
+-///
+-/// Where survivors are a heavy share of each minor the opposite holds —
+-/// copying survivors, not the fixed cost, dominates, and a small Eden gives
+-/// them no time to die (qs stringify at a fixed 4 MB: 105 minors instead of
+-/// 24, +7% instructions). That is what the ladder's existing debounced
+-/// 4 %/1 % influx rule is for, and it now simply starts two steps lower.
+-/// [`retune_nursery_cap_scale`] takes all the steps a reading justifies in one
+-/// debounced move, so such a program leaves the floor after its second minor
+-/// and settles at the same size it settled at from 16 MB before.
+-///
+-/// Only the effective nursery cap starts low. Everything else that is sized
+-/// from the base cap — the survivor target ([`desired_survivor_bytes`]), the
+-/// promoted-cohort floor, the allocation-census seed point, the JSON-leaf
+-/// routing gate — keeps the 16 MB base, because each of them measures a
+-/// LIFETIME or a volume in bytes allocated, which a smaller Eden must not
+-/// shorten. Measured before that decoupling (everything keyed on one 4 MB
+-/// base): validator's aging cohorts were promoted after 8 MB of allocation
+-/// instead of dying in the survivor space (+26% peak RSS), and a 5 MB startup
+-/// tree tripped a promoted-cohort full at 4 MB (+45% instructions).
++/// `NURSERY_CAP_SCALE` counts sixteenths of the configured base cap.
++const NURSERY_CAP_SCALE_UNIT: u8 = 16;
++
++/// Keep the established startup cap: a quarter of the base (4 MB by default).
++/// A smaller cap must be earned by two consecutive copying minors with less
++/// than 1% Eden survivor influx. The existing 4% growth rule and debounce
++/// allow a workload whose survival increases to recover in the same way.
++const NURSERY_CAP_SCALE_INITIAL: u8 = 4;
++
++/// Learned low-influx floor: a sixteenth of the base (1 MB by default),
++/// before the existing object-size denomination. Only the nursery ladder
++/// changes. Survivor sizing, promoted-cohort lifetime budgets, allocation
++/// census seeding and large-object routing keep the configured base.
+ const NURSERY_CAP_SCALE_MIN: u8 = 1;
+ 
+-/// Ceiling of the ladder: 16 MB × 4 = 64 MB, unchanged. Bounds the young-gen
+-/// RSS contribution on live-set-bound workloads while still cutting their
+-/// collection count (each collection carries a fixed root-scan/remembered-set/
+-/// eligibility cost that dominates once the adaptive threshold has eliminated
+-/// the re-copying).
+-const NURSERY_CAP_SCALE_MAX: u8 = 16;
++/// Ceiling remains four times the base (64 MB by default).
++const NURSERY_CAP_SCALE_MAX: u8 = 64;
+ const _: () = assert!(NURSERY_CAP_SCALE_MAX == 4 * NURSERY_CAP_SCALE_UNIT);
++const _: () = assert!(NURSERY_CAP_SCALE_INITIAL * 4 == NURSERY_CAP_SCALE_UNIT);
+ 
+ crate::perry_thread_local! {
+     /// Power-on threshold. This is `OCCUPANCY_MIN_SURVIVALS`, not the ceiling:
+@@ -256,11 +232,10 @@ crate::perry_thread_local! {
+     /// the denominator of this cycle's survival rate.
+     static PREV_COPIED_BYTES: Cell<usize> = const { Cell::new(0) };
+     /// Influx-driven multiplier applied to the scavenge nursery cap, in
+-    /// quarters of it (`NURSERY_CAP_SCALE_UNIT` is ×1): 1, 2, 4, 8 or 16, i.e.
+-    /// ×¼ … ×4. Power of two; starts at the floor and grows/shrinks one step
+-    /// at a time, debounced.
++    /// sixteenths of it (`NURSERY_CAP_SCALE_UNIT` is ×1): ×1/16 … ×4.
++    /// Starts at ×¼; both growth and learning a lower cap are debounced.
+     static NURSERY_CAP_SCALE: super::TriggerInput<u8> =
+-        const { super::TriggerInput::new(NURSERY_CAP_SCALE_MIN) };
++        const { super::TriggerInput::new(NURSERY_CAP_SCALE_INITIAL) };
+     static CAP_GROW_STREAK: Cell<u8> = const { Cell::new(0) };
+     static CAP_SHRINK_STREAK: Cell<u8> = const { Cell::new(0) };
+     /// #7929: mean size of the objects the last copying minor moved. Seeded at
+@@ -365,8 +340,8 @@ fn tenuring_survivals_override() -> Option<u8> {
+ /// multiplies the per-collection fixed cost by an enormous collection
+ /// count AND promotes objects that a larger Eden would have let die young.
+ /// The scale starts at a quarter of the base and grows only while survivor
+-/// influx stays a heavy fraction of Eden, so the small-live-set workloads
+-/// #7377 fixed never leave the 4 MB floor ([`NURSERY_CAP_SCALE_MIN`]).
++/// influx stays a heavy fraction of Eden. Sustained low influx can instead
++/// lower it to a sixteenth of the base ([`NURSERY_CAP_SCALE_MIN`]).
+ ///
+ /// #7592: the influx-driven product is the floor, not the whole answer — it
+ /// is bounded by `base × 4` (64 MB), and any *constant*
+@@ -622,13 +597,20 @@ pub(super) fn desired_survivor_bytes() -> usize {
+ }
+ 
+ /// The effective influx-driven cap at the floor of the ladder, before the
+-/// object denomination: a quarter of the base (4 MB by default).
++/// object denomination: a sixteenth of the base (1 MB by default).
+ #[cfg(test)]
+ pub(super) fn nursery_cap_floor_bytes() -> usize {
+     gc_scavenge_nursery_cap_bytes() * NURSERY_CAP_SCALE_MIN as usize
+         / NURSERY_CAP_SCALE_UNIT as usize
+ }
+ 
++/// Startup cap before object denomination; lower caps require survival data.
++#[cfg(test)]
++pub(super) fn nursery_cap_initial_bytes() -> usize {
++    gc_scavenge_nursery_cap_bytes() * NURSERY_CAP_SCALE_INITIAL as usize
++        / NURSERY_CAP_SCALE_UNIT as usize
++}
++
+ pub(super) fn compute_target_survivals(eden_live_bytes: usize, desired_bytes: usize) -> u8 {
+     if eden_live_bytes == 0 {
+         return GC_TENURING_SURVIVALS_MAX;
+@@ -949,7 +931,7 @@ pub(super) fn reset_for_test() {
+     PROMOTE_LOCK.with(|l| l.set(false));
+     UNLOCK_STREAK.with(|s| s.set(0));
+     PREV_COPIED_BYTES.with(|c| c.set(0));
+-    NURSERY_CAP_SCALE.with(|s| s.set(NURSERY_CAP_SCALE_MIN));
++    NURSERY_CAP_SCALE.with(|s| s.set(NURSERY_CAP_SCALE_INITIAL));
+     CAP_GROW_STREAK.with(|s| s.set(0));
+     CAP_SHRINK_STREAK.with(|s| s.set(0));
+     MEAN_SURVIVING_OBJECT_BYTES.with(|s| s.set(NURSERY_CAP_REFERENCE_OBJECT_BYTES));
+@@ -1040,9 +1022,9 @@ mod tests {
+     #[test]
+     fn census_carries_forward_across_a_cycle_that_moved_nothing() {
+         reset_for_test();
+-        // #11549: a fresh thread paces at the ladder's floor, a quarter of the
+-        // base, and the object denomination scales that.
+-        let base = nursery_cap_floor_bytes();
++        // A fresh thread keeps the established quarter-base startup cap,
++        // and the object denomination scales that before any minor.
++        let base = nursery_cap_initial_bytes();
+         assert_eq!(
+             influx_driven_nursery_cap_bytes(),
+             base,
+@@ -1424,26 +1406,28 @@ mod tests {
+     #[test]
+     fn cap_scale_grows_on_heavy_influx_and_shrinks_when_quiet() {
+         reset_for_test();
+-        // #11549: a fresh thread starts at the floor, a quarter of the base.
++        // A fresh thread keeps the quarter-base cap; the learned floor is lower.
+         let floor = nursery_cap_floor_bytes();
++        let initial = nursery_cap_initial_bytes();
+         let base = gc_scavenge_nursery_cap_bytes();
+-        assert_eq!(floor, base / 4);
+-        assert_eq!(scavenge_nursery_cap_effective_bytes(), floor);
++        assert_eq!(floor, base / 16);
++        assert_eq!(initial, base / 4);
++        assert_eq!(scavenge_nursery_cap_effective_bytes(), initial);
+         // Influx above 4% of the cap: one debounce cycle, then a ×2 step.
+-        retune_after_scavenge(floor / 15, 0, 0);
+-        assert_eq!(scavenge_nursery_cap_effective_bytes(), floor);
+-        retune_after_scavenge(floor / 15, 0, 0);
+-        assert_eq!(scavenge_nursery_cap_effective_bytes(), floor * 2);
++        retune_after_scavenge(initial / 15, 0, 0);
++        assert_eq!(scavenge_nursery_cap_effective_bytes(), initial);
++        retune_after_scavenge(initial / 15, 0, 0);
++        assert_eq!(scavenge_nursery_cap_effective_bytes(), initial * 2);
+         // Growth halves the observed ratio into the dead band: stable.
+-        retune_after_scavenge(floor / 15, 0, 0);
+-        retune_after_scavenge(floor / 15, 0, 0);
+-        assert_eq!(scavenge_nursery_cap_effective_bytes(), floor * 2);
++        retune_after_scavenge(initial / 15, 0, 0);
++        retune_after_scavenge(initial / 15, 0, 0);
++        assert_eq!(scavenge_nursery_cap_effective_bytes(), initial * 2);
+         // A heavier influx takes every step the one-step rule would take in a
+         // row, in ONE debounced move. 7% of the base is above 4% of 8 MB and
+         // of 16 MB but below 4% of 32 MB, so the move lands at 32 MB — where
+         // one-step moves would have settled — and not at the ceiling.
+         retune_after_scavenge(base * 7 / 100, 0, 0);
+-        assert_eq!(scavenge_nursery_cap_effective_bytes(), floor * 2);
++        assert_eq!(scavenge_nursery_cap_effective_bytes(), initial * 2);
+         retune_after_scavenge(base * 7 / 100, 0, 0);
+         assert_eq!(scavenge_nursery_cap_effective_bytes(), base * 2);
+         // Heavier still reaches the ×4-of-base ceiling and stops there.
+@@ -1471,6 +1455,34 @@ mod tests {
+         reset_for_test();
+     }
+ 
++    #[test]
++    fn lower_nursery_cap_requires_sustained_low_influx_and_preserves_lifetimes() {
++        reset_for_test();
++        let initial = nursery_cap_initial_bytes();
++        let floor = nursery_cap_floor_bytes();
++        let survivor_target = desired_survivor_bytes();
++        assert_eq!(scavenge_nursery_cap_effective_bytes(), initial);
++        // One quiet reading is insufficient, and a dead-band reading breaks
++        // the shrink streak. Startup bursts therefore do not learn a small cap.
++        retune_after_scavenge(0, 0, 0);
++        assert_eq!(scavenge_nursery_cap_effective_bytes(), initial);
++        retune_after_scavenge(initial / 50, 0, 0);
++        retune_after_scavenge(0, 0, 0);
++        assert_eq!(scavenge_nursery_cap_effective_bytes(), initial);
++        retune_after_scavenge(0, 0, 0);
++        assert_eq!(scavenge_nursery_cap_effective_bytes(), floor);
++        assert_eq!(desired_survivor_bytes(), survivor_target);
++        assert_eq!(survivor_target, gc_scavenge_nursery_cap_bytes() / 16);
++        // A survival increase still requires two readings and can recover
++        // several levels in one move, without changing the configured base.
++        let influx = initial / 15;
++        retune_after_scavenge(influx, 0, 0);
++        assert_eq!(scavenge_nursery_cap_effective_bytes(), floor);
++        retune_after_scavenge(influx, 0, 0);
++        assert_eq!(scavenge_nursery_cap_effective_bytes(), initial * 2);
++        reset_for_test();
++    }
++
+     /// #11549: a ladder move lands where one-step moves would settle, so a
+     /// steady influx reaches the same size it always did — and never
+     /// oscillates. Checked exhaustively over influxes from the floor's dead
+@@ -1496,9 +1508,15 @@ mod tests {
+                 influx >= settled / 100 || settled == floor,
+                 "influx {influx} still below 1% of the {settled} cap it settled at"
+             );
+-            // The smallest such level: one step down would be above 4%.
++            // Growth settles at the first acceptable level. A downward
++            // move stops as soon as influx reaches 1%; startup can already
++            // be in the dead band and does not require a move at all.
++            let initial = nursery_cap_initial_bytes();
+             assert!(
+-                settled == floor || influx > settled / 2 / 25,
++                settled == floor
++                    || settled == initial
++                    || (settled > initial && influx > settled / 2 / 25)
++                    || (settled < initial && influx < settled * 2 / 100),
+                 "influx {influx} overshot: {settled} is bigger than the one-step rule settles at"
+             );
+             // Fixed point: many more cycles of the same influx move nothing.
+diff --git a/crates/perry-runtime/src/gc/tests/copying/adaptive_tenuring.rs b/crates/perry-runtime/src/gc/tests/copying/adaptive_tenuring.rs
+index 42da1356a7..c24421b8b8 100644
+--- a/crates/perry-runtime/src/gc/tests/copying/adaptive_tenuring.rs
++++ b/crates/perry-runtime/src/gc/tests/copying/adaptive_tenuring.rs
+@@ -197,10 +197,10 @@ fn allocation_census_seeds_the_first_cap_before_any_minor() {
+         crate::gc::tenuring::NURSERY_CAP_REFERENCE_OBJECT_BYTES
+     );
+     // ...and the first cap already reflects it — before any collection. The
+-    // first cap is the ladder's floor (#11549), a quarter of the base.
++    // first cap keeps the established quarter-base startup size.
+     assert_eq!(
+         crate::gc::tenuring::influx_driven_nursery_cap_bytes(),
+-        crate::gc::tenuring::nursery_cap_floor_bytes()
++        crate::gc::tenuring::nursery_cap_initial_bytes()
+             * crate::gc::tenuring::nursery_cap_object_scale_permille(seeded)
+             / 1000
+     );

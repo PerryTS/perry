@@ -1,0 +1,21 @@
+{
+  "base": "07e50b14a3d23e8f914193ec4d5a679adbd7c37a",
+  "production": "65799a9c74",
+  "private_commit": "8e3013733da37ddc66998ee51b9bd1109a9175ec",
+  "private_paths": [
+    "crates/perry-runtime/src/arena/block.rs",
+    "crates/perry-runtime/src/arena/block/reuse_window_tests.rs",
+    "crates/perry-runtime/src/arena/mod.rs",
+    "crates/perry-runtime/src/arena/promote.rs",
+    "crates/perry-runtime/src/arena/quarantine.rs",
+    "crates/perry-runtime/src/arena/reset.rs",
+    "crates/perry-runtime/src/gc/cycle.rs",
+    "crates/perry-runtime/src/gc/mod.rs",
+    "crates/perry-runtime/src/gc/tests/eden_entry_residency.rs",
+    "crates/perry-runtime/src/gc/tests/mod.rs"
+  ],
+  "source_count": 5011,
+  "allocation_path_stores_added": 0,
+  "scope": "Private once-per-idle-interval Eden advice; shape/header/ABI unchanged; app benefit unproven.",
+  "overlay_sha256": "2dc035a604098404640555dcd0ec679fe84e2a85cdfd1e9c263a5d46b967c108"
+}

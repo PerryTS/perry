@@ -267,6 +267,36 @@ pub(crate) fn copying_reset_from_spaces_and_flip() -> ArenaResetStats {
     }
 }
 
+/// Discard empty Eden pages before collector scratch reaches its high-water.
+/// The existing idle count must precede this collection: nonmoving reset sets
+/// it after resetting, so doing this in that reset would skip the reuse interval.
+/// Advice keeps mappings, bitmaps, age and allocator accounting unchanged.
+/// Call once at collection entry, never at each budgeted slice.
+pub(crate) fn discard_previously_idle_eden_pages() -> usize {
+    sync_inline_arena_state();
+    ARENA.with(|cell| unsafe {
+        let arena = &mut *cell.get();
+        let current = arena.current;
+        let keep_low = current.saturating_sub(4);
+        let mut released = 0;
+        for (i, block) in arena.blocks.iter_mut().enumerate() {
+            if !block.data.is_null()
+                && block.offset == 0
+                && block.dead_cycles != 0
+                && !block.idle_pages_discarded
+                && !(keep_low..=current).contains(&i)
+            {
+                let bytes = super::block::discard_empty_block_pages(block);
+                // Failed advice can retry; successful advice needs no second
+                // syscall until a used block resets again.
+                block.idle_pages_discarded = bytes != 0;
+                released += bytes;
+            }
+        }
+        released
+    })
+}
+
 /// #11736: age Eden's blocks for a moving minor by the rule the non-moving
 /// reclaim ages them, and release the ones idle for
 /// [`GENERAL_DEALLOC_DEAD_CYCLES`] consecutive collections.

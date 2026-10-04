@@ -1,0 +1,15 @@
+{
+  "scope": "Prepared only; not uploaded or queued. Launch only after v6 policy evidence supports retaining the window.",
+  "production_head": "a38ab9587d865fb909ad154e22d97ad76a60da96",
+  "files": {
+    "gc-runtime-shared-window-v7-build.sh": "504e6ff83b9017c11f0b2d3e394b4d9d9a1a1a122dc97cffe9ac1baae03dcc33",
+    "gc-runtime-shared-window-linked-v7.py": "38c755ed2bf73a399ad42604e025abafe931b4ed5b8a7450412e98ab1a1d7b20",
+    "gc-runtime-shared-window-noauto-v7.py": "6d8d064e6b8d41571a22d854d2db24fe493980ff8e3a7b28524d26a1c606201d",
+    "gc-runtime-shared-window-auto-matrix-v7.py": "e9bf244c3fe041c20ee601cb20f02c4b3807489ee0d85b87ce78f81c2fb4e9e5",
+    "gc-runtime-shared-window-v7-run.sh": "04539ee56b7274a5fef017c8a81e9fe39fd49a3c54b7fad5417d17e47563754b"
+  },
+  "normal_auto_cells": 204,
+  "full_runtime_cells": 24,
+  "linked_default_moving_cells": 6,
+  "reuse": "Existing exact pristine-main69 binary/build records are reused only after current source, compiler/product, executable and symbol identities pass. New measurements run both arms again."
+}

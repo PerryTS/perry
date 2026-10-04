@@ -1,0 +1,49 @@
+{
+  "source_count": 5011,
+  "result": {
+    "command": [
+      "cargo",
+      "+nightly-2026-08-20",
+      "test",
+      "--locked",
+      "--release",
+      "-p",
+      "perry-ffi",
+      "-p",
+      "perry-ext-events"
+    ],
+    "rc": 0,
+    "pid": 90385,
+    "elapsed_s": 154.16448595933616,
+    "source_manifest_sha256": "5ef8d2840f6344a606008302f3d93f89373b94f288a155ba148e3f4ccff9c219",
+    "raw_log_sha256": "a064a0b712750e133eb653bc4ffeb1c16f33bec436d5fbcaecf76366a2fb3f10",
+    "source_equivalent_to": "8e3013733da37ddc66998ee51b9bd1109a9175ec"
+  },
+  "suites": [
+    [
+      "15",
+      "0",
+      "0"
+    ],
+    [
+      "75",
+      "0",
+      "0"
+    ],
+    [
+      "0",
+      "0",
+      "0"
+    ],
+    [
+      "5",
+      "0",
+      "13"
+    ]
+  ],
+  "test_binary_hashes": {
+    "/Users/amlug/projects/perry/secret-tests/scratchpad/rss-header-20261002/entry-once-main07-v45-mac-target/release/build/perry-ext-events/b54e442494b77c31/out/perry_ext_events-b54e442494b77c31": "d14b46f76f0451398fd49fea28555e9fdab3186021e488d148c1b7450d600682",
+    "/Users/amlug/projects/perry/secret-tests/scratchpad/rss-header-20261002/entry-once-main07-v45-mac-target/release/build/perry-ffi/3ccb3aeb9fbd1688/out/perry_ffi-3ccb3aeb9fbd1688": "04d7da45a8f8460beb558dbd1ea0a9d8590d3420989af21ab2cf34236ee47e1f"
+  },
+  "scope": "Exact adopted once-advice candidate: Mac FFI/event/doc tests pass. Original driver failed only its post-test suite-order assertion; native Cargo rc=0. Original raw log/result preserved, no native rerun."
+}

@@ -1,0 +1,67 @@
+"""Linked default and genuinely moving GC checks; exact Node output on both arms."""
+import json
+import bench
+B=bench.B; V='gc-qb6-currente532-v12r4-linked'; records=[]
+root=B.parent/'source-gc'
+arms=['currente532-base','currente532-gc']
+cases=['test_gap_gc_container_value_rooting','test_gap_gc_define_properties_key_rooting','test_gap_gc_store_ic_old_to_young','test_gap_class_accessor_shape_facts','test_gap_10753_dynamic_key_read','test_gap_10507_function_constructors','test_gap_gc_11789_closure_call_args','test_gap_class_expr_fresh_static_blocks_this','test_gap_byname_function_reads','test_gap_byname_inherited_reads']
+assert not (B/(V+'-runs.json')).exists()
+products={str(p):bench.m.sha(p) for arm in arms for p in [B/arm/'perry',B/arm/'libperry_runtime.a',B/arm/'libperry_stdlib.a']}
+bench.m.save(V+'-products.json',products)
+previous=B/'gc-qb6-currente532-v12r3-linked-runs.json'
+prior=json.loads(previous.read_text()); prior_sha=bench.m.sha(previous)
+old_products=json.loads((B/'gc-qb6-currente532-v12r3-linked-products.json').read_text())
+assert products==old_products
+reuse=set(cases[:7])
+derived=B/'derived-sources'; derived.mkdir(exist_ok=False)
+original=root/'test-files/test_gap_class_expr_fresh_static_blocks_this.ts'
+source=original.read_text()
+for statement in ['const B = makeExpr("B");','(globalThis as any).__IDENT = I;','const D = makeDecl("D");']:
+    assert source.count(statement)==1
+    source=source.replace(statement,statement+'\ngc();')
+source='declare function gc(): void;\n'+source
+(derived/original.name).write_text(source)
+bench.m.save(V+'-derived-source.json',dict(original_source_sha256=bench.m.sha(original),derived_source_sha256=bench.m.sha(derived/original.name),scope='Three explicit collections between fresh class creation and subsequent static reads. Original campaign fixture remains unchanged. Node output must match original.'))
+for case in cases:
+    src=root/'test-files'/(case+'.ts')
+    if case=='test_gap_class_expr_fresh_static_blocks_this':
+        src=derived/src.name
+    oracle=bench.run(V+'-node-'+case,['node','--expose-gc',src],timeout=300)
+    assert oracle['rc']==0,oracle
+    if case=='test_gap_class_expr_fresh_static_blocks_this':
+        control=bench.run(V+'-node-original-'+case,['node','--expose-gc',original],timeout=300)
+        assert control['rc']==0 and control['stdout']==oracle['stdout']
+    if case in reuse:
+        for arm in arms:
+            rows=[r for r in prior if r['case']==case and r['arm']==arm]
+            assert len(rows)==3 and {r['mode'] for r in rows}=={'build','default','moving'}
+            for r in rows:
+                assert r['rc']==0 and r['reason'] is None
+                if r['mode']=='build':assert r['source_sha256']==bench.m.sha(src)
+                else:
+                    assert r['correct'] and r['stdout']==oracle['stdout']
+                    assert bench.m.sha(r['cmd'][0])==r['binary_sha256']
+                    if r['mode']=='moving':assert r['copied_objects']>0 and r['protected']
+                records.append(dict(r,reused_from_manifest=str(previous),reuse_manifest_sha256=prior_sha))
+        bench.m.save(V+'-runs.json',records)
+        continue
+    for arm in arms:
+        binary=B/'bin'/f'{V}-{arm}-{case}'; assert not binary.exists()
+        env={'PERRY_RUNTIME_DIR':str(B/arm),'PERRY_WORKSPACE_ROOT':str(root),'PERRY_NO_CACHE':'1','PERRY_GC_INSTRUMENTS':'1','CARGO_TARGET_DIR':str(B.parent/('target-linked-'+arm))}
+        r=bench.run(V+'-build-'+arm+'-'+case,[B/arm/'perry','compile',src,'--no-auto-optimize','-o',binary],env,300)
+        r.update(case=case,arm=arm,mode='build',source_sha256=bench.m.sha(src)); records.append(r)
+        bench.m.save(V+'-runs.json',records); assert r['rc']==0 and r['reason'] is None,r
+        for mode in ['default','moving']:
+            env={} if mode=='default' else {'PERRY_GC_SCHEDULE_SEED':'7949','PERRY_GC_SCHEDULE_RATE':'1' if case in ['test_gap_gc_container_value_rooting','test_gap_gc_define_properties_key_rooting','test_gap_10753_dynamic_key_read','test_gap_byname_function_reads','test_gap_byname_inherited_reads'] else '0.01','PERRY_GC_SCHEDULE_ALLOC_KB':'0' if case in ['test_gap_10753_dynamic_key_read','test_gap_byname_function_reads','test_gap_byname_inherited_reads'] else '4','PERRY_GC_PROTECT_FROMSPACE':'1','PERRY_GC_VERIFY_EVACUATION':'1','PERRY_GC_DIAG':'1','PERRY_GC_TRACE':'1'}
+            label=f'{V}-{arm}-{case}-{mode}'
+            r=bench.run(label,[binary],env,300)
+            r.update(case=case,arm=arm,mode=mode,binary_sha256=bench.m.sha(binary),correct=r['rc']==0 and r['reason'] is None and r['stdout']==oracle['stdout'])
+            if mode=='moving':
+                lines=(B/'logs'/(label+'.err')).read_text().splitlines()
+                cycles=[json.loads(s) for s in lines if s.startswith('{')]
+                r.update(copied_objects=sum(c.get('copying_nursery',{}).get('copied_objects',0) for c in cycles),protected=any(s.startswith('[gc-fromspace-protect]') and 'retired_set=' in s for s in lines))
+            records.append(r); bench.m.save(V+'-runs.json',records)
+            assert r['correct'],r
+            if mode=='moving': assert r['copied_objects']>0 and r['protected'],r
+            print(arm,case,mode,'correct',r.get('copied_objects'),flush=True)
+assert {p:bench.m.sha(p) for p in products}==products

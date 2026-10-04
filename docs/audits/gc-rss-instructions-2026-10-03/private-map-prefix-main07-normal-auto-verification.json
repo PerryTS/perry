@@ -1,0 +1,19 @@
+{
+  "base": "07e50b14a3d23e8f914193ec4d5a679adbd7c37a",
+  "production_runtime": "4401b3b981f3ecd361f80521f011a7cb22289cf7",
+  "complete_cells": 204,
+  "builds": 30,
+  "private_map_prefix": "f27fcd49d8",
+  "private_control": "8e3013733d",
+  "cases": 17,
+  "all_raw_sources_products_oracles_counters_verified": true,
+  "auto_runtime_stamps": 8,
+  "inputs": {
+    "runs": "3ccabce7aac7f4d4cbb8a9264824802d395ad7ec228f7fd86536dfdd12399e49",
+    "builds": "1f5b4a19083dedc4e3098d41c84d44176c79dd77756f1542e2d664d294da7e69",
+    "oracle": "2c7624378552bbed27dc711d3a6f7021dfcdd87e25bf59ac8ae3becd2efce70b",
+    "products": "5c65ab13b2e230be913603ab60029823779fd77653244d628ab8477d0a35afc8",
+    "summary": "5b9b7ff3c7cd2ccb98b754f3917de4b50ec74f3b4e534222c427200ed42d328f",
+    "auto-runtime-products": "09b6c4b262ade55024fbe40b45cda6ada535b79ccc4c9d9a2193ed1a9bb8908d"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "complete_cells": 192,
+  "measured_cases": 16,
+  "full_suite_cases": 17,
+  "full_suite_accepted": false,
+  "full_guard_rejection": "oracle case coverage differs",
+  "build_manifest_sha256": "7a6ed2969d0ebe0778cf7f00e63e62514b0a9368b6dab59825ffbd178bacdc9c",
+  "runs_sha256": "e364c4833ef6afe0b54e2dd6cd2c72b16c0dbc4c7cb41dfc55b637341c9c23fe",
+  "successful_partial_receipt_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+  "failed_original_preflight": "v17 had no executable runs: retained baseline copies had no copied text-dump file; r1 verifies actual ELF text of each current plain/symbol binary against original build hash. Original failed receipt retained.",
+  "limitations": "Partial diagnostic comparison; inherited request compilation error present on both arms. Shared-host cycles span large ranges, not a stable timing verdict."
+}

@@ -1,0 +1,58 @@
+{
+  "base": "07e50b14a3d23e8f914193ec4d5a679adbd7c37a",
+  "private_commit": "f27fcd49d8adbb4312b9a90ae5536e4215c9fec3",
+  "tracked_inputs": 5012,
+  "private_paths": [
+    "crates/perry-runtime/src/gc/roots/stack_maps.rs",
+    "crates/perry-runtime/src/gc/roots/stack_maps_lazy.rs",
+    "crates/perry-runtime/src/gc/roots/stack_maps_prefix_tests.rs"
+  ],
+  "commands": [
+    {
+      "name": "build",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--release",
+        "-p",
+        "perry",
+        "-p",
+        "perry-runtime-static",
+        "-p",
+        "perry-stdlib-static"
+      ],
+      "rc": 0,
+      "pid": 2221121,
+      "elapsed_s": 197.24952032603323,
+      "log_sha256": "e365eb8716f4738093f9ea3a5c27952822a6344309127ee72f751dbe60b76800"
+    },
+    {
+      "name": "runtime-tests",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--release",
+        "-p",
+        "perry-runtime",
+        "--lib"
+      ],
+      "rc": 0,
+      "pid": 2233360,
+      "elapsed_s": 124.7009996091947,
+      "log_sha256": "ec9550697505e72c3b1d45e5676f3a5b9ab9d8f12c7e5ec40573bfeaa91cc1e5"
+    }
+  ],
+  "products": {
+    "perry": "c92ab0ccbe6925d7ddfa65f4b2c665b0e06d3fe3829423b98d4629d5d41d2bca",
+    "libperry_runtime.a": "e843a94762596a2bc928320148c9b25234e72c58b20130c82305ec74faeb2582",
+    "libperry_stdlib.a": "8022e04e8e07d87edc798ac67451f2fadb87157d8ee2191cf50644fa471c7e3b"
+  },
+  "runtime": {
+    "passed": 4868,
+    "failed": 0,
+    "ignored": 5
+  },
+  "scope": "Private native-map prefix build and full runtime tests, including early suffix avoidance, unsorted duplicate roots, folded functions, tie preservation, and malformed required-prefix rejection. Application benefit remains unproven."
+}

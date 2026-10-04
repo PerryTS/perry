@@ -1,0 +1,15 @@
+{
+  "scriptc": {
+    "version": "0.2.2",
+    "integrity": "sha512-DWSTPtyNYQxfrBeip9uvcgdnDRYBcJzwcVMmrFZsYO0sXxzqaA3KLuik543YIuYyatAuMO4BnYRCOgI2ny3g1Q=="
+  },
+  "porffor": {
+    "version": "0.0.0-alpha.15",
+    "integrity": "sha512-F6po1djFXszGo1J11Qvgs5rdtQBK5z74ViAk+CedDbE4gBeYF8SkWcaCXOtqqGq/D6VERmq8fNCKQmts6wf8ug==",
+    "remote_commit": "72d048d73d49e217631ac8a1bc4fa9070d22fbc9"
+  },
+  "hermes": {
+    "remote_commit": "ade4a2b20246340d4309cf62be51f9652dcde279"
+  },
+  "checked_utc": "2026-10-04T00:37:00.134035+00:00"
+}

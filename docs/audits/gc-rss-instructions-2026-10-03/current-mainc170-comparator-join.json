@@ -1,0 +1,105 @@
+{
+  "scope": "Peak RSS medians of three correct runs on the same measurement host and standalone source workloads. ScriptC JSON compilation failure has no RSS rank. Does not compare unsupported TS/Zod applications across engines.",
+  "perry_base": "c17090892e2a749bb4a3f2a0022e0f8274f0320c",
+  "perry_source_head": "f60e41c5ba519167252e94248dea8e9090990eea",
+  "latest_version_check": {
+    "checked_utc": "2026-10-03T17:36:41.727406+00:00",
+    "scriptc": {
+      "version": "0.2.1",
+      "integrity": "sha512-w8LPduUYUipy+kqqDX+tYh8N7LNpEnfFQnEnJ/cNPqxvp2XHe+Vwih/U8+kJf+IECorNcgY8YMembCX26o1SrQ=="
+    },
+    "porffor": {
+      "version": "0.0.0-alpha.15",
+      "integrity": "sha512-F6po1djFXszGo1J11Qvgs5rdtQBK5z74ViAk+CedDbE4gBeYF8SkWcaCXOtqqGq/D6VERmq8fNCKQmts6wf8ug==",
+      "remote_commit": "72d048d73d49e217631ac8a1bc4fa9070d22fbc9"
+    },
+    "hermes": {
+      "remote_commit": "ade4a2b20246340d4309cf62be51f9652dcde279"
+    },
+    "all_measured_versions_still_latest_at_check": true
+  },
+  "rows": [
+    {
+      "case": "00-noop",
+      "perry_main_mib": 1.2890625,
+      "perry_gc_mib": 1.2890625,
+      "scriptc_mib": 1.6640625,
+      "scriptc_correct": true,
+      "porffor_mib": 1.5390625,
+      "porffor_correct": true,
+      "shermes_mib": 9.63671875,
+      "shermes_correct": true
+    },
+    {
+      "case": "15-crc32",
+      "perry_main_mib": 16.93359375,
+      "perry_gc_mib": 16.30078125,
+      "scriptc_mib": 9.71484375,
+      "scriptc_correct": true,
+      "porffor_mib": 10.0625,
+      "porffor_correct": true,
+      "shermes_mib": 17.52734375,
+      "shermes_correct": true
+    },
+    {
+      "case": "23-binary-trees",
+      "perry_main_mib": 178.8125,
+      "perry_gc_mib": 178.52734375,
+      "scriptc_mib": 585.64453125,
+      "scriptc_correct": true,
+      "porffor_mib": 400.96875,
+      "porffor_correct": true,
+      "shermes_mib": 253.09765625,
+      "shermes_correct": true
+    },
+    {
+      "case": "30-string-build",
+      "perry_main_mib": 214.7734375,
+      "perry_gc_mib": 210.9296875,
+      "scriptc_mib": 183.34375,
+      "scriptc_correct": true,
+      "porffor_mib": 339.26171875,
+      "porffor_correct": true,
+      "shermes_mib": 301.94921875,
+      "shermes_correct": true
+    },
+    {
+      "case": "31-json",
+      "perry_main_mib": 160.0234375,
+      "perry_gc_mib": 154.07421875,
+      "scriptc_mib": null,
+      "scriptc_correct": false,
+      "porffor_mib": 166.09765625,
+      "porffor_correct": true,
+      "shermes_mib": 110.10546875,
+      "shermes_correct": true
+    },
+    {
+      "case": "51-pipeline",
+      "perry_main_mib": 285.47265625,
+      "perry_gc_mib": 255.36328125,
+      "scriptc_mib": 261.33984375,
+      "scriptc_correct": true,
+      "porffor_mib": 403.37890625,
+      "porffor_correct": true,
+      "shermes_mib": 386.4921875,
+      "shermes_correct": true
+    },
+    {
+      "case": "60-ring-churn",
+      "perry_main_mib": 14.94921875,
+      "perry_gc_mib": 14.67578125,
+      "scriptc_mib": 1.82421875,
+      "scriptc_correct": true,
+      "porffor_mib": 37.33203125,
+      "porffor_correct": true,
+      "shermes_mib": 14.27734375,
+      "shermes_correct": true
+    }
+  ],
+  "inputs": {
+    "gc-auto-currentc170-qb6-v22-summary.json": "35119a36dcfc5723b17dc0df3bec747bb4c5f44dd5f1c1f7e160ee32e0da8c4b",
+    "comparators-20261003-summary.json": "2db4e456de87320aedf85560156b3e71e4b2013100be135b7c6c15229a810ae0",
+    "comparators-20261003-versions.json": "245481a1d2d41e8ed05163821d9bcf45c6ae0a3e145342538ce3af42a85408af"
+  }
+}
