@@ -16,7 +16,7 @@ pub(super) fn clone_message(value: f64, transfer: f64) -> SerializedValue {
     }
 }
 
-fn try_clone_message(value: f64, transfer: f64) -> Result<SerializedValue, String> {
+pub(super) fn try_clone_message(value: f64, transfer: f64) -> Result<SerializedValue, String> {
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
     // Reading the transfer list can allocate.
     let value = scope.root_nanbox_f64(value);

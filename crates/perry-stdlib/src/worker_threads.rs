@@ -294,7 +294,8 @@ struct WorkerListener {
 enum WorkerEvent {
     Online(u64),
     Message(u64, SerializedValue),
-    Error(u64),
+    /// The worker ended on an uncaught exception: a clone of the thrown value.
+    Error(u64, SerializedValue),
     Exit(u64, i32),
 }
 
@@ -755,6 +756,9 @@ fn pump_worker_microtasks() {
             break;
         }
     }
+    // The microtask checkpoint: a rejection nothing handled is reported here.
+    // In a worker it ends the worker (see `run_worker_body`).
+    perry_runtime::promise::js_promise_report_unhandled_rejections();
 }
 
 /// Upper bound on one park in the worker's own loop while it has I/O in
@@ -1453,9 +1457,14 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
 
             let entry: WorkerEntry = unsafe { std::mem::transmute(entry_ptr as usize) };
             let mut exit_code = 0;
+            // An exception the worker leaves unhandled ends the worker, not
+            // the process: it lands in `run_worker_body`.
             let result = catch_unwind(AssertUnwindSafe(|| {
-                'reload: loop {
+                perry_runtime::exception::run_worker_body(|| 'reload: loop {
                     entry();
+                    // Let module-level continuations run, and report a
+                    // module-level rejection nothing handled.
+                    pump_worker_microtasks();
                     if CURRENT_WORKER_CLOSE_REQUESTED.with(Cell::get) {
                         return;
                     }
@@ -1547,7 +1556,7 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
                             Err(_) => break 'reload,
                         }
                     }
-                }
+                })
             }));
             restore_worker_env(previous_env);
             // This arena is about to go away; purge any queue entry still tagged
@@ -1556,20 +1565,44 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
             perry_runtime::agent::retire_agent(worker_agent);
 
             let exit_code = match result {
-                Ok(()) => exit_code,
+                Ok(Ok(())) => exit_code,
+                Ok(Err(thrown)) => {
+                    let error = worker_error_message(thrown);
+                    push_parent_event(parent_agent, WorkerEvent::Error(worker_id, error));
+                    1
+                }
                 Err(_) => {
-                    push_parent_event(parent_agent, WorkerEvent::Error(worker_id));
+                    let error = plain_error_message(b"the worker thread panicked");
+                    push_parent_event(parent_agent, WorkerEvent::Error(worker_id, error));
                     1
                 }
             };
             push_parent_event(parent_agent, WorkerEvent::Exit(worker_id, exit_code));
         });
     if spawned.is_err() {
-        push_parent_event(parent_agent, WorkerEvent::Error(worker_id));
+        let error = plain_error_message(b"the worker thread could not be started");
+        push_parent_event(parent_agent, WorkerEvent::Error(worker_id, error));
         push_parent_event(parent_agent, WorkerEvent::Exit(worker_id, 1));
     }
 
     object_value(worker_obj)
+}
+
+/// The value a worker threw, cloned for its parent's 'error' event. A value
+/// that cannot be cloned arrives as a plain Error saying so.
+fn worker_error_message(thrown: f64) -> SerializedValue {
+    clone::try_clone_message(thrown, js_undefined()).unwrap_or_else(|_| {
+        plain_error_message(b"the worker threw a value that could not be cloned")
+    })
+}
+
+fn plain_error_message(message: &[u8]) -> SerializedValue {
+    SerializedValue::Error {
+        name: b"Error".to_vec(),
+        message: Some(message.to_vec()),
+        stack: None,
+        cause: None,
+    }
 }
 
 /// worker_threads.setEnvironmentData(key, value)
@@ -1680,6 +1713,10 @@ pub extern "C" fn js_worker_threads_on(event_ptr: i64, callback: i64) -> f64 {
         }
     };
 
+    // The stored closure is only a raw pointer: without the root scanner a
+    // collection in the worker moves or frees it, and the next message calls
+    // a stale pointer ("value is not a function").
+    ensure_parent_port_event_gc_scanner();
     match event_name.as_str() {
         "message" => {
             MESSAGE_CALLBACK.with(|cb| {
