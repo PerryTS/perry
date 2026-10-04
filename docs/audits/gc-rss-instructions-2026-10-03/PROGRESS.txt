@@ -1,3 +1,29 @@
+PRIVATE ONCE-ADVICE IMPLEMENTED; CURRENT07 LINUX VERIFIED (2026-10-04 00:30Z)
+Current07 Linux baseline4840/proposal4860/originalentry4861 pass with0failed,
+5ignored each. 25source/build/product/raw proof files copied locally and
+independently rehashed. The normal-auto17 matrix and current07 linked checks
+remain outstanding; do not relabel preceding2026 application numbers.
+Private once-advice candidate8e3013733d is based on07plus production22paths.
+A boolean uses existing ArenaBlock padding; Mac4877/0/5 full unfilteredtests
+and48-byte size assertion pass. No store is added to allocation paths.
+Clearing object starts before resetting a USED bump offset starts a new idle
+interval. Already-empty resets preserve successful advice; failed advice
+can retry. Mapping/shape/objectheader/GCheader/ABI unchanged. No shape-lane
+fields repurposed. Source has10private paths, including3test-only paths.
+Linux candidate full-suite/mincore/actual-full-GC subject queued1531597.
+17-case GC/originalentry/once comparison queued1538199:30exact verified
+current07 control builds reused,15fresh candidate builds,306fresh measurements.
+Linked checks queued1539812:22builds44executions; all22moving cells must
+actually copy objects and protect retired from-space. Prerequisite waits
+occur before taking the shared lock; a failure stops dependent measurements.
+Candidate remains UNAPPLIED. No app RSS/instruction benefit inferred from
+unit tests. The old-hole test-only Linux helper fix passes4862/0/5;11evidence
+files copied and rehashed. Its four-case48-cell instruction/RSS run is live.
+Historical2026 LinuxFFI15events/75FFI/5doc tests(13ignored) independently
+verified,6raw/proof files copied and rehashed; notcurrent07 evidence.
+Completed owned R32/R34/R35 Cargo caches reclaimed7.74GiB after no-live-ref
+checks and downstream clone completion. Source/products/failures retained.
+
 REAL COLLECTION/CONTROL AND SCRIPTC022 VERIFIED (2026-10-04 00:07Z)
 Real full-GC subject:private1pass, control deliberatelyfails only second-entry
 residency assertion. Real strings/root handles/two collections; no idle ages

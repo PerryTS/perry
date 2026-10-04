@@ -1,0 +1,102 @@
+{
+  "private_commit": "f22104289b",
+  "base": "2026ecfe6dd9df1a0a8616e3bc5c5561e8e0cf63",
+  "tracked_inputs": 4999,
+  "differences": [
+    "crates/perry-runtime/src/arena/block.rs",
+    "crates/perry-runtime/src/arena/mod.rs",
+    "crates/perry-runtime/src/gc/cycle.rs",
+    "crates/perry-runtime/src/gc/old_free.rs"
+  ],
+  "actual_products": {
+    "perry": "a0890b3fbb6b2e66e00a939ac2b2df3bfd0dae24807c812a90fb2c53b69bbe23",
+    "libperry_runtime.a": "116eb971dfd9f59d330b59ffeffe7fd460abe4e03724f8c4a3080f575c2e0639",
+    "libperry_stdlib.a": "42e939326b28b0c18bd575f160a41a377a9e866d9f049213bc399c609430272d"
+  },
+  "linux_runtime": {
+    "passed": 4862,
+    "failed": 0,
+    "ignored": 5
+  },
+  "commands": [
+    {
+      "name": "build",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--release",
+        "-p",
+        "perry",
+        "-p",
+        "perry-runtime-static",
+        "-p",
+        "perry-stdlib-static"
+      ],
+      "rc": 0,
+      "pid": 1370172,
+      "elapsed_s": 213.60011299699545,
+      "log_sha256": "08e5c114fcbd8e792c5ab449281b31b866ac6d045a0cbd911a8228ad47e9c27f"
+    },
+    {
+      "name": "runtime-tests",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--release",
+        "-p",
+        "perry-runtime",
+        "--lib"
+      ],
+      "rc": 0,
+      "pid": 1383262,
+      "elapsed_s": 191.7359119192697,
+      "log_sha256": "d88fa2e5f795b9acb04f648f0496dd3df61ec86db0829635b31415a7c48c7c27"
+    }
+  ],
+  "input_manifest_sha256": "a2beb5524b1ae07c25bfb2cd20591604ab803528f0700fc7f71b7805b8b7c264",
+  "filtered_subprocess_test_summaries": [
+    [
+      "1",
+      "0",
+      "0"
+    ],
+    [
+      "1",
+      "0",
+      "0"
+    ],
+    [
+      "1",
+      "0",
+      "0"
+    ],
+    [
+      "1",
+      "0",
+      "0"
+    ],
+    [
+      "1",
+      "0",
+      "0"
+    ],
+    [
+      "1",
+      "0",
+      "0"
+    ],
+    [
+      "1",
+      "0",
+      "0"
+    ],
+    [
+      "1",
+      "0",
+      "0"
+    ]
+  ],
+  "scope": "Private old-hole payload overlay on rebased GC proposal; Linux mincore and full runtime pass. Application benefit unproven; unapplied."
+}
