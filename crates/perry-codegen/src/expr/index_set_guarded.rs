@@ -519,6 +519,50 @@ pub(super) fn emit_guarded_inbounds_array_store_keyed(
 mod tests {
     use perry_hir::{types::Type, Expr, Stmt};
 
+    fn abrupt_derived_class() -> perry_hir::Class {
+        perry_hir::Class {
+            id: 91,
+            name: "AbruptDerived".into(),
+            type_params: vec![],
+            extends: None,
+            extends_name: Some("Map".into()),
+            native_extends: None,
+            extends_expr: None,
+            heritage_lexically_shadowed: false,
+            fields: vec![],
+            constructor: Some(perry_hir::Function {
+                id: 92,
+                name: "AbruptDerived_constructor".into(),
+                type_params: vec![],
+                params: vec![],
+                return_type: Type::Any,
+                body: vec![],
+                is_async: false,
+                is_generator: false,
+                is_strict: true,
+                is_exported: false,
+                captures: vec![],
+                decorators: vec![],
+                was_plain_async: false,
+                was_unrolled: false,
+            }),
+            methods: vec![],
+            getters: vec![],
+            setters: vec![],
+            static_accessor_names: vec![],
+            static_accessor_fn_ids: vec![],
+            computed_members: vec![],
+            static_fields: vec![],
+            static_methods: vec![],
+            decorators: vec![],
+            is_exported: false,
+            aliases: vec![],
+            is_nested: false,
+            alloc_width_hint: 0,
+            specialized_from: None,
+        }
+    }
+
     fn store_ir(value: Expr, ty: Type) -> String {
         let mut module = perry_hir::Module::new("terminated_guarded_store");
         module.init = vec![Stmt::Let {
@@ -528,6 +572,7 @@ mod tests {
             mutable: true,
             init: Some(Expr::Array(vec![])),
         }];
+        module.classes.push(abrupt_derived_class());
         module.functions.push(perry_hir::Function {
             id: 2,
             name: "store".into(),
@@ -555,13 +600,13 @@ mod tests {
         .unwrap()
     }
 
-    // An unresolved Worker no longer ends its block: it asks the runtime
-    // worker entry table (`js_worker_threads_worker_new_by_spec`), which
-    // throws only if no entry matches (dyn_extern_i18n.rs). The store after it
-    // is therefore live code, reached only if the operand returned; a runtime
-    // throw leaves the call before the store. The `is_terminated` guards above
-    // stay as the defense for any operand that does end its block. Either way
-    // the emitted module must parse and verify.
+    // `new C()` where `C extends Map` and its constructor never calls
+    // `super()` is statically abrupt: the inlined constructor lowers to
+    // `js_throw_reference_error_this_before_super` + `unreachable`
+    // (`lower_call/new.rs`; a builtin base keeps the constructor inline). The
+    // store after such an operand is emitted as dead code rather than skipped;
+    // the `is_terminated` guards above stay as the defense. Either way the
+    // emitted module must parse and verify.
     #[test]
     fn throwing_operand_store_emits_valid_ir() {
         for (ty, block) in [
@@ -571,18 +616,21 @@ mod tests {
             let live = store_ir(Expr::Number(42.0), ty.clone());
             assert!(live.contains(block), "store arm {block} not exercised");
             let dead = store_ir(
-                Expr::WorkerNew {
-                    paths: vec![],
-                    filename: Box::new(Expr::String("unresolved-worker".into())),
-                    options: None,
-                    is_eval: false,
-                    partial: false,
+                Expr::New {
+                    class_name: "AbruptDerived".into(),
+                    args: vec![],
+                    type_args: vec![],
+                    byte_offset: 0,
+                    cap_args_appended: 0,
                 },
                 ty,
             );
+            let throw = dead
+                .find("call double @js_throw_reference_error_this_before_super(")
+                .unwrap_or_else(|| panic!("{block}: the abrupt operand must throw:\n{dead}"));
             assert!(
-                dead.contains("@js_worker_threads_worker_new_by_spec("),
-                "{block}: the throwing operand must be lowered before the store"
+                dead[throw..].lines().nth(1).map(str::trim) == Some("unreachable"),
+                "{block}: the throw must terminate its block:\n{dead}"
             );
             let llvm = inkwell::context::Context::create();
             let parsed = crate::inprocess::parse_ir_text(&llvm, &dead, block)
