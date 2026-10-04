@@ -1167,15 +1167,18 @@ pub fn run_with_parse_cache(
     // those globals thread-local so each thread instantiates its own graph.
     //
     // Conservative on purpose: any `new Worker(...)` site counts, resolved or
-    // not. A program with no Worker at all keeps process-wide globals and
+    // not, and so does a worker entry named only by a URL literal (a program
+    // that starts its Workers through the namespace value has no `new Worker`
+    // site at all). A program with no Worker keeps process-wide globals and
     // pays no TLS cost.
-    let program_has_worker = ctx.native_modules.values().any(|hir_module| {
-        let mut found = false;
-        perry_hir::for_each_worker_new(hir_module, &mut |_expr| {
-            found = true;
+    let program_has_worker = !ctx.worker_url_entries.is_empty()
+        || ctx.native_modules.values().any(|hir_module| {
+            let mut found = false;
+            perry_hir::for_each_worker_new(hir_module, &mut |_expr| {
+                found = true;
+            });
+            found
         });
-        found
-    });
     perry_codegen::set_program_has_worker(program_has_worker);
     // Immutable module-global leaves (perry-codegen codegen/global_transfer.rs)
     // must be published by producer modules that never launch an agent
@@ -3266,6 +3269,16 @@ pub fn run_with_parse_cache(
         }
         if !local_map.is_empty() {
             per_module_dyn_import_targets.insert(path.clone(), local_map);
+        }
+    }
+    // Worker entries named only by `new URL("<literal>", import.meta.url)`.
+    for (lexical, canonical) in &ctx.worker_url_entries {
+        let Some(target_name) = path_to_module_name.get(canonical) else {
+            continue;
+        };
+        let target_prefix = sanitize_module_name(target_name);
+        for path in [lexical, canonical] {
+            worker_entries.insert((path.to_string_lossy().into_owned(), target_prefix.clone()));
         }
     }
     perry_codegen::set_worker_entries(worker_entries.into_iter().collect());

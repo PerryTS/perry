@@ -49,6 +49,7 @@ mod tests;
 mod walk;
 mod wasm_asset;
 mod worker;
+pub(crate) mod worker_url;
 
 use binding_faithfulness::audit_native_binding_choice;
 pub(super) use discovery::is_nextjs_runtime_module;
@@ -118,6 +119,10 @@ enum VisitState {
 
 enum WorkFrame {
     Enter(PathBuf),
+    /// A worker entry named only by a `new URL("<literal>", import.meta.url)`.
+    /// If its module fails to compile, that is a warning: the literal may not
+    /// name a worker at all.
+    EnterWorkerUrl(PathBuf),
     Finish(PreparedModule),
 }
 
@@ -1170,6 +1175,7 @@ fn collect_module_one(
         ctx.native_module_imports
             .insert("worker_threads".to_string());
     }
+    worker_url::record(&hir_module, entry_path, &canonical, ctx);
     drop(dynamic_local_literals);
     drop(module_const_locals);
     if !dyn_errors.is_empty() {

@@ -14,7 +14,8 @@ pub(crate) fn collect_modules(
     progress: &VerboseProgress,
     mut parse_cache: Option<&mut ParseCache>,
 ) -> Result<()> {
-    ctx.reexport_pruner.root(&entry_path.canonicalize()?);
+    let entry_canonical = entry_path.canonicalize()?;
+    ctx.reexport_pruner.root(&entry_canonical);
     let mut states: HashMap<PathBuf, VisitState> = HashMap::new();
     let mut stack = vec![WorkFrame::Enter(entry_path.clone())];
     // Next.js wall 54 (part 2): a standalone `server.js` loads its page, route,
@@ -50,57 +51,9 @@ pub(crate) fn collect_modules(
     }
     loop {
         while let Some(frame) = stack.pop() {
-            match frame {
-                WorkFrame::Enter(next_path) => {
-                    let canonical = next_path.canonicalize().map_err(|e| {
-                        anyhow!("Failed to canonicalize {}: {}", next_path.display(), e)
-                    })?;
-                    // Worker/asset/standalone roots can enter outside ordinary
-                    // import edges. Their full namespace must remain available.
-                    ctx.reexport_pruner.implicit_root(&canonical);
-
-                    if matches!(
-                        states.get(&canonical),
-                        Some(VisitState::InProgress | VisitState::Done)
-                    ) {
-                        continue;
-                    }
-                    if visited.contains(&canonical) {
-                        states.insert(canonical, VisitState::Done);
-                        continue;
-                    }
-
-                    states.insert(canonical.clone(), VisitState::InProgress);
-                    visited.insert(canonical.clone());
-                    progress.record(ProgressSnapshot {
-                        stage: "collect-module",
-                        module_path: Some(&canonical),
-                        visited: Some(visited.len()),
-                        collected: Some(ctx.native_modules.len() + ctx.js_modules.len()),
-                        ..Default::default()
-                    });
-
-                    let discovered = collect_module_one(
-                        &next_path,
-                        canonical.clone(),
-                        ctx,
-                        visited,
-                        format,
-                        target,
-                        next_class_id,
-                        progress,
-                        parse_cache.as_deref_mut(),
-                    )?;
-
-                    if let Some(prepared) = discovered.finish {
-                        stack.push(WorkFrame::Finish(prepared));
-                    } else {
-                        states.insert(canonical, VisitState::Done);
-                    }
-                    for child in discovered.children.into_iter().rev() {
-                        stack.push(WorkFrame::Enter(child));
-                    }
-                }
+            let (next_path, worker_url) = match frame {
+                WorkFrame::Enter(next_path) => (next_path, false),
+                WorkFrame::EnterWorkerUrl(next_path) => (next_path, true),
                 WorkFrame::Finish(prepared) => {
                     let canonical = prepared.canonical.clone();
                     collect_module_finish(
@@ -112,8 +65,77 @@ pub(crate) fn collect_modules(
                         progress,
                     )?;
                     states.insert(canonical, VisitState::Done);
+                    continue;
                 }
+            };
+            let canonical = next_path
+                .canonicalize()
+                .map_err(|e| anyhow!("Failed to canonicalize {}: {}", next_path.display(), e))?;
+            // Worker/asset/standalone roots can enter outside ordinary
+            // import edges. Their full namespace must remain available.
+            ctx.reexport_pruner.implicit_root(&canonical);
+
+            if matches!(
+                states.get(&canonical),
+                Some(VisitState::InProgress | VisitState::Done)
+            ) {
+                continue;
             }
+            if visited.contains(&canonical) {
+                states.insert(canonical, VisitState::Done);
+                continue;
+            }
+
+            states.insert(canonical.clone(), VisitState::InProgress);
+            visited.insert(canonical.clone());
+            progress.record(ProgressSnapshot {
+                stage: "collect-module",
+                module_path: Some(&canonical),
+                visited: Some(visited.len()),
+                collected: Some(ctx.native_modules.len() + ctx.js_modules.len()),
+                ..Default::default()
+            });
+
+            let discovered = match collect_module_one(
+                &next_path,
+                canonical.clone(),
+                ctx,
+                visited,
+                format,
+                target,
+                next_class_id,
+                progress,
+                parse_cache.as_deref_mut(),
+            ) {
+                Ok(discovered) => discovered,
+                Err(error) if worker_url => {
+                    if matches!(format, OutputFormat::Text) {
+                        eprintln!(
+                            "  Warning: {} is named by new URL(..., import.meta.url) \
+                                     in a program that uses worker_threads, but it did not \
+                                     compile, so it is not a worker entry: {error:#}",
+                            canonical.display()
+                        );
+                    }
+                    states.insert(canonical, VisitState::Done);
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+
+            if let Some(prepared) = discovered.finish {
+                stack.push(WorkFrame::Finish(prepared));
+            } else {
+                states.insert(canonical, VisitState::Done);
+            }
+            for child in discovered.children.into_iter().rev() {
+                stack.push(WorkFrame::Enter(child));
+            }
+        }
+        let workers = worker_url::accept_pending(ctx, &entry_canonical, visited);
+        if !workers.is_empty() {
+            stack.extend(workers.into_iter().rev().map(WorkFrame::EnterWorkerUrl));
+            continue;
         }
         let pending = reexport_prune::settle(ctx);
         if pending.is_empty() {
@@ -121,5 +143,6 @@ pub(crate) fn collect_modules(
         }
         stack.extend(pending.into_iter().rev().map(WorkFrame::Enter));
     }
+    worker_url::link_accepted(ctx, format);
     Ok(())
 }
