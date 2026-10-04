@@ -1,3 +1,15 @@
+CURRENT07 LINKED EXECUTIONS INDEPENDENTLY VERIFIED
+33freshbuilds/66correctexec across11fixtures and3arms(base/GC/originalentry).
+All33movingruns showactualcopiedobjects andprotectedretiredfromspace.
+Source/9compiler-runtimeproducts/rawlogs/Node26.5.1oracles/binaryhashes and
+fresh-classderivedfixture independentlyverified; fullrawarchivecopiedlocally
+andrehashed. No nativeprogramfailed. Originalv42r1wrapperexit1 preserved:
+verifier wasinvokedbeforeEXITtrapwroteitsownreceipt. Postcompletionverifier
+explicitlyrequires that exacterror/receipt and independentlychecksall99rows.
+The earlierv42wrongproof-directoryerroralsoremains preserved; no rerun of
+completed measurements. Current07FFI/events andprivateonce/lazyacceptance
+remainoutstanding. Production22runtime/source5010 hashes unchanged.
+
 ONCE-ADVICE LINUX VERIFIED; CURRENT07 ENGINE COMPARISON JOINED
 Once-advice8e301 Linux4863/0/5 passes, actualmincore/reuse/fullGC and48byte
 padding subjects independentlyverified;10raw/proof files copied/rehashed.
