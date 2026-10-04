@@ -569,3 +569,21 @@ fn more_builtin_statics_without_spread_keep_their_fast_paths() {
         );
     }
 }
+
+/// #11896: `ns.Buffer.compare(a, b)` through a namespace import built a
+/// `NativeMethodCall` with class `Buffer` that no codegen table dispatches, so
+/// every static on it (`from`, `compare`, `concat`, ...) evaluated to
+/// `undefined`. The call now reaches the generic path on the `Buffer` value.
+#[test]
+fn namespace_import_buffer_statics_are_not_a_native_class_call() {
+    for src in [
+        "import * as ns from \"node:buffer\"; console.log(ns.Buffer.compare(ns.Buffer.from(\"a\"), ns.Buffer.from(\"b\")));",
+        "import * as ns from \"buffer\"; console.log(ns.Buffer.concat([]));",
+    ] {
+        let h = hir(src);
+        assert!(
+            !h.contains("class_name: Some(\"Buffer\")"),
+            "`{src}` lowered to a receiver-less class NativeMethodCall: {h}"
+        );
+    }
+}

@@ -230,6 +230,8 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
             // global value coerce like the bare-call lowering does.
             "Number" => crate::fn_info!(global_this_number_thunk, 1; with_declared(1)),
             "Boolean" => crate::fn_info!(global_this_boolean_thunk, 1; with_declared(1)),
+            "BigInt" => crate::fn_info!(global_this_bigint_thunk, 1; with_declared(1)),
+            "Symbol" => crate::fn_info!(global_this_symbol_thunk, 1; with_declared(1)),
             "Error" => crate::fn_info!(error_constructor_call_thunk, 1; with_declared(1)),
             "TypeError" => crate::fn_info!(type_error_constructor_call_thunk, 1; with_declared(1)),
             "RangeError" => {
