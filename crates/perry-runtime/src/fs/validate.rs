@@ -159,57 +159,105 @@ fn numeric_to_i32(jv: JSValue) -> i32 {
     }
 }
 
-/// Node's `Received …` clause for an `ERR_INVALID_ARG_TYPE` message.
+/// Rust compatibility adapter; only JS strings can retain unpaired surrogates.
 pub fn describe_received(value: f64) -> String {
+    string_header_to_string(describe_received_js(value))
+}
+
+fn received_text(text: &str) -> *mut StringHeader {
+    js_string_from_bytes(text.as_ptr(), text.len() as u32)
+}
+
+/// Canonical JS renderer. Keep inspected strings in the runtime string domain,
+/// including when composing public error messages.
+pub(crate) fn describe_received_js(value: f64) -> *mut StringHeader {
     let jv = JSValue::from_bits(value.to_bits());
     if jv.is_undefined() {
-        return "undefined".to_string();
+        return received_text("undefined");
     }
     if jv.is_null() {
-        return "null".to_string();
+        return received_text("null");
     }
     if jv.is_bool() {
-        return format!("type boolean ({})", jv.as_bool());
+        return received_text(&format!("type boolean ({})", jv.as_bool()));
     }
-    if jv.is_any_string() {
-        return format!("type string ({})", inspect_string_for_received(value));
-    }
-    if jv.is_bigint() {
-        return format!("type bigint ({}n)", bigint_decimal(value));
-    }
-    if unsafe { crate::symbol::js_is_symbol(value) != 0 } {
-        let ptr = unsafe { crate::symbol::js_symbol_to_string(value) } as *const StringHeader;
-        return format!("type symbol ({})", string_header_to_string(ptr));
-    }
+    // Denormal bits can resemble legacy addresses; never probe them as pointers.
     if is_numeric(jv) {
         let n = if jv.is_int32() {
             jv.as_int32() as f64
         } else {
-            jv.as_number()
+            value
         };
-        if n.fract() == 0.0 && n.is_finite() {
-            return format!("type number ({})", n as i64);
-        }
-        return format!("type number ({})", n);
+        let number = if n == 0.0 && n.is_sign_negative() {
+            "-0".to_string()
+        } else {
+            crate::string::js_format_f64(n)
+        };
+        return received_text(&format!("type number ({number})"));
     }
-    if crate::promise::js_value_is_promise(value) != 0 {
-        return "an instance of Promise".to_string();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(value);
+    if jv.is_any_string() {
+        let inspected =
+            scope.root_string_ptr(inspect_string_for_received_js(value.get_nanbox_f64()));
+        let prefix = scope.root_string_ptr(js_string_from_bytes(b"type string (".as_ptr(), 13));
+        let joined = scope.root_string_ptr(prefix.with_const_ptr(|a| {
+            inspected.with_const_ptr(|b| crate::string::js_string_concat(a, b))
+        }));
+        let suffix = scope.root_string_ptr(js_string_from_bytes(b")".as_ptr(), 1));
+        return joined
+            .with_const_ptr(|a| suffix.with_const_ptr(|b| crate::string::js_string_concat(a, b)));
     }
-    if !super::stream::extract_closure_ptr(value).is_null() {
-        return "function ".to_string();
+    if jv.is_bigint() {
+        return received_text(&format!(
+            "type bigint ({}n)",
+            bigint_decimal(value.get_nanbox_f64())
+        ));
+    }
+    if unsafe { crate::symbol::js_is_symbol(value.get_nanbox_f64()) != 0 } {
+        let ptr = unsafe { crate::symbol::js_symbol_to_string(value.get_nanbox_f64()) }
+            as *const StringHeader;
+        return received_text(&format!("type symbol ({})", string_header_to_string(ptr)));
+    }
+    if crate::promise::js_value_is_promise(value.get_nanbox_f64()) != 0 {
+        return received_text("an instance of Promise");
+    }
+    if !super::stream::extract_closure_ptr(value.get_nanbox_f64()).is_null() {
+        return received_text("function ");
     }
     if jv.is_pointer() {
-        let ptr = jv.as_pointer::<u8>();
+        let ptr = JSValue::from_bits(value.get_nanbox_u64()).as_pointer::<u8>();
         if !ptr.is_null() && (ptr as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
             let gc_header =
                 unsafe { &*(ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader) };
             if gc_header.obj_type == crate::gc::GC_TYPE_ARRAY {
-                return "an instance of Array".to_string();
+                return received_text("an instance of Array");
             }
         }
-        return "an instance of Object".to_string();
+        return received_text("an instance of Object");
     }
-    "an unsupported value".to_string()
+    received_text("an unsupported value")
+}
+
+/// Build a received-value error without round-tripping through UTF-8 Rust text.
+pub(crate) fn build_received_type_error(prefix: &str, value: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(value);
+    let received = scope.root_string_ptr(describe_received_js(value.get_nanbox_f64()));
+    let prefix = scope.root_string_ptr(js_string_from_bytes(prefix.as_ptr(), prefix.len() as u32));
+    let message = scope
+        .root_string_ptr(prefix.with_const_ptr(|a| {
+            received.with_const_ptr(|b| crate::string::js_string_concat(a, b))
+        }));
+    message.with_mut_ptr(|s| {
+        crate::node_submodules::register_error_code_pub(s, "ERR_INVALID_ARG_TYPE")
+    });
+    let error = message.with_mut_ptr(|s| crate::error::js_typeerror_new(s));
+    crate::value::js_nanbox_pointer(error as i64)
+}
+
+pub(crate) fn throw_received_type_error(prefix: &str, value: f64) -> ! {
+    crate::exception::js_throw(build_received_type_error(prefix, value))
 }
 
 fn string_header_to_string(ptr: *const StringHeader) -> String {
@@ -219,13 +267,20 @@ fn string_header_to_string(ptr: *const StringHeader) -> String {
     unsafe {
         let len = (*ptr).byte_len as usize;
         let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-        String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
+        let bytes = std::slice::from_raw_parts(data, len);
+        if let Ok(text) = std::str::from_utf8(bytes) {
+            text.to_owned()
+        } else {
+            let units: Vec<u16> = (0..(*ptr).utf16_len)
+                .map(|i| crate::string::js_string_char_code_at(ptr, i as i32) as u16)
+                .collect();
+            String::from_utf16_lossy(&units)
+        }
     }
 }
 
 /// Read a JS string value (heap `StringHeader` or inline SSO) into a Rust
-/// `String`. Used by `describe_received` to render a `Received type string
-/// ('…')` clause.
+/// `String`. This compatibility boundary cannot retain unpaired surrogates.
 fn read_js_string(value: f64) -> String {
     let ptr = crate::value::js_get_string_pointer_unified(value) as *const StringHeader;
     string_header_to_string(ptr)
@@ -238,23 +293,35 @@ pub fn read_js_string_pub(value: f64) -> String {
     read_js_string(value)
 }
 
-/// Render a string the way Node's `determineSpecificType` does for the
-/// `Received …` clause: single-quoted (switched to double quotes when the
-/// content has a single quote but no double quote), then truncated to 25
-/// characters plus `...` once the quoted form exceeds 28 characters.
-fn inspect_string_for_received(value: f64) -> String {
-    let content = read_js_string(value);
-    let quote = if content.contains('\'') && !content.contains('"') {
-        '"'
+/// Truncate the original UTF-16 value before choosing Node's quoting form.
+fn inspect_string_for_received_js(value: f64) -> *mut StringHeader {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(value);
+    let ptr =
+        crate::value::js_get_string_pointer_unified(value.get_nanbox_f64()) as *const StringHeader;
+    let string = scope.root_string_ptr(ptr);
+    let truncated = string.with_const_ptr(|s| crate::string::js_string_length(s)) > 28;
+    let rendered = if truncated {
+        let prefix = string.with_const_ptr(|s| crate::string::js_string_slice(s, 0, 25));
+        let prefix = scope.root_string_ptr(prefix);
+        let suffix = scope.root_string_ptr(js_string_from_bytes(b"...".as_ptr(), 3));
+        prefix.with_const_ptr(|a| suffix.with_const_ptr(|b| crate::string::js_string_concat(a, b)))
     } else {
-        '\''
+        string.with_mut_ptr(|s| s)
     };
-    let inspected = format!("{quote}{content}{quote}");
-    if inspected.chars().count() > 28 {
-        let truncated: String = inspected.chars().take(25).collect();
-        format!("{truncated}...")
+    let rendered = scope.root_string_ptr(rendered);
+    let has_quote = rendered.with_const_ptr(|s| {
+        (0..crate::string::js_string_length(s))
+            .any(|i| crate::string::js_string_char_code_at(s, i as i32) == b'\'' as f64)
+    });
+    if has_quote {
+        unsafe { rendered.with_const_ptr(|s| crate::json::js_json_stringify_string(s)) }
     } else {
-        inspected
+        let quote = scope.root_string_ptr(js_string_from_bytes(b"'".as_ptr(), 1));
+        let joined = scope.root_string_ptr(quote.with_const_ptr(|a| {
+            rendered.with_const_ptr(|b| crate::string::js_string_concat(a, b))
+        }));
+        joined.with_const_ptr(|a| quote.with_const_ptr(|b| crate::string::js_string_concat(a, b)))
     }
 }
 
@@ -279,12 +346,13 @@ fn bigint_decimal(value: f64) -> String {
 /// Throw `TypeError [ERR_INVALID_ARG_TYPE]` for a bad path argument, matching
 /// Node's message shape. Diverges via `js_throw`.
 pub(crate) fn throw_invalid_path_arg(arg_name: &str, value: f64) -> ! {
-    let message = format!(
-        "The \"{}\" argument must be of type string or an instance of Buffer or URL. Received {}",
-        arg_name,
-        describe_received(value)
+    throw_received_type_error(
+        &format!(
+            "The \"{}\" argument must be of type string or an instance of Buffer or URL. Received ",
+            arg_name
+        ),
+        value,
     );
-    throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
 }
 
 /// Throw `Error [EBADF]` for a numeric fd that is not an open descriptor.
@@ -365,11 +433,10 @@ pub unsafe extern "C" fn js_validate_event_listener(
         let bytes = std::slice::from_raw_parts(name_ptr, name_len as usize);
         String::from_utf8_lossy(bytes).into_owned()
     };
-    let message = format!(
-        "The \"{name}\" argument must be of type function. Received {}",
-        describe_received(value)
+    throw_received_type_error(
+        &format!("The \"{name}\" argument must be of type function. Received "),
+        value,
     );
-    throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
 }
 
 /// `#[used]` keepalive so the auto-optimize whole-program-LLVM rebuild does
@@ -479,12 +546,13 @@ pub(crate) fn fd_open_callback_error(value: f64, syscall: &'static str) -> Optio
 pub(crate) fn validate_required_callback(arg_name: &str, value: f64) -> *const ClosureHeader {
     let ptr = super::stream::extract_closure_ptr(value);
     if ptr.is_null() {
-        let message = format!(
-            "The \"{}\" argument must be of type function. Received {}",
-            arg_name,
-            describe_received(value)
+        throw_received_type_error(
+            &format!(
+                "The \"{}\" argument must be of type function. Received ",
+                arg_name
+            ),
+            value,
         );
-        throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
     }
     ptr
 }
@@ -533,12 +601,13 @@ pub(crate) fn validate_string_or_object_options(arg_name: &str, value: f64) {
     if is_nullish(jv) || jv.is_any_string() || is_options_object_like(value) {
         return;
     }
-    let message = format!(
-        "The \"{}\" argument must be one of type string or object. Received {}",
-        arg_name,
-        describe_received(value)
+    throw_received_type_error(
+        &format!(
+            "The \"{}\" argument must be one of type string or object. Received ",
+            arg_name
+        ),
+        value,
     );
-    throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
 }
 
 /// Validate fs options parameters that accept only an options object. Node
@@ -549,14 +618,9 @@ pub(crate) fn object_options_type_error_value(arg_name: &str, value: f64) -> Opt
     if jv.is_undefined() || is_plain_options_object(value) {
         return None;
     }
-    let message = format!(
-        "The \"{}\" argument must be of type object. Received {}",
-        arg_name,
-        describe_received(value)
-    );
-    Some(build_type_error_with_code_value(
-        &message,
-        "ERR_INVALID_ARG_TYPE",
+    Some(build_received_type_error(
+        &format!("The \"{arg_name}\" argument must be of type object. Received "),
+        value,
     ))
 }
 
@@ -583,22 +647,20 @@ pub(crate) fn validate_mkdir_options(options_value: f64) {
     let recursive = crate::object::js_object_get_field_by_name_f64(obj, recursive_key);
     let recursive_jv = JSValue::from_bits(recursive.to_bits());
     if !is_nullish(recursive_jv) && !recursive_jv.is_bool() {
-        let message = format!(
-            "The \"options.recursive\" property must be of type boolean. Received {}",
-            describe_received(recursive)
+        throw_received_type_error(
+            "The \"options.recursive\" property must be of type boolean. Received ",
+            recursive,
         );
-        throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
     }
 
     let mode_key = js_string_from_bytes(b"mode".as_ptr(), 4);
     let mode = crate::object::js_object_get_field_by_name_f64(obj, mode_key);
     let mode_jv = JSValue::from_bits(mode.to_bits());
     if !is_nullish(mode_jv) && !is_numeric(mode_jv) && !mode_jv.is_any_string() {
-        let message = format!(
-            "The \"options.mode\" property must be of type number. Received {}",
-            describe_received(mode)
+        throw_received_type_error(
+            "The \"options.mode\" property must be of type number. Received ",
+            mode,
         );
-        throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
     }
 }
 
@@ -637,12 +699,13 @@ pub(crate) fn validate_fs_mode(value: f64) {
 pub(crate) fn validate_int32(value: f64, arg_name: &str, min: i64, max: i64) {
     let jv = JSValue::from_bits(value.to_bits());
     if !is_numeric(jv) {
-        let message = format!(
-            "The \"{}\" argument must be of type number. Received {}",
-            arg_name,
-            describe_received(value)
+        throw_received_type_error(
+            &format!(
+                "The \"{}\" argument must be of type number. Received ",
+                arg_name
+            ),
+            value,
         );
-        throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
     }
     let n = if jv.is_int32() {
         jv.as_int32() as f64
@@ -711,12 +774,13 @@ pub fn format_received_number(n: f64) -> String {
 /// where the trailing callback is missing or the wrong type.
 pub(crate) fn validate_function(arg_name: &str, value: f64) {
     if super::stream::extract_closure_ptr(value).is_null() {
-        let message = format!(
-            "The \"{}\" argument must be of type function. Received {}",
-            arg_name,
-            describe_received(value)
+        throw_received_type_error(
+            &format!(
+                "The \"{}\" argument must be of type function. Received ",
+                arg_name
+            ),
+            value,
         );
-        throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
     }
 }
 
@@ -745,3 +809,7 @@ pub fn throw_error_with_code(message: &str, code: &'static str) -> ! {
     let err = crate::error::js_error_new_with_message(msg);
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
+
+#[cfg(test)]
+#[path = "received_diagnostic_tests.rs"]
+mod received_diagnostic_tests;
