@@ -400,8 +400,7 @@ fn with_listener_uncaught_trap<F: FnOnce()>(f: F) {
     crate::exception::js_clear_exception();
     crate::exception::js_try_end();
     if !crate::os::emit_process_event("uncaughtException", &[exc]) {
-        crate::exception::print_uncaught(exc);
-        crate::process::exit_after_current_thread_collection_teardown(1);
+        crate::exception::exit_on_uncaught(exc);
     }
 }
 
@@ -451,6 +450,9 @@ fn report_unhandled(promise: *mut Promise) {
         return;
     }
 
+    // In a worker the rejection ends that worker with the reason as its
+    // error (Node's default `--unhandled-rejections=throw`).
+    crate::exception::hand_to_worker_base(reason_handle.get_nanbox_f64());
     print_unhandled_diagnostic(reason_handle.get_nanbox_f64());
     // Match Node's unhandled-rejection exit code (1).
     crate::process::exit_after_current_thread_collection_teardown(1);

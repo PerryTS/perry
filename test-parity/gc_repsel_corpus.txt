@@ -966,3 +966,12 @@ test_gap_11743_class_field_array_push
 # #11842: a swept old-gen hole handed out while a budgeted full sweep is
 # still walking; the walk freed the live buffer born there.
 test_gap_gc_11842_sweep_window_hole_reuse
+
+# --- worker message clone: reader roots and the parentPort callback ---------
+# The message reader allocates every object of a message while earlier ones
+# must stay reachable for later references (shared objects, cycles, Map keys,
+# the ArrayBuffer behind a second view); the writer builds a lazy JSON array and
+# an Error stack between two walks. Also roots parentPort.on("message")'s
+# closure, whose stale pointer was the registry worker's "value is not a
+# function".
+test_gap_gc_worker_message_clone_rooting
