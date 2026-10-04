@@ -71,7 +71,15 @@ pub(crate) fn lower_member_tail(
         ) {
             if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
                 let obj_name = obj_ident.sym.as_ref();
-                if crate::analysis::is_builtin_global_value_name(obj_name) {
+                // Only while the name still IS the builtin: a module-level
+                // `function process(parentNode) {}` (turndown) shadows the
+                // global, and `process.call(this, root)` must call it. The
+                // receiver was already lowered to that binding above; this
+                // rewrite replaced it with `globalThis.process`, whose `call` is
+                // undefined, so the call silently returned `undefined`.
+                if crate::analysis::is_builtin_global_value_name(obj_name)
+                    && !ctx.shadows_unqualified_global(obj_name)
+                {
                     object_expr = Expr::PropertyGet {
                         byte_offset: 0,
                         object: Box::new(Expr::GlobalGet(0)),
