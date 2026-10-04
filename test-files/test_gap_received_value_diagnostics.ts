@@ -102,3 +102,60 @@ try {
   Object.defineProperty(Int16Array.prototype, 'constructor', originalInt16Constructor!);
 }
 callbackError('inherited-view-restored', patchedView);
+
+// Audit sibling intrinsic branches with the same inherited-metadata root cause.
+declare function gc(): void;
+const inheritedViews: any[] = [
+  ['dataview', DataView.prototype, new DataView(new ArrayBuffer(1))],
+  ['buffer', Buffer.prototype, Buffer.alloc(1)],
+  ['uint8array', Uint8Array.prototype, new Uint8Array(1)],
+];
+for (const entry of inheritedViews) {
+  const label = entry[0];
+  const prototype = entry[1];
+  const view = entry[2];
+  const original = Object.getOwnPropertyDescriptor(prototype, 'constructor');
+  try {
+    Object.defineProperty(prototype, 'constructor', {
+      value: { name: 'PatchedView' }, writable: true, configurable: true,
+    });
+    callbackError('inherited-' + label + '-data', view);
+    for (const unit of [0xd800, 0xdc00]) {
+      Object.defineProperty(prototype, 'constructor', {
+        value: { name: String.fromCharCode(unit) }, configurable: true,
+      });
+      try {
+        fs.exists('/received-diagnostic-unused', view);
+      } catch (error: any) {
+        const start = error.message.indexOf('an instance of ') + 15;
+        console.log('inherited-' + label + '-surrogate', unit, error.name, error.code,
+          error.message.charCodeAt(start), error.message.length - start);
+      }
+    }
+    let calls = 0;
+    Object.defineProperty(prototype, 'constructor', {
+      get() { calls++; return { name: 'PatchedView' }; }, configurable: true,
+    });
+    callbackError('inherited-' + label + '-getter', view);
+    console.log('inherited-' + label + '-getter-calls', calls);
+    calls = 0;
+    Object.defineProperty(prototype, 'constructor', {
+      get() { calls++; throw new Error('constructor sentinel'); }, configurable: true,
+    });
+    callbackError('inherited-' + label + '-throw', view);
+    console.log('inherited-' + label + '-throw-calls', calls);
+    calls = 0;
+    Object.defineProperty(prototype, 'constructor', {
+      get() {
+        calls++;
+        if (typeof gc === 'function') gc();
+        return { name: 'PatchedView' };
+      }, configurable: true,
+    });
+    callbackError('inherited-' + label + '-collect', view);
+    console.log('inherited-' + label + '-collect-calls', calls);
+  } finally {
+    Object.defineProperty(prototype, 'constructor', original!);
+  }
+  callbackError('inherited-' + label + '-restored', view);
+}

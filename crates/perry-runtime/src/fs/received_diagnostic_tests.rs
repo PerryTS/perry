@@ -368,14 +368,30 @@ fn property(value: f64, key: &str) -> f64 {
 
 // Restore the intrinsic descriptor even when a regression assertion panics.
 fn with_received_typed_array_constructor(test: impl FnOnce(f64, f64)) {
+    with_received_intrinsic_constructor("Int16Array", test);
+}
+
+fn with_received_intrinsic_constructor(name: &str, test: impl FnOnce(f64, f64)) {
     let _lock = crate::gc::global_side_table_test_lock();
     let scope = crate::gc::RuntimeHandleScope::new();
-    let value = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
-        crate::typedarray::js_typed_array_new_empty(crate::typedarray::KIND_INT16 as i32, 1) as i64,
-    ));
+    let raw = match name {
+        "Int16Array" => {
+            crate::typedarray::js_typed_array_new_empty(crate::typedarray::KIND_INT16 as i32, 1)
+                as i64
+        }
+        "Uint8Array" => crate::buffer::js_uint8array_alloc(1) as i64,
+        "DataView" => {
+            let view = crate::buffer::buffer_alloc(1);
+            crate::buffer::mark_as_data_view(view as usize);
+            view as i64
+        }
+        "Buffer" => crate::buffer::buffer_alloc(1) as i64,
+        _ => panic!("unsupported intrinsic test fixture"),
+    };
+    let value = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(raw));
     let constructor = scope.root_nanbox_f64(crate::object::js_get_global_this_builtin_value(
-        b"Int16Array".as_ptr(),
-        10,
+        name.as_ptr(),
+        name.len(),
     ));
     let prototype = scope.root_nanbox_f64(property(constructor.get_nanbox_f64(), "prototype"));
     let key = scope.root_nanbox_f64(text("constructor"));
@@ -394,7 +410,7 @@ fn with_received_typed_array_constructor(test: impl FnOnce(f64, f64)) {
     if let Err(panic) = result {
         std::panic::resume_unwind(panic);
     }
-    check(value.get_nanbox_f64(), "an instance of Int16Array");
+    check(value.get_nanbox_f64(), &format!("an instance of {name}"));
 }
 
 static RECEIVED_CONSTRUCTOR_CALLS: std::sync::atomic::AtomicUsize =
@@ -528,4 +544,145 @@ fn received_typed_array_inherited_constructor_collect() {
             3
         );
     });
+}
+
+// Exercise both the intrinsic shortcut and buffer-backed constructor fallback.
+fn inherited_view_data(name: &str) {
+    with_received_intrinsic_constructor(name, |value, prototype| {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let ctor = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+            crate::object::js_object_alloc(0, 0) as i64,
+        ));
+        set(ctor.get_nanbox_f64(), "name", text("PatchedView"));
+        set(prototype, "constructor", ctor.get_nanbox_f64());
+        check(value, "an instance of PatchedView");
+        // The formatter must keep inherited names in the JS string domain.
+        for (bytes, unit) in [(b"\xed\xa0\x80", 0xd800), (b"\xed\xb0\x80", 0xdc00)] {
+            let name = scope.root_string_ptr(crate::string::js_string_from_wtf8_bytes(
+                bytes.as_ptr(),
+                bytes.len() as u32,
+            ));
+            set(
+                ctor.get_nanbox_f64(),
+                "name",
+                name.with_mut_ptr(|ptr: *mut StringHeader| {
+                    crate::value::js_nanbox_string(ptr as i64)
+                }),
+            );
+            let result =
+                scope.root_nanbox_f64(crate::validators::js_runtime_describe_received(value));
+            let ptr = crate::value::js_get_string_pointer_unified(result.get_nanbox_f64());
+            assert_eq!(
+                crate::string::js_string_char_code_at(ptr as *const StringHeader, 15),
+                unit as f64
+            );
+        }
+    });
+}
+
+fn inherited_view_getter(name: &str, collecting: bool) {
+    with_received_intrinsic_constructor(name, |value, prototype| {
+        let info = if collecting {
+            crate::fn_info!(received_collecting_constructor, 0)
+        } else {
+            crate::fn_info!(received_patched_constructor, 0)
+        };
+        install_received_constructor_getter(prototype, info);
+        RECEIVED_CONSTRUCTOR_CALLS.store(0, std::sync::atomic::Ordering::Relaxed);
+        let mut before = 0;
+        crate::gc::js_gc_stats(&mut before, std::ptr::null_mut(), std::ptr::null_mut());
+        let result = crate::validators::js_runtime_describe_received(value);
+        assert_eq!(read_js_string_pub(result), "an instance of PatchedView");
+        assert_eq!(
+            RECEIVED_CONSTRUCTOR_CALLS.load(std::sync::atomic::Ordering::Relaxed),
+            3
+        );
+        if collecting {
+            let mut after = 0;
+            crate::gc::js_gc_stats(&mut after, std::ptr::null_mut(), std::ptr::null_mut());
+            assert!(
+                after >= before + 3,
+                "all three constructor reads must collect"
+            );
+        }
+    });
+}
+
+fn inherited_view_throw(name: &str) {
+    with_received_intrinsic_constructor(name, |value, prototype| {
+        install_received_constructor_getter(
+            prototype,
+            crate::fn_info!(received_throwing_constructor, 0),
+        );
+        RECEIVED_CONSTRUCTOR_CALLS.store(0, std::sync::atomic::Ordering::Relaxed);
+        let error = crate::exception::catch_js_throw(|| {
+            crate::validators::js_runtime_describe_received(value);
+        })
+        .expect_err("inherited constructor getter must throw");
+        assert_eq!(read_js_string_pub(error), "constructor sentinel");
+        assert_eq!(
+            RECEIVED_CONSTRUCTOR_CALLS.load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+    });
+}
+
+#[test]
+fn received_data_view_inherited_constructor_data() {
+    inherited_view_data("DataView");
+}
+
+#[test]
+fn received_data_view_inherited_constructor_getter() {
+    inherited_view_getter("DataView", false);
+}
+
+#[test]
+fn received_data_view_inherited_constructor_throw() {
+    inherited_view_throw("DataView");
+}
+
+#[test]
+fn received_data_view_inherited_constructor_collect() {
+    inherited_view_getter("DataView", true);
+}
+
+#[test]
+fn received_buffer_inherited_constructor_data() {
+    inherited_view_data("Buffer");
+}
+
+#[test]
+fn received_buffer_inherited_constructor_getter() {
+    inherited_view_getter("Buffer", false);
+}
+
+#[test]
+fn received_buffer_inherited_constructor_throw() {
+    inherited_view_throw("Buffer");
+}
+
+#[test]
+fn received_buffer_inherited_constructor_collect() {
+    inherited_view_getter("Buffer", true);
+}
+
+#[test]
+fn received_uint8_array_inherited_constructor_data() {
+    inherited_view_data("Uint8Array");
+}
+
+#[test]
+fn received_uint8_array_inherited_constructor_getter() {
+    inherited_view_getter("Uint8Array", false);
+}
+
+#[test]
+fn received_uint8_array_inherited_constructor_throw() {
+    inherited_view_throw("Uint8Array");
+}
+
+#[test]
+fn received_uint8_array_inherited_constructor_collect() {
+    inherited_view_getter("Uint8Array", true);
 }
