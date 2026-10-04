@@ -1,4 +1,4 @@
-//! #7764: the four `common::async_bridge` entry points `worker_threads` needs,
+//! #7764: the `common::async_bridge` entry points `worker_threads` needs,
 //! available in BOTH feature configurations.
 //!
 //! `common/mod.rs` states the contract this exists to satisfy:
@@ -8,7 +8,7 @@
 //! > `#[cfg(feature = "async-bridge")]`-gated.**
 //!
 //! (Before turnloop P8 lane L the bridge was gated on `async-runtime`, i.e. on
-//! tokio; it is tokio-free now, and so are the four entry points below.)
+//! tokio; it is tokio-free now, and so are the entry points below.)
 //!
 //! `worker_threads` is always-on and referenced it in eleven places across five
 //! files, so `cargo build -p perry-stdlib --no-default-features` did not
@@ -35,14 +35,19 @@
 
 #[cfg(feature = "async-bridge")]
 pub(crate) use crate::common::async_bridge::{
-    ensure_pump_registered, js_promise_new_for_native_resolution, queue_deferred_resolution,
-    queue_promise_resolution,
+    ensure_pump_registered, js_promise_new_for_native_resolution, js_stdlib_process_pending,
+    queue_deferred_resolution, queue_promise_resolution,
 };
 
 #[cfg(not(feature = "async-bridge"))]
 mod inline {
     /// No bridge means no pump to register.
     pub(crate) fn ensure_pump_registered() {}
+
+    /// Nothing is ever pending: every resolution above settles inline.
+    pub(crate) fn js_stdlib_process_pending() -> i32 {
+        0
+    }
 
     /// # Safety
     /// Mirrors `async_bridge::js_promise_new_for_native_resolution`.
@@ -78,6 +83,6 @@ mod inline {
 
 #[cfg(not(feature = "async-bridge"))]
 pub(crate) use inline::{
-    ensure_pump_registered, js_promise_new_for_native_resolution, queue_deferred_resolution,
-    queue_promise_resolution,
+    ensure_pump_registered, js_promise_new_for_native_resolution, js_stdlib_process_pending,
+    queue_deferred_resolution, queue_promise_resolution,
 };
