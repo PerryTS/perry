@@ -621,106 +621,6 @@ pub(super) fn unpipe_destination(stream: f64, dest: f64) -> bool {
     found
 }
 
-pub(super) fn unpipe_all_destinations(stream: f64) {
-    let arr_value = pipe_destinations(stream);
-    let arr = raw_ptr_from_value(arr_value) as *const crate::array::ArrayHeader;
-    let len = crate::array::js_array_length(arr);
-    let mut dests = Vec::with_capacity(len as usize);
-    for i in 0..len {
-        dests.push(crate::array::js_array_get_f64(arr, i));
-    }
-    set_hidden_value(
-        stream,
-        hidden_stream_pipes_key(),
-        box_pointer(crate::array::js_array_alloc(0) as *const u8),
-    );
-    set_hidden_value(
-        stream,
-        hidden_stream_pipe_no_end_key(),
-        box_pointer(crate::array::js_array_alloc(0) as *const u8),
-    );
-    let _ = pause_readable_stream_after_unpipe(stream);
-    for dest in dests {
-        let _ = emit_stream_event(dest, literal_string_value(b"unpipe"), &[stream]);
-    }
-}
-
-pub(super) fn write_chunk_to_pipe_destinations(stream: f64, chunk: f64) {
-    // Each write runs the destination's own code, which can collect (#11828).
-    // Walk a copy of the destinations so an unpipe from a write cannot skip one.
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let stream = scope.root_nanbox_f64(stream);
-    let chunk = scope.root_nanbox_f64(chunk);
-    let live = || {
-        raw_ptr_from_value(pipe_destinations(stream.get_nanbox_f64()))
-            as *const crate::array::ArrayHeader
-    };
-    let dests = scope.root_raw_mut_ptr(crate::array::js_array_alloc(0));
-    for i in 0..crate::array::js_array_length(live()) {
-        let dest = crate::array::js_array_get_f64(live(), i);
-        // `js_array_push_f64` roots its receiver before it can grow it.
-        dests.set_raw_mut_ptr(dests.with_mut_ptr(|arr: *mut crate::array::ArrayHeader| {
-            crate::array::js_array_push_f64(arr, dest)
-        }));
-    }
-    let dest_at = |i: u32| {
-        dests.with_const_ptr(|arr: *const crate::array::ArrayHeader| {
-            crate::array::js_array_get_f64(arr, i)
-        })
-    };
-    let len = dests
-        .with_const_ptr(|arr: *const crate::array::ArrayHeader| crate::array::js_array_length(arr));
-    for i in 0..len {
-        let dest = dest_at(i);
-        if is_small_native_handle_destination(dest) {
-            let ret = call_small_native_pipe_method(dest, b"write", &[chunk.get_nanbox_f64()]);
-            if ret.to_bits() == TAG_FALSE {
-                let _ = pause_readable_stream(stream.get_nanbox_f64());
-            }
-            continue;
-        }
-        let dest_scope = crate::gc::RuntimeHandleScope::new();
-        let dest = dest_scope.root_nanbox_f64(dest);
-        let ret = write_writable_chunk(
-            dest.get_nanbox_f64(),
-            chunk.get_nanbox_f64(),
-            f64::from_bits(TAG_UNDEFINED),
-            f64::from_bits(TAG_UNDEFINED),
-        );
-        if ret.to_bits() == TAG_FALSE {
-            let _ = pause_readable_stream(stream.get_nanbox_f64());
-            if writable_length(dest.get_nanbox_f64()) == 0.0 {
-                let _ = resume_readable_stream(stream.get_nanbox_f64());
-            } else {
-                add_pipe_drain_listener(stream.get_nanbox_f64(), dest.get_nanbox_f64());
-            }
-        }
-    }
-}
-
-pub(super) fn end_pipe_destinations(stream: f64) {
-    let arr_value = pipe_destinations(stream);
-    let arr = raw_ptr_from_value(arr_value) as *const crate::array::ArrayHeader;
-    let len = crate::array::js_array_length(arr);
-    let mut dests = Vec::with_capacity(len as usize);
-    for i in 0..len {
-        dests.push(crate::array::js_array_get_f64(arr, i));
-    }
-    for dest in dests {
-        if is_small_native_handle_destination(dest) {
-            let _ = call_small_native_pipe_method(dest, b"end", &[]);
-            continue;
-        }
-        if stream_destroyed(dest) || has_truthy_hidden(dest, hidden_finish_emitted_key()) {
-            continue;
-        }
-        if pipe_no_end_destination_contains(stream, dest) {
-            continue;
-        }
-        request_pipe_destination_finish(dest);
-    }
-}
-
 pub(super) fn schedule_readable_from_drain(stream: f64) {
     if readable_hidden_chunks(stream).is_none()
         || has_truthy_hidden(stream, hidden_drain_scheduled_key())
@@ -1952,21 +1852,73 @@ pub(crate) fn test_set_hidden_error(stream: f64, err: f64) {
     set_hidden_value(stream, hidden_error_key(), err);
 }
 
-pub(crate) fn js_node_stream_readable_chunks_result(stream: f64) -> Result<Option<Vec<f64>>, f64> {
-    invoke_read_once(stream);
-    if let Some(err) = readable_hidden_error(stream) {
+/// The chunks a pipeline source holds, copied into one fresh GC array rooted
+/// in `scope`, or `None` when it holds none.
+///
+/// `_read` and the hidden-property reads (generic lookups, so a getter may
+/// run) can collect, so the stream is reread from its handle after each and
+/// the chunks go straight into a GC array the collector rewrites.
+pub(crate) fn js_node_stream_readable_chunks_result<'s>(
+    scope: &'s crate::gc::RuntimeHandleScope,
+    stream: &crate::gc::RuntimeHandle<'_>,
+) -> Result<Option<crate::gc::RuntimeHandle<'s>>, f64> {
+    invoke_read_once(stream.get_nanbox_f64());
+    if let Some(err) = readable_hidden_error(stream.get_nanbox_f64()) {
         return Err(err);
     }
-    let Some(chunks) = readable_hidden_chunks(stream) else {
+    let Some(chunks) = readable_hidden_chunks(stream.get_nanbox_f64()) else {
         return Ok(None);
     };
-    let mut out = Vec::new();
-    push_chunk_values(chunks, &mut out, 0);
-    if let Some(err) = readable_hidden_error(stream) {
+    let chunks = scope.root_nanbox_f64(chunks);
+    let out = scope.root_raw_mut_ptr(crate::array::js_array_alloc(0));
+    append_chunk_values(&chunks, &out, 0);
+    if let Some(err) = readable_hidden_error(stream.get_nanbox_f64()) {
         return Err(err);
     }
     Ok(Some(out))
 }
+
+/// [`push_chunk_values`] into a rooted GC array: `value` is reread from its
+/// handle after every step that can collect.
+fn append_chunk_values(
+    value: &crate::gc::RuntimeHandle<'_>,
+    out: &crate::gc::RuntimeHandle<'_>,
+    depth: u8,
+) {
+    if depth > 8 {
+        return;
+    }
+    // `js_array_push_f64` roots its receiver and the value before it can grow.
+    let push = |chunk: f64| {
+        out.set_raw_mut_ptr(out.with_mut_ptr(|arr: *mut crate::array::ArrayHeader| {
+            crate::array::js_array_push_f64(arr, chunk)
+        }));
+    };
+    if let Some(chunks) = readable_hidden_chunks(value.get_nanbox_f64()) {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        append_chunk_values(&scope.root_nanbox_f64(chunks), out, depth + 1);
+        return;
+    }
+    // `is_array_like_value` has already rejected the handle band.
+    if is_array_like_value(value.get_nanbox_f64()) {
+        let arr = || raw_ptr_from_value(value.get_nanbox_f64()) as *const crate::array::ArrayHeader;
+        let mut i = 0;
+        while i < crate::array::js_array_length(arr()) {
+            push(crate::array::js_array_get_f64(arr(), i));
+            i += 1;
+        }
+        return;
+    }
+    if is_single_chunk_value(value.get_nanbox_f64()) {
+        push(value.get_nanbox_f64());
+    }
+}
+
+#[path = "node_stream_pipe_dests.rs"]
+mod pipe_dests;
+pub(super) use pipe_dests::{
+    end_pipe_destinations, unpipe_all_destinations, write_chunk_to_pipe_destinations,
+};
 
 #[cfg(test)]
 #[path = "node_stream_pipe_dests_gc_tests.rs"]
