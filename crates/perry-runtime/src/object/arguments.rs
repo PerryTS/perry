@@ -1106,11 +1106,14 @@ pub extern "C" fn js_array_like_to_array(value: f64) -> *mut ArrayHeader {
         if crate::buffer::is_registered_buffer(addr) {
             return crate::buffer::buffer_to_array(raw as *const crate::buffer::BufferHeader);
         }
-        // A real Array → fast path only when its spread is observably a dense
-        // element copy. The shared proof also rejects an own/re-parented
-        // `Symbol.iterator`, indexed accessors and patched iterator prototypes;
-        // all of those must run GetIterator for call spread (#11772).
+        // A real Array → the dominant plain shape needs only the sticky
+        // iterator-protocol check and one receiver-shape compare. An own key
+        // (including Symbol.iterator) or a custom prototype leaves that shape;
+        // only then pay the complete dense-spread proof (#11772).
         if crate::array::js_array_is_array(value).to_bits() == crate::value::TAG_TRUE {
+            if let Some(arr) = crate::array::plain_call_spread_source(value) {
+                return arr as *mut ArrayHeader;
+            }
             if let Some(arr) = crate::array::dense_spread_source(value) {
                 return arr as *mut ArrayHeader;
             }

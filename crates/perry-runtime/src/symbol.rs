@@ -1227,6 +1227,10 @@ pub(crate) fn small_handle_symbol_owner_ever() -> bool {
 /// insert in every install funnel (same ordering argument as
 /// [`note_symbol_key_installed`]).
 pub(crate) fn note_symbol_owner_installed(obj_key: usize) {
+    // Arrays carry own-key/prototype identity in their existing receiver-local
+    // shape word. Publish the transition before the side-table entry so array
+    // fast paths never need a symbol-name lookup to prove the canonical shape.
+    crate::array::note_array_own_non_index_key(obj_key);
     if crate::value::addr_class::is_small_handle(obj_key)
         && !SMALL_HANDLE_SYMBOL_OWNER_EVER.load(std::sync::atomic::Ordering::Relaxed)
     {
