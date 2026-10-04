@@ -80,13 +80,15 @@ pub(super) enum Lookup {
 }
 
 /// Answer `recv.<name>(args)` from a function-intrinsic entry of `slot`'s
-/// site (module docs).
+/// site (module docs). `word` is the receiver's word
+/// ([`served_receiver_word`]).
 ///
 /// # Safety
 /// `slot` is null or a live method-site slot; `args_ptr` holds `argc` values.
 #[inline]
-pub(super) unsafe fn lookup(
+unsafe fn lookup(
     slot: *mut MethodSiteSlot,
+    word: u64,
     recv: f64,
     args_ptr: *const f64,
     argc: usize,
@@ -94,15 +96,11 @@ pub(super) unsafe fn lookup(
     if WORKER_AGENTS_EXIST.load(Ordering::Relaxed) != 0 {
         return Lookup::Known;
     }
-    // A site that never primed has no entry to consult; the receiver is not
-    // even read here.
+    // A site that never primed has no entry to consult.
     let site = crate::object::pic_slot_peek(slot);
     if site.is_null() {
         return Lookup::Unknown;
     }
-    let Some(word) = function_receiver_word(recv) else {
-        return Lookup::Known;
-    };
     let Some(entry) = (*site)
         .entries
         .iter()
@@ -136,22 +134,16 @@ pub(super) unsafe fn lookup(
     }
 }
 
-/// Is a miss on `recv.<name>(…)` worth the rooted dispatch-then-prime: a
-/// heap function object whose Function shape inherits `name` from
-/// `%Function.prototype%`, in a realm that has built it. Words and the
-/// shape's cached verdict only; a receiver this refuses is never primed.
+/// Is a miss on `recv.<name>(…)` worth the rooted dispatch-then-prime: the
+/// receiver (`word`, a [`served_receiver_word`]) does not own `name`, so it
+/// inherits it from `%Function.prototype%`. The shape's cached verdict only;
+/// a receiver this refuses is never primed.
 #[inline]
-pub(super) fn worth_priming(recv: f64, name: &[u8]) -> bool {
-    if !crate::object::native_call_method::function_prototype_built() {
-        return false;
-    }
-    let Some(word) = (unsafe { function_receiver_word(recv) }) else {
-        return false;
-    };
-    let id = (word >> 32) as u32;
-    crate::object::shapes::is_exotic_shape_id(id)
-        && id != crate::closure::shape::function_dictionary_shape()
-        && crate::closure::shape::function_shape_inherits_from_function_prototype(id, name)
+fn worth_priming(word: u64, name: &[u8]) -> bool {
+    crate::closure::shape::function_shape_inherits_from_function_prototype(
+        (word >> 32) as u32,
+        name,
+    )
 }
 
 /// Prime a function-intrinsic entry for `recv.<name>(…)` when the shape facts
@@ -210,11 +202,11 @@ pub(super) unsafe fn prime(slot: *mut MethodSiteSlot, recv: f64, name: &[u8]) {
     }
 }
 
-/// The miss handler's whole function-intrinsic step for `recv.<name>(args)`:
+/// The miss handler's function-intrinsic step for `recv.<name>(args)` on a
+/// function receiver whose ShapeId says it inherits from
+/// `%Function.prototype%` (`word` is its word), in a realm that has built it:
 /// answer from the site's entry, or dispatch and prime one. `None` leaves the
-/// call to the ordinary miss path unchanged. Before the realm has built
-/// `%Function.prototype%` no entry can exist, and one relaxed load is the
-/// whole cost; the prime is out of line.
+/// call to the ordinary miss path unchanged.
 ///
 /// # Safety
 /// As `js_method_site_miss`.
@@ -223,18 +215,15 @@ pub(super) unsafe fn on_miss(
     slot: *mut MethodSiteSlot,
     site_id: u64,
     recv: f64,
+    word: u64,
     name: &[u8],
     args_ptr: *const f64,
     argc: usize,
 ) -> Option<f64> {
-    if !crate::object::native_call_method::function_prototype_built() {
-        return None;
-    }
-    function_receiver_word(recv)?;
-    match lookup(slot, recv, args_ptr, argc) {
+    match lookup(slot, word, recv, args_ptr, argc) {
         Lookup::Answered(result) => Some(result),
         Lookup::Known => None,
-        Lookup::Unknown => dispatch_and_prime(slot, site_id, recv, name, args_ptr, argc),
+        Lookup::Unknown => dispatch_and_prime(slot, site_id, recv, word, name, args_ptr, argc),
     }
 }
 
@@ -243,11 +232,12 @@ unsafe fn dispatch_and_prime(
     slot: *mut MethodSiteSlot,
     site_id: u64,
     recv: f64,
+    word: u64,
     name: &[u8],
     args_ptr: *const f64,
     argc: usize,
 ) -> Option<f64> {
-    if site_is_megamorphic(slot) || !worth_priming(recv, name) {
+    if site_is_megamorphic(slot) || !worth_priming(word, name) {
         return None;
     }
     // Dispatch first, then prime, as the ordinary miss does: the receiver

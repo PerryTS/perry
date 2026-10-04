@@ -359,14 +359,48 @@ pub(crate) fn function_shape_inherits_from_function_prototype(id: u32, key: &[u8
         b"apply" => VERDICT_APPLY,
         _ => return keyed_shape_lacks_key(id, key),
     };
+    keyed_shape_verdict(id) & bit != 0
+}
+
+/// Is the keyed ShapeId `id` (not a base shape, not the FunctionDictionary
+/// shape) a Function shape whose prototype identity is Function.prototype's?
+/// A fact of the id alone, for every key: with the base Function shape, the
+/// receivers a `Function.prototype` intrinsic can be inherited by at all.
+#[inline]
+pub(crate) fn keyed_function_shape_has_function_prototype(id: u32) -> bool {
+    keyed_shape_verdict(id) & VERDICT_FUNCTION_PROTOTYPE != 0
+}
+
+/// This agent's base `Function` ShapeId and its FunctionDictionary ShapeId,
+/// in one read of the cell. An id not minted yet reads 0, which no function
+/// object carries.
+#[inline]
+pub(crate) fn function_base_and_dictionary_shapes() -> (u32, u32) {
+    // SAFETY: a plain `[u32; 5]` read through the agent's own cell; nothing
+    // else holds a reference into it.
+    BASE_SHAPES.with(|c| unsafe {
+        let ids = &*c.as_ptr();
+        (ids[FunctionProtoKind::Function as usize], ids[4])
+    })
+}
+
+/// The verdict mask of a keyed ShapeId: whether it is a Function shape over
+/// `Function.prototype`, and which of the three intrinsics it lacks as own
+/// keys. A fact of the (immutable) ShapeId, cached per agent.
+fn keyed_shape_verdict(id: u32) -> u8 {
     let slot = (id as usize).wrapping_mul(0x9E37_79B9) >> 26 & (VERDICT_CACHE_LEN - 1);
     // Index in place: `Cell::get` would copy the whole 64-entry array.
     // SAFETY: this agent's own cell; no reference to it outlives the read.
     let cached = VERDICT_CACHE.with(|c| unsafe { (*c.as_ptr())[slot] });
-    let mask = if cached.0 == id {
-        cached.1
-    } else {
-        let mask = VERDICT_KNOWN
+    if cached.0 == id {
+        return cached.1;
+    }
+    let over_function_prototype = shapes::shape_descriptor_by_id(id).is_some_and(|d| {
+        d.object_kind == ShapeObjectKind::Function && d.proto_id == INTRINSIC_SERIAL_FUNCTION
+    });
+    let mask = if over_function_prototype {
+        VERDICT_KNOWN
+            | VERDICT_FUNCTION_PROTOTYPE
             | if keyed_shape_lacks_key(id, b"bind") {
                 VERDICT_BIND
             } else {
@@ -381,18 +415,20 @@ pub(crate) fn function_shape_inherits_from_function_prototype(id: u32, key: &[u8
                 VERDICT_APPLY
             } else {
                 0
-            };
-        // SAFETY: as above; a single-entry store in place.
-        VERDICT_CACHE.with(|c| unsafe { (*c.as_ptr())[slot] = (id, mask) });
-        mask
+            }
+    } else {
+        VERDICT_KNOWN
     };
-    mask & bit != 0
+    // SAFETY: as above; a single-entry store in place.
+    VERDICT_CACHE.with(|c| unsafe { (*c.as_ptr())[slot] = (id, mask) });
+    mask
 }
 
 const VERDICT_KNOWN: u8 = 1;
 const VERDICT_BIND: u8 = 2;
 const VERDICT_CALL: u8 = 4;
 const VERDICT_APPLY: u8 = 8;
+const VERDICT_FUNCTION_PROTOTYPE: u8 = 16;
 const VERDICT_CACHE_LEN: usize = 64;
 
 crate::perry_thread_local! {

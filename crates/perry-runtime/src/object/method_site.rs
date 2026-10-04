@@ -387,24 +387,37 @@ pub unsafe extern "C-unwind" fn js_method_site_miss(
             argc,
         );
     }
+    let name = std::slice::from_raw_parts(name_ref.ptr, name_ref.len);
+    // One read of the receiver's header classifies it for both steps below.
+    let receiver = miss_receiver(recv);
     // A function receiver calling an intrinsic it inherits from
     // `%Function.prototype%` (`fn.bind(this)`): the site's function-intrinsic
     // entry answers from words, or the call primes one (`function_intrinsic`).
-    if let Some(result) = function_intrinsic::on_miss(
-        slot,
-        site_id,
-        recv,
-        std::slice::from_raw_parts(name_ref.ptr, name_ref.len),
-        args_ptr,
-        argc,
-    ) {
-        return result;
+    // Only once the realm has built `%Function.prototype%` can an entry
+    // exist, and only for a receiver whose ShapeId says it inherits from it,
+    // whatever the key: the base Function shape, or a keyed Function shape
+    // over `Function.prototype`. A class method, a class function object, a
+    // FunctionDictionary receiver or an async/generator function is refused
+    // on its ShapeId, before any site or name is read.
+    if let MissReceiver::Function { word, base, keyed } = receiver {
+        if (base || keyed)
+            && crate::object::native_call_method::function_prototype_built()
+            && (base
+                || crate::closure::shape::keyed_function_shape_has_function_prototype(
+                    (word >> 32) as u32,
+                ))
+        {
+            if let Some(result) =
+                function_intrinsic::on_miss(slot, site_id, recv, word, name, args_ptr, argc)
+            {
+                return result;
+            }
+        }
     }
     // Only an ordinary heap object can prime. Everything else (primitives,
     // handles, functions, arrays) dispatches with no extra work at all.
     let megamorphic = site_is_megamorphic(slot);
-    if megamorphic || !prime_candidate(recv, std::slice::from_raw_parts(name_ref.ptr, name_ref.len))
-    {
+    if megamorphic || !prime_candidate(receiver, name) {
         refuse(if megamorphic { 18 } else { 1 });
         return crate::typed_feedback::js_typed_feedback_native_call_method(
             site_id,
@@ -430,7 +443,6 @@ pub unsafe extern "C-unwind" fn js_method_site_miss(
         argc,
     );
     let result_h = scope.root_nanbox_f64(result);
-    let name = std::slice::from_raw_parts(name_ref.ptr, name_ref.len);
     {
         // The prime reads the receiver, its holder chain and the method value
         // as raw addresses and may allocate (a prototype mark, the
@@ -442,41 +454,77 @@ pub unsafe extern "C-unwind" fn js_method_site_miss(
     result_h.get_nanbox_f64()
 }
 
-/// A cheap first cut of [`ordinary_receiver`] / [`prime_function`]: a heap
-/// pointer whose GcHeader says ordinary object, or a function object whose
-/// SHAPE lists `name` as an own key. Most calls on functions (`fn.bind`,
-/// `fn.call`) name an inherited builtin a site never memoizes; they leave
-/// here on the shape's key list, before the miss roots anything.
+/// What one read of a miss receiver's header says.
+#[derive(Clone, Copy)]
+enum MissReceiver {
+    /// A heap object whose GcHeader says ordinary object.
+    Ordinary,
+    /// A heap function object: its word (`capture_count | ShapeId`), whether
+    /// its ShapeId is the base Function shape (keyless, over
+    /// `%Function.prototype%`), and whether it is keyed (neither that nor the
+    /// FunctionDictionary shape).
+    Function { word: u64, base: bool, keyed: bool },
+    /// Anything else: primitives, handles, arrays, strings.
+    Other,
+}
+
+// A closure's first word is `capture_count | ShapeId`: the ShapeId is its
+// high half.
+const _: () = assert!(crate::closure::CLOSURE_SHAPE_OFFSET == 4);
+
 #[inline]
-fn prime_candidate(recv: f64, name: &[u8]) -> bool {
+fn miss_receiver(recv: f64) -> MissReceiver {
     let bits = recv.to_bits();
     if bits & !crate::value::POINTER_MASK != crate::value::POINTER_TAG {
-        return false;
+        return MissReceiver::Other;
     }
     let addr = (bits & crate::value::POINTER_MASK) as usize;
     if !crate::value::addr_class::is_above_handle_band(addr) {
-        return false;
+        return MissReceiver::Other;
     }
     match unsafe { crate::value::addr_class::try_read_gc_header(addr) } {
-        Some(h) if h.obj_type == crate::gc::GC_TYPE_OBJECT => true,
-        Some(h) if h.obj_type == crate::gc::GC_TYPE_CLOSURE => unsafe {
-            function_shape_lists_key(addr, name)
-        },
-        _ => false,
+        Some(h) if h.obj_type == crate::gc::GC_TYPE_OBJECT => MissReceiver::Ordinary,
+        Some(h) if h.obj_type == crate::gc::GC_TYPE_CLOSURE => {
+            // SAFETY: the header says a live closure; its first word is the
+            // `capture_count | ShapeId` word.
+            let word = unsafe { std::ptr::read(addr as *const u64) };
+            let id = (word >> 32) as u32;
+            let (base, dictionary) = crate::closure::shape::function_base_and_dictionary_shapes();
+            let keyed = id != base && super::shapes::is_exotic_shape_id(id) && id != dictionary;
+            MissReceiver::Function {
+                word,
+                base: id == base,
+                keyed,
+            }
+        }
+        _ => MissReceiver::Other,
     }
 }
 
-/// Does the (claimed) function object at `addr` sit on a KEYED Function shape
-/// whose key list holds `name`? Reads the ShapeId word and the shape's key
-/// list only; [`prime_function`] re-proves ownership before trusting it.
+/// A cheap first cut of [`ordinary_receiver`] / [`prime_function`]: an
+/// ordinary heap object, or a function object whose SHAPE lists `name` as an
+/// own key. Most calls on functions (`fn.bind`, `fn.call`) name an inherited
+/// builtin a site never memoizes; they leave here on the shape's key list,
+/// before the miss roots anything.
 #[inline]
-unsafe fn function_shape_lists_key(addr: usize, name: &[u8]) -> bool {
-    let id = *((addr as *const u8).add(crate::closure::CLOSURE_SHAPE_OFFSET) as *const u32);
-    if !super::shapes::is_exotic_shape_id(id)
-        || id == crate::closure::shape::function_dictionary_shape()
-    {
-        return false;
+fn prime_candidate(receiver: MissReceiver, name: &[u8]) -> bool {
+    match receiver {
+        MissReceiver::Ordinary => true,
+        // The base shape lists no key and the FunctionDictionary shape
+        // answers nothing: only a keyed shape can list `name`.
+        MissReceiver::Function {
+            word, keyed: true, ..
+        } => unsafe { function_shape_lists_key((word >> 32) as u32, name) },
+        MissReceiver::Function { .. } => false,
+        MissReceiver::Other => false,
     }
+}
+
+/// Does the keyed Function ShapeId `id` (a claimed function object's, see
+/// [`MissReceiver::Function`]) list `name` in its key list? Reads the shape's
+/// key list only; [`prime_function`] re-proves ownership before trusting it.
+#[inline]
+unsafe fn function_shape_lists_key(id: u32, name: &[u8]) -> bool {
     // The record in place (no descriptor copy): its key list and count.
     let Some(record) = super::shapes::shape_record_by_id(id) else {
         return false;
