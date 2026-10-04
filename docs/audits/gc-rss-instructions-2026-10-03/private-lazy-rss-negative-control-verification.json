@@ -1,0 +1,33 @@
+{
+  "scope": "Negative control only: original unconditional RSS sampling restored; the actual copied-root test fails at its RSS counter, while pinned fallback still passes. No application benefit claimed.",
+  "base_private_commit": "d4f491673b1d5930eaaffdd1f03c939754091eb5",
+  "source_count": 5011,
+  "source_delta": [
+    "crates/perry-runtime/src/gc/mod.rs"
+  ],
+  "test_result": {
+    "command": [
+      "cargo",
+      "+nightly-2026-08-20",
+      "test",
+      "--locked",
+      "--release",
+      "-p",
+      "perry-runtime",
+      "--lib",
+      "gc::tests::minor_lazy_rss::"
+    ],
+    "rc": 101,
+    "pid": 38921,
+    "elapsed_s": 0.6428433749824762,
+    "source_manifest_sha256": "98ff31c0653e281d9e6cf4f19e17208976c530688fe5d68e8f5dfae20e5de9a7",
+    "raw_log_sha256": "c4cda790f065e211f7829c98c228844c0ba682b67b42880bb9a81fc25ef06c9c"
+  },
+  "binary_sha256": "9a47f98defcc6b0fadb0b2dd00ba49e4243cedbdc0caf86ef213f0c58071be8b",
+  "patch_sha256": "37231cb59ef7b38558391df4394465c03f4a0427b09153db2bd67a839d098d03",
+  "original_runner_failure": {
+    "file": "lazy-rss-negative-main07-v57-original-runner-failure.txt",
+    "sha256": "a6885a1b2da262d39b1e14d38ca82ffa6b76a20df6ca92c291145e0523d2dbaf"
+  },
+  "original_negative_raw_log_sha256": "bd3d6d69de56ded99fc69dc9974305bcceb79496a1e2ba8e991291174598aa41"
+}

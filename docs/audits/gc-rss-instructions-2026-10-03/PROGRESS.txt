@@ -1,3 +1,17 @@
+DEFERRED-RSS NEGATIVE CONTROL VERIFIED
+Detached test-only control restores onlythe original earlyRSSquery location.
+All5011inputs matchprivate d4f491 except gc/mod.rs; pairedtestsourceunchanged.
+Actualcopiedroot test fails precisely atRSS_READS (1 vs0); the preceding
+copycount/rootrewrite/payload assertions pass. Pinnedfallback subject passes.
+Cargoexit101 recorded; outerdriver accepts this expectednegative result.
+Firstreceipt writer failed aftertestexecution due missingderivedmanifest;
+originalerror/rawlog preserved. Correctedv57r1 reruns onlythe2tests onthe
+same compiledownedtarget/source, recordsactualexit/binary/source/loghashes.
+This proves the gate fails onrestoredunusedquery; itis notRSS/instruction
+acceptance andno productionpolicy is adopted. FullMac4878/Linux4862 remain
+verified. OnceautoV46 has11/15freshbuilds atlastpoll; original30GC/entry
+controls reusedwith exacthashes, all306new measurements stillrequired.
+
 LAZY RSS LINUX FULL SUITE INDEPENDENTLY VERIFIED
 Private d4f491673b passesLinux4862/0failed/5ignored/0filtered, actualcopied
 zeroquery andpinnedfallbackpositiveRSS subjects bothpass. 5011source inputs,
