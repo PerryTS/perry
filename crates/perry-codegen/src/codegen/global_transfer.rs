@@ -267,11 +267,38 @@ pub(crate) fn emit_read(ctx: &mut FnCtx<'_>, t: &GlobalTransfer) -> String {
 /// Read a module global of the module being compiled: the transfer route for
 /// an eligible binding, otherwise the canonical slot as before.
 pub(crate) fn load_module_global(ctx: &mut FnCtx<'_>, id: u32, global_name: &str) -> String {
-    if let Some(t) = ctx.module_global_transfers.get(&id).cloned() {
+    let value = if let Some(t) = ctx.module_global_transfers.get(&id).cloned() {
         debug_assert_eq!(t.canonical, global_name);
-        return emit_read(ctx, &t);
-    }
-    ctx.block().load(DOUBLE, &format!("@{global_name}"))
+        emit_read(ctx, &t)
+    } else {
+        ctx.block().load(DOUBLE, &format!("@{global_name}"))
+    };
+    let Some(name) = ctx.strings.tdz_binding_names.get(&id).cloned() else {
+        return value;
+    };
+
+    let bits = ctx.block().bitcast_double_to_i64(&value);
+    let is_tdz = ctx.block().icmp_eq(I64, &bits, crate::nanbox::TAG_TDZ_I64);
+    let throw_idx = ctx.new_block("module_global.tdz");
+    let ready_idx = ctx.new_block("module_global.ready");
+    let throw_label = ctx.block_label(throw_idx);
+    let ready_label = ctx.block_label(ready_idx);
+    ctx.block().cond_br(&is_tdz, &throw_label, &ready_label);
+
+    ctx.current_block = throw_idx;
+    crate::expr::emit_versioned_loop_callback_deopt(ctx);
+    let index = ctx.strings.intern(&name);
+    let name_global = format!("@{}", ctx.strings.entry(index).handle_global);
+    let name_value = ctx.block().load(DOUBLE, &name_global);
+    ctx.block().call(
+        DOUBLE,
+        "js_throw_reference_error_tdz",
+        &[(DOUBLE, &name_value)],
+    );
+    ctx.block().unreachable();
+
+    ctx.current_block = ready_idx;
+    value
 }
 
 /// Publish right after the owning initializer stored the binding's value into

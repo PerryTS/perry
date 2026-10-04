@@ -2940,6 +2940,7 @@ fn compile_module_impl(
         hir,
         &opts.imported_classes,
         &cross_module.compile_time_constants,
+        &strings.tdz_binding_names,
         &module_prefix,
         &cjs_property_exports,
         global_transfer::enabled(thread_agents),

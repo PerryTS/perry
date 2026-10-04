@@ -889,8 +889,10 @@ fn create_poll_refreshed_receiver_cache(
     ctx: &mut FnCtx<'_>,
     arr_id: u32,
 ) -> Option<(String, String, String)> {
-    let source_ref = if let Some(slot) = ctx.locals.get(&arr_id) {
-        slot.clone()
+    let (source_ref, current) = if let Some(slot) = ctx.locals.get(&arr_id) {
+        let slot = slot.clone();
+        let current = ctx.block().load(DOUBLE, &slot);
+        (slot, current)
     } else {
         // The descriptor re-reads `source_ref` after polls. An immutable-leaf
         // transfer binding has no single agent-correct address to re-read, so
@@ -898,9 +900,11 @@ fn create_poll_refreshed_receiver_cache(
         if ctx.module_global_transfers.contains_key(&arr_id) {
             return None;
         }
-        format!("@{}", ctx.module_globals.get(&arr_id)?)
+        let global_name = ctx.module_globals.get(&arr_id)?.clone();
+        let current =
+            crate::codegen::global_transfer::load_module_global(ctx, arr_id, &global_name);
+        (format!("@{global_name}"), current)
     };
-    let current = ctx.block().load(DOUBLE, &source_ref);
     let rooted_box_slot = ctx.func.alloca_entry(DOUBLE);
     let base_handle_slot = ctx.func.alloca_entry(I64);
     // `root_entry_alloca` hoists the bind into entry setup, so seed the cache

@@ -46,6 +46,16 @@ pub fn run(module: &mut Module) {
 }
 
 fn fold_module_consts(module: &mut Module) {
+    let tdz_bindings: HashSet<LocalId> = module
+        .init
+        .iter()
+        .filter_map(|stmt| match stmt {
+            Stmt::PreallocateTdzBoxes(ids) => Some(ids.as_slice()),
+            _ => None,
+        })
+        .flatten()
+        .copied()
+        .collect();
     let mut consts: HashMap<LocalId, Expr> = HashMap::new();
     let mut decl_index: HashMap<LocalId, usize> = HashMap::new();
     for (index, stmt) in module.init.iter().enumerate() {
@@ -78,7 +88,15 @@ fn fold_module_consts(module: &mut Module) {
     if consts.is_empty() {
         return;
     }
-    for_each_function(module, &mut |f| fold_stmts(&mut f.body, &consts));
+    // A hoisted function can run before any module declaration. Keep reads of
+    // bindings whose shape carries a TDZ fact so codegen can preserve the
+    // required ReferenceError instead of substituting their eventual value.
+    let function_consts: HashMap<LocalId, Expr> = consts
+        .iter()
+        .filter(|(id, _)| !tdz_bindings.contains(id))
+        .map(|(id, lit)| (*id, lit.clone()))
+        .collect();
+    for_each_function(module, &mut |f| fold_stmts(&mut f.body, &function_consts));
     // `module.init`: only statements after each declaration.
     for (index, stmt) in module.init.iter_mut().enumerate() {
         let visible: HashMap<LocalId, Expr> = consts
@@ -582,6 +600,18 @@ mod tests {
         run(&mut m);
         assert!(matches!(&m.init[0], Stmt::Expr(Expr::LocalGet(3))));
         assert!(matches!(&m.init[2], Stmt::Expr(Expr::Integer(7))));
+    }
+
+    #[test]
+    fn a_tdz_marked_module_const_is_not_folded_inside_a_function() {
+        let mut m = module_with_const(false, Expr::Integer(7));
+        m.init.insert(0, Stmt::PreallocateTdzBoxes(vec![3]));
+        run(&mut m);
+        assert!(matches!(
+            &m.functions[0].body[0],
+            Stmt::Return(Some(Expr::Compare { right, .. }))
+                if matches!(right.as_ref(), Expr::LocalGet(3))
+        ));
     }
 
     #[test]

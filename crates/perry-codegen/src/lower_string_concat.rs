@@ -38,7 +38,10 @@ enum StringAppendTarget {
         index: u32,
         boxed: bool,
     },
-    ModuleGlobal(String),
+    ModuleGlobal {
+        id: u32,
+        name: String,
+    },
 }
 
 impl StringAppendTarget {
@@ -63,12 +66,18 @@ impl StringAppendTarget {
         }
         ctx.module_globals
             .get(&local_id)
-            .map(|name| Self::ModuleGlobal(format!("@{name}")))
+            .map(|name| Self::ModuleGlobal {
+                id: local_id,
+                name: name.clone(),
+            })
     }
 
     fn load(&self, ctx: &mut FnCtx<'_>) -> Result<String> {
         match self {
-            Self::LocalSlot(slot) | Self::ModuleGlobal(slot) => Ok(ctx.block().load(DOUBLE, slot)),
+            Self::LocalSlot(slot) => Ok(ctx.block().load(DOUBLE, slot)),
+            Self::ModuleGlobal { id, name } => Ok(
+                crate::codegen::global_transfer::load_module_global(ctx, *id, name),
+            ),
             Self::Scoped(id) => {
                 let bits = crate::scope_env::access::read_scoped(ctx, *id)?
                     .expect("scoped binding has a base here");
@@ -102,7 +111,9 @@ impl StringAppendTarget {
     fn store(&self, ctx: &mut FnCtx<'_>, value: &str) -> Result<()> {
         match self {
             Self::LocalSlot(slot) => ctx.block().store(DOUBLE, value, slot),
-            Self::ModuleGlobal(slot) => emit_root_nanbox_store_on_block(ctx.block(), value, slot),
+            Self::ModuleGlobal { name, .. } => {
+                emit_root_nanbox_store_on_block(ctx.block(), value, &format!("@{name}"))
+            }
             Self::Scoped(id) => {
                 // The rhs and append helper can collect: the base is loaded
                 // fresh here.

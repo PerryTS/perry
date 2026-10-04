@@ -789,11 +789,10 @@ fn emit_preallocate_boxes(ctx: &mut FnCtx<'_>, ids: &[u32], tdz: bool) -> Result
         // events.push(x) } }` in any ES module — every push landed nowhere).
         //
         // The global is statically initialized to `TAG_UNDEFINED`, which is
-        // exactly what a non-TDZ prealloc box seeds. The TDZ variant is skipped
-        // too: module-global reads are raw `load double @g` with no
-        // `js_box_get_bits` choke point, so seeding `TAG_TDZ` there would leak
-        // the sentinel into arithmetic instead of throwing a ReferenceError —
-        // strictly worse than the `undefined` a forward read gets today.
+        // exactly what a non-TDZ prealloc box seeds. A TDZ global is instead
+        // initialized to `TAG_TDZ` by `emit_module_globals`, and every source
+        // read goes through `load_module_global`'s sentinel check. It still
+        // needs no second heap cell here.
         if ctx.module_globals.contains_key(id) {
             continue;
         }

@@ -921,15 +921,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     return Ok(ctx.block().sitofp(I32, ret_i32, DOUBLE));
                 }
             }
-            let (storage, storage_is_root) = if let Some(slot) = ctx.locals.get(id).cloned() {
-                (slot, false)
-            } else if let Some(global_name) = ctx.module_globals.get(id).cloned() {
-                (format!("@{}", global_name), true)
-            } else {
-                // Soft fallback: silently increment a throwaway value.
-                return Ok(double_literal(0.0));
-            };
-            let raw_old = ctx.block().load(DOUBLE, &storage);
+            let (storage, storage_is_root, raw_old) =
+                if let Some(slot) = ctx.locals.get(id).cloned() {
+                    let raw_old = ctx.block().load(DOUBLE, &slot);
+                    (slot, false, raw_old)
+                } else if let Some(global_name) = ctx.module_globals.get(id).cloned() {
+                    let raw_old =
+                        crate::codegen::global_transfer::load_module_global(ctx, *id, &global_name);
+                    (format!("@{}", global_name), true, raw_old)
+                } else {
+                    // Soft fallback: silently increment a throwaway value.
+                    return Ok(double_literal(0.0));
+                };
             let (old, new) = if needs_numeric_coerce {
                 // A plain double already is its own ToNumeric, and its step is
                 // `± 1.0`: decide that inline and keep `js_to_numeric` /

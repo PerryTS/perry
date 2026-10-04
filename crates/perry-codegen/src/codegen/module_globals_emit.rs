@@ -160,6 +160,7 @@ pub(crate) fn emit_module_globals(
     hir: &HirModule,
     imported_classes: &[ImportedClass],
     compile_time_constants: &HashMap<u32, f64>,
+    tdz_binding_names: &HashMap<u32, String>,
     module_prefix: &str,
     cjs_property_exports: &super::cjs_exports::PropertyExports,
     thread_transfer: bool,
@@ -455,6 +456,8 @@ pub(crate) fn emit_module_globals(
                 // (e.g., __platform__, __plugins__). Otherwise default to 0.0.
                 let init_value = if let Some(cv) = compile_time_constants.get(id) {
                     format!("{:.1}", cv)
+                } else if tdz_binding_names.contains_key(id) {
+                    crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_TDZ))
                 } else {
                     crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
                 };
@@ -479,6 +482,7 @@ pub(crate) fn emit_module_globals(
                     && let_counts.get(id) == Some(&1)
                     && !reassigned.contains(id)
                     && !compile_time_constants.contains_key(id)
+                    && !tdz_binding_names.contains_key(id)
                     && !cjs_live_ids.contains(id)
                     && !hir.classic_for_lexical_bindings.contains(id)
                     && init.as_ref().is_some_and(|init| {
