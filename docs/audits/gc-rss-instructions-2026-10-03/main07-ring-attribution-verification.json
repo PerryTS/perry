@@ -1,0 +1,597 @@
+{
+  "scope": {
+    "base": "07e50b14a3d23e8f914193ec4d5a679adbd7c37a",
+    "private_once": "8e3013733da37ddc66998ee51b9bd1109a9175ec",
+    "source_sha256": "d3ef92c92f1576973e9d57bba22646eacf3dde96eaa589ae1153de395a0da9dd",
+    "scope": "Ring attribution diagnostic, three fresh full-runtime builds, same source/output and untouched collection settings. Plain and trace invocations kept separately. Trace logging can perturb residency/pacing; one repetition each is not peak-RSS acceptance or an absolute floor. Auto-optimized comparison remains separate."
+  },
+  "summary": {
+    "gc": {
+      "cycles": 29,
+      "collection_kinds": [
+        "minor"
+      ],
+      "rss_bytes": {
+        "plain": 17862656,
+        "trace": 18677760
+      },
+      "copied_objects": 7430,
+      "eden_live_bytes": {
+        "min": 12288,
+        "median": 12288,
+        "max": 14528
+      },
+      "arena": {
+        "before": {
+          "arena": {
+            "reserved_bytes": {
+              "min": 4194304,
+              "median": 4194304,
+              "max": 6291456
+            },
+            "in_use_bytes": {
+              "min": 3145728,
+              "median": 3145728,
+              "max": 5242848
+            },
+            "block_count": {
+              "min": 4,
+              "median": 4,
+              "max": 6
+            }
+          },
+          "survivor0": {
+            "reserved_bytes": {
+              "min": 0,
+              "median": 1048576,
+              "max": 1048576
+            },
+            "in_use_bytes": {
+              "min": 0,
+              "median": 0,
+              "max": 12288
+            },
+            "block_count": {
+              "min": 0,
+              "median": 1,
+              "max": 1
+            }
+          },
+          "survivor1": {
+            "reserved_bytes": {
+              "min": 0,
+              "median": 1048576,
+              "max": 1048576
+            },
+            "in_use_bytes": {
+              "min": 0,
+              "median": 0,
+              "max": 14528
+            },
+            "block_count": {
+              "min": 0,
+              "median": 1,
+              "max": 1
+            }
+          },
+          "longlived": {
+            "reserved_bytes": {
+              "min": 1048576,
+              "median": 1048576,
+              "max": 1048576
+            },
+            "in_use_bytes": {
+              "min": 272,
+              "median": 272,
+              "max": 272
+            },
+            "block_count": {
+              "min": 1,
+              "median": 1,
+              "max": 1
+            }
+          },
+          "old": {
+            "reserved_bytes": {
+              "min": 0,
+              "median": 1048576,
+              "max": 1048576
+            },
+            "in_use_bytes": {
+              "min": 0,
+              "median": 2240,
+              "max": 2240
+            },
+            "block_count": {
+              "min": 0,
+              "median": 1,
+              "max": 1
+            }
+          }
+        },
+        "after": {
+          "arena": {
+            "reserved_bytes": {
+              "min": 4194304,
+              "median": 4194304,
+              "max": 6291456
+            },
+            "in_use_bytes": {
+              "min": 0,
+              "median": 0,
+              "max": 0
+            },
+            "block_count": {
+              "min": 4,
+              "median": 4,
+              "max": 6
+            }
+          },
+          "survivor0": {
+            "reserved_bytes": {
+              "min": 0,
+              "median": 1048576,
+              "max": 1048576
+            },
+            "in_use_bytes": {
+              "min": 0,
+              "median": 0,
+              "max": 12288
+            },
+            "block_count": {
+              "min": 0,
+              "median": 1,
+              "max": 1
+            }
+          },
+          "survivor1": {
+            "reserved_bytes": {
+              "min": 1048576,
+              "median": 1048576,
+              "max": 1048576
+            },
+            "in_use_bytes": {
+              "min": 0,
+              "median": 12288,
+              "max": 14528
+            },
+            "block_count": {
+              "min": 1,
+              "median": 1,
+              "max": 1
+            }
+          },
+          "longlived": {
+            "reserved_bytes": {
+              "min": 1048576,
+              "median": 1048576,
+              "max": 1048576
+            },
+            "in_use_bytes": {
+              "min": 272,
+              "median": 272,
+              "max": 272
+            },
+            "block_count": {
+              "min": 1,
+              "median": 1,
+              "max": 1
+            }
+          },
+          "old": {
+            "reserved_bytes": {
+              "min": 0,
+              "median": 1048576,
+              "max": 1048576
+            },
+            "in_use_bytes": {
+              "min": 0,
+              "median": 2240,
+              "max": 2240
+            },
+            "block_count": {
+              "min": 0,
+              "median": 1,
+              "max": 1
+            }
+          }
+        }
+      }
+    },
+    "entry": {
+      "cycles": 29,
+      "collection_kinds": [
+        "minor"
+      ],
+      "rss_bytes": {
+        "plain": 17915904,
+        "trace": 18653184
+      },
+      "copied_objects": 7430,
+      "eden_live_bytes": {
+        "min": 12288,
+        "median": 12288,
+        "max": 14528
+      },
+      "arena": {
+        "before": {
+          "arena": {
+            "reserved_bytes": {
+              "min": 4194304,
+              "median": 4194304,
+              "max": 6291456
+            },
+            "in_use_bytes": {
+              "min": 3145728,
+              "median": 3145728,
+              "max": 5242848
+            },
+            "block_count": {
+              "min": 4,
+              "median": 4,
+              "max": 6
+            }
+          },
+          "survivor0": {
+            "reserved_bytes": {
+              "min": 0,
+              "median": 1048576,
+              "max": 1048576
+            },
+            "in_use_bytes": {
+              "min": 0,
+              "median": 0,
+              "max": 12288
+            },
+            "block_count": {
+              "min": 0,
+              "median": 1,
+              "max": 1
+            }
+          },
+          "survivor1": {
+            "reserved_bytes": {
+              "min": 0,
+              "median": 1048576,
+              "max": 1048576
+            },
+            "in_use_bytes": {
+              "min": 0,
+              "median": 0,
+              "max": 14528
+            },
+            "block_count": {
+              "min": 0,
+              "median": 1,
+              "max": 1
+            }
+          },
+          "longlived": {
+            "reserved_bytes": {
+              "min": 1048576,
+              "median": 1048576,
+              "max": 1048576
+            },
+            "in_use_bytes": {
+              "min": 272,
+              "median": 272,
+              "max": 272
+            },
+            "block_count": {
+              "min": 1,
+              "median": 1,
+              "max": 1
+            }
+          },
+          "old": {
+            "reserved_bytes": {
+              "min": 0,
+              "median": 1048576,
+              "max": 1048576
+            },
+            "in_use_bytes": {
+              "min": 0,
+              "median": 2240,
+              "max": 2240
+            },
+            "block_count": {
+              "min": 0,
+              "median": 1,
+              "max": 1
+            }
+          }
+        },
+        "after": {
+          "arena": {
+            "reserved_bytes": {
+              "min": 4194304,
+              "median": 4194304,
+              "max": 6291456
+            },
+            "in_use_bytes": {
+              "min": 0,
+              "median": 0,
+              "max": 0
+            },
+            "block_count": {
+              "min": 4,
+              "median": 4,
+              "max": 6
+            }
+          },
+          "survivor0": {
+            "reserved_bytes": {
+              "min": 0,
+              "median": 1048576,
+              "max": 1048576
+            },
+            "in_use_bytes": {
+              "min": 0,
+              "median": 0,
+              "max": 12288
+            },
+            "block_count": {
+              "min": 0,
+              "median": 1,
+              "max": 1
+            }
+          },
+          "survivor1": {
+            "reserved_bytes": {
+              "min": 1048576,
+              "median": 1048576,
+              "max": 1048576
+            },
+            "in_use_bytes": {
+              "min": 0,
+              "median": 12288,
+              "max": 14528
+            },
+            "block_count": {
+              "min": 1,
+              "median": 1,
+              "max": 1
+            }
+          },
+          "longlived": {
+            "reserved_bytes": {
+              "min": 1048576,
+              "median": 1048576,
+              "max": 1048576
+            },
+            "in_use_bytes": {
+              "min": 272,
+              "median": 272,
+              "max": 272
+            },
+            "block_count": {
+              "min": 1,
+              "median": 1,
+              "max": 1
+            }
+          },
+          "old": {
+            "reserved_bytes": {
+              "min": 0,
+              "median": 1048576,
+              "max": 1048576
+            },
+            "in_use_bytes": {
+              "min": 0,
+              "median": 2240,
+              "max": 2240
+            },
+            "block_count": {
+              "min": 0,
+              "median": 1,
+              "max": 1
+            }
+          }
+        }
+      }
+    },
+    "once": {
+      "cycles": 29,
+      "collection_kinds": [
+        "minor"
+      ],
+      "rss_bytes": {
+        "plain": 18018304,
+        "trace": 18907136
+      },
+      "copied_objects": 7430,
+      "eden_live_bytes": {
+        "min": 12288,
+        "median": 12288,
+        "max": 14528
+      },
+      "arena": {
+        "before": {
+          "arena": {
+            "reserved_bytes": {
+              "min": 4194304,
+              "median": 4194304,
+              "max": 6291456
+            },
+            "in_use_bytes": {
+              "min": 3145728,
+              "median": 3145728,
+              "max": 5242848
+            },
+            "block_count": {
+              "min": 4,
+              "median": 4,
+              "max": 6
+            }
+          },
+          "survivor0": {
+            "reserved_bytes": {
+              "min": 0,
+              "median": 1048576,
+              "max": 1048576
+            },
+            "in_use_bytes": {
+              "min": 0,
+              "median": 0,
+              "max": 12288
+            },
+            "block_count": {
+              "min": 0,
+              "median": 1,
+              "max": 1
+            }
+          },
+          "survivor1": {
+            "reserved_bytes": {
+              "min": 0,
+              "median": 1048576,
+              "max": 1048576
+            },
+            "in_use_bytes": {
+              "min": 0,
+              "median": 0,
+              "max": 14528
+            },
+            "block_count": {
+              "min": 0,
+              "median": 1,
+              "max": 1
+            }
+          },
+          "longlived": {
+            "reserved_bytes": {
+              "min": 1048576,
+              "median": 1048576,
+              "max": 1048576
+            },
+            "in_use_bytes": {
+              "min": 272,
+              "median": 272,
+              "max": 272
+            },
+            "block_count": {
+              "min": 1,
+              "median": 1,
+              "max": 1
+            }
+          },
+          "old": {
+            "reserved_bytes": {
+              "min": 0,
+              "median": 1048576,
+              "max": 1048576
+            },
+            "in_use_bytes": {
+              "min": 0,
+              "median": 2240,
+              "max": 2240
+            },
+            "block_count": {
+              "min": 0,
+              "median": 1,
+              "max": 1
+            }
+          }
+        },
+        "after": {
+          "arena": {
+            "reserved_bytes": {
+              "min": 4194304,
+              "median": 4194304,
+              "max": 6291456
+            },
+            "in_use_bytes": {
+              "min": 0,
+              "median": 0,
+              "max": 0
+            },
+            "block_count": {
+              "min": 4,
+              "median": 4,
+              "max": 6
+            }
+          },
+          "survivor0": {
+            "reserved_bytes": {
+              "min": 0,
+              "median": 1048576,
+              "max": 1048576
+            },
+            "in_use_bytes": {
+              "min": 0,
+              "median": 0,
+              "max": 12288
+            },
+            "block_count": {
+              "min": 0,
+              "median": 1,
+              "max": 1
+            }
+          },
+          "survivor1": {
+            "reserved_bytes": {
+              "min": 1048576,
+              "median": 1048576,
+              "max": 1048576
+            },
+            "in_use_bytes": {
+              "min": 0,
+              "median": 12288,
+              "max": 14528
+            },
+            "block_count": {
+              "min": 1,
+              "median": 1,
+              "max": 1
+            }
+          },
+          "longlived": {
+            "reserved_bytes": {
+              "min": 1048576,
+              "median": 1048576,
+              "max": 1048576
+            },
+            "in_use_bytes": {
+              "min": 272,
+              "median": 272,
+              "max": 272
+            },
+            "block_count": {
+              "min": 1,
+              "median": 1,
+              "max": 1
+            }
+          },
+          "old": {
+            "reserved_bytes": {
+              "min": 0,
+              "median": 1048576,
+              "max": 1048576
+            },
+            "in_use_bytes": {
+              "min": 0,
+              "median": 2240,
+              "max": 2240
+            },
+            "block_count": {
+              "min": 0,
+              "median": 1,
+              "max": 1
+            }
+          }
+        }
+      }
+    }
+  },
+  "source_product_stdout_rss_raw_telemetry_verified": true,
+  "limitations": "Natural trace logs can perturb residency/pacing. Full-runtime binaries and one plain/trace repetition each do not establish normal-auto peak RSS, an absolute floor, or a performance win.",
+  "inputs": {
+    "runs": "c851d187a02032e169999c5914796d68832fc705739620d1e6124c71fba35088",
+    "products": "c41a12dabced38f89104e9c502ebf0de08fcaa9df41e746bf13b61e0ee716ab0",
+    "oracle": "ab40b3a1b1f8e90cdff94691f9e11ce1273a1f130b80aa147ee0dfc00964732f",
+    "scope": "1ab5bd4d7ce19a2595011dc8022f48093d1adb8afc67a452be3f253686c18be0",
+    "gc-cycles": "ef4b0497ffe9b2931bd667270b40f11b0848ab4aaab68b1658fbbe119196961c",
+    "entry-cycles": "1dfbf4ad2560a52e127da89a8d05f5eb654f9f8bc9d6e0e98c0b6bb7bac5b855",
+    "once-cycles": "ed4f543bace69308709be6449c3fd91dbcb518746229908e5aae0f5d326f6988"
+  }
+}
