@@ -147,6 +147,26 @@ pub(crate) fn rebound_locals(stmts: &[Stmt]) -> HashSet<u32> {
     ids
 }
 
+/// Callee-side demotion for a specialized entry: which parameters of `f` must
+/// keep the boxed protocol.
+///
+/// A specialized entry binds each raw parameter once, at entry, and the body's
+/// proofs (a numeric parameter is a Number, a typed-array length, ...) describe
+/// that entry value. Anything that can leave the parameter's slot holding a
+/// different value invalidates them, so the parameter is demoted when the body
+/// rebinds it ([`rebound_locals`]: a `LocalSet` or `Update`, and also a `var`
+/// re-declaration, which reuses the parameter's id as a `Stmt::Let`; `var n = b`
+/// rebinds `n` exactly as `n = b` does) or when a closure refers to it (the
+/// capture machinery needs the boxed slot).
+pub(crate) fn callee_demoted_params(f: &perry_hir::Function) -> Vec<bool> {
+    let closure_refs = crate::expr::collect_closure_referenced_locals(&f.body);
+    let rebound = rebound_locals(&f.body);
+    f.params
+        .iter()
+        .map(|p| rebound.contains(&p.id) || closure_refs.contains(&p.id))
+        .collect()
+}
+
 /// Every local whose slot `stmts` can fill from something other than a
 /// `Stmt::Let` initialiser, a `LocalSet` right-hand side or an `Update`: a
 /// closure parameter or `catch` binding, a box pre-allocation, or a

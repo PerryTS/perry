@@ -491,3 +491,43 @@ fn guarded_number_array_rejects_stale_or_aliasable_reads() {
         5,
     ));
 }
+
+#[test]
+fn a_var_redeclared_parameter_is_demoted_like_a_reassigned_one() {
+    // #11802: `function f(n) { var n = b; ... }` binds the parameter's id with
+    // a `Stmt::Let`, not a `LocalSet`; the specialized entry's proofs about
+    // the Number `n` arrived as must not survive either form.
+    let param = |id: u32| perry_hir::Param {
+        id,
+        name: format!("p{id}"),
+        ty: Type::Number,
+        default: None,
+        decorators: vec![],
+        is_rest: false,
+        arguments_object: None,
+    };
+    let demoted = |body: Vec<Stmt>| {
+        let mut f = func(1, body);
+        f.params = vec![param(1), param(2)];
+        callee_demoted_params(&f)
+    };
+    assert_eq!(demoted(vec![]), [false, false]);
+    assert_eq!(
+        demoted(vec![Stmt::Expr(Expr::LocalSet(
+            1,
+            Box::new(Expr::LocalGet(99))
+        ))]),
+        [true, false],
+        "an assignment demotes its parameter"
+    );
+    assert_eq!(
+        demoted(vec![let_stmt(2, true, Expr::LocalGet(99))]),
+        [false, true],
+        "a `var` re-declaration demotes its parameter"
+    );
+    assert_eq!(
+        demoted(vec![let_stmt(3, true, Expr::LocalGet(1))]),
+        [false, false],
+        "binding a different local demotes nothing"
+    );
+}

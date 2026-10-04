@@ -3358,13 +3358,7 @@ fn compile_module_impl(
             // Callee-side demotion: params the raw ABI cannot accept keep the
             // boxed protocol (reassigned params would stale the entry-bound
             // proofs; closure-referenced params feed the capture machinery).
-            let closure_refs = crate::expr::collect_closure_referenced_locals(&f.body);
-            let reassigned = crate::collectors::reassigned_locals(&f.body);
-            let demoted: Vec<bool> = f
-                .params
-                .iter()
-                .map(|p| reassigned.contains(&p.id) || closure_refs.contains(&p.id))
-                .collect();
+            let demoted = crate::collectors::callee_demoted_params(f);
             // (#8094) A descriptor proof describes a heap object and is
             // established once, at entry. Any call in this body can run code
             // that reaches that same object — not only through an argument we
