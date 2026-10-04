@@ -365,7 +365,7 @@ pub unsafe extern "C" fn js_json_stringify_string(
     {
         return ptr;
     }
-    if str_ptr.is_null() || (str_ptr as usize) < 0x1000 {
+    if !crate::value::addr_class::is_plausible_heap_addr(str_ptr as usize) {
         return std::ptr::null_mut();
     }
     let len = (*str_ptr).byte_len as usize;
@@ -475,8 +475,29 @@ mod specialized_string_tests {
     #[test]
     fn specialized_json_rejects_malformed_bytes_and_low_pointers() {
         unsafe {
-            for address in [0, 1, 0xfff] {
-                assert!(js_json_stringify_string(address as *const StringHeader).is_null());
+            use crate::value::addr_class::{
+                COMMON_HANDLE_BAND_END, FETCH_HANDLE_BAND_END, FETCH_HANDLE_BAND_START,
+                HANDLE_BAND_MAX, PROXY_ID_BAND_START, ZLIB_HANDLE_BAND_END, ZLIB_HANDLE_BAND_START,
+            };
+
+            // None of these registry handles may reach a string-header read.
+            for address in [
+                0,
+                1,
+                0xfff,
+                0x1000,
+                COMMON_HANDLE_BAND_END - 1,
+                FETCH_HANDLE_BAND_START,
+                FETCH_HANDLE_BAND_END - 1,
+                ZLIB_HANDLE_BAND_START,
+                ZLIB_HANDLE_BAND_END - 1,
+                PROXY_ID_BAND_START,
+                HANDLE_BAND_MAX - 1,
+            ] {
+                assert!(
+                    js_json_stringify_string(address as *const StringHeader).is_null(),
+                    "handle-band address {address:#x} must be rejected before dereference",
+                );
             }
             for bytes in [
                 b"\xff".as_slice(),
